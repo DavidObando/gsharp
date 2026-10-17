@@ -248,11 +248,15 @@ func F(a string?) int32 {
     }
 
     @Fact
-    func LambdaBlockBody_TrailingIfLet_StaysAStatement() {
-        // Regression guard: an arrow-lambda body block is NOT a
-        // value-required block, so an existing void body ending in
-        // `if let … { return … } else { return … }` keeps parsing as the
-        // ADR-0071 statement.
+    func LambdaBlockBody_TrailingIfLet_IsTheExpressionForm() {
+        // ADR-0200: every value-capable block, arrow-lambda bodies included,
+        // reads its last item by one rule, so a trailing
+        // `if let … else …` is the expression form here too (it used to stay
+        // the ADR-0071 statement in a lambda body). A body ending in
+        // `if let … { return … } else { return … }` keeps its meaning: the
+        // exiting branches have the `never` type and the lambda's type comes
+        // from its returns (Adr0200BlockTailTests.
+        // LambdaTailWithExitingBranches_TakesItsTypeFromTheReturns runs it).
         const source = `package P
 func F(a string?) int32 {
     let g = (s string?) -> {
@@ -266,8 +270,8 @@ func F(a string?) int32 {
 }`
         let tree = SyntaxTree.Parse(source)
         Assert.Empty(tree.Diagnostics)
-        Assert.NotNull(FindFirst[IfLetStatementSyntax](tree))
-        Assert.Empty(Walk(tree.Root).OfType[IfLetExpressionSyntax]())
+        Assert.NotNull(FindFirst[IfLetExpressionSyntax](tree))
+        Assert.Empty(Walk(tree.Root).OfType[IfLetStatementSyntax]())
     }
 
     shared {

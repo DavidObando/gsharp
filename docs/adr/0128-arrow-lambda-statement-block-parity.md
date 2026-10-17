@@ -1,6 +1,6 @@
 # ADR-0128: Arrow-lambda / func-literal parity — statement-block arrow bodies
 
-- **Status**: Accepted
+- **Status**: Accepted; amended by [ADR-0200](0200-one-rule-for-block-tails-and-arrow-bodies.md) (2026-10-17)
 - **Date**: 2026-06-25
 - **Phase**: Phase 9 — language depth / lambda ergonomics
 - **Related**: issue [#1172](https://github.com/DavidObando/gsharp/issues/1172) (this ADR), issue #1160 (the cs2gs func-literal workaround this supersedes), [ADR-0074](0074-arrow-lambda-and-colon-switch-arms.md) (arrow lambda & `:` switch arms), [ADR-0075](0075-arrow-function-type-clause.md) (arrow function-type clause), [ADR-0076](0076-lambda-binding-type-inference.md) (lambda binding type inference), [ADR-0119](0119-canonical-arrow-lambda-inference.md) (canonical arrow lambda), [ADR-0064](0064-if-expression-and-block-expression.md) (`if` as expression), [ADR-0050](0050-trailing-arrow-lambda.md) (superseded trailing arrow lambda)
@@ -188,3 +188,24 @@ concise trailing-value form.
 None. The change is implemented end-to-end: parser classification, binder
 lowering-before-CFG, return-type inference, emit, and the cs2gs idiomatic arrow
 output, with binder + emit + translator tests.
+
+## Addendum (ADR-0200, issues #4965, #4966)
+
+- **Arrow members.** The block body after `->` means the same thing on a
+  function, operator, property, indexer or accessor as on a lambda: a statement
+  block with an optional trailing value. `func f() T -> { … }` desugars to the
+  equivalent block body (`{ stmts; return tail }`), so its `return` statements,
+  a void `for`, and other statement endings are checked as in
+  `func f() T { … }`.
+- **Trailing items.** A lambda body's last item follows the same rule as every
+  other value-capable block: a final nested `{ … }` and a final
+  `if let … else …` are the trailing value (they used to be statements here).
+  A nested block or branch whose value is void leaves the lambda void, so only a
+  tail that produces a value can change an inferred return type; see ADR-0200's
+  compatibility section.
+- **Exiting branches.** A trailing `if … else …` whose branches end in `return`
+  (`(c) -> { if c { return 1 } else { return 2 } }`) used to report GS0277; the
+  branches now have the `never` type and the lambda's type comes from its
+  `return` statements.
+- **Mixed void branches.** A trailing `if … else …` with one void and one
+  non-void branch is the void `if` in a lambda body instead of reporting GS0263.

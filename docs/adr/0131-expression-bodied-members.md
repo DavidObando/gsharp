@@ -1,6 +1,6 @@
 # ADR-0131: Expression-bodied members via the `->` arrow
 
-- **Status**: Accepted
+- **Status**: Accepted; amended by [ADR-0200](0200-one-rule-for-block-tails-and-arrow-bodies.md) (2026-10-17)
 - **Date**: 2026-06-27
 - **Phase**: Phase 9 — language surface completeness
 - **Related**: ADR-0128 (arrow-lambda statement/block parity), ADR-0051 (property accessors), ADR-0118 (indexer members), ADR-0019 (receiver-clause functions), ADR-0035 (user operators), issue [#1017](https://github.com/DavidObando/gsharp/issues/1017) (conversion operators), issues [#1278](https://github.com/DavidObando/gsharp/issues/1278), [#1277](https://github.com/DavidObando/gsharp/issues/1277), [#1273](https://github.com/DavidObando/gsharp/issues/1273), [#1270](https://github.com/DavidObando/gsharp/issues/1270)
@@ -70,6 +70,15 @@ emit) without a single new `BoundNodeKind`:
 - A **value-less** body — a void function/method (no return type clause), or a
   `set`/`init` accessor — becomes `{ expr }` (an expression statement),
   mirroring C#'s expression-bodied void methods.
+
+**Amended by ADR-0200.** A body that starts with `{` (and is not continued, as
+in `-> { … }.ToString()`) is not an expression: it is the ADR-0128 block body, a
+statement block with an optional trailing value, and it desugars to the
+equivalent block body — `{ stmts; return tail }` for a value-yielding member,
+`{ stmts; tail }` for a value-less one, the block as written when it has no
+tail. A value-less body `{ expr }` is a discarded position, so it is checked
+exactly like the equivalent block body: an `if` without `else` is the void `if`,
+and a switch with void arms is the void switch.
 
 `ParseArrowExpressionBody(asReturn)` consumes the `->` and the expression and
 synthesizes the brace/`return` tokens at the arrow's source position so

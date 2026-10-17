@@ -156,7 +156,7 @@ open partial class Parser {
                 suppressTrailingObjectInitializer--
             }
         }
-        let thenBlock = ParseBlockExpression(valueRequired: true)
+        let thenBlock = ParseBlockExpression()
         // The `else` branch is mandatory in value position. A missing one is
         // NOT manufactured here (that would cascade into a bogus block parse);
         // the binder reports GS0276 for a null else, exactly as it does for the
@@ -188,6 +188,6 @@ open partial class Parser {
         if Current.Kind == SyntaxKind.IfKeyword {
             return ParseIfExpression()
         }
-        return ParseBlockExpression(valueRequired: true)
+        return ParseBlockExpression()
     }
 }

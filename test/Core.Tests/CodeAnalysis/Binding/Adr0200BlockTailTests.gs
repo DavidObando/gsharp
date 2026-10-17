@@ -1,0 +1,397 @@
+// <copyright file="Adr0200BlockTailTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Core.Tests.CodeAnalysis.Binding
+
+import GSharp.Core.CodeAnalysis
+import GSharp.Tests
+import System
+import System.Linq
+import Xunit
+
+/// ADR-0200 / issues #4963, #4965, #4966: one rule for what the last item of a
+/// value-capable block means, a `never` type for a value block whose end is
+/// unreachable, and statement meaning for if/switch where the value is
+/// discarded. Each test is an issue repro (or a shape the rule covers) run
+/// end to end; the expected output is the program's exact stdout.
+open class Adr0200BlockTailTests {
+    // #4963 §1: comma arms in the expression form, next to the statement form.
+    @Fact
+    func CommaArms_MeanTheSameInBothSwitchForms() {
+        AssertOutput(`import System
+let x = 2
+switch x {
+case 1, 2 { Console.WriteLine("stmt one-or-two") }
+default { Console.WriteLine("stmt other") }
+}
+let s = switch x {
+case 1, 2: "expr one-or-two"
+default: "expr other"
+}
+Console.WriteLine(s)
+Console.WriteLine(switch 3 { case 1, 2: "low" default: "other" })`, "stmt one-or-two\nexpr one-or-two\nother\n")
+    }
+
+    // #4963 §2: a switch expression is the trailing value of a block, an
+    // if-expression branch and an arrow-lambda block body.
+    @Fact
+    func SwitchExpression_IsTheTrailingValueOfABlock() {
+        AssertOutput(`import System
+let x = 1
+let a = {
+    let y = x
+    switch y {
+    case 1: "block-one"
+    default: "other"
+    }
+}
+let c = true
+let b = if c {
+    switch x {
+    case 1: "if-one"
+    default: "other"
+    }
+} else { "none" }
+let f Func[int32, string] = (v) -> {
+    Console.WriteLine("in")
+    switch v {
+    case 1: "lambda-one"
+    default: "other"
+    }
+}
+Console.WriteLine(a)
+Console.WriteLine(b)
+Console.WriteLine(f(1))`, "block-one\nif-one\nin\nlambda-one\n")
+    }
+
+    // #4965 §1: a value block ending in `throw` is typed `never` and unifies.
+    @Fact
+    func ValueBlockEndingInThrow_UnifiesWithTheOtherBranch() {
+        AssertOutput(`import System
+func ter(c bool) int32 -> c ? 1 : throw Exception("ternary")
+func sw(x int32) int32 -> switch x {
+case 1: 1
+default: throw Exception("switch arm")
+}
+func ifx(c bool) int32 -> if c { 1 } else { throw Exception("if branch") }
+func blk() int32 {
+    let v int32 = {
+        Console.WriteLine("prefix")
+        throw Exception("block tail")
+    }
+    return v
+}
+Console.WriteLine(ter(true) + sw(1) + ifx(true))
+try {
+    ifx(false)
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+try {
+    blk()
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}`, "3\nif branch\nprefix\nblock tail\n")
+    }
+
+    // #4965 §2: `return` / `continue` tails; the other branch's value flows on.
+    @Fact
+    func ValueBlockEndingInReturnOrContinue_IsNever() {
+        AssertOutput(`import System
+func f(c bool) int32 {
+    let a = if c { 1 } else { return 0 }
+    return a + 10
+}
+func g() {
+    for var i = 0; i < 3; i++ {
+        let v = if i == 1 { continue } else { i * 10 }
+        Console.WriteLine(v)
+    }
+}
+Console.WriteLine(f(true))
+Console.WriteLine(f(false))
+g()`, "11\n0\n0\n20\n")
+    }
+
+    // ADR-0200 §5: the exit predicate covers break, structured exits, and
+    // defer/using prefixes; evaluation order of a partially evaluated operand
+    // is kept (the left operand runs before the exiting branch).
+    @Fact
+    func NeverBlocks_KeepEvaluationOrderAndCleanup() {
+        AssertOutput(`import System
+import System.IO
+func log(s string, v int32) int32 {
+    Console.WriteLine(s)
+    return v
+}
+func plus(c bool) int32 {
+    let x = log("left", 1) + if c { log("right", 2) } else { return -1 }
+    return x
+}
+func sw(k int32) int32 {
+    let v int32 = {
+        switch k {
+        case 1 { return 11 }
+        default { return 22 }
+        }
+    }
+    return v
+}
+func cleanup(c bool) int32 {
+    let v int32 = if c { 1 } else {
+        using let m = MemoryStream()
+        defer Console.WriteLine("deferred")
+        return 7
+    }
+    return v + 100
+}
+func loop() int32 {
+    var n = 0
+    while true {
+        n = n + if n < 3 { 1 } else { break }
+    }
+    return n
+}
+Console.WriteLine(plus(true))
+Console.WriteLine(plus(false))
+Console.WriteLine(sw(1) + sw(2))
+Console.WriteLine(cleanup(true))
+Console.WriteLine(cleanup(false))
+Console.WriteLine(loop())`, "left\nright\n3\nleft\n-1\n33\n101\ndeferred\n7\n3\n")
+    }
+
+    // #4965 §1/§2 inside a lambda: returns inside a trailing if-expression
+    // supply the lambda's type (they used to report GS0277), and an `if let`
+    // tail whose branches exit is the expression form.
+    @Fact
+    func LambdaTailWithExitingBranches_TakesItsTypeFromTheReturns() {
+        AssertOutput(`import System
+let f = (c bool) -> { if c { return 1 } else { return 2 } }
+let wide = (c bool) -> { if c { return 1 } else { return int64(5) } }
+let g Func[string?, int32] = (s) -> {
+    if let t = s { return t.Length } else { return -1 }
+}
+Console.WriteLine(f(false))
+Console.WriteLine(wide(false).GetType().Name)
+Console.WriteLine(g("abc") + g(nil))`, "2\nInt64\n2\n")
+    }
+
+    // #4965 §3: a final nested block is the value in a lambda body as it is
+    // in a block expression.
+    @Fact
+    func FinalNestedBlock_IsTheValueInLambdaBodies() {
+        AssertOutput(`import System
+let v = {
+    let a = 1
+    { a + 1 }
+}
+Console.WriteLine(v)
+let f Func[int32] = () -> {
+    let a = 1
+    { a + 1 }
+}
+Console.WriteLine(f())`, "2\n2\n")
+    }
+
+    // #4965 §3 compatibility: a nested block (or if-let) whose value is void,
+    // or whose branches mix void and non-void, leaves an inferred lambda void,
+    // so the Action overload is still chosen; only a value tail picks Func.
+    @Fact
+    func FinalNestedBlock_OnlyAValueTailChangesTheInferredType() {
+        AssertOutput(`import System
+import System.Collections.Generic
+func Run(f Func[int32]) { Console.WriteLine("func ${f()}") }
+func Run(a Action) {
+    a()
+    Console.WriteLine("action")
+}
+let list = List[int32]{1, 2}
+let c = true
+Run(() -> {
+    { Console.WriteLine("void nested") }
+})
+Run(() -> {
+    { if c { list.Remove(1) } else { list.Clear() } }
+})
+Run(() -> {
+    let o object? = "s"
+    if let s = o as string { list.Add(s.Length) } else { list.Clear() }
+})
+Run(() -> {
+    { 40 + 2 }
+})
+Run(() -> {
+    { 40 + 2 }
+    return
+})
+Console.WriteLine(list.Count)`, "void nested\naction\naction\naction\nfunc 42\naction\n2\n")
+    }
+
+    // #4966 §1: `-> { … }` on a function is the lambda's block body.
+    @Fact
+    func ArrowFunctionBlockBody_IsABlockBody() {
+        AssertOutput(`import System
+func fnArrow(x int32) int32 -> {
+    if x > 0 { return 1 }
+    return 2
+}
+func fnArrowVoid(x int32) -> {
+    for var i = 0; i < x; i++ { Console.WriteLine("fn ${i}") }
+}
+func fnTail(x int32) int32 -> {
+    let y = x * 2
+    y + 1
+}
+func fnNested(x int32) int32 -> {
+    let y = x
+    { y * 3 }
+}
+class C {
+    var n int32
+    prop P int32 -> {
+        let d = n * 2
+        d
+    }
+}
+let lamArrow Func[int32, int32] = (x) -> {
+    if x > 0 { return 1 }
+    return 2
+}
+let lamArrowVoid Action[int32] = (x) -> {
+    for var i = 0; i < x; i++ { Console.WriteLine("lam ${i}") }
+}
+Console.WriteLine(fnArrow(1) + lamArrow(1) + fnArrow(-1))
+fnArrowVoid(2)
+lamArrowVoid(2)
+Console.WriteLine(fnTail(4) + fnNested(2))
+let o = C()
+o.n = 21
+Console.WriteLine(o.P)`, "4\nfn 0\nfn 1\nlam 0\nlam 1\n15\n42\n")
+    }
+
+    // #4966 §2: a void arrow body (function, lambda, setter) takes an `if`
+    // without `else` and a switch with void arms; a void switch needs no
+    // default arm and runs none for an unmatched value.
+    @Fact
+    func VoidArrowBodies_TakeIfWithoutElseAndVoidSwitches() {
+        AssertOutput(`import System
+func blk(c bool) { if c { Console.WriteLine("blk") } }
+func arr(c bool) -> if c { Console.WriteLine("arr") }
+let lam Action[bool] = (c) -> if c { Console.WriteLine("lam") }
+let inferred = (c bool) -> if c { Console.WriteLine("inferred") }
+class C {
+    var n int32
+    prop P int32 {
+        get -> n
+        set -> if value > 0 { n = value }
+    }
+}
+func sw(x int32) -> switch x {
+case 1: Console.WriteLine("one")
+default: Console.WriteLine("other")
+}
+let noDefault Action[int32] = (x) -> switch x {
+case 1, 2: Console.WriteLine("low ${x}")
+}
+func stmt(x int32) {
+    switch x {
+    case 1: Console.WriteLine("stmt one")
+    case 2: Console.WriteLine("stmt two")
+    }
+}
+blk(true)
+arr(true)
+arr(false)
+lam(true)
+inferred(true)
+let o = C()
+o.P = 3
+o.P = -5
+Console.WriteLine(o.P)
+sw(1)
+sw(9)
+noDefault(2)
+noDefault(7)
+stmt(2)
+stmt(3)`, "blk\narr\nlam\ninferred\n3\none\nother\nlow 2\nstmt two\n")
+    }
+
+    // ADR-0200 §6: an if/else with one void branch in a void lambda is the void
+    // `if` (it reported GS0263), and a non-void value of the other branch is
+    // discarded.
+    @Fact
+    func MixedVoidBranches_InADiscardedPosition_AreTheVoidIf() {
+        AssertOutput(`import System
+import System.Collections.Generic
+let list = List[int32]{1, 2, 3}
+let f Action[bool] = (c) -> { if c { list.Remove(1) } else { list.Clear() } }
+f(true)
+Console.WriteLine(list.Count)
+f(false)
+Console.WriteLine(list.Count)`, "2\n0\n")
+    }
+
+    // Value position keeps its rules: GS0276, GS0277, GS0176, and GS0124 for a
+    // `never` initializer (which crashed the compiler, GS9998, before).
+    @Fact
+    func ValuePositionRules_StillReport() {
+        AssertDiagnostic(`let x = if true { 1 }`, "GS0276", 1, 9)
+        AssertDiagnostic(`func f(k int32) int32 {
+    let v int32 = {
+        switch k {
+        case 1 { break }
+        default { return 2 }
+        }
+    }
+    return v
+}`, "GS0277", 7, 5)
+        AssertDiagnostic(`let x = 1
+let s = switch x { case 1: "one" }`, "GS0176", 2, 9)
+        AssertDiagnostic(`func f() int32 {
+    let a = throw System.Exception("x")
+    return 0
+}`, "GS0124", 2, 13)
+        AssertDiagnostic(`func f(c bool) int32 {
+    let a = if c { return 1 } else { return 2 }
+    return 0
+}`, "GS0124", 2, 13)
+    }
+
+    // A function whose body ends in a statement-position switch expression
+    // whose arms all return passes the all-paths-return check (ADR-0069's own
+    // example).
+    @Fact
+    func NeverValuedStatement_EndsTheFunctionBody() {
+        AssertOutput(`import System
+open class Animal { open func Describe() string -> "animal" }
+class Dog : Animal { func Bark() string -> "woof" }
+func Describe(a Animal) string {
+    switch a {
+        case d is Dog: { return a.Bark() }
+        default: { return a.Describe() }
+    }
+}
+Console.WriteLine(Describe(Dog()))
+Console.WriteLine(Describe(Animal()))`, "woof\nanimal\n")
+    }
+
+    shared {
+        private func AssertOutput(source string, expected string) {
+            let result = EmittedOracle.Evaluate(source)
+            Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+            Assert.Null(result.UnhandledException)
+            Assert.Equal(expected, result.Output.Replace("\r\n", "\n"))
+        }
+
+        private func AssertDiagnostic(source string, id string, line int32, column int32) {
+            let result = EmittedOracle.Evaluate(source)
+            let matches = result.Diagnostics.Where((d Diagnostic) -> d.Id == id).ToList()
+            Assert.NotEmpty(matches)
+            Assert.Contains(
+                matches,
+                (d Diagnostic) -> d.Location.StartLine + 1 == line && d.Location.StartCharacter + 1 == column
+            )
+        }
+    }
+}

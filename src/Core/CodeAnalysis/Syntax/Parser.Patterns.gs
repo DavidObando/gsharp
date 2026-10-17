@@ -47,19 +47,26 @@ open partial class Parser {
             return SwitchCaseSyntax(syntaxTree, defaultKeyword, value: nil, whenKeyword: nil, $guard: nil, body)
         }
         let caseKeyword = MatchToken(SyntaxKind.CaseKeyword)
-        var value = ParsePattern(PatternParseContext.SwitchStatement)
-        // Issue #3501 A3: Go-style comma multi-pattern arms — `case 1, 2 { … }`.
-        // Each comma folds into the same disjunction node the `or` combinator
-        // produces (BindBinaryPattern treats any non-`and` operator as `or`),
-        // so downstream binding/emit need no changes.
-        while Current.Kind == SyntaxKind.CommaToken {
-            let comma = NextToken()
-            let next = ParsePattern(PatternParseContext.SwitchStatement)
-            value = BinaryPatternSyntax(syntaxTree, value, comma, next)
-        }
+        let value = ParseSwitchArmPattern(PatternParseContext.SwitchStatement)
         let (whenKeyword, guard_) = ParseOptionalWhenGuard(bodyFollows: true)
         let caseBody = ParseBlockStatement()
         return SwitchCaseSyntax(syntaxTree, caseKeyword, value, whenKeyword, guard_, caseBody)
+    }
+
+    // Issue #3501 A3 / issue #4963: the pattern list of a switch arm, shared by
+    // the statement form (`case 1, 2 { … }`) and the expression form
+    // (`case 1, 2: …`). Go-style comma multi-pattern arms fold each comma into
+    // the same disjunction node the `or` combinator produces
+    // (BindBinaryPattern treats any non-`and` operator as `or`), so downstream
+    // binding/emit need no changes and both forms mean the same thing.
+    private func ParseSwitchArmPattern(context PatternParseContext) PatternSyntax {
+        var value = ParsePattern(context)
+        while Current.Kind == SyntaxKind.CommaToken {
+            let comma = NextToken()
+            let next = ParsePattern(context)
+            value = BinaryPatternSyntax(syntaxTree, value, comma, next)
+        }
+        return value
     }
 
     // Issue #991: a contextual `when <bool-expr>` guard may follow the pattern

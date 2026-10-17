@@ -519,7 +519,7 @@ open partial class Parser {
                 // general primary expression. Statement-body parsers consume
                 // their opening brace before entering the expression
                 // pipeline, so this case is reached only from value position.
-                return ParsePostfixChain(ParseBlockExpression(valueRequired: true))
+                return ParsePostfixChain(ParseBlockExpression())
             }
             case SyntaxKind.OpenParenthesisToken {
                 // ADR-0074 / issue #714: `(p1 T1, p2 T2) -> body` is a lambda

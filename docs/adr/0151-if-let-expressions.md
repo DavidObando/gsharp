@@ -1,6 +1,6 @@
 # ADR-0151: `if let` expressions
 
-- **Status**: Accepted
+- **Status**: Accepted; amended by [ADR-0200](0200-one-rule-for-block-tails-and-arrow-bodies.md) (2026-10-17)
 - **Date**: 2026-07-26
 - **Phase**: Phase 8 — language ergonomics / expression surface
 - **Related**: ADR-0064 (if-expression and block-with-trailing-expression), ADR-0071 (`if let` / `guard let` bindings), ADR-0069 (smart-cast flow narrowing), ADR-0115 (cs2gs canonical forms), ADR-0150 (source decomposition conventions)
@@ -103,6 +103,13 @@ if let first = GetFirst(), let second = GetSecond(first) && second.IsValid {
 9. **Statement forms are unchanged.** A statement-leading `if let` still parses
    as the ADR-0071 statement, and `guard let` is untouched. Source that
    compiled before continues to compile identically.
+   **Amended by ADR-0200:** the *last* item of every value-capable block,
+   arrow-lambda bodies included, follows one rule, so a trailing
+   `if let … else …` is the expression form there too (the parser used to keep
+   the statement form in a lambda body). A lambda body ending in
+   `if let x = y { return … } else { return … }` keeps its meaning — the
+   exiting branches have the `never` type — and one whose branches are void is
+   the void if-let.
 
 ### The `&&` delimiter rule
 

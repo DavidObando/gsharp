@@ -736,7 +736,14 @@ member**, using the G# arrow `->` (never the C# fat
 arrow `=>`, which remains a `GS0005` syntax error in every member position).
 `func f(...) T -> expr` desugars to `{ return expr }` when the function has a
 return type, and to `{ expr }` (an expression statement) when it is void —
-mirroring C#'s expression-bodied void methods. Because operators and
+mirroring C#'s expression-bodied void methods. A void arrow body is checked
+exactly like that block body: `func f(c bool) -> if c { … }` is the void `if`,
+and a switch with void arms is the void switch. `-> { … }` is not an expression
+but the same block body an arrow lambda has — a statement block with an
+optional trailing value — and desugars to `{ stmts; return tail }` (or
+`{ stmts; tail }` when void), so `return` statements and statement endings work
+as in a block-bodied function. A brace followed by a continuation
+(`-> { … }.ToString()`) is still one expression. Because operators and
 user-defined conversion operators route through the same function-declaration
 path, they accept the arrow form too (`func (a V) operator + (b V) V -> …`,
 `func operator implicit (c T) U -> …`). The arrow body lives in a member
@@ -1435,6 +1442,8 @@ the original exception and task identity; no reflection, `dynamic`,
 
 Switch expressions use `:` between the pattern and the arm value. The legacy `->` arm separator is still accepted as a one-release migration aid but emits warning `GS0302`. Switch expressions require coverage or a default arm as enforced by diagnostics.
 
+An arm may list several comma-separated patterns, `case 1, 2: …`; each comma means `or`, exactly as in the statement form. A `switch` that starts a statement is the switch expression when its arms use `:` and the [switch statement](#switch-statements) when they use blocks, so a switch expression can be the trailing value of a block, an if-branch or a lambda body. Where its value is discarded (an expression statement, a void arrow body, a lambda body that is void), a switch expression with a void arm is the **void switch**: every arm's value is discarded and, like the switch statement, it needs no `default` arm — an unmatched value runs no arm. Any other switch expression, including one in statement position whose arms all produce values, still needs a `default` arm or an exhaustive discriminator (`GS0176`).
+
 ```gsharp
 let description = switch value {
 case 0: "zero"
@@ -1511,7 +1520,7 @@ default: "nonpositive"
 
 ### Lambda expressions
 
-`->` introduces a lambda expression. The **canonical** form omits parameter and return types and lets them be **inferred** from the expected delegate type at the use site: `(x) -> x + 1`, `(a, b) -> a + b`. A single-parameter lambda may drop the parentheses entirely: `x -> x + 1`. Parameter types may also be spelled explicitly when desired (`(x int32) -> x + 1`). The body is either a single expression or a brace-delimited block. A block body is a **statement block with an optional trailing value expression**: control-flow statements — including an `if` *without* a matching `else` — run as void statements, explicit `return` statements work anywhere, and a trailing expression (or `return`) supplies the lambda value. A block with no value-producing trailing expression and no value `return` is a **void** (`Action`-like) lambda. This brings block-bodied arrow lambdas to full parity with `func` literals while keeping the concise trailing-value form. Lambdas may capture outer locals; the closure machinery is shared with `func` literals.
+`->` introduces a lambda expression. The **canonical** form omits parameter and return types and lets them be **inferred** from the expected delegate type at the use site: `(x) -> x + 1`, `(a, b) -> a + b`. A single-parameter lambda may drop the parentheses entirely: `x -> x + 1`. Parameter types may also be spelled explicitly when desired (`(x int32) -> x + 1`). The body is either a single expression or a brace-delimited block. A block body is a **statement block with an optional trailing value expression**: control-flow statements — including an `if` *without* a matching `else` — run as void statements, explicit `return` statements work anywhere, and a trailing expression (or `return`) supplies the lambda value. The last item is read by the same rule as in every [block expression](#general-block-expressions): a final `if … else …`, `if let … else …`, nested `{ … }` or colon-arm `switch` is the trailing value. A block with no value-producing trailing expression and no value `return` is a **void** (`Action`-like) lambda; so is one whose trailing value is void. An expression body whose value may be void follows the [discarded-position rule](#if-expressions): `(c) -> if c { Log() }` is a void lambda. This brings block-bodied arrow lambdas to full parity with `func` literals while keeping the concise trailing-value form. Lambdas may capture outer locals; the closure machinery is shared with `func` literals.
 
 ```gsharp
 // Canonical: inferred parameter/return types, target-typed from the use site.
@@ -1544,12 +1553,13 @@ BlockExpression = "{" Statement* ( Expression )? "}" .
 ```
 
 - An `if` used in value position MUST have an exhaustive `else` chain — every branch must produce a value. Missing the terminal `else` reports `GS0276`.
-- A branch is a block of the form `{ stmt* expr }`. The trailing expression (the last expression statement of the block) is the branch value; the prefix statements run for their side effects. There is no `yield` keyword on this path — the form mirrors the switch-expression arm, which has no `yield` either. A block with no trailing expression in value position reports `GS0277`.
+- A branch is a block of the form `{ stmt* expr }`. The trailing expression (the last expression statement of the block) is the branch value; the prefix statements run for their side effects. There is no `yield` keyword on this path — the form mirrors the switch-expression arm, which has no `yield` either. A branch may instead end in `throw`, `return`, `break` or `continue`: its end is unreachable, so it has the bottom (`never`) type and takes the other branch's type (`let a = if c { 1 } else { return 0 }`). Any other block with no trailing expression in value position reports `GS0277`.
+- **Discarded positions.** Where the value is discarded — an expression statement, a void arrow body (`func f() -> if c { … }`, `set -> if …`), or a lambda body whose value may be void — an `if` without `else` is the void `if`, and an `if`/`if let` whose branch is void is the void `if`; the other branch's value is discarded. This is the meaning of the equivalent if statement.
 - `else if` chains nest right-associatively: `if c1 { a } else if c2 { b } else { c }` parses as `if c1 { a } else { if c2 { b } else { c } }`.
 - The header is the same as the if-statement's, including the optional simple-statement initializer: `let s = if var v = g(); v > 3 { "big ${v}" } else { "small ${v}" }`. The initializer runs exactly once, before the condition, and is scoped exactly as in the [if-statement](#if-statements): visible in the condition, in both branches and in every later `else if` link, and not after the expression. Each `else if` link may have its own initializer, which runs only when that link is reached.
 - The result type is the common type of all branch tails, chosen by the same `ComputeConditionalCommonType` helper that  uses for the ternary (identity, one-way implicit conversion, numeric widening tie-break, nil/null compatibility). Branch tails are implicitly converted to that result type. Mismatched branch types report `GS0263` (shared with the ternary).
 - Only one arm is evaluated at runtime; the other arms are not executed. Lowers to the same `BoundConditionalExpression` that the ternary uses, so no new IL emit paths are involved.
-- A throw-expression (`throw e`) may be used as a ternary branch (`cond ? a : throw e`) or `??` right operand; its bottom (`never`) type takes the sibling operand's type. Inside an *if-expression* or *switch-expression* tail, the trailing position is a block-value/arm context: to exit on the error path you can still place a `throw` **statement** in the block prefix and supply a tail expression of the chosen result type (unreachable at runtime but satisfying the binder), which matches the switch-expression treatment.
+- A throw-expression (`throw e`) may be used as a ternary branch (`cond ? a : throw e`), a `??` right operand, or a switch-expression arm; its bottom (`never`) type takes the sibling operand's type. An *if-expression* branch may simply end in `throw e` (`if c { 1 } else { throw e }`): as above, a branch whose end is unreachable has the `never` type, the same treatment the ternary and the switch-expression arm give a throw expression.
 - The nullable-binding variant `if let name = expr [, let n2 = e2]* [&& guard] { value } else { value }` is available in the same value positions and follows all of the rules above; see [`if let` expressions](#if-let-expressions).
 
 ```gsharp
@@ -1581,8 +1591,18 @@ return 2 * { let item = next() item }
 ```
 
 Prefix statements execute in source order, then the trailing expression is
-evaluated exactly once and supplies the block's value. A missing tail reports
-`GS0277`. The block introduces a lexical scope; its locals may shadow outer
+evaluated exactly once and supplies the block's value. The last item of the
+block is its trailing value when it is an expression, an `if … else …` or
+`if let … else …` chain ending in a plain `else`, a final nested `{ … }`, or a
+`switch` with `:` arms; this rule is the same in every value-capable block,
+including if-branches, arrow-lambda bodies and arrow-member bodies. A block with
+no trailing value is accepted in two cases: when its end is unreachable — its
+last statement is `return`, `throw`, `rethrow`, `break`, `continue` or `goto`,
+or a statement whose every branch ends in `return`/`throw` — it has the bottom
+(`never`) type and unifies with any other branch or target type; and where its
+value is discarded it is a void block. Otherwise a missing tail reports
+`GS0277`. An untyped local whose initializer never produces a value
+(`let a = throw e`) reports `GS0124`. The block introduces a lexical scope; its locals may shadow outer
 names and be captured by nested lambdas, but are not visible after the closing
 brace. Contextual target types flow to the tail in declarations, assignments,
 returns, fields, collection elements, and call/constructor arguments.
@@ -1601,7 +1621,9 @@ blocks inside expression-tree lambdas report `GS0473`.
 
 Braces remain contextual: function/loop/if/switch bodies parse as statement
 blocks, while struct/object/collection literals and property patterns keep
-their existing literal/pattern forms.
+their existing literal/pattern forms. Arrow-lambda and arrow-member bodies
+(`-> { … }`) are statement blocks with an optional trailing value, read by the
+rule above.
 
 ### Expression grammar
 
@@ -1771,9 +1793,17 @@ Switch statement cases use block bodies and never fall through implicitly. A `fa
 
 ```ebnf
 SwitchStmt = "switch" Expression "{" SwitchCase* "}" .
-SwitchCase = "case" Pattern [ "when" Expression ] Block | "default" Block .
+SwitchCase = "case" PatternList [ "when" Expression ] Block | "default" Block .
+SwitchExpr = "switch" Expression "{" SwitchArm* "}" .
+SwitchArm  = "case" PatternList [ "when" Expression ] ":" Expression | "default" ":" Expression .
+PatternList = Pattern { "," Pattern } .
 FallthroughStmt = "fallthrough" .
 ```
+
+`case 1, 2` lists several patterns; each comma means `or`, in both forms. A
+`switch` at the start of a statement whose arms use `:` is the switch expression
+used as a statement: a void arm makes it the void switch, which, like this form,
+needs no `default` (see *Switch expressions and patterns*).
 
 When an arm pattern is a type pattern (`T`, `T { ... }`, or `<ident> is T`) or
 any combined pattern that proves the discriminator's runtime type, the
@@ -2054,7 +2084,9 @@ unreachable and the emitted IL is verifiable.
 
 A bare `throw e` at statement start is still the throw **statement** — the
 statement parser intercepts it before expression parsing — so existing code is
-unaffected.
+unaffected. A throw statement that ends a value block makes the block's end
+unreachable, so the block has the `never` type too
+(`let v int32 = { log("x") throw e }`).
 
 ```ebnf
 ThrowExpr     = "throw" Expression .

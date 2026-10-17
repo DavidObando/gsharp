@@ -2748,6 +2748,17 @@ internal partial class StatementBinder {
                         syntax.Initializer!!.Location
                     )
                     variableType = TypeSymbol.Error
+                } else if syntax.TypeClause == nil && variableType == TypeSymbol.Never {
+                    // Issue #4965 (ADR-0200): an initializer that never produces
+                    // a value (`let a = throw e`, or a block/if/switch every
+                    // path of which exits) gives the local no type to infer.
+                    // Report it like a void initializer rather than inferring the
+                    // bottom type, which has no CLR representation (GS9998).
+                    // `!!`: this branch is reached only when an initializer was
+                    // bound (the `syntax.Initializer == nil` case is above).
+                    Diagnostics.ReportExpressionMustHaveValue(syntax.Initializer!!.Location)
+                    convertedInitializer = BoundErrorExpression(initializer.Syntax)
+                    variableType = TypeSymbol.Error
                 } else {
                     convertedInitializer = conversions.BindConversion(
                         syntax.Initializer!!.Location,
@@ -3974,6 +3985,30 @@ internal partial class StatementBinder {
         /// @returns `true` when [`type`](paramref) is reference-like.
         private func IsReferenceLikeType(type TypeSymbol?) bool -> type != nil && Conversion.IsReferenceLikeTarget(type)
 
+        /// Issue #4965 (ADR-0200): whether the end of a block whose bound
+        /// statements are [`statements`](paramref) is unreachable, so that a
+        /// value block ending this way has the bottom (`never`) type instead
+        /// of needing a trailing value (GS0277). The last statement must be a
+        /// `return`, `throw` or `rethrow`, a direct `break`/`continue`/`goto`
+        /// (bound as a goto, which always leaves the block because the block
+        /// ends right after it), or a structured statement every branch of
+        /// which ends in `return`/`throw` (see EndsInUnconditionalExit).
+        /// Gotos nested inside such a structured statement are deliberately
+        /// not counted: a `break` in a switch-statement arm targets the switch's
+        /// own exit label and falls through to the end of the block, so
+        /// counting it would type a block that completes normally as `never`
+        /// (fail-safe; a tail if-else is an if-expression and is typed by its
+        /// own branches instead).
+        /// @param statements The bound statements of the block.
+        /// @returns `true` when control can never reach the block's end.
+        internal func BlockEndIsUnreachable(statements ImmutableArray[BoundStatement]) bool {
+            if statements.IsDefaultOrEmpty {
+                return false
+            }
+            let last = statements[statements.Length - 1]
+            return last is BoundGotoStatement || EndsInUnconditionalExit(last, gotoExits: false)
+        }
+
         /// ADR-0069 / issue #700: structurally determine whether the given
         /// bound statement unconditionally transfers control out of its
         /// enclosing block (return / throw / unconditional goto, which covers
@@ -3987,7 +4022,7 @@ internal partial class StatementBinder {
         /// return/throw do. Callable-alias joins use this because a goto can still
         /// reach code after the enclosing construct.
         /// @returns `true` when the statement always leaves its block.
-        private func EndsInUnconditionalExit(statement BoundStatement?, gotoExits bool = true) bool {
+        internal func EndsInUnconditionalExit(statement BoundStatement?, gotoExits bool = true) bool {
             switch statement {
                 case nil {
                     return false

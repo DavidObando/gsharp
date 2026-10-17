@@ -184,6 +184,16 @@ open partial class Parser {
                 return ParseReturnStatement()
             }
             case SyntaxKind.SwitchKeyword {
+                // Issue #4963 (ADR-0200): a `switch` whose arms have the
+                // expression shape (`case P:` / `default:`) is the switch
+                // EXPRESSION as an expression statement — the trailing value
+                // when it ends a value-capable block, the void switch when its
+                // value is discarded. Arms with the statement shape
+                // (`case P { … }`) keep the switch statement. Like the `if`
+                // item, it ends at its closing brace.
+                if SwitchHasExpressionArms() {
+                    return ExpressionStatementSyntax(syntaxTree, ParseSwitchExpression())
+                }
                 return ParseSwitchStatement()
             }
             case SyntaxKind.FallthroughKeyword {
