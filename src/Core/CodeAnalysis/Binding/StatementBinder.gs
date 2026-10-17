@@ -299,9 +299,6 @@ internal partial class StatementBinder {
             case SyntaxKind.NamedDeconstructionStatement {
                 return BindNamedDeconstructionStatement(cast[NamedDeconstructionStatementSyntax](syntax))
             }
-            case SyntaxKind.NullCoalescingAssignmentStatement {
-                return BindNullCoalescingAssignmentStatement(cast[NullCoalescingAssignmentStatementSyntax](syntax))
-            }
             default {
                 throw Exception("Unexpected syntax ${syntax.Kind}")
             }

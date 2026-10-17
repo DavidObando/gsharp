@@ -3700,7 +3700,14 @@ internal partial class StatementBinder {
             return Conversion.IsRepresentationPreservingImplicit(source, target)
         }
 
-        private func AssignmentTypePreservesNarrowing(assignedType TypeSymbol?, narrowedType TypeSymbol) bool {
+        /// Whether a value of static type [`assignedType`](paramref) proves a
+        /// target non-nil whose non-nullable type is [`narrowedType`](paramref):
+        /// it is not nullable and converts implicitly. Shared by assignment
+        /// narrowing (issue #1123) and the `??=` result type (issue #4967).
+        /// @param assignedType The assigned value's pre-conversion type.
+        /// @param narrowedType The target's underlying non-nullable type.
+        /// @returns `true` when the value is statically non-nil.
+        internal func AssignmentTypePreservesNarrowing(assignedType TypeSymbol?, narrowedType TypeSymbol) bool {
             if assignedType == nil ||
                 assignedType == TypeSymbol.Error ||
                 assignedType == TypeSymbol.Null ||
@@ -3862,7 +3869,7 @@ internal partial class StatementBinder {
 
         // `x ??= v` is a write the shared assigned-name walker does not model.
         private func CollectNullCoalescingTargetNames(node SyntaxNode, names HashSet[string]) {
-            if node is NullCoalescingAssignmentStatementSyntax coalescing {
+            if node is NullCoalescingAssignmentExpressionSyntax coalescing {
                 CollectAllNames(coalescing.Target, names)
             }
             for child in node.GetChildren() {

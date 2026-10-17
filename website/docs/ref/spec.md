@@ -66,7 +66,7 @@ Notable contextual roles: `prop`, `event`, `delegate`, `data`, `inline`, `partia
 
 ### Operators and punctuation
 
-Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, `>>=`, and `>>>=`. Built-in operands use read/operate/write lowering; when the receiver type declares the matching compound-assignment operator, that in-place operator is called instead. `>>` is the signed (arithmetic) right shift, replicating the sign bit; `>>>` is the unsigned (logical) right shift, which always shifts in zero bits regardless of the operand's signedness. Prefix and postfix `++` and `--` are value-producing expressions on assignable numeric lvalues. The null-coalescing compound assignment `??=` writes the right-hand side into the left only when the lvalue currently reads as nil; see [Null-coalescing compound assignment](#null-coalescing-compound-assignment) under *Statements*. The `..` range operator slices a sliceable value inside an indexer (`a[lo..hi]`) and also forms a standalone `System.Range` value (`let r = 1..3`), and prefix `^n` is a first-class `System.Index` from-end expression (`a[^1]`, `let last = ^1`, `^3..^1`); prefix `~` is one's-complement; see [Range and slice expressions](#range-and-slice-expressions). `@` begins annotations on declarations.
+Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, `>>=`, and `>>>=`. Built-in operands use read/operate/write lowering; when the receiver type declares the matching compound-assignment operator, that in-place operator is called instead. `>>` is the signed (arithmetic) right shift, replicating the sign bit; `>>>` is the unsigned (logical) right shift, which always shifts in zero bits regardless of the operand's signedness. Prefix and postfix `++` and `--` are value-producing expressions on assignable numeric lvalues. The null-coalescing compound assignment `??=` writes the right-hand side into the left only when the lvalue currently reads as nil; like every other assignment operator it is an expression whose value is the left operand's final value; see [Null-coalescing compound assignment](#null-coalescing-compound-assignment). The `..` range operator slices a sliceable value inside an indexer (`a[lo..hi]`) and also forms a standalone `System.Range` value (`let r = 1..3`), and prefix `^n` is a first-class `System.Index` from-end expression (`a[^1]`, `let last = ^1`, `^3..^1`); prefix `~` is one's-complement; see [Range and slice expressions](#range-and-slice-expressions). `@` begins annotations on declarations.
 
 ### Integer literals
 
@@ -1611,6 +1611,7 @@ Assignment        = identifier "=" Assignment
                   | identifier "[" Expression "]" "=" Assignment
                   | identifier "." identifier "=" Assignment
                   | AccessorExpression ( "+=" | "-=" ) Assignment
+                  | RangeExpression "??=" Assignment  (* null-coalescing assignment; right-associative *)
                   | RangeExpression .
 RangeExpression   = BinaryExpression? ".." ( "^"? BinaryExpression )? | BinaryExpression .  (* standalone System.Range value; `..` binds looser than every binary operator, so `1+2..3+4` is `(1+2)..(3+4)`. Either bound may be a `^` from-end Index expression. Suppressed inside an index bound, where IndexArgument owns `..`. *)
 BinaryExpression  = PrefixExpression { BinaryOperator PrefixExpression } .
@@ -1634,7 +1635,7 @@ A block is a braced statement list. Expression statements are accepted for expre
 
 ```ebnf
 Block     = "{" Statement* "}" .
-Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | WhileLetStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | FallthroughStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | NullCoalescingAssignmentStmt | IncDecStmt | ChannelSendStmt | ExpressionStmt .
+Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | WhileLetStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | FallthroughStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | IncDecStmt | ChannelSendStmt | ExpressionStmt .
 ```
 
 ### Assignment and variable statements
@@ -1730,7 +1731,7 @@ current value of the left-hand side is `nil`**. The right-hand side is
 short-circuited (not evaluated) when the lvalue is already non-nil.
 
 ```ebnf
-NullCoalescingAssignmentStmt = Expression "??=" Expression .
+NullCoalescingAssignment = Expression "??=" Assignment .
 ```
 
 The left-hand side must be of a nullable type (`T?`, for either a nullable
@@ -1742,9 +1743,27 @@ property or non-init-only CLR field, and indexer access (G#-native or CLR).
 A non-assignable target reports `GS0299`. The usual `GS0127` (read-only
 lvalue) and conversion diagnostics also apply.
 
-`??=` is a statement, not an expression — it never appears as the value of
-another expression. The semantics, including single evaluation of the
-receiver and any index expressions, are:
+`??=` is an assignment expression, like `=`, the compound operators and
+`++`/`--`, so it may appear in any value position: `let r = (x ??= y)`,
+`f(x ??= y)`, `return x ??= y`. It is right-associative, so `a ??= b ??= c`
+is `a ??= (b ??= c)`, and `a ??= b ?? c` is `a ??= (b ?? c)`. As a statement
+it is an expression statement whose value is discarded.
+
+The value of `a ??= b` is the final value of `a`: the value read when it was
+not nil, otherwise the assigned value of `b`; the target is not read again to
+produce it. Its type is `a`'s underlying type when the stored value is known
+non-nil, that is, when `b`'s own type is non-nullable and not a platform type
+(`int32? ??= 42` has type `int32`, `string? ??= "x"` has type `string`, the
+types `a ?? b` has), and `a`'s `T?` otherwise: when `b` may be nil, when `b`
+is a platform (`T!`) value, which is stored unchecked, or when `b` is an `if`,
+`switch`, conditional or block expression, which the target types as a whole.
+A platform target follows the same rule. The value is converted to the target
+once, so a boxed value is the same object in `a` and in the result. A throwing
+right side (`a ??= throw e`) is the coalesce's fallback. Neither the statement
+nor the expression form narrows `a` afterwards.
+
+The semantics, including single evaluation of the receiver and any index
+expressions, are:
 
 ```text
 a ??= b
@@ -1752,15 +1771,17 @@ a ??= b
 {
     let __recv = <receiver-of-a>     // only if a's receiver is non-trivial
     let __idx  = <index-of-a>        // only for indexer targets
-    if __recv.member /* [__idx] */ == nil {
-        __recv.member /* [__idx] */ = b
+    __recv.member /* [__idx] */ ?? {
+        let __value = b
+        __recv.member /* [__idx] */ = __value
+        __value
     }
 }
 ```
 
 For nullable value types (`int32?`, `bool?`, …) the same shape applies; the
-nil-comparison reuses the existing `==` lowering for `Nullable<T>` so the
-write only fires when `HasValue == false`.
+nil test is the `??` operator's `Nullable<T>` test, so the write only fires
+when `HasValue == false`.
 
 ### Switch statements
 

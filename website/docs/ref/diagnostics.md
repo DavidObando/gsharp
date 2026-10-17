@@ -727,7 +727,7 @@ Cause/fix examples:
 
 ## Null-coalescing compound assignment diagnostics (GS0298–GS0299)
 
-The `??=` null-coalescing compound assignment statement. The diagnostics below cover the two shapes the binder rejects up front.
+The `??=` null-coalescing compound assignment, in statement or value position. The diagnostics below cover the two shapes the binder rejects up front.
 
 | Code | Severity | Message | Example trigger |
 |------|----------|--------------------------|-----------------|

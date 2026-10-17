@@ -277,7 +277,7 @@ enum SyntaxKind {
     IfExpression,
     BlockExpression,
     IfLetExpression,
-    NullCoalescingAssignmentStatement,
+    NullCoalescingAssignmentExpression,
     LambdaExpression,
     BaseInterfaceCallExpression,
     BaseClassCallExpression,

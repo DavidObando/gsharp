@@ -1,6 +1,6 @@
 # ADR-0072: `??=` null-coalescing compound assignment
 
-- **Status**: Accepted
+- **Status**: Accepted; amended 2026-10-17 by [#4967](https://github.com/DavidObando/gsharp/issues/4967) (expression form)
 - **Date**: 2026-06-12
 - **Phase**: Phase 9 — language depth / null-handling ergonomics
 - **Related**: ADR-0001 (nullable reference types), ADR-0001 (`?:` null-coalescing read, now spelled `??` per ADR-0116), parent [#706](https://github.com/DavidObando/gsharp/issues/706) (control-flow polish), this ADR [#709](https://github.com/DavidObando/gsharp/issues/709)
@@ -9,6 +9,70 @@
 > respelled from `a ?: b` to `a ?? b` and the `?:` spelling was removed. Where
 > this ADR shows `?:` below it now reads `??`; the `??=` compound assignment
 > described here is unchanged.
+
+> **Amendment (issue #4967, 2026-10-17): `??=` is an expression.** This ADR
+> first made `??=` statement-only "to keep it parallel with `=`, `+=`, etc.,
+> which are also statement-only in G#". That premise was wrong by the time it
+> was checked: #3350 confirmed that `=`, every compound operator and
+> `++`/`--` are already value-producing expressions, so `??=` was the only
+> assignment operator without an expression form. The revised rule, which
+> replaces the statement-only rule wherever this ADR states it:
+>
+> - `a ??= b` is an **assignment expression**, parsed in the same
+>   assignment-expression pipeline as `=` and the compound operators. It is
+>   right-associative (`a ??= b ??= c` is `a ??= (b ??= c)`), and `a ??= b ?? c`
+>   is `a ??= (b ?? c)`, as in C#. At statement level it is an ordinary
+>   expression statement whose value is discarded.
+> - Its **value** is the final value of `a`: the value read when it was not
+>   nil, otherwise the assigned (converted) value of `b`. The target is never
+>   re-read to produce the value.
+> - Its **type** is `a`'s underlying type `T` when the stored value is known
+>   non-nil, that is, when `b`'s own (pre-conversion) type is non-nullable and
+>   not a platform type. This is the test plain `=` uses to narrow its target
+>   (#1123), and it gives the type `a ?? b` has: `int32? ??= 42` is `int32`,
+>   `string? ??= "x"` is `string` and `object? ??= 42` is `object`, matching
+>   C#. Otherwise the type is `a`'s `T?`: a nullable `b`, or a `T!`
+>   (ADR-0186) `b`, which may be nil and is stored unchecked as the statement
+>   form always stored it. A `T!` target follows the same rule
+>   (`T! ??= "x"` is `string`). A right side the target types as a whole (an
+>   `if`, `switch`, conditional or block expression) is typed `T?`, so the
+>   result is `T?` (#4984).
+> - The stored value is converted to the target once and the same value is
+>   yielded, so a boxed value keeps its identity. A throwing right side
+>   (`a ??= throw e`) is the coalesce's fallback as in `a ?? throw e`.
+> - Evaluation is unchanged in both positions: the target's receiver and
+>   indices are evaluated once, the target is read once, and `b` is evaluated
+>   and written back only when that read is nil.
+> - Narrowing is unchanged: neither position narrows the target afterwards,
+>   which is what the statement form already did (narrowing after `??=` is
+>   tracked in #4978). A `??=` inside a closure still invalidates the
+>   target's narrowing in both positions.
+> - cs2gs keeps translating a C# value-position `??=` through its existing
+>   lowering until the pinned SDK includes this change (N-1); #4979 tracks
+>   emitting the expression form.
+>
+> One binder routine (`BindNullCoalescingAssignmentExpression`) serves both
+> positions. It keeps this ADR's receiver capture, target validation and
+> diagnostics, and produces the compound-assignment lowering shape, a
+> `BoundBlockExpression` of the captures over
+> `read ?? { let v = b; write(v); v }`, so the nil test is the `??`
+> operator's own and no new `BoundNodeKind` is introduced.
+>
+> One deliberate difference from `=` is recorded here: `(x = v)` has `x`'s
+> declared type (`T?`), while `(x ??= v)` has `T` for a known non-nil `v`,
+> because that is C#'s rule for `??=` and its value is never nil in that
+> case.
+>
+> **Compatibility.** Every program that compiled before compiles to the same
+> behavior: each existing `??=` is in statement position, which still parses
+> (as an expression statement over the new node) and keeps its diagnostics,
+> evaluation order and narrowing. The positions that now compile, such as
+> `let r = (x ??= y)`, `f(x ??= y)`, `return x ??= y`, `a ??= b ??= c` and
+> `x = y ??= z`, were all parse errors (`GS0005`) or `GS0299` before. The
+> syntax API changes: `NullCoalescingAssignmentStatementSyntax` is replaced by
+> `NullCoalescingAssignmentExpressionSyntax`, and
+> `SyntaxKind.NullCoalescingAssignmentStatement` is renamed in place to
+> `NullCoalescingAssignmentExpression`.
 
 ## Context
 
@@ -42,7 +106,8 @@ current value is nil**, and **writes through the lvalue once** in that case.
 
 ## Decision
 
-Add `??=` as a **statement-only** compound assignment with these semantics:
+Add `??=` as a compound assignment with these semantics (originally
+statement-only; an expression since the #4967 amendment above):
 
 > `a ??= b` desugars to *"evaluate `a`'s receiver once; if the resulting value
 > is nil, evaluate `b` (also once) and write the result back through the same
@@ -56,13 +121,16 @@ The lexer recognizes the sequence directly. G# does **not** introduce a bare
 `?` only appears as part of `??=`. Whitespace inside the sequence is not
 allowed.
 
-### Grammar (statement)
+### Grammar
 
 ```
-NullCoalescingAssignmentStatement
-    : Expression '??=' Expression
+NullCoalescingAssignmentExpression
+    : Expression '??=' AssignmentExpression
     ;
 ```
+
+(Amended by #4967: originally a statement production,
+`NullCoalescingAssignmentStatement : Expression '??=' Expression`.)
 
 The left-hand side accepts the same lvalue shapes as the simple assignment
 statement:
@@ -73,10 +141,12 @@ statement:
 - a writable CLR property or non-init-only CLR field (`obj.ClrMember`)
 - an index expression (`coll[k]`, both G#-native and CLR indexers)
 
-`??=` is **not** an expression — there is no value left on the stack — so it
+~~`??=` is **not** an expression — there is no value left on the stack — so it
 cannot appear inside larger expressions, in argument positions, or as the
 right-hand side of another assignment. This matches the existing compound
-forms (`+=`, `-=`, etc.) and the bare `=` assignment statement.
+forms (`+=`, `-=`, etc.) and the bare `=` assignment statement.~~
+Superseded by the #4967 amendment: `??=` is an expression and may appear in
+any value position, like `=`, `+=` and `++`.
 
 ### Typing
 
@@ -131,16 +201,23 @@ current scope, and emits the bound shape:
 {
     let __ncaRecv = <receiver-expr>;
     let __ncaIdx  = <index-expr>;          // only for indexer LHS
-    if __ncaRecv.Member /* or [__ncaIdx] */ == nil {
-        __ncaRecv.Member /* [__ncaIdx] */ = <rhs-expr>;
+    __ncaRecv.Member /* or [__ncaIdx] */ ?? {
+        let __ncaVal = <rhs-expr>;
+        __ncaRecv.Member /* [__ncaIdx] */ = __ncaVal;
+        __ncaVal
     }
 }
 ```
 
+(Amended by #4967. The original shape was
+`if __ncaRecv.Member == nil { __ncaRecv.Member = <rhs-expr>; }`, which
+leaves no value; the `??` form reads the target once, evaluates the right
+side only on nil, and yields the final value.)
+
 A receiver that is already a simple `BoundVariableExpression` (a local,
 parameter, or package-level variable) needs no spill — reading it twice has
 no observable side effect — so the desugaring elides the synthetic local
-in that case and emits just the `if` statement.
+in that case and emits just the `??` expression.
 
 The synthetic locals follow the existing `<…>` naming convention used by the
 binder for compiler-generated temporaries; they are not visible to user
@@ -149,13 +226,17 @@ code and do not collide with user-chosen identifiers.
 ### Bound tree
 
 `??=` does **not** introduce a new `BoundNodeKind`. It desugars at bind time
-into a `BoundBlockStatement` containing zero or more `BoundVariableDeclaration`
-nodes followed by a single `BoundIfStatement` whose then-branch is the
-existing assignment-expression node appropriate for the LHS shape
+into a `BoundBlockExpression` (the compound-assignment lowering shape)
+containing zero or more `BoundVariableDeclaration` nodes over a single
+null-coalescing `BoundBinaryExpression` whose right operand is a
+`BoundBlockExpression` that stores the right-hand side in a synthetic local,
+writes it through the existing assignment-expression node appropriate for
+the LHS shape
 (`BoundAssignmentExpression`, `BoundFieldAssignmentExpression`,
 `BoundPropertyAssignmentExpression`, `BoundClrPropertyAssignmentExpression`,
-`BoundIndexAssignmentExpression`, or `BoundClrIndexAssignmentExpression`).
-This deliberately sidesteps the bound-tree-discipline overhead (rewriter,
+`BoundIndexAssignmentExpression`, or `BoundClrIndexAssignmentExpression`),
+and yields the local. (Before the #4967 amendment it desugared into a
+`BoundBlockStatement` over a `BoundIfStatement`.) This deliberately sidesteps the bound-tree-discipline overhead (rewriter,
 walker, printer, spill rewriter, exhaustiveness allowlists) because the
 existing lowering already handles every node it produces, and both backends
 (emit and interpreter) already evaluate those nodes correctly.
@@ -179,8 +260,10 @@ avoided because the interpreter only reads `node.Receiver` (the
 
 ### Out of scope
 
-- **Expression form** (`x = (y ??= z)`): not supported. This keeps `??=`
-  parallel with `=`, `+=`, etc., which are also statement-only in G#.
+- ~~**Expression form** (`x = (y ??= z)`): not supported. This keeps `??=`
+  parallel with `=`, `+=`, etc., which are also statement-only in G#.~~
+  Supported since the #4967 amendment; `=` and `+=` were never
+  statement-only.
 - **`&&=` / `||=` / `?.??=`** chained forms: not in scope for this ADR.
 - **Custom user-defined operator overloads** for `??=`: out of scope; the
   operator is hard-wired to the desugaring above for any `T?` LHS.
