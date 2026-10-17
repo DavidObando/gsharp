@@ -497,11 +497,26 @@ import System.Runtime.InteropServices
 func native_dlsym(handle nint, name string) unmanaged[Cdecl] () -> void;
 ```
 
-Supported calling conventions are `Cdecl`, `Stdcall`, `Thiscall`, `Fastcall`. The bracketed slot after `unmanaged` is mandatory (omitting it reports GS0356). Returning a managed delegate from a P/Invoke is rejected (GS0355) because the runtime cannot infer the lifetime contract; use Shape B or `nint` + `Marshal.GetDelegateForFunctionPointer` instead.
+Supported calling conventions are `Cdecl`, `Stdcall`, `Thiscall`, `Fastcall`, plus the open CLR model (`unmanaged[Cdecl, SuppressGCTransition] (T) -> R`). The bracketed slot after `unmanaged` is optional: bare `unmanaged (T) -> R` uses the platform-default unmanaged convention. Returning a managed delegate from a P/Invoke is rejected (GS0355) because the runtime cannot infer the lifetime contract; use Shape B or `nint` + `Marshal.GetDelegateForFunctionPointer` instead.
+
+To call through an address you obtain at run time (`NativeLibrary.GetExport`, `GetProcAddress`, `vkGetInstanceProcAddr`), convert it with `cast[T]` and call the result directly (the call emits `calli`):
+
+```gs
+import System
+import System.Runtime.InteropServices
+
+unsafe func Main() {
+    let address = NativeLibrary.GetExport(NativeLibrary.Load("libc.so.6"), "getpid")
+    let getpid = cast[unmanaged[Cdecl] () -> int32](address)
+    Console.WriteLine(getpid() == Environment.ProcessId)
+}
+```
+
+`cast[T](address)` is an unchecked reinterpretation of the address, and also accepts `nuint`, the fixed-size integers and pointers; `nint(fp)` converts back. `address as (unmanaged[Cdecl] () -> int32)?` is a type test rather than a conversion: a function pointer has no runtime type of its own, so it tests whether the value is a `System.IntPtr` (always true for a `nint` operand, false for a `nuint`). Prefer `cast[T]`.
 
 **GC lifetime contract (Shape A).** The CLR keeps the delegate rooted only for the duration of `Marshal.GetFunctionPointerForDelegate` + the inner native call. The caller is responsible for holding an explicit reference to the delegate for as long as the native side might call back; the canonical pattern is to assign the delegate to a local or field and end the scope with `GC.KeepAlive(<delegate>)`.
 
-The diagnostics introduced by this feature are GS0353 (missing `@UnmanagedFunctionPointer`), GS0354 (unknown calling convention), GS0355 (delegate return), and GS0356 (missing `[CC]` slot).
+The diagnostics introduced by this feature are GS0353 (missing `@UnmanagedFunctionPointer`), GS0354 (unknown calling convention) and GS0355 (delegate return). GS0356 (missing `[CC]` slot) is retired.
 
 ### Per-parameter `@MarshalAs` overrides
 

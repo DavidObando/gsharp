@@ -750,7 +750,7 @@ internal partial class MethodBodyEmitter {
         }
         let slice = cast[BoundSlicePattern](lp.Elements[sliceIndex])
         if slice.Variable != nil {
-            let elementToken = this.outer.memberRefs.GetElementTypeToken(lp.ElementType)
+            let elementToken = this.outer.memberRefs.GetArrayElementTypeToken(lp.ElementType)
             // dst = new T[len - (prefix + suffix)]
             loadValue()
             this.il.OpCode(ILOpCode.Ldlen)

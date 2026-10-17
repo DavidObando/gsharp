@@ -109,7 +109,7 @@ When the binder sees a `FunctionPointerTypeSymbol` in a P/Invoke parameter or re
 - Calling convention must be one of `Cdecl`, `Stdcall`, `Thiscall`, `Fastcall` (parser already enforces; the binder additionally rejects `Winapi` if it somehow slips through, see §2).
 - Every inner parameter type and the return type must be a primitive integer / float, `nint`, `nuint`, a blittable struct (ADR-0093), a pointer to one of those (`*T`), or another `FunctionPointerTypeSymbol` (nested function-pointer parameters are accepted — the FNPTR encoding handles them natively, unlike the runtime thunk for delegates).
 - `string`, slices, classes, nullables, byref pointees, and `DelegateTypeSymbol` are rejected from inside a `FunctionPointerTypeSymbol`'s signature with the existing GS0323 anchored to the offending inner type.
-- The function pointer itself may be `nint`-castable at value sites (an unmanaged function pointer is just an address). The conversion classifier treats `FunctionPointerTypeSymbol` and `nint` / `IntPtr` / `*void` as mutually convertible via an explicit cast (`as`). Implicit conversion is rejected — the user must opt in.
+- The function pointer itself may be `nint`-castable at value sites (an unmanaged function pointer is just an address). The conversion classifier treats `FunctionPointerTypeSymbol` and `nint` / `nuint` / the fixed-size integers / pointers (`*void`, `*T`) as mutually convertible via an explicit conversion, spelled `cast[unmanaged[CC] (T) -> R](address)` (ADR-0167) towards the function pointer and `nint(fp)` back. Implicit conversion is rejected — the user must opt in. `address as (unmanaged[CC] (T) -> R)?` is not this conversion: it is ADR-0160's testing conversion, and what it tests is set out in the amendment for issue #4938 below.
 
 ### 5. Diagnostics (new)
 
@@ -338,3 +338,82 @@ csc's, which the #3501 self-migration gate verifies continuously.
 remains the `System.Runtime.InteropServices.CallingConvention` enum, whose
 shape is fixed by the runtime attribute. `[UnmanagedCallersOnly]` callee-side
 support remains deferred to a future ADR (re-noted on #3611).
+
+## Amendment (2026-10-16, issue #4938): converting an address, and what `as` tests
+
+Raw function-pointer dispatch through an address loaded at run time
+(`NativeLibrary.GetExport`, `GetProcAddress`, `vkGetInstanceProcAddr`) had no
+working spelling in 0.5.x:
+
+- `cast[unmanaged[Cdecl] () -> int32](address)` did not parse. The
+  speculative scanner that decides whether `name[...]` is a generic call
+  (`TryScanTypeClauseCore`) had no branch for this clause, read
+  `unmanaged[Cdecl]` as a generic name, stopped at `(` and parsed `cast[...]`
+  as an indexer (GS0125 / GS0130).
+- `address as (unmanaged[Cdecl] () -> int32)?` compiled and returned nil.
+  Through 0.4.1150 it returned the pointer.
+
+### `cast[T]` is the conversion
+
+`cast[T](x)` accepts a function-pointer target and a pointer target. ADR-0167
+reserves `cast` in call position, so its bracket is a conversion target, not
+a CLR generic instantiation: GS0521 ("Pointer and function-pointer types
+cannot be used as generic type arguments") does not apply to the called
+`cast[T](x)`, and still applies to every other generic argument list,
+including `cast[T]{…}`. The conversion is the explicit reinterpretation the
+classifier already admitted; no type test is emitted.
+
+```gs
+unsafe func Main() {
+    let address = NativeLibrary.GetExport(NativeLibrary.Load("libc.so.6"), "getpid")
+    let getpid = cast[unmanaged[Cdecl] () -> int32](address)
+    Console.WriteLine(getpid() == Environment.ProcessId)
+}
+```
+
+The scanner and the type-clause parser now share one head test for this
+production (`IsFunctionPointerTypeHead`), which also fixed
+`[]unmanaged[Cdecl] () -> int32`: the array-element dispatch used to read
+`unmanaged` as the element's type name. A parser test pairs every
+type-clause production with a scanner check, and fails when a new production
+appears without one.
+
+### `as`, `is` and type patterns test the runtime projection
+
+The CLR has no runtime type for a function pointer: its values are addresses,
+and boxed they are `System.IntPtr`. A type test against a function-pointer
+type — `x as (unmanaged[CC] (T) -> R)?`, `x is unmanaged[CC] (T) -> R`,
+`case f is unmanaged[CC] (T) -> R` — therefore tests for `System.IntPtr`, and
+the matched value is the address reinterpreted as the pointer. For `as`:
+
+| Operand | Result |
+|---|---|
+| `nint` | the pointer, never nil |
+| `nint?` | the pointer, or nil when the operand is nil |
+| `object` holding a boxed `nint` | the pointer |
+| any other value, including `nuint` (which boxes as `UIntPtr`) | nil |
+
+This is the behaviour through 0.4.1150, and this amendment restores it.
+Issue #4685 (first shipped in v0.4.1270, and in every 0.5.x) made the
+emitter give function pointers their FNPTR TypeSpec in every opcode, to fix
+`newarr` for arrays of function pointers. That also reached `box`, `isinst`
+and `unbox.any`. No boxed value is an instance of a FNPTR type, so every type
+test failed silently, and `box` of a function pointer yielded nil. The
+self-migration to G# carried the change over unchanged.
+
+`as` is kept rather than rejected: §4 documented it as the conversion spelling,
+it worked from 0.4 through 0.4.1150, and with the runtime projection it is a
+well-defined testing conversion under ADR-0160. Prefer `cast[T]` for an
+address: it states the intent, does not depend on the operand's static type,
+and accepts `nuint`, the fixed-size integers and pointers too. (Calling an
+`as` result after a nil check without `!!` currently miscompiles; that is
+issue #4943, independent of this amendment.)
+
+### Emit
+
+Opcodes that act on a value's runtime type (`box`, `isinst`, `unbox.any`,
+`castclass`) tokenise a function pointer as `System.IntPtr`
+(`GetElementTypeToken`). The array-element opcodes (`newarr`, `ldelem`,
+`stelem`, `ldelema`) name the exact FNPTR element type
+(`GetArrayElementTypeToken`), so an array of function pointers still matches
+its `method …*[]` signature (issue #4685).

@@ -224,7 +224,7 @@ internal partial class MethodBodyEmitter {
             // honors), structs, etc. `ldelem <token>` works for these
             // because the verifier matches the static element type.
             this.il.OpCode(ILOpCode.Ldelem)
-            this.il.Token(this.outer.memberRefs.GetElementTypeToken(elementType))
+            this.il.Token(this.outer.memberRefs.GetArrayElementTypeToken(elementType))
         }
     }
 
@@ -252,7 +252,7 @@ internal partial class MethodBodyEmitter {
             this.il.OpCode(ILOpCode.Stelem_ref)
         } else {
             this.il.OpCode(ILOpCode.Stelem)
-            this.il.Token(this.outer.memberRefs.GetElementTypeToken(elementType))
+            this.il.Token(this.outer.memberRefs.GetArrayElementTypeToken(elementType))
         }
     }
 
@@ -1967,7 +1967,7 @@ internal partial class MethodBodyEmitter {
         let token = this
             .outer
             .memberRefs
-            .GetElementTypeToken(
+            .GetArrayElementTypeToken(
             elementType ?? TypeSymbol.FromClrTypeWithoutNullability(typeof(object), NullabilityFreeReason.TypeLiteral)
         )
         this.il.OpCode(ILOpCode.Ldelema)
