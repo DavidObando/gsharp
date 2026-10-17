@@ -6,10 +6,11 @@ source with the G# source that `cs2gs` produces, in one squash PR against the
 frozen `main`. This page is the single record of how, so the step does not exist
 only as harness behaviour.
 
-The mechanics are code, not prose: [`build/cutover.py`](../build/cutover.py)
-(`dry-run` and `hand-fix` subcommands, tests in
-[`build/test-cutover.py`](../build/test-cutover.py)). The dry run and the real
-cut-over run the same hand-fix code.
+The mechanics are code, not prose: `build/cutover.py`
+(`dry-run` and `hand-fix` subcommands, tests in `build/test-cutover.py`; both
+were removed from `main` after the cut-over and remain at tag
+[`v0.5.7`](https://github.com/DavidObando/gsharp/blob/v0.5.7/build/cutover.py)).
+The dry run and the real cut-over run the same hand-fix code.
 
 ## What the repository looks like afterwards
 
