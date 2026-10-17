@@ -73,6 +73,31 @@ internal class ImportedMemberRefFactory {
         this.signatures = outer.signatures ?? throw ArgumentNullException("outer")
     }
 
+    /// Issue #4938: the token for an opcode that names a type's exact
+    /// identity rather than a value's runtime type: the array-element opcodes
+    /// (`newarr`, `ldelem`, `stelem`, `ldelema`) and `ldtoken` for
+    /// `typeof(T)`. An array must match its `T[]` signature, and `typeof`
+    /// must reflect the written type. For a function pointer that is the
+    /// FNPTR TypeSpec: `newarr System.IntPtr` would create an `IntPtr[]`
+    /// where the signature says `method …*[]` (issue #4684), and
+    /// `typeof(unmanaged[CC] () -> R)` is a function-pointer `Type`
+    /// (`IsFunctionPointer`), not `IntPtr`. Every other type tokenises
+    /// exactly as (cref:GetElementTypeToken) does, which gives a function
+    /// pointer its runtime projection, `System.IntPtr`.
+    /// @param element The type to name.
+    /// @returns The type token.
+    internal func GetExactTypeToken(element TypeSymbol) EntityHandle {
+        if element is PlatformTypeSymbol platformElement {
+            return this.GetExactTypeToken(platformElement.UnderlyingType)
+        }
+        if element is FunctionPointerTypeSymbol {
+            let sigBlob = BlobBuilder()
+            this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), element)
+            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        }
+        return this.GetElementTypeToken(element)
+    }
+
     internal func GetElementTypeToken(element TypeSymbol) EntityHandle {
         // ADR-0186 §1: `T!` is erased at emit and has no value-type case, so
         // its token is exactly `T`'s. Tokenising the UNDERLYING symbol matters
@@ -155,12 +180,24 @@ internal class ImportedMemberRefFactory {
         if element == TypeSymbol.String {
             return this.GetTypeReference(this.emitCtx.CoreStringType)
         }
-        // Pointer elements need their PTR/FNPTR TypeSpec, not a named pointer
-        // TypeRef or the function pointer's native-int runtime projection.
-        if element is PointerTypeSymbol || element is FunctionPointerTypeSymbol {
+        // Issue #3285 sibling sweep: an unmanaged pointer needs its PTR
+        // TypeSpec. A TypeRef whose name is `System.Int32*` is not a real
+        // runtime type and fails to load.
+        if element is PointerTypeSymbol {
             let sigBlob = BlobBuilder()
             this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), element)
             return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        }
+        // Issue #4938: a function pointer tokenises as its runtime projection,
+        // `System.IntPtr`. The CLR has no boxed function-pointer type, so the
+        // opcodes that act on a value's runtime type (`box`, `isinst`,
+        // `unbox.any`, `castclass`) must name `IntPtr`: with the FNPTR TypeSpec
+        // `box` produced nil and `isinst` never matched, so `x as
+        // (unmanaged[CC] () -> R)?` silently yielded nil and `x is …` false.
+        // Only the opcodes that name a type's identity (array elements,
+        // `typeof`) need the exact FNPTR type; they use GetExactTypeToken.
+        if element is FunctionPointerTypeSymbol {
+            return this.GetElementTypeToken(TypeSymbol.NInt)
         }
         if element is ArrayTypeSymbol nestedArr {
             let sigBlob = BlobBuilder()
@@ -371,7 +408,7 @@ internal class ImportedMemberRefFactory {
         ) {
             return definitionHandle
         }
-        return this.GetElementTypeToken(type)
+        return this.GetExactTypeToken(type)
     }
 
     /// Issue #3678: the emitted TypeDef row for a user-declared type.

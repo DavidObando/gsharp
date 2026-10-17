@@ -63,10 +63,12 @@ open partial class Parser {
                 elementOffset++
             }
         }
-        // `unmanaged[CC] (P...) -> R` is a single function-pointer type.
-        // The generic-call scanner intentionally treats `unmanaged[CC]` as a
-        // named generic and would otherwise mistake its signature `(` for the
-        // operand of an array conversion call.
+        // `unmanaged[CC] (P...) -> R` is a single function-pointer type whose
+        // signature `(` must not be read as the operand of an array
+        // conversion call. Since issue #4938 the scanner reads the whole
+        // function-pointer clause, but `[]unmanaged[CC] () -> R(x)` would then
+        // scan the return type `R` and take `(x)` as the conversion operand;
+        // keep the array-of-function-pointer element off this path.
         if Peek(elementOffset).Kind == SyntaxKind.IdentifierToken && Peek(elementOffset).Text == "unmanaged" {
             return false
         }

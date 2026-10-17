@@ -110,9 +110,7 @@ open partial class Parser {
         // start of a type-clause position followed by `[` or `(`. Plain
         // identifiers named `unmanaged` (e.g. a struct member or local)
         // are unaffected because they never reach this parser entry.
-        if Current.Kind == SyntaxKind.IdentifierToken &&
-            Current.Text == "unmanaged" &&
-            (Peek(1).Kind == SyntaxKind.OpenSquareBracketToken || Peek(1).Kind == SyntaxKind.OpenParenthesisToken) {
+        if IsFunctionPointerTypeHead() {
             return ParseFunctionPointerTypeClause()
         }
         // ADR-0039: pointer type `*T` in type-annotation position.
@@ -178,10 +176,14 @@ open partial class Parser {
             // identifier: `in`/`out` are contextual, so `[]in chan[T]` would
             // otherwise take the flat path and read `in` as the element's type
             // name.
+            // Issue #4938: the raw function-pointer head `unmanaged[CC] (…) -> R`
+            // is also an identifier, so `[]unmanaged[Cdecl] () -> int32` used
+            // to take the flat path and read `unmanaged` as the element's name.
             if Current.Kind != SyntaxKind.IdentifierToken ||
                 IsChannelDirectionHead() ||
                 IsReadOnlySliceHead() ||
-                IsReadOnlyManagedHead() {
+                IsReadOnlyManagedHead() ||
+                IsFunctionPointerTypeHead() {
                 let nestedElement = ParseTypeClause()
                 let nestedQuestion = if Current.Kind == SyntaxKind.QuestionToken {
                     MatchToken(SyntaxKind.QuestionToken)
@@ -345,10 +347,14 @@ open partial class Parser {
 
     private func ParseGenericTypeArgument() TypeClauseSyntax {
         let typeArgument = ParseTypeClause()
+        ReportIfPointerGenericTypeArgument(typeArgument)
+        return typeArgument
+    }
+
+    private func ReportIfPointerGenericTypeArgument(typeArgument TypeClauseSyntax) {
         if typeArgument.IsPointer || typeArgument.IsFunctionPointer {
             Diagnostics.ReportPointerGenericTypeArgument(typeArgument.Location)
         }
-        return typeArgument
     }
 
     private func ParseTupleTypeClause() TypeClauseSyntax {
@@ -437,8 +443,7 @@ open partial class Parser {
         }
         // `unmanaged[CC] (…) -> R` / `unmanaged (…) -> R` is a raw
         // function-pointer TYPE head, never an element name.
-        if Current.Text == "unmanaged" &&
-            (Peek(1).Kind == SyntaxKind.OpenSquareBracketToken || Peek(1).Kind == SyntaxKind.OpenParenthesisToken) {
+        if IsFunctionPointerTypeHead() {
             return false
         }
         // ADR-0174 D2: `in chan[T]` / `out chan[T]` is a directional channel
@@ -518,6 +523,24 @@ open partial class Parser {
             question
         )
     }
+
+    /// ADR-0095 §6: `unmanaged` is a contextual keyword that heads a raw
+    /// function-pointer type clause (`unmanaged[CC, …] (T, …) -> R`, or the
+    /// platform-default `unmanaged (T, …) -> R`) only when the next token is
+    /// `[` or `(`. This is the single head test for that production: the real
+    /// type-clause parser, its array-element dispatch, the tuple-element-name
+    /// look-aheads and the speculative scanner
+    /// (`TryScanTypeClauseCore`) all ask it, so they cannot disagree about
+    /// where a function-pointer type starts (issue #4938).
+    /// @param offset The token offset, relative to `Current`, of the
+    /// candidate `unmanaged` token.
+    private func IsFunctionPointerTypeHead(offset int32 = 0) bool -> Peek(offset).Kind == SyntaxKind.IdentifierToken &&
+        Peek(offset).Text == "unmanaged" &&
+        (
+        Peek(offset + 1).Kind == SyntaxKind.OpenSquareBracketToken || Peek(
+            offset + 1
+        ).Kind == SyntaxKind.OpenParenthesisToken
+    )
 
     private func IsChannelDirectionHead() bool -> Current.Kind == SyntaxKind.IdentifierToken &&
         (Current.Text == "in" || Current.Text == "out") &&

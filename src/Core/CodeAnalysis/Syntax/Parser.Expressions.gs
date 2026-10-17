@@ -778,7 +778,7 @@ open partial class Parser {
                 // emitter reuse the existing `(*p).field` / `(*p).method(...)`
                 // bound shape without any new bound-node kinds.
                 let arrowToken = NextToken()
-                let rightSide = ParseNameOrCallExpression(stopBeforeIndirectInvocation: true)
+                let rightSide = ParseNameOrCallExpression(stopBeforeIndirectInvocation: true, isMemberName: true)
                 let starToken = SyntaxToken(syntaxTree, SyntaxKind.StarToken, arrowToken.Position, "*", nil)
                 let deref = UnaryExpressionSyntax(syntaxTree, starToken, current)
                 current = AccessorExpressionSyntax(syntaxTree, deref, arrowToken, rightSide)
@@ -862,7 +862,11 @@ open partial class Parser {
             // Contextual operators (`nameof`, `typeof`, `checked`, ...) are only
             // operators at expression roots. After `.`/`?.` they are ordinary
             // CLR/source member names and must not steal the call grammar.
-            return ParseNameOrCallExpression(stopBeforeIndirectInvocation: true, allowContextualOperators: false)
+            return ParseNameOrCallExpression(
+                stopBeforeIndirectInvocation: true,
+                allowContextualOperators: false,
+                isMemberName: true
+            )
         }
         let selectorToken = NextToken()
         let identifierToken = SyntaxToken(

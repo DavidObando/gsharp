@@ -2208,7 +2208,7 @@ this analysis applies only to kinds with no usable zero value.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0521 | Error | Pointer and function-pointer types cannot be used as generic type arguments because the CLR cannot instantiate generic types with them. |
+| GS0521 | Error | Pointer and function-pointer types cannot be used as generic type arguments because the CLR cannot instantiate generic types with them. The called `cast[T](x)` intrinsic is not a generic instantiation (ADR-0167), so `cast[*uint8](address)` and `cast[unmanaged[Cdecl] () -> int32](address)` do not report it (issue #4938). |
 
 ## Nil comparison against a bare collection type is statically constant (GS0523)
 

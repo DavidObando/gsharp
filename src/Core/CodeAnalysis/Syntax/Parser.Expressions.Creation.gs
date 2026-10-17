@@ -577,11 +577,16 @@ open partial class Parser {
         return false
     }
 
+    /// @param isMemberName Whether this parses the member name after `.`,
+    /// `?.` or `->`. A member named `cast` is an ordinary member, never the
+    /// reserved `cast[T](x)` intrinsic.
     private func ParseNameOrCallExpression(
         stopBeforeIndirectInvocation bool = false,
-        allowContextualOperators bool = true
+        allowContextualOperators bool = true,
+        isMemberName bool = false
     ) ExpressionSyntax {
         var current ExpressionSyntax
+        let isCastIntrinsic = !isMemberName && IsCastIntrinsicHead()
         if IsReadOnlyManagedHead() || IsReadOnlyManagedHead(address: true) {
             current = ParseReadOnlyManagedExpression()
         } else if IsReadOnlySliceHead() ||
@@ -636,8 +641,8 @@ open partial class Parser {
             // invocation when the identifier resolves to a callable value.
             current = ParseNullableTypeCallExpression()
         } else if Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.OpenSquareBracketToken &&
-            LooksLikeGenericCallSite(1) {
-            current = ParseGenericCallExpression()
+            LooksLikeGenericCallSite(1, pointerArgumentsAllowed: isCastIntrinsic) {
+            current = ParseGenericCallExpression(castIntrinsic: isCastIntrinsic)
             current = MaybeWrapWithObjectInitializer(current)
         } else if Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.OpenBraceToken &&
             IsStructLiteralFollowingBrace(2) &&
@@ -763,30 +768,26 @@ open partial class Parser {
     // literal-index behaviour (`xs[0].ToString()`). The `(`/`{` markers stay
     // arity-agnostic: `Map[int](xs)` and `List[int]{...}` remain generic
     // instantiations regardless of arity.
-    private func LooksLikeGenericCallSite(bracketOffset int32) bool {
-        if Peek(bracketOffset).Kind != SyntaxKind.OpenSquareBracketToken {
-            return false
+    //
+    // Issue #4938: `cast` is reserved in CALL position (ADR-0167), so
+    // `cast[*T](x)` cannot be an indexer-then-call; the caller passes
+    // `pointerArgumentsAllowed` for that name only. The permission applies
+    // only when `(` follows the brackets: `cast[*p].Length` on a variable
+    // named `cast` is not a call, so it is classified by the ordinary rules
+    // and stays an indexer over a dereference.
+    private func LooksLikeGenericCallSite(bracketOffset int32, pointerArgumentsAllowed bool = false) bool {
+        if pointerArgumentsAllowed &&
+            TryScanBracketedTypeArguments(bracketOffset, pointerAllowed: true, out var callPos, out _, out _) &&
+            Peek(callPos).Kind == SyntaxKind.OpenParenthesisToken {
+            return true
         }
-        var pos = bracketOffset + 1
-        if Peek(pos).Kind == SyntaxKind.CloseSquareBracketToken {
-            return false
-        }
-        var typeArgumentCount = 0
-        var sawComplexTypeArgument = false
-        while true {
-            if !TryScanTypeClause(&pos, out var argumentIsComplex) {
-                return false
-            }
-            typeArgumentCount++
-            sawComplexTypeArgument |= argumentIsComplex
-            if Peek(pos).Kind == SyntaxKind.CommaToken {
-                pos++
-                continue
-            }
-            if Peek(pos).Kind == SyntaxKind.CloseSquareBracketToken {
-                pos++
-                break
-            }
+        if !TryScanBracketedTypeArguments(
+            bracketOffset,
+            pointerAllowed: false,
+            out var pos,
+            out var typeArgumentCount,
+            out var sawComplexTypeArgument
+        ) {
             return false
         }
         // Follow-set per ADR-0020: '(' (call), '{' (composite literal), '.' (member access).
@@ -831,6 +832,49 @@ open partial class Parser {
         return nextKind == SyntaxKind.DotToken && (typeArgumentCount > 1 || sawComplexTypeArgument)
     }
 
+    /// Scans `[ T1, T2, … ]` starting at [`bracketOffset`](paramref), each
+    /// item a type clause, for (cref:LooksLikeGenericCallSite).
+    /// @param bracketOffset The offset of the `[` token relative to Current.
+    /// @param pointerAllowed Whether a top-level `*T` item is accepted.
+    /// @param endPos The offset just past the matching `]`.
+    /// @param typeArgumentCount The number of items scanned.
+    /// @param sawComplexTypeArgument Whether any item is unambiguously a type.
+    /// @returns Whether every item scanned as a type clause.
+    private func TryScanBracketedTypeArguments(
+        bracketOffset int32,
+        pointerAllowed bool,
+        out endPos int32,
+        out typeArgumentCount int32,
+        out sawComplexTypeArgument bool
+    ) bool {
+        endPos = bracketOffset
+        typeArgumentCount = 0
+        sawComplexTypeArgument = false
+        if Peek(bracketOffset).Kind != SyntaxKind.OpenSquareBracketToken {
+            return false
+        }
+        var pos = bracketOffset + 1
+        if Peek(pos).Kind == SyntaxKind.CloseSquareBracketToken {
+            return false
+        }
+        while true {
+            if !TryScanTypeClause(&pos, out var argumentIsComplex, pointerAllowed) {
+                return false
+            }
+            typeArgumentCount++
+            sawComplexTypeArgument |= argumentIsComplex
+            if Peek(pos).Kind == SyntaxKind.CommaToken {
+                pos++
+                continue
+            }
+            if Peek(pos).Kind == SyntaxKind.CloseSquareBracketToken {
+                endPos = pos + 1
+                return true
+            }
+            return false
+        }
+    }
+
     private func TryScanTypeClause(ref pos int32) bool -> TryScanTypeClause(&pos, out _)
 
     /// ADR-0172: speculative-cursor twin of the committed parser's
@@ -838,12 +882,7 @@ open partial class Parser {
     /// [`pos`](paramref) is a tuple-element NAME (followed by a token
     /// that can start a type clause) rather than the element type itself.
     private func ScanLooksLikeTupleElementNameAt(pos int32) bool {
-        if Peek(pos).Text == "unmanaged" &&
-            (
-            Peek(pos + 1).Kind == SyntaxKind.OpenSquareBracketToken || Peek(
-                pos + 1
-            ).Kind == SyntaxKind.OpenParenthesisToken
-        ) {
+        if IsFunctionPointerTypeHead(pos) {
             return false
         }
         // ADR-0174 D2: a directional channel head, not an element name.
@@ -880,7 +919,14 @@ open partial class Parser {
     // list). Speculation must fail GRACEFULLY at the limit: it returns false
     // without reporting, and the subsequent real parse (which takes the
     // non-generic interpretation) reports GS0417 if it also runs too deep.
-    private func TryScanTypeClause(ref pos int32, out isComplex bool) bool {
+    /// @param pointerAllowed Whether a plain pointer clause `*T` may start
+    /// at [`pos`](paramref). It may not in a generic type-argument position,
+    /// where `xs[*p](y)` must stay an indexer over a dereference (and where
+    /// `ParseGenericTypeArgument` rejects a pointer anyway, GS0521). It may in
+    /// the positions `ParseTypeClause` reaches with no such ambiguity: a
+    /// pointer's pointee, a function-pointer signature, and the type argument
+    /// of the reserved `cast[T](x)` intrinsic (issue #4938).
+    private func TryScanTypeClause(ref pos int32, out isComplex bool, pointerAllowed bool = false) bool {
         if recursionDepth >= MaxRecursionDepth {
             isComplex = false
             return false
@@ -895,13 +941,13 @@ open partial class Parser {
         }
         recursionDepth++
         try {
-            return TryScanTypeClauseCore(&pos, out isComplex)
+            return TryScanTypeClauseCore(&pos, out isComplex, pointerAllowed)
         } finally {
             recursionDepth--
         }
     }
 
-    private func TryScanTypeClauseCore(ref pos int32, out isComplex bool) bool {
+    private func TryScanTypeClauseCore(ref pos int32, out isComplex bool, pointerAllowed bool) bool {
         isComplex = false
         // Optional leading bracketed segments: '[' ']' or '[' Number ']' for
         // slice/array shapes. Issue #2830: a jagged shape stacks them
@@ -943,14 +989,24 @@ open partial class Parser {
             return false
         }
         // CLR generic arguments cannot be pointer types. Keep `*T` on its
-        // existing rejection path, but scan the distinct `*func(T) R`
-        // production accepted by ParseTypeClauseCore.
+        // existing rejection path in generic-argument positions, but scan the
+        // distinct `*func(T) R` production accepted by ParseTypeClauseCore.
+        // Where a pointer is allowed, mirror ParseTypeClauseCore's
+        // `*` pointee `?` production.
+        var isManagedFunctionPointer = false
         if Peek(pos).Kind == SyntaxKind.StarToken {
-            if Peek(pos + 1).Kind != SyntaxKind.FuncKeyword {
-                return false
-            }
             isComplex = true
             pos++
+            if Peek(pos).Kind != SyntaxKind.FuncKeyword {
+                if !pointerAllowed || !TryScanTypeClause(&pos, out _, pointerAllowed: true) {
+                    return false
+                }
+                if Peek(pos).Kind == SyntaxKind.QuestionToken {
+                    pos++
+                }
+                return true
+            }
+            isManagedFunctionPointer = true
         }
         // ADR-0075: `async (T) -> R` and `func(T) R` start a function-type clause.
         // Handle the optional leading `async` modifier here so the next token
@@ -1017,7 +1073,10 @@ open partial class Parser {
                     if Peek(pos).Kind == SyntaxKind.IdentifierToken && ScanLooksLikeTupleElementNameAt(pos) {
                         pos++
                     }
-                    if !TryScanTypeClause(&pos) {
+                    // A grouping or element inside an allowed position (for
+                    // example `cast[unmanaged[CC] () -> (*uint8)](x)`) is
+                    // not a generic argument either.
+                    if !TryScanTypeClause(&pos, out _, pointerAllowed) {
                         return false
                     }
                     if Peek(pos).Kind == SyntaxKind.CommaToken {
@@ -1035,7 +1094,7 @@ open partial class Parser {
             let isArrowFunction = Peek(pos).Kind == SyntaxKind.RightArrowToken
             if isArrowFunction {
                 pos++
-                if !TryScanTypeClause(&pos) {
+                if !TryScanTypeClause(&pos, out _, pointerAllowed) {
                     return false
                 }
             } else if sawEllipsis {
@@ -1061,7 +1120,9 @@ open partial class Parser {
                     if Peek(pos).Kind == SyntaxKind.EllipsisToken {
                         pos++
                     }
-                    if !TryScanTypeClause(&pos) {
+                    // A managed function pointer's signature is not a generic
+                    // argument list, so it may name pointers (`*func(*int32)`).
+                    if !TryScanTypeClause(&pos, out _, pointerAllowed: isManagedFunctionPointer) {
                         return false
                     }
                     if Peek(pos).Kind == SyntaxKind.CommaToken {
@@ -1075,9 +1136,11 @@ open partial class Parser {
                 return false
             }
             pos++
-            // Optional return type for the legacy func form.
-            if CanStartTypeClause(Peek(pos)) && Peek(pos).Kind != SyntaxKind.StarToken {
-                if !TryScanTypeClause(&pos) {
+            // Optional return type for the legacy func form. A managed
+            // function pointer may return a pointer (`*func() *uint8`),
+            // which ParseOptionalTypeClause accepts.
+            if CanStartTypeClause(Peek(pos)) && (Peek(pos).Kind != SyntaxKind.StarToken || isManagedFunctionPointer) {
+                if !TryScanTypeClause(&pos, out _, pointerAllowed: isManagedFunctionPointer) {
                     return false
                 }
             }
@@ -1085,6 +1148,16 @@ open partial class Parser {
                 pos++
             }
             return true
+        }
+        // ADR-0095 / issue #4938: raw function-pointer type clause
+        // `unmanaged[CC, …] (T, …) -> R` (or the platform-default
+        // `unmanaged (T, …) -> R`). It must be recognised before the
+        // named-type path below, which would otherwise consume `unmanaged[CC]`
+        // as a generic name and stop at `(`, so `cast[unmanaged[Cdecl] () ->
+        // int32](address)` was mis-read as an indexer on a variable `cast`.
+        if IsFunctionPointerTypeHead(pos) {
+            isComplex = true
+            return TryScanFunctionPointerTypeClause(&pos)
         }
         if Peek(pos).Kind != SyntaxKind.IdentifierToken {
             return false
@@ -1120,6 +1193,59 @@ open partial class Parser {
             pos++
         }
         return true
+    }
+
+    /// Speculative-cursor twin of `ParseFunctionPointerTypeClause`: scans
+    /// `unmanaged`, an optional `[CC, …]` convention list, a parenthesised
+    /// parameter-type list, `->` and the return type. The caller has already
+    /// matched the head with `IsFunctionPointerTypeHead`. Like the real
+    /// parser, no trailing `?` is consumed here: a `?` after the return type
+    /// belongs to the return type, and a nullable function pointer is spelled
+    /// `(unmanaged[CC] (…) -> R)?`.
+    private func TryScanFunctionPointerTypeClause(ref pos int32) bool {
+        pos++
+        if Peek(pos).Kind == SyntaxKind.OpenSquareBracketToken {
+            pos++
+            if Peek(pos).Kind != SyntaxKind.IdentifierToken {
+                return false
+            }
+            pos++
+            while Peek(pos).Kind == SyntaxKind.CommaToken {
+                pos++
+                if Peek(pos).Kind != SyntaxKind.IdentifierToken {
+                    return false
+                }
+                pos++
+            }
+            if Peek(pos).Kind != SyntaxKind.CloseSquareBracketToken {
+                return false
+            }
+            pos++
+        }
+        if Peek(pos).Kind != SyntaxKind.OpenParenthesisToken {
+            return false
+        }
+        pos++
+        // The signature is not a generic argument list: native signatures
+        // routinely take and return pointers (`(nint, *uint8) -> nint`).
+        while Peek(pos).Kind != SyntaxKind.CloseParenthesisToken && Peek(pos).Kind != SyntaxKind.EndOfFileToken {
+            if !TryScanTypeClause(&pos, out _, pointerAllowed: true) {
+                return false
+            }
+            if Peek(pos).Kind != SyntaxKind.CommaToken {
+                break
+            }
+            pos++
+        }
+        if Peek(pos).Kind != SyntaxKind.CloseParenthesisToken {
+            return false
+        }
+        pos++
+        if Peek(pos).Kind != SyntaxKind.RightArrowToken {
+            return false
+        }
+        pos++
+        return TryScanTypeClause(&pos, out _, pointerAllowed: true)
     }
 
     private func TryScanSequenceTypeClause(ref pos int32) bool {
@@ -1202,9 +1328,25 @@ open partial class Parser {
         return true
     }
 
-    private func ParseGenericCallExpression() ExpressionSyntax {
+    /// ADR-0167: `cast` is reserved in call position, and `cast[T](x)` binds
+    /// as the conversion intrinsic whatever `T` is. Its bracket is a
+    /// conversion target, not a CLR generic instantiation, so pointer and
+    /// function-pointer targets are legal there (issue #4938).
+    private func IsCastIntrinsicHead() bool -> Current.Kind == SyntaxKind.IdentifierToken && Current.ValueText == "cast"
+
+    /// @param castIntrinsic Whether this is the reserved `cast[T]` intrinsic
+    /// (see (cref:IsCastIntrinsicHead)), whose target may be a pointer or a
+    /// function pointer when it is called.
+    private func ParseGenericCallExpression(castIntrinsic bool = false) ExpressionSyntax {
         let identifier = MatchToken(SyntaxKind.IdentifierToken)
-        let typeArguments = ParseTypeArgumentList()
+        let typeArguments = ParseTypeArgumentList(pointerArgumentsAllowed: castIntrinsic)
+        if castIntrinsic && Current.Kind != SyntaxKind.OpenParenthesisToken {
+            // `cast[*T]{…}` / `cast[*T].M` are not the intrinsic call; keep
+            // the ordinary generic-argument rejection for them.
+            for typeArgument in typeArguments.Arguments {
+                ReportIfPointerGenericTypeArgument(typeArgument)
+            }
+        }
         // Phase 4.3 / ADR-0020: a `[…]` type-argument list followed by `{` is a
         // generic struct/class composite literal (`Result[int, string]{...}`).
         // Issue #479 / ADR-0117: the same `Type[args]{…}` shape is a collection
@@ -1513,7 +1655,7 @@ open partial class Parser {
         )
     }
 
-    private func ParseTypeArgumentList() TypeArgumentListSyntax {
+    private func ParseTypeArgumentList(pointerArgumentsAllowed bool = false) TypeArgumentListSyntax {
         let openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken)
         let nodesAndSeparators = ImmutableArray.CreateBuilder[SyntaxNode]()
         var parseNext = true
@@ -1521,7 +1663,13 @@ open partial class Parser {
             Current.Kind != SyntaxKind.CloseSquareBracketToken &&
             Current.Kind != SyntaxKind
             .EndOfFileToken {
-            nodesAndSeparators.Add(ParseGenericTypeArgument())
+            nodesAndSeparators.Add(
+                if pointerArgumentsAllowed {
+                    ParseTypeClause()
+                } else {
+                    ParseGenericTypeArgument()
+                }
+            )
             if Current.Kind == SyntaxKind.CommaToken {
                 nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken))
             } else {
