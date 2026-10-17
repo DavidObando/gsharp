@@ -298,13 +298,20 @@ class RealSourceTests(CommentOnlyCase):
                 self.assertGreater(check.classify(path, text).count(check.COMMENT), 0)
 
     def test_real_lexer_comment_and_string_edits(self) -> None:
+        # The edits come from the scanner, not from fixed text, so a later
+        # rewording of Lexer.gs does not break this test.
         text = (REPO / self.LEXER).read_text(encoding="utf-8")
-        comment = "// Skip the current quote"
-        literal = "'\\u0000'"
-        self.assertIn(comment, text)
-        self.assertIn(literal, text)
-        self.assertPasses(self.LEXER, text, text.replace(comment, "// Step past the opening quote", 1))
-        self.assertFails(self.LEXER, text, text.replace(literal, "'\\u0001'", 1))
+        mask = check.classify(self.LEXER, text)
+        comments = [(s, e) for s, e in check._runs(mask, check.COMMENT) if text.startswith("// ", s)]
+        self.assertGreater(len(comments), 0)
+        start, end = comments[len(comments) // 2]
+        self.assertPasses(self.LEXER, text, text[:start] + "// A reworded comment." + text[end:])
+        strings = [(s, e) for s, e in check._runs(mask, check.STRING) if e - s >= 3 and text[(s + e) // 2] not in "\"'`\\{}$"]
+        self.assertGreater(len(strings), 0)
+        start, end = strings[len(strings) // 2]
+        middle = (start + end) // 2
+        changed = "Q" if text[middle] != "Q" else "R"
+        self.assertFails(self.LEXER, text, text[:middle] + changed + text[middle + 1 :])
 
 
 def git(repo: Path, *args: str) -> str:
