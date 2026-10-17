@@ -106,6 +106,12 @@ class ReleaseVersionRefsTests(unittest.TestCase):
             path, f"The published **{VERSION}** release", "The current release"))
         self.assertReported(problems, path, "found 0")
 
+    def test_missing_optional_snapshot_page_is_not_reported(self) -> None:
+        path = f"website/versioned_docs/version-{RELEASE['docsVersion']}/contributing/docs-authoring.md"
+        entry = next(e for e in refs.TRACKED if e.path.endswith("contributing/docs-authoring.md"))
+        self.assertTrue(entry.optional)
+        self.assertEqual(self.problems_with({path: None}), [])
+
     def test_missing_tracked_file_is_reported(self) -> None:
         problems = self.problems_with({"samples/ConcurrencyPatterns/README.md": None})
         self.assertReported(problems, "samples/ConcurrencyPatterns/README.md", "missing")
