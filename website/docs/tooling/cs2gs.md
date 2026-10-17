@@ -37,10 +37,12 @@ A migration needs these tools, in addition to `cs2gs`:
 - **A `gsc.dll`.** `cs2gs` looks for `out/bin/<config>/Compiler/gsc.dll` in the current directory and its parents, which a source build of G# provides. Otherwise, pass `--gsc <path>`. The `Gsharp.NET.Sdk` package contains the compiler at `tools/compiler/gsc.dll`, for example under `~/.nuget/packages/gsharp.net.sdk/<version>/` after you restore a G# project.
 - **An SDK version.** Pass `--sdk-version <v>` with a `Gsharp.NET.Sdk` version that is on NuGet. Without it, `cs2gs` looks for a locally packed SDK and stops if it finds none.
 - **The `ilverify` tool.** The IL-verify stage runs `dotnet tool run ilverify`. Add `dotnet-ilverify` to a local tool manifest in the directory you run `cs2gs` from (`dotnet new tool-manifest`, then `dotnet tool install dotnet-ilverify`).
+- **A `.nugs` directory.** The `nuget.config` that `cs2gs` generates for the destination lists `.nugs` under the C# source root (the `CS2GS_TEST_SOURCE_ROOT` directory below) as a local package source. Restore fails with `NU1301` for any project with package references until that directory exists. Create it before you run `migrate` (`mkdir path/to/csharp-repo/.nugs`).
 
 Known limitation ([#4956](https://github.com/DavidObando/gsharp/issues/4956)): the published tool also looks for the G# source tree, and outside it `migrate` stops with "Could not locate the repository source root". Until this is fixed, set the `CS2GS_TEST_SOURCE_ROOT` environment variable to the root of the C# repository:
 
 ```sh
+mkdir -p path/to/csharp-repo/.nugs
 CS2GS_TEST_SOURCE_ROOT=path/to/csharp-repo cs2gs migrate \
   --corpus path/to/csharp-repo --out path/to/gsharp-repo \
   --gsc ~/.nuget/packages/gsharp.net.sdk/<version>/tools/compiler/gsc.dll \

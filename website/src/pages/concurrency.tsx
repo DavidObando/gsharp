@@ -18,7 +18,7 @@ export default function Concurrency(): ReactNode {
   return (
     <Layout
       title="Ten concurrency patterns: Go and G#"
-      description="Compare ten runnable Go and G# concurrency patterns by correctness, cancellation, ownership, and ease of use, with separately sourced workflow measurements.">
+      description="Compare ten runnable Go and G# concurrency patterns by correctness, cancellation, ownership, and ease of use, with separately sourced benchmark measurements.">
       <main className={styles.page} data-pagefind-body data-pagefind-filter="version:general">
         <header className={styles.hero}>
           <div className="gs-container">
@@ -37,7 +37,7 @@ export default function Concurrency(): ReactNode {
                 Download all ten pairs
               </a>
               <Link className="gs-button gs-button-ghost" to="#benchmark-heading">
-                Inspect workflow measurements
+                Inspect benchmark measurements
               </Link>
             </div>
             <p className={styles.version}>
@@ -67,7 +67,7 @@ export default function Concurrency(): ReactNode {
               <div>
                 <Heading as="h3">What was measured?</Heading>
                 <p>
-                  The workflow measures lower-level operations, not these teaching programs. Some
+                  The benchmark measures lower-level operations, not these teaching programs. Some
                   patterns have no relevant measurement.
                 </p>
               </div>
@@ -163,7 +163,7 @@ export default function Concurrency(): ReactNode {
               <p className={styles.related}>
                 <strong>Whole-pattern performance: not measured.</strong>
                 {benchmarkSnapshot.status !== 'available' ? (
-                  <> No workflow snapshot is available.</>
+                  <> No benchmark snapshot is available.</>
                 ) : pattern.benchmarks.length > 0 ? (
                   <>
                     {' '}

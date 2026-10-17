@@ -183,7 +183,6 @@ loudly instead.
 ## Documentation site
 
 ```sh
-python3 build/generate-quality-dashboard.py
 cd website
 npm ci
 npm run typecheck
@@ -192,7 +191,8 @@ npm run build
 
 Broken links fail the production build. Current docs live in `website/docs`;
 released snapshots under `website/versioned_docs` change only during an
-intentional version cut.
+intentional version cut. Page conventions, examples, links and versioning are
+in [`docs/docs-authoring.md`](docs/docs-authoring.md).
 
 ## Pull requests
 

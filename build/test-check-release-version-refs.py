@@ -76,7 +76,6 @@ class ReleaseVersionRefsTests(unittest.TestCase):
             (f"{root}/getting-started/install.md", f"published **{VERSION}**", f"published **{OTHER}**"),
             (f"{root}/tutorials/trail.md", f"G# SDK {VERSION}", f"G# SDK {OTHER}"),
             (f"{root}/release-notes.md", f"## {VERSION} at a glance", f"## {OTHER} at a glance"),
-            (f"{root}/contributing/docs-authoring.md", f"against `v{VERSION}`", f"against `v{OTHER}`"),
         ]
         for path, old, new in cases:
             with self.subTest(path=path):
@@ -91,6 +90,8 @@ class ReleaseVersionRefsTests(unittest.TestCase):
             path = entry.path.replace("{D}", docs_version)
             pattern = entry.pattern.replace("{V}", refs.VER)
             text = BASE.read(path)
+            if text is None and entry.optional:
+                continue  # an optional page this snapshot no longer has
             self.assertIsNotNone(text, f"{path} is missing")
             assert text is not None  # narrows the type; assertIsNotNone above reports the failure
             # Make only this entry's references stale; other refs stay current.
@@ -105,6 +106,12 @@ class ReleaseVersionRefsTests(unittest.TestCase):
         problems = self.problems_with(self.replaced(
             path, f"The published **{VERSION}** release", "The current release"))
         self.assertReported(problems, path, "found 0")
+
+    def test_missing_optional_snapshot_page_is_not_reported(self) -> None:
+        path = f"website/versioned_docs/version-{RELEASE['docsVersion']}/contributing/docs-authoring.md"
+        entry = next(e for e in refs.TRACKED if e.path.endswith("contributing/docs-authoring.md"))
+        self.assertTrue(entry.optional)
+        self.assertEqual(self.problems_with({path: None}), [])
 
     def test_missing_tracked_file_is_reported(self) -> None:
         problems = self.problems_with({"samples/ConcurrencyPatterns/README.md": None})

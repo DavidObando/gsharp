@@ -146,7 +146,7 @@ const config: Config = {
         {
           to: '/project',
           activeBaseRegex:
-            '/(project|docs/(next/|[0-9.]+/)?(project|release-notes|design-decisions|contributing))(/|$)',
+            '/(project|docs/(next/|[0-9.]+/)?(release-notes|design-decisions|contributing))(/|$)',
           label: 'Project',
           position: 'left',
         },
@@ -199,7 +199,6 @@ const config: Config = {
           title: 'Project',
           items: [
             {label: 'About the project', to: '/project'},
-            {label: 'Quality dashboard', to: '/docs/next/project/quality-dashboard'},
             {label: 'FAQ', to: '/docs/faq'},
             {label: 'Release notes', to: '/docs/release-notes'},
             {label: 'Design decisions', to: '/docs/design-decisions'},

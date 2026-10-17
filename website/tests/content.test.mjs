@@ -110,7 +110,7 @@ test('tutorial source and output match the canonical showcase fixture', () => {
   }
 });
 
-test('the ten-pattern comparison matches its executed bundle and workflow source', () => {
+test('the ten-pattern comparison matches its executed bundle and benchmark source', () => {
   const examples = JSON.parse(
     readFileSync(path.join(site, 'src/data/concurrency-examples.json'), 'utf8'),
   );

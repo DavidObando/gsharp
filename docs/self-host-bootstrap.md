@@ -18,6 +18,25 @@ toolchain revalidation at each build/test boundary, and complete-PE equality
 except for the exact validated `Module.Mvid` GUID slot. Draft PR #4693 was an
 in-place prototype and discrimination inventory; it was closed without landing.
 
+How the cut-over was bootstrapped and certified (owner decision recorded in
+#4631):
+
+- **Stage 1 (bootstrap):** the G# source compiled by the published
+  `Gsharp.NET.Sdk` **0.4.1270**, the final C#-built SDK, pinned once in the
+  repository's `global.json` `msbuild-sdks`.
+- **Stage 2 (certification):** the G# source compiled again by the stage-1
+  compiler. The cut-over was accepted only when stage 1 and stage 2 produced
+  identical PE bytes for `GSharp.Core.dll` and `gsc.dll`, except the
+  structurally validated 16-byte `Module.Mvid` GUID slot, and
+  `RefactoringBaselineTests`, Core.Tests and Compiler.Tests passed under
+  stage 2.
+- The pin then moved from 0.4.1270 to 0.5.7, a 0.5 release. Since then, each
+  release is the repository built by an earlier G# release, as described
+  below.
+
+Where the C# source went, and the N-1 rule for repository source, are in
+[`CONTRIBUTING.md`](../CONTRIBUTING.md).
+
 After the cut-over, every release is the repository built by the previous pin,
 so a release is stage 1 of its tag. A pin-move PR builds `main` with that
 release, which makes its green CI the stage-2 verification. The controller below

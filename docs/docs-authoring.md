@@ -1,13 +1,8 @@
----
-title: "Authoring these docs"
-description: "Write and preview G# documentation with verified examples and version-safe links."
----
-
-# Authoring these docs
+# Authoring the documentation site
 
 This page documents the conventions for writing pages on the G# documentation site. It exists so that contributors — human or automated — can add or edit pages consistently.
 
-The site is built with [Docusaurus](https://docusaurus.io/) and lives entirely under the `website/` directory of the [gsharp repository](https://github.com/DavidObando/gsharp). Public-facing pages are written fresh here; the implementation-oriented documents under `docs/` remain the authoritative source of design intent, and pages here should link back to them rather than duplicating them.
+The site is built with [Docusaurus](https://docusaurus.io/) and lives entirely under the [`website/`](../website) directory. Public-facing pages are written fresh there. The implementation-oriented documents under `docs/` remain the authoritative source of design intent.
 
 ## Building and previewing locally
 
@@ -75,7 +70,7 @@ The homepage imports the complete `samples/Website*.gs` fixtures and their `.gol
 The site content is grounded in two research artifacts produced while planning the site, plus the in-repo references:
 
 - The language and tooling snapshot (lexical structure, full grammar, type system, concurrency, interop, tooling) — see the implementation sources under `src/Core/CodeAnalysis/` and the curated docs under `docs/`.
-- Design records explain *why* features work the way they do. End-user pages should not cite or link individual records; the single [Design decisions](../design-decisions.md) page is the only index for them.
+- Design records explain *why* features work the way they do. End-user pages should not cite or link individual records; the single [Design decisions](../website/docs/design-decisions.md) page is the only index for them.
 - `docs/diagnostics.md` is authoritative for diagnostic IDs (`GSxxxx`); the Diagnostics reference page must preserve those IDs exactly.
 
 ## Links

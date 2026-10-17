@@ -2,7 +2,7 @@
 
 This directory contains the source for the official G# documentation website, built with [Docusaurus](https://docusaurus.io/) and published to GitHub Pages at **https://davidobando.github.io/gsharp/**.
 
-See `docs/contributing/docs-authoring.md` for content conventions.
+See [`docs/docs-authoring.md`](../docs/docs-authoring.md) for content conventions.
 
 ## Local development
 
@@ -45,7 +45,7 @@ Pagefind's generated browser bundle is loaded directly from the same-origin `/pa
 
 The MDX table-cell wrapper preserves token separators in minified HTML and weights diagnostic ID cells. Without separators, an ID and severity can become one indexed word (for example `GS0154Error`), hiding the canonical reference from exact-code searches. Operator shortcut buttons use concept names because punctuation-only queries do not produce search terms.
 
-Production builds fail on broken links and anchors. CI runs content/type checks, browser/accessibility checks, and the published installation flow before deployment. Its existing non-PR compiler, benchmark, and quality-dashboard generation behavior is preserved.
+Production builds fail on broken links and anchors. CI runs content/type checks, browser/accessibility checks, and the published installation flow before deployment.
 
 ## Examples and release updates
 
@@ -72,14 +72,14 @@ The first modernization wave reviewed the original 48 current documents:
 | Reference and extensions | Updated release snapshot, bounded long TOCs, repaired diagnostic destinations, and preserved historical anchors. |
 | Tooling | Workflow-first discovery, formatter/analyzer pages included in the release snapshot, detailed references retained. |
 | FAQ and release notes | Added adoption guidance, clear starting points, and release summaries before implementation history. |
-| Design history, playground, quality dashboard | Technical/status content retained; improved discovery and descriptions without changing provenance or claiming browser execution. |
+| Design history and playground | Technical/status content retained; improved discovery and descriptions without changing provenance or claiming browser execution. |
 | Authoring guidance | Updated for local search, examples, design conventions, versions, and anchor preservation. |
 
 The 0.3 archive retains its language content. Its changes are version-local links and long-reference TOC presentation only.
 
 ## Review and rollback
 
-Check the homepage, hubs, installation, Tour, specification, diagnostics, and quality dashboard in both themes, at narrow and desktop widths. Run actual Safari visual checks alongside automated WebKit, Chromium, and Firefox coverage. Include keyboard, zoom, reduced-motion, and screen-reader review when publishing a major layout change.
+Check the homepage, hubs, installation, Tour, specification, diagnostics, and concurrency comparison in both themes, at narrow and desktop widths. Run actual Safari visual checks alongside automated WebKit, Chromium, and Firefox coverage. Include keyboard, zoom, reduced-motion, and screen-reader review when publishing a major layout change.
 
 After deployment, verify `/gsharp/`, direct documentation URLs, search assets and version filters, installation links, and the social image. Roll back through a normal revert and the existing Pages deployment; do not remove documentation versions or rewrite URLs as a rollback mechanism.
 
@@ -121,7 +121,7 @@ The comparison verifier builds the actual downloadable bundle, repeats each pair
 
 Review regressions also reject acquire-inside-worker source mutations and wrong-reason G# clock/overflow failures. The first is a structural ordering check, distinct from runtime active-work counters. The examples use asynchronous semaphore admission, explicitly owned timer handles, an empty G# scope, and checked SDK helper alternatives; the public notes distinguish verification scaffolding and cancellation classification from general guarantees.
 
-Refresh the static workflow snapshot with an authenticated, read-only GitHub CLI:
+Refresh the static benchmark snapshot with an authenticated, read-only GitHub CLI:
 
 ```bash
 python3 website/scripts/update_concurrency.py
@@ -133,4 +133,4 @@ Main-branch publication builds refresh the snapshot; PR and visual builds use th
 
 The importer fetches the scenario registry from the measured commit, not from a potentially different working tree. It preserves report-only warnings, JIT/AOT/Go separation, the actual range-of-run-medians interval method, compiler/runtime versions, visible CPUs, commit and artifact provenance, and retrieval/measurement times. Unpaired rows never acquire an invented Go counterpart.
 
-The workflow benchmarks lower-level operations, not the teaching programs. Related-operation links do not claim whole-pattern timings. Do not update `bench/concurrency/baseline.json`, rerun heavyweight benchmarks, or infer a universal language winner as part of website publication.
+The benchmark measures lower-level operations, not the teaching programs. Related-operation links do not claim whole-pattern timings. Do not update `bench/concurrency/baseline.json`, rerun heavyweight benchmarks, or infer a universal language winner as part of website publication.

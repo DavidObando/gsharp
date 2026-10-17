@@ -1,9 +1,9 @@
 name: Docs site
 
 # Builds the G# documentation website (Docusaurus, in /website) and deploys it
-# to GitHub Pages. Pull requests validate the generator CLI and site against
-# the checked-in snapshot without rerunning benchmarks; main pushes, nightly
-# schedules, and main-branch manual runs regenerate data and deploy.
+# to GitHub Pages. Pull requests build and check the site against the
+# checked-in concurrency snapshot; main pushes, nightly schedules, and
+# main-branch manual runs refresh that snapshot and deploy.
 #
 # After the first merge, a repository admin must set:
 #   Settings → Pages → Build and deployment → Source = "GitHub Actions".
@@ -14,13 +14,6 @@ on:
     paths:
       - 'website/**'
       - 'samples/**'
-      - 'src/Core/**'
-      - 'src/Compiler/**'
-      - 'src/Repl/**'
-      - 'test/Compiler.Tests/LanguageConformance/**'
-      - 'test/Shared/GoldenFile.gs'
-      - 'build/generate-quality-dashboard.py'
-      - 'build/test-generate-quality-dashboard.py'
       - 'global.json'
       - '.github/workflows/pages.yml'
   pull_request:
@@ -28,13 +21,6 @@ on:
     paths:
       - 'website/**'
       - 'samples/**'
-      - 'src/Core/**'
-      - 'src/Compiler/**'
-      - 'src/Repl/**'
-      - 'test/Compiler.Tests/LanguageConformance/**'
-      - 'test/Shared/GoldenFile.gs'
-      - 'build/generate-quality-dashboard.py'
-      - 'build/test-generate-quality-dashboard.py'
       - 'global.json'
       - '.github/workflows/pages.yml'
   schedule:
@@ -58,43 +44,14 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - name: Validate quality dashboard generator CLI
-        if: github.event_name == 'pull_request'
-        run: python3 build/generate-quality-dashboard.py --help
-      # Pull requests skip the generator itself, so a source it reads being
-      # renamed (#4904) would otherwise only fail after merge.
-      - name: Test quality dashboard generator source readers
-        run: python3 build/test-generate-quality-dashboard.py
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-      - name: Restore compiler
-        if: github.event_name != 'pull_request'
-        run: dotnet restore src/Compiler/Compiler.gsproj --locked-mode
-      - name: Build compiler
-        if: github.event_name != 'pull_request'
-        run: dotnet build src/Compiler/Compiler.gsproj --configuration Release --no-restore -graph
-      # ADR-0174 D11. The concurrency rows are measured here rather than
-      # downloaded from the nightly, so the dashboard's numbers and its
-      # conformance numbers come from the same machine and the same commit.
-      # Best-effort: a failure here must not stop the site from deploying, and
-      # a missing results file means the dashboard shows no concurrency rows
-      # rather than stale ones.
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version-file: bench/concurrency/go/go.mod
-      - name: Measure concurrency benchmark
-        if: github.event_name != 'pull_request'
-        continue-on-error: true
-        run: |
-          dotnet build src/Sdk/Gsharp.Extensions --configuration Release
-          python3 build/run-concurrency-bench.py --launches 6 --go             --json "$RUNNER_TEMP/concurrency.json"
-      - name: Generate quality dashboard data
-        if: github.event_name != 'pull_request'
-        run: |
-          python3 build/generate-quality-dashboard.py             --concurrency-json "$RUNNER_TEMP/concurrency.json"
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
@@ -104,7 +61,7 @@ jobs:
       - name: Install dependencies
         working-directory: website
         run: npm ci
-      - name: Import concurrency workflow snapshot
+      - name: Import concurrency benchmark snapshot
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}

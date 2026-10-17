@@ -83,12 +83,15 @@ class Tracked:
 
     ``pattern`` is a regex with one capture group for the version; ``{V}`` in
     it expands to VER. ``path`` may contain ``{D}``, the docs version.
+    ``optional`` entries are checked only when the file exists: a snapshot
+    cut after a page left ``website/docs`` no longer has that page.
     """
 
     path: str
     pattern: str
     minimum: int
     why: str
+    optional: bool = False
 
 
 @dataclass(frozen=True)
@@ -113,8 +116,6 @@ DOC_PAGES: tuple[tuple[str, str, str], ...] = (
     ("tutorials/trail.md", r"Trail for SDK ({V})", "Trail download link text"),
     ("tutorials/trail.md", r"/downloads/trail-({V})\.zip", "Trail download link target"),
     ("tooling/sdk-projects.md", r"\"Gsharp\.NET\.Sdk\":\s*\"({V})\"", "global.json pin example"),
-    ("contributing/docs-authoring.md", r"refreshed against `v({V})`",
-     "names the tag the default snapshot was refreshed from"),
 )
 
 TRACKED: tuple[Tracked, ...] = (
@@ -129,6 +130,12 @@ TRACKED: tuple[Tracked, ...] = (
     Tracked("website/versioned_docs/version-{D}/release-notes.md",
             r"follows the published `v({V})` Git tag", 1,
             "default snapshot names its source tag"),
+    Tracked("docs/docs-authoring.md", r"refreshed against `v({V})`", 1,
+            "names the tag the default snapshot was refreshed from"),
+    # Snapshots cut before the guide moved to docs/ keep their own copy.
+    Tracked("website/versioned_docs/version-{D}/contributing/docs-authoring.md",
+            r"refreshed against `v({V})`", 1,
+            "default snapshot names the tag it was refreshed from", optional=True),
     Tracked("website/README.md", r"refreshed from `v({V})`", 1,
             "names the tag the default snapshot was refreshed from"),
     Tracked("website/static/data/concurrency-checks.json", r"\"sdkVersion\":\s*\"({V})\"", 1,
@@ -320,7 +327,8 @@ def check(tree: Tree) -> list[str]:
         path = entry.path.replace("{D}", docs_version)
         text = tree.read(path)
         if text is None:
-            problems.append(f"{path}: missing (tracked: {entry.why})")
+            if not entry.optional:
+                problems.append(f"{path}: missing (tracked: {entry.why})")
             continue
         pattern = re.compile(entry.pattern.replace("{V}", VER), re.MULTILINE)
         matches = list(pattern.finditer(text))

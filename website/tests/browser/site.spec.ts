@@ -117,7 +117,6 @@ for (const colorScheme of ['light', 'dark'] as const) {
       'docs/getting-started/install',
       'docs/ref/spec',
       'docs/ref/diagnostics',
-      'docs/next/project/quality-dashboard',
       'trail',
       'docs/bridges/gsharp-for-kotlin-developers',
       'docs/bridges/gsharp-for-swift-developers',
@@ -317,7 +316,7 @@ test('Swift and all ten pattern pairs are discoverable and runnable downloads', 
   expect((await response.body()).subarray(0, 2).toString()).toBe('PK');
   if (benchmark.status === 'available' && benchmark.measurement) {
     await expect(
-      page.getByRole('heading', {name: 'What the workflow actually measured.'}),
+      page.getByRole('heading', {name: 'What the benchmark actually measured.'}),
     ).toBeVisible();
     await expect(page.locator('.gs-benchmark')).toContainText('not a 95% confidence interval');
     if (benchmark.scenarios.some((row) => row.goScenario === null)) {

@@ -1,12 +1,10 @@
 ---
 title: "Design decisions (ADRs)"
 draft: false
-description: "Explore the reasoning behind G# language and runtime choices through its design-decision index."
+description: "Index of the G# design decisions."
 ---
 
 # Design decisions (ADRs)
-
-This is a curated reference index of the Architecture Decision Records in the repository. ADRs explain design intent and tradeoffs; they are not the normative language specification. Each link points to the source ADR on GitHub. The repository currently has accepted/proposed ADRs through **ADR-0184** (plus the `0000` template); this index is curated and may lag behind the newest ADRs.
 
 ## Null model, values, and primitives
 
@@ -129,8 +127,6 @@ This is a curated reference index of the Architecture Decision Records in the re
 
 ## 0.3 ADRs (0105-0146)
 
-The 0.3 documentation audit covers these ADRs landed after the 0.2 snapshot. The earlier curated sections above remain grouped by topic; this table keeps the current ADR range visible.
-
 | ADR | Title |
 | --- | --- |
 | [0105](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0105-incremental-delta-binding-language-server.md) | Incremental (delta) binding for the language server |
@@ -179,8 +175,6 @@ The 0.3 documentation audit covers these ADRs landed after the 0.2 snapshot. The
 <span id="04-adrs-0157-0165"></span>
 
 ## 0.4 ADRs (0157-0166)
-
-The 0.4 documentation audit covers these ADRs landed after the 0.3 snapshot.
 
 | ADR | Title |
 | --- | --- |
