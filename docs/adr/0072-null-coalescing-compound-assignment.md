@@ -26,10 +26,20 @@
 > - Its **value** is the final value of `a`: the value read when it was not
 >   nil, otherwise the assigned (converted) value of `b`. The target is never
 >   re-read to produce the value.
-> - Its **type** is the type `a ?? b` has. When `b` is non-nullable that is
->   `a`'s underlying type (`int32? ??= 42` is `int32`; `string? ??= "x"` is
->   `string`), matching C#; when `b` may be nil it is `a`'s `T?`. A `T!`
->   (platform, ADR-0186) target or right side follows the same `??` rule.
+> - Its **type** is `a`'s underlying type `T` when the stored value is known
+>   non-nil, that is, when `b`'s own (pre-conversion) type is non-nullable and
+>   not a platform type. This is the test plain `=` uses to narrow its target
+>   (#1123), and it gives the type `a ?? b` has: `int32? ??= 42` is `int32`,
+>   `string? ??= "x"` is `string` and `object? ??= 42` is `object`, matching
+>   C#. Otherwise the type is `a`'s `T?`: a nullable `b`, or a `T!`
+>   (ADR-0186) `b`, which may be nil and is stored unchecked as the statement
+>   form always stored it. A `T!` target follows the same rule
+>   (`T! ??= "x"` is `string`). A right side the target types as a whole (an
+>   `if`, `switch`, conditional or block expression) is typed `T?`, so the
+>   result is `T?` (#4984).
+> - The stored value is converted to the target once and the same value is
+>   yielded, so a boxed value keeps its identity. A throwing right side
+>   (`a ??= throw e`) is the coalesce's fallback as in `a ?? throw e`.
 > - Evaluation is unchanged in both positions: the target's receiver and
 >   indices are evaluated once, the target is read once, and `b` is evaluated
 >   and written back only when that read is nil.
@@ -47,6 +57,11 @@
 > `BoundBlockExpression` of the captures over
 > `read ?? { let v = b; write(v); v }`, so the nil test is the `??`
 > operator's own and no new `BoundNodeKind` is introduced.
+>
+> One deliberate difference from `=` is recorded here: `(x = v)` has `x`'s
+> declared type (`T?`), while `(x ??= v)` has `T` for a known non-nil `v`,
+> because that is C#'s rule for `??=` and its value is never nil in that
+> case.
 >
 > **Compatibility.** Every program that compiled before compiles to the same
 > behavior: each existing `??=` is in statement position, which still parses

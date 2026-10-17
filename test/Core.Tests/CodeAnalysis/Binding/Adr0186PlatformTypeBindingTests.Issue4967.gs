@@ -9,30 +9,35 @@ import System
 import Xunit
 
 /// Issue #4967 / ADR-0072 (amended): the type of the `??=` expression is
-/// the type `target ?? value` has. With a non-nullable right side that is
-/// the target's underlying type (`int32? ??= int32` is `int32`, as in C#);
-/// with a right side that may be nil it stays the target's `T?`. A `T!`
-/// (platform) target or right side follows the same `??` rule.
+/// the target's underlying type when the stored value is known non-nil
+/// (`int32? ??= int32` is `int32`, as in C#, and the same as
+/// `target ?? value`); otherwise it is the target's `T?`. A `T!` (platform)
+/// target follows the rule; a `T!` right side may be nil, so it yields `T?`
+/// and is stored unchecked, as the statement form always stored it.
 partial class Adr0186PlatformTypeBindingTests {
-    /// The `??=` result type equals the `??` result type, and both equal the
-    /// expected display.
+    /// The `??=` result type equals the expected display and, where
+    /// [`matchesCoalesce`](paramref), the `??` result type.
     /// @param declarations Globals declaring the target and right side.
     /// @param target The target expression.
     /// @param value The right side.
     /// @param expected The expected display of the result type.
+    /// @param matchesCoalesce Whether `target ?? value` has the same type.
     @Theory
-    @InlineData("var t string? = nil", "t", "\"v\"", "string")
-    @InlineData("var t string? = nil\nvar m string? = nil", "t", "m", "string?")
-    @InlineData("var n int32? = nil", "n", "42", "int32")
-    @InlineData("var n int32? = nil\nvar o int32? = nil", "n", "o", "int32?")
-    @InlineData("var arr = []string?{nil}", "arr[0]", "\"v\"", "string")
-    @InlineData("var s = Ob.Nil()", "s", "\"v\"", "string")
-    @InlineData("var t string? = nil", "t", "Ob.Value()", "string")
-    func Issue4967_CoalescingAssignment_HasTheTypeOfCoalesce(
+    @InlineData("var t string? = nil", "t", "\"v\"", "string", true)
+    @InlineData("var t string? = nil\nvar m string? = nil", "t", "m", "string?", true)
+    @InlineData("var n int32? = nil", "n", "42", "int32", true)
+    @InlineData("var n int32? = nil\nvar o int32? = nil", "n", "o", "int32?", true)
+    @InlineData("var big int64? = nil", "big", "5", "int64", true)
+    @InlineData("var x object? = nil", "x", "42", "object", true)
+    @InlineData("var arr = []string?{nil}", "arr[0]", "\"v\"", "string", true)
+    @InlineData("var s = Ob.Nil()", "s", "\"v\"", "string", true)
+    @InlineData("var t string? = nil", "t", "Ob.Value()", "string?", false)
+    func Issue4967_CoalescingAssignment_ResultType(
         declarations string,
         target string,
         value string,
-        expected string
+        expected string,
+        matchesCoalesce bool
     ) {
         using let world = World()
         let _ = world.GlobalProbeType(
@@ -40,12 +45,12 @@ partial class Adr0186PlatformTypeBindingTests {
             NullabilityMode.PlatformTypes
         )
         let assigned = world.LastProbeDisplay
+        Assert.Equal(expected, assigned)
         let _ = world.GlobalProbeType(
             declarations + "\nlet probe = " + target + " ?? " + value,
             NullabilityMode.PlatformTypes
         )
-        Assert.Equal(world.LastProbeDisplay, assigned)
-        Assert.Equal(expected, assigned)
+        Assert.Equal(matchesCoalesce, world.LastProbeDisplay == assigned)
     }
 
     /// A platform target and a platform right side run in value position:
