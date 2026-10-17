@@ -1,6 +1,8 @@
 # ADR-0071: `if let` / `guard let` bindings for nullable narrowing
 
-- **Status**: Accepted
+- **Status**: Accepted; the statement-form `if let` header and evaluation
+  order are superseded by
+  [ADR-0200](0200-align-if-let-statement-and-expression.md)
 - **Date**: 2026-06-11
 - **Phase**: Phase 9 — language depth / flow analysis ergonomics
 - **Related**: ADR-0001 (nullable reference types), ADR-0069 (Kotlin-style smart cast), ADR-0163 (`while let`), parent [#706](https://github.com/DavidObando/gsharp/issues/706) (control-flow polish), this ADR [#708](https://github.com/DavidObando/gsharp/issues/708), superseded [#696](https://github.com/DavidObando/gsharp/issues/696)
@@ -60,7 +62,10 @@ Each `LetBinding`'s right-hand side must bind to a **nullable type** `T?`. The
 new local introduced on the left-hand side is bound at the underlying type `T`
 (non-null) in the region where the binding is in scope. Both shapes accept
 multiple comma-separated bindings. Statement-form `if let` evaluates every
-initializer left to right before one combined nil test. `guard let` interleaves
+initializer left to right before one combined nil test (*superseded by
+[ADR-0200](0200-align-if-let-statement-and-expression.md): it now
+short-circuits on the first `nil`, a later initializer sees earlier bindings
+narrowed, and an optional `&& guard` may follow the last binding*). `guard let` interleaves
 each initializer with its exiting nil test, so a later initializer runs only
 after every earlier binding produced a non-nil value.
 
@@ -90,7 +95,8 @@ expressed purely in terms of `BoundVariableDeclaration`, `BoundIfStatement`,
 and `BoundBlockStatement`.
 
 Multiple bindings without an `else` arm are evaluated before one combined
-test:
+test (*superseded by ADR-0200: each binding is tested before the next
+initializer runs*):
 
 ```
 if let a = e1, let b = e2 { body }
@@ -101,6 +107,11 @@ if let a = e1, let b = e2 { body }
     if a != nil && b != nil { body }
 }
 ```
+
+*Superseded by [ADR-0200](0200-align-if-let-statement-and-expression.md): the
+bindings now short-circuit, and with an `else` arm the statement is one
+two-armed `if` over the shared short-circuit condition; the flag shape below
+made a both-arms-return statement report GS0100.*
 
 Multiple bindings **with** an `else` arm use a synthesized `bool` flag so the
 else-block appears in the bound tree exactly once:
@@ -267,16 +278,21 @@ the new `SyntaxKind` entries.
 ADR-0151 adds a value-producing `if let` **expression**. The two surfaces share
 the binding grammar and the binding semantics but not the shape around them:
 
+> *Revised by [ADR-0200](0200-align-if-let-statement-and-expression.md). The
+> guard, initializer-grammar and evaluation rows below no longer differ; the
+> remaining differences follow from statement versus value position.*
+
 | | Statement form (this ADR) | Expression form (ADR-0151) |
 | --- | --- | --- |
 | Syntax node | `IfLetStatementSyntax` | `IfLetExpressionSyntax` |
 | Parsed when | `if let` leads a *statement* | `if let` appears in a *value* position |
 | `else` | Optional | **Required** (GS0276) |
 | Branch bodies | Statements | Blocks whose tail is a value (GS0277) |
-| Guard clause | None | Optional top-level `&& <bool>` after the last binding |
-| Initializer grammar | Full expression grammar (a top-level `&&` belongs to the initializer) | Stops at a top-level `&&` (or a top-level logical-or), which starts the guard; parenthesize to keep it in the initializer |
+| Guard clause | Optional top-level `&& <bool>` after the last binding (ADR-0200) | Same |
+| Initializer grammar | Stops at a top-level `&&` or `\|\|`; `??` and `?:` tails accepted; parenthesize to keep a logical operator in the initializer (ADR-0200) | Same |
+| Multiple bindings | Left-to-right short circuit; later initializers see earlier bindings narrowed (ADR-0200) | Same |
 | Result | No value | Common type of the branch tails (GS0263) |
-| Lowering | `BoundBlockStatement` + `BoundIfStatement` (this ADR) | `BoundBlockExpression` + `BoundConditionalExpression` (ADR-0064 nodes) |
+| Lowering | Nested `BoundIfStatement`s, or one `if`/`else` over the shared short-circuit condition when there is an `else` and more than one test (ADR-0200; replaces the matched flag below) | `BoundBlockExpression` + `BoundConditionalExpression` (ADR-0064 nodes) |
 
 Both forms:
 
@@ -292,7 +308,9 @@ lives in a single parser partial (`Parser.IfLet.cs`) used by `if let`,
 `guard let`, `while let` (ADR-0163), and the expression form, so the surfaces
 cannot drift.
 
-One deliberate difference: the expression form evaluates its bindings with a
+*Superseded by [ADR-0200](0200-align-if-let-statement-and-expression.md),
+which gives the statement form the same short circuit:* one deliberate
+difference: the expression form evaluates its bindings with a
 true left-to-right short circuit (a later initializer is only evaluated when
 every earlier one matched, and may reference the earlier bindings at their
 narrowed types), because in value position the difference is observable through
@@ -310,4 +328,6 @@ initializer is re-evaluated at the condition check, including after
 `continue`. Like statement-form `if let`, multiple initializers are sequenced
 before the combined nil test. Unlike the ADR-0151 expression chain, header
 bindings are not in scope for later initializers; the short-circuiting
-expression form remains distinct.
+expression form remains distinct. (*Since [ADR-0200](0200-align-if-let-statement-and-expression.md)
+statement-form `if let` short-circuits too, so this sequencing is now specific
+to `while let`; #4968 tracks aligning it.*)

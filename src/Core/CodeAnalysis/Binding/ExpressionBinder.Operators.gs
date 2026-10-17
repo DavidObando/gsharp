@@ -774,26 +774,13 @@ internal partial class ExpressionBinder {
         canBeVoid: false
     )
 
-    private func BindIfExpression(
-        syntax IfExpressionSyntax,
-        targetType TypeSymbol?,
-        canBeVoid bool = false
-    ) BoundExpression {
-        // A tail if/else in a discarded lambda/statement position may have
-        // void call or await arms; value-producing contexts keep the default.
-        // Issue #1238: defer a no-common-type unification failure when this
-        // if-expression is a bare argument awaiting its parameter target type
-        // (see BindConditionalExpression for the full rationale). Consume the
-        // flag immediately so nested sub-expressions bind normally.
-        let deferOnFailure = targetType == nil && binderCtx.DeferTargetlessConditional
-        this.binderCtx.DeferTargetlessConditional = false
-        let diagMark = Diagnostics.Count
-        // An if-expression in value position must have an else branch.
-        if syntax.ElseExpression == nil {
-            Diagnostics.ReportIfExpressionMissingElse(syntax.IfKeyword.Location)
-            return BoundErrorExpression(nil)
-        }
-        let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
+    /// The narrowing frames an if-expression condition implies for its
+    /// branches. Shared by the if-expression and, for its guard, the `if let`
+    /// expression (issue #4961 / ADR-0200).
+    private func ClassifyIfExpressionNarrowing(condition BoundExpression)(
+        Then Dictionary[AccessPath, TypeSymbol]?,
+        Else Dictionary[AccessPath, TypeSymbol]?
+    ) {
         // Issue #2640: an if-expression branch observes the same nil-guard
         // narrowing as an if-statement. Otherwise a nullable hole can poison
         // the interpolation before handler overload resolution runs.
@@ -817,8 +804,33 @@ internal partial class ExpressionBinder {
             }
         }
         let (typeWhenTrue, typeWhenFalse) = ClassifyTypeTestNarrowing(condition)
-        whenTrueNarrowing = MergeIfExpressionNarrowing(whenTrueNarrowing, typeWhenTrue)
-        whenFalseNarrowing = MergeIfExpressionNarrowing(whenFalseNarrowing, typeWhenFalse)
+        return (
+            MergeIfExpressionNarrowing(whenTrueNarrowing, typeWhenTrue),
+            MergeIfExpressionNarrowing(whenFalseNarrowing, typeWhenFalse)
+        )
+    }
+
+    private func BindIfExpression(
+        syntax IfExpressionSyntax,
+        targetType TypeSymbol?,
+        canBeVoid bool = false
+    ) BoundExpression {
+        // A tail if/else in a discarded lambda/statement position may have
+        // void call or await arms; value-producing contexts keep the default.
+        // Issue #1238: defer a no-common-type unification failure when this
+        // if-expression is a bare argument awaiting its parameter target type
+        // (see BindConditionalExpression for the full rationale). Consume the
+        // flag immediately so nested sub-expressions bind normally.
+        let deferOnFailure = targetType == nil && binderCtx.DeferTargetlessConditional
+        this.binderCtx.DeferTargetlessConditional = false
+        let diagMark = Diagnostics.Count
+        // An if-expression in value position must have an else branch.
+        if syntax.ElseExpression == nil {
+            Diagnostics.ReportIfExpressionMissingElse(syntax.IfKeyword.Location)
+            return BoundErrorExpression(nil)
+        }
+        let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
+        let (whenTrueNarrowing, whenFalseNarrowing) = ClassifyIfExpressionNarrowing(condition)
         // ADR-0166: each arm also sees the pattern variables the condition
         // definitely assigns on that arm.
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)

@@ -43,6 +43,7 @@ shared class SemanticLookup {
             ForRanges = List[ForRangeStatementSyntax]()
             AwaitForRanges = List[AwaitForRangeStatementSyntax]()
             WhileLets = List[WhileLetStatementSyntax]()
+            IfLets = List[SyntaxNode]()
             VariableDeclarations = List[VariableDeclarationSyntax]()
             TypeAliasDeclarations = List[TypeAliasDeclarationSyntax]()
         }
@@ -76,6 +77,12 @@ shared class SemanticLookup {
         }
 
         prop WhileLets List[WhileLetStatementSyntax] {
+            get;
+        }
+
+        /// Issue #4961 / ADR-0200: the `if let` statements and expressions
+        /// ((cref:IfLetStatementSyntax) / (cref:IfLetExpressionSyntax)).
+        prop IfLets List[SyntaxNode] {
             get;
         }
 
@@ -116,6 +123,7 @@ shared class SemanticLookup {
         private var cachedConstructorsByFile Dictionary[string, []ConstructorDeclarationSyntax]
         private var cachedStructsByFile Dictionary[string, []StructDeclarationSyntax]
         private var cachedWhileLetsByFile Dictionary[string, []WhileLetStatementSyntax]
+        private var cachedIfLetsByFile Dictionary[string, []SyntaxNode]
         private var cachedAccessorsByTree Dictionary[SyntaxTree, []AccessorExpressionSyntax]
         private var cachedFieldAssignmentsByTree Dictionary[SyntaxTree, []FieldAssignmentExpressionSyntax]
         private var cachedForRangesByTree Dictionary[SyntaxTree, []ForRangeStatementSyntax]
@@ -178,6 +186,7 @@ shared class SemanticLookup {
             let constructorsByFile = Dictionary[string, List[ConstructorDeclarationSyntax]]()
             let structsByFile = Dictionary[string, List[StructDeclarationSyntax]]()
             let whileLetsByFile = Dictionary[string, List[WhileLetStatementSyntax]]()
+            let ifLetsByFile = Dictionary[string, List[SyntaxNode]]()
             this.memberAccessTokenSpans = HashSet[(string, int32, int32)]()
             this.fieldAssignmentTokenSpans = HashSet[(string, int32, int32)]()
             for var i = 0; i < treeArray.Length; i++ {
@@ -216,6 +225,13 @@ shared class SemanticLookup {
                     }
                     whileLets.AddRange(bucket.WhileLets)
                 }
+                if bucket.IfLets.Count > 0 {
+                    if !ifLetsByFile.TryGetValue(fileName, out var ifLets) {
+                        ifLets = List[SyntaxNode]()
+                        ifLetsByFile[fileName] = ifLets
+                    }
+                    ifLets.AddRange(bucket.IfLets)
+                }
                 for accessor in bucket.Accessors {
                     for memberToken in EnumerateAccessorMemberTokens(accessor.RightPart) {
                         let key = SpanKey(memberToken)
@@ -247,6 +263,10 @@ shared class SemanticLookup {
                 (kvp KeyValuePair[string, List[WhileLetStatementSyntax]]) -> kvp.Key,
                 (kvp KeyValuePair[string, List[WhileLetStatementSyntax]]) -> kvp.Value.ToArray()
             )
+            this.cachedIfLetsByFile = ifLetsByFile.ToDictionary(
+                (kvp KeyValuePair[string, List[SyntaxNode]]) -> kvp.Key,
+                (kvp KeyValuePair[string, List[SyntaxNode]]) -> kvp.Value.ToArray()
+            )
         }
 
         /// Gets a snapshot of the global name → symbol map. ADR-0106 test hook.
@@ -276,6 +296,10 @@ shared class SemanticLookup {
             if IsRightOfMemberAccess(token) {
                 // Token is clearly a member name; do not fall through to by-name lookups.
                 return nil
+            }
+            let ifLetLocal Symbol? = this.ResolveIfLetLocal(token)
+            if ifLetLocal != nil {
+                return ifLetLocal
             }
             let whileLetLocal Symbol? = this.ResolveWhileLetLoopLocal(token)
             if whileLetLocal != nil {
@@ -640,6 +664,59 @@ shared class SemanticLookup {
                 if c.Span.Start <= token.Span.Start && token.Span.End <= c.Span.End && c.Span.Length < bestLength {
                     best = c
                     bestLength = c.Span.Length
+                }
+            }
+            return best
+        }
+
+        /// Issue #4961 / ADR-0200: resolves a use of an `if let` binding (either
+        /// form). A binding is in scope from the end of its own clause — so in
+        /// later initializers and the guard — through the end of the
+        /// then-region, never in the else branch. The innermost such region
+        /// wins, which also makes a later same-named binding shadow an earlier
+        /// one.
+        private func ResolveIfLetLocal(token SyntaxToken) Symbol? {
+            if token?.SyntaxTree == nil {
+                return nil
+            }
+            let fileName = token.SyntaxTree.Text?.FileName ?? string.Empty
+            if !this.cachedIfLetsByFile.TryGetValue(fileName, out var ifLets) {
+                return nil
+            }
+            var best Symbol? = nil
+            var bestRegionLength = int32.MaxValue
+            for node in ifLets {
+                var thenEnd = 0
+                if node is IfLetStatementSyntax statement {
+                    thenEnd = statement.ThenStatement.Span.End
+                } else if node is IfLetExpressionSyntax expression {
+                    thenEnd = expression.ThenBlock.Span.End
+                } else {
+                    continue
+                }
+                for binding in GetIfLetBindings(node) {
+                    let regionStart = binding.Span.End
+                    if token
+                        .Span
+                        .Start < regionStart ||
+                        thenEnd < token
+                        .Span
+                        .End ||
+                        thenEnd - regionStart >= bestRegionLength {
+                        continue
+                    }
+                    if binding.Identifier == nil || !string.Equals(
+                        binding.Identifier.Text,
+                        token.Text,
+                        StringComparison.Ordinal
+                    ) {
+                        continue
+                    }
+                    let symbol Symbol? = this.Resolve(binding.Identifier)
+                    if symbol != nil {
+                        best = symbol
+                        bestRegionLength = thenEnd - regionStart
+                    }
                 }
             }
             return best
@@ -1783,6 +1860,9 @@ shared class SemanticLookup {
         bucketsByTree Dictionary[SyntaxTree, NodeBuckets],
         useIncrementalCaches bool
     ) {
+        // Region-scoped bindings (`while let`, and since issue #4961 both
+        // `if let` forms) resolve through their own region lookups, so they
+        // must not enter the function-wide by-name local map.
         let whileLetIdentifiers = HashSet[SyntaxToken](
             bucketsByTree
                 .Values
@@ -1795,6 +1875,9 @@ shared class SemanticLookup {
                 func (statement WhileLetStatementSyntax) IEnumerable[IfLetBindingClauseSyntax] {
                     return statement.Bindings
                 }
+            )
+                .Concat(
+                bucketsByTree.Values.SelectMany((bucket NodeBuckets) -> bucket.IfLets.SelectMany(GetIfLetBindings))
             )
                 .Select((binding IfLetBindingClauseSyntax) -> binding.Identifier)
         )
@@ -1890,6 +1973,12 @@ shared class SemanticLookup {
                     )
                 )
             )
+                .Concat(
+                bucketsByTree
+                    .Values
+                    .SelectMany((b NodeBuckets) -> b.IfLets.SelectMany(GetIfLetBindings))
+                    .Select((binding IfLetBindingClauseSyntax) -> binding.Identifier)
+            )
             for (identifier, variable) in MatchBoundLocals(program.Statement, topLevelLoopIdentifiers) {
                 declarations[identifier] = variable
             }
@@ -1963,6 +2052,14 @@ shared class SemanticLookup {
             )
         )
             .Concat(
+            FindNodes[IfLetStatementSyntax]([]BlockStatementSyntax{bodySyntax})
+                .SelectMany(GetIfLetBindings)
+                .Concat(
+                FindNodes[IfLetExpressionSyntax]([]BlockStatementSyntax{bodySyntax}).SelectMany(GetIfLetBindings)
+            )
+                .Select((binding IfLetBindingClauseSyntax) -> binding.Identifier)
+        )
+            .Concat(
             FindNodes[TypePatternSyntax]([]BlockStatementSyntax{bodySyntax}).Select(
                 (pattern TypePatternSyntax) -> pattern.BindingIdentifier
             )
@@ -1996,6 +2093,15 @@ shared class SemanticLookup {
         )
             .OfType[SyntaxToken]()
         return MatchBoundLocals(body, syntaxLocalIdentifiers)
+    }
+
+    /// Issue #4961: the binding clauses of an `if let` statement or expression.
+    private func GetIfLetBindings(node SyntaxNode) IEnumerable[IfLetBindingClauseSyntax] {
+        return switch node {
+            case statement is IfLetStatementSyntax: statement.Bindings
+            case expression is IfLetExpressionSyntax: expression.Bindings
+            default: Enumerable.Empty[IfLetBindingClauseSyntax]()
+        }
     }
 
     private func EnumerateDestructuredLambdaParameterIdentifiers(lambda LambdaExpressionSyntax) sequence[SyntaxToken] {
@@ -2147,6 +2253,12 @@ shared class SemanticLookup {
             }
             case whileLet is WhileLetStatementSyntax {
                 buckets.WhileLets.Add(whileLet)
+            }
+            case ifLetStatement is IfLetStatementSyntax {
+                buckets.IfLets.Add(ifLetStatement)
+            }
+            case ifLetExpression is IfLetExpressionSyntax {
+                buckets.IfLets.Add(ifLetExpression)
             }
             case vd is VariableDeclarationSyntax {
                 buckets.VariableDeclarations.Add(vd)

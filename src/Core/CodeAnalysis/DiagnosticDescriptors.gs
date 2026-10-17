@@ -2432,6 +2432,21 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "Data {0} '{1}' declares 'PrintMembers' with an incompatible shape; it must be an instance method taking one 'StringBuilder' and returning 'bool' with {2} accessibility, not generic, not async or suspending and not by-reference, and marked 'override' exactly when the type has an inherited slot."
     )
+    internal let IfLetGuardSplitsInitializer DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0624",
+        DiagnosticSeverity.Error,
+        "The '&&' after binding '{0}' starts the 'if let' guard, so the initializer ends before it and has the non-nullable type '{1}'. If the '&&' belongs to the initializer, parenthesize the initializer: 'let {0} = (…)'."
+    )
+    internal let LetBindingGuardNotSupported DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0625",
+        DiagnosticSeverity.Error,
+        "'{0}' does not accept a '&&' guard after its bindings; only 'if let' does. Test the condition in a separate statement, or parenthesize the initializer if the '&&' belongs to it."
+    )
+    internal let LetBindingLogicalOr DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0626",
+        DiagnosticSeverity.Error,
+        "A top-level '||' cannot follow a 'let' binding: only '&&' introduces a guard. If the '||' belongs to the initializer, parenthesize the initializer."
+    )
     internal let CannotTakeAddressOfNonLvalue DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9001",
         DiagnosticSeverity.Error,

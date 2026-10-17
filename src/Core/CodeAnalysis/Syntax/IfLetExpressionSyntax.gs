@@ -17,7 +17,7 @@ class IfLetExpressionSyntax : ExpressionSyntax {
     /// @param syntaxTree The parent syntax tree.
     /// @param ifKeyword The `if` keyword token.
     /// @param bindings The comma-separated list of `let` bindings.
-    /// @param ampersandAmpersandToken The optional `&&` token that introduces the guard (null when absent).
+    /// @param guardOperatorToken The optional `&&` token that introduces the guard (null when absent).
     /// @param guard The optional guard expression (null when absent).
     /// @param thenBlock The then-block expression.
     /// @param elseKeyword The `else` keyword token (null only in erroneous source).
@@ -27,7 +27,7 @@ class IfLetExpressionSyntax : ExpressionSyntax {
         syntaxTree SyntaxTree,
         ifKeyword SyntaxToken,
         bindings SeparatedSyntaxList[IfLetBindingClauseSyntax],
-        ampersandAmpersandToken SyntaxToken?,
+        guardOperatorToken SyntaxToken?,
         $guard ExpressionSyntax?,
         thenBlock BlockExpressionSyntax,
         elseKeyword SyntaxToken?,
@@ -35,7 +35,7 @@ class IfLetExpressionSyntax : ExpressionSyntax {
     ) : base(syntaxTree) {
         IfKeyword = ifKeyword
         Bindings = bindings
-        AmpersandAmpersandToken = ampersandAmpersandToken
+        GuardOperatorToken = guardOperatorToken
         Guard = $guard
         ThenBlock = thenBlock
         ElseKeyword = elseKeyword
@@ -57,8 +57,11 @@ class IfLetExpressionSyntax : ExpressionSyntax {
         get;
     }
 
-    /// Gets the optional `&&` token introducing the guard; `null` when there is no guard.
-    prop AmpersandAmpersandToken SyntaxToken? {
+    /// Gets the optional `&&` token introducing the guard; `null` when there
+    /// is no guard. In erroneous source it may be a `||` token (reported as
+    /// GS0626 by the parser). Issue #4961 / ADR-0200: named like the statement
+    /// forms' (cref:IfLetStatementSyntax.GuardOperatorToken).
+    prop GuardOperatorToken SyntaxToken? {
         get;
     }
 
