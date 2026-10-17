@@ -7,12 +7,16 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// Issue #669: an if-expression of the form
 /// `if cond { expr } else { expr }` (value-producing) or
 /// `if cond { expr } else if ... { expr } else { expr }` (chained).
+/// Issue #4962: like the if-statement, the header may start with a
+/// simple-statement initializer, `if init; cond { … } else { … }`.
 /// The else branch is either another (cref:IfExpressionSyntax) (for
 /// `else if` chains) or a (cref:BlockExpressionSyntax).
 class IfExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:IfExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param ifKeyword The `if` keyword token.
+    /// @param initializer The optional initializer simple statement (the `init` in `if init; cond`).
+    /// @param semicolon The semicolon separating the initializer from the condition.
     /// @param condition The condition expression.
     /// @param thenBlock The then-block expression.
     /// @param elseKeyword The optional `else` keyword token (null when absent).
@@ -21,12 +25,16 @@ class IfExpressionSyntax : ExpressionSyntax {
     init(
         syntaxTree SyntaxTree,
         ifKeyword SyntaxToken,
+        initializer StatementSyntax?,
+        semicolon SyntaxToken?,
         condition ExpressionSyntax,
         thenBlock BlockExpressionSyntax,
         elseKeyword SyntaxToken?,
         elseExpression ExpressionSyntax?
     ) : base(syntaxTree) {
         IfKeyword = ifKeyword
+        Initializer = initializer
+        Semicolon = semicolon
         Condition = condition
         ThenBlock = thenBlock
         ElseKeyword = elseKeyword
@@ -40,6 +48,18 @@ class IfExpressionSyntax : ExpressionSyntax {
 
     /// Gets the `if` keyword token.
     prop IfKeyword SyntaxToken {
+        get;
+    }
+
+    /// Gets the optional initializer simple statement (the `init`
+    /// in `if init; cond`). May be `null`.
+    prop Initializer StatementSyntax? {
+        get;
+    }
+
+    /// Gets the semicolon separating the initializer from the condition,
+    /// or `null` when there is no initializer.
+    prop Semicolon SyntaxToken? {
         get;
     }
 

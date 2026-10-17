@@ -254,15 +254,16 @@ shared class GSharpFormatter {
                 return Math.Max(required, current.NewlinesBefore)
             }
             // `;` is a statement terminator everywhere EXCEPT the two clause
-            // separators of a C-style `for init; cond; post { … }` header,
-            // where it is a list separator like `,` (ForClauseStatementSyntax
-            // is the only node that owns a `;` as a direct child rather than
-            // as the close of a StatementSyntax). SyntaxFacts.IsBreakRequiredBetween
+            // separators of a C-style `for init; cond; post { … }` header and
+            // the one of an `if init; cond { … }` header, where it is a list
+            // separator like `,` (ForClauseStatementSyntax, IfStatementSyntax
+            // and IfExpressionSyntax are the only nodes that own a `;` as a
+            // direct child rather than as the close of a StatementSyntax). SyntaxFacts.IsBreakRequiredBetween
             // is a two-token predicate and cannot see that distinction — only
             // the owning node can — so it is guarded here rather than fixed
             // there, matching how IsCallNullableMarker/IsNullableMarker below
             // already disambiguate a bare token kind by its parent.
-            if SyntaxFacts.IsBreakRequiredBetween(previous.Token, current.Token) && !IsForClauseSeparator(previous) {
+            if SyntaxFacts.IsBreakRequiredBetween(previous.Token, current.Token) && !IsHeaderClauseSeparator(previous) {
                 return 1
             }
             if current.NewlinesBefore == 0 {
@@ -403,12 +404,12 @@ shared class GSharpFormatter {
                 IsPatternCombinator(previous) {
                 return Doc.Nest(4, Doc.Line)
             }
-            // A for-clause separator `;` behaves like `,`: a wrap point that
+            // A header clause separator `;` behaves like `,`: a wrap point that
             // flattens to a single space, not a hard terminator. This must be
             // checked before the "no space before `;`" rule below, or the
             // all-empty form (`for ; ; {`, both clauses empty) would have its
             // `right is SemicolonToken` case swallow it.
-            if IsForClauseSeparator(previous) {
+            if IsHeaderClauseSeparator(previous) {
                 return Doc.Nest(4, Doc.Line)
             }
             // An empty initializer clause (`for ; cond; post {`) leaves the
@@ -416,7 +417,7 @@ shared class GSharpFormatter {
             // clause token to its left to hug. The "no space before `;`" rule
             // below assumes `;` always closes a preceding expression/clause
             // and would otherwise glue it to the keyword as `for;`.
-            if left == SyntaxKind.ForKeyword && IsForClauseSeparator(current) {
+            if left == SyntaxKind.ForKeyword && IsHeaderClauseSeparator(current) {
                 return Doc.Text(" ")
             }
             if right == SyntaxKind.DotToken || right == SyntaxKind.QuestionDotToken {
@@ -676,16 +677,22 @@ shared class GSharpFormatter {
             private func IsContinuationBoundary(left LayoutToken, right LayoutToken) bool -> IsPatternCombinator(
                 left
             ) ||
-                IsForClauseSeparator(left) ||
+                IsHeaderClauseSeparator(left) ||
                 IsContinuationBoundary(left.Token.Kind, right.Token.Kind)
 
-            // The `;` separating a for-clause header's init/condition/post, as
+            // The `;` separating a for-clause header's init/condition/post, or
+            // an `if init; cond` header's initializer from its condition (in
+            // both the statement and the expression form, issue #4962), as
             // opposed to a statement-terminating `;` (whose parent is the
-            // statement it ends, never ForClauseStatementSyntax directly).
-            private func IsForClauseSeparator(token LayoutToken) bool -> token
+            // statement it ends, never one of these nodes directly).
+            private func IsHeaderClauseSeparator(token LayoutToken) bool -> token
                 .Token
                 .Kind == SyntaxKind.SemicolonToken &&
-                token.Parent is ForClauseStatementSyntax
+                (
+                token.Parent is ForClauseStatementSyntax ||
+                    token.Parent is IfStatementSyntax ||
+                    token.Parent is IfExpressionSyntax
+            )
 
             // `case A or B or C:` — G# spells pattern disjunction and conjunction as
             // the contextual identifiers `or` and `and` rather than as operator

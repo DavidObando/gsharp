@@ -709,6 +709,18 @@ open partial class Parser {
 
     private func ParseIfStatement() StatementSyntax {
         let keyword = MatchToken(SyntaxKind.IfKeyword)
+        let (initializer, semicolon, condition) = ParseIfHeader()
+        let statement = ParseStatement()
+        let elseClause = ParseElseClause()
+        return IfStatementSyntax(syntaxTree, keyword, initializer, semicolon, condition, statement, elseClause)
+    }
+
+    /// Parses the header after `if`, `( SimpleStmt ";" )? Expression`.
+    /// The if-statement and the if-expression both call it (issue #4962,
+    /// ADR-0064), so the two forms accept the same initializer and parse the
+    /// condition the same way.
+    /// @returns The optional initializer, the `;` that ends it, and the condition.
+    private func ParseIfHeader()(Initializer StatementSyntax?, Semicolon SyntaxToken?, Condition ExpressionSyntax) {
         var initializer StatementSyntax? = nil
         var semicolon SyntaxToken? = nil
         if HasIfInitClause() {
@@ -716,9 +728,7 @@ open partial class Parser {
             semicolon = MatchToken(SyntaxKind.SemicolonToken)
         }
         let condition = ParseExpressionInBodyHeader()
-        let statement = ParseStatement()
-        let elseClause = ParseElseClause()
-        return IfStatementSyntax(syntaxTree, keyword, initializer, semicolon, condition, statement, elseClause)
+        return (initializer, semicolon, condition)
     }
 
     private func HasIfInitClause() bool {

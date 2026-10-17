@@ -4,6 +4,7 @@
 - **Date**: 2026-06-10
 - **Implemented**: 2026-06-10 (PR [#680](https://github.com/DavidObando/gsharp/pull/680), issue [#669](https://github.com/DavidObando/gsharp/issues/669))
 - **Finalized**: 2026-06-11 (issue [#711](https://github.com/DavidObando/gsharp/issues/711))
+- **Amended**: 2026-10-17 (issue [#4962](https://github.com/DavidObando/gsharp/issues/4962)): the if-expression accepts the if-statement's `SimpleStmt ';'` header initializer, with the same scoping. See the addendum at the end.
 - **Phase**: Phase 8 — language ergonomics / expression surface
 - **Related**: ADR-0062 (generalized ternary), ADR-0009 (switch semantics), issues #669, #706, #711, #3355
 
@@ -16,9 +17,12 @@ G# has a generalized ternary (`cond ? a : b`, ADR-0062) but no way to write mult
 Add `if` as a value-producing expression that coexists with the ternary:
 
 ```ebnf
-IfExpression := 'if' Expression Block ('else' (IfExpression | Block))?
+IfExpression := 'if' (SimpleStmt ';')? Expression Block ('else' (IfExpression | Block))?
 Block        := '{' Statement* (Expression)? '}'
 ```
+
+(The `(SimpleStmt ';')?` initializer was added by the issue #4962 addendum
+below. The original decision had no initializer.)
 
 - The block's final expression (last expression statement) is the value.
 - `if` without `else` is statement-only; using it in value position reports **GS0276**.
@@ -154,3 +158,90 @@ return 2 * { let item = next() item }
   report the existing precise `GS0473` unsupported-expression diagnostic.
 - cs2gs uses this native form for expression-position spills, replacing the
   synthesized `__pN`/`__initN` helper path and its double-evaluation fallback.
+
+## Addendum (issue #4962, 2026-10-17): the header initializer
+
+The original decision gave the if-expression no initializer, and the spec
+recorded that the statement's `if init; cond` form was "unchanged" by the
+expression form. So `if var v = g(); v > 3 { … } else { … }` parsed as a
+statement but failed to parse in value position (a spurious GS0276 followed
+by GS0005 errors). The same `if` failed in one statement-shaped place too: a
+trailing, else-terminated `if` in an arrow-lambda block body is the expression
+form (ADR-0128, issue #2349), so `() -> { if var v = g(); v > 3 { … } else { … } }`
+did not parse. Constructs that exist as both a statement and an expression
+must behave the same, so the expression form now takes the statement's
+header.
+
+Revised rule:
+
+```ebnf
+IfStmt       := 'if' (SimpleStmt ';')? Expression Statement ('else' Statement)?
+IfExpression := 'if' (SimpleStmt ';')? Expression Block ('else' (IfExpression | Block))?
+```
+
+- **One header routine.** Both forms parse `(SimpleStmt ';')? Expression`
+  with the same parser routine (`ParseIfHeader`), so the two cannot drift.
+  The initializer is detected the same way (a `;` at parenthesis depth zero
+  before the then-block's `{`), and it is one of the simple statements the
+  statement form accepts: a `var` declaration, an assignment, an
+  increment/decrement, or a call. The condition is parsed with the
+  body-header rules in both forms (a bare `Name { }` is not read as a struct
+  literal and a trailing object initializer is not absorbed).
+- **Scope.** The initializer's declarations are visible in the condition, in
+  the then-branch, in the else-branch, and in every link of an `else if`
+  chain. They are not visible after the `if`. Each `else if` link may have its
+  own initializer, visible in that link's condition and branches and in the
+  links after it, and not in the earlier links. Redeclaring an outer name and
+  reusing a name in a sibling `if` follow the rules for a nested block. This
+  is what the statement form already did; the expression form now does the
+  same.
+- **Evaluation order.** The initializer runs exactly once, before the
+  condition, each time the `if` is evaluated. Then exactly one branch runs.
+  The initializer of an `else if` link runs only when that link is reached.
+- **Lowering.** `if init; cond { a } else { b }` in value position lowers to
+  `{ init; cond ? a : b }`, a `BoundBlockExpression` around the usual
+  `BoundConditionalExpression`. The initializer is bound as a block
+  expression's prefix statement, so the emitter, the async/iterator spiller
+  and the closure analysis need no new cases, and an `await` in the
+  initializer works under the normal async rules.
+- **Target typing and branch rules are unchanged.** A contextual target type
+  still flows into both branches, and a call argument still rebinds against
+  its parameter type during overload resolution (issue #1238); the
+  initializer's local is declared again in a fresh scope on each binding, so
+  no GS0004 is reported.
+- **Value-position differences that remain.** Only the ones that follow from
+  value position: the expression form needs a terminal `else` (GS0276) and
+  value-producing branch tails (GS0277). The initializer does not change
+  either rule.
+- **`if let` is a different header.** An `if` followed by `let` is the
+  ADR-0071 / ADR-0151 binding form in both positions, so the initializer can
+  never be a `let` declaration, and a `let` binding cannot follow an
+  initializer (`if var v = g(); let w = v { … }`). Both forms reject these
+  headers the same way. Use a `var` initializer, or put the binding in an
+  inner `if let`.
+- **Formatter.** gsfmt treats the header's `;` as a clause separator, like
+  the `;` of a for-clause header, in both forms: the header stays on one
+  line. gsfmt used to force a line break after the statement form's `;`
+  (`if var v = g();` then `v > 3 {` on the next line); that output still
+  parsed with the same meaning, and gsfmt now joins it back.
+
+### Compatibility
+
+The change only accepts code that failed to parse before. A valid
+if-expression never has a `;` at parenthesis depth zero before its
+then-block's `{` (a block-expression or lambda condition starts with or
+contains its own braces first), so the initializer check is false for every
+existing if-expression and it parses exactly as before. A search of the
+repository's `.gs` sources, tests, samples, docs and cs2gs goldens found 0
+if-expressions with an initializer. Two matches of the search pattern were
+`;` characters inside string literals, which are single tokens. There are 7
+statement-form uses, all in compiler test sources, and they are unchanged.
+cs2gs neither emits nor reads this form: C# has no `if` initializer.
+
+The condition of an if-expression is now parsed with the same body-header
+helper as the statement's. The only difference from the old expression path
+is that the helper turns off, inside the condition, the `for x in Name { }`
+empty-struct-literal allowance of an enclosing `for … in` collection header.
+That matters only for an if-expression written directly as a `for … in`
+collection whose condition is itself `Name { }`, which no code in the
+repository does. No migration path is needed.
