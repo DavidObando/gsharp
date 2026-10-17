@@ -70,7 +70,7 @@ jobs:
           bwrap --ro-bind / / --unshare-user --unshare-pid --unshare-net true
 
       - name: Build controller helpers
-        # Same as #4842's selfhost-stage2.yml. These two helper projects stay C#
+        # Same as #4842's selfhost-stage2.yml. These two helper projects are G#
         # (build/selfhost/*.gsproj) and must exist before the controller runs.
         run: |
           dotnet restore build/selfhost/PackageContentHash.gsproj --locked-mode
