@@ -199,7 +199,7 @@ selfmig_stage_corpus_sdk() {
   echo "self-migration: staged $staged corpus Gsharp.NET.Sdk package(s) in $migrated/.nugs."
 }
 
-# Issue #4919: runs a command (cs2gs validate, or the single-job migrate) with
+# Issue #4919: runs a command (cs2gs validate) with
 # the pinned G# SDK's bundled runtime assemblies redirected to the CORPUS's own
 # Gsharp.Runtime.Channels and Gsharp.Runtime.Values builds. Before the cut-over
 # the SDK the migrated tree pinned was built from the corpus checkout, so the

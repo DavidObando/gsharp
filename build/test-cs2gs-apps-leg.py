@@ -281,7 +281,64 @@ def main():
         s = json.loads((from_corpus / "stats.json").read_text())
         assert (s["green"], s["floor"], s["baseline"]) == (2, floor, "failed"), s
         assert gate.returncode != 0 and f"fell below floor {floor}" in gate.stderr, gate.stderr
+        single_job_with_separate_corpus(d)
     print("OK")
+
+
+STUB_DOTNET = r"""#!/usr/bin/env bash
+# A stand-in for dotnet: builds, restores and tool restores do nothing; the
+# cs2gs verbs write the minimum the selfmig scripts read, and `validate`
+# records what the migrated mirror looked like when validation started.
+case "$1" in build|restore|tool) exit 0 ;; esac
+verb=$2
+shift 2
+args=("$@")
+get() { local i; for ((i = 0; i < ${#args[@]}; i++)); do [[ ${args[i]} == "$1" ]] && echo "${args[i+1]}"; done; }
+case "$verb" in
+  migrate)
+    mkdir -p "$(get --out)" "$(get --artifacts)/r1"
+    echo '{"runId":"r1","succeeded":true,"apps":[{"appId":"src/A/A.csproj","succeeded":true,"stages":[{"stage":"translate","status":"passed"}]}]}' \
+      > "$(get --artifacts)/r1/run.json" ;;
+  capture-test-oracle) mkdir -p "$(get --out)" ;;
+  validate)
+    { ls "$(get --migrated)/.nugs"; echo "channels=${GsharpChannelsRuntimeAssemblyFullPath:-<unset>}"; } > "$STUB_LOG"
+    mkdir -p "$(get --artifacts)/r2"
+    echo '{"apps":[{"appId":"src/A/A.csproj","succeeded":true,"stages":[{"stage":"compile","status":"passed"},{"stage":"ilverify","status":"passed"},{"stage":"test-parity","status":"passed"}]}]}' \
+      > "$(get --artifacts)/r2/run.json" ;;
+  *) echo "stub dotnet: unexpected $verb" >&2; exit 2 ;;
+esac
+"""
+
+
+def single_job_with_separate_corpus(d: Path) -> None:
+    """Issue #4919: the single-job path with a SEPARATE corpus runs translate,
+    one validate shard and the gate, so the mirror is validated with the
+    corpus SDK staged in its local feed and the corpus runtime under the SDK,
+    exactly as the nightly's shards are."""
+    corpus = d / "sj-corpus"
+    (corpus / "out" / "bin" / "Release" / "nupkgs").mkdir(parents=True)
+    (corpus / "GSharp.sln").write_text("")
+    (corpus / "out" / "bin" / "Release" / "nupkgs" / "Gsharp.NET.Sdk.0.4.1271-gabc.nupkg").write_text("")
+    for runtime in ("Channels", "Values"):
+        (corpus / "out" / "bin" / "Release" / f"Gsharp.Runtime.{runtime}").mkdir(parents=True)
+        (corpus / "out" / "bin" / "Release" / f"Gsharp.Runtime.{runtime}" / f"Gsharp.Runtime.{runtime}.dll").write_text("")
+    stub = d / "sj-bin"
+    stub.mkdir()
+    (stub / "dotnet").write_text(STUB_DOTNET)
+    (stub / "dotnet").chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"}
+    env.update(PATH=f"{stub}:{env['PATH']}", SELFMIG_SOURCE_ROOT=str(corpus),
+               SELFMIG_GATE_ROOT=str(d / "sj-root"), STUB_LOG=str(d / "sj-validate.log"))
+    run = subprocess.run(["bash", str(HERE / "run-cs2gs-selfmig.sh")], capture_output=True, text=True, env=env)
+    seen = (d / "sj-validate.log").read_text().splitlines()
+    assert "Gsharp.NET.Sdk.0.4.1271-gabc.nupkg" in seen, (seen, run.stderr[-2000:])
+    real = corpus.resolve()
+    assert f"channels={real}/out/bin/Release/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.dll" in seen, seen
+    stats = json.loads((d / "sj-root" / "stats.json").read_text())
+    assert (stats["green"], stats["total"], stats["runLevelFailure"]) == (1, 1, False), stats
+    # One green app is far below the real greenFloor: the gate's verdict and
+    # exit status come through.
+    assert run.returncode != 0 and stats["baseline"] == "failed", run.stderr[-2000:]
 
 
 main()

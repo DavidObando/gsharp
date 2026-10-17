@@ -476,9 +476,7 @@ untouched=$(env -u SELFMIG_SOURCE_ROOT -u GsharpChannelsRuntimeAssemblyFullPath 
 assert_eq "$untouched" "<unset>|<unset>" "no redirection when the checkout is the corpus"
 after=$(SELFMIG_SOURCE_ROOT="$scratch/csharp-src" env -u GsharpChannelsRuntimeAssemblyFullPath bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_with_corpus_runtime true; bash -c "$2"' _ "$repo_root" "$probe")
 assert_eq "$after" "<unset>|<unset>" "the redirection does not outlive the wrapped command"
-for leg_script in run-cs2gs-selfmig-validate.sh run-cs2gs-selfmig.sh; do
-  grep -q '^selfmig_with_corpus_runtime dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll"' "$repo_root/build/$leg_script" \
-    || { echo "FAIL: $leg_script does not compile the migrated tree against the corpus runtime" >&2; exit 1; }
-done
+grep -q '^selfmig_with_corpus_runtime dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" validate' "$repo_root/build/run-cs2gs-selfmig-validate.sh" \
+  || { echo "FAIL: the validate shard does not compile the migrated tree against the corpus runtime" >&2; exit 1; }
 
 echo "cs2gs counter contract tests passed"
