@@ -582,6 +582,7 @@ open partial class Parser {
         allowContextualOperators bool = true
     ) ExpressionSyntax {
         var current ExpressionSyntax
+        let isCastIntrinsic = IsCastIntrinsicHead()
         if IsReadOnlyManagedHead() || IsReadOnlyManagedHead(address: true) {
             current = ParseReadOnlyManagedExpression()
         } else if IsReadOnlySliceHead() ||
@@ -636,8 +637,8 @@ open partial class Parser {
             // invocation when the identifier resolves to a callable value.
             current = ParseNullableTypeCallExpression()
         } else if Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.OpenSquareBracketToken &&
-            LooksLikeGenericCallSite(1, pointerArgumentsAllowed: IsCastIntrinsicHead()) {
-            current = ParseGenericCallExpression(castIntrinsic: IsCastIntrinsicHead())
+            LooksLikeGenericCallSite(1, pointerArgumentsAllowed: isCastIntrinsic) {
+            current = ParseGenericCallExpression(castIntrinsic: isCastIntrinsic)
             current = MaybeWrapWithObjectInitializer(current)
         } else if Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.OpenBraceToken &&
             IsStructLiteralFollowingBrace(2) &&
