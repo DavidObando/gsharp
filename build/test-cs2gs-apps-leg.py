@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import tempfile
+import zipfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -318,10 +319,10 @@ def single_job_with_separate_corpus(d: Path) -> None:
     corpus = d / "sj-corpus"
     (corpus / "out" / "bin" / "Release" / "nupkgs").mkdir(parents=True)
     (corpus / "GSharp.sln").write_text("")
-    (corpus / "out" / "bin" / "Release" / "nupkgs" / "Gsharp.NET.Sdk.0.4.1271-gabc.nupkg").write_text("")
-    for runtime in ("Channels", "Values"):
-        (corpus / "out" / "bin" / "Release" / f"Gsharp.Runtime.{runtime}").mkdir(parents=True)
-        (corpus / "out" / "bin" / "Release" / f"Gsharp.Runtime.{runtime}" / f"Gsharp.Runtime.{runtime}.dll").write_text("")
+    with zipfile.ZipFile(corpus / "out" / "bin" / "Release" / "nupkgs" / "Gsharp.NET.Sdk.0.4.1271-gabc.nupkg", "w") as z:
+        for member in ("tools/extensions//Gsharp.Extensions.dll", "tools/channels//Gsharp.Runtime.Channels.dll",
+                       "tools/values//Gsharp.Runtime.Values.dll"):
+            z.writestr(member, member)
     stub = d / "sj-bin"
     stub.mkdir()
     (stub / "dotnet").write_text(STUB_DOTNET)
@@ -333,7 +334,7 @@ def single_job_with_separate_corpus(d: Path) -> None:
     seen = (d / "sj-validate.log").read_text().splitlines()
     assert "Gsharp.NET.Sdk.0.4.1271-gabc.nupkg" in seen, (seen, run.stderr[-2000:])
     real = corpus.resolve()
-    assert f"channels={real}/out/bin/Release/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.dll" in seen, seen
+    assert f"channels={real}/out/selfmig-corpus-sdk/channels/Gsharp.Runtime.Channels.dll" in seen, seen
     stats = json.loads((d / "sj-root" / "stats.json").read_text())
     assert (stats["green"], stats["total"], stats["runLevelFailure"]) == (1, 1, False), stats
     # One green app is far below the real greenFloor: the gate's verdict and

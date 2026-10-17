@@ -457,25 +457,50 @@ if [[ -e "$scratch/mirror" ]]; then
   exit 1
 fi
 
-# Issue #4919: the SDK's bundled runtime is redirected to the corpus's own
-# Gsharp.Runtime.Channels/Values for the wrapped command only, a missing corpus
-# runtime build fails loudly, and the checkout-as-corpus case changes nothing.
-probe='echo "${GsharpChannelsRuntimeAssemblyFullPath:-<unset>}|${GsharpValuesRuntimeAssemblyFullPath:-<unset>}"'
-if SELFMIG_SOURCE_ROOT="$scratch/csharp-src" bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_with_corpus_runtime true' _ "$repo_root" 2>/dev/null; then
-  echo "FAIL: a corpus without its runtime builds was accepted" >&2
+# Issue #4919: the SDK's bundled G# assemblies (Extensions, Channels, Values)
+# are taken from the corpus's own Gsharp.NET.Sdk package for the wrapped
+# command only; a malformed or incomplete package fails loudly, never falling
+# back to main's; the checkout-as-corpus case changes nothing.
+probe='echo "${GsharpExtensionsAssemblyFullPath:-<unset>}|${GsharpChannelsRuntimeAssemblyFullPath:-<unset>}|${GsharpValuesRuntimeAssemblyFullPath:-<unset>}"'
+sdk_nupkg="$scratch/csharp-src/out/bin/Release/nupkgs/Gsharp.NET.Sdk.0.4.1271-gabc.nupkg"
+with_runtime() {
+  SELFMIG_SOURCE_ROOT="$scratch/csharp-src" bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_with_corpus_runtime bash -c "$2"' _ "$repo_root" "$probe"
+}
+if with_runtime 2>/dev/null; then
+  echo "FAIL: a corpus SDK package that is not a zip was accepted" >&2
   exit 1
 fi
-for runtime in Channels Values; do
-  mkdir -p "$scratch/csharp-src/out/bin/Release/Gsharp.Runtime.$runtime"
-  touch "$scratch/csharp-src/out/bin/Release/Gsharp.Runtime.$runtime/Gsharp.Runtime.$runtime.dll"
-done
-redirected=$(SELFMIG_SOURCE_ROOT="$scratch/csharp-src" bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_with_corpus_runtime bash -c "$2"' _ "$repo_root" "$probe")
-assert_eq "$redirected" "$corpus/out/bin/Release/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.dll|$corpus/out/bin/Release/Gsharp.Runtime.Values/Gsharp.Runtime.Values.dll" "the SDK runtime is the corpus's own"
-untouched=$(env -u SELFMIG_SOURCE_ROOT -u GsharpChannelsRuntimeAssemblyFullPath -u GsharpValuesRuntimeAssemblyFullPath \
+# The packer writes "tools/<folder>//<file>" member names; match them anyway.
+make_sdk_zip() {
+  python3 - "$sdk_nupkg" "$@" <<'PY'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    for member in sys.argv[2:]:
+        z.writestr(member, member)
+PY
+}
+make_sdk_zip "tools/extensions//Gsharp.Extensions.dll" "tools/channels//Gsharp.Runtime.Channels.dll"
+if with_runtime 2>/dev/null; then
+  echo "FAIL: a corpus SDK package without tools/values was accepted" >&2
+  exit 1
+fi
+make_sdk_zip "tools/extensions//Gsharp.Extensions.dll" "tools/channels//Gsharp.Runtime.Channels.dll" \
+  "tools/values//Gsharp.Runtime.Values.dll" "tools/compiler//Gsharp.Runtime.Channels.dll"
+tools="$corpus/out/selfmig-corpus-sdk"
+assert_eq "$(with_runtime)" "$tools/extensions/Gsharp.Extensions.dll|$tools/channels/Gsharp.Runtime.Channels.dll|$tools/values/Gsharp.Runtime.Values.dll" "the SDK's bundled G# assemblies are the corpus's own"
+assert_eq "$(cat "$tools/channels/Gsharp.Runtime.Channels.dll")" "tools/channels//Gsharp.Runtime.Channels.dll" "the channels runtime comes from tools/channels, not tools/compiler"
+untouched=$(env -u SELFMIG_SOURCE_ROOT -u GsharpExtensionsAssemblyFullPath -u GsharpChannelsRuntimeAssemblyFullPath -u GsharpValuesRuntimeAssemblyFullPath \
   bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_with_corpus_runtime bash -c "$2"' _ "$repo_root" "$probe")
-assert_eq "$untouched" "<unset>|<unset>" "no redirection when the checkout is the corpus"
-after=$(SELFMIG_SOURCE_ROOT="$scratch/csharp-src" env -u GsharpChannelsRuntimeAssemblyFullPath bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_with_corpus_runtime true; bash -c "$2"' _ "$repo_root" "$probe")
-assert_eq "$after" "<unset>|<unset>" "the redirection does not outlive the wrapped command"
+assert_eq "$untouched" "<unset>|<unset>|<unset>" "no redirection when the checkout is the corpus"
+after=$(SELFMIG_SOURCE_ROOT="$scratch/csharp-src" env -u GsharpChannelsRuntimeAssemblyFullPath -u GsharpExtensionsAssemblyFullPath -u GsharpValuesRuntimeAssemblyFullPath \
+  bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_with_corpus_runtime true; bash -c "$2"' _ "$repo_root" "$probe")
+assert_eq "$after" "<unset>|<unset>|<unset>" "the redirection does not outlive the wrapped command"
+cp "$sdk_nupkg" "$scratch/csharp-src/out/bin/Release/nupkgs/Gsharp.NET.Sdk.0.4.1272-gdef.nupkg"
+if with_runtime 2>/dev/null; then
+  echo "FAIL: two corpus SDK packages were accepted" >&2
+  exit 1
+fi
+rm "$scratch/csharp-src/out/bin/Release/nupkgs/Gsharp.NET.Sdk.0.4.1272-gdef.nupkg"
 grep -q '^selfmig_with_corpus_runtime dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" validate' "$repo_root/build/run-cs2gs-selfmig-validate.sh" \
   || { echo "FAIL: the validate shard does not compile the migrated tree against the corpus runtime" >&2; exit 1; }
 

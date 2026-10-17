@@ -186,35 +186,52 @@ selfmig_prepare_corpus() {
 #
 #   selfmig_stage_corpus_sdk <migrated-dir>
 selfmig_stage_corpus_sdk() {
-  local migrated=$1 nupkg staged=0
+  local migrated=$1 nupkg
   if [[ "$selfmig_source_root" == "$selfmig_default_root" ]]; then
     return 0
   fi
+  nupkg=$(selfmig_corpus_sdk_package) || return 1
   mkdir -p "$migrated/.nugs"
-  for nupkg in "$selfmig_source_root"/out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg; do
-    [[ -f "$nupkg" ]] || continue
-    cp "$nupkg" "$migrated/.nugs/"
-    staged=$((staged + 1))
-  done
-  echo "self-migration: staged $staged corpus Gsharp.NET.Sdk package(s) in $migrated/.nugs."
+  cp "$nupkg" "$migrated/.nugs/"
+  echo "self-migration: staged $(basename "$nupkg") in $migrated/.nugs."
 }
 
-# Issue #4919: runs a command (cs2gs validate) with
-# the pinned G# SDK's bundled runtime assemblies redirected to the CORPUS's own
-# Gsharp.Runtime.Channels and Gsharp.Runtime.Values builds. Before the cut-over
-# the SDK the migrated tree pinned was built from the corpus checkout, so the
-# runtime it bundles and auto-references (Gsharp.NET.Sdk.props,
-# _ExplicitReference) had the corpus's own identity, 0.4.0.0. With main's 0.5
-# SDK pinned instead, a migrated project that also project-references its own
-# 0.4 runtime hits an MSB3243 conflict that RAR settles by taking 0.5, and
-# every golden that hashes emitted PEs moves on the AssemblyRef row alone:
-# test/Core.Tests RefactoringBaselineTests.Samples_EmittedPE_Match_Baseline
-# failed with Gsharp.Runtime.Channels/Values 0.4.0.0 -> 0.5.0.0 and unchanged
-# method bodies (branch runs 38849888958 and 38959417266). The SDK reads both
-# paths only when they are not already set, so the environment redirects them
-# without touching the migrated tree; main's gsc and the rest of the SDK are
-# still what compiles it. No-op when the checkout is the corpus. A missing
-# corpus runtime build is an error, never a silent fall back to 0.5.
+# The corpus's own Gsharp.NET.Sdk nupkg (built by selfmig_prepare_corpus).
+# Exactly one is expected in a fresh corpus checkout; none or several is an
+# error, never a guess.
+selfmig_corpus_sdk_package() {
+  local found=() nupkg
+  for nupkg in "$selfmig_source_root"/out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg; do
+    [[ -f "$nupkg" ]] && found+=("$nupkg")
+  done
+  if (( ${#found[@]} != 1 )); then
+    echo "self-migration: expected one corpus Gsharp.NET.Sdk package under" \
+      "$selfmig_source_root/out/bin/Release/nupkgs, found ${#found[@]}." >&2
+    return 1
+  fi
+  echo "${found[0]}"
+}
+
+# Issue #4919: runs a command (cs2gs validate) with the pinned G# SDK's
+# BUNDLED G# assemblies -- Gsharp.Extensions, Gsharp.Runtime.Channels and
+# Gsharp.Runtime.Values, which Gsharp.NET.Sdk.props auto-references
+# (_ExplicitReference) from its tools/ folders -- taken from the CORPUS's own
+# Gsharp.NET.Sdk package instead of main's. Before the cut-over the SDK the
+# migrated tree pinned WAS the corpus-built package, so those assemblies had
+# the corpus's identity (0.4.0.0). With main's 0.5 SDK pinned instead:
+#   * a migrated project that also project-references its own 0.4 runtime hit
+#     MSB3243 and RAR took 0.5, so test/Core.Tests' PE golden moved on the
+#     AssemblyRef row alone (Channels/Values 0.4.0.0 -> 0.5.0.0, unchanged
+#     method bodies; branch runs 38849888958 and 38959417266);
+#   * redirecting only the two runtimes left main's 0.5 Gsharp.Extensions,
+#     compiled against Channels 0.5, as the one copy the Compiler.Tests
+#     conformance harness loads, so an emitted sample referenced Channels
+#     0.5.0.0 that no longer existed (run 38990575269, Timeout.gs).
+# All three come from the one package, so the identities stay consistent.
+# The SDK reads each path only when it is not already set, so the environment
+# redirects them without touching the migrated tree; main's gsc and BuildTask
+# still compile it. No-op when the checkout is the corpus. A missing package
+# or assembly is an error, never a silent fall back to main's.
 #
 #   selfmig_with_corpus_runtime <command> [args...]
 selfmig_with_corpus_runtime() {
@@ -222,16 +239,29 @@ selfmig_with_corpus_runtime() {
     "$@"
     return
   fi
-  local channels="$selfmig_source_root/out/bin/Release/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.dll"
-  local values="$selfmig_source_root/out/bin/Release/Gsharp.Runtime.Values/Gsharp.Runtime.Values.dll"
-  local path
-  for path in "$channels" "$values"; do
-    if [[ ! -f "$path" ]]; then
-      echo "self-migration: the corpus runtime '$path' was not built (selfmig_prepare_corpus)." >&2
-      return 1
-    fi
-  done
-  GsharpChannelsRuntimeAssemblyFullPath="$channels" GsharpValuesRuntimeAssemblyFullPath="$values" "$@"
+  local nupkg tools
+  nupkg=$(selfmig_corpus_sdk_package) || return 1
+  tools="$selfmig_source_root/out/selfmig-corpus-sdk"
+  python3 - "$nupkg" "$tools" <<'PY' || return 1
+import sys, zipfile
+from pathlib import Path
+nupkg, out = sys.argv[1], Path(sys.argv[2])
+wanted = {"extensions": "Gsharp.Extensions.dll", "channels": "Gsharp.Runtime.Channels.dll",
+          "values": "Gsharp.Runtime.Values.dll"}
+with zipfile.ZipFile(nupkg) as z:
+    names = {"/".join(p for p in n.split("/") if p): n for n in z.namelist()}
+    for folder, dll in wanted.items():
+        member = names.get(f"tools/{folder}/{dll}")
+        if member is None:
+            sys.exit(f"self-migration: {nupkg} has no tools/{folder}/{dll}")
+        target = out / folder / dll
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(z.read(member))
+PY
+  GsharpExtensionsAssemblyFullPath="$tools/extensions/Gsharp.Extensions.dll" \
+    GsharpChannelsRuntimeAssemblyFullPath="$tools/channels/Gsharp.Runtime.Channels.dll" \
+    GsharpValuesRuntimeAssemblyFullPath="$tools/values/Gsharp.Runtime.Values.dll" \
+    "$@"
 }
 
 # Most metrics count CODE, not fixtures: migrated test sources embed
