@@ -240,6 +240,30 @@ class ShellTests(CommentOnlyCase):
         # The comment ends the command, so deleting its line joins "run" and "--fast".
         self.assertFails("a.sh", "run \\\n# keep\n--fast\n", "run \\\n--fast\n")
 
+    def test_escaped_trailing_space_is_not_normalized(self) -> None:
+        # Bash prints "<a >" for the base and "<a>" for the head.
+        self.assertFails("a.sh", "printf '<%s>\\n' a\\ \n", "printf '<%s>\\n' a\\\n")
+
+    def test_quoted_text_inside_parameter_expansion_is_not_normalized(self) -> None:
+        self.assertFails("a.sh", "x=${u:-'a   \nb'}\n", "x=${u:-'a\nb'}\n")
+        self.assertFails("a.sh", 'x=${u:-"a   \nb"}\n', 'x=${u:-"a\nb"}\n')
+
+    def test_backtick_substitution_is_not_normalized(self) -> None:
+        self.assertFails("a.sh", "x=`printf 'a   \nb'`\n", "x=`printf 'a\nb'`\n")
+
+    def test_hash_after_escape_or_continuation_is_not_a_comment(self) -> None:
+        self.assertFails("a.sh", "echo a\\ #old\n", "echo a\\ #new\n")
+        self.assertFails("a.sh", "echo a\\\n#old\n", "echo a\\\n#new\n")
+
+    def test_comment_after_continuation_and_space_is_a_comment(self) -> None:
+        self.assertPasses("a.sh", "echo a \\\n#old\n", "echo a \\\n#new\n")
+
+    def test_unquoted_heredoc_line_ending_in_backslash_fails_closed(self) -> None:
+        # The first EOF joins the line before it, so it does not end the body.
+        self.assertFails(
+            "a.sh", "cat <<EOF\nx\\\nEOF\n#old\nEOF\n", "cat <<EOF\nx\\\nEOF\n#new\nEOF\n", "cannot tokenize"
+        )
+
     def test_unclosed_heredoc_fails_closed(self) -> None:
         self.assertFails("a.sh", "cat <<EOF\nx\nEOF\n", "cat <<EOF\nx # c\n", "cannot tokenize")
 
@@ -280,6 +304,18 @@ class YamlTests(CommentOnlyCase):
     def test_change_inside_tagged_or_anchored_scalar_fails(self) -> None:
         self.assertFails("a.yml", 'a: !!str "x # y"\n', 'a: !!str "x # z"\n')
         self.assertFails("a.yml", "a: &k 'x # y'\n", "a: &k 'x # z'\n")
+
+    def test_blank_lines_inside_plain_scalar_are_not_normalized(self) -> None:
+        # The values are "a\n\nb" and "a\nb".
+        self.assertFails("a.yml", "k: a\n\n\n  b\n", "k: a\n\n  b\n")
+
+    def test_quoted_flow_value_after_colon_is_a_string(self) -> None:
+        self.assertFails("a.yml", '{"k":"a # old"}\n', '{"k":"a # new"}\n')
+        self.assertFails("a.yml", "m: {k: x,\n  j:'a # old'}\n", "m: {k: x,\n  j:'a # new'}\n")
+
+    def test_final_line_break_of_block_scalar_is_kept(self) -> None:
+        self.assertFails("a.yml", "k: |\n  a\n", "k: |\n  a")
+        self.assertFails("a.yml", "k: |+\n  a\n\n", "k: |+\n  a\n")
 
     def test_change_inside_block_scalar_fails(self) -> None:
         self.assertFails("a.yml", self.BASE, self.BASE.replace("# shell comment", "# shell note"))
