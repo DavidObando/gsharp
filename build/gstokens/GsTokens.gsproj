@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <AssemblyName>gstokens</AssemblyName>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.gs" />
+    <ProjectReference Include="../../src/Core/Core.gsproj" />
+  </ItemGroup>
+</Project>
