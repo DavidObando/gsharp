@@ -10,14 +10,17 @@ Supported files:
 
   .gs           The compiler's own lexer, through build/gstokens. The check
                 compares every token that is not whitespace or a comment (kind
-                and text), and whether a line break comes before it.
+                and text), and what separates it from the previous token:
+                nothing, spaces, or a line break.
   .py           The standard tokenize module. The check compares every token
-                except comments and blank-line (NL) tokens. A docstring is a
+                except comments and blank-line (NL) tokens, and whether it is
+                on the same line as the previous token. A docstring is a
                 string literal, so a change to one fails with "docstring
                 changed: review manually".
   .yml, .yaml   PyYAML. The check compares the parse events of the two
                 versions (each scalar's value, style, tag and anchor, and the
-                structure). If PyYAML is not installed, the check fails.
+                structure), and every line with a tool directive after a `#`.
+                If PyYAML is not installed, the check fails.
 
 Every other file type fails with "unsupported: review manually". That
 includes shell scripts and C#: their grammar needs a real parser, and the
@@ -88,17 +91,26 @@ class CheckError(Exception):
 
 @dataclass(frozen=True)
 class Token:
+    """A token that the comparison keeps.
+
+    `before` says what separates the token from the previous kept token:
+    "start" for the first token; for G# "none", "space" or "line break"; for
+    Python "same line" or "new line". It is part of the comparison, because a
+    parser can depend on it (G# reads `a?(x)` and `a? (x)` differently, and a
+    Python `# type: ignore` applies to its own line).
+    """
+
     kind: str
     text: str
     line: int
-    line_break_before: bool = False
+    before: str = ""
 
-    def key(self) -> tuple[str, str, bool]:
-        return (self.kind, self.text, self.line_break_before)
+    def key(self) -> tuple[str, str, str]:
+        return (self.kind, self.text, self.before)
 
     def show(self) -> str:
         text = self.text if len(self.text) <= 80 else self.text[:77] + "..."
-        return f"{self.kind} {text!r}" + (" (after a line break)" if self.line_break_before else "")
+        return f"{self.kind} {text!r}" + (f" (after: {self.before})" if self.before else "")
 
 
 def first_difference(base: list[Token], head: list[Token]) -> int | None:
@@ -184,16 +196,19 @@ class GsLexer:
 
 
 def gs_significant(raw: list[list]) -> list[Token]:
-    """Drop whitespace and comments, and record where a line break came before a token."""
-    tokens = []
-    line_break = False
+    """Drop whitespace and comments, and record what separated each kept token from the previous one."""
+    tokens: list[Token] = []
+    separator = "none"
     for kind, line, text in raw:
         directive = kind != "WhitespaceToken" and DIRECTIVE.search(text)
         if kind in GS_TRIVIA and not directive:
-            line_break = line_break or "\n" in text or "\r" in text
+            if "\n" in text or "\r" in text:
+                separator = "line break"
+            elif separator == "none":
+                separator = "space"
             continue
-        tokens.append(Token(kind, text, line, line_break))
-        line_break = False
+        tokens.append(Token(kind, text, line, separator if tokens else "start"))
+        separator = "none"
     return tokens
 
 
@@ -206,7 +221,8 @@ _FSTRING_ENDS = {getattr(tokenize, n) for n in ("FSTRING_END", "TSTRING_END") if
 
 
 def py_tokens(text: str) -> list[Token]:
-    tokens = []
+    tokens: list[Token] = []
+    last_row = 0  # the row where the previous kept token ends
     depth = 0  # f-string nesting; a comment inside one is part of the string
     try:
         for tok in tokenize.generate_tokens(io.StringIO(text).readline):
@@ -225,7 +241,9 @@ def py_tokens(text: str) -> list[Token]:
                 )
                 if not keep:
                     continue
-            tokens.append(Token(tokenize.tok_name[tok.type], tok.string, tok.start[0]))
+            before = "start" if not tokens else "same line" if tok.start[0] == last_row else "new line"
+            tokens.append(Token(tokenize.tok_name[tok.type], tok.string, tok.start[0], before))
+            last_row = tok.end[0]
     except (tokenize.TokenError, SyntaxError) as error:
         raise CheckError(f"Python tokenize failed: {error}") from error
     return tokens
@@ -262,6 +280,22 @@ def compare_py(base_text: str, head_text: str) -> str | None:
 # --------------------------------------------------------------------------
 
 _YAML_FIELDS = ("anchor", "tag", "implicit", "value", "style", "explicit", "version", "tags", "flow_style")
+
+
+def yaml_directives(text: str) -> list[tuple[int, str]]:
+    """Return (line, text) of each line with a tool directive after a `#`.
+
+    PyYAML drops comments, so the parse events cannot show a directive such
+    as `# yaml-language-server: $schema=...`. The check compares these lines
+    directly instead.
+    """
+    found = []
+    for number, line in enumerate(text.split("\n"), start=1):
+        for k, ch in enumerate(line):
+            if ch == "#" and DIRECTIVE.search(line[k:]):
+                found.append((number, line.strip()))
+                break
+    return found
 
 
 def yaml_events(text: str) -> list[Token]:
@@ -303,6 +337,8 @@ def compare(path: str, base: str, head: str, lexer: GsLexer | None = None) -> st
         elif suffix == ".py":
             return compare_py(base, head)
         else:
+            if yaml_directives(base) != yaml_directives(head):
+                return "a YAML tool directive comment changed or moved: review manually"
             base_tokens, head_tokens = yaml_events(base), yaml_events(head)
     except CheckError as error:
         return f"cannot compare: {error}"
