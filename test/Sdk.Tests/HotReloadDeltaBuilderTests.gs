@@ -138,6 +138,75 @@ func Last() int32 { return 33 }`)
     }
 
     @Fact
+    func MethodBodyEdits_ReportChangedTypesInRoslynOrder() {
+        // Issue #4960: metadata update handlers receive the changed types the
+        // way Roslyn's delta writer reports them: each changed method's
+        // declaring type and every type containing it, once, with top-level
+        // types (in TypeDef order) before nested types. `Second` only
+        // contains a change and `Inner` has two changed methods.
+        let source = `package HotReloadTests
+
+class First {
+    shared {
+        func Value() int32 { return 1 }
+    }
+}
+
+class Second {
+    shared {
+        func Value() int32 { return 2 }
+    }
+
+    class Inner {
+        shared {
+            func Value() int32 { return 3 }
+            func Other() int32 { return 4 }
+        }
+    }
+}
+
+class Third {
+    shared {
+        func Value() int32 { return 5 }
+    }
+}
+
+class Unchanged {
+    shared {
+        func Value() int32 { return 6 }
+    }
+}`
+        let baseline = Emit(source)
+        let current = Emit(
+            source
+                .Replace("return 1", "return 11")
+                .Replace("return 3", "return 33")
+                .Replace("return 4", "return 44")
+                .Replace("return 5", "return 55")
+        )
+        let update = HotReloadDeltaBuilder(baseline).CreateUpdate(current)
+        Assert.Equal(HotReloadDeltaStatus.Ready, update.Status)
+        Assert.Equal(4, update.UpdatedMethods.Length)
+        Assert.Equal(
+            []string{
+                "HotReloadTests.First",
+                "HotReloadTests.Second",
+                "HotReloadTests.Third",
+                "HotReloadTests.Second+Inner"
+            },
+            GetTypeNames(current, update.UpdatedTypes)
+        )
+    }
+
+    @Fact
+    func NoChangesAndRejectedEdits_ReportNoChangedTypes() {
+        let baseline = Emit("package HotReloadTests\nfunc Value() int32 { return 1 }")
+        Assert.Empty(HotReloadDeltaBuilder(baseline).CreateUpdate(baseline).UpdatedTypes)
+        let renamed = Emit("package HotReloadTests\nfunc Renamed() int32 { return 1 }")
+        Assert.Empty(HotReloadDeltaBuilder(baseline).CreateUpdate(renamed).UpdatedTypes)
+    }
+
+    @Fact
     func StringLiteralEdit_AddsUserStringHeapEntry() {
         let baseline = Emit("package HotReloadTests\nfunc Value() string { return \"before\" }")
         let current = Emit("package HotReloadTests\nfunc Value() string { return \"after\" }")
@@ -331,6 +400,33 @@ func Value() int32 { return Math.Abs(-1) }`)
                 )
             )
             return peStream.ToArray()
+        }
+
+        private func GetTypeNames(image[]uint8, tokens ImmutableArray[int32])[]string {
+            using let stream = MemoryStream(image, writable: false)
+            using let peReader = PEReader(stream)
+            let reader = peReader.GetMetadataReader()
+            let names = List[string]()
+            for token in tokens {
+                let handle = TypeDefinitionHandle(MetadataTokens.EntityHandle(token))
+                names.Add(GetTypeName(reader, handle))
+            }
+            return names.ToArray()
+        }
+
+        private func GetTypeName(reader MetadataReader, handle TypeDefinitionHandle) string {
+            let type = reader.GetTypeDefinition(handle)
+            let name = reader.GetString(type.Name)
+            let declaringType = type.GetDeclaringType()
+            if !declaringType.IsNil {
+                return GetTypeName(reader, declaringType) + "+" + name
+            }
+            let namespaceName = reader.GetString(type.Namespace)
+            return if namespaceName.Length == 0 {
+                name
+            } else {
+                "$namespaceName.$name"
+            }
         }
 
         private func GetMethodDefinitionRows(image[]uint8, methodNames IEnumerable[string]) Dictionary[string, int32] {
