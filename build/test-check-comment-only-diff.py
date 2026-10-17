@@ -181,6 +181,10 @@ class CSharpTests(CommentOnlyCase):
         base = '#if false\nvar v = @"\n#endif\nvar s = "a // old";\n'
         self.assertFails("a.cs", base, base.replace("old", "new"), "preprocessor line")
 
+    def test_comment_across_indented_directive_fails_closed(self) -> None:
+        base = '#if false\n/*\n\f#endif\nSystem.Console.WriteLine("old");\n\f#if false\n*/\n#endif\n'
+        self.assertFails("a.cs", base, base.replace('"old"', '"new"'), "preprocessor line")
+
     def test_unicode_line_separator_fails_closed(self) -> None:
         # C# ends the // comment at U+2028, so the WriteLine is code.
         base = '// note\u2028System.Console.WriteLine("old");\n'
@@ -289,6 +293,22 @@ class ShellTests(CommentOnlyCase):
         base = 'x="$(case x in x) echo "value # old";; esac)"\n'
         self.assertFails("a.sh", base, base.replace("old", "new"), "case inside")
 
+    def test_case_split_by_line_continuation_fails_closed(self) -> None:
+        base = 'x="$(ca\\\nse x in x) echo "value # old";; esac)"\n'
+        self.assertFails("a.sh", base, base.replace("old", "new"), "case inside")
+
+    def test_ansi_c_string_inside_parameter_expansion(self) -> None:
+        base = "x=${u:-$'\\'} value # old'}\n"
+        self.assertFails("a.sh", base, base.replace("old", "new"))
+
+    def test_trailing_form_feed_and_vertical_tab_are_kept(self) -> None:
+        for ch in ("\f", "\v"):
+            with self.subTest(ch=repr(ch)):
+                self.assertFails("a.sh", f"printf '<%s>\\n' value{ch}\n", "printf '<%s>\\n' value\n")
+
+    def test_byte_order_mark_fails_closed(self) -> None:
+        self.assertFails("a.sh", "\ufeffecho hi # old\n", "\ufeffecho hi # new\n", "byte-order mark")
+
     def test_line_ending_change_fails(self) -> None:
         # Bash prints "<value\r>" for the base and "<value>" for the head.
         self.assertFails("a.sh", "printf '<%s>\\n' value\r\n", "printf '<%s>\\n' value\n", "carriage return")
@@ -371,6 +391,14 @@ class YamlTests(CommentOnlyCase):
     def test_open_plain_quote_before_comment_fails_closed(self) -> None:
         # The scanner does not know every place where a quoted scalar can start.
         self.assertFails("a.yml", 'k: x "a # old"\n', 'k: x "a # new"\n', "cannot tokenize")
+
+    def test_byte_order_mark_fails_closed(self) -> None:
+        self.assertFails("a.yml", "\ufeff- |\n    # old\n", "\ufeff- |\n    # new\n", "byte-order mark")
+
+    def test_whitespace_only_block_lines_are_kept(self) -> None:
+        # The values are "a\n \n" and "a\n".
+        self.assertFails("a.yml", "k: |\n  a\n   \n", "k: |\n  a\n")
+        self.assertFails("a.yml", "k: |\n  a\n    \nn: 1\n", "k: |\n  a\n  \nn: 1\n")
 
     def test_bare_carriage_return_fails_closed(self) -> None:
         self.assertFails("a.yml", "# note\rk: old\r", "# note\rk: new\r", "carriage return")
