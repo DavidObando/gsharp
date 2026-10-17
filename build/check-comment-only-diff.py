@@ -36,7 +36,8 @@ Some grammar is out of scope, so the check also fails closed on it:
   - shell: `case` inside `$(...)`, a backslash-newline that does not follow a
     space or a tab, a `$` or a backtick in a heredoc delimiter, a backslash
     inside a double-quoted heredoc delimiter, a body line that ends in a
-    backslash in a heredoc with an unquoted delimiter, and any carriage
+    backslash in a heredoc with an unquoted delimiter, a `#` after an
+    unclosed `[` on the same line (an array subscript), and any carriage
     return;
   - YAML: a comment after an open quote that the scanner read as plain text,
     a block scalar with only blank lines, and an explicit indentation
