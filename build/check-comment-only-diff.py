@@ -37,7 +37,7 @@ Some grammar is out of scope, so the check also fails closed on it:
     space or a tab, a `$` or a backtick in a heredoc delimiter, a backslash
     inside a double-quoted heredoc delimiter, a body line that ends in a
     backslash in a heredoc with an unquoted delimiter, a `#` after an
-    unclosed `[` on the same line (an array subscript), and any carriage
+    unclosed `[` (an array subscript, which can span lines), and any carriage
     return;
   - YAML: a comment after an open quote that the scanner read as plain text,
     a block scalar with only blank lines, and an explicit indentation
@@ -561,7 +561,7 @@ def _sh_scan(text: str, pos: int, mask: bytearray, nested: bool) -> int:
     start = pos
     depth = 0
     word_start = True
-    brackets = 0  # unclosed `[` on this line, as in an array subscript
+    brackets = 0  # unclosed `[`, as in an array subscript; it can span lines
     pending: list[tuple[str, bool, bool]] = []
     while pos < n:
         c = text[pos]
@@ -576,7 +576,6 @@ def _sh_scan(text: str, pos: int, mask: bytearray, nested: bool) -> int:
         if c == "\n":
             pos += 1
             word_start = True
-            brackets = 0
             if pending:
                 pos = _sh_heredocs(text, pos, mask, pending)
                 pending = []
