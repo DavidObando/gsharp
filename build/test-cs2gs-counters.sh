@@ -441,4 +441,20 @@ if DOTNET_STUB_LOG="$scratch/dotnet-stub.log" PATH="$stubbin:$PATH" SELFMIG_SOUR
   exit 1
 fi
 
+# Issue #4919: a separate corpus's SDK nupkg is staged in the migrated tree's
+# local feed (the version it builds may be unpublished), snupkgs and other
+# packages are not, and nothing is staged when the checkout is the corpus.
+mkdir -p "$scratch/csharp-src/out/bin/Release/nupkgs" "$scratch/mirror"
+touch "$scratch/csharp-src/out/bin/Release/nupkgs/Gsharp.NET.Sdk.0.4.1271-gabc.nupkg" \
+  "$scratch/csharp-src/out/bin/Release/nupkgs/Gsharp.NET.Sdk.0.4.1271-gabc.snupkg" \
+  "$scratch/csharp-src/out/bin/Release/nupkgs/Gsharp.Cs2Gs.0.4.1271-gabc.nupkg"
+SELFMIG_SOURCE_ROOT="$scratch/csharp-src" bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_stage_corpus_sdk "$2"' _ "$repo_root" "$scratch/mirror" >/dev/null
+assert_eq "$(ls "$scratch/mirror/.nugs")" "Gsharp.NET.Sdk.0.4.1271-gabc.nupkg" "the corpus SDK nupkg is staged in the mirror's feed"
+rm -rf "$scratch/mirror"
+env -u SELFMIG_SOURCE_ROOT bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_stage_corpus_sdk "$2"' _ "$repo_root" "$scratch/mirror"
+if [[ -e "$scratch/mirror" ]]; then
+  echo "FAIL: staged an SDK when the checkout is the corpus" >&2
+  exit 1
+fi
+
 echo "cs2gs counter contract tests passed"

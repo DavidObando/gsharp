@@ -57,6 +57,7 @@ rm -rf "$shard_out"
 mkdir -p "$shard_out"
 
 selfmig_build_prerequisites
+selfmig_stage_corpus_sdk "$migrated_dir"
 
 # Snapshot the tree so stage 2's `!!` polish rewrites can be shipped back to
 # the gate job as a delta (see run-cs2gs-selfmig-gate.sh).

@@ -168,6 +168,37 @@ selfmig_prepare_corpus() {
   )
 }
 
+# Issue #4919: offer the corpus's own Gsharp.NET.Sdk nupkg in the migrated
+# tree's local feed (<migrated>/.nugs, the "Gsharp local packages" source of the
+# mirrored nuget.config). Migrated tests that drive cs2gs build generated
+# projects under <migrated>/out, and MSBuild resolves their `Sdk=` through that
+# nuget.config, pinned to the version the CORPUS builds. While the corpus was
+# the tag v0.4.1270 that version was published on nuget.org, so the empty local
+# feed never mattered. The cs2gs/csharp-0.4 back-ports build an unpublished
+# 0.4.1271-g<sha> that exists only in the corpus's own output, and
+# MigrationPipelineTests.L2_RepositoryCompile_EmitsInternalsVisibleToExactlyOnce
+# failed with MSB4236 (branch run 38959417266; main fixed its own copy of the
+# test in #4942, the frozen corpus cannot be). Staging the nupkg restores the
+# pre-back-port environment: the exact version is resolvable. It adds a
+# package version to a local feed and nothing else; every migrated app still
+# builds against the SDK pinned in the migrated global.json. No-op when the
+# checkout is the corpus.
+#
+#   selfmig_stage_corpus_sdk <migrated-dir>
+selfmig_stage_corpus_sdk() {
+  local migrated=$1 nupkg staged=0
+  if [[ "$selfmig_source_root" == "$selfmig_default_root" ]]; then
+    return 0
+  fi
+  mkdir -p "$migrated/.nugs"
+  for nupkg in "$selfmig_source_root"/out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg; do
+    [[ -f "$nupkg" ]] || continue
+    cp "$nupkg" "$migrated/.nugs/"
+    staged=$((staged + 1))
+  done
+  echo "self-migration: staged $staged corpus Gsharp.NET.Sdk package(s) in $migrated/.nugs."
+}
+
 # Most metrics count CODE, not fixtures: migrated test sources embed
 # expected-output strings (and docs quote constructs), so lines containing a
 # string quote or leading with a comment marker are excluded before counting.
