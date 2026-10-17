@@ -23,7 +23,6 @@ import System
 import System.Collections.Generic
 import System.IO
 import System.Linq
-import System.Threading.Tasks
 import Xunit
 
 /// Current-state synthetic-spill inventory for issue #3347.
@@ -35,93 +34,37 @@ class Issue3347RemainingSpillInventoryTests {
     /// declarations are now retired from Core output; the companion translator
     /// project ratchet below protects its independently verified zero-spill output.
     @Fact
-    async func CoreMigration_Issue3421CheckedCastNoiseAndSynthesizedNameFamiliesStayRetired() {
+    func CoreMigration_Issue3421CheckedCastNoiseAndSynthesizedNameFamiliesStayRetired() {
         let repoRoot = GsharpTestProjectRunner.FindRepoRoot()!!
-        if CommittedCompilerSource.IsGSharp(repoRoot) {
-            // Issue #4656: after the cut-over the committed G# IS the
-            // translation. The same four families must not appear in it.
-            var committedCasts = 0
-            var committedDeconstructions = 0
-            var committedSpills = 0
-            var committedUsings = 0
-            for file in CommittedCompilerSource.GSharpFiles(repoRoot, "src/Core") {
-                let committed = File.ReadAllText(file)
-                committedCasts += CountOccurrences(committed, "__cast")
-                committedDeconstructions += CountOccurrences(committed, "__decon")
-                committedSpills += CountOccurrences(StripCommentLines(committed), "let __spill")
-                committedUsings += CountOccurrences(committed, "__using")
-            }
-            Assert.Equal(0, committedCasts)
-            Assert.Equal(0, committedDeconstructions)
-            Assert.Equal(0, committedSpills)
-            Assert.Equal(0, committedUsings)
-            return
+        // Issue #4656: after the cut-over the committed G# IS the
+        // translation. The same four families must not appear in it.
+        Assert.True(CommittedCompilerSource.IsGSharp(repoRoot), "The committed compiler source must be G#.")
+        var committedCasts = 0
+        var committedDeconstructions = 0
+        var committedSpills = 0
+        var committedUsings = 0
+        for file in CommittedCompilerSource.GSharpFiles(repoRoot, "src/Core") {
+            let committed = File.ReadAllText(file)
+            committedCasts += CountOccurrences(committed, "__cast")
+            committedDeconstructions += CountOccurrences(committed, "__decon")
+            committedSpills += CountOccurrences(StripCommentLines(committed), "let __spill")
+            committedUsings += CountOccurrences(committed, "__using")
         }
-        let project = await CSharpProjectLoader.LoadProjectAsync(Path.Combine(repoRoot, "src", "Core", "Core.csproj"))
-        Assert.True(
-            project.BoundWithoutErrors,
-            "Core should bind with no C# errors: " + string.Join(Environment.NewLine, project.ErrorDiagnostics)
-        )
-        // Issue #4656: zero documents would count zero of everything and pass.
-        Assert.NotEmpty(project.Documents)
-        let translator = CSharpToGSharpTranslator(preservePartialParts: true)
-        var castCount = 0
-        var deconstructionCount = 0
-        var spillCount = 0
-        var usingCount = 0
-        var sourceAssertedAsConversions = 0
-        var translatedAssertedAsConversions = 0
-        for document in project.Documents {
-            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-            let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
-            castCount += CountOccurrences(printed, "__cast")
-            deconstructionCount += CountOccurrences(printed, "__decon")
-            // Issue #3469: author comments now flow into the emitted G#,
-            // and Translator-source comments mention the very patterns this
-            // inventory counts — count code lines only.
-            spillCount += CountOccurrences(StripCommentLines(printed), "let __spill")
-            usingCount += CountOccurrences(printed, "__using")
-            sourceAssertedAsConversions += CountSourceAssertedAsConversions(document)
-            translatedAssertedAsConversions += CountTranslatedAssertedAsConversions(printed)
-        }
-        Assert.Equal(0, castCount)
-        Assert.Equal(0, deconstructionCount)
-        Assert.Equal(0, spillCount)
-        Assert.Equal(0, usingCount)
-        Assert.Equal(sourceAssertedAsConversions, translatedAssertedAsConversions)
+        Assert.Equal(0, committedCasts)
+        Assert.Equal(0, committedDeconstructions)
+        Assert.Equal(0, committedSpills)
+        Assert.Equal(0, committedUsings)
     }
 
     @Fact
-    async func TranslatorMigration_SpillFamilyStaysRetired() {
+    func TranslatorMigration_SpillFamilyStaysRetired() {
         let repoRoot = GsharpTestProjectRunner.FindRepoRoot()!!
-        if CommittedCompilerSource.IsGSharp(repoRoot) {
-            // Issue #4656: the committed G# translator is checked directly.
-            let committedSpills = CommittedCompilerSource.GSharpFiles(repoRoot, "tools/cs2gs/Cs2Gs.Translator").Sum(
-                (file string) -> CountOccurrences(StripCommentLines(File.ReadAllText(file)), "let __spill")
-            )
-            Assert.Equal(0, committedSpills)
-            return
-        }
-        let project = await CSharpProjectLoader.LoadProjectAsync(
-            Path.Combine(repoRoot, "tools", "cs2gs", "Cs2Gs.Translator", "Cs2Gs.Translator.csproj")
+        // Issue #4656: the committed G# translator is checked directly.
+        Assert.True(CommittedCompilerSource.IsGSharp(repoRoot), "The committed compiler source must be G#.")
+        let committedSpills = CommittedCompilerSource.GSharpFiles(repoRoot, "tools/cs2gs/Cs2Gs.Translator").Sum(
+            (file string) -> CountOccurrences(StripCommentLines(File.ReadAllText(file)), "let __spill")
         )
-        Assert.True(
-            project.BoundWithoutErrors,
-            "Translator should bind with no C# errors: " + string.Join(Environment.NewLine, project.ErrorDiagnostics)
-        )
-        // Issue #4656: zero documents would count zero spills and pass.
-        Assert.NotEmpty(project.Documents)
-        let translator = CSharpToGSharpTranslator(preservePartialParts: true)
-        var spillCount = 0
-        for document in project.Documents {
-            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-            let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
-            // Issue #3469: author comments now flow into the emitted G#,
-            // and Translator-source comments mention the very patterns this
-            // inventory counts — count code lines only.
-            spillCount += CountOccurrences(StripCommentLines(printed), "let __spill")
-        }
-        Assert.Equal(0, spillCount)
+        Assert.Equal(0, committedSpills)
     }
 
     @Fact
