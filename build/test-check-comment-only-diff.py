@@ -322,6 +322,14 @@ class ShellTests(CommentOnlyCase):
             with self.subTest(base=base):
                 self.assertFails("a.sh", base, base.replace("old", "new"), "inside a word")
 
+    def test_literal_dollar_does_not_hide_an_escape(self) -> None:
+        # Bash prints "$ #old" and "$ #new".
+        self.assertFails("a.sh", "printf '%s\\n' $\\ #old\n", "printf '%s\\n' $\\ #new\n")
+
+    def test_expansion_in_heredoc_delimiter_fails_closed(self) -> None:
+        base = "cat <<$(echo EOF)\n$\n#old\n$(echo EOF)\n"
+        self.assertFails("a.sh", base, base.replace("old", "new"), "heredoc delimiter")
+
     def test_line_ending_change_fails(self) -> None:
         # Bash prints "<value\r>" for the base and "<value>" for the head.
         self.assertFails("a.sh", "printf '<%s>\\n' value\r\n", "printf '<%s>\\n' value\n", "carriage return")
@@ -411,6 +419,10 @@ class YamlTests(CommentOnlyCase):
     def test_byte_order_mark_before_later_document_fails_closed(self) -> None:
         base = "--- a\n...\n\ufeff--- |\n  # old\n"
         self.assertFails("a.yml", base, base.replace("old", "new"), "byte-order mark")
+
+    def test_blank_only_block_scalar_fails_closed(self) -> None:
+        # The base value of k is a line break; the head value is empty.
+        self.assertFails("a.yml", "k: |+\n\n# note\nn: 1\n", "k: |+\n# note\n\nn: 1\n", "only blank lines")
 
     def test_whitespace_only_block_lines_are_kept(self) -> None:
         # The values are "a\n \n" and "a\n".
