@@ -32,9 +32,10 @@ internal partial class ExpressionBinder {
     /// read ?? { let <ncaVal> = value; write(<ncaVal>); <ncaVal> }
     /// ```
     ///
-    /// so the `??` operator table types the result: `T` when the
-    /// right-hand side is non-nullable, `T?` when it can be nil. At statement
-    /// level the value is discarded.
+    /// so the `??` operator table types the result: `T` when the stored
+    /// value is known non-nil, otherwise `T?`. A throwing right-hand side is
+    /// the fallback itself (`read ?? throw E`). At statement level the value
+    /// is discarded.
     /// @param syntax The `??=` expression.
     /// @returns The bound, lowered expression.
     private func BindNullCoalescingAssignmentExpression(
@@ -73,30 +74,48 @@ internal partial class ExpressionBinder {
         if boundRhs is BoundErrorExpression || boundRhs.Type == TypeSymbol.Error {
             return BoundErrorExpression(nil)
         }
-        // Issue #4967: the value `??=` yields is the assigned value, and its
-        // type is what `read ?? value` would have. When the right-hand side's
-        // own type is non-nullable, binding it against `T?` wrapped it in the
-        // lifting conversion; the value keeps the pre-conversion type (the
-        // assigned-value type plain `=` records for narrowing) so that
-        // `T? ?? T` types the result `T`. The write still stores the lifted
-        // value. A right-hand side that can be nil keeps `T?`.
-        let assignedValue = if boundRhs is BoundConversionExpression lift &&
-            lift.Type == rhsTargetType &&
-            nullableType != nil &&
-            StatementBinder.AssignmentTypePreservesNarrowing(lift.Expression.Type, nullableType.UnderlyingType) {
+        // Issue #4967: the value `??=` yields is the value it stores. Binding
+        // the right-hand side against `T?` wraps a non-nullable value in the
+        // lifting conversion; the value is the pre-conversion value converted
+        // once to the target's underlying `T`, and the write stores that same
+        // value lifted to `T?` (so a boxed value keeps its identity, #4967
+        // review). Only a value whose type proves it non-nil gets `T`: see
+        // (cref:ProvesNonNil). Every other right-hand side is stored and
+        // yielded exactly as bound, typed `T?`, as the statement form always
+        // stored it.
+        let preConversion = if boundRhs is BoundConversionExpression lift && lift.Type == rhsTargetType {
             lift.Expression
         } else {
             boundRhs
         }
+        let underlying TypeSymbol? = nullableType?.UnderlyingType
+        let provesNonNil = underlying != nil && ProvesNonNil(preConversion.Type, underlying)
         let preStatements = ImmutableArray.CreateBuilder[BoundStatement]()
-        let valueName = "<ncaVal${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
-        let valueLocal = LocalVariableSymbol(valueName, isReadOnly: true, assignedValue.Type)
-        $scope.TryDeclareVariable(valueLocal)
-        let valueRead = BoundVariableExpression(syntax, valueLocal)
-        let storedValue = if object.ReferenceEquals(assignedValue, boundRhs) {
-            cast[BoundExpression](valueRead)
+        // A throwing right-hand side (`x ??= throw E`) has no value to store:
+        // it is the coalesce's fallback as is, as in `x ?? throw E`.
+        let isThrow = boundRhs.Type == TypeSymbol.Never
+        let valueLocal LocalVariableSymbol? = if isThrow {
+            default(LocalVariableSymbol?)
         } else {
-            conversions.BindConversion(syntax.Value.Location, valueRead, rhsTargetType)
+            LocalVariableSymbol(
+                "<ncaVal${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
+                isReadOnly: true,
+                if provesNonNil {
+                    Invariant.Required(underlying, "a non-nil value has an underlying type", expression: "underlying")
+                } else {
+                    rhsTargetType
+                }
+            )
+        }
+        var storedValue = boundRhs
+        if valueLocal != nil {
+            $scope.TryDeclareVariable(valueLocal)
+            let valueRead = BoundVariableExpression(syntax, valueLocal)
+            storedValue = if valueLocal.Type == rhsTargetType {
+                cast[BoundExpression](valueRead)
+            } else {
+                conversions.BindConversion(syntax.Value.Location, valueRead, rhsTargetType)
+            }
         }
         let (read, write) = TryBuildNullCoalescingReadWrite(syntax, boundRead, storedValue, preStatements)
         if read == nil || write == nil {
@@ -109,24 +128,32 @@ internal partial class ExpressionBinder {
         if isNonNullableReferenceTarget {
             coalesceRead = BoundConversionExpression(syntax, NullableTypeSymbol.Get(read.Type), read)
         }
-        let whenNil = BoundBlockExpression(
-            syntax,
-            ImmutableArray.Create[BoundStatement](
-                BoundVariableDeclaration(syntax, valueLocal, assignedValue),
-                BoundExpressionStatement(syntax, write)
-            ),
-            valueRead
-        )
-        // A target-typed (`T?`) operand always coalesces with the target's
-        // own read; it is the fallback when the pre-conversion type does not.
+        let whenNil BoundExpression = if valueLocal == nil {
+            boundRhs
+        } else {
+            let initialValue = if valueLocal.Type == boundRhs.Type {
+                boundRhs
+            } else if provesNonNil {
+                conversions.BindConversion(syntax.Value.Location, preConversion, valueLocal.Type)
+            } else {
+                conversions.BindConversion(syntax.Value.Location, boundRhs, valueLocal.Type)
+            }
+            BoundBlockExpression(
+                syntax,
+                ImmutableArray.Create[BoundStatement](
+                    BoundVariableDeclaration(syntax, valueLocal, initialValue),
+                    BoundExpressionStatement(syntax, write)
+                ),
+                BoundVariableExpression(syntax, valueLocal)
+            )
+        }
         let coalesceOperator = Invariant.Required(
-            BoundBinaryOperator.Bind(SyntaxKind.QuestionQuestionToken, coalesceRead.Type, whenNil.Type) ??
-                BoundBinaryOperator.Bind(SyntaxKind.QuestionQuestionToken, coalesceRead.Type, rhsTargetType),
-            "a nullable coalescing assignment target coalesces with its own assigned value",
-            expression: "BoundBinaryOperator.Bind(SyntaxKind.QuestionQuestionToken, coalesceRead.Type, rhsTargetType)"
+            BoundBinaryOperator.Bind(SyntaxKind.QuestionQuestionToken, coalesceRead.Type, whenNil.Type),
+            "a nullable coalescing assignment target coalesces with its own stored value",
+            expression: "BoundBinaryOperator.Bind(SyntaxKind.QuestionQuestionToken, coalesceRead.Type, whenNil.Type)"
         )
-        let whenNilValue = if whenNil.Type == coalesceOperator.Type {
-            cast[BoundExpression](whenNil)
+        let whenNilValue = if whenNil.Type == coalesceOperator.Type || whenNil.Type == TypeSymbol.Never {
+            whenNil
         } else {
             conversions.BindConversion(syntax.Value.Location, whenNil, coalesceOperator.Type)
         }
@@ -569,6 +596,22 @@ internal partial class ExpressionBinder {
     }
 
     shared {
+        /// Issue #4967: whether a stored `??=` value of static type
+        /// [`valueType`](paramref) is known non-nil, so the expression's
+        /// value can be typed [`underlying`](paramref) rather than `T?`.
+        /// It is the test plain `=` uses to narrow its target (issue #1123),
+        /// except that a platform (`T!`) value does not qualify: it may be
+        /// nil (ADR-0186), and treating it as `T` would insert a §4 check
+        /// on a value the statement form stores unchecked.
+        /// @param valueType The right-hand side's pre-conversion type.
+        /// @param underlying The target's underlying non-nullable type.
+        /// @returns `true` when the value is statically non-nil.
+        private func ProvesNonNil(
+            valueType TypeSymbol,
+            underlying TypeSymbol
+        ) bool -> valueType is not PlatformTypeSymbol &&
+            StatementBinder.AssignmentTypePreservesNarrowing(valueType, underlying)
+
         /// The class in [`receiverType`](paramref)'s hierarchy that declares
         /// [`property`](paramref) (instance or static).
         /// @param receiverType The type the property was read through.

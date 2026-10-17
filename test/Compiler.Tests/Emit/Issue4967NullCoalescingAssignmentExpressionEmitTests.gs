@@ -321,6 +321,79 @@ main()`
         Assert.Equal("1 keep${Environment.NewLine}", CompileAndRun(source))
     }
 
+    /// Review of #4980: the value is converted to the target once, so a boxed value stored in an `object?` target is the same object the expression yields.
+    @Fact
+    func BoxedValue_StoredAndYieldedValueAreTheSameObject() {
+        let source = `package Test
+import System
+
+func main() {
+    var x object? = nil
+    let r = (x ??= 42)
+    Console.WriteLine("${object.ReferenceEquals(x, r)} ${r}")
+    var big int64? = nil
+    let widened int64 = (big ??= 5)
+    Console.WriteLine(widened)
+}
+
+main()`
+        Assert.Equal("True 42${Environment.NewLine}5${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    /// Review of #4980: a throwing right side is the coalesce fallback, in statement and value position; it runs only when the target is nil.
+    @Fact
+    func ThrowingRhs_StatementAndValuePositions() {
+        let source = `package Test
+import System
+
+func main() {
+    var s string? = "kept"
+    s ??= throw Exception("missing")
+    let k = (s ??= throw Exception("missing"))
+    Console.WriteLine(k)
+    var u string? = nil
+    try {
+        let _ = (u ??= throw Exception("thrown"))
+    } catch (e Exception) {
+        Console.WriteLine(e.Message)
+    }
+    try {
+        u ??= throw Exception("thrown again")
+    } catch (e Exception) {
+        Console.WriteLine(e.Message)
+    }
+}
+
+main()`
+        Assert.Equal(
+            "kept${Environment.NewLine}thrown${Environment.NewLine}thrown again${Environment.NewLine}",
+            CompileAndRun(source)
+        )
+    }
+
+    /// Lambda and method-group right sides are target-typed by the nullable function-typed target in both positions.
+    @Fact
+    func LambdaAndMethodGroupRhs_TargetTyped() {
+        let source = `package Test
+import System
+
+class Holder {
+    var F (() -> int32)?
+}
+func seven() int32 -> 7
+
+func main() {
+    let h = Holder{}
+    h.F ??= () -> 3
+    var g (() -> int32)? = nil
+    let picked = (g ??= seven)
+    Console.WriteLine("${h.F!!()} ${picked()}")
+}
+
+main()`
+        Assert.Equal("3 7${Environment.NewLine}", CompileAndRun(source))
+    }
+
     shared {
         private func CompileAndRun(source string) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_issue4967_").FullName

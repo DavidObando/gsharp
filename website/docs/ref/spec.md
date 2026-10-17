@@ -1751,11 +1751,16 @@ it is an expression statement whose value is discarded.
 
 The value of `a ??= b` is the final value of `a`: the value read when it was
 not nil, otherwise the assigned value of `b`; the target is not read again to
-produce it. Its type is the type `a ?? b` has: `a`'s underlying type when `b`
-is non-nullable (`int32? ??= 42` has type `int32`, `string? ??= "x"` has type
-`string`), and `a`'s `T?` when `b` may be nil. A platform (`T!`) operand
-follows the same rule. Neither the statement nor the expression form narrows
-`a` afterwards.
+produce it. Its type is `a`'s underlying type when the stored value is known
+non-nil, that is, when `b`'s own type is non-nullable and not a platform type
+(`int32? ??= 42` has type `int32`, `string? ??= "x"` has type `string`, the
+types `a ?? b` has), and `a`'s `T?` otherwise: when `b` may be nil, when `b`
+is a platform (`T!`) value, which is stored unchecked, or when `b` is an `if`,
+`switch`, conditional or block expression, which the target types as a whole.
+A platform target follows the same rule. The value is converted to the target
+once, so a boxed value is the same object in `a` and in the result. A throwing
+right side (`a ??= throw e`) is the coalesce's fallback. Neither the statement
+nor the expression form narrows `a` afterwards.
 
 The semantics, including single evaluation of the receiver and any index
 expressions, are:
