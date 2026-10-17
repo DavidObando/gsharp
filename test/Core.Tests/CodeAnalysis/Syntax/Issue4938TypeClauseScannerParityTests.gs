@@ -196,6 +196,17 @@ open class Issue4938TypeClauseScannerParityTests {
         Assert.Empty(tree.Root.DescendantNodesAndSelf().OfType[TypeArgumentListSyntax]())
     }
 
+    @Fact
+    func Variable_Named_Cast_Indexed_By_A_Dereference_Stays_An_Indexer() {
+        // ADR-0167 reserves `cast` only in call position. Indexing a
+        // variable named `cast` with `*p` and then accessing a member is not
+        // a call, so the pointer permission must not turn `[*p]` into a type
+        // argument list (which would also report GS0521).
+        let tree = Parse("unsafe func count(cast [][]int32, p *int32) int32 {\n    return cast[*p].Length\n}\n")
+        AssertNoErrors(tree)
+        Assert.Empty(tree.Root.DescendantNodesAndSelf().OfType[TypeArgumentListSyntax]())
+    }
+
     @Theory
     @InlineData("receiver.cast[unmanaged[Cdecl] () -> int32](address)")
     @InlineData("cast[unmanaged[Cdecl] () -> int32]{}")

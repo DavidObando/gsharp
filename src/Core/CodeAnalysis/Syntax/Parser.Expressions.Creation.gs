@@ -769,33 +769,25 @@ open partial class Parser {
     // arity-agnostic: `Map[int](xs)` and `List[int]{...}` remain generic
     // instantiations regardless of arity.
     //
-    // Issue #4938: `cast` is reserved in call position (ADR-0167), so
+    // Issue #4938: `cast` is reserved in CALL position (ADR-0167), so
     // `cast[*T](x)` cannot be an indexer-then-call; the caller passes
-    // `pointerArgumentsAllowed` for that site only.
+    // `pointerArgumentsAllowed` for that name only. The permission applies
+    // only when `(` follows the brackets: `cast[*p].Length` on a variable
+    // named `cast` is not a call, so it is classified by the ordinary rules
+    // and stays an indexer over a dereference.
     private func LooksLikeGenericCallSite(bracketOffset int32, pointerArgumentsAllowed bool = false) bool {
-        if Peek(bracketOffset).Kind != SyntaxKind.OpenSquareBracketToken {
-            return false
+        if pointerArgumentsAllowed &&
+            TryScanBracketedTypeArguments(bracketOffset, pointerAllowed: true, out var callPos, out _, out _) &&
+            Peek(callPos).Kind == SyntaxKind.OpenParenthesisToken {
+            return true
         }
-        var pos = bracketOffset + 1
-        if Peek(pos).Kind == SyntaxKind.CloseSquareBracketToken {
-            return false
-        }
-        var typeArgumentCount = 0
-        var sawComplexTypeArgument = false
-        while true {
-            if !TryScanTypeClause(&pos, out var argumentIsComplex, pointerArgumentsAllowed) {
-                return false
-            }
-            typeArgumentCount++
-            sawComplexTypeArgument |= argumentIsComplex
-            if Peek(pos).Kind == SyntaxKind.CommaToken {
-                pos++
-                continue
-            }
-            if Peek(pos).Kind == SyntaxKind.CloseSquareBracketToken {
-                pos++
-                break
-            }
+        if !TryScanBracketedTypeArguments(
+            bracketOffset,
+            pointerAllowed: false,
+            out var pos,
+            out var typeArgumentCount,
+            out var sawComplexTypeArgument
+        ) {
             return false
         }
         // Follow-set per ADR-0020: '(' (call), '{' (composite literal), '.' (member access).
@@ -838,6 +830,49 @@ open partial class Parser {
             return true
         }
         return nextKind == SyntaxKind.DotToken && (typeArgumentCount > 1 || sawComplexTypeArgument)
+    }
+
+    /// Scans `[ T1, T2, … ]` starting at [`bracketOffset`](paramref), each
+    /// item a type clause, for (cref:LooksLikeGenericCallSite).
+    /// @param bracketOffset The offset of the `[` token relative to Current.
+    /// @param pointerAllowed Whether a top-level `*T` item is accepted.
+    /// @param endPos The offset just past the matching `]`.
+    /// @param typeArgumentCount The number of items scanned.
+    /// @param sawComplexTypeArgument Whether any item is unambiguously a type.
+    /// @returns Whether every item scanned as a type clause.
+    private func TryScanBracketedTypeArguments(
+        bracketOffset int32,
+        pointerAllowed bool,
+        out endPos int32,
+        out typeArgumentCount int32,
+        out sawComplexTypeArgument bool
+    ) bool {
+        endPos = bracketOffset
+        typeArgumentCount = 0
+        sawComplexTypeArgument = false
+        if Peek(bracketOffset).Kind != SyntaxKind.OpenSquareBracketToken {
+            return false
+        }
+        var pos = bracketOffset + 1
+        if Peek(pos).Kind == SyntaxKind.CloseSquareBracketToken {
+            return false
+        }
+        while true {
+            if !TryScanTypeClause(&pos, out var argumentIsComplex, pointerAllowed) {
+                return false
+            }
+            typeArgumentCount++
+            sawComplexTypeArgument |= argumentIsComplex
+            if Peek(pos).Kind == SyntaxKind.CommaToken {
+                pos++
+                continue
+            }
+            if Peek(pos).Kind == SyntaxKind.CloseSquareBracketToken {
+                endPos = pos + 1
+                return true
+            }
+            return false
+        }
     }
 
     private func TryScanTypeClause(ref pos int32) bool -> TryScanTypeClause(&pos, out _)
