@@ -15,45 +15,60 @@ name: cs2gs-apps-nightly
 #
 #   gsharp-csharp  C# input: branch cs2gs/csharp-0.4 at the SHA pinned in
 #                  tools/cs2gs/external/gsharp-csharp.json, checked out beside
-#                  main and passed as SELFMIG_SOURCE_ROOT. The branch is
-#                  semi-frozen: a living corpus that gets back-ports from G#
-#                  when they exercise cs2gs (bump the pin in the same PR). The
-#                  translated output IS the G# compiler tree; it is compiled,
-#                  ILVerified and parity-tested.
+#                  main (build/checkout-csharp-corpus.sh) and passed as
+#                  SELFMIG_SOURCE_ROOT. The branch is semi-frozen: a living
+#                  corpus that gets back-ports from G# when they exercise cs2gs
+#                  (bump the pin in the same PR). The translated output IS the
+#                  G# compiler tree; it is compiled, ILVerified and
+#                  parity-tested, and judged by the ratcheting baseline
+#                  tools/cs2gs/selfmig-baseline.json, which always describes
+#                  the pinned cs2gs/csharp-0.4 corpus.
 #   oahu           C# input: tools/cs2gs/external/oahu.json
 #   code-exploder  C# input: tools/cs2gs/external/code-exploder.json
 #
 # Oahu and Code Exploder used to be the PR jobs cs2gs-oahu and cs2gs-code-exploder
 # in build.yml (and `publish` dependencies). They are out of PR and official
-# builds and run only here, as legs of this one nightly job, so they no longer
-# slow or block PRs. Their accounting is part of the end-of-run stats below.
-# The self-host stage-2 check is separate: selfhost-stage2-nightly.yml.
+# builds and run only here, as legs of this one nightly, so they no longer slow
+# or block PRs. The self-host stage-2 check is separate:
+# selfhost-stage2-nightly.yml.
 #
-# End-of-run stats: every app leg writes result-<app>.json, optionally with a
-# "stats" object (stage counts, floors and readability counters, for ALL three
-# apps including Oahu and Code Exploder). The `gate` job prints one table of
-# them in the run summary.
+# Job layout. Oahu and Code Exploder are one job each (the `app` matrix). The
+# gsharp-csharp corpus is too big for one runner: run as one job it starved the
+# hosted runner, which lost communication mid-run (#4919). It runs as the
+# sharded pipeline cs2gs-selfmig-nightly used before the cut-over (#3668):
+#
+#   csharp-migrate    ONE whole-corpus translate pass
+#                     (build/run-cs2gs-selfmig-migrate.sh). Translation is not
+#                     sharded: TranslateStage cross-checks linked sources across
+#                     projects, which needs every project in one run. It also
+#                     captures the C# test oracle and plans the shards.
+#   csharp-validate   N shards, each running compile/ILVerify/test-parity for
+#                     its own apps against the migrated tree
+#                     (build/run-cs2gs-selfmig-validate.sh).
+#   csharp-aggregate  merges the shard results, applies the baseline
+#                     (build/run-cs2gs-selfmig-gate.sh) and writes the leg's
+#                     result. Runs even when the translate job or a shard
+#                     failed, so a red run still reports why.
+#
+# End-of-run stats (#4856): every leg writes stats.json (green/total, the floor,
+# per-stage status counts, the red apps, readability counters) through
+# build/cs2gs-apps-leg.py, and folds it into result-<app>.json with a
+# fail-safe status: green only when the leg exited 0 AND stats.json exists, is
+# well formed and meets its floor. The floor is the baseline's greenFloor for
+# gsharp-csharp and every app for Oahu and Code Exploder. The `gate` job
+# prints one table of them in the run summary.
 #
 # Failure handling: a failed gate opens a GitHub issue. For every red app the
 # `gate` job files or updates ONE issue (build/cs2gs-apps-gate-issues.py),
 # deduplicated by gate/app/failure fingerprint, whose body carries the gate
-# report (summary, log tail, run URL), labeled cs2gs-nightly. Priority per
-# CLAUDE.md: P0 only when a banked app (tools/cs2gs/apps-nightly-banked.json)
-# goes red on main, otherwise P1.
-#
-# NOT YET IMPLEMENTED (Phase 4 work this file only reserves a slot for):
-#   * build/run-cs2gs-selfmig-*.sh assume the checkout IS the C# source. The
-#     gsharp-csharp leg needs SELFMIG_SOURCE_ROOT; "Require source-root
-#     support" fails loudly until then, so the leg cannot pass vacuously.
-#   * tools/cs2gs/external/gsharp-csharp.json and
-#     tools/cs2gs/apps-nightly-banked.json (a {"banked": [...]} list; an app is
-#     added only after it has been seen green on main).
-#   * Per-app accounting from the old gate (stage floors, readability counters)
-#     is produced by the leg scripts; fold it into result-<app>.json "stats"
-#     for every app, Oahu and Code Exploder included. The corpus of the
-#     gsharp-csharp leg is 56 apps with greenFloor 56 once #4865 lands (the
-#     untracked ildump scratch project no longer counts); carry those numbers
-#     into the stats rather than the pre-#4865 57.
+# report (summary, accounting, log tail, run URL), labeled cs2gs-nightly.
+# Priority per CLAUDE.md: P0 only when a banked app
+# (tools/cs2gs/apps-nightly-banked.json) goes red on main, otherwise P1. Only
+# runs on main file issues; a dispatch on any other ref (proving a workflow
+# change) reports in its summary and exit code but touches no issue. A leg that
+# crashed without a result, or left a malformed one, is reported red. A leg
+# whose job was cancelled is "incomplete": the gate is red, but no issue is
+# filed, since nothing showed a migration failure.
 
 on:
   schedule:
@@ -62,30 +77,32 @@ on:
 
 env:
   NBGV_SetCloudBuildVersionVars: false
+  SELFMIG_SHARDS: '6'
+  # Pinned rather than left to the scripts' ${TMPDIR:-/tmp} default: the
+  # migrate job's run directory and corpus checkout are recorded as absolute
+  # paths in the artifacts the shards consume, so every gsharp-csharp job must
+  # agree on them.
+  SELFMIG_GATE_ROOT: /tmp/gsharp-cs2gs-selfmig
 
 permissions:
   contents: read
 
-# Issue deduplication is search-then-create, so overlapping runs could file
-# duplicates. Serialize runs.
+# Issue deduplication is search-then-create, so overlapping runs on main could
+# file duplicates: serialize runs per ref. Only main files issues, so a branch
+# run neither waits for nor blocks the scheduled one.
 concurrency:
-  group: cs2gs-apps-nightly
+  group: cs2gs-apps-nightly-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   app:
     name: app (${{ matrix.app }})
     runs-on: ubuntu-latest
-    # 360 is the hosted-runner maximum. The gsharp-csharp leg as written runs the
-    # classic single-job migrate with test parity, which is longer than that (the
-    # nightly it replaces shards it: migrate job plus validate shards). Adapting it
-    # to the sharded pipeline with SELFMIG_SOURCE_ROOT is required Phase 4 work
-    # (README owner list); until then that leg is expected to fail loudly.
-    timeout-minutes: 360
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        app: [gsharp-csharp, oahu, code-exploder]
+        app: [oahu, code-exploder]
     steps:
       - uses: actions/checkout@v5
         with:
@@ -105,62 +122,42 @@ jobs:
       - name: Build cs2gs (Release)
         run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj --configuration Release --no-restore -graph
 
-      - name: Check out the C# input (cs2gs/csharp-0.4, pinned) as the source corpus
-        if: matrix.app == 'gsharp-csharp'
-        run: |
-          pinned=$(jq -r '.commit' tools/cs2gs/external/gsharp-csharp.json)
-          git fetch --quiet origin "cs2gs/csharp-0.4"
-          git worktree add "$RUNNER_TEMP/csharp-0.4" "$pinned"
-          grep -q SELFMIG_SOURCE_ROOT build/selfmig-common.sh || {
-            echo "::error::build/selfmig-common.sh has no SELFMIG_SOURCE_ROOT support yet (Phase 4 work)."
-            exit 1
-          }
-
       - name: Migrate and validate ${{ matrix.app }}
-        id: leg
         env:
           APP: ${{ matrix.app }}
-          SELFMIG_SOURCE_ROOT: ${{ runner.temp }}/csharp-0.4
           # Every leg writes under the one directory the upload step collects.
-          SELFMIG_GATE_ROOT: ${{ runner.temp }}/gsharp-cs2gs-gate/gsharp-csharp
           OAHU_GATE_ROOT: ${{ runner.temp }}/gsharp-cs2gs-gate/oahu
           CODE_EXPLODER_GATE_ROOT: ${{ runner.temp }}/gsharp-cs2gs-gate/code-exploder
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set +e
           case "$APP" in
-            gsharp-csharp) cmd=./build/run-cs2gs-selfmig.sh ;;
             oahu) cmd=./build/run-cs2gs-oahu.sh ;;
             code-exploder) cmd=./build/run-cs2gs-code-exploder.sh ;;
           esac
           "$cmd" 2>&1 | tee "$RUNNER_TEMP/leg.log"
           code=${PIPESTATUS[0]}
-          status=green
-          [[ $code -eq 0 ]] || status=red
-          mkdir -p "$RUNNER_TEMP/results"
-          python3 - "$APP" "$status" "$code" <<'PY'
-          import json, os, sys
-          app, status, code = sys.argv[1:4]
-          # Accounting is mandatory: each leg script must leave stats.json in its
-          # gate root (Phase 4 work). Without it the leg is red, so a missing
-          # Oahu / Code Exploder accounting can never pass silently.
-          root = {"gsharp-csharp": "gsharp-csharp", "oahu": "oahu", "code-exploder": "code-exploder"}[app]
-          stats_path = os.environ["RUNNER_TEMP"] + f"/gsharp-cs2gs-gate/{root}/stats.json"
-          stats, note = None, ""
-          if os.path.exists(stats_path):
-              stats = json.load(open(stats_path))
-          else:
-              status, note = "red", "; no stats.json: per-app accounting was not produced"
-          tail = open(os.environ["RUNNER_TEMP"] + "/leg.log", errors="replace").read()[-8000:]
-          run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
-          json.dump({"app": app, "gate": "cs2gs-apps-nightly", "status": status,
-                     "summary": f"leg exited {code}{note}", "stats": stats, "log_tail": tail, "run_url": run},
-                    open(os.environ["RUNNER_TEMP"] + f"/results/result-{app}.json", "w"))
-          PY
-          # The artifact upload and the gate job report the failure; do not
-          # fail this leg twice.
+          # The leg script leaves stats.json in its gate root (#4856); the
+          # result is red without it, below its floor, or on a non-zero exit.
+          python3 build/cs2gs-apps-leg.py result --app "$APP" --exit-code "$code" \
+            --stats "$RUNNER_TEMP/gsharp-cs2gs-gate/$APP/stats.json" \
+            --log "$RUNNER_TEMP/leg.log" --run-url "$RUN_URL" \
+            --out "$RUNNER_TEMP/results/result-$APP.json"
+          # The gate job reports the failure; do not fail this leg twice.
           exit 0
 
-      - name: Upload result and reports
+      # Only result-<app>.json goes into the artifact the gate job downloads;
+      # the reports go into a separate one, so the gate job does not pull them.
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: cs2gs-apps-result-${{ matrix.app }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/results/result-*.json
+
+      - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v5
         with:
@@ -168,56 +165,316 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
           path: |
-            ${{ runner.temp }}/results/result-*.json
-            ${{ runner.temp }}/gsharp-cs2gs-gate/**/*.json
-            ${{ runner.temp }}/gsharp-cs2gs-gate/**/*.log
-            ${{ runner.temp }}/gsharp-cs2gs-gate/**/report.html
-            ${{ runner.temp }}/gsharp-cs2gs-gate/oahu/smoke/*
-            ${{ runner.temp }}/gsharp-cs2gs-gate/code-exploder/smoke/*
+            ${{ runner.temp }}/gsharp-cs2gs-gate/*/stats.json
+            ${{ runner.temp }}/gsharp-cs2gs-gate/*/migrate.log
+            ${{ runner.temp }}/gsharp-cs2gs-gate/*/runs/**/*.json
+            ${{ runner.temp }}/gsharp-cs2gs-gate/*/runs/**/report.html
+            ${{ runner.temp }}/gsharp-cs2gs-gate/*/smoke/*
+
+  csharp-migrate:
+    name: gsharp-csharp (translate)
+    runs-on: ubuntu-latest
+    # The one gsharp-csharp job that cannot be split; the translate pass took
+    # about 75 minutes before the cut-over. Keep the headroom.
+    timeout-minutes: 240
+    # actions:read so the shard planner can download a recent run's measured
+    # per-app durations (issue #3721).
+    permissions:
+      contents: read
+      actions: read
+    env:
+      # The same absolute path in csharp-validate (`env` is not available here).
+      SELFMIG_SOURCE_ROOT: /tmp/gsharp-csharp-corpus
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore GSharp.slnx --locked-mode
+
+      - name: Restore .NET local tools
+        run: dotnet tool restore
+
+      - name: Build cs2gs (Release)
+        run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj --configuration Release --no-restore -graph
+
+      - name: Check out the C# corpus (cs2gs/csharp-0.4, pinned)
+        run: ./build/checkout-csharp-corpus.sh "$SELFMIG_SOURCE_ROOT"
+
+      - name: Translate the corpus
+        run: ./build/run-cs2gs-selfmig-migrate.sh
+
+      # Issue #3721: prefer the durations a recent run measured over the
+      # checked-in map, so the packing tracks the migration instead of aging
+      # out between refresh commits. Best-effort by construction: any failure
+      # here leaves the checked-in map in place.
+      - name: Fetch a recent run's app duration map
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for previous in $(gh run list --workflow cs2gs-apps-nightly.yml --status completed \
+              --limit 10 --json databaseId --jq '.[].databaseId'); do
+            dir="$RUNNER_TEMP/selfmig-previous-$previous"
+            if gh run download "$previous" --name cs2gs-selfmig-run --dir "$dir" 2>/dev/null \
+                && jq -e '(.apps | length) > 0' "$dir/selfmig-shard-costs.json" >/dev/null 2>&1; then
+              cp "$dir/selfmig-shard-costs.json" build/selfmig-shard-costs.json
+              echo "using durations measured by run $previous."
+              exit 0
+            fi
+          done
+          echo "no recent run carries a duration map; using the checked-in one."
+
+      - name: Plan validation shards
+        id: matrix
+        run: |
+          run_dir=$(cat "$SELFMIG_GATE_ROOT/migrate-run-dir.txt")
+          {
+            echo '### gsharp-csharp validation shard plan'
+            echo '```'
+            python3 build/generate-selfmig-shard-matrix.py \
+              --run-dir "$run_dir" --shards "$SELFMIG_SHARDS" --plan
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          matrix=$(python3 build/generate-selfmig-shard-matrix.py \
+            --run-dir "$run_dir" --shards "$SELFMIG_SHARDS")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+      # Named outside the cs2gs-apps-result-* pattern the gate job downloads.
+      - name: Upload migrated tree
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: cs2gs-selfmig-migrated
+          retention-days: 3
+          include-hidden-files: true
+          if-no-files-found: warn
+          path: |
+            ${{ env.SELFMIG_GATE_ROOT }}/migrated/**
+            ${{ env.SELFMIG_GATE_ROOT }}/runs/**
+            ${{ env.SELFMIG_GATE_ROOT }}/migrate.log
+            ${{ env.SELFMIG_GATE_ROOT }}/metrics.json
+            ${{ env.SELFMIG_GATE_ROOT }}/migrate-run-dir.txt
+            ${{ env.SELFMIG_GATE_ROOT }}/csharp-tests/**
+            ${{ env.SELFMIG_GATE_ROOT }}/capture-test-oracle.log
+
+  csharp-validate:
+    name: gsharp-csharp (validate ${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    needs: csharp-migrate
+    env:
+      # The same absolute path csharp-migrate recorded.
+      SELFMIG_SOURCE_ROOT: /tmp/gsharp-csharp-corpus
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.csharp-migrate.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore GSharp.slnx --locked-mode
+
+      - name: Restore .NET local tools
+        run: dotnet tool restore
+
+      - name: Build cs2gs (Release)
+        run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj --configuration Release --no-restore -graph
+
+      # `cs2gs validate --corpus` reads the C# corpus too.
+      - name: Check out the C# corpus (cs2gs/csharp-0.4, pinned)
+        run: ./build/checkout-csharp-corpus.sh "$SELFMIG_SOURCE_ROOT"
+
+      - name: Download migrated tree
+        uses: actions/download-artifact@v5
+        with:
+          name: cs2gs-selfmig-migrated
+          path: ${{ env.SELFMIG_GATE_ROOT }}
+
+      - name: Validate shard
+        env:
+          SHARD_NAME: ${{ matrix.name }}
+          SHARD_APPS: ${{ matrix.apps }}
+        # SHARD_APPS is a space-separated app-id list: one argument per app.
+        run: |
+          read -ra apps <<< "$SHARD_APPS"
+          ./build/run-cs2gs-selfmig-validate.sh "$SHARD_NAME" "${apps[@]}"
+
+      - name: Upload shard result
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: cs2gs-selfmig-shard-${{ matrix.name }}
+          retention-days: 3
+          path: |
+            ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/shard-run.json
+            ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/shard-costs.json
+            ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/polished.tar.gz
+            ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/validate.log
+            ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/runs/**/*.json
+            ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/runs/**/report.html
+            ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/runs/**/sdk.build.log
+            ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/runs/**/polish.log
+            ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/runs/**/test-parity.log
+
+  csharp-aggregate:
+    name: gsharp-csharp (aggregate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [csharp-migrate, csharp-validate]
+    # Report even when the translate job or a shard failed: the leg must always
+    # leave a result, and a crashed job must read as red with its reason rather
+    # than as a missing result. A shard that left no result fails the merge
+    # loudly (build/merge-selfmig-runs.py), which is red here too.
+    if: always()
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download migrated tree
+        continue-on-error: true
+        uses: actions/download-artifact@v5
+        with:
+          name: cs2gs-selfmig-migrated
+          path: ${{ env.SELFMIG_GATE_ROOT }}
+
+      - name: Download shard results
+        continue-on-error: true
+        uses: actions/download-artifact@v5
+        with:
+          pattern: cs2gs-selfmig-shard-*
+          path: ${{ runner.temp }}/selfmig-shards
+
+      - name: Apply the baseline and write the leg result
+        env:
+          MIGRATE_RESULT: ${{ needs.csharp-migrate.result }}
+          VALIDATE_RESULT: ${{ needs.csharp-validate.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set +e
+          mkdir -p "$RUNNER_TEMP/selfmig-shards"
+          notes=()
+          [[ "$MIGRATE_RESULT" == success ]] || notes+=("the translate job finished '$MIGRATE_RESULT'")
+          [[ "$VALIDATE_RESULT" == success ]] || notes+=("the validate shards finished '$VALIDATE_RESULT'")
+          if [[ -f "$SELFMIG_GATE_ROOT/migrate-run-dir.txt" ]]; then
+            # Writes $SELFMIG_GATE_ROOT/stats.json whatever its verdict.
+            ./build/run-cs2gs-selfmig-gate.sh "$SELFMIG_GATE_ROOT" "$RUNNER_TEMP/selfmig-shards" \
+              2>&1 | tee "$RUNNER_TEMP/leg.log"
+            code=${PIPESTATUS[0]}
+          else
+            # No translated tree: report the translate log the job left, if any.
+            notes+=("no migrated tree to validate")
+            cp "$SELFMIG_GATE_ROOT/migrate.log" "$RUNNER_TEMP/leg.log" 2>/dev/null \
+              || echo "the translate job uploaded no log." > "$RUNNER_TEMP/leg.log"
+            code=1
+          fi
+          note=""
+          for n in "${notes[@]}"; do note+="${note:+; }$n"; done
+          # A cancelled translate or validate job did not finish: report the
+          # leg incomplete (the gate stays red but files no issue), not as a
+          # migration failure. A job that FAILED is still red.
+          incomplete=()
+          if [[ "$MIGRATE_RESULT" == cancelled || "$VALIDATE_RESULT" == cancelled ]]; then
+            incomplete=(--incomplete)
+          fi
+          python3 build/cs2gs-apps-leg.py result --app gsharp-csharp --exit-code "$code" \
+            "${incomplete[@]}" \
+            --stats "$SELFMIG_GATE_ROOT/stats.json" --note "$note" \
+            --log "$RUNNER_TEMP/leg.log" --run-url "$RUN_URL" \
+            --out "$RUNNER_TEMP/results/result-gsharp-csharp.json"
+          # The gate job reports the failure; do not fail this leg twice.
+          exit 0
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: cs2gs-apps-result-gsharp-csharp
+          retention-days: 14
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/results/result-*.json
+
+      # cs2gs-selfmig-run carries selfmig-shard-costs.json, the per-app duration
+      # map the next run's shard planner downloads (issue #3721). Refresh
+      # build/selfmig-shard-costs.json from it when the corpus shifts.
+      - name: Upload merged run
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: cs2gs-selfmig-run
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ env.SELFMIG_GATE_ROOT }}/run.merged.json
+            ${{ env.SELFMIG_GATE_ROOT }}/stats.json
+            ${{ env.SELFMIG_GATE_ROOT }}/metrics.json
+            ${{ env.SELFMIG_GATE_ROOT }}/migrate.log
+            ${{ env.SELFMIG_GATE_ROOT }}/selfmig-shard-costs.json
 
   gate:
     name: gate report
-    needs: app
+    needs: [app, csharp-aggregate]
     if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: write
+      # Per-leg job conclusions for cancelled-leg handling.
+      actions: read
     steps:
       - uses: actions/checkout@v5
 
       - name: Download results
         # If every leg failed before uploading, the download finds nothing and
-        # errors. Continue so --expect below files the missing-result issues.
+        # errors. Continue so --expect below reports the missing results red.
         continue-on-error: true
         uses: actions/download-artifact@v5
         with:
-          pattern: cs2gs-apps-*
+          pattern: cs2gs-apps-result-*
           path: results
           merge-multiple: true
 
+      # One script renders the summary table and files the issues from the
+      # same normalized results, so a malformed result can stop neither
+      # (#4887). It files issues only on main.
       - name: Summarize, then file or update issues for red apps
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           mkdir -p results
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import glob, json
-          print("### cs2gs apps nightly")
-          print("| app | status | summary | stats |\n|---|---|---|---|")
-          seen = {}
-          # Artifacts extract relative to their common ancestor, so results can be nested.
-          for p in sorted(glob.glob("results/**/result-*.json", recursive=True)):
-              r = json.load(open(p))
-              seen[r["app"]] = r
-          for app in ("gsharp-csharp", "oahu", "code-exploder"):
-              r = seen.get(app) or {"status": "red", "summary": "no result: the leg crashed before reporting"}
-              stats = ", ".join(f"{k}={v}" for k, v in sorted((r.get("stats") or {}).items())) or "n/a"
-              print(f"| {app} | {r['status']} | {r.get('summary','')} | {stats} |")
-          PY
+          # A leg whose OWN job was cancelled or skipped and left no result is
+          # "incomplete": the gate stays red, but no issue is filed for a
+          # migration failure nothing showed (run 38908586181). A job that
+          # failed or crashed without a result is still red and filed. Each
+          # matrix child's conclusion comes from the jobs API, because
+          # needs.app.result is one value for both legs. If the API cannot be
+          # read, no leg is excused (fail-closed).
+          gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" > "$RUNNER_TEMP/jobs.json" \
+            || echo '{}' > "$RUNNER_TEMP/jobs.json"
           python3 build/cs2gs-apps-gate-issues.py \
             --results results \
             --banked tools/cs2gs/apps-nightly-banked.json \
             --expect gsharp-csharp,oahu,code-exploder \
+            --jobs "$RUNNER_TEMP/jobs.json" \
+            --leg-job "oahu=app (oahu)" \
+            --leg-job "code-exploder=app (code-exploder)" \
+            --leg-job "gsharp-csharp=gsharp-csharp (aggregate)" \
+            --run-url "$RUN_URL" \
+            --summary "$GITHUB_STEP_SUMMARY" \
             --ref "${GITHUB_REF_NAME}"

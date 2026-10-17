@@ -91,5 +91,10 @@ fi
 green=$(jq '[.apps[] | select(.succeeded)] | length' "$merged")
 total=$(jq '.apps | length' "$merged")
 
+# Issue #4856: whatever the verdict, leave the leg's stats.json beside the
+# merged run (an EXIT trap, so the gate's own exit status is kept and the
+# baseline check keeps running under `set -e`).
+trap 'selfmig_write_stats "$merged" "$baseline" "$migrate_dir/stats.json" "$?"' EXIT
+
 selfmig_measure "$migrated_dir"
 selfmig_apply_baseline "$baseline" "$green" "$total" "$merged"

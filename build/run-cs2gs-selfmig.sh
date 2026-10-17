@@ -37,6 +37,34 @@ case "$work_root" in
     ;;
 esac
 
+# Issue #4919: a SEPARATE corpus (SELFMIG_SOURCE_ROOT) needs the migrated
+# mirror prepared between translation and validation: the corpus's own
+# Gsharp.NET.Sdk package staged in its local feed (selfmig_stage_corpus_sdk;
+# the mirror must be empty when `migrate` creates it, so it cannot be staged
+# beforehand) and the corpus runtime under the pinned SDK
+# (selfmig_with_corpus_runtime). One `migrate` invocation runs both phases, so
+# this path runs the sharded pipeline on this one machine instead -- translate,
+# ONE validate shard holding every translated app, gate -- which is the same
+# work, prepared the same way the nightly prepares it.
+if [[ "$selfmig_source_root" != "$selfmig_default_root" ]]; then
+  export SELFMIG_GATE_ROOT="$work_root"
+  "$repo_root/build/run-cs2gs-selfmig-migrate.sh"
+  work_root=$(cd "$work_root" && pwd -P)
+  manifest_run_json="$(cat "$work_root/migrate-run-dir.txt")/run.json"
+  translated_apps=()
+  while IFS= read -r app; do
+    translated_apps+=("$app")
+  done < <(jq -r '.apps[] | select(any(.stages[]?; .stage == "translate" and .status == "passed")) | .appId' "$manifest_run_json")
+  if (( ${#translated_apps[@]} > 0 )); then
+    "$repo_root/build/run-cs2gs-selfmig-validate.sh" local "${translated_apps[@]}"
+  fi
+  mkdir -p "$work_root/shards"
+  if [[ -d "$work_root/shard-local" ]]; then
+    mv "$work_root/shard-local" "$work_root/shards/local"
+  fi
+  exec "$repo_root/build/run-cs2gs-selfmig-gate.sh" "$work_root" "$work_root/shards"
+fi
+
 rm -rf "$work_root"
 mkdir -p "$work_root"
 work_root=$(cd "$work_root" && pwd -P)
@@ -76,6 +104,9 @@ fi
 
 green=$(jq '[.apps[] | select(.succeeded)] | length' "$run_json")
 total=$(jq '.apps | length' "$run_json")
+
+# Issue #4856: the leg's stats.json, as the sharded gate writes it.
+trap 'selfmig_write_stats "$run_json" "$baseline" "$work_root/stats.json" "$?"' EXIT
 
 selfmig_measure "$migrated_dir"
 selfmig_apply_baseline "$baseline" "$green" "$total" "$run_json"

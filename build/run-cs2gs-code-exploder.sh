@@ -72,6 +72,12 @@ set -e
 cs2gs_emit_counter_report "$migrated_dir" 'cs2gs code-exploder: readability counters' \
   'Counts only — code-exploder has no ratcheting baseline, so nothing here gates the job.' || true
 
+# Issue #4856: the leg's per-app accounting (green/total, per-stage counts, the
+# red apps, the counters above) for the cs2gs apps nightly, which reports a leg
+# with no stats.json red. Written from the newest runs/*/run.json, also before
+# the exit check, so a red migration still reports how far each app got.
+cs2gs_write_leg_stats "$runs_dir" "$migrated_dir" "$work_root/stats.json"
+
 if (( migrate_exit != 0 )); then
   exit "$migrate_exit"
 fi

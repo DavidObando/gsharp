@@ -57,6 +57,7 @@ rm -rf "$shard_out"
 mkdir -p "$shard_out"
 
 selfmig_build_prerequisites
+selfmig_stage_corpus_sdk "$migrated_dir"
 
 # Snapshot the tree so stage 2's `!!` polish rewrites can be shipped back to
 # the gate job as a delta (see run-cs2gs-selfmig-gate.sh).
@@ -73,7 +74,7 @@ done
 validate_started=$(date +%s)
 
 set +e
-dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" validate \
+selfmig_with_corpus_runtime dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" validate \
   --corpus "$selfmig_source_root" \
   --migrated "$migrated_dir" \
   --artifacts "$shard_out/runs" \

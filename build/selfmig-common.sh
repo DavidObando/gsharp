@@ -15,13 +15,19 @@
 # Unset or empty, it is `repo_root` (the checkout IS the C# source). The cs2gs
 # apps nightly sets it to a separate checkout of the C# branch (cs2gs/csharp-0.4).
 #
-# RULE: it moves the corpus and nothing else. Only the --corpus argument uses
-# `selfmig_source_root`. The tool (cs2gs.dll), these scripts, the baselines and
-# shard-cost files, and the toolchain (the Debug prerequisite builds of the
-# compiler, SDK and analyzers-testing package below) all stay on `repo_root`,
-# i.e. main, so the migrated output targets main's compiler and SDK. A value
-# that is not an existing directory is an error, never a silent fallback, so a
-# typo cannot make a leg migrate the wrong tree.
+# RULE: it moves the corpus and nothing else. Only the --corpus argument and
+# the corpus preparation below (selfmig_prepare_corpus) use
+# `selfmig_source_root`. The tool under test
+# ($repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll), these scripts, the
+# baselines and shard-cost files, and main's prerequisite builds of the
+# compiler, SDK and analyzers-testing package all stay on `repo_root`, i.e.
+# main, so the migrated output targets main's compiler and SDK. The corpus's
+# OWN out/ tree is part of the INPUT, not the toolchain: before the cut-over
+# the checkout was the corpus, and the gate always saw it restored and built
+# (see selfmig_prepare_corpus for what reads it), so a separate corpus gets the
+# same restore and builds. A value that is not an existing directory is an
+# error, never a silent fallback, so a typo cannot make a leg migrate the wrong
+# tree.
 # Some callers (the Issue3885 allow-list test) source this file without setting
 # `repo_root`, under `set -u`; fall back to this file's own checkout.
 selfmig_default_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
@@ -111,6 +117,151 @@ selfmig_build_prerequisites() {
   dotnet build \
     "$repo_root/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.gsproj" \
     -c Release -graph
+  selfmig_prepare_corpus
+}
+
+# Issue #4919: a separate C# corpus (SELFMIG_SOURCE_ROOT) must be in the state
+# the pre-cut-over gate always saw, because before the cut-over the checkout
+# WAS the corpus: restored, local tools restored, cs2gs built in Release (whose
+# graph builds the C# compiler, SDK and their nupkgs), and the Debug compiler,
+# Debug SDK and Release analyzers-testing prerequisites built. Nothing did that
+# for a corpus in its own directory, and the branch runs show what reads it:
+#
+#   * cs2gs loads the corpus through MSBuildWorkspace, which resolves
+#     PackageReferences only from a restored assets file. Unrestored, every
+#     package type (Roslyn's ISymbol, MetadataLoadContext, ...) is unresolved
+#     and 22 of 58 apps failed translate (run 38809539739).
+#   * The corpus's Gsharp.Extensions.csproj imports the bootstrap targets,
+#     which need <corpus>/out/bin/Debug/{Compiler/gsc.dll,Gsharp.NET.Sdk}; every
+#     app referencing it failed ProjectLoad (Repl and three test projects, run
+#     38824831419).
+#   * Migrated tests that drive cs2gs (Cs2Gs.Tests) locate gsc and the local
+#     Gsharp.NET.Sdk nupkg under <corpus>/out/bin/Release through the source-root
+#     variable cs2gs sets to --corpus, and failed without them.
+#
+# Every entrypoint (single-job, migrate, validate) goes through
+# selfmig_build_prerequisites, so this is the one place the corpus is prepared,
+# with the same commands the old jobs ran on the checkout and in the same
+# order. When the checkout is the corpus there is nothing extra to do.
+selfmig_prepare_corpus() {
+  if [[ "$selfmig_source_root" == "$selfmig_default_root" ]]; then
+    return 0
+  fi
+  local corpus=$selfmig_source_root
+  if [[ ! -f "$corpus/GSharp.sln" ]]; then
+    echo "self-migration: the C# corpus at '$corpus' has no GSharp.sln to restore." >&2
+    return 1
+  fi
+  # Run from inside the corpus so dotnet resolves the CORPUS's global.json
+  # (and its local tool manifest), as it did when the corpus was the checkout.
+  (
+    set -e
+    cd "$corpus"
+    dotnet restore "$corpus/GSharp.sln" --locked-mode
+    dotnet tool restore
+    dotnet build "$corpus/tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj" --configuration Release --no-restore -graph
+    dotnet build "$corpus/src/Compiler/Compiler.csproj" -c Debug -graph
+    dotnet build "$corpus/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj" -c Debug -graph
+    dotnet build \
+      "$corpus/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.csproj" \
+      -c Release -graph
+  )
+}
+
+# Issue #4919: offer the corpus's own Gsharp.NET.Sdk nupkg in the migrated
+# tree's local feed (<migrated>/.nugs, the "Gsharp local packages" source of the
+# mirrored nuget.config). Migrated tests that drive cs2gs build generated
+# projects under <migrated>/out, and MSBuild resolves their `Sdk=` through that
+# nuget.config, pinned to the version the CORPUS builds. While the corpus was
+# the tag v0.4.1270 that version was published on nuget.org, so the empty local
+# feed never mattered. The cs2gs/csharp-0.4 back-ports build an unpublished
+# 0.4.1271-g<sha> that exists only in the corpus's own output, and
+# MigrationPipelineTests.L2_RepositoryCompile_EmitsInternalsVisibleToExactlyOnce
+# failed with MSB4236 (branch run 38959417266; main fixed its own copy of the
+# test in #4942, the frozen corpus cannot be). Staging the nupkg restores the
+# pre-back-port environment: the exact version is resolvable. It adds a
+# package version to a local feed and nothing else; every migrated app still
+# builds against the SDK pinned in the migrated global.json. No-op when the
+# checkout is the corpus.
+#
+#   selfmig_stage_corpus_sdk <migrated-dir>
+selfmig_stage_corpus_sdk() {
+  local migrated=$1 nupkg
+  if [[ "$selfmig_source_root" == "$selfmig_default_root" ]]; then
+    return 0
+  fi
+  nupkg=$(selfmig_corpus_sdk_package) || return 1
+  mkdir -p "$migrated/.nugs"
+  cp "$nupkg" "$migrated/.nugs/"
+  echo "self-migration: staged $(basename "$nupkg") in $migrated/.nugs."
+}
+
+# The corpus's own Gsharp.NET.Sdk nupkg (built by selfmig_prepare_corpus).
+# Exactly one is expected in a fresh corpus checkout; none or several is an
+# error, never a guess.
+selfmig_corpus_sdk_package() {
+  local found=() nupkg
+  for nupkg in "$selfmig_source_root"/out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg; do
+    [[ -f "$nupkg" ]] && found+=("$nupkg")
+  done
+  if (( ${#found[@]} != 1 )); then
+    echo "self-migration: expected one corpus Gsharp.NET.Sdk package under" \
+      "$selfmig_source_root/out/bin/Release/nupkgs, found ${#found[@]}." >&2
+    return 1
+  fi
+  echo "${found[0]}"
+}
+
+# Issue #4919: runs a command (cs2gs validate) with the pinned G# SDK's
+# BUNDLED G# assemblies -- Gsharp.Extensions, Gsharp.Runtime.Channels and
+# Gsharp.Runtime.Values, which Gsharp.NET.Sdk.props auto-references
+# (_ExplicitReference) from its tools/ folders -- taken from the CORPUS's own
+# Gsharp.NET.Sdk package instead of main's. Before the cut-over the SDK the
+# migrated tree pinned WAS the corpus-built package, so those assemblies had
+# the corpus's identity (0.4.0.0). With main's 0.5 SDK pinned instead:
+#   * a migrated project that also project-references its own 0.4 runtime hit
+#     MSB3243 and RAR took 0.5, so test/Core.Tests' PE golden moved on the
+#     AssemblyRef row alone (Channels/Values 0.4.0.0 -> 0.5.0.0, unchanged
+#     method bodies; branch runs 38849888958 and 38959417266);
+#   * redirecting only the two runtimes left main's 0.5 Gsharp.Extensions,
+#     compiled against Channels 0.5, as the one copy the Compiler.Tests
+#     conformance harness loads, so an emitted sample referenced Channels
+#     0.5.0.0 that no longer existed (run 38990575269, Timeout.gs).
+# All three come from the one package, so the identities stay consistent.
+# The SDK reads each path only when it is not already set, so the environment
+# redirects them without touching the migrated tree; main's gsc and BuildTask
+# still compile it. No-op when the checkout is the corpus. A missing package
+# or assembly is an error, never a silent fall back to main's.
+#
+#   selfmig_with_corpus_runtime <command> [args...]
+selfmig_with_corpus_runtime() {
+  if [[ "$selfmig_source_root" == "$selfmig_default_root" ]]; then
+    "$@"
+    return
+  fi
+  local nupkg tools
+  nupkg=$(selfmig_corpus_sdk_package) || return 1
+  tools="$selfmig_source_root/out/selfmig-corpus-sdk"
+  python3 - "$nupkg" "$tools" <<'PY' || return 1
+import sys, zipfile
+from pathlib import Path
+nupkg, out = sys.argv[1], Path(sys.argv[2])
+wanted = {"extensions": "Gsharp.Extensions.dll", "channels": "Gsharp.Runtime.Channels.dll",
+          "values": "Gsharp.Runtime.Values.dll"}
+with zipfile.ZipFile(nupkg) as z:
+    names = {"/".join(p for p in n.split("/") if p): n for n in z.namelist()}
+    for folder, dll in wanted.items():
+        member = names.get(f"tools/{folder}/{dll}")
+        if member is None:
+            sys.exit(f"self-migration: {nupkg} has no tools/{folder}/{dll}")
+        target = out / folder / dll
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(z.read(member))
+PY
+  GsharpExtensionsAssemblyFullPath="$tools/extensions/Gsharp.Extensions.dll" \
+    GsharpChannelsRuntimeAssemblyFullPath="$tools/channels/Gsharp.Runtime.Channels.dll" \
+    GsharpValuesRuntimeAssemblyFullPath="$tools/values/Gsharp.Runtime.Values.dll" \
+    "$@"
 }
 
 # Most metrics count CODE, not fixtures: migrated test sources embed
@@ -183,6 +334,29 @@ selfmig_measure() {
   local long_lines_total
   read -r long_lines long_lines_atomic long_lines_total < <(cs2gs_long_line_counts "$migrated_dir")
   bangs=$(selfmig_code_grep "$migrated_dir" '!!')
+}
+
+# Issue #4856: the leg's per-app accounting for the cs2gs apps nightly, written
+# as stats.json by build/cs2gs-apps-leg.py from the (merged) run.json. The floor
+# is the baseline's greenFloor, so the nightly judges this leg by the same
+# floor this gate applies. The readability metrics selfmig_measure set (when it
+# has run) and the gate verdict ride along as extras. Best effort: a failure is
+# reported and returns 0, because the nightly reports a leg without stats.json
+# red anyway, with that as the reason.
+#
+#   selfmig_write_stats <run-json> <baseline> <out> <gate-exit-code>
+selfmig_write_stats() {
+  local run_json=$1 baseline=$2 out=$3 gate_exit=$4 verdict=failed key floor
+  (( gate_exit == 0 )) && verdict=passed
+  floor=$(jq -r '.greenFloor' "$baseline") || floor=''
+  local args=(--run "$run_json" --out "$out" --floor "$floor" --extra "baseline=$verdict")
+  for key in labels lifts long_lines long_lines_atomic bangs; do
+    if [[ -n "${!key:-}" ]]; then
+      args+=(--extra "$key=${!key}")
+    fi
+  done
+  python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cs2gs-apps-leg.py" stats "${args[@]}" \
+    || echo "self-migration gate: could not write $out." >&2
 }
 
 # Applies the ratcheting baseline to a green count and the measured metrics,

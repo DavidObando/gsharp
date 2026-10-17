@@ -59,6 +59,12 @@ grep -Fq '| lines >300 chars (total) | n/a | 4 |' <<< "$report"
 selfmig_measure "$tree"
 assert_eq "$long_lines $long_lines_atomic" "1 3" "selfmig_measure long lines"
 
+# Issue #4856: the machine-readable counters the apps nightly folds into each
+# leg's stats.json agree with the table above, and a missing tree prints none.
+counter_stats=$(TMPDIR="$scratch" cs2gs_counter_stats "$tree" | tr '\n' ' ')
+assert_eq "$counter_stats" "gs_files=1 bangs=0 synthetic=0 long_lines=1 long_lines_atomic=3 " "cs2gs_counter_stats"
+assert_eq "$(cs2gs_counter_stats "$scratch/no-such-tree")" "" "cs2gs_counter_stats on a missing tree"
+
 # Issue #4082: a backtick that is NOT a raw-string delimiter must not be
 # mistaken for one. The old counter toggled an in-raw flag on per-line backtick
 # parity, so a backtick inside a "..." literal, inside a // comment, or as a
@@ -389,14 +395,113 @@ fi
 # and record every project path it is asked to build with the override set.
 stubbin="$scratch/stubbin"
 mkdir -p "$stubbin"
-printf '#!/usr/bin/env bash\necho "$@" >> "$DOTNET_STUB_LOG"\n' > "$stubbin/dotnet"
+# The stub also records each call's working directory in a second log.
+printf '#!/usr/bin/env bash\necho "$@" >> "$DOTNET_STUB_LOG"\necho "$PWD" >> "$DOTNET_STUB_LOG.cwd"\n' > "$stubbin/dotnet"
 chmod +x "$stubbin/dotnet"
+touch "$scratch/csharp-src/GSharp.sln"
 DOTNET_STUB_LOG="$scratch/dotnet-stub.log" PATH="$stubbin:$PATH" SELFMIG_SOURCE_ROOT="$scratch/csharp-src" \
   bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_build_prerequisites' _ "$repo_root"
 assert_eq "$(grep -c "$repo_root/src/" "$scratch/dotnet-stub.log")" "3" "prerequisite builds stay on the checkout"
-if grep -Fq "$scratch/csharp-src" "$scratch/dotnet-stub.log"; then
+if head -n 3 "$scratch/dotnet-stub.log" | grep -Fq "$scratch/csharp-src"; then
   echo "FAIL: a prerequisite build followed SELFMIG_SOURCE_ROOT" >&2
   exit 1
 fi
+
+# Issue #4919: the separate corpus is prepared exactly as the pre-cut-over
+# checkout was (restore, tool restore, cs2gs Release graph, Debug compiler and
+# SDK, Release analyzers-testing), in that order and nothing else; without it
+# cs2gs cannot resolve package types, the bootstrap import fails ProjectLoad,
+# and migrated cs2gs tests find no gsc or SDK nupkg under the corpus.
+corpus="$(cd "$scratch/csharp-src" && pwd -P)"
+expected_corpus=$(printf '%s\n' \
+  "restore $corpus/GSharp.sln --locked-mode" \
+  "tool restore" \
+  "build $corpus/tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj --configuration Release --no-restore -graph" \
+  "build $corpus/src/Compiler/Compiler.csproj -c Debug -graph" \
+  "build $corpus/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj -c Debug -graph" \
+  "build $corpus/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.csproj -c Release -graph")
+assert_eq "$(tail -n +4 "$scratch/dotnet-stub.log")" "$expected_corpus" "the corpus is prepared like the pre-cut-over checkout"
+assert_eq "$(head -n 3 "$scratch/dotnet-stub.log" | grep -c "$repo_root/src/")" "3" "main's prerequisite builds come first, on the checkout"
+# The corpus is restored with ITS OWN lock files: --locked-mode on the corpus
+# solution, run from inside the corpus so its global.json and tool manifest
+# apply. Main's builds run where the caller is, and nothing about the corpus
+# preparation changes them.
+assert_eq "$(tail -n +4 "$scratch/dotnet-stub.log.cwd" | sort -u)" "$corpus" "corpus commands run inside the corpus"
+assert_eq "$(head -n 3 "$scratch/dotnet-stub.log.cwd" | sort -u)" "$(pwd)" "main's builds run from the caller's directory"
+# The checkout as the corpus (the default) restores nothing extra.
+: > "$scratch/dotnet-stub.log"
+DOTNET_STUB_LOG="$scratch/dotnet-stub.log" PATH="$stubbin:$PATH" \
+  env -u SELFMIG_SOURCE_ROOT bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_build_prerequisites' _ "$repo_root"
+assert_eq "$(grep -c '' "$scratch/dotnet-stub.log" || true)" "3" "no corpus preparation when the checkout is the corpus"
+# A corpus with no solution to restore fails loudly instead of migrating unrestored.
+mkdir -p "$scratch/csharp-nosln"
+if DOTNET_STUB_LOG="$scratch/dotnet-stub.log" PATH="$stubbin:$PATH" SELFMIG_SOURCE_ROOT="$scratch/csharp-nosln" \
+  bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_build_prerequisites' _ "$repo_root" 2>/dev/null; then
+  echo "FAIL: a corpus without GSharp.sln was accepted unrestored" >&2
+  exit 1
+fi
+
+# Issue #4919: a separate corpus's SDK nupkg is staged in the migrated tree's
+# local feed (the version it builds may be unpublished), snupkgs and other
+# packages are not, and nothing is staged when the checkout is the corpus.
+mkdir -p "$scratch/csharp-src/out/bin/Release/nupkgs" "$scratch/mirror"
+touch "$scratch/csharp-src/out/bin/Release/nupkgs/Gsharp.NET.Sdk.0.4.1271-gabc.nupkg" \
+  "$scratch/csharp-src/out/bin/Release/nupkgs/Gsharp.NET.Sdk.0.4.1271-gabc.snupkg" \
+  "$scratch/csharp-src/out/bin/Release/nupkgs/Gsharp.Cs2Gs.0.4.1271-gabc.nupkg"
+SELFMIG_SOURCE_ROOT="$scratch/csharp-src" bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_stage_corpus_sdk "$2"' _ "$repo_root" "$scratch/mirror" >/dev/null
+assert_eq "$(ls "$scratch/mirror/.nugs")" "Gsharp.NET.Sdk.0.4.1271-gabc.nupkg" "the corpus SDK nupkg is staged in the mirror's feed"
+rm -rf "$scratch/mirror"
+env -u SELFMIG_SOURCE_ROOT bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_stage_corpus_sdk "$2"' _ "$repo_root" "$scratch/mirror"
+if [[ -e "$scratch/mirror" ]]; then
+  echo "FAIL: staged an SDK when the checkout is the corpus" >&2
+  exit 1
+fi
+
+# Issue #4919: the SDK's bundled G# assemblies (Extensions, Channels, Values)
+# are taken from the corpus's own Gsharp.NET.Sdk package for the wrapped
+# command only; a malformed or incomplete package fails loudly, never falling
+# back to main's; the checkout-as-corpus case changes nothing.
+probe='echo "${GsharpExtensionsAssemblyFullPath:-<unset>}|${GsharpChannelsRuntimeAssemblyFullPath:-<unset>}|${GsharpValuesRuntimeAssemblyFullPath:-<unset>}"'
+sdk_nupkg="$scratch/csharp-src/out/bin/Release/nupkgs/Gsharp.NET.Sdk.0.4.1271-gabc.nupkg"
+with_runtime() {
+  SELFMIG_SOURCE_ROOT="$scratch/csharp-src" bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_with_corpus_runtime bash -c "$2"' _ "$repo_root" "$probe"
+}
+if with_runtime 2>/dev/null; then
+  echo "FAIL: a corpus SDK package that is not a zip was accepted" >&2
+  exit 1
+fi
+# The packer writes "tools/<folder>//<file>" member names; match them anyway.
+make_sdk_zip() {
+  python3 - "$sdk_nupkg" "$@" <<'PY'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    for member in sys.argv[2:]:
+        z.writestr(member, member)
+PY
+}
+make_sdk_zip "tools/extensions//Gsharp.Extensions.dll" "tools/channels//Gsharp.Runtime.Channels.dll"
+if with_runtime 2>/dev/null; then
+  echo "FAIL: a corpus SDK package without tools/values was accepted" >&2
+  exit 1
+fi
+make_sdk_zip "tools/extensions//Gsharp.Extensions.dll" "tools/channels//Gsharp.Runtime.Channels.dll" \
+  "tools/values//Gsharp.Runtime.Values.dll" "tools/compiler//Gsharp.Runtime.Channels.dll"
+tools="$corpus/out/selfmig-corpus-sdk"
+assert_eq "$(with_runtime)" "$tools/extensions/Gsharp.Extensions.dll|$tools/channels/Gsharp.Runtime.Channels.dll|$tools/values/Gsharp.Runtime.Values.dll" "the SDK's bundled G# assemblies are the corpus's own"
+assert_eq "$(cat "$tools/channels/Gsharp.Runtime.Channels.dll")" "tools/channels//Gsharp.Runtime.Channels.dll" "the channels runtime comes from tools/channels, not tools/compiler"
+untouched=$(env -u SELFMIG_SOURCE_ROOT -u GsharpExtensionsAssemblyFullPath -u GsharpChannelsRuntimeAssemblyFullPath -u GsharpValuesRuntimeAssemblyFullPath \
+  bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_with_corpus_runtime bash -c "$2"' _ "$repo_root" "$probe")
+assert_eq "$untouched" "<unset>|<unset>|<unset>" "no redirection when the checkout is the corpus"
+after=$(SELFMIG_SOURCE_ROOT="$scratch/csharp-src" env -u GsharpChannelsRuntimeAssemblyFullPath -u GsharpExtensionsAssemblyFullPath -u GsharpValuesRuntimeAssemblyFullPath \
+  bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_with_corpus_runtime true; bash -c "$2"' _ "$repo_root" "$probe")
+assert_eq "$after" "<unset>|<unset>|<unset>" "the redirection does not outlive the wrapped command"
+cp "$sdk_nupkg" "$scratch/csharp-src/out/bin/Release/nupkgs/Gsharp.NET.Sdk.0.4.1272-gdef.nupkg"
+if with_runtime 2>/dev/null; then
+  echo "FAIL: two corpus SDK packages were accepted" >&2
+  exit 1
+fi
+rm "$scratch/csharp-src/out/bin/Release/nupkgs/Gsharp.NET.Sdk.0.4.1272-gdef.nupkg"
+grep -q '^selfmig_with_corpus_runtime dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" validate' "$repo_root/build/run-cs2gs-selfmig-validate.sh" \
+  || { echo "FAIL: the validate shard does not compile the migrated tree against the corpus runtime" >&2; exit 1; }
 
 echo "cs2gs counter contract tests passed"
