@@ -307,3 +307,10 @@ does not narrow in either form, because the short-circuit classifier accepts
 reference nullables only. The if-statement does narrow these. That
 statement/expression difference, and the if-statement's `[NotNullWhen]` call
 narrowing, are tracked in issue #4969.
+
+**Known gap, shared by every narrowing region.** An assignment inside the
+narrowed expression does not end the narrowing for the rest of that
+expression: `s != nil ? consume((s = nil), s.Length) : 0` compiles and
+dereferences nil, as the if-expression, if-statement and `&&` forms already
+did. Invalidation runs at statement granularity; issue #4985 tracks moving it
+to the assignment.
