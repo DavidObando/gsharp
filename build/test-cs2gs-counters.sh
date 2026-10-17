@@ -457,4 +457,28 @@ if [[ -e "$scratch/mirror" ]]; then
   exit 1
 fi
 
+# Issue #4919: the SDK's bundled runtime is redirected to the corpus's own
+# Gsharp.Runtime.Channels/Values for the wrapped command only, a missing corpus
+# runtime build fails loudly, and the checkout-as-corpus case changes nothing.
+probe='echo "${GsharpChannelsRuntimeAssemblyFullPath:-<unset>}|${GsharpValuesRuntimeAssemblyFullPath:-<unset>}"'
+if SELFMIG_SOURCE_ROOT="$scratch/csharp-src" bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_with_corpus_runtime true' _ "$repo_root" 2>/dev/null; then
+  echo "FAIL: a corpus without its runtime builds was accepted" >&2
+  exit 1
+fi
+for runtime in Channels Values; do
+  mkdir -p "$scratch/csharp-src/out/bin/Release/Gsharp.Runtime.$runtime"
+  touch "$scratch/csharp-src/out/bin/Release/Gsharp.Runtime.$runtime/Gsharp.Runtime.$runtime.dll"
+done
+redirected=$(SELFMIG_SOURCE_ROOT="$scratch/csharp-src" bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_with_corpus_runtime bash -c "$2"' _ "$repo_root" "$probe")
+assert_eq "$redirected" "$corpus/out/bin/Release/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.dll|$corpus/out/bin/Release/Gsharp.Runtime.Values/Gsharp.Runtime.Values.dll" "the SDK runtime is the corpus's own"
+untouched=$(env -u SELFMIG_SOURCE_ROOT -u GsharpChannelsRuntimeAssemblyFullPath -u GsharpValuesRuntimeAssemblyFullPath \
+  bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_with_corpus_runtime bash -c "$2"' _ "$repo_root" "$probe")
+assert_eq "$untouched" "<unset>|<unset>" "no redirection when the checkout is the corpus"
+after=$(SELFMIG_SOURCE_ROOT="$scratch/csharp-src" env -u GsharpChannelsRuntimeAssemblyFullPath bash -c 'repo_root=$1; source "$1/build/selfmig-common.sh"; selfmig_with_corpus_runtime true; bash -c "$2"' _ "$repo_root" "$probe")
+assert_eq "$after" "<unset>|<unset>" "the redirection does not outlive the wrapped command"
+for leg_script in run-cs2gs-selfmig-validate.sh run-cs2gs-selfmig.sh; do
+  grep -q '^selfmig_with_corpus_runtime dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll"' "$repo_root/build/$leg_script" \
+    || { echo "FAIL: $leg_script does not compile the migrated tree against the corpus runtime" >&2; exit 1; }
+done
+
 echo "cs2gs counter contract tests passed"

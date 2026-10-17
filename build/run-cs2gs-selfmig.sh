@@ -56,7 +56,7 @@ dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" capture-test-oracle \
   || echo "self-migration gate: capturing the C# test oracle failed for some test project(s)." >&2
 
 set +e
-dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
+selfmig_with_corpus_runtime dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
   --corpus "$selfmig_source_root" \
   --sdk-pin global-json \
   --out "$migrated_dir" \

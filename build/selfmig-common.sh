@@ -199,6 +199,41 @@ selfmig_stage_corpus_sdk() {
   echo "self-migration: staged $staged corpus Gsharp.NET.Sdk package(s) in $migrated/.nugs."
 }
 
+# Issue #4919: runs a command (cs2gs validate, or the single-job migrate) with
+# the pinned G# SDK's bundled runtime assemblies redirected to the CORPUS's own
+# Gsharp.Runtime.Channels and Gsharp.Runtime.Values builds. Before the cut-over
+# the SDK the migrated tree pinned was built from the corpus checkout, so the
+# runtime it bundles and auto-references (Gsharp.NET.Sdk.props,
+# _ExplicitReference) had the corpus's own identity, 0.4.0.0. With main's 0.5
+# SDK pinned instead, a migrated project that also project-references its own
+# 0.4 runtime hits an MSB3243 conflict that RAR settles by taking 0.5, and
+# every golden that hashes emitted PEs moves on the AssemblyRef row alone:
+# test/Core.Tests RefactoringBaselineTests.Samples_EmittedPE_Match_Baseline
+# failed with Gsharp.Runtime.Channels/Values 0.4.0.0 -> 0.5.0.0 and unchanged
+# method bodies (branch runs 38849888958 and 38959417266). The SDK reads both
+# paths only when they are not already set, so the environment redirects them
+# without touching the migrated tree; main's gsc and the rest of the SDK are
+# still what compiles it. No-op when the checkout is the corpus. A missing
+# corpus runtime build is an error, never a silent fall back to 0.5.
+#
+#   selfmig_with_corpus_runtime <command> [args...]
+selfmig_with_corpus_runtime() {
+  if [[ "$selfmig_source_root" == "$selfmig_default_root" ]]; then
+    "$@"
+    return
+  fi
+  local channels="$selfmig_source_root/out/bin/Release/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.dll"
+  local values="$selfmig_source_root/out/bin/Release/Gsharp.Runtime.Values/Gsharp.Runtime.Values.dll"
+  local path
+  for path in "$channels" "$values"; do
+    if [[ ! -f "$path" ]]; then
+      echo "self-migration: the corpus runtime '$path' was not built (selfmig_prepare_corpus)." >&2
+      return 1
+    fi
+  done
+  GsharpChannelsRuntimeAssemblyFullPath="$channels" GsharpValuesRuntimeAssemblyFullPath="$values" "$@"
+}
+
 # Most metrics count CODE, not fixtures: migrated test sources embed
 # expected-output strings (and docs quote constructs), so lines containing a
 # string quote or leading with a comment marker are excluded before counting.

@@ -74,7 +74,7 @@ done
 validate_started=$(date +%s)
 
 set +e
-dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" validate \
+selfmig_with_corpus_runtime dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" validate \
   --corpus "$selfmig_source_root" \
   --migrated "$migrated_dir" \
   --artifacts "$shard_out/runs" \
