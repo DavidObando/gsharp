@@ -64,46 +64,18 @@ internal partial class ExpressionBinder {
         // `Nullable<T>` storage instead. This is the one place that decides it
         // for every narrowing region (if-statement, if-expression, `?:`,
         // early exit), because they all build the receiver with
-        // `BuildNarrowedRead`. A member the narrowed type does have (a
-        // struct's own `Value`) keeps binding to it: the narrowed bind runs
-        // first and is kept unless it reports the member as missing.
+        // `BuildNarrowedRead`. The decision looks the name up without
+        // binding anything, so the member and its arguments are bound once:
+        // any member of that name the narrowed type has (a struct's own
+        // `Value`, an overload that turns out inapplicable, an applicable
+        // extension) keeps the narrowed binding and its diagnostics.
         let narrowingUnwrap = receiver as BoundUnaryExpression
         let headToken = AccessorHeadToken(rightPart)
         if narrowingUnwrap != nil &&
             narrowingUnwrap.IsNarrowingUnwrap &&
             headToken != nil &&
-            NullableOnlyMemberNames
-            .Contains(headToken.ValueText) {
-            let diagnosticMark = Diagnostics.Count
-            let onNarrowedValue = BindAccessorStepOnReceiver(
-                receiver,
-                classSymbol,
-                rightPart,
-                receiverSyntax,
-                receiverStart
-            )
-            let headLocation = headToken.Location
-            let isHeadMissing = func (diagnostic Diagnostic) bool {
-                return (
-                    diagnostic.Id == DiagnosticDescriptors
-                        .UnableToFindMember
-                        .Id ||
-                        diagnostic.Id == DiagnosticDescriptors
-                        .UnableToFindFunction
-                        .Id
-                ) &&
-                    object.ReferenceEquals(diagnostic.Location.Text, headLocation.Text) &&
-                    diagnostic
-                    .Location
-                    .Span
-                    .Start == headLocation
-                    .Span
-                    .Start
-            }
-            if !Diagnostics.AnySince(diagnosticMark, isHeadMissing) {
-                return onNarrowedValue
-            }
-            Diagnostics.TruncateTo(diagnosticMark)
+            NullableOnlyMemberNames.Contains(headToken.ValueText) &&
+            !NarrowedTypeMayHaveMember(narrowingUnwrap.Type, headToken.ValueText) {
             return BindAccessorStepOnReceiver(
                 narrowingUnwrap.Operand,
                 classSymbol,
@@ -113,6 +85,176 @@ internal partial class ExpressionBinder {
             )
         }
         return BindAccessorStepOnReceiver(receiver, classSymbol, rightPart, receiverSyntax, receiverStart)
+    }
+
+    /// Issue #4986: whether [`type`](paramref), the narrowed type of a
+    /// value-type nullable read, may have a member named
+    /// [`name`](paramref) that a member access would bind to: an instance or
+    /// static member of the type, its interfaces or constraints, or an
+    /// extension (source or imported) whose receiver can take it. Nothing is
+    /// bound. When the shape is not known well enough to rule a member out,
+    /// the answer is `true`, which keeps the narrowed binding.
+    /// @param type The narrowed type.
+    /// @param name The member name.
+    /// @returns `false` only when no member of that name can apply.
+    private func NarrowedTypeMayHaveMember(type TypeSymbol, name string) bool {
+        if !$scope.TryLookupExtensionFunctions(type, name).IsDefaultOrEmpty {
+            return true
+        }
+        if ImportedExtensionMayApply(type, name) {
+            return true
+        }
+        switch type {
+            case structType is StructSymbol {
+                return StructMayHaveMember(structType, name)
+            }
+            case _ is EnumSymbol {
+                return ClrTypeMayHaveMember(typeof(System.Enum), name)
+            }
+            case typeParameter is TypeParameterSymbol {
+                return TypeParameterMayHaveMember(typeParameter, name)
+            }
+        }
+        let clrType = type.ClrType
+        if clrType == nil {
+            return true
+        }
+        return ClrTypeMayHaveMember(clrType, name)
+    }
+
+    private func StructMayHaveMember(structType StructSymbol, name string) bool {
+        if structType.Fields.Any((field FieldSymbol) -> field.Name == name) ||
+            structType.StaticFields.Any((field FieldSymbol) -> field.Name == name) ||
+            structType.ConstFields.Any((field FieldSymbol) -> field.Name == name) ||
+            structType.Properties.Any((property PropertySymbol) -> property.Name == name) ||
+            structType.StaticProperties.Any((property PropertySymbol) -> property.Name == name) ||
+            structType.Methods.Any((method FunctionSymbol) -> method.Name == name) ||
+            structType.StaticMethods.Any((method FunctionSymbol) -> method.Name == name) ||
+            structType.Events.Any((event_ EventSymbol) -> event_.Name == name) ||
+            structType.StaticEvents.Any((event_ EventSymbol) -> event_.Name == name) {
+            return true
+        }
+        for interfaceType in structType.Interfaces {
+            if InterfaceMayHaveMember(interfaceType, name) {
+                return true
+            }
+        }
+        for clrInterface in structType.ImplementedClrInterfaces {
+            let clrInterfaceType = clrInterface.ClrType
+            if clrInterfaceType == nil || ClrTypeMayHaveMember(clrInterfaceType, name) {
+                return true
+            }
+        }
+        return ClrTypeMayHaveMember(typeof(System.ValueType), name)
+    }
+
+    private func InterfaceMayHaveMember(interfaceType InterfaceSymbol, name string) bool {
+        if interfaceType.Methods.Any((method FunctionSymbol) -> method.Name == name) ||
+            interfaceType.StaticMethods.Any((method FunctionSymbol) -> method.Name == name) ||
+            interfaceType.Properties.Any((property PropertySymbol) -> property.Name == name) ||
+            interfaceType.Events.Any((event_ EventSymbol) -> event_.Name == name) {
+            return true
+        }
+        for baseInterface in interfaceType.BaseInterfaces {
+            if InterfaceMayHaveMember(baseInterface, name) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func TypeParameterMayHaveMember(typeParameter TypeParameterSymbol, name string) bool {
+        if typeParameter.InterfaceConstraint is InterfaceSymbol interfaceConstraint &&
+            InterfaceMayHaveMember(interfaceConstraint, name) {
+            return true
+        }
+        for constraint in []TypeSymbol?{typeParameter.ClrInterfaceConstraint, typeParameter.ClassConstraint} {
+            if constraint != nil {
+                let constraintClr = constraint.ClrType
+                if constraintClr == nil || ClrTypeMayHaveMember(constraintClr, name) {
+                    return true
+                }
+            }
+        }
+        if typeParameter.TypeParameterBound is TypeParameterSymbol bound && TypeParameterMayHaveMember(bound, name) {
+            return true
+        }
+        return ClrTypeMayHaveMember(typeof(System.ValueType), name)
+    }
+
+    private func ClrTypeMayHaveMember(clrType Type, name string) bool {
+        try {
+            var lookupType = clrType
+            let references = $scope.References
+            if references != nil && references.TryGetMemberLookupType(clrType, out var targetLookupType) {
+                lookupType = targetLookupType
+            }
+            let flags = BindingFlags.Public |
+                BindingFlags.NonPublic |
+                BindingFlags.Instance |
+                BindingFlags.Static |
+                BindingFlags.FlattenHierarchy
+            if lookupType.GetMember(name, flags).Length > 0 {
+                return true
+            }
+            for interfaceType in lookupType.GetInterfaces() {
+                if interfaceType.GetMember(name, flags).Length > 0 {
+                    return true
+                }
+            }
+            return false
+        } catch (ex Exception) when !(ex is OutOfMemoryException) {
+            return true
+        }
+    }
+
+    private func ImportedExtensionMayApply(type TypeSymbol, name string) bool {
+        let receiverClr = type.ClrType
+        for candidate in this.memberLookup.CollectImportedExtensionMethods(name) {
+            try {
+                let parameters = candidate.GetParameters()
+                if parameters.Length == 0 {
+                    continue
+                }
+                var thisType = parameters[0].ParameterType
+                if thisType.IsByRef {
+                    thisType = thisType.GetElementType() ?? thisType
+                }
+                if thisType.IsGenericParameter ||
+                    thisType.FullName == "System.Object" ||
+                    thisType.FullName == "System.ValueType" ||
+                    thisType.FullName == "System.Enum" {
+                    return true
+                }
+                if receiverClr == nil {
+                    if thisType.IsInterface {
+                        return true
+                    }
+                    continue
+                }
+                if ClrTypeUtilities.AreSame(thisType, receiverClr) {
+                    return true
+                }
+                if thisType.IsInterface {
+                    for implemented in receiverClr.GetInterfaces() {
+                        if ClrTypeUtilities.AreSame(implemented, thisType) ||
+                            (
+                            implemented.IsGenericType &&
+                                thisType.IsGenericType &&
+                                ClrTypeUtilities.AreSame(
+                                implemented.GetGenericTypeDefinition(),
+                                thisType.GetGenericTypeDefinition()
+                            )
+                        ) {
+                            return true
+                        }
+                    }
+                }
+            } catch (ex Exception) when !(ex is OutOfMemoryException) {
+                return true
+            }
+        }
+        return false
     }
 
     private func BindAccessorStepOnReceiver(
