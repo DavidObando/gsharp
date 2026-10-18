@@ -123,15 +123,27 @@ internal partial class ExpressionBinder {
     }
 
     private func StructMayHaveMember(structType StructSymbol, name string) bool {
-        if structType.Fields.Any((field FieldSymbol) -> field.Name == name) ||
-            structType.StaticFields.Any((field FieldSymbol) -> field.Name == name) ||
-            structType.ConstFields.Any((field FieldSymbol) -> field.Name == name) ||
-            structType.Properties.Any((property PropertySymbol) -> property.Name == name) ||
-            structType.StaticProperties.Any((property PropertySymbol) -> property.Name == name) ||
-            structType.Methods.Any((method FunctionSymbol) -> method.Name == name) ||
-            structType.StaticMethods.Any((method FunctionSymbol) -> method.Name == name) ||
-            structType.Events.Any((event_ EventSymbol) -> event_.Name == name) ||
-            structType.StaticEvents.Any((event_ EventSymbol) -> event_.Name == name) {
+        if structType.Fields.Any((field FieldSymbol) -> field.Name == name) || structType.StaticFields.Any(
+            (field FieldSymbol) -> field.Name == name
+        ) ||
+            structType
+            .ConstFields
+            .Any((field FieldSymbol) -> field.Name == name) || structType.Properties.Any(
+            (property PropertySymbol) -> property.Name == name
+        ) ||
+            structType
+            .StaticProperties
+            .Any((property PropertySymbol) -> property.Name == name) || structType.Methods.Any(
+            (method FunctionSymbol) -> method.Name == name
+        ) ||
+            structType
+            .StaticMethods
+            .Any((method FunctionSymbol) -> method.Name == name) || structType.Events.Any(
+            (event_ EventSymbol) -> event_.Name == name
+        ) ||
+            structType
+            .StaticEvents
+            .Any((event_ EventSymbol) -> event_.Name == name) {
             return true
         }
         for interfaceType in structType.Interfaces {
@@ -149,10 +161,14 @@ internal partial class ExpressionBinder {
     }
 
     private func InterfaceMayHaveMember(interfaceType InterfaceSymbol, name string) bool {
-        if interfaceType.Methods.Any((method FunctionSymbol) -> method.Name == name) ||
-            interfaceType.StaticMethods.Any((method FunctionSymbol) -> method.Name == name) ||
-            interfaceType.Properties.Any((property PropertySymbol) -> property.Name == name) ||
-            interfaceType.Events.Any((event_ EventSymbol) -> event_.Name == name) {
+        if interfaceType.Methods.Any((method FunctionSymbol) -> method.Name == name) || interfaceType.StaticMethods.Any(
+            (method FunctionSymbol) -> method.Name == name
+        ) ||
+            interfaceType
+            .Properties
+            .Any((property PropertySymbol) -> property.Name == name) || interfaceType.Events.Any(
+            (event_ EventSymbol) -> event_.Name == name
+        ) {
             return true
         }
         for baseInterface in interfaceType.BaseInterfaces {
@@ -168,7 +184,7 @@ internal partial class ExpressionBinder {
             InterfaceMayHaveMember(interfaceConstraint, name) {
             return true
         }
-        for constraint in []TypeSymbol?{typeParameter.ClrInterfaceConstraint, typeParameter.ClassConstraint} {
+        for constraint in[]TypeSymbol? {typeParameter.ClrInterfaceConstraint, typeParameter.ClassConstraint} {
             if constraint != nil {
                 let constraintClr = constraint.ClrType
                 if constraintClr == nil || ClrTypeMayHaveMember(constraintClr, name) {
@@ -190,10 +206,10 @@ internal partial class ExpressionBinder {
                 lookupType = targetLookupType
             }
             let flags = BindingFlags.Public |
-                BindingFlags.NonPublic |
-                BindingFlags.Instance |
-                BindingFlags.Static |
-                BindingFlags.FlattenHierarchy
+            BindingFlags.NonPublic |
+            BindingFlags.Instance |
+            BindingFlags.Static |
+            BindingFlags.FlattenHierarchy
             if lookupType.GetMember(name, flags).Length > 0 {
                 return true
             }
@@ -239,9 +255,7 @@ internal partial class ExpressionBinder {
                     for implemented in receiverClr.GetInterfaces() {
                         if ClrTypeUtilities.AreSame(implemented, thisType) ||
                             (
-                            implemented.IsGenericType &&
-                                thisType.IsGenericType &&
-                                ClrTypeUtilities.AreSame(
+                            implemented.IsGenericType && thisType.IsGenericType && ClrTypeUtilities.AreSame(
                                 implemented.GetGenericTypeDefinition(),
                                 thisType.GetGenericTypeDefinition()
                             )

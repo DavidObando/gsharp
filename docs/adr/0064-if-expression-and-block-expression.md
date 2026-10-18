@@ -309,9 +309,17 @@ member access on a variable or stable path narrowed from value-type
 (a struct with its own `Value` field reads that field). The decision is made
 in one place, `ExpressionBinder.BindAccessorStep`: the narrowed read that
 `BuildNarrowedRead` builds is marked (`BoundUnaryExpression.IsNarrowingUnwrap`),
-the member is bound against the narrowed value first, and only when that
-reports the head member missing (GS0158 / GS0159) is the bind rolled back and
-redone against the storage read. The read is an ordinary `Nullable<T>`
+and when the accessed name is one `Nullable<T>` itself declares, a lookup that
+binds nothing (`NarrowedTypeMayHaveMember`) asks whether `T` could have a
+member of that name: its own instance or static members, its interfaces or
+type-parameter constraints, or an applicable source or imported extension.
+Only when none can is the member bound against the storage read. The member
+and its arguments are bound once either way, so a member `T` declares keeps
+its own overload diagnostics even when no overload applies, and an imported
+extension of the same name that cannot take `T`
+(`CollectionExtensions.GetValueOrDefault` on a dictionary) does not block the
+fallback. An unknown shape answers "may have", which keeps the narrowed
+binding. The read is an ordinary `Nullable<T>`
 property or method access, so `n.Value` after a guard emits
 `call Nullable<int32>::get_Value` on the storage, which the guard already
 proved non-nil. The if-statement gains this too; it had rejected `n.Value`

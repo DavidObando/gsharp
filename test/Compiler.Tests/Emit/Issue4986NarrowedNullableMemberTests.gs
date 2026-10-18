@@ -6,9 +6,11 @@ package GSharp.Compiler.Tests.Emit
 
 import GSharp.Compiler
 import GSharp.Compiler.Tests
+import GSharp.Core.Tests
 import System
 import System.Diagnostics
 import System.IO
+import System.Text.RegularExpressions
 import Xunit
 
 /// Issue #4986: a smart cast narrows `n int32?` to `int32`, which has no
@@ -196,6 +198,74 @@ Console.WriteLine("${pick(2)} ${pick(nil)} ${pickStatement(3)} ${pickStatement(n
         Assert.Equal("2 1 3 2 5" + Environment.NewLine, result.Output)
     }
 
+    /// The fallback is decided by looking the name up, not by binding and
+    /// watching for a missing-member error. So a member the narrowed type
+    /// declares keeps the binding, and its own overload error, even when no
+    /// overload applies: `Meter` declares only `GetValueOrDefault(int)`, and
+    /// `n.GetValueOrDefault()` must not quietly become
+    /// `Nullable<Meter>.GetValueOrDefault()`.
+    @Fact
+    func An_Inapplicable_Member_Of_The_Narrowed_Type_Is_Not_Replaced() {
+        using let fixture = CSharpFixture(
+            "namespace Fixture4986 { public struct Meter { public int V; public int GetValueOrDefault(int x) => x + V; } }"
+        )
+        let rejected = Compile(`import Fixture4986
+func pick(n Meter?) Meter -> n != nil ? n.GetValueOrDefault() : Meter()
+`, fixture.AssemblyPath)
+        Assert.NotEqual(0, rejected.ExitCode)
+        Assert.DoesNotContain("GS0113", rejected.Output, StringComparison.Ordinal)
+        Assert.True(
+            Regex.IsMatch(rejected.Output, `\(2,43,2,62\): error GS0159: [^\n]*GetValueOrDefault`),
+            rejected.Output
+        )
+        let accepted = Compile(`import Fixture4986
+func pick(n Meter?) int32 -> n != nil ? n.GetValueOrDefault(3) : 0
+`, fixture.AssemblyPath)
+        Assert.True(accepted.ExitCode == 0, accepted.Output)
+    }
+
+    /// A CLR type's own member wins too (`KeyValuePair.Value` is the pair's
+    /// value, not the pair), and an imported extension of the same name that
+    /// cannot take the narrowed type (`CollectionExtensions.GetValueOrDefault`
+    /// on a dictionary) does not block the fallback.
+    @Fact
+    func Clr_Members_And_Inapplicable_Extensions_Are_Told_Apart() {
+        let result = CompileAndRun(`import System
+import System.Collections.Generic
+func pairValue(p KeyValuePair[string, int32]?) int32 -> p != nil ? p.Value : -1
+func withCollections(n int32?) int32 {
+    if n != nil {
+        return n.GetValueOrDefault() + 1
+    }
+    return 0
+}
+Console.WriteLine("${pairValue(KeyValuePair[string, int32]("a", 7))} ${pairValue(nil)} ${withCollections(4)} ${withCollections(nil)}")
+`)
+        Assert.Equal("7 -1 5 0" + Environment.NewLine, result.Output)
+    }
+
+    /// Nothing is bound twice. A pattern variable and an `out var` in the
+    /// argument are declared once (a second bind reported GS0102), and nested
+    /// fallbacks bind in linear time (a second bind per level made 22 levels
+    /// take minutes).
+    @Fact
+    func Arguments_Are_Bound_Once() {
+        var nested = "0"
+        for var i = 0; i < 22; i++ {
+            nested = "n.GetValueOrDefault(" + nested + ")"
+        }
+        let result = CompileAndRun((`import System
+func fallback(out x int32) int32 {
+    x = 5
+    return x
+}
+func declared(n int32?, o object) int32 -> n != nil ? n.GetValueOrDefault((o is string s) ? fallback(out var x) + s.Length : 0) : 0
+func nested(n int32?) int32 -> n != nil ? ` + nested + ` : -1
+Console.WriteLine("${declared(3, "z")} ${declared(nil, "z")} ${nested(9)} ${nested(nil)}")
+`))
+        Assert.Equal("3 0 9 -1" + Environment.NewLine, result.Output)
+    }
+
     /// The storage read is an ordinary `Nullable<T>.Value` property access, so
     /// it also works inside an expression-tree lambda, where the narrowed
     /// unwrap itself is rejected (#4974).
@@ -214,6 +284,47 @@ Console.WriteLine("${e.Compile()(4)} ${e.Compile()(nil)} ${h.Compile()(1)} ${h.C
         /// Compiles the program through the real driver, verifies it with
         /// ilverify, runs it and returns its standard output and the
         /// compiler's output.
+        /// Compiles a library against one extra reference and returns the
+        /// driver's exit code and output, without running anything.
+        private func Compile(source string, reference string)(ExitCode int32, Output string) {
+            let outputDirectory = Path.Combine(
+                AppContext.BaseDirectory,
+                "Issue4986NarrowedNullableMemberTests",
+                Guid.NewGuid().ToString("N")
+            )
+            Directory.CreateDirectory(outputDirectory)
+            try {
+                let sourcePath = Path.Combine(outputDirectory, "Library.gs")
+                File.WriteAllText(sourcePath, source)
+                using let standardOut = StringWriter()
+                using let standardError = StringWriter()
+                let previousOut = Console.Out
+                let previousError = Console.Error
+                Console.SetOut(standardOut)
+                Console.SetError(standardError)
+                var exitCode int32
+                try {
+                    exitCode = Program.Main(
+                        []string{
+                            "/out:" + Path.Combine(outputDirectory, "Library.dll"),
+                            "/target:library",
+                            "/targetframework:net10.0",
+                            "/reference:" + reference,
+                            sourcePath
+                        }
+                    )
+                } finally {
+                    Console.SetOut(previousOut)
+                    Console.SetError(previousError)
+                }
+                return (exitCode, standardOut.ToString() + standardError.ToString())
+            } finally {
+                try {
+                    Directory.Delete(outputDirectory, recursive: true)
+                } catch { }
+            }
+        }
+
         private func CompileAndRun(source string)(Output string, CompilerOutput string) {
             let outputDirectory = Path.Combine(
                 AppContext.BaseDirectory,
