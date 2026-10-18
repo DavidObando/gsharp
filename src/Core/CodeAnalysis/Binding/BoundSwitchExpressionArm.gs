@@ -45,8 +45,8 @@ class BoundSwitchExpressionArm : BoundNode {
     prop IsDefault bool -> Pattern == nil
 
     /// Gets whether this arm matches every input without a guard.
-    prop IsCatchAll bool -> Guard == nil && PatternMatchesAllInputs
+    internal prop IsCatchAll bool -> Guard == nil && PatternMatchesAllInputs
 
     /// Gets whether every input reaches this arm's guard or result.
-    prop PatternMatchesAllInputs bool -> Pattern == nil || Pattern is BoundDiscardPattern
+    internal prop PatternMatchesAllInputs bool -> Pattern == nil || Pattern is BoundDiscardPattern
 }

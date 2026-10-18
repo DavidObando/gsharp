@@ -42,7 +42,7 @@ class BoundSwitchExpression : BoundExpression {
     }
 
     /// Enumerates dispatch order: the default runs after all other patterns.
-    func GetDispatchArms() sequence[BoundSwitchExpressionArm] {
+    internal func GetDispatchArms() sequence[BoundSwitchExpressionArm] {
         for arm in Arms {
             if !arm.IsDefault {
                 yield arm
