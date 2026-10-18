@@ -1071,7 +1071,7 @@ class LspServer {
             // Open buffers win over the on-disk project tree so the explorer reflects
             // unsaved edits; preserve the client's own URI string so run-at-cursor
             // matching stays byte-for-byte identical to the editor's document URI.
-            let path = PathKeyFor(tree, pair.Key)
+            let path = PathKeyFor(tree, DocumentUri.From(pair.Key)?.GetFileSystemPath() ?? pair.Key)
             // Reuse the project association captured above when the file is a known project
             // source; otherwise resolve it (e.g. a freshly created, not-yet-globbed file).
             var projectFile string? = nil
@@ -1086,7 +1086,7 @@ class LspServer {
                     projectLabel = ProjectLabel(owning)
                 }
             }
-            byPath[path] = TestSource(pair.Key, tree, projectFile!!, projectLabel!!)
+            byPath[path] = TestSource(pair.Key, tree, projectFile, projectLabel)
         }
         return byPath.Values.OrderBy((s TestSource) -> s.Uri, StringComparer.Ordinal).ToList()
     }
@@ -1094,7 +1094,7 @@ class LspServer {
     // A single test-bearing source: its emitted URI, parsed (immutable) tree, and the
     // identity of the owning project (null for loose files) used to build the grouping node.
     private struct TestSource {
-        init(uri string, tree SyntaxTree, projectFile string, projectLabel string) {
+        init(uri string, tree SyntaxTree, projectFile string?, projectLabel string?) {
             Uri = uri
             Tree = tree
             ProjectFile = projectFile
@@ -1109,11 +1109,11 @@ class LspServer {
             get;
         }
 
-        prop ProjectFile string {
+        prop ProjectFile string? {
             get;
         }
 
-        prop ProjectLabel string {
+        prop ProjectLabel string? {
             get;
         }
     }
@@ -1739,14 +1739,15 @@ class LspServer {
                 if items.Count == 0 {
                     continue
                 }
-                if string.IsNullOrEmpty(source.ProjectFile) {
+                let projectFile = source.ProjectFile
+                if projectFile == nil || projectFile.Length == 0 {
                     // Loose / project-less file: keep its items at the top level.
                     results.AddRange(items)
                     continue
                 }
-                if !grouped.TryGetValue(source.ProjectFile, out var bucket) {
-                    bucket = (source.ProjectLabel, source.ProjectFile, List[TestDiscoveryItem]())
-                    grouped[source.ProjectFile] = bucket
+                if !grouped.TryGetValue(projectFile, out var bucket) {
+                    bucket = (source.ProjectLabel, projectFile, List[TestDiscoveryItem]())
+                    grouped[projectFile] = bucket
                 }
                 bucket.Children.AddRange(items)
             }

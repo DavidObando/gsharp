@@ -11,6 +11,7 @@ import System
 import System.Collections.Generic
 import System.IO
 import System.Linq
+import System.Text.Json
 import System.Threading.Tasks
 import Xunit
 
@@ -30,6 +31,80 @@ open class TestDiscoveryWorkspaceTests : IDisposable {
         try {
             Directory.Delete(this.root, recursive: true)
         } catch (IOException) { }
+    }
+
+    @Fact
+    async func DiscoverTests_LooseOpenFileRetainsTestsWithoutProjectMetadata() {
+        const source = `@Fact
+func LooseTest() {
+}
+`
+        let file = this.WriteFile("LooseTests.gs", source)
+        let uri = DocumentUri.FromFileSystemPath(file)!!
+        let server = LspServer(DocumentContentService(), WorkspaceState())
+        using let capabilities = JsonDocument.Parse(`{"textDocument":{"diagnostic":{}}}`)
+        await server.InitializeAsync(InitializeParams{Capabilities: capabilities.RootElement.Clone()})
+        await server.DidOpenAsync(DidOpenTextDocumentParams{TextDocument: TextDocumentItem{Uri: uri, Text: source}})
+
+        let test = Assert.Single(await server.DiscoverTestsAsync())
+        Assert.Equal("LooseTest", test.Label)
+        Assert.Equal("LooseTest", test.Filter)
+        Assert.Equal(uri.ToString(), test.Uri)
+        Assert.Null(test.ProjectFile)
+    }
+
+    @Fact
+    async func DiscoverTests_LooseHelperDoesNotHideProjectTests() {
+        let projectFile = this.WriteFile("ProjectTests.gs", `@Fact
+func ProjectTest() {
+}
+`)
+        let workspace = WorkspaceState()
+        let project = workspace.AddProject(Path.Combine(this.root, "Demo.gsproj"))
+        project.AddFileFromDisk(projectFile)
+        workspace.RegisterFile(projectFile, project)
+        let server = LspServer(DocumentContentService(), workspace)
+        using let capabilities = JsonDocument.Parse(`{"textDocument":{"diagnostic":{}}}`)
+        await server.InitializeAsync(InitializeParams{Capabilities: capabilities.RootElement.Clone()})
+        await server.DidOpenAsync(
+            DidOpenTextDocumentParams{
+                TextDocument: TextDocumentItem{
+                    Uri: DocumentUri.FromFileSystemPath(Path.Combine(this.root, "LooseHelper.gs"))!!,
+                    Text: "func Helper() int32 -> 42"
+                }
+            }
+        )
+
+        let group = Assert.Single(await server.DiscoverTestsAsync())
+        Assert.Equal(project.ProjectFilePath, group.ProjectFile)
+        Assert.Equal("ProjectTest", Assert.Single(group.Children!!).Label)
+    }
+
+    @Fact
+    async func DiscoverTests_ProjectFoundAfterOpenOverlaysBufferWithoutLooseDuplicate() {
+        let file = this.WriteFile("EditableTests.gs", `@Fact
+func Original() {
+}
+`)
+        let uri = DocumentUri.FromFileSystemPath(file)!!
+        let workspace = WorkspaceState()
+        let server = LspServer(DocumentContentService(), workspace)
+        using let capabilities = JsonDocument.Parse(`{"textDocument":{"diagnostic":{}}}`)
+        await server.InitializeAsync(InitializeParams{Capabilities: capabilities.RootElement.Clone()})
+        await server.DidOpenAsync(DidOpenTextDocumentParams{TextDocument: TextDocumentItem{Uri: uri, Text: `@Fact
+func Edited() {
+}
+`}})
+
+        let project = workspace.AddProject(Path.Combine(this.root, "Demo.gsproj"))
+        project.AddFileFromDisk(file)
+        workspace.RegisterFile(file, project)
+
+        let group = Assert.Single(await server.DiscoverTestsAsync())
+        Assert.Equal(project.ProjectFilePath, group.ProjectFile)
+        let test = Assert.Single(group.Children!!)
+        Assert.Equal("Edited", test.Label)
+        Assert.Equal(uri.ToString(), test.Uri)
     }
 
     @Fact
