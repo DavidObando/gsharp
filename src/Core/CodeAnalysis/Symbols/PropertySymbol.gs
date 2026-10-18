@@ -214,6 +214,48 @@ class PropertySymbol : Symbol {
     /// Gets or sets the imported CLR setter slot overridden by this property.
     prop ExternalOverriddenSetter MethodInfo?
 
+    /// Returns a copy of this property with [`type`](paramref) and
+    /// [`parameters`](paramref) in place of its own, keeping everything
+    /// else, including the declaration. A constructed generic type's member
+    /// substitution builds its members this way, and the language server uses
+    /// it to show a member read through a constructed interface (issue #4989).
+    /// @param type The substituted property type.
+    /// @param parameters The substituted indexer parameters.
+    /// @returns The copy.
+    internal func WithSignature(
+        type TypeSymbol,
+        parameters ImmutableArray[ParameterSymbol]
+    ) PropertySymbol -> PropertySymbol(
+        Name,
+        type,
+        Accessibility,
+        HasGetter,
+        HasSetter,
+        IsAutoProperty,
+        IsVirtual,
+        IsOverride,
+        SetterParameterName,
+        IsStatic,
+        Declaration,
+        IsInitOnly,
+        GetterAccessibility,
+        SetterAccessibility,
+        MetadataIsAbstract
+    ){
+        IsIndexer = IsIndexer,
+        Parameters = parameters,
+        BackingField = BackingField,
+        GetterSymbol = GetterSymbol,
+        SetterSymbol = SetterSymbol,
+        OverriddenProperty = OverriddenProperty,
+        ExternalOverriddenGetter = ExternalOverriddenGetter,
+        ExternalOverriddenSetter = ExternalOverriddenSetter,
+        ExternalOverrideContainingType = ExternalOverrideContainingType,
+        GetterBodySyntax = GetterBodySyntax,
+        SetterBodySyntax = SetterBodySyntax,
+        ReturnRefKind = ReturnRefKind
+    }
+
     /// Gets or sets the source-declared base property overridden by this property.
     prop OverriddenProperty PropertySymbol?
 

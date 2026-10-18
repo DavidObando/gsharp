@@ -299,9 +299,23 @@ shared class BoundSemantics {
             case variable is BoundVariableExpression: variable.Variable
             case call is BoundCallExpression: call.Function
             case userCall is BoundUserInstanceCallExpression: userCall.Method
+            // A read through a constructed generic interface keeps the
+            // declaration's property and records the substituted type beside
+            // it; show the property at that type. References still match it
+            // by its declaration.
+            case BoundPropertyAccessExpression{
+                SubstitutedType: {} substitutedType
+            } property when !object.ReferenceEquals(substitutedType, property.Property.Type): property
+                .Property
+                .WithSignature(substitutedType, property.Property.Parameters)
             case property is BoundPropertyAccessExpression: property.Property
             case field is BoundFieldAccessExpression: field.Field
             default: default(Symbol?)
+        }
+        // A field-like event's read binds its synthesized backing field; the
+        // reference is to the event, which the callers' event lookup finds.
+        if symbol is FieldSymbol{IsEventBackingField: true} {
+            return nil
         }
         return if symbol != nil && symbol.Name == name {
             symbol

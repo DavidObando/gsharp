@@ -172,7 +172,63 @@ open class Issue4989BoundReceiverTests {
         Assert.Equal(LanguageServerTestHelpers.PositionOf(OverloadSource, "M()", 0).Line, location.Range.Start.Line)
     }
 
+    @Fact
+    func Hover_ConstructedGenericInterfaceProperty_ShowsTheSubstitutedType() {
+        let content = LanguageServerTestHelpers.Content(GenericInterfaceSource)
+        let hover = HoverText(content, GenericInterfaceSource, "Value", 2)
+        Assert.Contains("Value int32", hover, StringComparison.Ordinal)
+        let compilation = Compilation(content.SyntaxTree)
+        let declaration = SemanticLookup.ResolveSymbol(
+            compilation,
+            TokenAt(content, GenericInterfaceSource, "Value", 0)
+        )
+        let use = TokenAt(content, GenericInterfaceSource, "Value", 2)
+        Assert.Contains(
+            SemanticLookup.FindReferences(compilation, declaration),
+            (token SyntaxToken) -> token.Span.Start == use.Span.Start
+        )
+    }
+
+    @Fact
+    func ResolveSymbol_FieldLikeEventRead_IsTheEvent() {
+        let content = LanguageServerTestHelpers.Content(EventSource)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.IsAssignableFrom[EventSymbol](
+            SemanticLookup.ResolveSymbol(compilation, TokenAt(content, EventSource, "Click", 1))
+        )
+        Assert.DoesNotContain("(field)", HoverText(content, EventSource, "Click", 1), StringComparison.Ordinal)
+    }
+
     shared {
+        private const GenericInterfaceSource string = `package Repro
+
+interface IBox[T] {
+    prop Value T { get; }
+}
+
+class IntBox : IBox[int32] {
+    prop Value int32 -> 3
+}
+
+func Run(b IBox[int32]) int32 {
+    return b.Value
+}
+`
+
+        private const EventSource string = `package Repro
+
+import System
+
+class Foo {
+    event Click (Object, EventArgs) -> void
+
+    func Read() bool {
+        let handler = this.Click
+        return handler == nil
+    }
+}
+`
+
         private const ValueReceiverSource string = `package Repro
 
 struct Point {

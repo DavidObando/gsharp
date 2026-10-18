@@ -2757,36 +2757,7 @@ class StructSymbol : TypeSymbol {
                     builder.Add(p)
                     continue
                 }
-                let substituted = PropertySymbol(
-                    p.Name,
-                    newType,
-                    p.Accessibility,
-                    p.HasGetter,
-                    p.HasSetter,
-                    p.IsAutoProperty,
-                    p.IsVirtual,
-                    p.IsOverride,
-                    p.SetterParameterName,
-                    p.IsStatic,
-                    p.Declaration,
-                    p.IsInitOnly,
-                    p.GetterAccessibility,
-                    p.SetterAccessibility,
-                    p.MetadataIsAbstract
-                ){
-                    IsIndexer = p.IsIndexer,
-                    Parameters = newParams,
-                    BackingField = p.BackingField,
-                    GetterSymbol = p.GetterSymbol,
-                    SetterSymbol = p.SetterSymbol,
-                    OverriddenProperty = p.OverriddenProperty,
-                    ExternalOverriddenGetter = p.ExternalOverriddenGetter,
-                    ExternalOverriddenSetter = p.ExternalOverriddenSetter,
-                    ExternalOverrideContainingType = p.ExternalOverrideContainingType,
-                    GetterBodySyntax = p.GetterBodySyntax,
-                    SetterBodySyntax = p.SetterBodySyntax,
-                    ReturnRefKind = p.ReturnRefKind
-                }
+                let substituted = p.WithSignature(newType, newParams)
                 builder.Add(substituted)
             }
             return builder.MoveToImmutable()
