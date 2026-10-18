@@ -1233,109 +1233,225 @@ internal shared class ClrOverloadResolution {
         if parameterType.IsByRef {
             parameterType = parameterType.GetElementType() ?? parameterType
         }
-        if parameterType.ContainsGenericParameters {
-            let bounds = Dictionary[string, Type](StringComparer.Ordinal)
-            if !UnifyForInference(parameterType, receiverClr, bounds) {
-                return false
-            }
-            let typeParameters = method.GetGenericArguments()
-            var remainingParameters = parameters.Skip(1).Take(argumentCount ?? int32.MaxValue).ToArray()
-            if argumentNames != nil {
-                if !TryBuildNamedArgumentReordering(method, argumentNames.Count, argumentNames, out var mapping) &&
-                    !TryBuildNamedArgumentReordering(
-                    method,
-                    argumentNames.Count,
-                    argumentNames,
-                    isExpanded: true,
-                    out mapping
-                ) {
-                    remainingParameters = Array.Empty[ParameterInfo]()
-                } else if mapping != nil {
-                    remainingParameters = mapping.Skip(1).Select((index int32) -> parameters[index]).ToArray()
-                }
-            }
-            let argumentDependentReceiver = remainingParameters.Any(
-                (parameter ParameterInfo) -> typeParameters.Any(
-                    (typeParameter Type) -> MentionsGenericParameter(parameterType, typeParameter) &&
-                        MentionsGenericParameter(parameter.ParameterType, typeParameter)
-                )
-            )
-            if !TryCloseInferredType(parameterType, bounds, out var closedReceiver) || closedReceiver == nil {
-                return argumentDependentReceiver &&
-                    MayConvertToOpenReceiver(parameterType, receiverClr) &&
-                    typeParameters
-                    .All(
-                    (typeParameter Type) -> bounds.ContainsKey(typeParameter.Name) || remainingParameters.Any(
-                        (parameter ParameterInfo) -> MentionsGenericParameter(parameter.ParameterType, typeParameter)
-                    )
-                )
-            }
-            parameterType = closedReceiver
-            let typeArguments = [typeParameters.Length]Type
-            for var i = 0; i < typeParameters.Length; i++ {
-                typeArguments[i] = if bounds.TryGetValue(typeParameters[i].Name, out var argument) {
-                    argument
-                } else {
-                    typeParameters[i]
-                }
-            }
-            if !SatisfiesGenericConstraints(method, typeArguments) {
-                // Other arguments can widen an inferred receiver bound (for
-                // example, int32 plus object fixes `T : class` to object).
-                return argumentDependentReceiver
-            }
+        if !parameterType.ContainsGenericParameters {
+            return ClassifyImplicit(parameterType, receiverClr) != ImplicitConversionKind.None ||
+                Conversion
+                .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(parameters[0])).IsImplicit
         }
-        return ClassifyImplicit(parameterType, receiverClr) != ImplicitConversionKind.None ||
-            Conversion
-            .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(parameters[0])).IsImplicit
-    }
-
-    private func MayConvertToOpenReceiver(target Type, source Type) bool {
-        if MayHaveStandardConversionToOpenReceiver(target, source) {
-            return true
+        let bounds = Dictionary[string, Type](StringComparer.Ordinal)
+        if !UnifyForInference(parameterType, receiverClr, bounds) {
+            return false
         }
-        let operators = List[MethodInfo]()
-        ClrOperatorResolution.CollectOperators(source, "op_Implicit", operators)
-        ClrOperatorResolution.CollectOperators(
-            NullableLifting.GetValueTypeNullableUnderlyingClr(target) ?? target,
-            "op_Implicit",
-            operators
-        )
-        return operators.Any(
-            (method MethodInfo) -> {
-                let parameters = method.GetParameters()
-                return parameters.Length == 1 &&
-                    MayHaveStandardConversionToOpenReceiver(parameters[0].ParameterType, source) &&
-                    MayHaveStandardConversionToOpenReceiver(target, method.ReturnType)
-            }
-        )
-    }
-
-    /// Open arguments may change, but an impossible outer conversion cannot.
-    /// Keep user-defined conversions to one operator plus standard conversions.
-    private func MayHaveStandardConversionToOpenReceiver(target Type, source Type) bool {
-        if target.IsGenericParameter || source.IsGenericParameter {
-            return true
-        }
-        if !target.ContainsGenericParameters && !source.ContainsGenericParameters {
-            let conversion = ClassifyImplicit(target, source)
-            return conversion != ImplicitConversionKind.None && conversion != ImplicitConversionKind.UserDefinedImplicit
-        }
-        if target.IsGenericType {
-            let definition = target.GetGenericTypeDefinition()
-            if FindClosedGeneric(source, definition) != nil || ClrTypeUtilities.SafeGetInterfaces(source).Any(
-                (interfaceType Type) -> interfaceType.IsGenericType &&
-                    MatchesOpenDefinition(interfaceType.GetGenericTypeDefinition(), definition, definition.FullName)
+        let typeParameters = method.GetGenericArguments()
+        var remainingParameters = parameters.Skip(1).Take(argumentCount ?? int32.MaxValue).ToArray()
+        if argumentNames != nil {
+            if !TryBuildNamedArgumentReordering(method, argumentNames.Count, argumentNames, out var mapping) &&
+                !TryBuildNamedArgumentReordering(
+                method,
+                argumentNames.Count,
+                argumentNames,
+                isExpanded: true,
+                out mapping
             ) {
+                remainingParameters = Array.Empty[ParameterInfo]()
+            } else if mapping != nil {
+                remainingParameters = mapping.Skip(1).Select((index int32) -> parameters[index]).ToArray()
+            }
+        }
+        let argumentDependent = typeParameters
+            .Where(
+            (typeParameter Type) -> remainingParameters.Any(
+                (parameter ParameterInfo) -> MentionsGenericParameter(parameter.ParameterType, typeParameter)
+            )
+        )
+            .Select((typeParameter Type) -> typeParameter.Name)
+            .ToHashSet(StringComparer.Ordinal)
+        if typeParameters.Any(
+            (typeParameter Type) -> !bounds.ContainsKey(typeParameter.Name) && !argumentDependent.Contains(
+                typeParameter.Name
+            )
+        ) {
+            return false
+        }
+        for carrier in GetReceiverInferenceCarriers(receiverClr) {
+            if ExtensionReceiverCarrierMayApply(method, receiver, parameterType, carrier, bounds, argumentDependent) {
                 return true
             }
         }
-        let underlying = NullableLifting.GetValueTypeNullableUnderlyingClr(target)
-        if underlying != nil && source.IsValueType {
-            return MayHaveStandardConversionToOpenReceiver(underlying, source)
+        let operators = List[MethodInfo]()
+        ClrOperatorResolution.CollectOperators(receiverClr, "op_Implicit", operators)
+        ClrOperatorResolution.CollectOperators(
+            NullableLifting.GetValueTypeNullableUnderlyingClr(parameterType) ?? parameterType,
+            "op_Implicit",
+            operators
+        )
+        for conversion in operators {
+            let conversionParameters = conversion.GetParameters()
+            let convertedBounds = Dictionary[string, Type](bounds, StringComparer.Ordinal)
+            if conversionParameters.Length != 1 ||
+                !UnifyForInference(conversionParameters[0].ParameterType, receiverClr, convertedBounds) {
+                continue
+            }
+            if ExtensionReceiverBoundsMayApply(method, receiver, parameterType, convertedBounds, argumentDependent) {
+                return true
+            }
+            for carrier in GetReceiverInferenceCarriers(conversion.ReturnType) {
+                if ExtensionReceiverCarrierMayApply(
+                    method,
+                    receiver,
+                    parameterType,
+                    carrier,
+                    convertedBounds,
+                    argumentDependent
+                ) {
+                    return true
+                }
+            }
         }
-        return target.IsArray && source.IsArray && target.GetArrayRank() == source.GetArrayRank() &&
-            MayHaveStandardConversionToOpenReceiver(target.GetElementType()!!, source.GetElementType()!!)
+        return false
+    }
+
+    private func ExtensionReceiverCarrierMayApply(
+        method MethodInfo,
+        receiver TypeSymbol,
+        parameterType Type,
+        carrier Type,
+        bounds Dictionary[string, Type],
+        argumentDependent HashSet[string]
+    ) bool {
+        let candidateBounds = Dictionary[string, Type](bounds, StringComparer.Ordinal)
+        if UnifyForInference(parameterType, carrier, candidateBounds) &&
+            ExtensionReceiverBoundsMayApply(method, receiver, parameterType, candidateBounds, argumentDependent) {
+            return true
+        }
+        let underlying = NullableLifting.GetValueTypeNullableUnderlyingClr(parameterType)
+        if underlying == nil {
+            return false
+        }
+        let wrappedBounds = Dictionary[string, Type](bounds, StringComparer.Ordinal)
+        return UnifyForInference(underlying, carrier, wrappedBounds) &&
+            ExtensionReceiverBoundsMayApply(method, receiver, parameterType, wrappedBounds, argumentDependent)
+    }
+
+    /// Every possible bound is checked against the closed signature, never
+    /// accepted merely because an open shape or a failed constraint is unknown.
+    private func ExtensionReceiverBoundsMayApply(
+        method MethodInfo,
+        receiver TypeSymbol,
+        parameterType Type,
+        bounds Dictionary[string, Type],
+        argumentDependent HashSet[string]
+    ) bool {
+        let receiverBounds = Dictionary[string, Type](StringComparer.Ordinal)
+        if !UnifyForInference(parameterType, receiver.ClrType, receiverBounds) || receiverBounds.Any(
+            (entry KeyValuePair[string, Type]) -> !argumentDependent.Contains(entry.Key) &&
+                (!bounds.TryGetValue(entry.Key, out var argument) || !ClrTypeUtilities.AreSame(entry.Value, argument))
+        ) {
+            return false
+        }
+        let typeParameters = method.GetGenericArguments()
+        // Close metadata signatures with primitives from their own load context.
+        var contextObject = typeParameters[0]
+        while contextObject.BaseType is {} baseType {
+            contextObject = baseType
+        }
+        let contextBounds = Dictionary[string, Type](StringComparer.Ordinal)
+        for entry in bounds {
+            contextBounds[entry.Key] = ClrTypeUtilities.RemapHostCoreTypeToContext(entry.Value, contextObject) ??
+                entry.Value
+        }
+        if !TryCloseInferredType(parameterType, contextBounds, out var closedReceiver) || closedReceiver == nil {
+            return false
+        }
+        let typeArguments = typeParameters.Select(
+            (parameter Type) -> if contextBounds.TryGetValue(parameter.Name, out var argument) {
+                argument
+            } else {
+                parameter
+            }
+        )
+            .ToArray()
+        if !ClosedExtensionReceiverConversionMayApply(method, receiver, closedReceiver, typeArguments) {
+            return false
+        }
+        if !SatisfiesDeclaredConstraints(typeParameters, typeArguments, default, out var failedIndex, out _) {
+            let failedParameter = typeParameters[failedIndex]
+            for parameter in typeParameters {
+                if !argumentDependent.Contains(parameter.Name) || !contextBounds.TryGetValue(
+                    parameter.Name,
+                    out var argument
+                ) ||
+                    (
+                    parameter.GenericParameterPosition != failedIndex &&
+                        !failedParameter
+                        .GetGenericParameterConstraints().Any(
+                        (constraint Type) -> MentionsGenericParameter(constraint, parameter)
+                    )
+                ) {
+                    continue
+                }
+                for widened in GetReceiverInferenceCarriers(argument) {
+                    if ClrTypeUtilities.AreSame(widened, argument) || !IsInferenceBoundPromotion(widened, argument) {
+                        continue
+                    }
+                    let widenedBounds = Dictionary[string, Type](contextBounds, StringComparer.Ordinal)
+                    widenedBounds[parameter.Name] = widened
+                    if ExtensionReceiverBoundsMayApply(
+                        method,
+                        receiver,
+                        parameterType,
+                        widenedBounds,
+                        argumentDependent
+                    ) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+        return true
+    }
+
+    private func ClosedExtensionReceiverConversionMayApply(
+        method MethodInfo,
+        receiver TypeSymbol,
+        closedReceiver Type,
+        typeArguments[]Type
+    ) bool {
+        var closedMethod MethodInfo
+        try {
+            closedMethod = method.MakeGenericMethod(typeArguments)
+        } catch (ex ArgumentException) {
+            // Live reflection enforces constraints while closing; the caller
+            // checks those separately, including bounds later arguments can fix.
+            return true
+        }
+        return ClassifyImplicit(closedReceiver, receiver.ClrType) != ImplicitConversionKind.None ||
+            Conversion
+            .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(closedMethod.GetParameters()[0]))
+            .IsImplicit
+    }
+
+    private func GetReceiverInferenceCarriers(type Type) List[Type] {
+        let carriers = List[Type]()
+        for var current Type? = type; current != nil; current = current?.BaseType {
+            carriers.Add(current)
+        }
+        carriers.AddRange(ClrTypeUtilities.SafeGetInterfaces(type))
+        let contextObject = ResolveObjectInSameContext(type) ?? typeof(object)
+        if !carriers.Any((candidate Type) -> ClrTypeUtilities.AreSame(candidate, contextObject)) {
+            carriers.Add(contextObject)
+        }
+        for name in NumericWideningLattice.WideningTargets(type.FullName).OrderBy(
+            (name string) -> name,
+            StringComparer.Ordinal
+        ) {
+            let widened = type.Assembly.GetType(name) ?? Type.GetType(name)
+            if widened != nil {
+                carriers.Add(widened)
+            }
+        }
+        return carriers
     }
 
     /// Partial method type inference for deferred arrow-lambda arguments

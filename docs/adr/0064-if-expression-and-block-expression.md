@@ -317,10 +317,14 @@ applicable source or imported extension.
 Imported extension receivers use the CLR overload resolver's existing input
 inference, constraint checks and implicit conversions, including generic
 struct receivers and numeric widening. Unknown symbolic receivers and bounds
-that supplied arguments can complete or widen remain conservative, but an
-incomplete generic receiver must still have a possible standard conversion
-or a single implicit operator between compatible outer shapes. Inferring
-an element type cannot turn an `int32` receiver into a collection.
+that supplied arguments can complete or widen remain conservative. Possible
+bounds are recovered from the receiver, its hierarchy and implicit operators;
+each possibility is checked by the method constraint checker and the ordinary
+conversion classifier against its closed imported receiver parameter. Only bounds
+mentioned by supplied argument slots may change. This preserves fixed generic
+arguments and variance, and lets structural conversions such as tuple-element
+widening use the inferred substitutions rather than an open CLR signature.
+Inferring an element type cannot turn an `int32` receiver into a collection.
 Explicit generic
 calls keep the narrowed binding (`Nullable<T>` declares no generic methods).
 Only when none can is the member bound against the storage read. The member

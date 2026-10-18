@@ -395,6 +395,103 @@ Console.WriteLine("${ternary(7)} ${expression(7)} ${statement(7)} ${named(7)} ${
         Assert.Equal("7 7 7 7 0 0 0 0" + Environment.NewLine, result.Output)
     }
 
+    @Theory
+    @InlineData("U")
+    @InlineData("T")
+    func Unrepairable_Receiver_Constraints_Do_Not_Block_Storage(fallbackType string) {
+        using let fixture = CSharpFixture(
+            "namespace Fixture4986 { public static class Extensions { public static int GetValueOrDefault<T,U>(" +
+                "this System.Collections.Generic.KeyValuePair<T,U> value, " +
+                fallbackType +
+                " fallback) where T : class => 99; } }"
+        )
+        let result = CompileAndRun(`import System
+import System.Collections.Generic
+import Fixture4986
+func ternary(n KeyValuePair[int32, int32]?) int32 -> n != nil ? n.GetValueOrDefault(default(KeyValuePair[int32, int32])).Value : 0
+func expression(n KeyValuePair[int32, int32]?) int32 -> if n != nil { n.GetValueOrDefault(default(KeyValuePair[int32, int32])).Value } else { 0 }
+func statement(n KeyValuePair[int32, int32]?) int32 {
+    if n != nil { return n.GetValueOrDefault(default(KeyValuePair[int32, int32])).Value }
+    return 0
+}
+let pair = KeyValuePair[int32, int32](1, 7)
+Console.WriteLine("${ternary(pair)} ${expression(pair)} ${statement(pair)} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("7 7 7 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
+    func Inferred_Receiver_Conversions_Use_The_Closed_Symbolic_Parameter() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public static class Extensions {
+        public static (int, int) GetValueOrDefault<T>(this (long, T) value) => (99, 99);
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func direct(n (int32, int32)) int32 -> n.GetValueOrDefault().Item1
+func ternary(n (int32, int32)?) int32 -> n != nil ? n.GetValueOrDefault().Item1 : 0
+func expression(n (int32, int32)?) int32 -> if n != nil { n.GetValueOrDefault().Item1 } else { 0 }
+func statement(n (int32, int32)?) int32 {
+    if n != nil { return n.GetValueOrDefault().Item1 }
+    return 0
+}
+Console.WriteLine("${direct((1, 2))} ${ternary((1, 2))} ${expression((1, 2))} ${statement((1, 2))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99 99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData("int", "string")
+    @InlineData("string", "object")
+    func Invariant_Operator_Output_Arguments_Do_Not_Block_Storage(sourceArgument string, targetArgument string) {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public struct Meter {
+        public int V;
+        public Meter(int value) { V = value; }
+        public static implicit operator System.Collections.Generic.KeyValuePair<string, ` + sourceArgument + `>(Meter value) => default;
+    }
+    public static class Extensions {
+        public static int GetValueOrDefault<T>(this System.Collections.Generic.KeyValuePair<T, ` + targetArgument + `> value, T fallback) => 99;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n Meter?) int32 -> n != nil ? n.GetValueOrDefault(Meter()).V : 0
+func expression(n Meter?) int32 -> if n != nil { n.GetValueOrDefault(Meter()).V } else { 0 }
+func statement(n Meter?) int32 {
+    if n != nil { return n.GetValueOrDefault(Meter()).V }
+    return 0
+}
+Console.WriteLine("${ternary(Meter(7))} ${expression(Meter(7))} ${statement(Meter(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("7 7 7 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
+    func Other_Arguments_Can_Widen_Interface_Bounds_To_Object() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public struct Probe : System.Collections.Generic.IEnumerable<System.ICloneable> {
+        public System.Collections.Generic.IEnumerator<System.ICloneable> GetEnumerator() => throw new System.NotImplementedException();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+    public static class Extensions {
+        public static int GetValueOrDefault<T>(this System.Collections.Generic.IEnumerable<T> value, T fallback) where T : new() => 99;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func direct(n Probe) int32 -> n.GetValueOrDefault(Object())
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Object()) : 0
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Object()) }
+    return 0
+}
+Console.WriteLine("${direct(Probe())} ${ternary(Probe())} ${statement(Probe())} ${ternary(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99 99 99 0 0" + Environment.NewLine, result.Output)
+    }
+
     /// A second argument bind hoisted another `out var`, reporting GS0102.
     @Fact
     func Arguments_Are_Bound_Once() {
