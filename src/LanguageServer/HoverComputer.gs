@@ -157,6 +157,30 @@ async sequence[T]
         if token == nil || token.Kind != SyntaxKind.IdentifierToken {
             return nil
         }
+        // Issue #4989: the imported member the binder bound the token to wins
+        // over the name-and-arity scan and the reflection lookups below, which
+        // can report a same-named member of another type.
+        let boundModel HoverModel? = switch BoundSemantics.GetImportedMember(compilation, token) {
+            case boundMethod is MethodInfo: HoverModel(
+                SymbolDisplay.ToDisplayString(boundMethod, SymbolDisplayFormat.Hover),
+                HoverDocumentationRenderer.Render(AssemblyDocumentationProvider.Resolve(boundMethod)),
+                SemanticLookup.CountSameNamedMethods(boundMethod)
+            )
+            case boundProperty is PropertyInfo: HoverModel(
+                SymbolDisplay.ToDisplayString(boundProperty, SymbolDisplayFormat.Hover),
+                HoverDocumentationRenderer.Render(AssemblyDocumentationProvider.Resolve(boundProperty)),
+                OverloadCount: 1
+            )
+            case boundField is FieldInfo: HoverModel(
+                SymbolDisplay.ToDisplayString(boundField, SymbolDisplayFormat.Hover),
+                HoverDocumentationRenderer.Render(AssemblyDocumentationProvider.Resolve(boundField)),
+                OverloadCount: 1
+            )
+            default: default(HoverModel?)
+        }
+        if boundModel != nil {
+            return boundModel
+        }
         // Issue #891: when the token is the identifier of an invoked call (e.g.
         // the `Single` in `report.Checks.Single(...)`), resolve the actual
         // method the call bound to BEFORE attempting type-name resolution.
@@ -466,6 +490,11 @@ async sequence[T]
         compilation Compilation,
         expression ExpressionSyntax
     ) StructSymbol? {
+        // Issue #4989: the receiver's bound (flow) type is authoritative.
+        let boundType = BoundSemantics.GetExpressionType(compilation, expression)
+        if boundType != nil {
+            return boundType as StructSymbol
+        }
         switch expression {
             case name is NameExpressionSyntax {
                 let symbol = SemanticLookup.ResolveSymbol(compilation, name.IdentifierToken)
@@ -680,6 +709,11 @@ async sequence[T]
         expression ExpressionSyntax,
         out receiver ClrReceiver?
     ) bool {
+        // Issue #4989: a value receiver's bound (flow) type first.
+        if BoundSemantics.GetExpressionType(compilation, expression)?.ClrType is {} boundClrType {
+            receiver = ClrReceiver(boundClrType, StaticMembers: false)
+            return true
+        }
         switch expression {
             case name is NameExpressionSyntax {
                 if TryResolveClrTypeFromSymbol(
@@ -917,7 +951,11 @@ async sequence[T]
             case name is NameExpressionSyntax {
                 let symbol = SemanticLookup.ResolveSymbol(compilation, name.IdentifierToken)
                 if IsValueSymbol(symbol) {
-                    TryResolveClrTypeFromSymbol(symbol, out receiverClrType)
+                    // Issue #4989: the receiver's bound (flow) type first.
+                    receiverClrType = BoundSemantics.GetExpressionType(compilation, name)?.ClrType
+                    if receiverClrType == nil {
+                        TryResolveClrTypeFromSymbol(symbol, out receiverClrType)
+                    }
                     return SemanticLookup.CallReceiverGate.Value
                 }
                 // A bare-name receiver that is not a value is a type-name receiver: a
@@ -2004,7 +2042,10 @@ shared class CompletionComputer {
                     content.SyntaxTree,
                     offset
                 )
-                let receiverType TypeSymbol? = GSharp
+                // Issue #4989: the receiver's bound (flow) type when the binder has
+                // one; a speculative bind otherwise (an incomplete chain).
+                let receiverType TypeSymbol? = BoundSemantics.GetExpressionType(compilation, receiverExpression) ??
+                    GSharp
                     .Core
                     .CodeAnalysis
                     .Binding
@@ -2026,18 +2067,20 @@ shared class CompletionComputer {
         }
         let leftName = cast[NameExpressionSyntax](accessor.LeftPart)
         let receiver = SemanticLookup.ResolveSymbol(compilation, leftName.IdentifierToken)
+        // Issue #4989: a value receiver's bound (flow) type over its declared one.
+        let boundReceiverType TypeSymbol? = BoundSemantics.GetExpressionType(compilation, leftName)
         switch receiver {
             case variable is VariableSymbol {
-                AddInstanceTypeMembers(items, seen, variable.Type)
+                AddInstanceTypeMembers(items, seen, boundReceiverType ?? variable.Type)
             }
             case property is PropertySymbol {
-                AddInstanceTypeMembers(items, seen, property.Type)
+                AddInstanceTypeMembers(items, seen, boundReceiverType ?? property.Type)
             }
             case field is FieldSymbol {
-                AddInstanceTypeMembers(items, seen, field.Type)
+                AddInstanceTypeMembers(items, seen, boundReceiverType ?? field.Type)
             }
             case event is EventSymbol {
-                AddInstanceTypeMembers(items, seen, event.Type)
+                AddInstanceTypeMembers(items, seen, boundReceiverType ?? event.Type)
             }
             case enumSymbol is EnumSymbol {
                 AddEnumMembers(items, seen, enumSymbol)

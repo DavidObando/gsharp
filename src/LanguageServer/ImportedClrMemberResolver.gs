@@ -62,6 +62,11 @@ internal shared class ImportedClrMemberResolver {
         if token == nil || token.Kind != SyntaxKind.IdentifierToken {
             return false
         }
+        // Issue #4989: the member the binder bound the token to, when it has one.
+        member = BoundSemantics.GetImportedMember(compilation, token)
+        if member != nil {
+            return true
+        }
         for context in FindAccessorMemberContexts(tree, token) {
             if !TryResolveClrReceiver(
                 tree,
@@ -116,6 +121,11 @@ internal shared class ImportedClrMemberResolver {
     ) bool {
         receiverType = nil
         staticMembers = false
+        // Issue #4989: a value receiver's bound (flow) type first.
+        receiverType = BoundSemantics.GetExpressionType(compilation, expression)?.ClrType
+        if receiverType != nil {
+            return true
+        }
         switch expression {
             case name is NameExpressionSyntax {
                 let nameSymbol = SemanticLookup.ResolveSymbol(compilation, name.IdentifierToken)
