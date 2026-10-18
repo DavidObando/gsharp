@@ -69,6 +69,11 @@ speculatively with brace bodies skimmed, so an initializer's own if-expression
 braces cannot be mistaken for the outer branch. Tokens, position and diagnostics
 are restored after classification.
 
+Promoting a trailing `if let` does not restrict its initializer to binary
+expressions: it uses the regular assignment/coalescing/conditional grammar.
+The expression form still reserves a top-level `&&` for its optional guard
+(ADR-0151), with nested expression contexts resetting that delimiter.
+
 ### 2. `switch` is decided by its arm shape
 
 At the start of any statement (every block, not only value blocks), `switch` is the
@@ -167,8 +172,10 @@ body whose value may be void — there is no value to produce, so:
   value runs no result. Definite assignment and narrowing propagate dispatch
   through pattern-failure and guard-failure paths, preserving side effects of
   evaluated guards. The unmatched state joins result states only when there
-  is no unguarded default or discard arm. A guarded discard always evaluates
-  its guard but can skip its result. As in emission, `default` is considered
+  is no unguarded irrefutable arm. Shared pattern coverage composes discard
+  coverage through `and`, `or` (including comma arms) and `not`; unknown atoms
+  stay unknown. A guard remains a separate condition even for an irrefutable
+  pattern: it always runs but can skip its result. As in emission, `default` is considered
   after all other patterns, regardless of its textual position. Callable-state
   collection joins alternative paths rather than visiting them in sequence.
   This preserves skipped-operand states for short-circuit expressions and

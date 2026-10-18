@@ -12,11 +12,17 @@ import System.Linq
 import System.Runtime.CompilerServices
 
 open partial class Parser {
-    private func ParseExpression() ExpressionSyntax {
+    private func ParseExpression(stopAtTopLevelLogicalAnd bool = false) ExpressionSyntax {
         // Recursion safety: ParseAssignmentExpression (the immediate delegate)
         // carries the issue #1602 recursion-depth guard for the whole
         // expression pipeline.
-        return ParseAssignmentExpression()
+        let savedStopAtIfLetGuard = stopAtIfLetGuard
+        stopAtIfLetGuard = stopAtTopLevelLogicalAnd
+        try {
+            return ParseAssignmentExpression()
+        } finally {
+            stopAtIfLetGuard = savedStopAtIfLetGuard
+        }
     }
 
     // Issue #1602: depth-guarded wrapper — see MaxRecursionDepth. Covers every
@@ -441,6 +447,9 @@ open partial class Parser {
             left = ParsePostfixChain(left)
         }
         while true {
+            if stopAtIfLetGuard && Current.Kind == SyntaxKind.AmpersandAmpersandToken {
+                break
+            }
             // ADR-0122 / issue #1014: a `*` that begins a new source line is a
             // pointer-dereference statement (`*p = v` / `*p`), not a
             // continuation of the previous expression as multiplication. G#

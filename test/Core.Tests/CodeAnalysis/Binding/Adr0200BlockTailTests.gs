@@ -535,25 +535,33 @@ Good(2, out r)
 Console.WriteLine(r)`, "20\n")
     }
 
-    @Fact
-    func VoidSwitchWildcard_AssignsOnlyWhenUnguarded() {
+    @Theory
+    @InlineData("_")
+    @InlineData("1, _")
+    @InlineData("1 or _")
+    @InlineData("_ and _")
+    @InlineData("not not _")
+    func VoidSwitchWildcard_AssignsOnlyWhenUnguarded(pattern string) {
         AssertOutput(`import System
 func Set(out a int32) { a = 1 }
 func Good(x int32, out a int32) {
-    switch x { case _: Set(out a) }
+    switch x { case ` + pattern + `: Set(out a) }
 }
 var r int32
 Good(2, out r)
 Console.WriteLine(r)`, "1\n")
         let guarded = EmittedOracle.Evaluate(`func Set(out a int32) { a = 1 }
 func Bad(x int32, out a int32) {
-    switch x { case _ when x > 0: Set(out a) }
+    switch x { case ` + pattern + ` when x > 0: Set(out a) }
 }`)
         Assert.Contains(guarded.Diagnostics, (d Diagnostic) -> d.Id == "GS0238")
     }
 
-    @Fact
-    func VoidSwitchWildcard_ReplacesCallableStateOnlyWhenUnguarded() {
+    @Theory
+    @InlineData("_")
+    @InlineData("1, _")
+    @InlineData("1 or _")
+    func VoidSwitchWildcard_ReplacesCallableStateOnlyWhenUnguarded(pattern string) {
         // The goto analysis walks the whole finally body. The no-op call
         // keeps the switch void instead of yielding the assignment's value.
         AssertOutput(`import System
@@ -565,7 +573,7 @@ func Run(x int32) {
         let mutate = func() { text = nil }
         let noop = func() { }
         var action (() -> void) = mutate
-        switch x { case _: { action = noop noop() } }
+        switch x { case ` + pattern + `: { action = noop noop() } }
         action()
     }
 Done:
@@ -581,7 +589,7 @@ func Run(x int32) {
         let mutate = func() { text = nil }
         let noop = func() { }
         var action (() -> void) = mutate
-        switch x { case _ when x < 0: { action = noop noop() } }
+        switch x { case ` + pattern + ` when x < 0: { action = noop noop() } }
         action()
     }
 Done:
@@ -635,17 +643,20 @@ Run(() -> { {
 ` + body.ToString() + "42 } })", "func 42\n")
     }
 
-    @Fact
-    func VoidSwitchGuardAssignments_ReachTheUnmatchedPath() {
+    @Theory
+    @InlineData("_")
+    @InlineData("1, _")
+    @InlineData("1 or _")
+    func VoidSwitchGuardAssignments_ReachTheUnmatchedPath(pattern string) {
         AssertOutput(`import System
 func Set(out a int32) { a = 1 }
 func F(x int32, out a int32) {
-    switch x { case _ when { Set(out a) false }: Console.WriteLine("unused") }
+    switch x { case ` + pattern + ` when { Set(out a) false }: Console.WriteLine("unused") }
 }
 func G(x int32, out a int32) {
     switch x {
     default: Console.WriteLine("default")
-    case _ when { Set(out a) false }: Console.WriteLine("unused")
+    case ` + pattern + ` when { Set(out a) false }: Console.WriteLine("unused")
     }
 }
 var a int32
@@ -744,6 +755,35 @@ func Run(a Action) { a() Console.WriteLine("action") }
 let c = true
 let s string? = "value"
 Run(() -> { if let x = ` + initializer + " { 42 } else { 0 } })", "func 42\n")
+    }
+
+    @Theory
+    @InlineData("_ and 1")
+    @InlineData("1 or _ when x > 0")
+    func CompositeWildcardCoverage_KeepsConditionalArmsConditional(arm string) {
+        let result = EmittedOracle.Evaluate(`func Set(out a int32) { a = 1 }
+func Bad(x int32, out a int32) {
+   switch x { case ` + arm + `: Set(out a) }
+}`)
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0238")
+    }
+
+    @Theory
+    @InlineData("c ? s : nil")
+    @InlineData("(c ? s : nil)")
+    @InlineData("slot = c ? s : nil")
+    func TrailingIfLetCompleteInitializerGrammar_PreservesVoidBranches(initializer string) {
+        AssertOutput(`import System
+func Run(c bool) {
+   let s string? = "value"
+   var slot string? = nil
+   let f = () -> {
+       if let x = ` + initializer + ` { Console.WriteLine(x) } else { Console.WriteLine("none") }
+   }
+   f()
+}
+Run(true)
+Run(false)`, "value\nnone\n")
     }
 
     // Value position keeps its rules: GS0276, GS0277, GS0176, and GS0124 for a

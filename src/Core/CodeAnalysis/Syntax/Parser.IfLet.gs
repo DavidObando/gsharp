@@ -87,22 +87,10 @@ open partial class Parser {
 
     /// ADR-0151: parses an `if let` EXPRESSION binding initializer, which
     /// stops before a top-level `&&` so the delimiter can start
-    /// the optional guard. The binary loop is entered at the logical-and
-    /// precedence tier (which also terminates at a top-level `||`, a
-    /// shape that could never be a nullable initializer anyway), while the
-    /// right-associative `??` tail — the one realistic nullable
-    /// initializer that sits below that tier — is still accepted. A logical
-    /// operator that genuinely belongs to the initializer is written
-    /// parenthesized.
-    private func ParseIfLetGuardedInitializer() ExpressionSyntax {
-        let left = ParseBinaryExpression(SyntaxKind.AmpersandAmpersandToken.GetBinaryOperatorPrecedence())
-        if Current.Kind == SyntaxKind.QuestionQuestionToken {
-            let operatorToken = NextToken()
-            let right = ParseIfLetGuardedInitializer()
-            return BinaryExpressionSyntax(syntaxTree, left, operatorToken, right)
-        }
-        return left
-    }
+    /// the optional guard. Reuse the complete expression grammar, including
+    /// assignment, coalescing and conditional expressions. Nested expression
+    /// contexts reset the delimiter; the false arm of a conditional retains it.
+    private func ParseIfLetGuardedInitializer() ExpressionSyntax -> ParseExpression(stopAtTopLevelLogicalAnd: true)
 
     private func ParseOptionalTypeClauseBeforeEquals() TypeClauseSyntax? {
         // A binding clause is always followed by `=`; if we see `=` directly

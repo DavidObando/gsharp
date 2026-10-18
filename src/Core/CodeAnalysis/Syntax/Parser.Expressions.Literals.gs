@@ -669,7 +669,7 @@ open partial class Parser {
     private func ParseConditionalTail(condition ExpressionSyntax) ExpressionSyntax {
         let questionToken = NextToken()
         let whenTrueMod SyntaxToken? = TryConsumeInnerRefModifier()
-        let whenTrue = ParseAssignmentExpression()
+        let whenTrue = ParseExpression()
         let colonToken = MatchToken(SyntaxKind.ColonToken)
         let whenFalseMod SyntaxToken? = TryConsumeInnerRefModifier()
         let whenFalse = ParseAssignmentExpression()

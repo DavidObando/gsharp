@@ -133,6 +133,18 @@ open class Adr0200BlockTailParserTests {
         Assert.Equal(41, Walk(tree.Root).OfType[IfLetExpressionSyntax]().Count())
     }
 
+    @Fact
+    func ConditionalIfLetInitializer_PreservesTheOuterGuardDelimiter() {
+        let tree = Parse(`func F(c bool, a bool, b bool, flag bool) bool {
+    return if let x = c ? a && b : nil && flag { x } else { false }
+}`)
+        let expression = Walk(tree.Root).OfType[IfLetExpressionSyntax]().Single()
+        let initializer = Assert.IsType[ConditionalExpressionSyntax](expression.Bindings[0].Initializer)
+        let whenTrue = Assert.IsType[BinaryExpressionSyntax](initializer.WhenTrue)
+        Assert.Equal(SyntaxKind.AmpersandAmpersandToken, whenTrue.OperatorToken.Kind)
+        Assert.Equal("flag", Assert.IsType[NameExpressionSyntax](expression.Guard).IdentifierToken.Text)
+    }
+
     // A long `-> { … }.ToString()` is still one continued expression: the
     // continuation is decided at the real closing brace, not within a capped
     // lookahead.
