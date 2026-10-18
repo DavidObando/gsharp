@@ -218,7 +218,9 @@ that are not duplicated into their records and remain covered by uniqueness,
 reference, and ownership checks. File roles are closed to `compiled`, `active`,
 `test`, `ignored`, `native`, and `embed`, with exact native/embed flag
 agreement; `compiled` role must exactly match membership in the owning
-package's `compiledFileIds`. Every serialized syntax node must belong to a compiled file, and
+package's `compiledFileIds`. Compiled sources selected by `go:embed` retain
+the `compiled` role and are also linked by embed records. Every serialized
+syntax node must belong to a compiled file, and
 every node-bearing file must form one parent-linked `*ast.File` tree without
 detached nodes or cycles. Incomplete artifacts may omit trees; complete
 artifacts require one for every compiled file. Validation does not authenticate

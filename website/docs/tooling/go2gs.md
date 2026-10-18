@@ -155,7 +155,8 @@ instead enforces their uniqueness, references, and ownership. Schema-v1 file
 roles are limited to `compiled`, `active`, `test`,
 `ignored`, `native`, and `embed`, with exact native/embed flag agreement;
 `compiled` role must exactly match membership in the owning package's
-`compiledFileIds`.
+`compiledFileIds`. Compiled sources selected by `go:embed` retain the
+`compiled` role and are also linked by embed records.
 Serialized syntax nodes must belong to compiled files, and each node-bearing
 file must be one parent-linked `*ast.File` tree without detached nodes or
 cycles. Incomplete artifacts may omit trees; complete artifacts require one for

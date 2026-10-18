@@ -362,7 +362,8 @@ Before moving an application to a different compiler version, pin the intended S
   rejects unknown file roles, native/embed role-flag disagreement, mismatches
   between `compiled` role and owning-package `compiledFileIds`,
   noncompiled-file syntax trees, detached nodes, parent cycles, and complete
-  artifacts without a loaded main-module package/source ownership graph. Each
+  artifacts without a loaded main-module package/source ownership graph.
+  Self-embedded sources retain their compiled roles and embed links. Each
   node-bearing file must be one `*ast.File`-rooted tree. Blocker IDs are indexed
   during construction so bounded deduplication remains linear. These checks reuse
   producer contracts and establish internal consistency, not artifact

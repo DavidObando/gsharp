@@ -4837,6 +4837,41 @@ func TestValidateAnalysisRejectsInvalidFileRolesAndNodeTrees(t *testing.T) {
 	}
 }
 
+func TestAnalyzeCompiledFileCanAlsoBeEmbedded(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/selfembed\n\ngo 1.27\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source := "package selfembed\nimport _ \"embed\"\n//go:embed source.go\nvar Source string\n"
+	if err := os.WriteFile(filepath.Join(root, "source.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("self-embedded source did not load: complete=%v err=%v", complete, err)
+	}
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatalf("self-embedded compiled file has inconsistent metadata: %v", err)
+	}
+	found := false
+	for _, file := range analysis.Files {
+		if file.Path == "source://source.go" {
+			found = true
+			if file.Role != "compiled" || file.Native || file.Embed {
+				t.Fatalf("self-embedded source lost its compiled role: %#v", file)
+			}
+			if !slices.ContainsFunc(analysis.Embeds, func(embed EmbedRecord) bool {
+				return embed.FileID == file.ID
+			}) {
+				t.Fatalf("compiled file %q lost its embed relationship", file.ID)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("self-embedded source file missing")
+	}
+}
+
 func TestValidateAnalysisAllowsMinimalLoadedEmptyPackage(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/empty\n\ngo 1.27\n"), 0o644); err != nil {

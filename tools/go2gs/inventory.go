@@ -69,7 +69,7 @@ type inventoryBuilder struct {
 }
 
 func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile Profile) *inventoryBuilder {
-	builder := &inventoryBuilder{
+	return &inventoryBuilder{
 		analysis: analysis, sourceRoot: sourceRoot, goroot: goroot, profile: profile,
 		semanticProfileID: semanticProfileIdentity(analysis.Profile, analysis.Toolchain),
 		packageIDs:        map[*packages.Package]string{}, packageModuleIDs: map[*packages.Package]string{},
@@ -88,7 +88,6 @@ func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile 
 		maxRecords: profile.Limits.MaxRecords, records: analysisRecordCount(analysis),
 		ctx: context.Background(),
 	}
-	return builder
 }
 
 type objectRef struct {
@@ -986,6 +985,11 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 		}
 		role, reason := "active", ""
 		switch {
+		case compiled[path]:
+			role = "compiled"
+			if strings.HasSuffix(path, "_test.go") {
+				reason = "selected test source compiled for this package variant"
+			}
 		case embed[path]:
 			role, reason = "embed", "selected by go:embed"
 		case contains(pkg.OtherFiles, path):
@@ -1002,11 +1006,6 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 			} else {
 				role, reason = "ignored", "excluded by current build constraints or file naming"
 			}
-		case compiled[path]:
-			role = "compiled"
-			if strings.HasSuffix(path, "_test.go") {
-				reason = "selected test source compiled for this package variant"
-			}
 		case strings.HasSuffix(path, "_test.go"):
 			role, reason = "test", "test source not compiled for this package variant"
 		case active[path]:
@@ -1015,7 +1014,7 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 			role, reason = "input", "reported by go/packages"
 		}
 		key := packageInputKey(pkg)
-		if !contains(pkg.GoFiles, path) &&
+		if !compiled[path] && !contains(pkg.GoFiles, path) &&
 			!contains(pkg.IgnoredFiles, path) && !contains(pkg.OtherFiles, path) && !contains(pkg.EmbedFiles, path) {
 			snapshotRole := b.snapshotRoles[key][path]
 			if contains(b.selectedSnapshotFiles[key], path) {

@@ -1081,7 +1081,7 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 	}
 	for _, embed := range a.Embeds {
 		if file := files[embed.FileID]; file.PackageID != embed.PackageID ||
-			!file.Embed || file.SHA256 != embed.ContentSHA256 {
+			(!file.Embed && file.Role != "compiled") || file.SHA256 != embed.ContentSHA256 {
 			return fmt.Errorf("embed %q package/file ownership is inconsistent", embed.ID)
 		}
 	}

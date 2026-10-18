@@ -165,37 +165,62 @@ func TestBlockerDeduplicationMaintainsIDIndex(t *testing.T) {
 	builder.block("seed", "seed", nil, nil)
 	for index := 0; index < 2048; index++ {
 		builder.block("indexed", fmt.Sprintf("blocker-%04d", index), nil, nil)
+		builder.block("indexed", fmt.Sprintf("blocker-%04d", index), nil, nil)
 	}
-	if len(builder.seenBlockers) != len(analysis.Blockers) || len(analysis.Blockers) != 2049 {
+	if builder.err != nil || builder.records != 2049 ||
+		len(builder.seenBlockers) != len(analysis.Blockers) || len(analysis.Blockers) != 2049 {
 		t.Fatalf("blocker ID index is inconsistent: index=%d records=%d",
 			len(builder.seenBlockers), len(analysis.Blockers))
 	}
+	for _, blocker := range analysis.Blockers {
+		if !builder.seenBlockers[blocker.ID] {
+			t.Fatalf("published blocker %q is absent from the ID index", blocker.ID)
+		}
+	}
 }
 
-func TestBlockerDeduplicationOnlyScansPublishedRecordsToSeedIndex(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "inventory.go", nil, 0)
-	if err != nil {
-		t.Fatal(err)
+func TestBlockerDeduplicationPreservesRecordLimit(t *testing.T) {
+	profile := testProfile()
+	profile.Limits.MaxRecords = 1
+	analysis := Analysis{Blockers: []BlockerRecord{}}
+	builder := newInventoryBuilder(&analysis, "", "", profile)
+	builder.block("limit", "first", nil, nil)
+	builder.block("limit", "first", nil, nil)
+	if builder.err != nil || builder.records != 1 || len(analysis.Blockers) != 1 {
+		t.Fatalf("duplicate consumed record budget: records=%d err=%v", builder.records, builder.err)
 	}
-	for _, declaration := range file.Decls {
-		function, ok := declaration.(*ast.FuncDecl)
-		if !ok || function.Name.Name != "addBlocker" {
-			continue
-		}
-		scans := 0
-		ast.Inspect(function.Body, func(node ast.Node) bool {
-			statement, ok := node.(*ast.RangeStmt)
-			if ok && containsBlockersSelector(statement.X) {
-				scans++
+	builder.block("limit", "second", nil, nil)
+	if builder.err == nil || !strings.Contains(builder.err.Error(), "record count exceeds limit") {
+		t.Fatalf("distinct blocker did not enforce record limit: %v", builder.err)
+	}
+	if builder.records != 1 || len(analysis.Blockers) != 1 || len(builder.seenBlockers) != 1 {
+		t.Fatalf("rejected blocker changed published records or ID index: records=%d blockers=%d index=%d",
+			builder.records, len(analysis.Blockers), len(builder.seenBlockers))
+	}
+}
+
+func BenchmarkBlockerDeduplication(b *testing.B) {
+	for _, count := range []int{1024, 16384} {
+		b.Run(fmt.Sprintf("records-%d", count), func(b *testing.B) {
+			profile := testProfile()
+			messages := make([]string, count)
+			for index := range messages {
+				messages[index] = fmt.Sprintf("blocker-%05d", index)
 			}
-			return true
+			b.ResetTimer()
+			for iteration := 0; iteration < b.N; iteration++ {
+				analysis := Analysis{Blockers: []BlockerRecord{}}
+				builder := newInventoryBuilder(&analysis, "", "", profile)
+				for _, message := range messages {
+					builder.block("benchmark", message, nil, nil)
+					builder.block("benchmark", message, nil, nil)
+				}
+				if builder.err != nil || len(analysis.Blockers) != count {
+					b.Fatalf("blocker construction failed: count=%d err=%v", len(analysis.Blockers), builder.err)
+				}
+			}
 		})
-		if scans != 1 {
-			t.Fatalf("addBlocker published-record scans = %d, want one index seed scan", scans)
-		}
-		return
 	}
-	t.Fatal("addBlocker function not found")
 }
 
 func TestRecordedMessagePathRedactionIsComponentAware(t *testing.T) {
