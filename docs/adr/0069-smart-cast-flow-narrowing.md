@@ -562,3 +562,41 @@ class Job {
     }
 }
 ```
+
+## Addendum — issue #4989 (assignment narrowing and joins never pick an assigned class)
+
+### Rule
+
+Assignment narrowing (issue #1123) proves one fact: the variable is not nil.
+The narrowed type is the variable's declared type with its nullable layer
+removed. It is never the static type of the assigned value. After
+`var store IStore? = nil` and `store = MacStore()`, `store` reads as
+`IStore`, so `store.Name()` needs no `!!` and `store.MacOnly()` reports
+GS0159.
+
+At a merge, a narrowing survives only when every path that reaches the merge
+proves it, and proves the same type. This holds for every merge the binder
+models: `if` / `else if` / `else` chains, `switch` statement arms and
+expression arms, loop back-edges together with `break` and `continue`,
+`try` / `catch` / `finally`, the `&&`, `||` and `??` operators, `guard`
+and other early exits, `goto` targets, and the branches of an `if`
+expression or `?:`. When the paths disagree, the variable reads at its
+declared type, with the nullability that every path proves. The only
+supertype a join produces is one of the incoming narrowed types to which all
+the others convert, which the `goto`-target join uses. The binder never
+computes a least common supertype of two unrelated narrowed types.
+
+`if let`, `guard let` and `while let` bind the initializer's flow type with
+one nullable layer stripped (`IfLetBindingSupport.BindBindingClause`, the
+routine all three forms share). Because a flow type follows the rule above,
+`guard let s = store` binds `s` at `IStore`, whichever implementation was
+assigned. Pattern bindings (`x is IStore s`) bind the pattern's type.
+
+### Tooling
+
+The language server does not recompute any of this. Hover, go-to-definition,
+references, signature help, semantic tokens and member completion read the
+symbol and the receiver type from the bound tree through one accessor
+(`BoundSemantics` in `src/LanguageServer`), which is backed by the ADR-0169
+`SemanticModel`. The language server's syntactic lookups run only when the
+binder has no answer, such as incomplete code.

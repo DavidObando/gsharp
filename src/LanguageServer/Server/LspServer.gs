@@ -1519,16 +1519,26 @@ class LspServer {
             return Array.Empty[Location]()
         }
         let symbol = SemanticLookup.ResolveSymbol(compilation, token, ct)
-        let typeSymbol TypeSymbol? = switch symbol {
+        // Issue #4989: the expression's bound (flow) type over the symbol's declared one.
+        let typeSymbol TypeSymbol? = BoundSemantics.GetExpressionType(compilation, token.Parent as ExpressionSyntax) ??
+            switch symbol {
             case ps is ParameterSymbol: ps.Type
             case vs is VariableSymbol: vs.Type
             case fs is FunctionSymbol: fs.Type
             default: default(TypeSymbol?)
         }
-        if typeSymbol == nil {
+        // The type's declaration is the target, so a nullable or platform
+        // wrapper (`Result?` from `c?.Make()`, a `Result?` local) is looked
+        // through to the declared type.
+        let navigationType TypeSymbol? = switch typeSymbol {
+            case nullable is NullableTypeSymbol: nullable.UnderlyingType
+            case platform is PlatformTypeSymbol: platform.UnderlyingType
+            default: typeSymbol
+        }
+        if navigationType == nil {
             return Array.Empty[Location]()
         }
-        let firstRef SyntaxToken? = SemanticLookup.FindReferences(compilation, typeSymbol, ct).FirstOrDefault()
+        let firstRef SyntaxToken? = SemanticLookup.FindReferences(compilation, navigationType, ct).FirstOrDefault()
         if firstRef == nil {
             return Array.Empty[Location]()
         }
