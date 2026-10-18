@@ -170,6 +170,15 @@ class GSharpTests(CommentOnlyCase):
             with self.subTest(gap=gap):
                 self.assertFails("a.gs", base, base.replace("\nfunc", "\n" + gap + "func"), "directive comment changed")
 
+    def test_rewording_a_block_with_the_same_text_as_an_attached_one_passes(self) -> None:
+        # Only the second block is attached to F; the first floats.
+        base = "/// Same.\n\n/// Same.\nfunc F() {}\n"
+        self.assertPasses("a.gs", base, base.replace("/// Same.\n\n", "/// Other.\n\n", 1))
+
+    def test_doc_comment_that_loses_all_content_fails(self) -> None:
+        # The compiler parses `@returns` to a model and an empty block to none.
+        self.assertFails("a.gs", "/// @returns\nfunc F() {}\n", "///\nfunc F() {}\n", "directive comment changed")
+
     def test_trailing_doc_comment_change_fails(self) -> None:
         base = "func F() {}\n"
         tagged = base + "/// @unknown-tag content\n"

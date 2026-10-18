@@ -215,10 +215,11 @@ class Doc:
     line: int
     target: int
     attached: bool
+    model: bool
     skeleton: str
 
-    def key(self) -> tuple[int, bool, str]:
-        return (self.target, self.attached, self.skeleton)
+    def key(self) -> tuple[int, bool, bool, str]:
+        return (self.target, self.attached, self.model, self.skeleton)
 
 
 def _skeleton(xml: str) -> str:
@@ -240,7 +241,8 @@ def gs_docs(entries: list[dict], tokens: list[Token]) -> list[Doc]:
     for entry in entries:
         attached = entry["declaration"] >= 0
         anchor = entry["declaration"] if attached else entry["end"]
-        docs.append(Doc(entry["line"], bisect.bisect_left(positions, anchor), attached, _skeleton(entry["xml"])))
+        target = bisect.bisect_left(positions, anchor)
+        docs.append(Doc(entry["line"], target, attached, entry["model"], _skeleton(entry["xml"])))
     return docs
 
 
@@ -254,7 +256,8 @@ def compare_docs(base: list[Doc], head: list[Doc]) -> str | None:
             if d is None:
                 return "(no doc comment)"
             where = "documents" if d.attached else "floats before"
-            return f"line {d.line}, {where} token {d.target}: {d.skeleton}"
+            content = d.skeleton if d.model else "(no documentation)"
+            return f"line {d.line}, {where} token {d.target}: {content}"
         return f"{DIRECTIVE_CHANGED} (a /// doc comment):\n      base: {show(b)}\n      head: {show(h)}"
     return None
 

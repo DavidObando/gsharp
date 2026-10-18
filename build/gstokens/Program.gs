@@ -6,11 +6,12 @@
 // Output: a JSON array with one object for each file:
 //   {"path": FILE, "errors": [MESSAGE, ...],
 //    "tokens": [[KIND, LINE, TEXT, POSITION], ...],
-//    "docs": [{"line": LINE, "end": POSITION, "declaration": POSITION, "xml": XML}, ...],
+//    "docs": [{"line": LINE, "end": POSITION, "declaration": POSITION, "model": BOOL, "xml": XML}, ...],
 //    "docDiagnostics": [MESSAGE, ...]}
 // The tokens include whitespace and comments. LINE starts at 1. Each doc entry
 // is one `///` block: "declaration" is the start of the declaration that the
-// compiler attaches it to, or -1 if the block is floating; "xml" is the XML
+// compiler attaches it to, or -1 if the block is floating; "model" says if the
+// compiler's parser produced documentation for it; "xml" is the XML
 // documentation that the compiler writes for it. "docDiagnostics" holds what
 // the compiler's DocumentationValidator reports from the syntax tree alone
 // (floating doc comments and unknown tags), without locations.
@@ -65,19 +66,25 @@ for path in args {
             while next < declarations.Count && declarations[next].Span.Start < block.EndPosition {
                 next++
             }
+            // Attach() requires the declaration on the line right after the
+            // block, so two blocks with the same text cannot both match.
             var declaration = -1
-            if next < declarations.Count && attached.TryGetValue(declarations[next], out var text) &&
-                text == block.Text {
+            let adjacent = next < declarations.Count && source.GetLineIndex(
+                declarations[next].Span.Start
+            ) == block.LastLine +
+                1
+            if adjacent && attached.TryGetValue(declarations[next], out var text) && text == block.Text {
                 declaration = declarations[next].Span.Start
             }
+            // A block with no content parses to no model, so the compiler
+            // writes no documentation for the declaration at all.
+            let model = GSharpDocumentationParser.Parse(block.Text)
             entry.WriteStartObject()
             entry.WriteNumber("line", block.FirstLine + 1)
             entry.WriteNumber("end", block.EndPosition)
             entry.WriteNumber("declaration", declaration)
-            entry.WriteString(
-                "xml",
-                DocumentationXmlWriter.WriteXmlFragment(GSharpDocumentationParser.Parse(block.Text))
-            )
+            entry.WriteBoolean("model", model != nil)
+            entry.WriteString("xml", DocumentationXmlWriter.WriteXmlFragment(model))
             entry.WriteEndObject()
         }
         entry.WriteEndArray()
