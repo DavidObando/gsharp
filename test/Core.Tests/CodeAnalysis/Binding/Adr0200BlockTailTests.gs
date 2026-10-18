@@ -696,6 +696,56 @@ Run(() -> { if let s = input {
 ` + body.ToString() + "42 } else { 0 } })", "func 42\n")
     }
 
+    @Theory
+    @InlineData("case _ when flag && { action = noop false }: noop()", "nil", true)
+    @InlineData("case _ when !flag || { action = noop false }: noop()", "nil", true)
+    @InlineData("case 0 and == { action = noop 0 }: noop() default: noop()", "nil", true)
+    @InlineData("case 1 or == { action = noop 0 }: noop() default: noop()", "nil", true)
+    @InlineData("case _ when (token ?? { action = noop \"other\" }) == \"unused\": noop()", "\"present\"", true)
+    @InlineData("case _ when token?.Contains({ action = noop \"unused\" }) ?? false: noop()", "nil", true)
+    @InlineData("case _ when (if flag { action = noop false } else { false }): noop()", "nil", true)
+    @InlineData("case _ when (flag ? { action = noop false } : false): noop()", "nil", true)
+    @InlineData("case _ when (if flag { action = noop false } else { action = noop false }): noop()", "nil", false)
+    func ShortCircuitSwitchPaths_PreserveSkippedCallableTargets(arm string, tokenArgument string, mustReject bool) {
+        let source = `func Run(flag bool, x int32, token string?) int32 {
+    var text string? = nil
+    text = "safe"
+    try { goto Done }
+    finally {
+        let mutate = func() { text = nil }
+        let noop = func() { }
+        var action (() -> void) = mutate
+        switch x {
+` + arm + `
+        }
+        action()
+    }
+Done:
+    return text.Length
+}
+Run(false, 1, ` + tokenArgument + ")"
+        let result = EmittedOracle.Evaluate(source)
+        if mustReject {
+            let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+            Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        } else {
+            Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+            Assert.Null(result.UnhandledException)
+        }
+    }
+
+    @Theory
+    @InlineData("if c { s } else { nil }")
+    @InlineData("(if c { s } else { nil })")
+    func TrailingIfLetInitializerBraces_DoNotChangeTheOverload(initializer string) {
+        AssertOutput(`import System
+func Run(f Func[int32]) { Console.WriteLine("func ${f()}") }
+func Run(a Action) { a() Console.WriteLine("action") }
+let c = true
+let s string? = "value"
+Run(() -> { if let x = ` + initializer + " { 42 } else { 0 } })", "func 42\n")
+    }
+
     // Value position keeps its rules: GS0276, GS0277, GS0176, and GS0124 for a
     // `never` initializer (which crashed the compiler, GS9998, before).
     @Fact

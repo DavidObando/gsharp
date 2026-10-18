@@ -930,69 +930,52 @@ open partial class Parser {
     // yields a value (or, for a void-typed lambda body, a void (Action-like)
     // lambda) instead of being rejected with GS0276/GS0124.
     //
-    // We perform look-ahead only (no token consumption): we walk every link of
-    // the `if`/`else if` chain. For each link we scan forward to its then-block
-    // opening brace (the first `{` at paren/bracket depth zero after the `if`
-    // keyword), then to its matching close brace (tracking brace depth, which
-    // handles nested blocks). After the matching `}` we inspect what follows:
-    //   * not `else`                -> void if-statement (return false);
-    //   * `else if`                 -> continue walking from that inner `if`;
-    //   * plain `else { ... }`      -> scan that final else-block to its own
-    //                                  matching close brace, then require
-    //                                  requirement 2 (tail position) above.
+    // Parse the complete header grammar speculatively, skimming brace bodies
+    // instead of recursively parsing them. Initializers can themselves contain
+    // if expressions and braces; a first-brace scan cannot locate their body.
+    // Restoring tokens, position and diagnostics makes this lookahead only.
     private func LooksLikeIfExpression() bool {
-        // `i` is the offset of the `if` keyword for the current chain link.
-        // Peek(0) is the current token (the leading `if`).
-        var i = 0
-        while true {
-            // Locate this link's then-block opening brace: the first `{` at
-            // paren and bracket depth zero after the `if` keyword at offset i.
-            var j = i + 1
+        let savedPosition = position
+        let savedTokens = tokens
+        let savedDiagnosticCount = Diagnostics.Count
+        skimBraceBodies++
+        try {
+            var statement = ParseStatement()
+            if Current.Kind != SyntaxKind.CloseBraceToken {
+                return false
+            }
             while true {
-                let k = Peek(j).Kind
-                if k == SyntaxKind.EndOfFileToken {
+                var elseClause ElseClauseSyntax? = nil
+                switch statement {
+                    case plainIf is IfStatementSyntax {
+                        if plainIf.ThenStatement is not BlockStatementSyntax {
+                            return false
+                        }
+                        elseClause = plainIf.ElseClause
+                    }
+                    case bindingIf is IfLetStatementSyntax {
+                        if bindingIf.ThenStatement is not BlockStatementSyntax {
+                            return false
+                        }
+                        elseClause = bindingIf.ElseClause
+                    }
+                    default {
+                        return false
+                    }
+                }
+                if elseClause == nil {
                     return false
                 }
-                if k == SyntaxKind.OpenBraceToken {
-                    break
-                }
-                if k == SyntaxKind.OpenParenthesisToken ||
-                    k == SyntaxKind.OpenSquareBracketToken ||
-                    k == SyntaxKind.QuestionOpenBracketToken {
-                    j = SkipBalancedGroup(j)
-                } else {
-                    j++
+                statement = elseClause.ElseStatement
+                if statement is BlockStatementSyntax {
+                    return true
                 }
             }
-            j = SkipBalancedGroup(j)
-            // `j` is now just past this link's matching close brace. Inspect what
-            // follows to decide whether the chain continues or terminates.
-            if Peek(j).Kind != SyntaxKind.ElseKeyword {
-                // No `else`: this link has a path with no value, so the whole
-                // chain is a void if-statement.
-                return false
-            }
-            if Peek(j + 1).Kind == SyntaxKind.IfKeyword {
-                // `else if`: continue walking the chain from the inner `if`.
-                i = j + 1
-                continue
-            }
-            // Plain final `else { ... }`: shape requirement satisfied (every
-            // path yields a value). Issue #2349: also require the POSITION
-            // requirement — this chain must be the last item in its
-            // enclosing block expression, i.e. immediately followed by that
-            // block's closing `}`, or it can never actually be used as a
-            // value and must be a void if-statement instead. Scan the final
-            // else-block to its own matching close brace to find that
-            // position.
-            if Peek(j + 1).Kind != SyntaxKind.OpenBraceToken {
-                return false
-            }
-            let m = SkipBalancedGroup(j + 1)
-            // `m` is now just past the final else-block's matching close brace.
-            // Value-producing only when immediately followed by the
-            // enclosing block expression's own closing brace (tail position).
-            return Peek(m).Kind == SyntaxKind.CloseBraceToken
+        } finally {
+            skimBraceBodies--
+            position = savedPosition
+            tokens = savedTokens
+            Diagnostics.TruncateTo(savedDiagnosticCount)
         }
     }
 

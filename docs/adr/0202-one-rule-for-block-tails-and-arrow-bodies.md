@@ -64,7 +64,10 @@ Anything else is a statement, as before.
 A nested brace or trailing if/if-let chain is classified at its actual matching
 closing braces, without a lookahead-token limit. Its length cannot change the
 lambda's inferred type or whether a postfix/binary continuation belongs to a
-nested brace expression.
+nested brace expression. The if classifier parses the complete header grammar
+speculatively with brace bodies skimmed, so an initializer's own if-expression
+braces cannot be mistaken for the outer branch. Tokens, position and diagnostics
+are restored after classification.
 
 ### 2. `switch` is decided by its arm shape
 
@@ -166,7 +169,11 @@ body whose value may be void — there is no value to produce, so:
   evaluated guards. The unmatched state joins result states only when there
   is no unguarded default or discard arm. A guarded discard always evaluates
   its guard but can skip its result. As in emission, `default` is considered
-  after all other patterns, regardless of its textual position;
+  after all other patterns, regardless of its textual position. Callable-state
+  collection joins alternative paths rather than visiting them in sequence.
+  This preserves skipped-operand states for short-circuit expressions and
+  patterns, including conditional access and property/list subpatterns, while
+  a conditional that replaces a callable on both paths still kills its old target;
 - a bare `default` branch — also as a block's tail, a nested switch-arm result,
   or a tail behind `defer` / `using let` cleanup — has no target type to take,
   so it reports `GS0362` as any targetless `default` does. Validation happens

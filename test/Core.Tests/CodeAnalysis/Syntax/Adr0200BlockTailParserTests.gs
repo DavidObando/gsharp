@@ -119,6 +119,20 @@ open class Adr0200BlockTailParserTests {
         Assert.Equal(41, Walk(tree.Root).OfType[SwitchStatementSyntax]().Count())
     }
 
+    @Fact
+    func NestedIfLetInitializers_ParseInLinearTime() {
+        var initializer = "input"
+        for var i = 0; i < 40; i++ {
+            initializer = "if let value = " + initializer + " { value } else { nil }"
+        }
+        let source = "func f(input string?) { let g = () -> { if let result = " + initializer + " { 1 } else { 0 } } }"
+        let stopwatch = System.Diagnostics.Stopwatch.StartNew()
+        let tree = Parse(source)
+        stopwatch.Stop()
+        Assert.True(stopwatch.ElapsedMilliseconds < 5000, "parse took ${stopwatch.ElapsedMilliseconds} ms")
+        Assert.Equal(41, Walk(tree.Root).OfType[IfLetExpressionSyntax]().Count())
+    }
+
     // A long `-> { … }.ToString()` is still one continued expression: the
     // continuation is decided at the real closing brace, not within a capped
     // lookahead.

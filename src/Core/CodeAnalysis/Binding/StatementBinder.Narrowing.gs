@@ -1738,6 +1738,68 @@ internal partial class StatementBinder {
             base.VisitIndirectCallExpression(node)
         }
 
+        private func VisitPossiblySkipped(visit() -> void) {
+            // A skipped operand cannot erase an earlier callable target.
+            VisitAlternativePaths(() -> { }, visit)
+        }
+
+        private func VisitAlternativePaths(whenTrue() -> void, whenFalse() -> void) {
+            let branchStart = CaptureCallableState()
+            whenTrue()
+            let thenState = CaptureCallableState()
+            RestoreCallableState(branchStart)
+            whenFalse()
+            RestoreCallableState(JoinCallableStates(thenState, CaptureCallableState()))
+        }
+
+        protected open override func VisitBinaryExpression(node BoundBinaryExpression) {
+            VisitExpression(node.Left)
+            if node
+                .Op
+                .Kind is BoundBinaryOperatorKind.LogicalAnd or
+                BoundBinaryOperatorKind.LogicalOr or
+                BoundBinaryOperatorKind.NullCoalesce {
+                VisitPossiblySkipped(() -> VisitExpression(node.Right))
+            } else {
+                VisitExpression(node.Right)
+            }
+        }
+
+        protected open override func VisitNullConditionalAccessExpression(node BoundNullConditionalAccessExpression) {
+            VisitExpression(node.Receiver)
+            VisitPossiblySkipped(() -> VisitExpression(node.WhenNotNull))
+        }
+
+        protected open override func VisitConditionalExpression(node BoundConditionalExpression) {
+            VisitExpression(node.Condition)
+            VisitAlternativePaths(() -> VisitExpression(node.WhenTrue), () -> VisitExpression(node.WhenFalse))
+        }
+
+        protected open override func VisitConditionalAddressExpression(node BoundConditionalAddressExpression) {
+            VisitExpression(node.Condition)
+            VisitAlternativePaths(
+                () -> VisitExpression(node.WhenTrueOperand),
+                () -> VisitExpression(node.WhenFalseOperand)
+            )
+        }
+
+        protected open override func VisitBinaryPattern(node BoundBinaryPattern) {
+            VisitPattern(node.Left)
+            VisitPossiblySkipped(() -> VisitPattern(node.Right))
+        }
+
+        protected open override func VisitPropertyPattern(node BoundPropertyPattern) {
+            for field in node.Fields {
+                VisitPossiblySkipped(() -> VisitPattern(field.Pattern))
+            }
+        }
+
+        protected open override func VisitListPattern(node BoundListPattern) {
+            for element in node.Elements {
+                VisitPossiblySkipped(() -> VisitPattern(element))
+            }
+        }
+
         protected open override func VisitBaseClassCallExpression(node BoundBaseClassCallExpression) {
             AnalyzeCallableArguments(node.Arguments)
             base.VisitBaseClassCallExpression(node)

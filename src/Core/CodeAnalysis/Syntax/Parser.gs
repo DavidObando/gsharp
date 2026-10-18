@@ -92,10 +92,9 @@ open partial class Parser {
 
     // Issue #4963 (ADR-0202): while positive, brace bodies (block expressions,
     // lambda and function-literal blocks) are skipped to their matching brace
-    // instead of parsed. Only the switch-form fallback
-    // (FirstArmPatternEndsInExpressionSeparator) sets it: it needs where the
-    // first arm's pattern and guard end, not their contents, and skipping keeps
-    // a switch nested in a guard from being parsed twice per nesting level.
+    // instead of parsed. The switch-form fallback and trailing-if classifier
+    // need complete header boundaries, not brace-body contents. Skipping keeps
+    // speculative classification from parsing nested bodies twice per level.
     private var skimBraceBodies int32
 
     /// Initializes a new instance of the (cref:Parser) class.
