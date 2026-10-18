@@ -252,6 +252,12 @@ local across an `await`. A nested value field rooted in a class similarly
 captures the class reference, while a nested field rooted in a struct local
 continues to refer to that local's storage.
 
+Before capturing indexer arguments, evaluate and discard the storage receiver's
+address. Null and array-bounds checks therefore precede argument side effects,
+without retaining a managed pointer across suspension. CLR field chains retain
+their addressability after a reference owner is captured, including across REPL
+submissions; receiver emission and spill planning share that decision.
+
 For a storage receiver, a suspending right side is computed into a value
 local inside the statement's nil branch before the write. This prevents
 general await operand spilling from copying the struct receiver (#5012).

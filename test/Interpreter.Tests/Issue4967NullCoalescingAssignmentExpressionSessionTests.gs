@@ -5,6 +5,7 @@
 package GSharp.Interpreter.Tests
 
 import GSharp.Interpreter
+import GSharp.Repl.Engine
 import System
 import System.IO
 import Xunit
@@ -46,6 +47,31 @@ let h = Holder{}
 h.O.Inner.F ??= "nested"
 Console.WriteLine("storage=" + value + "," + (a[0].F ?? "nil") + "," + (h.O.Inner.F ?? "nil"))`
         Assert.Contains("storage=array,array,nested", RunSubmission(source))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func StructReceivers_CrossSubmissionClrField_KeepsItsStorage(valuePosition bool) {
+        using let engine = EmittedSessionEngine()
+        let declaration = engine.Evaluate(`import System.Collections
+import System.Runtime.CompilerServices
+var box = StrongBox[DictionaryEntry](DictionaryEntry("key", nil))`)
+        Assert.False(declaration.HasError, string.Join("; ", declaration.Diagnostics))
+        let assignment = engine.Evaluate(
+            if valuePosition {
+                `(box.Value.Value ??= "v")`
+            } else {
+                `box.Value.Value ??= "v"`
+            }
+        )
+        Assert.False(assignment.HasError, string.Join("; ", assignment.Diagnostics))
+        if valuePosition {
+            Assert.Equal("v", assignment.Value)
+        }
+        let probe = engine.Evaluate("box.Value.Value")
+        Assert.False(probe.HasError, string.Join("; ", probe.Diagnostics))
+        Assert.Equal("v", probe.Value)
     }
 
     shared {

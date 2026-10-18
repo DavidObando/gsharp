@@ -1848,6 +1848,9 @@ field, in both statement and value positions. Reference owners and indices
 are captured before the nil test, including when the right side suspends
 and reassigns those variables; the struct itself is not copied. A struct
 temporary reports `GS0499`, and read-only receivers are rejected as with `=`.
+The receiver's null and bounds checks occur before indexer arguments are
+evaluated. Capturing a reference owner preserves CLR field storage, including
+fields reached through a previous REPL submission.
 An opaque ref-returning receiver is evaluated once through a ref alias; if
 that alias would remain live across an awaited right side, `GS0258` rejects
 the operation instead of re-evaluating the ref-returning call.

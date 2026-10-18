@@ -4503,6 +4503,9 @@ internal class ReflectionMetadataEmitter {
         ) {
             return false
         }
+        if receiver is BoundClrPropertyAccessExpression clrField && IsAddressableClrFieldChain(clrField) {
+            return false
+        }
         return true
     }
 
@@ -4696,6 +4699,25 @@ internal class ReflectionMetadataEmitter {
     }
 
     shared {
+        /// CLR field storage remains addressable after a reference owner is
+        /// captured into a local. Share this decision with receiver emission so
+        /// neither path replaces a stored struct with a spilled copy.
+        internal func IsAddressableClrFieldChain(access BoundClrPropertyAccessExpression) bool {
+            if access.Member is not FieldInfo {
+                return false
+            }
+            if access.Receiver == nil {
+                return access.IsAddressableStaticField
+            }
+            if !IsValueTypeSymbol(access.Receiver.Type) && access.Receiver.Type is not TypeParameterSymbol {
+                return true
+            }
+            if access.Receiver is BoundIndexExpression element {
+                return element.IsArrayBackedElementAccess
+            }
+            return access.Receiver is BoundClrPropertyAccessExpression inner && IsAddressableClrFieldChain(inner)
+        }
+
         private const ModuleInitializerAttributeName string = "System.Runtime.CompilerServices.ModuleInitializerAttribute"
 
         // Portable PDB metadata format version expected by all current readers

@@ -463,6 +463,59 @@ main()`
     }
 
     @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func StructReceivers_InvalidArrayElement_ThrowsBeforeIndexerArguments(valuePosition bool, suspendingArgument bool) {
+        let source = `package Test
+import System
+import System.Threading.Tasks
+var calls = 0
+func key() int32 {
+    calls++
+    return 0
+}
+async func delayedKey() int32 {
+    await Task.Yield()
+    return key()
+}
+async func run() {
+    var a = []ArraySegment[string?]{ArraySegment[string?]([]string?{nil})}
+    try {
+        INVALID_ASSIGN
+    } catch (ex IndexOutOfRangeException) {
+        Console.WriteLine("bounds ${calls}")
+    }
+    VALID_ASSIGN
+    Console.WriteLine("${a[0][0] ?? "nil"} ${calls}")
+}
+run().Wait()`.Replace(
+            "INVALID_ASSIGN",
+            if valuePosition {
+                `let _ = (a[1][KEY()] ??= "lost")`
+            } else {
+                `a[1][KEY()] ??= "lost"`
+            }
+        ).Replace(
+            "VALID_ASSIGN",
+            if valuePosition {
+                `let _ = (a[0][KEY()] ??= "v")`
+            } else {
+                `a[0][KEY()] ??= "v"`
+            }
+        ).Replace(
+            "KEY()",
+            if suspendingArgument {
+                "await delayedKey()"
+            } else {
+                "key()"
+            }
+        )
+        Assert.Equal("bounds 0${Environment.NewLine}v 1${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func StructReceivers_ArrayElementsAndNestedFields_KeepTheirStorage(valuePosition bool) {

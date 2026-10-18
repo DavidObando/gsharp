@@ -112,9 +112,9 @@ class BoundClrPropertyAccessExpression : BoundPropertyReferenceOperationExpressi
         /// (cref:FieldInfo) links. Such a receiver must NOT be spilled to
         /// a temp by duplicating-context lowering: writes through it must reach
         /// the stored global's address, and re-reading a static field / field
-        /// chain has no observable side effect. Never true outside the
-        /// interactive submission gate (only the submission binder fallbacks set
-        /// (cref:IsAddressableStaticField)).
+        /// chain has no observable side effect. A read-only reference local
+        /// also provides a stable owner after receiver capture; field storage
+        /// over that owner must not be replaced by a struct copy.
         /// @param expression The candidate receiver expression.
         /// @returns `true` for an addressable submission field chain.
         func IsAddressableSubmissionFieldChain(expression BoundExpression) bool {
@@ -128,7 +128,8 @@ class BoundClrPropertyAccessExpression : BoundPropertyReferenceOperationExpressi
                 }
                 expression = access.Receiver
             }
-            return false
+            return expression is BoundVariableExpression{Variable: LocalVariableSymbol{IsReadOnly: true}} &&
+                Conversion.IsReferenceLikeTarget(expression.Type)
         }
     }
 }

@@ -624,6 +624,13 @@ internal partial class ExpressionBinder {
                         preStatements,
                         forceCapture: SnapshotsReference(clrIdx.Target)
                     )
+                    // Evaluate storage checks before arguments, without keeping
+                    // the managed pointer alive across a suspending argument.
+                    if !ReceiverTypeIsReference(target.Type) {
+                        preStatements.Add(
+                            BoundExpressionStatement(captureAnchor, BoundAddressOfExpression(captureAnchor, target))
+                        )
+                    }
                     let argsBuilder = ImmutableArray.CreateBuilder[BoundExpression](clrIdx.Arguments.Length)
                     for arg in clrIdx.Arguments {
                         argsBuilder.Add(
