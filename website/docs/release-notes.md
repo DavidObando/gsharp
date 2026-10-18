@@ -578,20 +578,12 @@ Before moving an application to a different compiler version, pin the intended S
 ### Known limitations
 
 Translating the compiler from C# to G# lost some things, by decision
-(owner decision D7). Most items below change only the source form, not what the
-compiler does. The exception is `!!` (see "`!!` density" and the fail-fast
-breaking change above): it is a runtime check, so a violated non-null
-assumption now throws where C#'s compile-time-only `!` carried null onward:
+(owner decision D7). A `!!` assertion is a runtime check (see "`!!` density"
+and the fail-fast breaking change above), so a violated non-null assumption now
+throws where C#'s compile-time-only `!` carried null onward. For the changes
+that `cs2gs` makes to any C# it translates, see
+[What translation changes](./tooling/cs2gs.md#what-translation-changes).
 
-- **Regions.** `#region` blocks are not in the G# source. License headers are
-  preserved.
-- **Warning pragmas.** Only G# analyzer (`GSA*`) and nullable (`CS86xx`)
-  suppressions were carried over, as `@SuppressDiagnostic`. Other
-  `#pragma warning` lines were dropped.
-- **Layout.** Some blank lines inside bodies are gone.
-  - Static members of a type are grouped in a trailing `shared { }` block, so
-    they appear in a different order than in the C# file.
-  - `public`/`sealed` modifiers that G# does not spell are omitted.
 - **`!!` density.** The translated source has many `!!` assertions where the G#
   compiler could not prove that a value is non-null. Reducing them is ongoing
   cleanup.
