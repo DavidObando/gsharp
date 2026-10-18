@@ -14,6 +14,7 @@ import System
 import System.IO
 import System.Linq
 import System.Text
+import System.Threading.Tasks
 import Xunit
 
 /// Issue #4989: the language server reports the member and receiver type the
@@ -199,6 +200,36 @@ open class Issue4989BoundReceiverTests {
         Assert.DoesNotContain("(field)", HoverText(content, EventSource, "Click", 1), StringComparison.Ordinal)
     }
 
+    @Theory
+    @InlineData("Make", 1)
+    @InlineData("maybe", 1)
+    async func TypeDefinition_NullableBoundType_NavigatesToTheDeclaredType(text string, occurrence int32) {
+        let root = Path.Combine(Directory.GetCurrentDirectory(), "issue4989-typedef-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root)
+        try {
+            let gsPath = Path.Combine(root, "TypeDefinition.gs")
+            File.WriteAllText(gsPath, TypeDefinitionSource)
+            let server = GSharp.LanguageServer.Server.LspServer(DocumentContentService(), WorkspaceState())
+            let uri = Assert.IsType[DocumentUri](DocumentUri.FromFileSystemPath(gsPath))
+            await server.DidOpenAsync(
+                DidOpenTextDocumentParams{TextDocument: TextDocumentItem{Uri: uri, Text: TypeDefinitionSource}}
+            )
+            let locations = await server.TypeDefinitionAsync(
+                TypeDefinitionParams{
+                    TextDocument: TextDocumentIdentifier{Uri: uri},
+                    Position: LanguageServerTestHelpers.PositionOf(TypeDefinitionSource, text, occurrence)
+                }
+            )
+            let location = Assert.Single(locations)
+            // `class Result` is on line 2.
+            Assert.Equal(2, location.Range.Start.Line)
+        } finally {
+            try {
+                Directory.Delete(root, recursive: true)
+            } catch { }
+        }
+    }
+
     shared {
         private const GenericInterfaceSource string = `package Repro
 
@@ -226,6 +257,22 @@ class Foo {
         let handler = this.Click
         return handler == nil
     }
+}
+`
+
+        private const TypeDefinitionSource string = `package Repro
+
+class Result {
+}
+
+class C {
+    func Make() Result -> Result()
+}
+
+func Run(c C) bool {
+    let made = c?.Make()
+    let maybe Result? = nil
+    return made == nil && maybe == nil
 }
 `
 

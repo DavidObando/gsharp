@@ -1527,10 +1527,18 @@ class LspServer {
             case fs is FunctionSymbol: fs.Type
             default: default(TypeSymbol?)
         }
-        if typeSymbol == nil {
+        // The type's declaration is the target, so a nullable or platform
+        // wrapper (`Result?` from `c?.Make()`, a `Result?` local) is looked
+        // through to the declared type.
+        let navigationType TypeSymbol? = switch typeSymbol {
+            case nullable is NullableTypeSymbol: nullable.UnderlyingType
+            case platform is PlatformTypeSymbol: platform.UnderlyingType
+            default: typeSymbol
+        }
+        if navigationType == nil {
             return Array.Empty[Location]()
         }
-        let firstRef SyntaxToken? = SemanticLookup.FindReferences(compilation, typeSymbol, ct).FirstOrDefault()
+        let firstRef SyntaxToken? = SemanticLookup.FindReferences(compilation, navigationType, ct).FirstOrDefault()
         if firstRef == nil {
             return Array.Empty[Location]()
         }
