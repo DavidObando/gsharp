@@ -25,17 +25,23 @@ class BoundUnaryExpression : BoundExpression {
     /// expression and the boundary that failed. Only observed for
     /// (cref:BoundUnaryOperatorKind.NullAssertion); every other operator
     /// ignores it.
+    /// @param isNarrowingUnwrap Issue #4986: `true` when this node is the
+    /// `Nullable<T>` unwrap that `ExpressionBinder.BuildNarrowedRead` builds
+    /// for a smart-cast read of value-type nullable storage, rather than a
+    /// user-written `!!`.
     init(
         syntax SyntaxNode?,
         op BoundUnaryOperator,
         operand BoundExpression,
         isChecked bool = false,
-        platformCheckMessage string? = nil
+        platformCheckMessage string? = nil,
+        isNarrowingUnwrap bool = false
     ) : base(syntax) {
         Op = op
         Operand = operand
         IsChecked = isChecked
         PlatformCheckMessage = platformCheckMessage
+        IsNarrowingUnwrap = isNarrowingUnwrap
     }
 
     /// ```xmldoc
@@ -81,6 +87,16 @@ class BoundUnaryExpression : BoundExpression {
     /// `Interpreter.Tests` drives emitted IL — so the emitter is the
     /// only thing that reads this.
     prop PlatformCheckMessage string? {
+        get;
+    }
+
+    /// Gets a value indicating whether this node is the unwrap of a narrowed
+    /// value-type nullable read (issue #4986), whose (cref:Operand) is the
+    /// read of the original `Nullable<T>` storage. Member access binding
+    /// reads it to fall back to `Nullable<T>` members such as `Value` and
+    /// `HasValue` when the narrowed type has no member of that name. Only the
+    /// binder observes it; rewriters that rebuild the node may drop it.
+    prop IsNarrowingUnwrap bool {
         get;
     }
 }

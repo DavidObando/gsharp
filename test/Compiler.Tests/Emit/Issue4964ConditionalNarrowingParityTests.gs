@@ -136,11 +136,11 @@ Console.WriteLine("${viaTernary(1)} ${viaIf(1)} ${viaTernary(nil)} ${viaIf(nil)}
     @InlineData("s string?", "int32", "s != nil", "0", "s.Length", "GS0158:Length")
     @InlineData("o object", "int32", "o is string", "0", "o.Length", "GS0158:Length")
     @InlineData("s string?, t string?", "int32", "s != nil || t != nil", "s.Length", "0", "GS0158:Length")
-    // A narrowed value-type nullable is its underlying value, so
-    // `Nullable<T>` members no longer resolve on it (issue #4986).
-    @InlineData("n int32?", "int32", "n != nil", "n.Value", "0", "GS0158:Value")
-    @InlineData("n int32?", "int32", "n != nil", "n.GetValueOrDefault()", "0", "GS0159:GetValueOrDefault()")
-    @InlineData("n int32?", "bool", "n == nil", "false", "n.HasValue", "GS0158:HasValue")
+    // A `Nullable<T>` member the narrowed type does not have binds against
+    // the `Nullable<T>` storage, in both forms (issue #4986).
+    @InlineData("n int32?", "int32", "n != nil", "n.Value", "0", "")
+    @InlineData("n int32?", "int32", "n != nil", "n.GetValueOrDefault()", "0", "")
+    @InlineData("n int32?", "bool", "n == nil", "false", "n.HasValue", "")
     // A narrowed value makes a user `!!` redundant (GS0536) in both forms,
     // including an ADR-0186 platform (`T!`) value, which a nil guard
     // narrows to `T`.

@@ -56,6 +56,72 @@ internal partial class ExpressionBinder {
         receiverSyntax ExpressionSyntax? = nil,
         receiverStart int32? = nil
     ) BoundExpression {
+        // Issue #4986: a smart cast narrows `n int32?` to `int32`, but C# code
+        // and G# code written before `?:` narrowed (#4964) reads the guarded
+        // value through `Nullable<T>`'s own members: `n.Value`,
+        // `n.HasValue`, `n.GetValueOrDefault()`. When the narrowed type has
+        // no member of that name, bind the member against the original
+        // `Nullable<T>` storage instead. This is the one place that decides it
+        // for every narrowing region (if-statement, if-expression, `?:`,
+        // early exit, switch arm), because they all build the receiver with
+        // `BuildNarrowedRead`. A member the narrowed type does have (a
+        // struct's own `Value`) keeps binding to it: the narrowed bind runs
+        // first and is kept unless it reports the member as missing.
+        let narrowingUnwrap = receiver as BoundUnaryExpression
+        let headToken = AccessorHeadToken(rightPart)
+        if narrowingUnwrap != nil &&
+            narrowingUnwrap.IsNarrowingUnwrap &&
+            headToken != nil &&
+            NullableOnlyMemberNames
+            .Contains(headToken.ValueText) {
+            let diagnosticMark = Diagnostics.Count
+            let onNarrowedValue = BindAccessorStepOnReceiver(
+                receiver,
+                classSymbol,
+                rightPart,
+                receiverSyntax,
+                receiverStart
+            )
+            let headLocation = headToken.Location
+            let isHeadMissing = func (diagnostic Diagnostic) bool {
+                return (
+                    diagnostic.Id == DiagnosticDescriptors
+                        .UnableToFindMember
+                        .Id ||
+                        diagnostic.Id == DiagnosticDescriptors
+                        .UnableToFindFunction
+                        .Id
+                ) &&
+                    object.ReferenceEquals(diagnostic.Location.Text, headLocation.Text) &&
+                    diagnostic
+                    .Location
+                    .Span
+                    .Start == headLocation
+                    .Span
+                    .Start
+            }
+            if !Diagnostics.AnySince(diagnosticMark, isHeadMissing) {
+                return onNarrowedValue
+            }
+            Diagnostics.TruncateTo(diagnosticMark)
+            return BindAccessorStepOnReceiver(
+                narrowingUnwrap.Operand,
+                classSymbol,
+                rightPart,
+                receiverSyntax,
+                receiverStart
+            )
+        }
+        return BindAccessorStepOnReceiver(receiver, classSymbol, rightPart, receiverSyntax, receiverStart)
+    }
+
+    private func BindAccessorStepOnReceiver(
+        receiver BoundExpression?,
+        classSymbol ImportedClassSymbol?,
+        rightPart ExpressionSyntax,
+        receiverSyntax ExpressionSyntax?,
+        receiverStart int32?
+    ) BoundExpression {
         var receiver = receiver
         var result = BindAccessorStepAfterPlatformReceiverCheck(
             CheckPlatformReceiver(receiver, receiverSyntax?.Location ?? rightPart.Location),
@@ -1115,7 +1181,10 @@ internal partial class ExpressionBinder {
             return true
         }
         let openTypeParameter = nullableType.UnderlyingType as TypeParameterSymbol
-        if openTypeParameter?.HasValueTypeConstraint != true {
+        // Issue #4986: a user value-kind struct or enum has no ClrType while
+        // binding either, so its `Nullable<T>` members bind against the open
+        // `Nullable<>` exactly like a `struct`-constrained type parameter's.
+        if openTypeParameter?.HasValueTypeConstraint != true && !NullableLifting.IsUserValueTypeNullable(nullableType) {
             return false
         }
         let openNullable = typeof(System.Nullable[_])
@@ -1126,7 +1195,7 @@ internal partial class ExpressionBinder {
         )
         if openProperty != nil && openProperty.GetIndexParameters().Length == 0 && openProperty.CanRead {
             let propertyType = if openProperty.PropertyType.IsGenericParameter {
-                cast[TypeSymbol](openTypeParameter!!)
+                nullableType.UnderlyingType
             } else {
                 ClrNullability.GetPropertyTypeSymbol(openProperty)
             }
@@ -4438,6 +4507,42 @@ internal partial class ExpressionBinder {
     }
 
     shared {
+        /// Issue #4986: the names of the members `Nullable<T>` itself
+        /// declares (`HasValue`, `Value`, `GetValueOrDefault`). Overrides of
+        /// `object` members and accessor methods are left out, since every
+        /// narrowed `T` has those already.
+        private let NullableOnlyMemberNames HashSet[string] = HashSet[string](
+            typeof(System.Nullable[_])
+                .GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                .Where(
+                (member MemberInfo) -> switch member {
+                    case method is MethodInfo: !method.IsSpecialName && method.GetBaseDefinition()
+                        .DeclaringType == method.DeclaringType
+                    case _ is PropertyInfo: true
+                    default: false
+                }
+            )
+                .Select((member MemberInfo) -> member.Name),
+            StringComparer.Ordinal
+        )
+
+        /// Issue #4986: the identifier token that names the first member an
+        /// accessor step looks up: `Value` in `n.Value.X`,
+        /// `GetValueOrDefault` in `n.GetValueOrDefault(7)`.
+        /// @param rightPart The syntax after the receiver's `.`.
+        /// @returns The head identifier token, or `nil` when
+        /// [`rightPart`](paramref) does not start with a member name.
+        private func AccessorHeadToken(rightPart ExpressionSyntax?) SyntaxToken? -> switch rightPart {
+            case name is NameExpressionSyntax: name.IdentifierToken
+            case call is CallExpressionSyntax: call.Identifier
+            case accessor is AccessorExpressionSyntax: AccessorHeadToken(accessor.LeftPart)
+            case index is IndexExpressionSyntax: AccessorHeadToken(index.Target)
+            case unary is UnaryExpressionSyntax when unary
+                .OperatorToken
+                .Kind == SyntaxKind.BangBangToken: AccessorHeadToken(unary.Operand)
+            default: default(SyntaxToken?)
+        }
+
         private func TryGetTupleElementIndex(memberName string, tupleType TupleTypeSymbol, out zeroBased int32) bool {
             if string.IsNullOrEmpty(memberName) {
                 zeroBased = -1

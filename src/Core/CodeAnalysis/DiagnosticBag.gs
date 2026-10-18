@@ -65,6 +65,22 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         }
     }
 
+    /// Issue #4986: whether any diagnostic added after the bag reached
+    /// [`mark`](paramref) entries satisfies [`predicate`](paramref). Lets a
+    /// speculative bind inspect what it reported before deciding whether to
+    /// keep it or roll it back with (cref:TruncateTo).
+    /// @param mark A count previously read from (cref:Count).
+    /// @param predicate The test to apply to each newer diagnostic.
+    /// @returns `true` when a newer diagnostic matches.
+    internal func AnySince(mark int32, predicate(Diagnostic) -> bool) bool {
+        for var i = Math.Max(mark, 0); i < diagnostics.Count; i++ {
+            if predicate(diagnostics[i]) {
+                return true
+            }
+        }
+        return false
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
