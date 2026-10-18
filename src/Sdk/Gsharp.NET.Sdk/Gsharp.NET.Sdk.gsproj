@@ -73,6 +73,10 @@
   </Target>
 
   <ItemGroup>
+    <!-- Pack targets invoke these projects. Restore their assets in scoped graphs (#5006). -->
+    <ProjectReference Include="../../Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
+    <ProjectReference Include="../../../tools/gsgen/Gsgen.Cli/Gsgen.Cli.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
+    <ProjectReference Include="../Gsharp.Extensions/Gsharp.Extensions.csproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
     <ProjectReference Include="../Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
     <!-- ADR-0174 D1: the channel runtime is packed under tools/channels/ and
          auto-referenced by every consumer .gsproj (build/Gsharp.NET.Sdk.props). -->
@@ -98,19 +102,6 @@
     <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\PACKAGE_README.md" Pack="true" PackagePath="README.md" Visible="false" />
     <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\gsharp-icon.png" Pack="true" PackagePath="icon.png" Visible="false" />
   </ItemGroup>
-
-  <!-- ADR-0084 §L5 / issue #806. The previous topology had this SDK
-       csproj reference Gsharp.Extensions.csproj (Private="false"
-       ReferenceOutputAssembly="false") to ensure Extensions was built
-       before PackGsharpExtensions ran. That arrow has been REMOVED:
-       Gsharp.Extensions now references this project (so it builds
-       AFTER the BuildTask DLL exists), which would form a cycle if the
-       reverse arrow were kept. PackGsharpExtensions below still works
-       because the <MSBuild Projects="..." Targets="Build" /> invocation
-       resolves the Extensions output at pack time — Extensions has
-       either already been built by the sln-level topology (the common
-       case) or gets built inline at pack time (the standalone-pack
-       case). -->
 
   <!-- Pack the BuildTask DLL (this assembly's build output) under tools/task/. -->
   <Target Name="PackGsharpBuildTask" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">

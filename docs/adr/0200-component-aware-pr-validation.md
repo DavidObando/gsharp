@@ -35,6 +35,8 @@ Filter the canonical test matrix by project, including individual members of
 For PRs, restore and build native solution filters containing selected roots.
 Keep dependency configurations from the solution and traverse their graph once.
 Keep the pinned C# checkout and build in the cs2gs shards.
+Declare the SDK's pack-time tool projects as build-only references so every
+scoped restore includes their assets. Keep package payload targets unchanged.
 
 Select independent harness contracts separately from test partitioning.
 Official events retain full solution commands, test selection, artifacts,

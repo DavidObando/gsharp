@@ -26,6 +26,13 @@ SUITES = {
     "cs2gs": CS2GS,
     "generators": GENERATOR,
 }
+# These documentation files are also inputs to product contract tests.
+CONTRACT_INPUTS = {
+    "docs/cs2gs-coverage-matrix.md": "cs2gs",
+    "docs/diagnostics.md": "core",
+    "website/docs/ref/diagnostics.md": "core",
+    "website/docs/tooling/repl.md": "interpreter",
+}
 HARNESS = {
     "counters": ["build/test-cs2gs-counters.sh", "build/cs2gs-counters.sh"],
     "stage1": ["build/test-selfhost-pack-stage1.py", "build/selfhost-pack-stage1.py"],
@@ -98,8 +105,6 @@ def area(path):
         ("build/gstokens/", "comment-checker"),
     ):
         if path.startswith(prefix):
-            if path.startswith(("src/vscode-gsharp/themes/", "src/vscode-gsharp/snippets/")):
-                return "editor-assets"
             return component
     for component, project in SUITES.items():
         if path.startswith(str(Path(project).parent) + "/"):
@@ -132,6 +137,11 @@ def select(paths, event, projects=None, go_exists=None):
     harnesses = set()
     docs_jobs = set()
     build_projects = set()
+    for path in reasons:
+        if path in CONTRACT_INPUTS:
+            consumer = CONTRACT_INPUTS[path]
+            suites.add(SUITES[consumer])
+            reasons[path] += f" + {consumer} contract tests"
     if full:
         jobs.update(BUILD_JOBS)
         suites.update(all_tests)
@@ -166,9 +176,11 @@ def select(paths, event, projects=None, go_exists=None):
         if areas.intersection({"language-server", "formatting"}):
             suites.add(SUITES["interpreter"])
             jobs.update({"vscode-extension", "vsix", "visual-studio-extension"})
-        if areas.intersection({"vscode", "editor-assets"}):
-            jobs.update({"vscode-extension", "vsix"})
-        if areas.intersection({"visual-studio", "editor-assets"}):
+        if areas.intersection({"interpreter", "language-server", "formatting"}):
+            suites.add(SUITES["compiler"])
+        if "vscode" in areas:
+            jobs.update({"vscode-extension", "vsix", "visual-studio-extension"})
+        if "visual-studio" in areas:
             jobs.add("visual-studio-extension")
         if "samples" in areas:
             suites.update(SUITES[key] for key in (

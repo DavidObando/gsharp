@@ -59,6 +59,17 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(mixed["jobs"], go["jobs"])
         self.assertEqual(mixed["docs_jobs"], ["build", "visual"])
 
+    def test_documentation_consumed_by_product_contracts_keeps_its_suite(self):
+        for path, consumer in ci.CONTRACT_INPUTS.items():
+            plan = selection(path)
+            self.assertIn(ci.SUITES[consumer], plan["projects"].split())
+            self.assertIn("tests", plan["jobs"])
+            self.assertEqual(plan["docs_jobs"], ["build", "visual"])
+        # Do not let deletion of the exception table make this test vacuous.
+        self.assertIn(ci.CS2GS, selection("docs/cs2gs-coverage-matrix.md")["projects"].split())
+        self.assertIn(ci.SUITES["interpreter"],
+                      selection("website/docs/tooling/repl.md")["projects"].split())
+
     def test_component_project_files_and_fixture_prose_are_not_shared_config(self):
         for path in ("tools/cs2gs/Cs2Gs.Tests/Fixtures/README.md",
                      "tools/cs2gs/corpus/L1/notes.md",
@@ -90,7 +101,7 @@ class SelectionTests(unittest.TestCase):
              ["format", "cs2gs-corpus", "visual-studio-extension", "vsix"]),
             ("src/LanguageServer/Server.gs", ["language-server", "interpreter"],
              ["vscode-extension", "vsix", "visual-studio-extension"]),
-            ("src/Repl/Program.gs", ["interpreter"], ["tests"]),
+            ("src/Repl/Program.gs", ["interpreter", "compiler"], ["tests"]),
             ("src/Sdk/Gsharp.NET.Sdk/BuildTask.gs", ["sdk", "compiler", "cs2gs"],
              ["build", "e2e", "desktop-msbuild-sdk-smoke", "vscode-extension"]),
             ("tools/gsgen/Gsgen.Cli/Program.gs", ["generators", "compiler", "cs2gs"],
@@ -99,6 +110,7 @@ class SelectionTests(unittest.TestCase):
              ["e2e", "ilverify"]),
             ("src/vscode-gsharp/themes/light.json", [],
              ["vscode-extension", "vsix", "visual-studio-extension"]),
+            ("src/vscode-gsharp/src/extension.ts", [], ["visual-studio-extension"]),
             ("src/vs-gsharp/src/VsGsharp/Package.cs", [], ["visual-studio-extension"]),
         ):
             with self.subTest(path=path):
@@ -193,6 +205,23 @@ class DiffTests(unittest.TestCase):
 
 
 class MatrixAndGraphTests(unittest.TestCase):
+    def test_sdk_pack_targets_are_in_the_restore_graph(self):
+        path = ROOT / ci.SDK
+        tree = ET.parse(path)
+        properties = {node.tag: node.text for group in tree.iter("PropertyGroup") for node in group}
+
+        def resolve(value):
+            if value.startswith("$(") and value.endswith(")"):
+                value = properties[value[2:-1]]
+            value = value.replace("$(MSBuildThisFileDirectory)", str(path.parent) + "/")
+            self.assertNotIn("$(", value)
+            return (path.parent / value.replace("\\", "/")).resolve()
+
+        references = {resolve(node.attrib["Include"]) for node in tree.iter("ProjectReference")}
+        invoked = {resolve(node.attrib["Projects"]) for node in tree.iter("MSBuild")}
+        self.assertTrue(invoked)
+        self.assertFalse(invoked - references, f"pack tools missing from restore graph: {invoked - references}")
+
     def entries(self):
         entries = [{"name": matrix.GROUPED_NAME, "project": " ".join(matrix.GROUPED_PROJECTS), "filter": ""}]
         for project, bands in matrix.SHARDED_PROJECTS.items():
