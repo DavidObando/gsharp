@@ -97,12 +97,12 @@ class SelectionTests(unittest.TestCase):
 
     def test_owning_suites_and_downstream_consumers(self):
         for path, suites, jobs in (
-            ("src/Formatting/Gsfmt.Cli/Program.gs", ["formatting", "language-server", "cs2gs"],
+            ("src/Formatting/Gsfmt.Cli/Program.gs", ["formatting", "language-server", "compiler", "cs2gs"],
              ["format", "cs2gs-corpus", "visual-studio-extension", "vsix"]),
-            ("src/LanguageServer/Server.gs", ["language-server", "interpreter"],
+            ("src/LanguageServer/Server.gs", ["language-server", "interpreter", "compiler"],
              ["vscode-extension", "vsix", "visual-studio-extension"]),
             ("src/Repl/Program.gs", ["interpreter", "compiler"], ["tests"]),
-            ("src/Sdk/Gsharp.NET.Sdk/BuildTask.gs", ["sdk", "compiler", "cs2gs"],
+            ("src/Sdk/Gsharp.NET.Sdk/BuildTask.gs", ["sdk", "core", "compiler", "cs2gs"],
              ["build", "e2e", "desktop-msbuild-sdk-smoke", "vscode-extension"]),
             ("tools/gsgen/Gsgen.Cli/Program.gs", ["generators", "compiler", "cs2gs"],
              ["build", "e2e"]),
@@ -337,6 +337,19 @@ class WorkflowTests(unittest.TestCase):
 
 
 class RulesTests(unittest.TestCase):
+    def test_apply_creates_main_protection_before_narrowing_the_old_ruleset(self):
+        args = rules.argparse.Namespace(ruleset=123, apply=True)
+        with patch.object(rules.argparse.ArgumentParser, "parse_args", return_value=args), \
+                patch.object(rules, "split_rules", return_value=({"name": "Main CI aggregates"}, {"name": "Lock Main"})), \
+                patch.object(rules, "api", side_effect=[{}, [], {"id": 456}, {"id": 123}]) as api, \
+                patch("builtins.print"):
+            rules.main()
+        self.assertEqual([call.args for call in api.call_args_list], [
+            ("rulesets/123",), ("rulesets",),
+            ("rulesets", "POST", {"name": "Main CI aggregates"}),
+            ("rulesets/123", "PUT", {"name": "Lock Main"}),
+        ])
+
     def test_split_preserves_every_csharp_rule_and_only_replaces_main_checks(self):
         original = {"name": "Lock Main", "target": "branch", "enforcement": "active",
                     "bypass_actors": [{"actor_type": "RepositoryRole", "actor_id": 5, "bypass_mode": "always"}],
