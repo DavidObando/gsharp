@@ -7,14 +7,15 @@
 //   {"path": FILE, "errors": [MESSAGE, ...],
 //    "tokens": [[KIND, LINE, TEXT, POSITION], ...],
 //    "docs": [{"line": LINE, "end": POSITION, "declaration": POSITION, "model": BOOL, "xml": XML}, ...],
-//    "docDiagnostics": [MESSAGE, ...]}
+//    "docDiagnostics": [[BLOCK, MESSAGE], ...]}
 // The tokens include whitespace and comments. LINE starts at 1. Each doc entry
 // is one `///` block: "declaration" is the start of the declaration that the
 // compiler attaches it to, or -1 if the block is floating; "model" says if the
 // compiler's parser produced documentation for it; "xml" is the XML
 // documentation that the compiler writes for it. "docDiagnostics" holds what
 // the compiler's DocumentationValidator reports from the syntax tree alone
-// (floating doc comments and unknown tags), without locations.
+// (floating doc comments and unknown tags), each with the index of the doc
+// block it is reported at (-1 if none), instead of a location.
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Documentation
 import GSharp.Core.CodeAnalysis.Symbols
@@ -96,9 +97,19 @@ for path in args {
             docDiagnostics,
             false
         )
+        let blocks = DocumentationAttacher.GetBlocks(tree)
         entry.WriteStartArray("docDiagnostics")
         for diagnostic in docDiagnostics {
+            var owner = -1
+            for var k = 0; k < blocks.Length; k++ {
+                if blocks[k].Location.Span.Start == diagnostic.Location.Span.Start {
+                    owner = k
+                }
+            }
+            entry.WriteStartArray()
+            entry.WriteNumberValue(owner)
             entry.WriteStringValue(diagnostic.Message)
+            entry.WriteEndArray()
         }
         entry.WriteEndArray()
         entry.WriteEndObject()

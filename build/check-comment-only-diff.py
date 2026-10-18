@@ -156,7 +156,7 @@ class GsLexer:
             raise CheckError(f"cannot build {GSTOKENS_PROJECT.relative_to(REPO)}:\n{tail}")
         return GsLexer(GSTOKENS_DLL)
 
-    def lex(self, texts: list[str]) -> list[tuple[list[Token], list[Doc], list[str]]]:
+    def lex(self, texts: list[str]) -> list[tuple[list[Token], list[Doc], list[list]]]:
         """Return the kept tokens, the doc comments and the doc diagnostics of each text."""
         if not self.dll.is_file():
             raise CheckError(f"{self.dll} does not exist; build {GSTOKENS_PROJECT.relative_to(REPO)}")
@@ -285,8 +285,9 @@ def compare(path: str, base: str, head: str, lexer: GsLexer | None = None) -> st
     if k is not None:
         return describe(base_tokens, head_tokens, k)
     reason = compare_docs(base_docs, head_docs)
-    # The order of the diagnostics carries no meaning; the blocks are compared above.
-    if reason is None and sorted(base_notes) != sorted(head_notes):
+    # Each diagnostic carries the index of its block, so a tag that moves to
+    # another block fails. Within a block, the order carries no meaning.
+    if reason is None and sorted(map(tuple, base_notes)) != sorted(map(tuple, head_notes)):
         reason = (
             f"{DIRECTIVE_CHANGED} (the compiler's doc-comment diagnostics differ):\n"
             f"      base: {base_notes}\n      head: {head_notes}"
