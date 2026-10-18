@@ -222,6 +222,10 @@ class PythonTests(CommentOnlyCase):
         base = "# coding: unicode_escape\n# note \\u000ax = 1\n"
         self.assertFails("a.py", base, base.replace("x = 1", "x = 2"), "declares the encoding")
 
+    def test_type_comment_change_or_deletion_fails(self) -> None:
+        self.assertFails("a.py", "x = 1  # type: int\n", "x = 1  # type: str\n")
+        self.assertFails("a.py", "x = 1  # type: int\n", "x = 1\n")
+
     def test_noqa_change_fails(self) -> None:
         self.assertFails("a.py", "import os  # noqa: F401\n", "import os  # unused\n")
 
