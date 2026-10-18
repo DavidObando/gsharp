@@ -153,6 +153,54 @@ Run(false)`)
         Assert.Empty(result.Diagnostics)
     }
 
+    @Theory
+    @InlineData("if flag { fallback } else { false }")
+    @InlineData("if let other = fallback { fallback } else { false }")
+    @InlineData("cached = (flag ? fallback : false)")
+    @InlineData("flag ? fallback : (cached = false)")
+    func ClosedNestedInitializerBeforeGuard_IsNotAnAmbiguousContinuation(initializer string) {
+        let source = `func Run(flag bool, fallback bool?, ok bool) bool {
+    var cached bool? = nil
+    if let v = INITIALIZER && ok { }
+    return if let w = INITIALIZER && ok { w } else { false }
+}
+Run(false, nil, true)`.Replace("INITIALIZER", initializer)
+        let result = EmittedOracle.Evaluate(source)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(false, result.Value)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func NestedJoin_InternalIfLetLabels_DoNotProveNullableLocalNonNull(initiallyNonNull bool) {
+        let source = `func Run(flag bool, s string?, t string?) int32 {
+    var text string? = INITIAL
+    if flag {
+        if let a = s, let b = t { MUTATE } else { }
+    } else { text = "ok" }
+    return text.Length
+}
+Run(false, "s", "t")`.Replace(
+            "INITIAL",
+            if initiallyNonNull {
+                `"initial"`
+            } else {
+                "nil"
+            }
+        )
+            .Replace(
+            "MUTATE",
+            if initiallyNonNull {
+                "text = nil"
+            } else {
+                ""
+            }
+        )
+        let result = EmittedOracle.Evaluate(source)
+        Assert.Equal([]string{"GS0158@6:17"}, Ids(result))
+    }
+
     @Fact
     func Compatibility_ParenthesizedInitializer_KeepsItsMeaning() {
         let result = EmittedOracle.Evaluate(`func Run(a bool, b bool, x string?, y string?) string {

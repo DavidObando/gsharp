@@ -1712,12 +1712,14 @@ non-nullable `bool` (for example `if let v = a && b ? x : y`, where the `&&`
 starts the guard), the binder reports `GS0624` instead of `GS0296` and asks for
 parentheses.
 
-GS0624 also diagnoses an unparenthesized assignment or conditional continuation
+GS0624 also diagnoses an unparenthesized assignment or ternary continuation
 whose nullable conversion hides the boolean before the guard. For example, with
 `cached bool?`, write `if let v = (cached = a && b)` to preserve the original
 assignment value and body execution, or `(cached = a) && b` to make the new
 guard explicit. The same rule applies when conditional unification hides a
-boolean false arm.
+boolean false arm. Nested `if`/`if let` expressions and parenthesized
+subexpressions close their own boundaries and are not traversed for this
+migration check.
 
 `if let` (statement and expression alike) evaluates its bindings left to right
 and stops at the first `nil`: later initializers and the guard do not run, and

@@ -203,11 +203,18 @@ if let a = e0, let b = e1 && g { T } else { F }
 This replaces ADR-0071's matched-flag shape (`var <matched> = false; …;
 if !<matched> { F }`). Under that shape, return analysis could not see that a
 statement whose arms both `return` always returns, so it reported GS0100.
-Plain control flow keeps every flow analysis exact. A short-circuit
+Plain control flow exposes the branch structure to return analysis. A short-circuit
 block-expression condition (the expression form's) was rejected here as well:
 definite-assignment analysis cannot see through it that the then-branch runs
 only after every initializer ran, so an `out` argument of a later initializer
 was reported unassigned (GS0238).
+
+Branch-exit nullability analysis treats a labelled bound block as internal
+control flow, not an unconditional exit at its first `goto`. Without a CFG it
+conservatively drops facts for roots that the block can assign and retains only
+untouched entry facts. All branch statements use this shared analysis path, so
+an enclosing `if` join cannot discard a live branch and prove a nullable local
+non-null from the other branch alone.
 
 ### Not changed by this ADR
 
@@ -242,6 +249,10 @@ top level contains `&&` or `||`.
   only the prefix assignment/conditional to make the new guard explicit.
   The check follows implicit conversions and synthesized operator nodes, but
   does not look through an explicit nullable cast or an ordinary source call.
+  It records genuine source assignment/ternary continuations before walking
+  bound nodes: nested `if`/`if let` expressions and parentheses close the
+  initializer subexpression even when their bound representation is another
+  conditional or has no parenthesized node.
 - An assignment initializer (`if let v = cached = Next() { … }`) keeps
   working in every form; a guard may follow it.
 - A `?:` initializer without a top-level logical operator

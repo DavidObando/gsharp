@@ -236,7 +236,7 @@ internal shared class IfLetBindingSupport {
                     guardSyntax != nil &&
                     i == bindings.Count - 1 &&
                     binding.Initializer is not ParenthesizedExpressionSyntax &&
-                    HasAmbiguousBooleanContinuation(bound.Initializer) {
+                    HasAmbiguousBooleanContinuation(bound.Initializer, binding.Initializer) {
                     diagnostics.ReportIfLetGuardSplitsInitializer(
                         binding.Initializer.Location,
                         binding.Identifier.ValueText,
@@ -300,44 +300,72 @@ internal shared class IfLetBindingSupport {
         }
     }
 
-    private func HasAmbiguousBooleanContinuation(expression BoundExpression) bool {
-        // Follow source continuations and their synthesized conversion/operator
-        // nodes, stopping at an ordinary source expression. This keeps explicit
-        // casts and calls opaque while covering compound-assignment lowering.
+    private func HasAmbiguousBooleanContinuation(expression BoundExpression, initializer ExpressionSyntax) bool {
+        // Only assignment values and ternary false arms can absorb a following
+        // logical operator. Bound conditionals also represent closed if/if-let
+        // expressions, and parentheses need not survive in the bound tree.
+        let continuations = HashSet[SyntaxNode]()
+        var source = initializer
+        while true {
+            var nextSource ExpressionSyntax? = nil
+            if source is ConditionalExpressionSyntax conditional {
+                nextSource = conditional.WhenFalse
+            } else {
+                var isAssignment = false
+                for child in source.GetChildren() {
+                    if child is SyntaxToken token &&
+                        (
+                        token.Kind == SyntaxKind.EqualsToken || SyntaxFacts.TryGetCompoundAssignmentBaseOperator(
+                            token.Kind,
+                            out _
+                        )
+                    ) {
+                        isAssignment = true
+                    } else if child is ExpressionSyntax operand {
+                        nextSource = operand
+                    }
+                }
+                if !isAssignment {
+                    break
+                }
+            }
+            if nextSource == nil {
+                break
+            }
+            continuations.Add(source)
+            source = nextSource
+        }
+        if continuations.Count == 0 {
+            return false
+        }
         var value = expression
         var absorbsLogicalTail = false
         while true {
+            let syntax = value.Syntax
             var next BoundExpression? = switch value {
                 case conversion is BoundConversionExpression when conversion.Syntax == nil || object.ReferenceEquals(
                     conversion.Syntax,
                     conversion.Expression.Syntax
                 ): conversion.Expression
-                case assignment is BoundAssignmentExpression: assignment.Expression
-                case field is BoundFieldAssignmentExpression: field.Value
-                case property is BoundPropertyAssignmentExpression: property.Value
-                case index is BoundIndexAssignmentExpression: index.Value
-                case clrIndex is BoundClrIndexAssignmentExpression: clrIndex.Value
-                case clrProperty is BoundClrPropertyAssignmentExpression: clrProperty.Value
-                case indirect is BoundIndirectAssignmentExpression: indirect.Value
-                case conditional is BoundConditionalExpression: conditional.WhenFalse
                 default: nil
             }
-            var isCompoundAssignment = false
-            if value.Syntax is {} syntax {
-                for child in syntax.GetChildren() {
-                    if child is SyntaxToken token && SyntaxFacts.TryGetCompoundAssignmentBaseOperator(
-                        token.Kind,
-                        out _
-                    ) {
-                        isCompoundAssignment = true
-                        break
-                    }
+            if next == nil && (syntax == nil || continuations.Contains(syntax)) {
+                next = switch value {
+                    case assignment is BoundAssignmentExpression: assignment.Expression
+                    case field is BoundFieldAssignmentExpression: field.Value
+                    case property is BoundPropertyAssignmentExpression: property.Value
+                    case index is BoundIndexAssignmentExpression: index.Value
+                    case clrIndex is BoundClrIndexAssignmentExpression: clrIndex.Value
+                    case clrProperty is BoundClrPropertyAssignmentExpression: clrProperty.Value
+                    case indirect is BoundIndirectAssignmentExpression: indirect.Value
+                    case conditional is BoundConditionalExpression: conditional.WhenFalse
+                    default: nil
                 }
-            }
-            if next == nil && (value.Syntax == nil || isCompoundAssignment) {
-                let children = value.ChildNodes
-                if children.Length > 0 {
-                    next = children[children.Length - 1] as BoundExpression
+                if next == nil {
+                    let children = value.ChildNodes
+                    if children.Length > 0 {
+                        next = children[children.Length - 1] as BoundExpression
+                    }
                 }
             }
             if next == nil {
