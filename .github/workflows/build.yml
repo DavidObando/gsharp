@@ -342,10 +342,12 @@ jobs:
 
       - name: Verify every test is run exactly once
         if: github.event_name != 'pull_request'
+        shell: bash
         run: python3 build/verify-ci-test-partition.py | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Verify selected tests are run exactly once
         if: github.event_name == 'pull_request'
+        shell: bash
         env:
           PROJECTS: ${{ fromJSON(needs.select.outputs.plan).projects }}
         run: python3 build/verify-ci-test-partition.py --projects "$PROJECTS" | tee -a "$GITHUB_STEP_SUMMARY"

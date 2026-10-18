@@ -293,6 +293,24 @@ class AggregateTests(unittest.TestCase):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_partition_pipeline_propagates_failed_verification(self):
+        text = (ROOT / ".github/workflows/build.yml").read_text()
+        steps = re.findall(r"      - name: Verify .*?exactly once\n(.*?)(?=^      -|\Z)",
+                           job(text, "test-partition"), re.M | re.S)
+        self.assertEqual(len(steps), 2)
+        for step in steps:
+            command = re.search(r"^        run: (.+)", step, re.M).group(1)
+            command = command.replace("python3 build/verify-ci-test-partition.py",
+                                      "python3 -c 'raise SystemExit(23)'")
+            # Match Actions' explicit-bash and default Linux shell invocations.
+            shell = ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail"] \
+                if re.search(r"^        shell: bash$", step, re.M) else ["bash", "-e"]
+            with tempfile.TemporaryDirectory() as directory:
+                result = subprocess.run([*shell, "-c", command], capture_output=True,
+                                        env={**os.environ, "GITHUB_STEP_SUMMARY": str(Path(directory) / "summary"),
+                                             "PROJECTS": ci.CS2GS})
+            self.assertEqual(result.returncode, 23, "tee masked a partition failure")
+
     def test_aggregates_cover_all_selected_job_ids_even_after_failure(self):
         for filename, aggregate, selected in (
             ("build.yml", "ci", ci.BUILD_JOBS | ci.GO_JOBS | {"format"}),
