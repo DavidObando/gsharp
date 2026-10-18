@@ -128,11 +128,14 @@ The annotation goes on each method, property, field, constructor, event or final
 - In a class or struct, instance members keep their source order. `cs2gs` moves the static members, in source order, into one `shared { }` block after the instance members.
 - A `static class` becomes a `shared class`, with no `shared { }` block. Its nested types come first, then its other members in source order.
 - Nested types stay in the body of the enclosing type, in source order among the instance members.
-- Operator overloads, delegate types declared inside a type, and extension methods in a static class become top-level declarations. `cs2gs` places them right after the top-level type that contained them.
+- Operator overloads become top-level functions. Conversion operators (`implicit` and `explicit`) and compound-assignment operators are the exception: they stay in the type.
+- Delegate types declared inside a type become top-level declarations.
+- Extension methods in a static class usually become top-level receiver functions. Some stay in the class as static methods, for example when the receiver form would collide with another overload. An extension method on a type that the project declares can instead move into that type.
+- `cs2gs` places the new top-level declarations right after the top-level type that contained them.
 - G# has no property initializer. For an auto-property declared `{ get; }` or `{ get; init; }`, `cs2gs` moves the initial value to the start of each constructor that doesn't call `this(...)`.
   - A class with no constructor gets a synthesized `init()` that sets the values. If the class has a primary constructor, the synthesized `init` takes its parameters.
   - If a primary-constructor parameter is also used elsewhere in the class, `cs2gs` reports an error and drops the initial values.
-  - A static, `virtual` or `override` property, or one declared in a record, keeps its initial value on a backing field instead.
+  - A `{ get; }` property that is static, `virtual` or `override`, or that is declared in a record, keeps its initial value on a backing field instead.
 - `cs2gs` doesn't keep the C# blank lines. Statements inside a body have no blank lines between them. With the default formatting, one blank line separates members.
 
 ### Modifiers
