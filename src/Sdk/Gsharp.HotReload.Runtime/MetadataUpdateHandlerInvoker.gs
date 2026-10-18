@@ -174,8 +174,9 @@ internal class MetadataUpdateHandlerInvoker {
             modifiers: nil
         )
         // A method of an open generic handler type cannot be bound to a
-        // delegate either, so it does not match.
-        if method != nil && method.ReturnType == typeof(void) && !method.ContainsGenericParameters {
+        // delegate either, so it does not match. The return type is compared
+        // by name, as the typeof-identity guard (issue #835) requires.
+        if method != nil && method.ReturnType.FullName == typeof(void).FullName && !method.ContainsGenericParameters {
             return method
         }
         for candidate in handlerType.GetMethods(HandlerMethodBindingFlags | BindingFlags.Instance) {
