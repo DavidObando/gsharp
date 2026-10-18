@@ -725,6 +725,8 @@ open partial class Parser {
     // Issue #669: parse an if-expression of the form
     // `if cond { expr }`, `if cond { expr } else { expr }`,
     // or `if cond { expr } else if ... { expr } else { expr }`.
+    // Issue #4962: each link may start with an initializer,
+    // `if init; cond { expr } else { expr }`, as in the statement form.
     // Issue #1602: depth-guarded wrapper — if-expressions self-recurse through
     // `else if` chains and through ParseBlockExpression/ParseBlockExpressionItem
     // (which dispatch back here without passing the expression pipeline).
@@ -740,15 +742,9 @@ open partial class Parser {
 
     private func ParseIfExpressionCore() IfExpressionSyntax {
         let ifKeyword = MatchToken(SyntaxKind.IfKeyword)
-        suppressTrailingObjectInitializer++
-        suppressStructLiteral++
-        var condition ExpressionSyntax
-        try {
-            condition = ParseExpression()
-        } finally {
-            suppressStructLiteral--
-            suppressTrailingObjectInitializer--
-        }
+        // Issue #4962: the same header routine as the if-statement, so the
+        // optional `init;` initializer is accepted here too.
+        let (initializer, semicolon, condition) = ParseIfHeader()
         let thenBlock = ParseBlockExpression(valueRequired: true)
         var elseKeyword SyntaxToken? = nil
         var elseExpression ExpressionSyntax? = nil
@@ -763,7 +759,16 @@ open partial class Parser {
                 elseExpression = ParseBlockExpression(valueRequired: true)
             }
         }
-        return IfExpressionSyntax(syntaxTree, ifKeyword, condition, thenBlock, elseKeyword, elseExpression)
+        return IfExpressionSyntax(
+            syntaxTree,
+            ifKeyword,
+            initializer,
+            semicolon,
+            condition,
+            thenBlock,
+            elseKeyword,
+            elseExpression
+        )
     }
 
     // Issue #669: parse a block expression `{ stmt*; expr? }`.

@@ -1539,13 +1539,14 @@ Inference is **target-typed**: when an untyped arrow lambda flows into a positio
 `if` can also appear in value position. The expression form is selected by the parser whenever an `if` appears where a primary expression is expected (let-init, call argument, return operand, switch-expression arm, the trailing position of a block, etc.); when an `if` is the head of a statement the existing statement form is preserved. The same `if` keyword is used for both shapes — there is no separate `if-expression` keyword.
 
 ```ebnf
-IfExpression  = "if" Expression BlockExpression ( "else" ( IfExpression | BlockExpression ) )? .
+IfExpression  = "if" ( SimpleStmt ";" )? Expression BlockExpression ( "else" ( IfExpression | BlockExpression ) )? .
 BlockExpression = "{" Statement* ( Expression )? "}" .
 ```
 
 - An `if` used in value position MUST have an exhaustive `else` chain — every branch must produce a value. Missing the terminal `else` reports `GS0276`.
 - A branch is a block of the form `{ stmt* expr }`. The trailing expression (the last expression statement of the block) is the branch value; the prefix statements run for their side effects. There is no `yield` keyword on this path — the form mirrors the switch-expression arm, which has no `yield` either. A block with no trailing expression in value position reports `GS0277`.
 - `else if` chains nest right-associatively: `if c1 { a } else if c2 { b } else { c }` parses as `if c1 { a } else { if c2 { b } else { c } }`.
+- The header is the same as the if-statement's, including the optional simple-statement initializer: `let s = if var v = g(); v > 3 { "big ${v}" } else { "small ${v}" }`. The initializer runs exactly once, before the condition, and is scoped exactly as in the [if-statement](#if-statements): visible in the condition, in both branches and in every later `else if` link, and not after the expression. Each `else if` link may have its own initializer, which runs only when that link is reached.
 - The result type is the common type of all branch tails, chosen by the same `ComputeConditionalCommonType` helper that  uses for the ternary (identity, one-way implicit conversion, numeric widening tie-break, nil/null compatibility). Branch tails are implicitly converted to that result type. Mismatched branch types report `GS0263` (shared with the ternary).
 - Only one arm is evaluated at runtime; the other arms are not executed. Lowers to the same `BoundConditionalExpression` that the ternary uses, so no new IL emit paths are involved.
 - A throw-expression (`throw e`) may be used as a ternary branch (`cond ? a : throw e`) or `??` right operand; its bottom (`never`) type takes the sibling operand's type. Inside an *if-expression* or *switch-expression* tail, the trailing position is a block-value/arm context: to exit on the error path you can still place a `throw` **statement** in the block prefix and supply a tail expression of the chosen result type (unreachable at runtime but satisfying the binder), which matches the switch-expression treatment.
@@ -1562,7 +1563,7 @@ let title = if user.IsAdmin {
 }
 ```
 
-The existing if-statement form (`if cond { stmt }` with optional `else`, optional simple-statement initializer) is unchanged; the expression form is purely additive and never reached when `if` heads a statement.
+When `if` heads a statement, the statement form (`if cond { stmt }` with optional `else`) is used and the expression form is not reached. The two forms share one header grammar, `( SimpleStmt ";" )? Expression`; they differ only where value position requires it, in the mandatory `else` (`GS0276`) and the value-producing branch tails (`GS0277`).
 
 ### General block expressions
 
@@ -1654,6 +1655,8 @@ RefLocalDecl = ( "let" | "var" ) "ref" identifier "=" Expression .
 ```ebnf
 IfStmt = "if" ( SimpleStmt ";" )? Expression Statement ( "else" Statement )? .
 ```
+
+The initializer is a `var` declaration, an assignment, an increment or decrement, or a call. It runs exactly once, before the condition. Its declarations are visible in the condition, in the then-body, in the `else` body and in every link of an `else if` chain, and not after the statement; a later `else if` link's own initializer is visible only in that link and the links after it. An `if` followed by `let` is the [`if let`](#if-let-guard-let-and-while-let-binding-statements) binding form instead, so the initializer cannot be a `let` declaration. The [if-expression](#if-expressions) takes the same header with the same scoping.
 
 ### `if let`, `guard let`, and `while let` binding statements
 
@@ -2510,7 +2513,7 @@ NameOf            ::= 'nameof' '(' Expression ')'
 DefaultExpression ::= 'default' ('(' TypeClause ')')?                     (*  *)
 BaseInterfaceCall ::= 'base' '[' TypeClause ']' '.' identifier TypeArgList? '(' Arguments? ')'   (* explicit-base interface call,  *)
 CheckedExpression ::= ('checked' | 'unchecked') '(' Expression ')'         (* : names the overflow-checking context for evaluating the argument expression *)
-IfExpression      ::= 'if' Expression Block ('else' (IfExpression | Block))?   (* if-as-expression,  *)
+IfExpression      ::= 'if' (SimpleStmt ';')? Expression Block ('else' (IfExpression | Block))?   (* if-as-expression,  *)
 IfLetExpression   ::= 'if' LetBindingList ('&&' Expression)? Block
                       'else' (IfExpression | IfLetExpression | Block)         (* if-let-as-expression *)
 TupleLiteral      ::= '(' TupleLiteralElement ',' TupleLiteralElement (',' TupleLiteralElement)* ')'

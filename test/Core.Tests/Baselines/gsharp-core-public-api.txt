@@ -6402,16 +6402,21 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.IfExpressionSyntax : GSharp.Co
   method public GSharp.Core.CodeAnalysis.Syntax.BlockExpressionSyntax get_ThenBlock()
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Condition()
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_ElseExpression()
+  method public GSharp.Core.CodeAnalysis.Syntax.StatementSyntax get_Initializer()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ElseKeyword()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_IfKeyword()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_Semicolon()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ifKeyword, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax condition, GSharp.Core.CodeAnalysis.Syntax.BlockExpressionSyntax thenBlock, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken elseKeyword, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax elseExpression)
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ifKeyword, GSharp.Core.CodeAnalysis.Syntax.StatementSyntax initializer, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken semicolon, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax condition, GSharp.Core.CodeAnalysis.Syntax.BlockExpressionSyntax thenBlock, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken elseKeyword, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax elseExpression)
   method public virtual override GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public GSharp.Core.CodeAnalysis.Syntax.BlockExpressionSyntax ThenBlock { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax Condition { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax ElseExpression { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.StatementSyntax Initializer { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ElseKeyword { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken IfKeyword { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken Semicolon { get; }
 type sealed class GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax : GSharp.Core.CodeAnalysis.Syntax.SyntaxNode
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Initializer()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_EqualsToken()

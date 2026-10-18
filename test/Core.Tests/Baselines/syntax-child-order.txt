@@ -63,7 +63,7 @@ GSharp.Core.CodeAnalysis.Syntax.GlobalStatementSyntax: Statement, Annotations
 GSharp.Core.CodeAnalysis.Syntax.GoStatementSyntax: GoKeyword, Expression
 GSharp.Core.CodeAnalysis.Syntax.GotoStatementSyntax: Keyword, LabelIdentifier
 GSharp.Core.CodeAnalysis.Syntax.GuardLetStatementSyntax: GuardKeyword, Bindings, ElseKeyword, ElseStatement
-GSharp.Core.CodeAnalysis.Syntax.IfExpressionSyntax: IfKeyword, Condition, ThenBlock, ElseKeyword, ElseExpression
+GSharp.Core.CodeAnalysis.Syntax.IfExpressionSyntax: IfKeyword, Initializer, Semicolon, Condition, ThenBlock, ElseKeyword, ElseExpression
 GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax: LetKeyword, Identifier, TypeClause, EqualsToken, Initializer
 GSharp.Core.CodeAnalysis.Syntax.IfLetExpressionSyntax: IfKeyword, Bindings, AmpersandAmpersandToken, Guard, ThenBlock, ElseKeyword, ElseExpression
 GSharp.Core.CodeAnalysis.Syntax.IfLetStatementSyntax: IfKeyword, Bindings, ThenStatement, ElseClause

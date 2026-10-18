@@ -58,6 +58,18 @@ func Main() {
 
 The result type is the common type of all branch tails. Missing the terminal `else` in value position reports `GS0276`; an empty block reports `GS0277`; branches with no common type report `GS0263`.
 
+Both forms of `if` can start with a simple statement and a `;`, such as a `var` declaration, an assignment or a call. It runs once, before the condition, and what it declares is visible in the condition and in every branch, but not after the `if`:
+
+```gsharp
+if var n = ReadCount(); n > 0 {
+    Console.WriteLine("read $n")
+} else {
+    Console.WriteLine("nothing read")
+}
+
+let summary = if var n = ReadCount(); n > 0 { "read $n" } else if n == 0 { "empty" } else { "error $n" }
+```
+
 ## `if let`, `guard let`, and `while let` — nullable bindings
 
 `if let name = expr { ... }` strips the nullable layer from a value and binds the underlying non-null view to `name` inside the then-branch. The companion `guard let name = expr else { exit }` form binds `name` for the remainder of the enclosing block; the else clause must unconditionally exit.

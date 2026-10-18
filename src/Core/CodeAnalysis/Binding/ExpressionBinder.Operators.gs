@@ -793,6 +793,46 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportIfExpressionMissingElse(syntax.IfKeyword.Location)
             return BoundErrorExpression(nil)
         }
+        if syntax.Initializer is not StatementSyntax initializer {
+            return BindIfExpressionBranches(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
+        }
+        // Issue #4962: `if init; cond { … } else { … }` scopes the initializer
+        // exactly as BindIfStatement does for the statement form. It is
+        // visible in the condition and in every branch, including an
+        // `else if` chain, and not after the expression. It runs once, before
+        // the condition:
+        //   { init; cond ? then : else }
+        return BindInBlockExpressionScope(
+            () -> {
+                let (statements, value) = BindStatementsBeforeValue(
+                    ImmutableArray.Create[StatementSyntax](initializer),
+                    syntax,
+                    () -> BindIfExpressionBranches(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
+                )
+                if value is BoundErrorExpression {
+                    return value
+                }
+                return BoundBlockExpression(nil, statements, value)
+            }
+        )
+    }
+
+    /// Binds the condition and branches of an if-expression, after any
+    /// initializer is in scope.
+    /// @param syntax The if-expression.
+    /// @param targetType The contextual target type, or `null`.
+    /// @param canBeVoid Whether the branches may be void (a discarded tail).
+    /// @param deferOnFailure Whether a no-common-type failure is deferred for overload resolution
+    /// (issue #1238).
+    /// @param diagMark The diagnostic count to truncate to when deferring.
+    /// @returns The bound conditional, or an error expression.
+    private func BindIfExpressionBranches(
+        syntax IfExpressionSyntax,
+        targetType TypeSymbol?,
+        canBeVoid bool,
+        deferOnFailure bool,
+        diagMark int32
+    ) BoundExpression {
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
         // Issue #2640: an if-expression branch observes the same nil-guard
         // narrowing as an if-statement. Otherwise a nullable hole can poison
@@ -922,6 +962,23 @@ internal partial class ExpressionBinder {
                 BindExpression(expression, targetType)
             }
         }
+        return BindStatementsBeforeValue(statements, expression, BindTrailingExpression)
+    }
+
+    /// Binds [`statements`](paramref) in order and then, with their
+    /// declarations still in scope, the value produced by
+    /// [`bindValue`](paramref). A block expression's tail and an
+    /// if-expression's initializer (issue #4962) both use it, so the prefix
+    /// statements of either bind exactly like the statements of a block.
+    /// @param statements The prefix statements.
+    /// @param valueSyntax The syntax the synthesized nodes for the value are attributed to.
+    /// @param bindValue Binds the value after the prefix statements.
+    /// @returns The bound prefix statements and the bound value.
+    private func BindStatementsBeforeValue(
+        statements ImmutableArray[StatementSyntax],
+        valueSyntax ExpressionSyntax,
+        bindValue() -> BoundExpression
+    )(Statements ImmutableArray[BoundStatement], Expression BoundExpression) {
         if !statements.Any(
             (statement StatementSyntax) -> statement is UsingStatementSyntax ||
                 statement is AwaitUsingStatementSyntax ||
@@ -932,7 +989,7 @@ internal partial class ExpressionBinder {
             var fastBoundStatements = bindStatementList(
                 statements,
                 () -> {
-                    fastBoundExpression = BindTrailingExpression()
+                    fastBoundExpression = bindValue()
                     sentinel = BoundExpressionStatement(nil, BoundLiteralExpression(nil, value: 0, TypeSymbol.Void))
                     return sentinel
                 }
@@ -955,9 +1012,9 @@ internal partial class ExpressionBinder {
         var boundExpression BoundExpression? = nil
         var result VariableSymbol? = nil
         let bindTrailingStatement() -> BoundStatement = () -> {
-            boundExpression = BindTrailingExpression()
+            boundExpression = bindValue()
             if boundExpression is BoundErrorExpression || boundExpression.Type == TypeSymbol.Void {
-                return BoundExpressionStatement(expression, boundExpression)
+                return BoundExpressionStatement(valueSyntax, boundExpression)
             }
             result = LocalVariableSymbol(
                 "<blockResult${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
@@ -965,17 +1022,17 @@ internal partial class ExpressionBinder {
                 boundExpression.Type ?? TypeSymbol.Error
             )
             $scope.TryDeclareVariable(result)
-            return BoundVariableDeclaration(expression, result, boundExpression)
+            return BoundVariableDeclaration(valueSyntax, result, boundExpression)
         }
         let boundStatements = bindStatementList(statements, bindTrailingStatement)
         let resultExpression = if result != nil {
-            cast[BoundExpression](BoundVariableExpression(expression, result))
+            cast[BoundExpression](BoundVariableExpression(valueSyntax, result))
         } else {
             (
                 if boundExpression is BoundErrorExpression {
                     boundExpression
                 } else {
-                    cast[BoundExpression](BoundLiteralExpression(expression, value: 0, TypeSymbol.Void))
+                    cast[BoundExpression](BoundLiteralExpression(valueSyntax, value: 0, TypeSymbol.Void))
                 }
             )
         }
