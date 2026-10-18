@@ -232,18 +232,6 @@ internal class CustomAttributeEncoder {
         )
     }
 
-    /// Issue #834: emits
-    /// `System.Runtime.CompilerServices.NullableAttribute` on a Param row
-    /// using either the single-byte ctor (when [`flags`](paramref) has
-    /// length 1) or the byte-array ctor (when there are nested generic
-    /// inner-position bytes). Silently no-ops when the attribute type can't
-    /// be resolved (very old TFMs) or when [`flags`](paramref) is empty.
-    /// @param paramHandle The Param row to attach the attribute to.
-    /// @param flags The DFS pre-order nullability byte array.
-    func EmitNullableAttributeOnParameter(paramHandle ParameterHandle, flags ImmutableArray[uint8]) {
-        this.EmitNullableAttributeOnEntity(paramHandle, flags)
-    }
-
     /// Issue #1354: emits a per-field
     /// `System.Runtime.CompilerServices.NullableAttribute` on a Field row
     /// when [`type`](paramref) has at least one position that deviates from
@@ -334,6 +322,47 @@ internal class CustomAttributeEncoder {
         let flags = NullableFlagsBuilder.Build(type)
         if ShouldEmitPerPositionNullable(flags) {
             this.EmitNullableAttributeOnEntity(eventHandle, flags)
+        }
+    }
+
+    /// Issue #4988: stamps a method signature's nullability exactly as
+    /// [`plan`](paramref) decided it — the method-level
+    /// `[NullableContext]`, then a `[Nullable]` on each Param row whose
+    /// bytes differ from that context. Every MethodDef-minting path calls this,
+    /// so whether a position keeps its annotation can no longer depend on which
+    /// declaration path produced the method.
+    /// @param methodHandle The MethodDef the signature belongs to.
+    /// @param plan The signature's plan.
+    /// @param returnRow The sequence-0 Param row; required when (cref:MethodNullabilityPlan.ReturnNeedsAttribute).
+    /// @param parameterRows The parameter rows, one per (cref:MethodNullabilityPlan.ParameterFlags) entry.
+    /// @exception InvalidOperationException The caller did not mint the rows the plan needs. Dropping the
+    /// annotation silently is what #4988 was, so a path that forgets the row fails loudly instead.
+    func EmitMethodNullability(
+        methodHandle MethodDefinitionHandle,
+        plan MethodNullabilityPlan,
+        returnRow ParameterHandle?,
+        parameterRows ImmutableArray[ParameterHandle]
+    ) {
+        if parameterRows.Length != plan.ParameterFlags.Length {
+            throw InvalidOperationException(
+                "Invariant violated: a nullability plan for ${plan.ParameterFlags.Length} parameter(s) was applied to ${parameterRows.Length} Param row(s)."
+            )
+        }
+        if plan.ReturnNeedsAttribute && returnRow == nil {
+            throw InvalidOperationException(
+                "Invariant violated: the return position needs [Nullable] but no sequence-0 Param row was minted for it."
+            )
+        }
+        if plan.ContextByteToEmit is uint8 contextByte {
+            this.EmitNullableContextAttributeOnMethod(methodHandle, contextByte)
+        }
+        if returnRow is {} returnHandle && plan.ReturnNeedsAttribute {
+            this.EmitNullableAttributeOnEntity(returnHandle, plan.ReturnFlags)
+        }
+        for var i = 0; i < parameterRows.Length; i++ {
+            if plan.ParameterNeedsAttribute(i) {
+                this.EmitNullableAttributeOnEntity(parameterRows[i], plan.ParameterFlags[i])
+            }
         }
     }
 
@@ -1418,17 +1447,9 @@ internal class CustomAttributeEncoder {
         /// non-null the type-level `NullableContextAttribute(1)` covers it.
         /// @param flags The DFS pre-order nullability byte array.
         /// @returns `true` when the attribute must be emitted.
-        internal func ShouldEmitPerPositionNullable(flags ImmutableArray[uint8]) bool {
-            if flags.IsDefaultOrEmpty {
-                return false
-            }
-            for b in flags {
-                if b != NullableFlagsBuilder.NotAnnotated {
-                    return true
-                }
-            }
-            return false
-        }
+        internal func ShouldEmitPerPositionNullable(
+            flags ImmutableArray[uint8]
+        ) bool -> MethodNullabilityPlan.NeedsAttribute(flags, NullableFlagsBuilder.NotAnnotated)
 
         private func TryMapUserAttributeConstructorArgumentSlots(
             parameters ImmutableArray[ParameterSymbol],

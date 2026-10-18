@@ -90,7 +90,12 @@ internal class TypeDefEmitter {
     private let emitUserAttributes(EntityHandle, Symbol, AttributeTargetKind) -> void
     private let emitNullableContextOnType(TypeDefinitionHandle) -> void
     private let emitNullableAttributeOnField(FieldDefinitionHandle, TypeSymbol) -> void
-    private let emitNullableAttributeOnParameter(ParameterHandle, ImmutableArray[uint8]) -> void
+    private let emitMethodNullability(
+        MethodDefinitionHandle,
+        MethodNullabilityPlan,
+        ParameterHandle?,
+        ImmutableArray[ParameterHandle]
+    ) -> void
     private let emitTupleElementNamesOnParameter(ParameterHandle, TypeSymbol) -> void
     private let emitIsReadOnlyAttributeOnParameter(ParameterHandle) -> void
     private let emitParamArrayAttributeOnParameter(ParameterHandle) -> void
@@ -130,7 +135,12 @@ internal class TypeDefEmitter {
         emitUserAttributes(EntityHandle, Symbol, AttributeTargetKind) -> void,
         emitNullableContextOnType(TypeDefinitionHandle) -> void,
         emitNullableAttributeOnField(FieldDefinitionHandle, TypeSymbol) -> void,
-        emitNullableAttributeOnParameter(ParameterHandle, ImmutableArray[uint8]) -> void,
+        emitMethodNullability(
+            MethodDefinitionHandle,
+            MethodNullabilityPlan,
+            ParameterHandle?,
+            ImmutableArray[ParameterHandle]
+        ) -> void,
         emitTupleElementNamesOnParameter(ParameterHandle, TypeSymbol) -> void,
         emitIsReadOnlyAttributeOnParameter(ParameterHandle) -> void,
         emitParamArrayAttributeOnParameter(ParameterHandle) -> void,
@@ -173,8 +183,7 @@ internal class TypeDefEmitter {
             throw ArgumentNullException("emitNullableContextOnType")
         this.emitNullableAttributeOnField = emitNullableAttributeOnField ??
             throw ArgumentNullException("emitNullableAttributeOnField")
-        this.emitNullableAttributeOnParameter = emitNullableAttributeOnParameter ??
-            throw ArgumentNullException("emitNullableAttributeOnParameter")
+        this.emitMethodNullability = emitMethodNullability ?? throw ArgumentNullException("emitMethodNullability")
         this.emitTupleElementNamesOnParameter = emitTupleElementNamesOnParameter ??
             throw ArgumentNullException("emitTupleElementNamesOnParameter")
         this.emitIsReadOnlyAttributeOnParameter = emitIsReadOnlyAttributeOnParameter ??
@@ -311,6 +320,9 @@ internal class TypeDefEmitter {
                 firstField = backingHandle
             }
             this.cache.StructFieldDefs[prop.BackingField!!] = backingHandle
+            // Issue #4988: a backing field carries its property's nullability,
+            // as csc's does.
+            this.emitNullableAttributeOnField(backingHandle, prop.Type)
         }
     }
 
@@ -343,6 +355,10 @@ internal class TypeDefEmitter {
                 firstField = backingHandle
             }
             this.cache.StructFieldDefs[ev.BackingField!!] = backingHandle
+            // Issue #4988: the `family` backing field is visible to a derived
+            // type in another assembly, which reads the handler's nullability
+            // from it.
+            this.emitNullableAttributeOnField(backingHandle, ev.Type)
         }
     }
 
@@ -427,6 +443,7 @@ internal class TypeDefEmitter {
                 firstField = backingHandle
             }
             this.cache.StructFieldDefs[prop.BackingField!!] = backingHandle
+            this.emitNullableAttributeOnField(backingHandle, prop.Type)
         }
     }
 
@@ -450,6 +467,7 @@ internal class TypeDefEmitter {
                 firstField = backingHandle
             }
             this.cache.StructFieldDefs[ev.BackingField!!] = backingHandle
+            this.emitNullableAttributeOnField(backingHandle, ev.Type)
         }
     }
 
@@ -999,7 +1017,7 @@ internal class TypeDefEmitter {
             }
         )
         let ctorFirstParamHandle = this.nextParameterHandle()
-        this
+        let ctorObjectRow = this
             .emitCtx
             .Metadata
             .AddParameter(
@@ -1007,7 +1025,7 @@ internal class TypeDefEmitter {
             name: this.emitCtx.Metadata.GetOrAddString("object"),
             sequenceNumber: 1
         )
-        this
+        let ctorMethodRow = this
             .emitCtx
             .Metadata
             .AddParameter(
@@ -1028,6 +1046,21 @@ internal class TypeDefEmitter {
             parameterList: ctorFirstParamHandle
         )
         this.cache.DelegateCtorHandles[delegateSym] = ctorHandle
+        // Issue #4988: even the runtime-provided constructor's signature goes
+        // through the one nullability plan (its `object` is non-null and its
+        // `native int` has no position, so nothing deviates today).
+        this.emitMethodNullability(
+            ctorHandle,
+            MethodNullabilityPlan.ForParameters(
+                TypeSymbol.Void,
+                []ParameterSymbol{
+                    ParameterSymbol("object", TypeSymbol.Object),
+                    ParameterSymbol("method", TypeSymbol.NInt)
+                }
+            ),
+            nil,
+            ImmutableArray.Create(ctorObjectRow, ctorMethodRow)
+        )
         // Sanity check: the actual .ctor row must match the row reserved by
         // the scheduler so the TypeDef's methodList pointer is valid.
         if MetadataTokens.GetRowNumber(ctorHandle) != firstMethodRow {
@@ -1056,6 +1089,11 @@ internal class TypeDefEmitter {
             }
         )
         let invokeFirstParamHandle = this.nextParameterHandle()
+        // Issue #4988: `Invoke` used to mint no return row, so a delegate
+        // returning `Task[Token?]` exported `Task[Token]`.
+        let invokeReturnType = delegateSym.ReturnType ?? TypeSymbol.Void
+        let invokeNullability = MethodNullabilityPlan.ForParameters(invokeReturnType, delegateSym.Parameters)
+        let invokeReturnRow = this.AddReturnRow(invokeNullability, invokeReturnType, RefKind.None, nil)
         let invokeParamHandles = ImmutableArray.CreateBuilder[ParameterHandle](delegateSym.Parameters.Length)
         for var i = 0; i < delegateSym.Parameters.Length; i++ {
             let p = delegateSym.Parameters[i]
@@ -1076,10 +1114,10 @@ internal class TypeDefEmitter {
                     this.emitParamCollectionAttributeOnParameter(paramHandle)
                 }
             }
-            this.EmitConstructorParameterNullability(paramHandle, p)
+            this.EmitParameterTupleNames(paramHandle, p)
         }
         let invokeAttrs = MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual | MethodAttributes.NewSlot
-        let invokeParamList = if delegateSym.Parameters.Length > 0 {
+        let invokeParamList = if delegateSym.Parameters.Length > 0 || invokeReturnRow != nil {
             invokeFirstParamHandle
         } else {
             this.nextParameterHandle()
@@ -1099,7 +1137,9 @@ internal class TypeDefEmitter {
         // Issue #2006: delegate Invoke parameters must keep their user
         // annotations same as the other Parameter-row-minting emit sites, or
         // @Note-style attributes silently vanish for delegate params.
-        this.EmitUserAttributesOnParameters(invokeParamHandles.MoveToImmutable(), delegateSym.Parameters)
+        let invokeRows = invokeParamHandles.MoveToImmutable()
+        this.EmitUserAttributesOnParameters(invokeRows, delegateSym.Parameters)
+        this.StampSignature(invokeHandle, invokeNullability, invokeReturnRow, invokeReturnType, nil, invokeRows)
         // ADR-0047 §3: user annotations targeting the delegate type land on
         // the TypeDef row (same as struct/interface/enum).
         this.emitUserAttributes(delegateTypeDef, delegateSym, AttributeTargetKind.Type)
@@ -1143,7 +1183,11 @@ internal class TypeDefEmitter {
         // ParameterAttributes.In/Out and the IsReadOnlyAttribute for `in`),
         // mirroring EmitFunction, so interface parameters keep their names in
         // metadata (named arguments / IDE signature help from consumers).
-        let returnHandle = this.AddReadOnlyReturnRow(method)
+        // Issue #4988: the return row comes from the same decision a method
+        // with a body makes — a bodyless slot returning `Task[Token?]` needs
+        // it just as much.
+        let nullability = MethodNullabilityPlan.ForParameters(method.Type, method.Parameters)
+        let returnHandle = this.AddReturnRow(nullability, method.Type, method.ReturnRefKind, method)
         var firstParamHandle = this.AddRefKindAwareParameterRows(method.Parameters, out var paramHandles)
         firstParamHandle = returnHandle ?? firstParamHandle
         let attrs = MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual | MethodAttributes.Abstract | MethodAttributes.NewSlot
@@ -1169,18 +1213,78 @@ internal class TypeDefEmitter {
         // method signature emit as CustomAttribute rows on the MethodDef,
         // mirroring the bodied (EmitFunction) path.
         this.emitUserAttributes(handle, method, AttributeTargetKind.Method)
+        this.StampSignature(handle, nullability, returnHandle, method.Type, method, paramHandles)
     }
 
-    private func AddReadOnlyReturnRow(method FunctionSymbol) ParameterHandle? {
-        if method.ReturnRefKind != RefKind.RefReadOnly {
+    /// Issue #4988: mints a signature's sequence-0 `Param` row when
+    /// (cref:ParameterMetadataEmitter.NeedsReturnParameter) says it needs
+    /// one, stamping the `ref readonly` marker at once. Call it before the
+    /// parameter rows: ECMA-335 II.22.33 orders a method's rows by sequence.
+    /// @param plan The signature's nullability plan.
+    /// @param returnType The declared return type.
+    /// @param returnRefKind The return's ref kind.
+    /// @param owner The declaration whose `@return:` annotations apply, if any.
+    /// @returns The row, or `null` when the return position carries nothing.
+    private func AddReturnRow(
+        plan MethodNullabilityPlan,
+        returnType TypeSymbol,
+        returnRefKind RefKind,
+        owner Symbol?
+    ) ParameterHandle? {
+        if !ParameterMetadataEmitter.NeedsReturnParameter(plan, returnType, returnRefKind, owner) {
             return nil
         }
-        let handle = this
-            .emitCtx
-            .Metadata
-            .AddParameter(ParameterAttributes.None, default(StringHandle), sequenceNumber: 0)
-        this.emitIsReadOnlyAttributeOnParameter(handle)
+        let handle = ParameterMetadataEmitter.AddReturnParameter(this.emitCtx)
+        if returnRefKind == RefKind.RefReadOnly {
+            this.emitIsReadOnlyAttributeOnParameter(handle)
+        }
         return handle
+    }
+
+    /// Issue #4988: stamps what a signature's rows carry once its MethodDef
+    /// exists — the return row's `@return:` annotations, the nullability
+    /// [`plan`](paramref) decided, and the return's tuple element names —
+    /// in the order the bodied-method path (FunctionEmitter) uses.
+    /// @param handle The MethodDef.
+    /// @param plan The signature's nullability plan.
+    /// @param returnRow The row (cref:AddReturnRow) minted, if any.
+    /// @param returnType The declared return type.
+    /// @param owner The declaration whose `@return:` annotations apply, if any.
+    /// @param parameterRows The parameter rows the plan covers.
+    private func StampSignature(
+        handle MethodDefinitionHandle,
+        plan MethodNullabilityPlan,
+        returnRow ParameterHandle?,
+        returnType TypeSymbol,
+        owner Symbol?,
+        parameterRows ImmutableArray[ParameterHandle]
+    ) {
+        if returnRow is {} userReturnRow && owner != nil {
+            this.emitUserAttributes(userReturnRow, owner, AttributeTargetKind.Return)
+        }
+        this.emitMethodNullability(handle, plan, returnRow, parameterRows)
+        if returnRow is {} tupleReturnRow {
+            this.emitTupleElementNamesOnParameter(tupleReturnRow, returnType)
+        }
+    }
+
+    /// Issue #4988: stamps a constructor's parameter rows — their user
+    /// annotations, then their nullability through the one plan.
+    /// @param handle The constructor's MethodDef.
+    /// @param parameterRows The rows, in source-parameter order.
+    /// @param parameters The source parameters.
+    private func StampConstructorParameters(
+        handle MethodDefinitionHandle,
+        parameterRows ImmutableArray[ParameterHandle],
+        parameters ImmutableArray[ParameterSymbol]
+    ) {
+        this.EmitUserAttributesOnParameters(parameterRows, parameters)
+        this.emitMethodNullability(
+            handle,
+            MethodNullabilityPlan.ForParameters(TypeSymbol.Void, parameters),
+            nil,
+            parameterRows
+        )
     }
 
     /// ADR-0089 / issue #755: emits a static-virtual interface
@@ -1209,7 +1313,8 @@ internal class TypeDefEmitter {
         )
         // Issue #1610: Parameter rows with names and In/Out flags, mirroring
         // EmitFunction.
-        let returnHandle = this.AddReadOnlyReturnRow(method)
+        let nullability = MethodNullabilityPlan.ForParameters(method.Type, method.Parameters)
+        let returnHandle = this.AddReturnRow(nullability, method.Type, method.ReturnRefKind, method)
         var firstParamHandle = this.AddRefKindAwareParameterRows(method.Parameters, out var paramHandles)
         firstParamHandle = returnHandle ?? firstParamHandle
         var attrs = MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Static | MethodAttributes.Virtual | MethodAttributes.NewSlot
@@ -1237,6 +1342,7 @@ internal class TypeDefEmitter {
         // Issue #2129: method-level @annotations on a static-virtual interface
         // method emit as CustomAttribute rows on the MethodDef.
         this.emitUserAttributes(handle, method, AttributeTargetKind.Method)
+        this.StampSignature(handle, nullability, returnHandle, method.Type, method, paramHandles)
     }
 
     /// Issue #1610: emits one `Parameter` row per source parameter,
@@ -1274,19 +1380,16 @@ internal class TypeDefEmitter {
                     this.emitParamCollectionAttributeOnParameter(paramHandle)
                 }
             }
-            this.EmitConstructorParameterNullability(paramHandle, p)
+            this.EmitParameterTupleNames(paramHandle, p)
         }
         paramHandles = handles.MoveToImmutable()
         return first
     }
 
-    private func EmitConstructorParameterNullability(paramHandle ParameterHandle, parameter ParameterSymbol) {
-        let nullableFlags = NullableFlagsBuilder.Build(parameter.Type)
-        if !nullableFlags.IsDefaultOrEmpty &&
-            !(nullableFlags.Length == 1 && nullableFlags[0] == NullableFlagsBuilder.NotAnnotated) {
-            this.emitNullableAttributeOnParameter(paramHandle, nullableFlags)
-        }
-        // ADR-0172 Phase B: parameter rows also carry tuple element names.
+    /// ADR-0172 Phase B: parameter rows carry tuple element names. Their
+    /// nullability is not stamped here: it needs the whole signature's plan,
+    /// which the caller applies once the MethodDef exists (issue #4988).
+    private func EmitParameterTupleNames(paramHandle ParameterHandle, parameter ParameterSymbol) {
         this.emitTupleElementNamesOnParameter(paramHandle, parameter.Type)
     }
 
@@ -1439,7 +1542,7 @@ internal class TypeDefEmitter {
             bodyOffset: bodyOffset,
             parameterList: firstParameter
         )
-        this.EmitUserAttributesOnParameters(parameterHandles, parameters)
+        this.StampConstructorParameters(constructor, parameterHandles, parameters)
         return constructor
     }
 
@@ -1557,7 +1660,7 @@ internal class TypeDefEmitter {
         // Issue #2006: primary-ctor parameters must keep their user
         // annotations same as explicit ctors / interface methods, or
         // @Note-style attributes silently vanish for primary-ctor params.
-        this.EmitUserAttributesOnParameters(paramHandles, parameters)
+        this.StampConstructorParameters(ctorHandle, paramHandles, parameters)
         return ctorHandle
     }
 
@@ -1631,7 +1734,7 @@ internal class TypeDefEmitter {
         // Issue #2006: primary-ctor parameters must keep their user
         // annotations same as explicit ctors / interface methods, or
         // @Note-style attributes silently vanish for primary-ctor params.
-        this.EmitUserAttributesOnParameters(paramHandles, parameters)
+        this.StampConstructorParameters(ctorHandle, paramHandles, parameters)
         return ctorHandle
     }
 
@@ -1674,16 +1777,24 @@ internal class TypeDefEmitter {
                     this.emitParamCollectionAttributeOnParameter(paramHandle)
                 }
             }
-            this.EmitConstructorParameterNullability(paramHandle, p)
+            this.EmitParameterTupleNames(paramHandle, p)
         }
         paramHandles = handles.MoveToImmutable()
         return first
     }
 
-    internal func AddPrimaryCtorParameters(parameters ImmutableArray[ParameterSymbol]) ParameterHandle {
+    /// Adds a synthesized primary constructor's parameter rows with their user
+    /// annotations. The caller stamps their nullability once the MethodDef
+    /// exists, through the same plan as every other signature (issue #4988).
+    /// @param parameters The constructor's parameters.
+    /// @returns The `parameterList` anchor and the rows, in parameter order.
+    internal func AddPrimaryCtorParameters(parameters ImmutableArray[ParameterSymbol])(
+        First ParameterHandle,
+        Rows ImmutableArray[ParameterHandle]
+    ) {
         let first = this.AddPrimaryCtorParameterRows(parameters, out var parameterHandles)
         this.EmitUserAttributesOnParameters(parameterHandles, parameters)
-        return first
+        return (first, parameterHandles)
     }
 
     /// Issue #306 / #2766: emits a class or plain-struct constructor materialized from an explicit
@@ -1755,7 +1866,7 @@ internal class TypeDefEmitter {
         // Issue #1913: constructor parameters must carry their user
         // annotations same as the class-method path (bug B1 — this was
         // dropped even after the binder-level #1913 fix).
-        this.EmitUserAttributesOnParameters(ctorParamHandles, function.Parameters)
+        this.StampConstructorParameters(ctorHandle, ctorParamHandles, function.Parameters)
         return ctorHandle
     }
 

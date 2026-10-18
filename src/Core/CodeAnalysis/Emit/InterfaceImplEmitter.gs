@@ -765,22 +765,31 @@ internal class InterfaceImplEmitter {
                     }
                 }
             )
-            let firstParameter = this.outer.customAttrEncoder.NextParameterHandle()
-            for var i = 0; i < parameterCount; i++ {
-                let name = if i < bridge.Property.Parameters.Length {
-                    bridge.Property.Parameters[i].Name
-                } else {
-                    "value"
-                }
-                this
-                    .emitCtx
-                    .Metadata
-                    .AddParameter(
-                    ParameterAttributes.None,
-                    this.emitCtx.Metadata.GetOrAddString(name),
-                    sequenceNumber: i + 1
+            // Issue #4988: the bridge's rows and nullability come from the
+            // same plan as every other signature, over its slot types.
+            let bridgeParameters = ImmutableArray.CreateBuilder[ParameterSymbol](parameterCount)
+            for parameter in bridge.Property.Parameters {
+                bridgeParameters.Add(
+                    ParameterSymbol(
+                        parameter.Name,
+                        DeclarationBinder.GetInterfacePropertySlotType(parameter.Type, typeMap)
+                    )
                 )
             }
+            if bridge.IsSetter {
+                bridgeParameters.Add(ParameterSymbol("value", propertyType))
+            }
+            let bridgeRows = ParameterMetadataEmitter.AddSignatureRows(
+                this.emitCtx,
+                if bridge.IsSetter {
+                    TypeSymbol.Void
+                } else {
+                    propertyType
+                },
+                RefKind.None,
+                bridgeParameters.MoveToImmutable()
+            )
+            let firstParameter = bridgeRows.First
             let emittedHandle = this
                 .emitCtx
                 .Metadata
@@ -797,6 +806,10 @@ internal class InterfaceImplEmitter {
                     "Imported accessor bridge MethodDef row was not emitted in planned order."
                 )
             }
+            this
+                .outer
+                .customAttrEncoder
+                .EmitMethodNullability(emittedHandle, bridgeRows.Nullability, bridgeRows.ReturnRow, bridgeRows.Rows)
             this
                 .emitCtx
                 .Metadata
@@ -968,11 +981,18 @@ internal class InterfaceImplEmitter {
                 .signatures
                 .EncodeTypeSymbol(parameters.AddParameter().Type(), eventType)
         )
-        let firstParameter = this.outer.customAttrEncoder.NextParameterHandle()
-        this
-            .emitCtx
-            .Metadata
-            .AddParameter(ParameterAttributes.None, this.emitCtx.Metadata.GetOrAddString("value"), sequenceNumber: 1)
+        let bridgeRows = ParameterMetadataEmitter.AddSignatureRows(
+            this.emitCtx,
+            TypeSymbol.Void,
+            RefKind.None,
+            ImmutableArray.Create(
+                ParameterSymbol(
+                    "value",
+                    Invariant.Required(eventType, "an inherited event's handler type substitutes into its bridge")
+                )
+            )
+        )
+        let firstParameter = bridgeRows.First
         let emittedHandle = this
             .emitCtx
             .Metadata
@@ -999,6 +1019,10 @@ internal class InterfaceImplEmitter {
         if emittedHandle != expectedHandle {
             throw InvalidOperationException("Inherited event bridge MethodDef row was not emitted in planned order.")
         }
+        this
+            .outer
+            .customAttrEncoder
+            .EmitMethodNullability(emittedHandle, bridgeRows.Nullability, bridgeRows.ReturnRow, bridgeRows.Rows)
     }
 
     /// ADR-0089 / issue #755: emit MethodImpl rows binding each declared

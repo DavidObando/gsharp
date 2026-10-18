@@ -594,9 +594,26 @@ internal shared class NullableFlagsBuilder {
             }
             return
         }
+        // Issue #4988: an open self-reference under `?` (a generic data
+        // class's synthesized `==(R[T]? left, R[T]? right)`) lays out its own
+        // type parameters, exactly as the non-nullable arm in Append does.
+        // Without them the array was the scalar `[2]`, which a reader applies
+        // to every position and so read `T` as `T?`.
+        if type is StructSymbol openStruct && !openStruct.TypeParameters.IsDefaultOrEmpty {
+            for defTp in openStruct.TypeParameters {
+                Append(defTp, builder)
+            }
+            return
+        }
         if type is InterfaceSymbol iface && !iface.TypeArguments.IsDefaultOrEmpty {
             for arg in iface.TypeArguments {
                 Append(arg, builder)
+            }
+            return
+        }
+        if type is InterfaceSymbol openInterface && !openInterface.TypeParameters.IsDefaultOrEmpty {
+            for defTp in openInterface.TypeParameters {
+                Append(defTp, builder)
             }
             return
         }
