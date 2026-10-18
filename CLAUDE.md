@@ -96,8 +96,13 @@ The self-migration gates (the nightly self-migration and the hot-core
 translation guard) are retired: there is no C# compiler source left on `main`
 to translate. What gates a PR now:
 
+- **`ci` and `docs-ci`** require every selected job to pass. PR workflows use
+  `build/ci-selection.py` to select components and their consumers (ADR-0200).
+  Unknown inputs and shared CI changes select full validation. Official builds
+  retain full validation. The run summary reports selection reasons.
 - **`build`** builds the whole solution with the pinned SDK. This is also the
   smoke test that the pinned compiler can still compile `src/Core`.
+  Scoped PRs build selected product graphs instead.
 - **`tests`** shards, one per test project (the big ones split by test-name
   band). `test-partition` proves every test runs exactly once. Rebalancing is a
   change to `build/generate-ci-test-matrix.py`; the verifier says whether the
@@ -114,7 +119,7 @@ to translate. What gates a PR now:
   evidence, not a gate on PRs or releases (the publish requirement was removed
   by #4914), and no CI workflow runs it. It needs the controller's pinned .NET
   layout and takes about eight hours (#4885). A PR only runs the controller's
-  contract tests in `test-partition`, which are not certification.
+  contract tests in `harness (stage2)`, which are not certification.
 - **`cs2gs-corpus`** still guards cs2gs as a product on every PR: it runs the
   C# corpus under `tools/cs2gs/corpus` against the gap ledger.
 - **cs2gs apps nightly** (`cs2gs-apps-nightly`) runs cs2gs as built from `main`

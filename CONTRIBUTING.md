@@ -129,6 +129,17 @@ local full-suite runs are not expected for focused changes. Run relevant e2e
 scripts under [`e2etests/`](e2etests/) when changing the SDK, templates,
 debugging, packaging, or generated projects.
 
+PR CI selects components and their consumers with `build/ci-selection.py`
+([ADR-0200](docs/adr/0200-component-aware-pr-validation.md)). Unknown inputs
+select full validation. Each workflow reports its selection reasons.
+The stable required checks are `ci` and `docs-ci`. Official builds still run
+full validation. When changing routing or component dependencies, run:
+
+```sh
+python3 build/test-ci-selection.py
+python3 build/test-ci-test-matrix.py
+```
+
 `Cs2Gs.Tests` launches nested SDK builds. Its stability depends on both
 invariants pinned by `TestHostProcessSetupTests`: MSBuild node reuse is disabled
 (#2407) and xUnit test execution is serialized (#2689). Do not remove either

@@ -18,11 +18,6 @@ on:
       - '.github/workflows/pages.yml'
   pull_request:
     branches: [main]
-    paths:
-      - 'website/**'
-      - 'samples/**'
-      - 'global.json'
-      - '.github/workflows/pages.yml'
   schedule:
     - cron: '23 06 * * *'
   workflow_dispatch:
@@ -36,7 +31,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  select:
+    runs-on: ubuntu-latest
+    outputs:
+      plan: ${{ steps.select.outputs.plan }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - run: python3 build/test-ci-selection.py
+      - name: Select affected components
+        id: select
+        run: python3 build/ci-selection.py
+
   build:
+    needs: select
+    if: contains(fromJSON(needs.select.outputs.plan).docs_jobs, 'build')
     name: Build docs
     runs-on: ubuntu-latest
     steps:
@@ -102,6 +112,8 @@ jobs:
           path: website/build
 
   visual:
+    needs: select
+    if: contains(fromJSON(needs.select.outputs.plan).docs_jobs, 'visual')
     name: Website visual baselines
     runs-on: macos-26
     steps:
@@ -126,6 +138,18 @@ jobs:
             website/playwright-report
             website/test-results
           retention-days: 14
+
+  docs-ci:
+    if: always()
+    needs: [select, build, visual]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Require every selected docs job to succeed
+        env:
+          PLAN: ${{ needs.select.outputs.plan }}
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 build/ci-selection.py --check docs
 
   deploy:
     name: Deploy to GitHub Pages

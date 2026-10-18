@@ -26,6 +26,7 @@ verifier is what says whether the result is still a partition.
 Band costs come from run 33429269051's trx artifacts (see the shard comments).
 """
 
+import argparse
 import json
 import re
 import subprocess
@@ -179,8 +180,28 @@ def sharded_entries(project: str, bands: dict[str, list[str]]) -> list[dict]:
     ]
 
 
+def selected_entries(entries, projects):
+    """Keep canonical bands and intersect the members of grouped shards."""
+    if projects is None:
+        return entries
+    selected = set(projects.split())
+    available = {p for entry in entries for p in entry["project"].split()}
+    if selected - available:
+        raise ValueError(f"Unknown selected test projects: {sorted(selected - available)}")
+    result = []
+    for entry in entries:
+        members = [p for p in entry["project"].split() if p in selected]
+        if members:
+            result.append({**entry, "project": " ".join(members)})
+    return result
+
+
 def main() -> int:
-    solution = sys.argv[1] if len(sys.argv) > 1 else "GSharp.slnx"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("solution", nargs="?", default="GSharp.slnx")
+    parser.add_argument("--projects", default=None)
+    args = parser.parse_args()
+    solution = args.solution
     result = subprocess.run(
         ["dotnet", "sln", solution, "list"],
         check=True,
@@ -217,7 +238,7 @@ def main() -> int:
         raise SystemExit("Generated test matrix contains duplicate names.")
 
     entries.sort(key=lambda entry: entry["name"])
-    print(json.dumps({"include": entries}, separators=(",", ":")))
+    print(json.dumps({"include": selected_entries(entries, args.projects)}, separators=(",", ":")))
     return 0
 
 
