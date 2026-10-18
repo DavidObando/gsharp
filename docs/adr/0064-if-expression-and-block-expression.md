@@ -313,6 +313,11 @@ and when the accessed name is one `Nullable<T>` itself declares, a lookup that
 binds nothing (`NarrowedTypeMayHaveMember`) asks whether `T` could have a
 member of that name: its own instance or static members, its interfaces or
 type-parameter constraints, or an applicable source or imported extension.
+Imported extension receivers use the CLR overload resolver's existing input
+inference, constraint checks and implicit conversions, including generic
+struct receivers and numeric widening. Unknown symbolic receivers and bounds
+that can be widened by other arguments remain conservative. Explicit generic
+calls keep the narrowed binding (`Nullable<T>` declares no generic methods).
 Only when none can is the member bound against the storage read. The member
 and its arguments are bound once either way, so a member `T` declares keeps
 its own overload diagnostics even when no overload applies, and an imported

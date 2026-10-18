@@ -1210,6 +1210,58 @@ internal shared class ClrOverloadResolution {
         return true
     }
 
+    /// Tests only an extension receiver, without binding its arguments.
+    /// Shares final resolution's inference, constraints and CLR conversions;
+    /// unknown symbolic receivers or argument-dependent bounds stay possible.
+    internal func MayAcceptExtensionReceiver(method MethodInfo, receiver TypeSymbol) bool {
+        let receiverClr = receiver.ClrType
+        if receiverClr == nil || receiverClr.ContainsGenericParameters || TypeSymbol.ContainsSameCompilationUserType(
+            receiver
+        ) {
+            return true
+        }
+        let parameters = method.GetParameters()
+        if parameters.Length == 0 {
+            return false
+        }
+        var parameterType = parameters[0].ParameterType
+        if parameterType.IsByRef {
+            parameterType = parameterType.GetElementType() ?? parameterType
+        }
+        if parameterType.ContainsGenericParameters {
+            let bounds = Dictionary[string, Type](StringComparer.Ordinal)
+            if !UnifyForInference(parameterType, receiverClr, bounds) {
+                return false
+            }
+            if !TryCloseInferredType(parameterType, bounds, out var closedReceiver) || closedReceiver == nil {
+                return false
+            }
+            parameterType = closedReceiver
+            let typeParameters = method.GetGenericArguments()
+            let typeArguments = [typeParameters.Length]Type
+            for var i = 0; i < typeParameters.Length; i++ {
+                typeArguments[i] = if bounds.TryGetValue(typeParameters[i].Name, out var argument) {
+                    argument
+                } else {
+                    typeParameters[i]
+                }
+            }
+            if !SatisfiesGenericConstraints(method, typeArguments) {
+                // Other arguments can widen an inferred receiver bound (for
+                // example, int32 plus object fixes `T : class` to object).
+                return parameters.Skip(1).Any(
+                    (parameter ParameterInfo) -> typeParameters.Any(
+                        (typeParameter Type) -> bounds.ContainsKey(typeParameter.Name) &&
+                            MentionsGenericParameter(parameter.ParameterType, typeParameter)
+                    )
+                )
+            }
+        }
+        return ClassifyImplicit(parameterType, receiverClr) != ImplicitConversionKind.None ||
+            Conversion
+            .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(parameters[0])).IsImplicit
+    }
+
     /// Partial method type inference for deferred arrow-lambda arguments
     /// (follow-up to issue #891). When a generic method's lambda
     /// parameter return type is a method type parameter that can only be

@@ -243,6 +243,75 @@ Console.WriteLine("${pairValue(KeyValuePair[string, int32]("a", 7))} ${pairValue
         Assert.Equal("7 -1 5 0" + Environment.NewLine, result.Output)
     }
 
+    @Fact
+    func Imported_Extension_Receiver_Conversions_Keep_The_Narrowed_Binding() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public struct Meter {
+        public static implicit operator long(Meter value) => 1;
+    }
+    public static class Extensions {
+        public static int GetValueOrDefault(this long value) => 99;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func direct(n int32) int32 -> n.GetValueOrDefault()
+func narrowed(n int32?) int32 -> n != nil ? n.GetValueOrDefault() : 0
+func directMeter(n Meter) int32 -> n.GetValueOrDefault()
+func narrowedMeter(n Meter?) int32 -> n != nil ? n.GetValueOrDefault() : 0
+Console.WriteLine("${direct(5)} ${narrowed(5)} ${narrowed(nil)} ${directMeter(Meter())} ${narrowedMeter(Meter())} ${narrowedMeter(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99 99 0 99 99 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
+    func Imported_Generic_Struct_Extension_Receivers_Keep_The_Narrowed_Binding() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public static class Extensions {
+        public static int GetValueOrDefault<T>(this System.Collections.Generic.KeyValuePair<T, int> value) => value.Value + 100;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import System.Collections.Generic
+import Fixture4986
+func direct(n KeyValuePair[string, int32]) int32 -> n.GetValueOrDefault()
+func narrowed(n KeyValuePair[string, int32]?) int32 -> n != nil ? n.GetValueOrDefault() : -1
+let pair = KeyValuePair[string, int32]("a", 7)
+Console.WriteLine("${direct(pair)} ${narrowed(pair)} ${narrowed(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("107 107 -1" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData("public static int GetValueOrDefault(this System.Enum value) => 99;")
+    @InlineData("public static int GetValueOrDefault<T>(this T value) where T : class => 99;")
+    func Incompatible_Imported_Extension_Receivers_Do_Not_Block_Storage(method string) {
+        using let fixture = CSharpFixture("namespace Fixture4986 { public static class Extensions { " + method + " } }")
+        let result = CompileAndRun(`import System
+import Fixture4986
+func narrowed(n int32?) int32 -> n != nil ? n.GetValueOrDefault() : 0
+Console.WriteLine("${narrowed(7)} ${narrowed(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("7 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
+    func Other_Arguments_And_Explicit_Type_Arguments_Can_Widen_Receiver_Bounds() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public static class Extensions {
+        public static int GetValueOrDefault<T>(this T value) where T : class => 81;
+        public static int GetValueOrDefault<T>(this T value, T other) where T : class => 91;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func explicitPick(n int32?) int32 -> n != nil ? n.GetValueOrDefault[object]() : 0
+func argument(n int32?) int32 -> n != nil ? n.GetValueOrDefault(Object()) : 0
+Console.WriteLine("${explicitPick(7)} ${argument(7)} ${explicitPick(nil)} ${argument(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("81 91 0 0" + Environment.NewLine, result.Output)
+    }
+
     /// A second argument bind hoisted another `out var`, reporting GS0102.
     @Fact
     func Arguments_Are_Bound_Once() {
@@ -361,7 +430,7 @@ Console.WriteLine("${e.Compile()(4)} ${e.Compile()(nil)} ${h.Compile()(1)} ${h.C
         }
 
         /// Compiles through the real driver, verifies IL, and executes.
-        private func CompileAndRun(source string)(Output string, CompilerOutput string) {
+        private func CompileAndRun(source string, reference string? = nil)(Output string, CompilerOutput string) {
             let outputDirectory = Path.Combine(
                 AppContext.BaseDirectory,
                 "Issue4986NarrowedNullableMemberTests",
@@ -380,9 +449,14 @@ Console.WriteLine("${e.Compile()(4)} ${e.Compile()(nil)} ${h.Compile()(1)} ${h.C
                 Console.SetError(standardError)
                 var exitCode int32
                 try {
-                    exitCode = Program.Main(
+                    let arguments = List[string](
                         []string{"/out:" + outputPath, "/target:exe", "/targetframework:net10.0", sourcePath}
                     )
+                    if reference != nil {
+                        arguments.Add("/reference:" + reference)
+                        File.Copy(reference, Path.Combine(outputDirectory, Path.GetFileName(reference)))
+                    }
+                    exitCode = Program.Main(arguments.ToArray())
                 } finally {
                     Console.SetOut(previousOut)
                     Console.SetError(previousError)
@@ -392,7 +466,14 @@ stdout:
 ` + "$standardOut" + `
 stderr:
 ` + "$standardError"))
-                IlVerifier.Verify(outputPath)
+                IlVerifier.Verify(
+                    outputPath,
+                    if reference != nil {
+                        []string{reference}
+                    } else {
+                        Array.Empty[string]()
+                    }
+                )
                 let startInfo = ProcessStartInfo("dotnet"){
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,

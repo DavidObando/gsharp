@@ -225,44 +225,10 @@ internal partial class ExpressionBinder {
     }
 
     private func ImportedExtensionMayApply(type TypeSymbol, name string) bool {
-        let receiverClr = type.ClrType
         for candidate in this.memberLookup.CollectImportedExtensionMethods(name) {
             try {
-                let parameters = candidate.GetParameters()
-                if parameters.Length == 0 {
-                    continue
-                }
-                var thisType = parameters[0].ParameterType
-                if thisType.IsByRef {
-                    thisType = thisType.GetElementType() ?? thisType
-                }
-                if thisType.IsGenericParameter ||
-                    thisType.FullName == "System.Object" ||
-                    thisType.FullName == "System.ValueType" ||
-                    thisType.FullName == "System.Enum" {
+                if ClrOverloadResolution.MayAcceptExtensionReceiver(candidate, type) {
                     return true
-                }
-                if receiverClr == nil {
-                    if thisType.IsInterface {
-                        return true
-                    }
-                    continue
-                }
-                if ClrTypeUtilities.AreSame(thisType, receiverClr) {
-                    return true
-                }
-                if thisType.IsInterface {
-                    for implemented in receiverClr.GetInterfaces() {
-                        if ClrTypeUtilities.AreSame(implemented, thisType) ||
-                            (
-                            implemented.IsGenericType && thisType.IsGenericType && ClrTypeUtilities.AreSame(
-                                implemented.GetGenericTypeDefinition(),
-                                thisType.GetGenericTypeDefinition()
-                            )
-                        ) {
-                            return true
-                        }
-                    }
                 }
             } catch (ex Exception) when !(ex is OutOfMemoryException) {
                 return true
@@ -4690,11 +4656,11 @@ internal partial class ExpressionBinder {
         /// accessor step looks up: `Value` in `n.Value.X`,
         /// `GetValueOrDefault` in `n.GetValueOrDefault(7)`.
         /// @param rightPart The syntax after the receiver's `.`.
-        /// @returns The head identifier token, or `nil` when
-        /// [`rightPart`](paramref) does not start with a member name.
+        /// @returns The head identifier token, or `nil` without a member name
+        /// or for explicit generic calls (`Nullable<T>` has no generic methods).
         private func AccessorHeadToken(rightPart ExpressionSyntax?) SyntaxToken? -> switch rightPart {
             case name is NameExpressionSyntax: name.IdentifierToken
-            case call is CallExpressionSyntax: call.Identifier
+            case call is CallExpressionSyntax when call.TypeArgumentList == nil: call.Identifier
             case accessor is AccessorExpressionSyntax: AccessorHeadToken(accessor.LeftPart)
             case index is IndexExpressionSyntax: AccessorHeadToken(index.Target)
             case unary is UnaryExpressionSyntax when unary
