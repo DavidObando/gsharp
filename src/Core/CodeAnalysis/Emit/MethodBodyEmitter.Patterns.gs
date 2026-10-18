@@ -116,11 +116,10 @@ internal partial class MethodBodyEmitter {
             if hasResult {
                 this.il.StoreLocal(resultSlot)
             }
-        } else if node.Type == TypeSymbol.Void {
-            // The void switch: like the switch statement, an unmatched value
-            // runs no arm.
-            let _ = 0
-        } else {
+        } else if node.Type != TypeSymbol.Void {
+            // A value-producing switch with no match throws. The void switch
+            // (like the switch statement) runs no arm for an unmatched value,
+            // so it emits nothing here.
             const Message = "Unmatched switch expression value."
             let constructor = BclMember.Ctor(typeof(InvalidOperationException), typeof(string))
             this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(Message))
