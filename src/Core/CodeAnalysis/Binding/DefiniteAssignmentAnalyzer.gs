@@ -1352,7 +1352,7 @@ internal shared class DefiniteAssignmentAnalyzer {
                     // statement), so the incoming state is one of the paths. A
                     // value-producing switch without a default throws instead.
                     if switchExpression.Type == TypeSymbol.Void && !switchExpression.Arms.Any(
-                        (arm BoundSwitchExpressionArm) -> arm.IsDefault
+                        (arm BoundSwitchExpressionArm) -> arm.IsCatchAll
                     ) {
                         armAssigned.Add(HashSet[VariableSymbol](assigned))
                         armAliases.Add(Dictionary[VariableSymbol, VariableSymbol](pointerAliases))

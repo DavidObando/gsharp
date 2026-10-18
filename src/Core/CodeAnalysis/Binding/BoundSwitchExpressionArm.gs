@@ -43,4 +43,7 @@ class BoundSwitchExpressionArm : BoundNode {
     /// Gets a value indicating whether this is the `default` arm.
     @MemberNotNullWhen(false, "Pattern")
     prop IsDefault bool -> Pattern == nil
+
+    /// Gets whether this arm matches every input without a guard.
+    prop IsCatchAll bool -> Guard == nil && (Pattern == nil || Pattern is BoundDiscardPattern)
 }

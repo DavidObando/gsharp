@@ -1747,7 +1747,7 @@ shared class SpillSequenceSpiller {
                 let arm = arms[i]
                 indexArms.Add(BoundSwitchExpressionArm(nil, arm.Pattern, arm.Guard, BoundLiteralExpression(nil, i)))
             }
-            if switchExpr.Type == TypeSymbol.Void && !arms.Any((arm BoundSwitchExpressionArm) -> arm.IsDefault) {
+            if switchExpr.Type == TypeSymbol.Void && !arms.Any((arm BoundSwitchExpressionArm) -> arm.IsCatchAll) {
                 // The void switch runs no arm for an unmatched value (see
                 // ExpressionBinder.BindSwitchExpression), so the index switch
                 // gets a default that selects none instead of throwing.

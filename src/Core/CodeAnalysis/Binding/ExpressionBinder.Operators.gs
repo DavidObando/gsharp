@@ -955,7 +955,7 @@ internal partial class ExpressionBinder {
 
     /// Issue #4966 (ADR-0202): reports GS0362 for each unresolved bare
     /// `default` placeholder that [`value`](paramref) yields — the value itself,
-    /// a block expression's tail, or a conditional's branch, recursively.
+    /// a block expression's tail, a conditional's branch or a switch arm, recursively.
     /// @param value The value of a discarded position.
     /// @returns `true` when any was reported.
     private func ReportUnresolvedBareDefaults(value BoundExpression?) bool {
@@ -975,6 +975,13 @@ internal partial class ExpressionBinder {
                 let inTrue = ReportUnresolvedBareDefaults(conditional.WhenTrue)
                 let inFalse = ReportUnresolvedBareDefaults(conditional.WhenFalse)
                 return inTrue || inFalse
+            }
+            case switchExpression is BoundSwitchExpression {
+                var reported = false
+                for arm in switchExpression.Arms {
+                    reported = ReportUnresolvedBareDefaults(arm.Result) || reported
+                }
+                return reported
             }
             default {
                 return false
@@ -1111,21 +1118,26 @@ internal partial class ExpressionBinder {
         var boundExpression BoundExpression? = nil
         var result VariableSymbol? = nil
         let bindTrailingStatement() -> BoundStatement = () -> {
-            boundExpression = bindValue()
+            var value = bindValue()
+            // Cleanup replaces a tail with a result-local read. Diagnose an
+            // unresolved value before that replacement hides its defaults.
+            if value.Type == TypeSymbol.Error && ReportUnresolvedBareDefaults(value) {
+                value = BoundErrorExpression(nil)
+            }
+            boundExpression = value
             // Issue #4965 (ADR-0202): a `never` tail (every path exits) has no
             // value to keep across the cleanup region either.
-            if boundExpression is BoundErrorExpression ||
-                boundExpression.Type == TypeSymbol.Void ||
-                boundExpression.Type == TypeSymbol.Never {
-                return BoundExpressionStatement(valueSyntax, boundExpression)
+            if value is BoundErrorExpression || value.Type == TypeSymbol.Void || value.Type == TypeSymbol.Never {
+                return BoundExpressionStatement(valueSyntax, value)
             }
-            result = LocalVariableSymbol(
+            let resultVariable = LocalVariableSymbol(
                 "<blockResult${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
                 isReadOnly: true,
-                boundExpression.Type ?? TypeSymbol.Error
+                value.Type ?? TypeSymbol.Error
             )
-            $scope.TryDeclareVariable(result)
-            return BoundVariableDeclaration(valueSyntax, result, boundExpression)
+            result = resultVariable
+            $scope.TryDeclareVariable(resultVariable)
+            return BoundVariableDeclaration(valueSyntax, resultVariable, value)
         }
         let boundStatements = bindStatementList(statements, bindTrailingStatement)
         let resultExpression = if result != nil {

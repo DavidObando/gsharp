@@ -867,44 +867,14 @@ open partial class Parser {
     }
 
     private func NestedBraceCanBeTrailingExpression() bool {
-        var depth = 0
-        for var offset = 0; offset <= LookaheadMaxScan; offset++ {
-            let kind = Peek(offset).Kind
-            if kind == SyntaxKind.EndOfFileToken {
-                return false
-            }
-            if kind == SyntaxKind.OpenBraceToken {
-                depth++
-                continue
-            }
-            if kind != SyntaxKind.CloseBraceToken {
-                continue
-            }
-            depth--
-            if depth != 0 {
-                continue
-            }
-            let nextOffset = offset + 1
-            let next = Peek(nextOffset).Kind
-            return next == SyntaxKind.CloseBraceToken || IsExpressionContinuationAfterBraceAt(nextOffset, Peek(offset))
-        }
-        return false
+        let nextOffset = SkipBalancedGroup(0)
+        return Peek(nextOffset).Kind == SyntaxKind.CloseBraceToken ||
+            IsExpressionContinuationAfterBraceAt(nextOffset, Peek(nextOffset - 1))
     }
 
     private func NestedBraceStartsContinuedExpression() bool {
-        var depth = 0
-        for var offset = 0; offset <= LookaheadMaxScan; offset++ {
-            let kind = Peek(offset).Kind
-            if kind == SyntaxKind.EndOfFileToken {
-                return false
-            }
-            if kind == SyntaxKind.OpenBraceToken {
-                depth++
-            } else if kind == SyntaxKind.CloseBraceToken && (depth -= 1) == 0 {
-                return IsExpressionContinuationAfterBraceAt(offset + 1, Peek(offset))
-            }
-        }
-        return false
+        let nextOffset = SkipBalancedGroup(0)
+        return IsExpressionContinuationAfterBraceAt(nextOffset, Peek(nextOffset - 1))
     }
 
     private func IsExpressionContinuationAfterBraceAt(offset int32, closeBrace SyntaxToken) bool {

@@ -1904,7 +1904,7 @@ internal partial class StatementBinder {
             }
             // Issue #4966 (ADR-0202): a void switch with no default arm can run
             // no arm, so the incoming state joins too.
-            if node.Type == TypeSymbol.Void && !node.Arms.Any((arm BoundSwitchExpressionArm) -> arm.IsDefault) {
+            if node.Type == TypeSymbol.Void && !node.Arms.Any((arm BoundSwitchExpressionArm) -> arm.IsCatchAll) {
                 joined = JoinCallableStates(joined, CloneCallableState(branchStart))
             }
             RestoreCallableState(joined ?? branchStart)

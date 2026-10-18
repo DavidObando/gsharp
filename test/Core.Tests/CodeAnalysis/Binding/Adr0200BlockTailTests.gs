@@ -535,6 +535,106 @@ Good(2, out r)
 Console.WriteLine(r)`, "20\n")
     }
 
+    @Fact
+    func VoidSwitchWildcard_AssignsOnlyWhenUnguarded() {
+        AssertOutput(`import System
+func Set(out a int32) { a = 1 }
+func Good(x int32, out a int32) {
+    switch x { case _: Set(out a) }
+}
+var r int32
+Good(2, out r)
+Console.WriteLine(r)`, "1\n")
+        let guarded = EmittedOracle.Evaluate(`func Set(out a int32) { a = 1 }
+func Bad(x int32, out a int32) {
+    switch x { case _ when x > 0: Set(out a) }
+}`)
+        Assert.Contains(guarded.Diagnostics, (d Diagnostic) -> d.Id == "GS0238")
+    }
+
+    @Fact
+    func VoidSwitchWildcard_ReplacesCallableStateOnlyWhenUnguarded() {
+        // The goto analysis walks the whole finally body. The no-op call
+        // keeps the switch void instead of yielding the assignment's value.
+        AssertOutput(`import System
+func Run(x int32) {
+    var text string? = nil
+    text = "safe"
+    try { goto Done }
+    finally {
+        let mutate = func() { text = nil }
+        let noop = func() { }
+        var action (() -> void) = mutate
+        switch x { case _: { action = noop noop() } }
+        action()
+    }
+Done:
+    Console.WriteLine(text.Length)
+}
+Run(1)`, "4\n")
+        let guarded = EmittedOracle.Evaluate(`import System
+func Run(x int32) {
+    var text string? = nil
+    text = "safe"
+    try { goto Done }
+    finally {
+        let mutate = func() { text = nil }
+        let noop = func() { }
+        var action (() -> void) = mutate
+        switch x { case _ when x < 0: { action = noop noop() } }
+        action()
+    }
+Done:
+    Console.WriteLine(text.Length)
+}`)
+        Assert.Contains(guarded.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+    }
+
+    @Theory
+    @InlineData(`func f(c bool) -> if c {
+    defer System.Console.WriteLine("d")
+    default
+}`, 3, 5)
+    @InlineData(`func f(c bool) -> if c {
+    using let stream = System.IO.MemoryStream()
+    default
+}`, 3, 5)
+    @InlineData(`func f(c bool, x int32) -> if c {
+    switch x { default: default }
+}`, 2, 25)
+    @InlineData(`func f(c bool, x int32) -> if c {
+    defer System.Console.WriteLine("d")
+    switch x { default: default }
+}`, 3, 25)
+    func DiscardedBareDefaultUnderCleanupOrSwitch_IsDiagnosed(source string, line int32, column int32) {
+        AssertDiagnostic(source, "GS0362", line, column)
+    }
+
+    @Fact
+    func ContextualDefaultUnderCleanup_StillTakesItsTargetType() {
+        AssertOutput(`import System
+func f(c bool) int32 -> if c {
+    defer Console.WriteLine("cleanup")
+    default
+} else { 7 }
+Console.WriteLine(f(true))
+Console.WriteLine(f(false))`, "cleanup\n0\n7\n")
+    }
+
+    @Fact
+    func LongNestedLambdaTail_StillSelectsTheValueOverload() {
+        let body = System.Text.StringBuilder()
+        for var i = 0; i < 2000; i++ {
+            body.Append("Log()\n")
+        }
+        AssertOutput(`import System
+func Log() { }
+func Run(f Func[int32]) { Console.WriteLine("func ${f()}") }
+func Run(a Action) { a() Console.WriteLine("action") }
+Run(() -> { {
+` + body.ToString() + "42 } })", "func 42\n")
+    }
+
     // Value position keeps its rules: GS0276, GS0277, GS0176, and GS0124 for a
     // `never` initializer (which crashed the compiler, GS9998, before).
     @Fact
