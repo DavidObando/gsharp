@@ -328,7 +328,10 @@ after a guard in every release.
 Same-compilation value types are included for `Value` and `HasValue`: their
 `Nullable<T>` properties bind against the open `Nullable<>` and the emitter
 parents the getter at the constructed `Nullable<T>`, guarded or not (they
-reported GS0158 even unguarded before). `GetValueOrDefault` on a
+reported GS0158 even unguarded before). This newly admitted path does not
+bind method groups: their emitter does not yet construct the symbolic
+`Nullable<T>` method reference, so accepting them would produce invalid IL.
+`GetValueOrDefault` on a
 same-compilation struct or enum still does not bind in any position (issue
 #5001).
 

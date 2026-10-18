@@ -8,6 +8,7 @@ import GSharp.Compiler
 import GSharp.Compiler.Tests
 import GSharp.Core.Tests
 import System
+import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Text.RegularExpressions
@@ -175,11 +176,9 @@ Console.WriteLine("${ternary(Box{Value: 8})} ${ternary(nil)} ${ifStatement(Box{V
         Assert.Equal("8 0 5" + Environment.NewLine, result.Output)
     }
 
-    /// The narrowed bind is tried first and rolled back when the member is
-    /// missing, so an argument is bound twice. A lambda argument must still
-    /// run exactly once, from the kept binding.
+    /// A lambda argument executes once when the member uses nullable storage.
     @Fact
-    func A_Lambda_Argument_Survives_The_Rebind() {
+    func A_Lambda_Argument_Executes_Once() {
         let result = CompileAndRun(`import System
 func run(f () -> int32) int32 {
     calls = calls + 1
@@ -244,26 +243,62 @@ Console.WriteLine("${pairValue(KeyValuePair[string, int32]("a", 7))} ${pairValue
         Assert.Equal("7 -1 5 0" + Environment.NewLine, result.Output)
     }
 
-    /// Nothing is bound twice. A pattern variable and an `out var` in the
-    /// argument are declared once (a second bind reported GS0102), and nested
-    /// fallbacks bind in linear time (a second bind per level made 22 levels
-    /// take minutes).
+    /// A second argument bind hoisted another `out var`, reporting GS0102.
     @Fact
     func Arguments_Are_Bound_Once() {
-        var nested = "0"
-        for var i = 0; i < 22; i++ {
-            nested = "n.GetValueOrDefault(" + nested + ")"
-        }
-        let result = CompileAndRun((`import System
+        let result = CompileAndRun(`import System
 func fallback(out x int32) int32 {
     x = 5
     return x
 }
 func declared(n int32?, o object) int32 -> n != nil ? n.GetValueOrDefault((o is string s) ? fallback(out var x) + s.Length : 0) : 0
+Console.WriteLine("${declared(3, "z")} ${declared(nil, "z")}")
+`)
+        Assert.Equal("3 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
+    func Nested_Fallbacks_Have_Linear_Binding_Work() {
+        var nested = "0"
+        for var i = 0; i < 22; i++ {
+            nested = "n.GetValueOrDefault(" + nested + ")"
+        }
+        let timer = Stopwatch.StartNew()
+        let result = CompileAndRun((`import System
 func nested(n int32?) int32 -> n != nil ? ` + nested + ` : -1
-Console.WriteLine("${declared(3, "z")} ${declared(nil, "z")} ${nested(9)} ${nested(nil)}")
+Console.WriteLine("${nested(9)} ${nested(nil)}")
 `))
-        Assert.Equal("3 0 9 -1" + Environment.NewLine, result.Output)
+        Assert.Equal("9 -1" + Environment.NewLine, result.Output)
+        Assert.True(timer.Elapsed < TimeSpan.FromSeconds(30), "Nested nullable fallback binding must remain linear.")
+    }
+
+    @Fact
+    func Argument_Ambiguity_Diagnostics_Are_Not_Discarded() {
+        using let fixture = CSharpFixture(
+            "namespace Alpha4986 { public static class Thing { public static string Name() => \"alpha\"; } } " +
+                "namespace Beta4986 { public static class Thing { public static string Name() => \"beta\"; } }"
+        )
+        let result = Compile(`import Alpha4986
+import Beta4986
+func pick(n int32?) int32 -> n != nil ? n.GetValueOrDefault(Thing.Name().Length) : 0
+`, fixture.AssemblyPath)
+        Assert.NotEqual(0, result.ExitCode)
+        Assert.True(Regex.IsMatch(result.Output, `\(3,61,3,66\): error GS0547:`), result.Output)
+        Assert.Contains("Alpha4986.Thing", result.Output, StringComparison.Ordinal)
+        Assert.Contains("Beta4986.Thing", result.Output, StringComparison.Ordinal)
+    }
+
+    @Theory
+    @InlineData("struct Point { var X int32 }", "Point")
+    @InlineData("enum Color { Red, Green }", "Color")
+    func User_Value_Nullable_Method_Groups_Do_Not_Bind_Open_Methods(declaration string, typeName string) {
+        let result = Compile(declaration + "\nfunc capture(p " + typeName + `?) int32 {
+    let f () -> int32 = p.GetHashCode
+    return f()
+}
+`)
+        Assert.NotEqual(0, result.ExitCode)
+        Assert.True(Regex.IsMatch(result.Output, `\(3,27,3,38\): error GS0158: [^\n]*GetHashCode`), result.Output)
     }
 
     /// The storage read is an ordinary `Nullable<T>.Value` property access, so
@@ -281,12 +316,9 @@ Console.WriteLine("${e.Compile()(4)} ${e.Compile()(nil)} ${h.Compile()(1)} ${h.C
     }
 
     shared {
-        /// Compiles the program through the real driver, verifies it with
-        /// ilverify, runs it and returns its standard output and the
-        /// compiler's output.
-        /// Compiles a library against one extra reference and returns the
+        /// Compiles a library with an optional extra reference and returns the
         /// driver's exit code and output, without running anything.
-        private func Compile(source string, reference string)(ExitCode int32, Output string) {
+        private func Compile(source string, reference string? = nil)(ExitCode int32, Output string) {
             let outputDirectory = Path.Combine(
                 AppContext.BaseDirectory,
                 "Issue4986NarrowedNullableMemberTests",
@@ -304,15 +336,18 @@ Console.WriteLine("${e.Compile()(4)} ${e.Compile()(nil)} ${h.Compile()(1)} ${h.C
                 Console.SetError(standardError)
                 var exitCode int32
                 try {
-                    exitCode = Program.Main(
+                    let arguments = List[string](
                         []string{
                             "/out:" + Path.Combine(outputDirectory, "Library.dll"),
                             "/target:library",
                             "/targetframework:net10.0",
-                            "/reference:" + reference,
                             sourcePath
                         }
                     )
+                    if reference != nil {
+                        arguments.Add("/reference:" + reference)
+                    }
+                    exitCode = Program.Main(arguments.ToArray())
                 } finally {
                     Console.SetOut(previousOut)
                     Console.SetError(previousError)
@@ -325,6 +360,7 @@ Console.WriteLine("${e.Compile()(4)} ${e.Compile()(nil)} ${h.Compile()(1)} ${h.C
             }
         }
 
+        /// Compiles through the real driver, verifies IL, and executes.
         private func CompileAndRun(source string)(Output string, CompilerOutput string) {
             let outputDirectory = Path.Combine(
                 AppContext.BaseDirectory,

@@ -1338,9 +1338,13 @@ internal partial class ExpressionBinder {
         }
         let openTypeParameter = nullableType.UnderlyingType as TypeParameterSymbol
         // Issue #4986: a user value-kind struct or enum has no ClrType while
-        // binding either, so its `Nullable<T>` members bind against the open
-        // `Nullable<>` exactly like a `struct`-constrained type parameter's.
-        if openTypeParameter?.HasValueTypeConstraint != true && !NullableLifting.IsUserValueTypeNullable(nullableType) {
+        // binding either. Admit only its properties here: open method groups
+        // do not yet emit a constructed `Nullable<T>` method reference.
+        if openTypeParameter?.HasValueTypeConstraint != true &&
+            (
+            !NullableLifting.IsUserValueTypeNullable(nullableType) ||
+                (memberName != "Value" && memberName != "HasValue")
+        ) {
             return false
         }
         let openNullable = typeof(System.Nullable[_])

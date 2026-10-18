@@ -2279,7 +2279,7 @@ internal partial class ExpressionBinder {
                 // Bind's first arm unconditionally returns non-null for
                 // BangBangToken (BoundUnaryOperator.cs), regardless of operandType.
                 let op = BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, declaredType)!!
-                return BoundUnaryExpression(nil, op, bareRead, isNarrowingUnwrap: true)
+                return BoundUnaryExpression(nil, op, bareRead){IsNarrowingUnwrap = true}
             }
             return makeNarrowedNode(narrowedType)
         }
