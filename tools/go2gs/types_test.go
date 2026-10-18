@@ -93,3 +93,83 @@ func TestStructuralTypeIdentityIncludesPositionalUnexportedOwnership(t *testing.
 		t.Fatal("structural identity omitted positional generic constraint ownership")
 	}
 }
+
+func TestTypeIdentityPreservesDeclarationArgumentOrder(t *testing.T) {
+	pkg := types.NewPackage("example.com/shadowed", "shadowed")
+	parameter := func(name string) *types.TypeParam {
+		return types.NewTypeParam(types.NewTypeName(token.NoPos, nil, name, nil),
+			types.NewInterfaceType(nil, nil))
+	}
+	leftParameter, rightParameter := parameter("A"), parameter("B")
+	pairObject := types.NewTypeName(token.NoPos, pkg, "Pair", nil)
+	pair := types.NewNamed(pairObject, types.NewStruct(nil, nil), nil)
+	pair.SetTypeParams([]*types.TypeParam{leftParameter, rightParameter})
+	local := func() *types.Named {
+		local := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "T", nil), nil, nil)
+		local.SetUnderlying(types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "next", types.NewPointer(local), false),
+		}, nil))
+		return local
+	}
+	outer, inner := local(), local()
+	left, err := types.Instantiate(nil, pair, []types.Type{outer, inner}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := types.Instantiate(nil, pair, []types.Type{inner, outer}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonicalType(left) != canonicalType(right) {
+		t.Fatal("display identity unexpectedly distinguishes swapped shadowed declarations")
+	}
+	identify := func(object *types.TypeName) string {
+		switch object {
+		case pairObject:
+			return "pair"
+		case outer.Obj():
+			return "outerT"
+		case inner.Obj():
+			return "innerT"
+		default:
+			return typeObjectIdentity(object)
+		}
+	}
+	if canonicalTypeIdentityWith(left, identify) == canonicalTypeIdentityWith(right, identify) {
+		t.Fatal("type identity collected declaration identities without structural positions")
+	}
+}
+
+func TestTypeIdentityOmitsSignatureParameterAndResultNames(t *testing.T) {
+	signature := func(parameter, result string) *types.Signature {
+		return types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, parameter, types.Typ[types.Int])),
+			types.NewTuple(types.NewVar(token.NoPos, nil, result, types.Typ[types.String])), false)
+	}
+	first, second := signature("left", "first"), signature("right", "second")
+	nested := func(value *types.Signature) types.Type {
+		return types.NewMap(types.Typ[types.String], types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, nil, "Handler", value, false),
+		}, nil))
+	}
+	firstNested, secondNested := nested(first), nested(second)
+	for _, test := range []struct {
+		name          string
+		first, second types.Type
+	}{
+		{"direct", first, second},
+		{"nested", firstNested, secondNested},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if !types.Identical(test.first, test.second) {
+				t.Fatal("go/types unexpectedly considers parameter names part of type identity")
+			}
+			if canonicalType(test.first) == canonicalType(test.second) {
+				t.Fatal("display text did not retain signature parameter names")
+			}
+			if canonicalTypeIdentity(test.first) != canonicalTypeIdentity(test.second) {
+				t.Fatal("semantic identity retained signature parameter or result names")
+			}
+		})
+	}
+}

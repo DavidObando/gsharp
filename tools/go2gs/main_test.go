@@ -3646,6 +3646,104 @@ func GenericString[T ~string](value T) { type Local int; var _ Local }
 	}
 }
 
+func TestScopeIdentityIncludesSourcePath(t *testing.T) {
+	root := t.TempDir()
+	for name, source := range map[string]string{
+		"go.mod": "module example.com/scopepaths\n\ngo 1.27.0\n",
+		"a.go":   "package scopepaths\nfunc A() { if true { var _ int } }\n",
+		"b.go":   "package scopepaths\nfunc B() { if true { var _ int } }\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("equal-offset scope fixture failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	type offsets struct {
+		start int
+		end   int
+	}
+	byOffsets := map[offsets]map[string]string{}
+	for _, scope := range analysis.Scopes {
+		key := offsets{scope.Span.StartByte, scope.Span.EndByte}
+		if byOffsets[key] == nil {
+			byOffsets[key] = map[string]string{}
+		}
+		byOffsets[key][scope.Span.Path] = scope.ID
+	}
+	for _, paths := range byOffsets {
+		if len(paths) < 2 {
+			continue
+		}
+		ids := map[string]bool{}
+		for _, id := range paths {
+			ids[id] = true
+		}
+		if len(ids) != len(paths) {
+			t.Fatalf("equal-offset scopes in separate files collided: %v", paths)
+		}
+		return
+	}
+	t.Fatalf("fixture produced no equal-offset scopes in separate files: %#v", analysis.Scopes)
+}
+
+func TestMethodSetsRetainPackageTestVariantOwnership(t *testing.T) {
+	root := t.TempDir()
+	for name, source := range map[string]string{
+		"go.mod":        "module example.com/methodsetowner\n\ngo 1.27.0\n",
+		"value.go":      "package methodsetowner\ntype Value struct{}\nfunc (Value) Production() {}\n",
+		"value_test.go": "package methodsetowner\nfunc (Value) TestOnly() {}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("test-variant method-set fixture failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	var valueTypeID string
+	for _, record := range analysis.Types {
+		if record.Display == "example.com/methodsetowner.Value" {
+			valueTypeID = record.ID
+			break
+		}
+	}
+	if valueTypeID == "" {
+		t.Fatal("Value type was not inventoried")
+	}
+	variants := map[string]string{}
+	for _, pkg := range analysis.Packages {
+		if pkg.ImportPath == "example.com/methodsetowner" {
+			variants[pkg.ID] = pkg.Variant
+		}
+	}
+	symbolNames := map[string]string{}
+	for _, symbol := range analysis.Symbols {
+		symbolNames[symbol.ID] = symbol.Name
+	}
+	methodsByVariant := map[string][]string{}
+	for _, methodSet := range analysis.MethodSets {
+		if methodSet.TypeID != valueTypeID || methodSet.Pointer {
+			continue
+		}
+		var names []string
+		for _, symbolID := range methodSet.MethodSymbolIDs {
+			names = append(names, symbolNames[symbolID])
+		}
+		sort.Strings(names)
+		methodsByVariant[variants[methodSet.PackageID]] = names
+	}
+	if !slices.Equal(methodsByVariant["ordinary"], []string{"Production"}) {
+		t.Fatalf("ordinary method set = %v", methodsByVariant["ordinary"])
+	}
+	if !slices.Equal(methodsByVariant["in-package-test"], []string{"Production", "TestOnly"}) {
+		t.Fatalf("in-package-test method set = %v", methodsByVariant["in-package-test"])
+	}
+}
+
 func TestPromotedMemberIdentityUsesImportedDeclaration(t *testing.T) {
 	analyzeFixture := func(reverse bool) Analysis {
 		t.Helper()
@@ -4312,6 +4410,15 @@ func TestValidateAnalysisRejectsStalePayloadDerivedRecordIDs(t *testing.T) {
 		t.Fatal("identity fixture has no alternate node")
 		return ""
 	}
+	differentPackageID := func(value *Analysis, current string) string {
+		for _, pkg := range value.Packages {
+			if pkg.ID != current {
+				return pkg.ID
+			}
+		}
+		t.Fatal("identity fixture has no alternate package")
+		return ""
+	}
 	tests := []struct {
 		name   string
 		kind   string
@@ -4355,6 +4462,9 @@ func TestValidateAnalysisRejectsStalePayloadDerivedRecordIDs(t *testing.T) {
 		}},
 		{"method-set", "methodSet", complete, func(value *Analysis) {
 			value.MethodSets[0].Pointer = !value.MethodSets[0].Pointer
+		}},
+		{"method-set-owner", "methodSet", complete, func(value *Analysis) {
+			value.MethodSets[0].PackageID = differentPackageID(value, value.MethodSets[0].PackageID)
 		}},
 		{"instance", "instance", complete, func(value *Analysis) {
 			value.Instances[0].NodeID = differentNodeID(value, value.Instances[0].NodeID)
@@ -5159,6 +5269,14 @@ func TestValidateAnalysisCommandRejectsMalformedNestedRecords(t *testing.T) {
 		name   string
 		mutate func(map[string]any) bool
 	}{
+		{"method-set-package-owner", func(root map[string]any) bool {
+			methodSets := root["methodSets"].([]any)
+			if len(methodSets) == 0 {
+				return false
+			}
+			delete(methodSets[0].(map[string]any), "packageId")
+			return true
+		}},
 		{"struct-field-type", func(root map[string]any) bool {
 			for _, item := range root["types"].([]any) {
 				fields := item.(map[string]any)["fields"].([]any)
@@ -5721,6 +5839,18 @@ func TestSourceCoordinateCountsBytes(t *testing.T) {
 	raw, _, _, _, _, _ := positions.span(len("é"), len("é"))
 	if raw.Line != 1 || raw.Column != 3 {
 		t.Fatalf("UTF-8 byte coordinate mismatch: line=%d column=%d", raw.Line, raw.Column)
+	}
+}
+
+func TestSourcePositionMapAcceptsAtInModuleFilename(t *testing.T) {
+	portable := "module://example.com/dep@local/file@copy.go"
+	positions, err := newSourcePositionMap(portable, []byte("package dep\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, path, line, column, directive := positions.span(0, 0)
+	if path != portable || line != 1 || column != 1 || directive {
+		t.Fatalf("module filename position = %s:%d:%d directive=%v", path, line, column, directive)
 	}
 }
 

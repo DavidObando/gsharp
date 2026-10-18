@@ -27,83 +27,93 @@ func canonicalTypeIdentity(t types.Type) string {
 }
 
 func canonicalTypeIdentityWith(t types.Type, identify func(*types.TypeName) string) string {
-	display := canonicalType(t)
+	display := canonicalTypeIdentityText(t)
 	if t == nil {
 		return display
 	}
-	seen := map[types.Type]bool{}
-	declarations := map[string]bool{}
-	var walk func(types.Type)
-	walk = func(current types.Type) {
-		if current == nil || seen[current] {
+	active := map[types.Type]string{}
+	var declarations []string
+	var walk func(types.Type, string)
+	walk = func(current types.Type, position string) {
+		if current == nil {
 			return
 		}
-		seen[current] = true
+		if ancestor, ok := active[current]; ok {
+			declarations = append(declarations, position+"=cycle:"+ancestor)
+			return
+		}
+		active[current] = position
+		defer delete(active, current)
 		switch value := current.(type) {
 		case *types.TypeParam:
-			declarations["typeparam:"+identify(value.Obj())] = true
-			walk(value.Constraint())
+			declarations = append(declarations, position+"=typeparam:"+strconv.Quote(identify(value.Obj())))
+			walk(value.Constraint(), position+".constraint")
 		case *types.Named:
-			declarations["named:"+identify(value.Obj())] = true
+			declarations = append(declarations, position+"=named:"+strconv.Quote(identify(value.Obj())))
 			if arguments := value.TypeArgs(); arguments != nil {
 				for i := 0; i < arguments.Len(); i++ {
-					walk(arguments.At(i))
+					walk(arguments.At(i), position+".argument["+strconv.Itoa(i)+"]")
 				}
 			}
-			walk(value.Underlying())
+			walk(value.Underlying(), position+".underlying")
 		case *types.Alias:
-			declarations["alias:"+identify(value.Obj())] = true
+			declarations = append(declarations, position+"=alias:"+strconv.Quote(identify(value.Obj())))
 			if arguments := value.TypeArgs(); arguments != nil {
 				for i := 0; i < arguments.Len(); i++ {
-					walk(arguments.At(i))
+					walk(arguments.At(i), position+".argument["+strconv.Itoa(i)+"]")
 				}
 			}
-			walk(value.Underlying())
+			walk(value.Underlying(), position+".underlying")
 		case *types.Array:
-			walk(value.Elem())
+			walk(value.Elem(), position+".element")
 		case *types.Slice:
-			walk(value.Elem())
+			walk(value.Elem(), position+".element")
 		case *types.Pointer:
-			walk(value.Elem())
+			walk(value.Elem(), position+".element")
 		case *types.Map:
-			walk(value.Key())
-			walk(value.Elem())
+			walk(value.Key(), position+".key")
+			walk(value.Elem(), position+".element")
 		case *types.Chan:
-			walk(value.Elem())
+			walk(value.Elem(), position+".element")
 		case *types.Struct:
 			for i := 0; i < value.NumFields(); i++ {
-				walk(value.Field(i).Type())
+				walk(value.Field(i).Type(), position+".field["+strconv.Itoa(i)+"].type")
 			}
 		case *types.Tuple:
 			for i := 0; i < value.Len(); i++ {
-				walk(value.At(i).Type())
+				walk(value.At(i).Type(), position+".tuple["+strconv.Itoa(i)+"]")
 			}
 		case *types.Signature:
 			if value.Recv() != nil {
-				walk(value.Recv().Type())
+				walk(value.Recv().Type(), position+".receiver")
+			}
+			if parameters := value.RecvTypeParams(); parameters != nil {
+				for i := 0; i < parameters.Len(); i++ {
+					walk(parameters.At(i), position+".receiverTypeParameter["+strconv.Itoa(i)+"]")
+				}
 			}
 			if parameters := value.TypeParams(); parameters != nil {
 				for i := 0; i < parameters.Len(); i++ {
-					walk(parameters.At(i))
+					walk(parameters.At(i), position+".typeParameter["+strconv.Itoa(i)+"]")
 				}
 			}
-			walk(value.Params())
-			walk(value.Results())
+			walk(value.Params(), position+".parameters")
+			walk(value.Results(), position+".results")
 		case *types.Interface:
 			value.Complete()
 			for i := 0; i < value.NumMethods(); i++ {
-				walk(value.Method(i).Type())
+				walk(value.Method(i).Type(), position+".method["+strconv.Itoa(i)+"].type")
 			}
 			for i := 0; i < value.NumEmbeddeds(); i++ {
-				walk(value.EmbeddedType(i))
+				walk(value.EmbeddedType(i), position+".embedded["+strconv.Itoa(i)+"]")
 			}
 		case *types.Union:
 			for i := 0; i < value.Len(); i++ {
-				walk(value.Term(i).Type())
+				walk(value.Term(i).Type(), position+".term["+strconv.Itoa(i)+"]")
 			}
 		}
 	}
-	walk(t)
+	walk(t, "root")
 	structuralOwners := structuralTypeOwners(t)
 	if len(declarations) == 0 {
 		if len(structuralOwners) == 0 {
@@ -111,16 +121,182 @@ func canonicalTypeIdentityWith(t types.Type, identify func(*types.TypeName) stri
 		}
 		return display + "\x00structuralOwners=" + strings.Join(structuralOwners, ",")
 	}
-	keys := make([]string, 0, len(declarations))
-	for declaration := range declarations {
-		keys = append(keys, declaration)
-	}
-	sort.Strings(keys)
-	result := display + "\x00declarations=" + strings.Join(keys, ",")
+	result := display + "\x00declarations=" + strings.Join(declarations, ",")
 	if len(structuralOwners) != 0 {
 		result += "\x00structuralOwners=" + strings.Join(structuralOwners, ",")
 	}
 	return result
+}
+
+func canonicalTypeIdentityText(t types.Type) string {
+	var result strings.Builder
+	writeCanonicalTypeIdentity(&result, t)
+	return result.String()
+}
+
+func writeCanonicalTypeIdentity(result *strings.Builder, t types.Type) {
+	switch value := t.(type) {
+	case nil:
+	case *types.Alias:
+		writeTypeName(result, value.Obj())
+		writeTypeArguments(result, value.TypeArgs())
+	case *types.Array:
+		result.WriteByte('[')
+		result.WriteString(strconv.FormatInt(value.Len(), 10))
+		result.WriteByte(']')
+		writeCanonicalTypeIdentity(result, value.Elem())
+	case *types.Basic:
+		result.WriteString(canonicalType(value))
+	case *types.Chan:
+		switch value.Dir() {
+		case types.SendOnly:
+			result.WriteString("chan<- ")
+		case types.RecvOnly:
+			result.WriteString("<-chan ")
+		default:
+			result.WriteString("chan ")
+		}
+		writeCanonicalTypeIdentity(result, value.Elem())
+	case *types.Interface:
+		value.Complete()
+		result.WriteString("interface{")
+		separator := ""
+		for i := 0; i < value.NumMethods(); i++ {
+			result.WriteString(separator)
+			result.WriteString(value.Method(i).Name())
+			writeCanonicalSignature(result, value.Method(i).Type().(*types.Signature), false)
+			separator = "; "
+		}
+		for i := 0; i < value.NumEmbeddeds(); i++ {
+			result.WriteString(separator)
+			writeCanonicalTypeIdentity(result, value.EmbeddedType(i))
+			separator = "; "
+		}
+		result.WriteByte('}')
+	case *types.Map:
+		result.WriteString("map[")
+		writeCanonicalTypeIdentity(result, value.Key())
+		result.WriteByte(']')
+		writeCanonicalTypeIdentity(result, value.Elem())
+	case *types.Named:
+		writeTypeName(result, value.Obj())
+		writeTypeArguments(result, value.TypeArgs())
+	case *types.Pointer:
+		result.WriteByte('*')
+		writeCanonicalTypeIdentity(result, value.Elem())
+	case *types.Signature:
+		writeCanonicalSignature(result, value, true)
+	case *types.Slice:
+		result.WriteString("[]")
+		writeCanonicalTypeIdentity(result, value.Elem())
+	case *types.Struct:
+		result.WriteString("struct{")
+		for i := 0; i < value.NumFields(); i++ {
+			if i != 0 {
+				result.WriteString("; ")
+			}
+			field := value.Field(i)
+			if !field.Embedded() {
+				result.WriteString(field.Name())
+				result.WriteByte(' ')
+			}
+			writeCanonicalTypeIdentity(result, field.Type())
+			if tag := value.Tag(i); tag != "" {
+				result.WriteByte(' ')
+				result.WriteString(strconv.Quote(tag))
+			}
+		}
+		result.WriteByte('}')
+	case *types.Tuple:
+		writeCanonicalTuple(result, value, false)
+	case *types.TypeParam:
+		result.WriteString(value.Obj().Name())
+	case *types.Union:
+		for i := 0; i < value.Len(); i++ {
+			if i != 0 {
+				result.WriteString(" | ")
+			}
+			term := value.Term(i)
+			if term.Tilde() {
+				result.WriteByte('~')
+			}
+			writeCanonicalTypeIdentity(result, term.Type())
+		}
+	default:
+		result.WriteString(canonicalType(t))
+	}
+}
+
+func writeCanonicalSignature(result *strings.Builder, signature *types.Signature, keyword bool) {
+	if keyword {
+		result.WriteString("func")
+	}
+	if parameters := signature.TypeParams(); parameters != nil && parameters.Len() != 0 {
+		result.WriteByte('[')
+		for i := 0; i < parameters.Len(); i++ {
+			if i != 0 {
+				result.WriteString(", ")
+			}
+			parameter := parameters.At(i)
+			result.WriteString(parameter.Obj().Name())
+			result.WriteByte(' ')
+			writeCanonicalTypeIdentity(result, parameter.Constraint())
+		}
+		result.WriteByte(']')
+	}
+	writeCanonicalTuple(result, signature.Params(), signature.Variadic())
+	results := signature.Results()
+	if results == nil || results.Len() == 0 {
+		return
+	}
+	result.WriteByte(' ')
+	if results.Len() == 1 {
+		writeCanonicalTypeIdentity(result, results.At(0).Type())
+		return
+	}
+	writeCanonicalTuple(result, results, false)
+}
+
+func writeCanonicalTuple(result *strings.Builder, tuple *types.Tuple, variadic bool) {
+	result.WriteByte('(')
+	if tuple != nil {
+		for i := 0; i < tuple.Len(); i++ {
+			if i != 0 {
+				result.WriteString(", ")
+			}
+			t := tuple.At(i).Type()
+			if variadic && i == tuple.Len()-1 {
+				if slice, ok := t.(*types.Slice); ok {
+					result.WriteString("...")
+					t = slice.Elem()
+				}
+			}
+			writeCanonicalTypeIdentity(result, t)
+		}
+	}
+	result.WriteByte(')')
+}
+
+func writeTypeName(result *strings.Builder, object *types.TypeName) {
+	if object.Pkg() != nil {
+		result.WriteString(object.Pkg().Path())
+		result.WriteByte('.')
+	}
+	result.WriteString(object.Name())
+}
+
+func writeTypeArguments(result *strings.Builder, arguments *types.TypeList) {
+	if arguments == nil || arguments.Len() == 0 {
+		return
+	}
+	result.WriteByte('[')
+	for i := 0; i < arguments.Len(); i++ {
+		if i != 0 {
+			result.WriteString(", ")
+		}
+		writeCanonicalTypeIdentity(result, arguments.At(i))
+	}
+	result.WriteByte(']')
 }
 
 func structuralTypeOwners(t types.Type) []string {

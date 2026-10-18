@@ -319,6 +319,9 @@ func validateAnalysis(a Analysis) error {
 		}
 	}
 	for _, value := range a.MethodSets {
+		if err := require(value.ID, "packageId", value.PackageID, "package"); err != nil {
+			return err
+		}
 		if err := require(value.ID, "typeId", value.TypeID, "type"); err != nil {
 			return err
 		}
@@ -796,7 +799,7 @@ func validateRecordFields(a Analysis) error {
 		}
 	}
 	for _, value := range a.MethodSets {
-		if value.ID == "" || value.TypeID == "" || value.MethodSymbolIDs == nil {
+		if value.ID == "" || value.PackageID == "" || value.TypeID == "" || value.MethodSymbolIDs == nil {
 			return fmt.Errorf("method set %q has invalid required fields", value.ID)
 		}
 	}

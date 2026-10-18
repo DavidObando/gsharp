@@ -30,7 +30,7 @@ func newSourcePositionMapContext(ctx context.Context, portable string, data []by
 	logicalRoot := filepath.Join(os.TempDir(), "go2gs-position-root", scheme)
 	relative := filepath.FromSlash(payload)
 	if scheme == "module" {
-		at := strings.LastIndex(payload, "@")
+		at := strings.IndexByte(payload, '@')
 		slashIndex := -1
 		if at >= 0 {
 			if remainder := strings.IndexByte(payload[at:], '/'); remainder >= 0 {

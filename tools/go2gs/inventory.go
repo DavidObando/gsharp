@@ -2451,7 +2451,7 @@ func (b *inventoryBuilder) addMethodSets(pkg *packages.Package) {
 			pointer bool
 		}{{t, false}, {types.NewPointer(t), true}} {
 			typeID := b.addType(pkg, candidate.t)
-			record := MethodSetRecord{TypeID: typeID, Pointer: candidate.pointer}
+			record := MethodSetRecord{PackageID: b.packageIDs[pkg], TypeID: typeID, Pointer: candidate.pointer}
 			record.ID = methodSetRecordID(record)
 			id := record.ID
 			if b.seenMethodSets[id] {

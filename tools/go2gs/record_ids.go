@@ -75,7 +75,7 @@ func constantRecordID(value ConstantRecord) string {
 }
 
 func scopeRecordID(value ScopeRecord) string {
-	return stableID("scope", value.PackageID+"\x00"+
+	return stableID("scope", value.PackageID+"\x00"+value.Span.Path+"\x00"+
 		strconv.Itoa(value.Span.StartByte)+":"+strconv.Itoa(value.Span.EndByte))
 }
 
@@ -88,7 +88,7 @@ func callRecordID(value CallRecord) string {
 }
 
 func methodSetRecordID(value MethodSetRecord) string {
-	return stableID("methodSet", value.TypeID+"\x00"+strconv.FormatBool(value.Pointer))
+	return stableID("methodSet", value.PackageID+"\x00"+value.TypeID+"\x00"+strconv.FormatBool(value.Pointer))
 }
 
 func instanceRecordID(value InstanceRecord) string {

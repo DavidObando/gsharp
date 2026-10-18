@@ -862,7 +862,7 @@ func validateAnalysisJSONShape(data []byte) error {
 		{"scopes", []string{"id", "packageId", "span", "symbolIds", "labels"}},
 		{"selections", []string{"id", "nodeId", "kind", "objectId", "receiverTypeId", "typeId", "indexPath", "indirect"}},
 		{"calls", []string{"id", "nodeId", "kind", "argumentTypeIds", "variadic", "ellipsis"}},
-		{"methodSets", []string{"id", "typeId", "pointer", "methodSymbolIds"}},
+		{"methodSets", []string{"id", "packageId", "typeId", "pointer", "methodSymbolIds"}},
 		{"instances", []string{"id", "nodeId", "typeId", "typeArgIds"}},
 		{"embeds", []string{"id", "packageId", "fileId", "pattern", "logicalName", "contentSha256"}},
 		{"generateDirectives", []string{"id", "fileId", "directive", "executed", "span"}},
