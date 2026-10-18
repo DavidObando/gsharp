@@ -490,10 +490,9 @@ open partial class Parser {
     // any nested switch is parsed twice. A braced group followed by the next
     // arm or the end of the body was the statement arm's body; any other
     // braced group belongs to the pattern (a property pattern) or the guard.
-    // Inside a `when` guard a `:` that closes a `? :` conditional is skipped.
-    // A `->` in the first arm (the deprecated separator, or a function-type
-    // pattern) is decided by parsing that arm; see
-    // FirstArmPatternEndsInExpressionSeparator.
+    // A first arm that contains `->` (the deprecated separator, or a
+    // function-type pattern) or `?` (a nullable type, or a `? :` conditional)
+    // is decided by parsing that arm; see FirstArmPatternEndsInExpressionSeparator.
     private func SwitchBodyHasExpressionArms() bool {
         if Current.Kind != SyntaxKind.OpenBraceToken {
             return false
@@ -506,8 +505,6 @@ open partial class Parser {
             return false
         }
         var offset = 2
-        var inGuard = false
-        var pendingConditionals = 0
         while true {
             let token = Peek(offset)
             switch token.Kind {
@@ -530,30 +527,18 @@ open partial class Parser {
                     }
                 }
                 case SyntaxKind.ColonToken {
-                    if inGuard && pendingConditionals > 0 {
-                        pendingConditionals--
-                        offset++
-                    } else {
-                        return true
-                    }
+                    return true
                 }
-                case SyntaxKind.RightArrowToken {
+                case SyntaxKind.RightArrowToken, SyntaxKind.QuestionToken {
                     // `->` is either the deprecated arm separator or the arrow
                     // of a function-type pattern (`case f is (int32) -> string
-                    // { … }`); only the pattern grammar can tell, so parse this
-                    // one arm's pattern and guard.
+                    // { … }`), and `?` either a nullable type (`int32?`) or a
+                    // `? :` conditional whose `:` is not the separator. Only the
+                    // grammar can tell, so parse this one arm's pattern and
+                    // guard.
                     return FirstArmPatternEndsInExpressionSeparator()
                 }
-                case SyntaxKind.QuestionToken {
-                    if inGuard {
-                        pendingConditionals++
-                    }
-                    offset++
-                }
                 default {
-                    if token.Kind == SyntaxKind.IdentifierToken && token.Text == "when" {
-                        inGuard = true
-                    }
                     offset++
                 }
             }
@@ -561,7 +546,7 @@ open partial class Parser {
     }
 
     // The precise fallback of SwitchBodyHasExpressionArms for a first arm that
-    // contains `->`: parses that arm's pattern list and guard with the
+    // contains `->` or `?`: parses that arm's pattern list and guard with the
     // switch-expression rules and checks the separator that follows. Only the
     // first arm is parsed (the header was already consumed), and position, the
     // token list (which type parsing may split) and diagnostics are restored.

@@ -162,6 +162,19 @@ func Sink(a int32, b int32) int32 {
 func F(c bool) int32 {
     return Sink(if c { return 1 } else { return 2 }, if c { 3 } else { return 4 })
 }`}
+            yield[]object{"exiting-operand-before-await", `
+package P
+import System
+import System.Threading.Tasks
+func Sink(a int32, b int32) int32 {
+    return a + b
+}
+async func F(c bool) Task[int32] {
+    return Sink(if c { return 1 } else { return 2 }, await Task.FromResult(3))
+}
+async func G() Task[int32] {
+    return Sink(throw Exception("x"), await Task.FromResult(3))
+}`}
             yield[]object{"void-if-and-void-switch", `
 package P
 import System

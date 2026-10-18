@@ -2748,7 +2748,7 @@ internal partial class StatementBinder {
                         syntax.Initializer!!.Location
                     )
                     variableType = TypeSymbol.Error
-                } else if syntax.TypeClause == nil && variableType == TypeSymbol.Never {
+                } else if syntax.TypeClause == nil && ContainsNever(variableType) {
                     // Issue #4965 (ADR-0200): an initializer that never produces
                     // a value (`let a = throw e`, or a block/if/switch every
                     // path of which exits) gives the local no type to infer.
@@ -3984,6 +3984,27 @@ internal partial class StatementBinder {
         /// @param type The candidate type.
         /// @returns `true` when [`type`](paramref) is reference-like.
         private func IsReferenceLikeType(type TypeSymbol?) bool -> type != nil && Conversion.IsReferenceLikeTarget(type)
+
+        /// Issue #4965 (ADR-0200): whether [`type`](paramref) is, or is a tuple
+        /// with an element that is, the bottom type — the inferred type of an
+        /// initializer that never produces a value (`throw e`,
+        /// `(if c { return 1 } else { return 2 }, 0)`). Such a type cannot be
+        /// a local's type: `never` has no CLR form.
+        /// @param type The inferred type.
+        /// @returns `true` when the type contains `never`.
+        internal func ContainsNever(type TypeSymbol?) bool {
+            if type == TypeSymbol.Never {
+                return true
+            }
+            if type is TupleTypeSymbol tuple {
+                for element in tuple.ElementTypes {
+                    if ContainsNever(element) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
 
         /// Issue #4965 (ADR-0200): whether the end of a block whose bound
         /// statements are [`statements`](paramref) is unreachable, so that a

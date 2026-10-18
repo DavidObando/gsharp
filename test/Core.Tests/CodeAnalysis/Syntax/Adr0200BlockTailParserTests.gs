@@ -51,6 +51,25 @@ open class Adr0200BlockTailParserTests {
         Assert.IsType[SwitchStatementSyntax](body.Statements[4])
     }
 
+    // A `?` in the first arm is a nullable type or a conditional; neither its
+    // `?` nor a conditional's `:` decides the form.
+    @Fact
+    func QuestionTokensInTheFirstArm_DoNotDecideTheForm() {
+        let tree = Parse(`func f(x int32, o object) {
+    switch x {
+    case 1 when o as int32? != nil: A()
+    default: B()
+    }
+    switch 1 {
+    case true ? 1 : 2 { A() }
+    default { B() }
+    }
+}`)
+        let body = Body(tree, "f")
+        Assert.IsType[SwitchExpressionSyntax](Assert.IsType[ExpressionStatementSyntax](body.Statements[0]).Expression)
+        Assert.IsType[SwitchStatementSyntax](body.Statements[1])
+    }
+
     // The deprecated `->` arm separator still selects the expression form.
     @Fact
     func DeprecatedArrowSeparator_SelectsTheExpressionForm() {

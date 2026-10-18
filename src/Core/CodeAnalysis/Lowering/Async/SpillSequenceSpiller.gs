@@ -397,6 +397,11 @@ shared class SpillSequenceSpiller {
                 FlushSideEffects(spilled, builder)
                 expression = spilled.Value
             }
+            if expression.Type == TypeSymbol.Never {
+                // Issue #4965 (ADR-0200): see StoreOperand.
+                builder.Add(BoundExpressionStatement(nil, expression))
+                return BoundThrowExpression(nil, BoundLiteralExpression(nil, value: nil))
+            }
             let temp = MakeSpillTemp(expression.Type)
             builder.Add(BoundVariableDeclaration(nil, temp, expression))
             return BoundVariableExpression(nil, temp)
@@ -1177,10 +1182,7 @@ shared class SpillSequenceSpiller {
             // If right has await, the left must be spilled to a temp
             // (unless it's a pure constant or simple variable read).
             if rightHasAwait && !CanDeferAcrossLift(left) {
-                let leftTemp = MakeSpillTemp(left.Type)
-                locals.Add(leftTemp)
-                sideEffects.Add(BoundVariableDeclaration(nil, leftTemp, left))
-                left = BoundVariableExpression(nil, leftTemp)
+                left = StoreOperand(left, locals, sideEffects)
             }
             var right BoundExpression
             if rightHasAwait {
@@ -1435,10 +1437,7 @@ shared class SpillSequenceSpiller {
                 receiver = spilledReceiver.Value
             }
             if argsHaveAwait && !CanDeferAcrossLift(receiver) {
-                let recvTemp = MakeSpillTemp(receiver.Type)
-                locals.Add(recvTemp)
-                sideEffects.Add(BoundVariableDeclaration(nil, recvTemp, receiver))
-                receiver = BoundVariableExpression(nil, recvTemp)
+                receiver = StoreOperand(receiver, locals, sideEffects)
             }
             let (argLocals, argSideEffects, args) = SpillArgumentList(arguments)
             locals.AddRange(argLocals)
@@ -2044,10 +2043,7 @@ shared class SpillSequenceSpiller {
             // it into a spill temp exactly once here so a side effect in the
             // condition (e.g. a method call) can't fire more than once.
             if !CanDeferAcrossLift(condition) {
-                let condTemp = MakeSpillTemp(condition.Type)
-                locals.Add(condTemp)
-                sideEffects.Add(BoundVariableDeclaration(nil, condTemp, condition))
-                condition = BoundVariableExpression(nil, condTemp)
+                condition = StoreOperand(condition, locals, sideEffects)
             }
             var trueOperand = condAddr.WhenTrueOperand
             if trueHasAwait {
@@ -2595,10 +2591,7 @@ shared class SpillSequenceSpiller {
                 left = spilledA.Value
             }
             if bHasAwait && !CanDeferAcrossLift(left) {
-                let temp = MakeSpillTemp(left.Type)
-                locals.Add(temp)
-                sideEffects.Add(BoundVariableDeclaration(nil, temp, left))
-                left = BoundVariableExpression(nil, temp)
+                left = StoreOperand(left, locals, sideEffects)
             }
             var right = b
             if bHasAwait {
@@ -2657,19 +2650,13 @@ shared class SpillSequenceSpiller {
                         hasLaterAwait |= awaitIndex > i
                     }
                     if hasLaterAwait && !CanDeferAcrossLift(spilledArg.Value) {
-                        let temp = MakeSpillTemp(arg.Type)
-                        locals.Add(temp)
-                        sideEffects.Add(BoundVariableDeclaration(nil, temp, spilledArg.Value))
-                        args.Add(BoundVariableExpression(nil, temp))
+                        args.Add(StoreOperand(spilledArg.Value, locals, sideEffects))
                     } else {
                         args.Add(spilledArg.Value)
                     }
                 } else if i < firstAwaitIdx && (spillEveryPreAwaitOperand || !CanDeferAcrossLift(arg)) {
                     // This arg precedes an await — spill to temp.
-                    let temp = MakeSpillTemp(arg.Type)
-                    locals.Add(temp)
-                    sideEffects.Add(BoundVariableDeclaration(nil, temp, arg))
-                    args.Add(BoundVariableExpression(nil, temp))
+                    args.Add(StoreOperand(arg, locals, sideEffects))
                 } else if i > firstAwaitIdx && (spillEveryPreAwaitOperand || !CanDeferAcrossLift(arg)) {
                     // Between awaits, we also need to check if there's a
                     // later await that would require this to be spilled.
@@ -2681,10 +2668,7 @@ shared class SpillSequenceSpiller {
                         }
                     }
                     if needsSpill {
-                        let temp = MakeSpillTemp(arg.Type)
-                        locals.Add(temp)
-                        sideEffects.Add(BoundVariableDeclaration(nil, temp, arg))
-                        args.Add(BoundVariableExpression(nil, temp))
+                        args.Add(StoreOperand(arg, locals, sideEffects))
                     } else {
                         args.Add(arg)
                     }
@@ -2697,19 +2681,35 @@ shared class SpillSequenceSpiller {
 
         private func MakeSpillTemp(type TypeSymbol) LocalVariableSymbol {
             let name = GeneratedNames.SpillTempField(spillOrdinal++, spillTempDomain)
-            // Issue #4965 (ADR-0200): a `never` operand (a block, if or switch
-            // every path of which exits) is never stored — its evaluation does
-            // not complete — but an operand list spilled around it still asks
-            // for a temp. `never` has no CLR form, so the temp is typed
-            // `object`; it is never written or read at run time. This is the
-            // one factory for spill temps, including those hoisted into a
-            // state machine.
-            let storageType = if type == TypeSymbol.Never {
-                TypeSymbol.Object
-            } else {
-                type
+            return LocalVariableSymbol(name, isReadOnly: false, type)
+        }
+
+        /// Issue #4965 (ADR-0200): stores a spilled operand in a fresh temp and
+        /// returns the read of it. An operand of the bottom (`never`) type — a
+        /// throw expression, or a block, if or switch every path of which exits
+        /// — is never stored: it runs as a statement, and the operand becomes
+        /// the unreachable `throw nil` trap. Nothing after it runs, so no
+        /// later operand, await or call is reached; even a state machine's
+        /// resume edge into the rest of the sequence only reaches a `throw`.
+        /// `never` has no CLR form, so a temp of that type could not be
+        /// encoded (GS9998).
+        /// @param value The operand to store.
+        /// @param locals The spill locals of the current sequence.
+        /// @param sideEffects The side effects of the current sequence.
+        /// @returns The expression that reads the stored operand.
+        private func StoreOperand(
+            value BoundExpression,
+            locals ImmutableArray[LocalVariableSymbol].Builder,
+            sideEffects ImmutableArray[BoundStatement].Builder
+        ) BoundExpression {
+            if value.Type == TypeSymbol.Never {
+                sideEffects.Add(BoundExpressionStatement(nil, value))
+                return BoundThrowExpression(nil, BoundLiteralExpression(nil, value: nil))
             }
-            return LocalVariableSymbol(name, isReadOnly: false, storageType)
+            let temp = MakeSpillTemp(value.Type)
+            locals.Add(temp)
+            sideEffects.Add(BoundVariableDeclaration(nil, temp, value))
+            return BoundVariableExpression(nil, temp)
         }
 
         private func MakeLabel() BoundLabel {

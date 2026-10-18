@@ -3730,6 +3730,12 @@ internal class LambdaBinder {
                     return TypeSymbol.Error
                 }
             }
+            // Issue #4965 (ADR-0200): a block body every return of which never
+            // completes (`() -> { return { throw e } }`) has no value type
+            // either; see `neverBlockTail` above.
+            if result == TypeSymbol.Never && syntax.Body is BlockExpressionSyntax {
+                return TypeSymbol.Void
+            }
             return result ?? TypeSymbol.Error
         }
 

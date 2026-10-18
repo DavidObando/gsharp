@@ -459,6 +459,53 @@ Console.WriteLine(both(true))
 Console.WriteLine(both(false))`, "first\nsecond\n12\nfirst\n-1\n1\n2\n")
     }
 
+    // An exiting operand spilled around an await runs as a statement; nothing
+    // after it (the await, the call) runs.
+    @Fact
+    func ExitingOperandBeforeAnAwait_StopsTheSequence() {
+        AssertOutput(`import System
+import System.Threading.Tasks
+func Sink(a int32, b int32) int32 { return a * 10 + b }
+async func Three() Task[int32] {
+    Console.WriteLine("awaited")
+    return 3
+}
+async func f(c bool) Task[int32] {
+    return Sink(if c { 1 } else { return -1 }, await Three())
+}
+async func g() Task[int32] {
+    return Sink(throw Exception("thrown"), await Three())
+}
+Console.WriteLine(f(true).Result)
+Console.WriteLine(f(false).Result)
+try { g().Wait() } catch (e AggregateException) { Console.WriteLine(e.InnerException!!.Message) }`, "awaited\n13\n-1\nthrown\n")
+    }
+
+    // A block lambda whose every return never completes is void with no target.
+    @Fact
+    func NeverReturnsOnlyBlockLambda_IsVoidWithoutATarget() {
+        AssertOutput(`import System
+let f = () -> { return { throw Exception("x") } }
+let g Func[int32] = () -> { return { throw Exception("y") } }
+try { f() } catch (e Exception) { Console.WriteLine(e.Message) }
+try { g() } catch (e Exception) { Console.WriteLine(e.Message) }`, "x\ny\n")
+    }
+
+    // A bare `default` in a discarded position has no target type (GS0362),
+    // and an untyped local whose inferred tuple type has a `never` element is
+    // GS0124 (both were invalid IL / GS9998).
+    @Fact
+    func DiscardedBareDefaultAndNeverTupleLocal_AreDiagnosed() {
+        AssertDiagnostic(`func f(x int32) -> switch x {
+case 1: System.Console.WriteLine("one")
+default: default
+}`, "GS0362", 3, 10)
+        AssertDiagnostic(`func f(c bool) int32 {
+    let t = (if c { return 1 } else { return 2 }, 0)
+    return 3
+}`, "GS0124", 2, 13)
+    }
+
     // Value position keeps its rules: GS0276, GS0277, GS0176, and GS0124 for a
     // `never` initializer (which crashed the compiler, GS9998, before).
     @Fact

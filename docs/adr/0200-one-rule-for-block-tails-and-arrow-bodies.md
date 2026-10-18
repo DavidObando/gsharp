@@ -71,12 +71,13 @@ The parser parses the header once and then decides with a linear,
 non-consuming token scan of the first arm (`SwitchBodyHasExpressionArms`):
 parenthesized, bracketed and braced groups are skipped whole, a braced group
 followed by the next arm or the end of the body was the statement arm's body,
-any other braced group belongs to a property pattern or the guard, and inside a
-`when` guard a `:` that closes a `? :` conditional is skipped. A `->` in the
-first arm is either the deprecated separator or the arrow of a function-type
-pattern (`case f is (int32) -> string { … }`), so only then is that one arm's
-pattern and guard parsed to decide. No header is parsed twice, so nested
-headers stay linear. Like an `if` item, the
+and any other braced group belongs to a property pattern or the guard. Two
+tokens are ambiguous without the grammar: `->` (the deprecated separator, or
+the arrow of a function-type pattern such as `case f is (int32) -> string
+{ … }`) and `?` (a nullable type such as `int32?`, or a `? :` conditional whose
+`:` is not the separator). Only when the first arm contains one of them is that
+one arm's pattern and guard parsed to decide. No header is parsed twice, so
+nested headers stay linear. Like an `if` item, the
 switch item ends at its closing brace.
 
 A colon-arm switch at statement start was a parse error before, so no valid
@@ -120,22 +121,24 @@ the block's last statement is:
 
 The never-produced value is represented by an unreachable `throw nil` trap after
 the exiting statement, so no new bound node is needed and every later pass
-already handles it. A `never` value is never stored. Where lowering still asks
-for storage around one (a spilled operand list), the spill-temp factory and the
-local-signature encoder type it `object`; it is never written or read at run
-time, and `never` has no CLR form. A `never` value keeps no result storage, also behind a
+already handles it. A `never` value is never stored. When lowering spills an
+operand list around one (`f(if c { return 1 } else { return 2 }, await g())`),
+the `never` operand runs as a statement and is replaced by the `throw nil` trap
+(`SpillSequenceSpiller.StoreOperand`). Nothing after it runs, and even a state
+machine's resume edge into the rest of the sequence reaches only a `throw`. A `never` value keeps no result storage, also behind a
 `defer` / `using let` prefix. Statements whose value is `never` are terminators
 in the control-flow graph (all-paths-return analysis). Lambda return-type
 inference collects `return`s inside the trailing value — and inside another
 `return`'s operand (`return if c { return a } else { b }`), converting each to
-the inferred type — and ignores a `never` tail; a block-bodied lambda whose every path exits is void when no delegate
-target supplies a return type (`() -> { { throw e } }`), exactly like
+the inferred type — and ignores a `never` tail; a block-bodied lambda whose every path exits — through its tail or its
+returns (`() -> { { throw e } }`, `() -> { return { throw e } }`) — is void
+when no delegate target supplies a return type, exactly like
 `() -> { throw e }`. An expression-bodied `() -> throw e` keeps its
 `() -> never` type, which adapts to any delegate signature (#2716).
 
-A local whose initializer is `never` and that has no type clause
-(`let a = throw e`, `let a = if c { return 1 } else { return 2 }`) reports
-`GS0124` ("Expression must have a value"). Before this ADR the throw-expression
+A local with no type clause whose initializer's type is or contains `never`
+(`let a = throw e`, `let a = if c { return 1 } else { return 2 }`,
+`let t = (throw e, 0)`) reports `GS0124` ("Expression must have a value"). Before this ADR the throw-expression
 form crashed the compiler (GS9998).
 
 ### 6. A void arrow body is checked exactly like the equivalent void block body
@@ -152,7 +155,9 @@ body whose value may be void — there is no value to produce, so:
   else { list.Clear() } }` as an `Action`, which reported GS0263 although the
   identical if statement compiles;
 - a void switch, like the switch statement, needs no `default`: an unmatched
-  value runs no arm.
+  value runs no arm;
+- a bare `default` branch has no target type to take, so it reports `GS0362`
+  as any targetless `default` does.
 
 Branches that all produce values keep their common type, so a lambda whose body
 ends in such an `if … else …` still returns it (ADR-0128).
