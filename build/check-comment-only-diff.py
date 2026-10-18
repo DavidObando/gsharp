@@ -274,7 +274,7 @@ def py_tokens(text: str) -> list[Token]:
             if tok.type == tokenize.COMMENT:
                 row = tok.start[0]
                 if row == 1 and tok.line.lstrip().startswith("#!"):
-                    keep("SHEBANG", tok.line.rstrip("\r\n"), tok.start, tok.end)
+                    keep("SHEBANG", tok.line.removesuffix("\n"), tok.start, tok.end)  # a CR breaks it
                     continue
                 if not ((row <= 2 and PY_CODING.match(tok.line)) or DIRECTIVE.search(tok.string)):
                     continue

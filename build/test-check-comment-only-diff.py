@@ -211,6 +211,8 @@ class PythonTests(CommentOnlyCase):
 
     def test_indented_shebang_fails(self) -> None:
         self.assertFails("a.py", "#!/usr/bin/env python3\nx = 1\n", " #!/usr/bin/env python3\nx = 1\n")
+        # Linux looks for "python3\r" when the shebang line ends in CRLF.
+        self.assertFails("a.py", "#!/usr/bin/env python3\nx = 1\n", "#!/usr/bin/env python3\r\nx = 1\n")
 
     def test_space_inside_f_string_replacement_field_fails(self) -> None:
         # f"{x=}" gives "x=1" and f"{x =}" gives "x =1".
