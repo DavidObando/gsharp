@@ -230,6 +230,18 @@ open class Issue4989BoundReceiverTests {
         }
     }
 
+    @Fact
+    func Hover_NullConditionalInterfaceCall_ShowsTheInterfaceMember() {
+        let content = LanguageServerTestHelpers.Content(NullConditionalSource)
+        let hover = HoverText(content, NullConditionalSource, "LoadAsync", 1)
+        Assert.Contains("func (IStore) LoadAsync()", hover, StringComparison.Ordinal)
+        let compilation = Compilation(content.SyntaxTree)
+        let receiver = Assert.IsAssignableFrom[ParameterSymbol](
+            SemanticLookup.ResolveSymbol(compilation, TokenAt(content, NullConditionalSource, "store?.", 0))
+        )
+        Assert.Equal("store", receiver.Name)
+    }
+
     shared {
         private const GenericInterfaceSource string = `package Repro
 
@@ -273,6 +285,20 @@ func Run(c C) bool {
     let made = c?.Make()
     let maybe Result? = nil
     return made == nil && maybe == nil
+}
+`
+
+        private const NullConditionalSource string = `package Repro
+
+import System.Threading.Tasks
+
+interface IStore {
+    func LoadAsync() Task[string?];
+}
+
+func Run(store IStore?) bool {
+    let pending = store?.LoadAsync()
+    return pending == nil
 }
 `
 

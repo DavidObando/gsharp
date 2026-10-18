@@ -192,12 +192,23 @@ shared class BoundSemantics {
             return nil
         }
         var node BoundExpression? = PeelConversions(model.GetBoundNode(root) as BoundExpression)
+        // A `?.` hop binds its access over a synthetic capture of the receiver;
+        // the walk maps each capture back to the receiver it stands for.
+        let captures = Dictionary[VariableSymbol, BoundExpression]()
         for var depth = segments.Count - 1; depth > index && node != nil; depth-- {
-            let member = Unwrap(node)
+            var member = PeelConversions(node)
+            while member is BoundNullConditionalAccessExpression hop {
+                captures[hop.Capture] = hop.Receiver
+                member = PeelConversions(hop.WhenNotNull)
+            }
+            member = Unwrap(member)
             node = if member == nil {
                 default(BoundExpression?)
             } else {
                 PeelConversions(ReceiverOf(member))
+            }
+            if node is BoundVariableExpression read && captures.TryGetValue(read.Variable, out var captured) {
+                node = PeelConversions(captured)
             }
         }
         return node
@@ -255,6 +266,9 @@ shared class BoundSemantics {
             if current is BoundConversionExpression conversion &&
                 IsSynthesizedWrapper(conversion, conversion.Expression) {
                 current = conversion.Expression
+            } else if current is BoundNullConditionalAccessExpression hop {
+                // The member a `?.` hop reads is its non-nil access.
+                current = hop.WhenNotNull
             } else if current is BoundUnaryExpression unary &&
                 unary
                 .Op
