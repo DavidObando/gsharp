@@ -152,10 +152,16 @@ func run(f () -> int32) int32 {
     return f()
 }
 func pick(n int32?) int32 -> n != nil ? n.GetValueOrDefault(run(() -> 40)) : run(() -> 1)
+func pickStatement(n int32?) int32 {
+    if n != nil {
+        return n.GetValueOrDefault(run(() -> 50)) + run(() -> 0)
+    }
+    return run(() -> 2)
+}
 var calls = 0
-Console.WriteLine("${pick(2)} ${pick(nil)} ${calls}")
+Console.WriteLine("${pick(2)} ${pick(nil)} ${pickStatement(3)} ${pickStatement(nil)} ${calls}")
 `)
-        Assert.Equal("2 1 2" + Environment.NewLine, result.Output)
+        Assert.Equal("2 1 3 2 5" + Environment.NewLine, result.Output)
     }
 
     /// The storage read is an ordinary `Nullable<T>.Value` property access, so

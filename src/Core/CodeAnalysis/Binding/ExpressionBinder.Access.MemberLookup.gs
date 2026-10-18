@@ -63,7 +63,7 @@ internal partial class ExpressionBinder {
         // no member of that name, bind the member against the original
         // `Nullable<T>` storage instead. This is the one place that decides it
         // for every narrowing region (if-statement, if-expression, `?:`,
-        // early exit, switch arm), because they all build the receiver with
+        // early exit), because they all build the receiver with
         // `BuildNarrowedRead`. A member the narrowed type does have (a
         // struct's own `Value`) keeps binding to it: the narrowed bind runs
         // first and is kept unless it reports the member as missing.

@@ -291,24 +291,54 @@ The only differences left between the two forms follow from syntax: an
 if-expression branch is a block with a value tail, and its `else` is
 mandatory, while a ternary branch is a single expression.
 
-**Compatibility.** This is a deliberate breaking change for parity. A narrowed
-branch has its narrowed type, so a ternary whose branch reads the guarded
-variable can now have a narrower result type, exactly as the matching
-if-expression already had. With `n int32?`, `n != nil ? n : 0` is now `int32`
-(it was `int32?`), which can change the inferred type of a `let`/`var` and the
-overload chosen for an argument, and a user `!!` on the narrowed variable in
-the proven branch now reports the GS0536 redundant-assertion warning.
+**Compatibility.** A narrowed branch has its narrowed type, so a ternary
+whose branch reads the guarded variable can now have a narrower result type,
+exactly as the matching if-expression already had. With `n int32?`,
+`n != nil ? n : 0` is now `int32` (it was `int32?`), which can change the
+inferred type of a `let`/`var` and the overload chosen for an argument.
 
-Code that compiled before, in 0.4.1270 and 0.5.7, stops compiling in these
-cases:
+**`Nullable<T>` members on a narrowed value (issue #4986).** C# reads a
+guarded value-type nullable through `Nullable<T>`'s own members, and
+`n != nil ? n.Value : 0`, `n.HasValue` and `n.GetValueOrDefault()` compiled in
+0.4.1270 and 0.5.7 because the ternary did not narrow. Narrowing alone would
+have broken them, since `int32` has none of those members. The rule, for
+every narrowing region (if-statement, if-expression, `?:`, early exit): a
+member access on a variable or stable path narrowed from value-type
+`Nullable<T>` to `T` binds against the original `Nullable<T>` storage when
+`T` has no member of that name. A member `T` does have keeps binding to `T`
+(a struct with its own `Value` field reads that field). The decision is made
+in one place, `ExpressionBinder.BindAccessorStep`: the narrowed read that
+`BuildNarrowedRead` builds is marked (`BoundUnaryExpression.IsNarrowingUnwrap`),
+the member is bound against the narrowed value first, and only when that
+reports the head member missing (GS0158 / GS0159) is the bind rolled back and
+redone against the storage read. The read is an ordinary `Nullable<T>`
+property or method access, so `n.Value` after a guard emits
+`call Nullable<int32>::get_Value` on the storage, which the guard already
+proved non-nil. The if-statement gains this too; it had rejected `n.Value`
+after a guard in every release.
 
-- **`Nullable<T>` members on the narrowed value.** `n != nil ? n.Value : 0`,
-  `n.GetValueOrDefault()` and `n.HasValue` in the proven branch report GS0158 /
-  GS0159, because `n` is `int32` there. The if-statement and if-expression
-  have always rejected these. Migration: the narrowed value is the value, so
-  write `n` for `n.Value` and `n.GetValueOrDefault()`, and `true` for
-  `n.HasValue`. Issue #4986 tracks a fix hint (or a rule that keeps the C#
-  idiom compiling in every form).
+Same-compilation value types are included for `Value` and `HasValue`: their
+`Nullable<T>` properties bind against the open `Nullable<>` and the emitter
+parents the getter at the constructed `Nullable<T>`, guarded or not (they
+reported GS0158 even unguarded before). `GetValueOrDefault` on a
+same-compilation struct or enum still does not bind in any position (issue
+#5001).
+
+No diagnostic accompanies the fallback. A warning would break builds that
+treat warnings as errors, an Info diagnostic is printed by `gsc` on every
+build, and a Hidden one is dropped by both `gsc` and the language server, so
+none of the available severities gives a fix hint (`write n`, `write true`)
+without either breaking builds or reaching nobody.
+
+Code that compiled cleanly in 0.4.1270 and 0.5.7 now warns or stops compiling in
+these cases:
+
+- **A `!!` the condition makes redundant (maintainer decision, kept).** A user
+  `!!` on the narrowed variable in the proven branch
+  (`s != nil ? s!!.Length : 0`) now reports the GS0536 redundant-assertion
+  warning, exactly as in an if-statement or if-expression branch; `?:` does
+  not suppress it. It stops the build only where warnings are errors.
+  Migration: remove the `!!`.
 - **The narrower type no longer fits.** A later `nil` assignment to an
   inferred local, or a call to overloads that differ only in reference
   nullability (`f(string)` / `f(string?)`), which are ambiguous for any
