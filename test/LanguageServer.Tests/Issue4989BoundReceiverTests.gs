@@ -178,6 +178,7 @@ open class Issue4989BoundReceiverTests {
         let content = LanguageServerTestHelpers.Content(GenericInterfaceSource)
         let hover = HoverText(content, GenericInterfaceSource, "Value", 2)
         Assert.Contains("Value int32", hover, StringComparison.Ordinal)
+        Assert.Contains("The boxed value.", hover, StringComparison.Ordinal)
         let compilation = Compilation(content.SyntaxTree)
         let declaration = SemanticLookup.ResolveSymbol(
             compilation,
@@ -246,6 +247,7 @@ open class Issue4989BoundReceiverTests {
         private const GenericInterfaceSource string = `package Repro
 
 interface IBox[T] {
+    /// The boxed value.
     prop Value T { get; }
 }
 
