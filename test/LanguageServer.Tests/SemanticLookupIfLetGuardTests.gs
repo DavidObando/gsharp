@@ -163,6 +163,98 @@ func Run(maybe string?) int32 {
         Assert.Same(local, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 4)))
     }
 
+    @Fact
+    func ForInLoopVariable_InsideOrAroundTheBinding_ResolvesToTheInnermost() {
+        const IfLetOutside = `func Run(maybe string?) {
+    if let value = maybe {
+        for value in []int32{1} {
+            let use = value
+        }
+        let after = value
+    }
+}`
+        let first = SyntaxTree.Parse(IfLetOutside)
+        let firstCompilation = Compilation(first)
+        let binding Symbol? = SemanticLookup.ResolveSymbol(
+            firstCompilation,
+            IdentifierAt(first, "value", occurrence: 1)
+        )
+        let loopVariable Symbol? = SemanticLookup.ResolveSymbol(
+            firstCompilation,
+            IdentifierAt(first, "value", occurrence: 2)
+        )
+        Assert.IsAssignableFrom[VariableSymbol](binding)
+        Assert.IsAssignableFrom[VariableSymbol](loopVariable)
+        Assert.NotSame(binding, loopVariable)
+        Assert.Same(
+            loopVariable,
+            SemanticLookup.ResolveSymbol(firstCompilation, IdentifierAt(first, "value", occurrence: 3))
+        )
+        Assert.Same(
+            binding,
+            SemanticLookup.ResolveSymbol(firstCompilation, IdentifierAt(first, "value", occurrence: 4))
+        )
+        const LoopOutside = `func Run(items []string?) {
+    for value in items {
+        if let value = value {
+            let use = value
+        }
+    }
+}`
+        let second = SyntaxTree.Parse(LoopOutside)
+        let secondCompilation = Compilation(second)
+        let outerLoop Symbol? = SemanticLookup.ResolveSymbol(
+            secondCompilation,
+            IdentifierAt(second, "value", occurrence: 1)
+        )
+        let innerBinding Symbol? = SemanticLookup.ResolveSymbol(
+            secondCompilation,
+            IdentifierAt(second, "value", occurrence: 2)
+        )
+        Assert.IsAssignableFrom[VariableSymbol](innerBinding)
+        Assert.NotSame(outerLoop, innerBinding)
+        Assert.Same(
+            outerLoop,
+            SemanticLookup.ResolveSymbol(secondCompilation, IdentifierAt(second, "value", occurrence: 3))
+        )
+        Assert.Same(
+            innerBinding,
+            SemanticLookup.ResolveSymbol(secondCompilation, IdentifierAt(second, "value", occurrence: 4))
+        )
+    }
+
+    @Fact
+    func HeaderAndBlockExpressionLocals_ShadowOnlyInsideTheirOwnScope() {
+        const Source = `func Run(maybe string?) int32 {
+    if let value = maybe {
+        if var value = 1; value > 0 {
+            let inHeaderScope = value
+        }
+        let n = if value.Length > 0 {
+            let value = 2
+            value
+        } else {
+            0
+        }
+        let after = value
+    }
+    return 0
+}`
+        let tree = SyntaxTree.Parse(Source)
+        let compilation = Compilation(tree)
+        let binding Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 1))
+        Assert.IsAssignableFrom[VariableSymbol](binding)
+        // Inside the `if var value = 1; …` header scope the header local wins.
+        Assert.NotSame(binding, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 3)))
+        Assert.NotSame(binding, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 4)))
+        // The if-expression condition is outside the branch block: still the binding.
+        Assert.Same(binding, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 5)))
+        // Inside the branch block expression its own local wins.
+        Assert.NotSame(binding, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 7)))
+        // After both inner scopes end, the binding is back in effect.
+        Assert.Same(binding, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 8)))
+    }
+
     shared {
         private func IdentifierAt(tree SyntaxTree, text string, occurrence int32) SyntaxToken? {
             var seen = 0

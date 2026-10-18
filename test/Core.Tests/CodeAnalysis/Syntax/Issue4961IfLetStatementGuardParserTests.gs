@@ -182,6 +182,40 @@ func F(a int32, b int32, ok bool) {
     }
 
     @Fact
+    func WithInitializer_IsKept_InEveryLetBindingForm() {
+        // The initializer is the full grammar, so the `with` continuation
+        // (parsed only at the outermost binary tier) stays in it, here in the
+        // false arm of a nullable `?:`; a guard may still follow.
+        const source = `package P
+data struct Point(X int32, Y int32)
+func F(flag bool, point Point) int32 {
+    if let copy = flag ? default(Point?) : point with { X = 2 } {
+        return copy.X
+    }
+    if let other = flag ? default(Point?) : point with { X = 3 } && other.X > 0 {
+        return other.X
+    }
+    guard let third = flag ? default(Point?) : point with { X = 4 } else {
+        return 0
+    }
+    return third.X
+}`
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        let statements = Walk(tree.Root).OfType[IfLetStatementSyntax]().ToList()
+        Assert.Equal(2, statements.Count)
+        Assert.IsType[WithExpressionSyntax](
+            Assert.IsType[ConditionalExpressionSyntax](statements[0].Bindings[0].Initializer).WhenFalse
+        )
+        Assert.Null(statements[0].Guard)
+        Assert.IsType[WithExpressionSyntax](
+            Assert.IsType[ConditionalExpressionSyntax](statements[1].Bindings[0].Initializer).WhenFalse
+        )
+        Assert.NotNull(statements[1].Guard)
+        Assert.IsType[ConditionalExpressionSyntax](FindFirst[GuardLetStatementSyntax](tree).Bindings[0].Initializer)
+    }
+
+    @Fact
     func TopLevelLogicalOr_AfterTheBindings_ReportsGS0626_InBothForms() {
         const source = `package P
 func F(a string?, c bool) bool {

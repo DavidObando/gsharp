@@ -173,6 +173,36 @@ Run("x", true)`)
         Assert.DoesNotContain(ids, (id string) -> id.StartsWith("GS0157"))
     }
 
+    @Fact
+    func Statement_GuardInvokedClosure_ChangesExternalCallableAlias() {
+        // The if-let variant of Issue4519's
+        // ForwardGoto_ConditionInvokedClosureChangesExternalCallableAlias: the
+        // guard runs before the then-region like an `if` condition, so the
+        // closure it invokes (which makes `action` the clearing closure) must
+        // be folded into the alias state before the then-region is bound.
+        let result = EmittedOracle.Evaluate(`func Run(callback (() -> void), maybe string?) int32 {
+    var text string? = nil
+    text = "safe"
+    let clear = func() { text = nil }
+    var action = callback
+    if let m = maybe && func() bool { action = clear; return true }() {
+        try {
+            goto Done
+        }
+        finally {
+            action()
+        }
+    }
+Done:
+    return text.Length
+}
+
+Run(func() { }, "a")`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
     shared {
         private func Ids(result EmittedOracleResult)[]string {
             return result

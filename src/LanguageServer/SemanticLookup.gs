@@ -786,16 +786,64 @@ shared class SemanticLookup {
         private func ResolveRegionScopedLocal(token SyntaxToken) Symbol? {
             let ifLet = this.ResolveIfLetLocal(token)
             let whileLet = this.ResolveWhileLetLoopLocal(token)
-            let (symbol, regionStart) = if whileLet.Symbol != nil &&
+            let (symbol, regionStart, regionLength) = if whileLet.Symbol != nil &&
                 (ifLet.Symbol == nil || whileLet.RegionLength < ifLet.RegionLength) {
-                (whileLet.Symbol, whileLet.RegionStart)
+                (whileLet.Symbol, whileLet.RegionStart, whileLet.RegionLength)
             } else {
-                (ifLet.Symbol, ifLet.RegionStart)
+                (ifLet.Symbol, ifLet.RegionStart, ifLet.RegionLength)
             }
-            if symbol == nil || this.IsShadowedByNestedLocal(token, regionStart) {
+            if symbol == nil {
+                return nil
+            }
+            // A `for … in` / `await for` loop variable of the same name in a
+            // narrower region is the binding in effect; defer to the existing
+            // lookup path, which resolves loop variables.
+            let forRange = this.ResolveForRangeLoopLocalRegion(token)
+            if forRange.Symbol != nil && forRange.RegionLength < regionLength {
+                return nil
+            }
+            if this.IsShadowedByNestedLocal(token, regionStart) {
                 return nil
             }
             return symbol
+        }
+
+        /// The node whose span is the lexical scope of a local declaration: an
+        /// `if` / `for` header initializer is scoped to its whole statement
+        /// (or if-expression), and any other declaration to its nearest
+        /// enclosing statement block or block expression.
+        private func DeclarationScope(declaration VariableDeclarationSyntax) SyntaxNode? {
+            var child SyntaxNode = declaration
+            var node SyntaxNode? = declaration.Parent
+            while node is SyntaxNode current {
+                switch current {
+                    case block is BlockStatementSyntax {
+                        return block
+                    }
+                    case blockExpression is BlockExpressionSyntax {
+                        return blockExpression
+                    }
+                    case ifStatement is IfStatementSyntax when object.ReferenceEquals(ifStatement.Initializer, child) {
+                        return ifStatement
+                    }
+                    case ifExpression is IfExpressionSyntax when object.ReferenceEquals(
+                        ifExpression.Initializer,
+                        child
+                    ) {
+                        return ifExpression
+                    }
+                    case forClause is ForClauseStatementSyntax when object.ReferenceEquals(
+                        forClause.Initializer,
+                        child
+                    ) {
+                        return forClause
+                    }
+                    default { }
+                }
+                child = current
+                node = current.Parent
+            }
+            return nil
         }
 
         private func IsShadowedByNestedLocal(token SyntaxToken, regionStart int32) bool {
@@ -807,11 +855,18 @@ shared class SemanticLookup {
                 if declaration.Span.Start < regionStart || token.Span.Start < declaration.Span.End {
                     continue
                 }
-                var block SyntaxNode? = declaration.Parent
-                while block != nil && block !is BlockStatementSyntax {
-                    block = block.Parent
-                }
-                if block != nil && block.Span.Start <= token.Span.Start && token.Span.End <= block.Span.End {
+                let declarationScope SyntaxNode? = DeclarationScope(declaration)
+                if declarationScope != nil &&
+                    declarationScope
+                    .Span
+                    .Start <= token
+                    .Span
+                    .Start &&
+                    token
+                    .Span
+                    .End <= declarationScope
+                    .Span
+                    .End {
                     return true
                 }
             }
@@ -868,12 +923,20 @@ shared class SemanticLookup {
             return (best, bestRegionStart, bestSpanLength)
         }
 
-        private func ResolveForRangeLoopLocal(token SyntaxToken) Symbol? {
-            if token?.SyntaxTree == nil {
-                return nil
-            }
+        private func ResolveForRangeLoopLocal(token SyntaxToken) Symbol? -> this.ResolveForRangeLoopLocalRegion(token)
+            .Symbol
+
+        private func ResolveForRangeLoopLocalRegion(token SyntaxToken)(
+            Symbol Symbol?,
+            RegionStart int32,
+            RegionLength int32
+        ) {
             var best Symbol? = nil
+            var bestRegionStart = 0
             var bestSpanLength = int32.MaxValue
+            if token?.SyntaxTree == nil {
+                return (nil, 0, bestSpanLength)
+            }
             for statement in this.GetForRangesForTree(token.SyntaxTree) {
                 if statement.Body == nil ||
                     token
@@ -902,6 +965,7 @@ shared class SemanticLookup {
                     }
                     if keySymbol != nil && statement.Body.Span.Length < bestSpanLength {
                         best = keySymbol
+                        bestRegionStart = statement.Body.Span.Start
                         bestSpanLength = statement.Body.Span.Length
                     }
                 }
@@ -916,6 +980,7 @@ shared class SemanticLookup {
                 }
                 if valueSymbol != nil && statement.Body.Span.Length < bestSpanLength {
                     best = valueSymbol
+                    bestRegionStart = statement.Body.Span.Start
                     bestSpanLength = statement.Body.Span.Length
                 }
             }
@@ -943,10 +1008,11 @@ shared class SemanticLookup {
                 }
                 if valueSymbol != nil && statement.Body.Span.Length < bestSpanLength {
                     best = valueSymbol
+                    bestRegionStart = statement.Body.Span.Start
                     bestSpanLength = statement.Body.Span.Length
                 }
             }
-            return best
+            return (best, bestRegionStart, bestSpanLength)
         }
 
         private func GetForRangesForTree(tree SyntaxTree)[]ForRangeStatementSyntax {

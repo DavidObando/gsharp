@@ -178,6 +178,12 @@ internal partial class StatementBinder {
     /// (cref:IfLetBindingSupport.BuildShortCircuitCondition), the condition
     /// the expression form uses, so each branch appears exactly once.
     private func BindIfLetStatement(syntax IfLetStatementSyntax) BoundStatement {
+        // The header (initializers and guard) runs before either branch, like
+        // an `if` condition: fold its callable effects into the alias state
+        // before the branches are bound, then join the branch exits, exactly as
+        // BindIfStatement does.
+        var callableEntry = CaptureExternalCallableAliases()
+        var callableThenExit = callableEntry
         let (clauses, guard_, thenStatement) = IfLetBindingSupport.BindHeader(
             binderCtx,
             syntax.Bindings,
@@ -185,15 +191,29 @@ internal partial class StatementBinder {
             Diagnostics,
             conversions,
             bindTypeClause,
-            (initializer ExpressionSyntax) -> bindExpression(initializer, false),
+            (initializer ExpressionSyntax) -> {
+                let bound = bindExpression(initializer, false)
+                ApplyHeaderCallableEffects(bound)
+                return bound
+            },
             (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> bindLocalVariable(
                 identifier,
                 isReadOnly,
                 type
             ),
-            (guardSyntax ExpressionSyntax) -> bindExpressionWithTargetType(guardSyntax, TypeSymbol.Bool),
+            (guardSyntax ExpressionSyntax) -> {
+                let bound = bindExpressionWithTargetType(guardSyntax, TypeSymbol.Bool)
+                ApplyHeaderCallableEffects(bound)
+                return bound
+            },
             (boundGuard BoundExpression) -> ClassifyIfConditionNarrowing(boundGuard).Then,
-            () -> BindStatementWithNarrowing(syntax.ThenStatement, nil)
+            () -> {
+                callableEntry = CaptureExternalCallableAliases()
+                let then = BindStatementWithNarrowing(syntax.ThenStatement, nil)
+                callableThenExit = CaptureExternalCallableAliases()
+                RestoreExternalCallableAliases(callableEntry)
+                return then
+            }
         )
         // Bound AFTER the header scope is popped: the else branch never sees
         // the bindings.
@@ -202,6 +222,12 @@ internal partial class StatementBinder {
         } else {
             BindStatement(syntax.ElseClause.ElseStatement)
         }
+        let callableElseExit = if syntax.ElseClause == nil {
+            callableEntry
+        } else {
+            CaptureExternalCallableAliases()
+        }
+        RestoreJoinedExternalCallableAliases(callableThenExit, callableElseExit)
         if !clauses.Any((clause IfLetBindingSupport.BoundIfLetClause) -> clause.Binding.IsValid) {
             // Every initializer was an error: keep the declarations so the
             // user still sees diagnostics, but no synthetic if-shape leaks.

@@ -118,32 +118,108 @@ open partial class Parser {
     }
 
     /// ADR-0151 / ADR-0200: parses a binding initializer of any `let`-binding
-    /// header. It is the full expression grammar (assignments, `??`, `?:`)
-    /// except that a TOP-LEVEL `&&` or `||` ends it, so the delimiter can
-    /// start the optional guard. The rule is applied by the assignment layer
-    /// in its `guarded` mode, which replaces the range/binary operand with
-    /// (cref:ParseIfLetGuardedCoalescing) and carries the rule into an
-    /// assignment's right-hand side and a `?:` false arm. A logical operator
-    /// that genuinely belongs to the initializer is written parenthesized.
-    private func ParseIfLetGuardedInitializer() ExpressionSyntax -> ParseAssignmentExpression(guarded: true)
-
-    /// The operand of a guarded initializer: the binary loop entered at the
-    /// logical-and precedence tier (which also stops at a top-level `||`),
-    /// plus the right-associative `??` tail that sits below that tier.
-    private func ParseIfLetGuardedCoalescing() ExpressionSyntax {
-        // Issue #1602: the right-associative `??` tail self-recurses.
-        EnsureNestedParseAllowed()
-        recursionDepth++
+    /// header. It is the FULL expression grammar, except that the first
+    /// TOP-LEVEL `&&` or `||` ends it, so the delimiter can start the
+    /// optional guard. A logical operator that genuinely belongs to the
+    /// initializer is written parenthesized.
+    ///
+    /// The grammar is never re-implemented here: the initializer is first
+    /// parsed speculatively with (cref:ParseExpression), and
+    /// (cref:FindTopLevelLogicalOperator) locates the first logical operator
+    /// that is not nested inside any operand (parentheses, arguments, a `?:`
+    /// true arm, a lambda, ...). Without one, the speculative result is the
+    /// initializer. Otherwise the initializer is re-parsed with the same
+    /// grammar, the token stream ending just before that operator. A shape
+    /// the finder does not recognize keeps its logical operators inside the
+    /// initializer, which is the pre-ADR-0200 statement-form parse, so the
+    /// rule can only ever fail safe.
+    private func ParseIfLetGuardedInitializer() ExpressionSyntax {
+        let savedPosition = position
+        let savedTokens = tokens
+        let savedDiagnosticCount = Diagnostics.Count
+        let speculative = ParseExpression()
+        let delimiter = FindTopLevelLogicalOperator(speculative)
+        if delimiter == nil {
+            return speculative
+        }
+        position = savedPosition
+        tokens = savedTokens
+        Diagnostics.TruncateTo(savedDiagnosticCount)
+        let outerLimit = tokenLimitPosition
+        tokenLimitPosition = delimiter.Position
         try {
-            let left = ParseBinaryExpression(SyntaxKind.AmpersandAmpersandToken.GetBinaryOperatorPrecedence())
-            if Current.Kind == SyntaxKind.QuestionQuestionToken {
-                let operatorToken = NextToken()
-                let right = ParseIfLetGuardedCoalescing()
-                return BinaryExpressionSyntax(syntaxTree, left, operatorToken, right)
-            }
-            return left
+            return ParseExpression()
         } finally {
-            recursionDepth--
+            tokenLimitPosition = outerLimit
+        }
+    }
+
+    /// Issue #4961 / ADR-0200: the first `&&` / `||` token of
+    /// [`expression`](paramref) that is a top-level operator of a `let`
+    /// initializer, or `null`. Only the operands that continue the
+    /// initializer at its own level are searched: both operands of a binary
+    /// operator (`??`, comparisons, the logical operators themselves), a
+    /// `?:` condition and false arm, range bounds, a `with` receiver, and an
+    /// assignment's value. Everything else (parenthesized expressions, calls,
+    /// lambdas, a `?:` true arm, ...) is nested and keeps its operators.
+    private func FindTopLevelLogicalOperator(expression ExpressionSyntax?) SyntaxToken? {
+        switch expression {
+            case binary is BinaryExpressionSyntax {
+                let left = FindTopLevelLogicalOperator(binary.Left)
+                if left != nil {
+                    return left
+                }
+                if binary
+                    .OperatorToken
+                    .Kind == SyntaxKind.AmpersandAmpersandToken ||
+                    binary
+                    .OperatorToken
+                    .Kind == SyntaxKind.PipePipeToken {
+                    return binary.OperatorToken
+                }
+                return FindTopLevelLogicalOperator(binary.Right)
+            }
+            case conditional is ConditionalExpressionSyntax {
+                return FindTopLevelLogicalOperator(conditional.Condition) ??
+                    FindTopLevelLogicalOperator(conditional.WhenFalse)
+            }
+            case rangeExpression is RangeExpressionSyntax {
+                return FindTopLevelLogicalOperator(rangeExpression.LowerBound) ??
+                    FindTopLevelLogicalOperator(rangeExpression.UpperBound)
+            }
+            case with_ is WithExpressionSyntax {
+                return FindTopLevelLogicalOperator(with_.Receiver)
+            }
+            case assignment is AssignmentExpressionSyntax {
+                return FindTopLevelLogicalOperator(assignment.Expression)
+            }
+            case field is FieldAssignmentExpressionSyntax {
+                return FindTopLevelLogicalOperator(field.Value)
+            }
+            case memberField is MemberFieldAssignmentExpressionSyntax {
+                return FindTopLevelLogicalOperator(memberField.Value)
+            }
+            case index is IndexAssignmentExpressionSyntax {
+                return FindTopLevelLogicalOperator(index.Value)
+            }
+            case memberIndex is MemberIndexAssignmentExpressionSyntax {
+                return FindTopLevelLogicalOperator(memberIndex.Value)
+            }
+            case compoundIndex is CompoundIndexAssignmentExpressionSyntax {
+                return FindTopLevelLogicalOperator(compoundIndex.Value)
+            }
+            case indirect is IndirectAssignmentExpressionSyntax {
+                return FindTopLevelLogicalOperator(indirect.Value)
+            }
+            case indirectCompound is IndirectCompoundAssignmentExpressionSyntax {
+                return FindTopLevelLogicalOperator(indirectCompound.Value)
+            }
+            case subscription is EventSubscriptionExpressionSyntax {
+                return FindTopLevelLogicalOperator(subscription.Value)
+            }
+            default {
+                return nil
+            }
         }
     }
 

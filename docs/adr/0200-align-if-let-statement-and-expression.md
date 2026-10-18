@@ -90,7 +90,14 @@ if let v = (a && b ? x : y) { … }                // parenthesized: one initial
 
 The rule is implemented once, in `Parser.ParseIfLetHeader`, which every
 `let`-binding form (`if let` statement and expression, `guard let`,
-`while let`) calls.
+`while let`) calls. The initializer is not parsed by a re-implemented
+"restricted" grammar. It is parsed speculatively with the ordinary expression
+grammar, and the first logical operator that is a top-level operator of that
+tree is located: an operand of a binary operator, a `?:` condition or false
+arm, a range bound, a `with` receiver, or an assignment's value. If there is
+one, the initializer is re-parsed with the token stream ending just before
+it. A construct the locator does not know keeps its logical operators, which
+is the pre-ADR-0200 parse, so the rule fails safe.
 
 ### 2. Guard
 

@@ -26,6 +26,11 @@ open partial class Parser {
     private var tokens ImmutableArray[SyntaxToken]
     private var position int32
 
+    // Issue #4961 / ADR-0200: Peek reports end-of-file for every token at or
+    // after this source position (see ParseIfLetGuardedInitializer).
+    // int32.MaxValue means no limit.
+    private var tokenLimitPosition int32 = int32.MaxValue
+
     // Issue #3587: declaration return/property types can contain a slice-wrapped
     // tuple immediately before an expression-body arrow. This position marks
     // the one ambiguous tuple that must be parsed as a tuple, not a function type.
@@ -558,7 +563,13 @@ open partial class Parser {
         if index >= tokens.Length {
             return tokens[tokens.Length - 1]
         }
-        return tokens[index]
+        let token = tokens[index]
+        // Issue #4961 / ADR-0200: while a `let` initializer is re-parsed up to
+        // its guard delimiter, the stream ends just before that token.
+        if token.Position >= tokenLimitPosition {
+            return tokens[tokens.Length - 1]
+        }
+        return token
     }
 
     private func NextToken() SyntaxToken {
