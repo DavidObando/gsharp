@@ -1677,8 +1677,9 @@ machinery of . A `while let` binding has the same non-null view inside
 the loop body and is out of scope after the loop.
 
 A `LetInitializer` is an ordinary expression except that a **top-level** `&&`
-or `||` ends it, so the delimiter can start the guard. A `??` tail and a `?:`
-conditional (whose false arm follows the same rule) are accepted; a logical
+or `||` ends it, so the delimiter can start the guard. An assignment, a `??`
+tail and a `?:` conditional (whose right-hand side and false arm follow the
+same rule) are accepted; a logical
 operator that belongs to the initializer is parenthesized:
 `if let v = (a && b ? x : y) { … }`. A top-level `||` after the bindings
 reports `GS0626`. When an `if let` has a guard and its final initializer is a

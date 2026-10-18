@@ -439,6 +439,31 @@ Parenthesized(true, false, "x", "y")`
     }
 
     @Fact
+    func AssignmentInitializer_StillWorks_InEveryLetBindingForm() {
+        let source = `package Test
+import System
+
+var cached string? = nil
+var calls = 0
+func Next() string? {
+    calls++
+    return if calls < 3 { "n" + calls.ToString() } else { default(string?) }
+}
+func Run() {
+    if let a = cached = Next() && a.Length > 0 {
+        Console.WriteLine(a + " " + (cached ?? "nil"))
+    }
+    while let b = cached = Next() {
+        Console.WriteLine(b)
+    }
+    Console.WriteLine(cached ?? "nil")
+}
+
+Run()`
+        Assert.Equal(Lines("n1 n1", "n2", "nil"), CompileAndRun(source))
+    }
+
+    @Fact
     func ExpressionForm_AcceptsAConditionalInitializer() {
         // Aligned initializer grammar: the value-position form used to fail
         // to parse a `?:` initializer that the statement form accepted.
@@ -503,9 +528,20 @@ stderr:
                 psi.ArgumentList.Add(Path.ChangeExtension(outPath, ".runtimeconfig.json"))
                 psi.ArgumentList.Add(outPath)
                 using let proc = Process.Start(psi) ?? throw InvalidOperationException("Failed to start dotnet exec")
-                let stdout = proc.StandardOutput.ReadToEnd()
-                let stderr = proc.StandardError.ReadToEnd()
-                Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out")
+                // Drain both streams concurrently and enforce the timeout
+                // before waiting for EOF, so a hung program (for example a
+                // loop-lowering regression) fails here instead of hanging
+                // until the CI job times out.
+                let stdoutTask = proc.StandardOutput.ReadToEndAsync()
+                let stderrTask = proc.StandardError.ReadToEndAsync()
+                if !proc.WaitForExit(30_000) {
+                    try {
+                        proc.Kill(entireProcessTree: true)
+                    } catch (InvalidOperationException) { }
+                    Assert.Fail("dotnet exec timed out after 30 s")
+                }
+                let stdout = stdoutTask.GetAwaiter().GetResult()
+                let stderr = stderrTask.GetAwaiter().GetResult()
                 Assert.True(proc.ExitCode == 0, (`sample exited ` + "${proc.ExitCode}" + `
 stdout:
 ` + "$stdout" + `

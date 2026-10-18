@@ -76,9 +76,10 @@ LetBindingClause = "let" identifier TypeClause? "=" LetInitializer .
 ### 1. Initializer rule (both forms, every `let`-binding header)
 
 A binding initializer is the full expression grammar except that a
-**top-level** `&&` or `||` ends it. The two nullable-capable tails below the
-logical-and tier are kept: the right-associative `??`, and the `?:`
-conditional, whose false arm follows the same rule (so a guard may follow it).
+**top-level** `&&` or `||` ends it. Everything below the logical-and tier
+is kept: an assignment (`if let v = cached = Next()`, whose right-hand side
+follows the same rule), the right-associative `??`, and the `?:` conditional,
+whose false arm follows the same rule (so a guard may follow it).
 A logical operator that belongs to the initializer is parenthesized:
 
 ```gsharp
@@ -193,6 +194,8 @@ top level contains `&&` or `||`.
   never compiles silently: the `bool` initializer reports GS0624 (parenthesize)
   and the non-`bool` guard reports GS0155. The fix that preserves meaning is
   `if let v = (a && b ? x : y) { … }`.
+- An assignment initializer (`if let v = cached = Next() { … }`) keeps
+  working in every form; a guard may follow it.
 - A `?:` initializer without a top-level logical operator
   (`if let v = flag ? x : y { … }`) keeps working, and now also works in the
   expression form, where it used to fail to parse.
@@ -207,7 +210,7 @@ Repository count at the time of the change (`.gs` sources, test sources and
 test inputs in string literals, samples, website docs, ADRs, cs2gs translator
 and its tests): **one** statement `if let` with a top-level `&&` in an
 initializer — the ADR-0151 parser test that pinned the old statement-form
-behavior, rewritten by this change — and **zero** with a `?:` initializer.
+behavior, rewritten by this change — and **zero** with a `?:` or assignment initializer.
 There is **one** multi-binding statement `if let` in non-test source
 (`samples/IfLetGuardLet.gs`), whose initializers are side-effect-free
 parameters. cs2gs prints every statement-form initializer at the

@@ -77,6 +77,92 @@ func Run(maybe string?) int32 {
         Assert.Same(binding, initializerUse)
     }
 
+    @Fact
+    func MixedNesting_ResolvesTheInnermostBinding_InBothOrders() {
+        const IfLetOutside = `func Run(outer string?, inner string?) {
+    if let value = outer {
+        while let value = inner {
+            let use = value
+            break
+        }
+        let after = value
+    }
+}`
+        let first = SyntaxTree.Parse(IfLetOutside)
+        let firstCompilation = Compilation(first)
+        let ifBinding Symbol? = SemanticLookup.ResolveSymbol(
+            firstCompilation,
+            IdentifierAt(first, "value", occurrence: 1)
+        )
+        let whileBinding Symbol? = SemanticLookup.ResolveSymbol(
+            firstCompilation,
+            IdentifierAt(first, "value", occurrence: 2)
+        )
+        Assert.IsAssignableFrom[VariableSymbol](ifBinding)
+        Assert.IsAssignableFrom[VariableSymbol](whileBinding)
+        Assert.NotSame(ifBinding, whileBinding)
+        Assert.Same(
+            whileBinding,
+            SemanticLookup.ResolveSymbol(firstCompilation, IdentifierAt(first, "value", occurrence: 3))
+        )
+        Assert.Same(
+            ifBinding,
+            SemanticLookup.ResolveSymbol(firstCompilation, IdentifierAt(first, "value", occurrence: 4))
+        )
+        const WhileLetOutside = `func Run(outer string?, inner string?) {
+    while let value = outer {
+        if let value = inner {
+            let use = value
+        }
+        let after = value
+        break
+    }
+}`
+        let second = SyntaxTree.Parse(WhileLetOutside)
+        let secondCompilation = Compilation(second)
+        let outerBinding Symbol? = SemanticLookup.ResolveSymbol(
+            secondCompilation,
+            IdentifierAt(second, "value", occurrence: 1)
+        )
+        let innerBinding Symbol? = SemanticLookup.ResolveSymbol(
+            secondCompilation,
+            IdentifierAt(second, "value", occurrence: 2)
+        )
+        Assert.IsAssignableFrom[VariableSymbol](outerBinding)
+        Assert.IsAssignableFrom[VariableSymbol](innerBinding)
+        Assert.NotSame(outerBinding, innerBinding)
+        Assert.Same(
+            innerBinding,
+            SemanticLookup.ResolveSymbol(secondCompilation, IdentifierAt(second, "value", occurrence: 3))
+        )
+        Assert.Same(
+            outerBinding,
+            SemanticLookup.ResolveSymbol(secondCompilation, IdentifierAt(second, "value", occurrence: 4))
+        )
+    }
+
+    @Fact
+    func NestedOrdinaryLocal_ShadowsTheBinding_InsideItsBlock() {
+        const Source = `func Run(maybe string?) int32 {
+    if let value = maybe {
+        let before = value
+        {
+            let value = 1
+            let inside = value
+        }
+    }
+    return 0
+}`
+        let tree = SyntaxTree.Parse(Source)
+        let compilation = Compilation(tree)
+        let binding Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 1))
+        let local Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 3))
+        Assert.IsAssignableFrom[VariableSymbol](binding)
+        Assert.Same(binding, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 2)))
+        Assert.NotSame(binding, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 4)))
+        Assert.Same(local, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 4)))
+    }
+
     shared {
         private func IdentifierAt(tree SyntaxTree, text string, occurrence int32) SyntaxToken? {
             var seen = 0

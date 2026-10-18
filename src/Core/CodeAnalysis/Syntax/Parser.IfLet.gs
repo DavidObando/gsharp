@@ -118,34 +118,18 @@ open partial class Parser {
     }
 
     /// ADR-0151 / ADR-0200: parses a binding initializer of any `let`-binding
-    /// header. It is the full expression grammar except that a TOP-LEVEL
-    /// `&&` or `||` ends it, so the delimiter can start the optional
-    /// guard: the binary loop is entered at the logical-and precedence tier
-    /// (which also terminates at a top-level `||`). The two nullable-capable
-    /// tails below that tier are still accepted: the right-associative `??`
-    /// and the `?:` conditional, whose false arm uses this same rule so a
-    /// guard may follow it. A logical operator that genuinely belongs to the
-    /// initializer is written parenthesized.
-    private func ParseIfLetGuardedInitializer() ExpressionSyntax {
-        // Issue #1602: the `?:` false arm self-recurses, so tick the guard.
-        EnsureNestedParseAllowed()
-        recursionDepth++
-        try {
-            let condition = ParseIfLetGuardedCoalescing()
-            if Current.Kind != SyntaxKind.QuestionToken {
-                return condition
-            }
-            let questionToken = NextToken()
-            // The true arm is closed by `:`, so it keeps the full grammar.
-            let whenTrue = ParseExpression()
-            let colonToken = MatchToken(SyntaxKind.ColonToken)
-            let whenFalse = ParseIfLetGuardedInitializer()
-            return ConditionalExpressionSyntax(syntaxTree, condition, questionToken, whenTrue, colonToken, whenFalse)
-        } finally {
-            recursionDepth--
-        }
-    }
+    /// header. It is the full expression grammar (assignments, `??`, `?:`)
+    /// except that a TOP-LEVEL `&&` or `||` ends it, so the delimiter can
+    /// start the optional guard. The rule is applied by the assignment layer
+    /// in its `guarded` mode, which replaces the range/binary operand with
+    /// (cref:ParseIfLetGuardedCoalescing) and carries the rule into an
+    /// assignment's right-hand side and a `?:` false arm. A logical operator
+    /// that genuinely belongs to the initializer is written parenthesized.
+    private func ParseIfLetGuardedInitializer() ExpressionSyntax -> ParseAssignmentExpression(guarded: true)
 
+    /// The operand of a guarded initializer: the binary loop entered at the
+    /// logical-and precedence tier (which also stops at a top-level `||`),
+    /// plus the right-associative `??` tail that sits below that tier.
     private func ParseIfLetGuardedCoalescing() ExpressionSyntax {
         // Issue #1602: the right-associative `??` tail self-recurses.
         EnsureNestedParseAllowed()

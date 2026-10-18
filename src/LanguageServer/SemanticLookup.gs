@@ -124,6 +124,7 @@ shared class SemanticLookup {
         private var cachedStructsByFile Dictionary[string, []StructDeclarationSyntax]
         private var cachedWhileLetsByFile Dictionary[string, []WhileLetStatementSyntax]
         private var cachedIfLetsByFile Dictionary[string, []SyntaxNode]
+        private var cachedVariableDeclarationsByFile Dictionary[string, []VariableDeclarationSyntax]
         private var cachedAccessorsByTree Dictionary[SyntaxTree, []AccessorExpressionSyntax]
         private var cachedFieldAssignmentsByTree Dictionary[SyntaxTree, []FieldAssignmentExpressionSyntax]
         private var cachedForRangesByTree Dictionary[SyntaxTree, []ForRangeStatementSyntax]
@@ -187,6 +188,7 @@ shared class SemanticLookup {
             let structsByFile = Dictionary[string, List[StructDeclarationSyntax]]()
             let whileLetsByFile = Dictionary[string, List[WhileLetStatementSyntax]]()
             let ifLetsByFile = Dictionary[string, List[SyntaxNode]]()
+            let variableDeclarationsByFile = Dictionary[string, List[VariableDeclarationSyntax]]()
             this.memberAccessTokenSpans = HashSet[(string, int32, int32)]()
             this.fieldAssignmentTokenSpans = HashSet[(string, int32, int32)]()
             for var i = 0; i < treeArray.Length; i++ {
@@ -224,6 +226,14 @@ shared class SemanticLookup {
                         whileLetsByFile[fileName] = whileLets
                     }
                     whileLets.AddRange(bucket.WhileLets)
+                }
+                // Only files with region-scoped bindings need the shadowing check.
+                if (bucket.IfLets.Count > 0 || bucket.WhileLets.Count > 0) && bucket.VariableDeclarations.Count > 0 {
+                    if !variableDeclarationsByFile.TryGetValue(fileName, out var variableDeclarations) {
+                        variableDeclarations = List[VariableDeclarationSyntax]()
+                        variableDeclarationsByFile[fileName] = variableDeclarations
+                    }
+                    variableDeclarations.AddRange(bucket.VariableDeclarations)
                 }
                 if bucket.IfLets.Count > 0 {
                     if !ifLetsByFile.TryGetValue(fileName, out var ifLets) {
@@ -263,6 +273,10 @@ shared class SemanticLookup {
                 (kvp KeyValuePair[string, List[WhileLetStatementSyntax]]) -> kvp.Key,
                 (kvp KeyValuePair[string, List[WhileLetStatementSyntax]]) -> kvp.Value.ToArray()
             )
+            this.cachedVariableDeclarationsByFile = variableDeclarationsByFile.ToDictionary(
+                (kvp KeyValuePair[string, List[VariableDeclarationSyntax]]) -> kvp.Key,
+                (kvp KeyValuePair[string, List[VariableDeclarationSyntax]]) -> kvp.Value.ToArray()
+            )
             this.cachedIfLetsByFile = ifLetsByFile.ToDictionary(
                 (kvp KeyValuePair[string, List[SyntaxNode]]) -> kvp.Key,
                 (kvp KeyValuePair[string, List[SyntaxNode]]) -> kvp.Value.ToArray()
@@ -297,13 +311,9 @@ shared class SemanticLookup {
                 // Token is clearly a member name; do not fall through to by-name lookups.
                 return nil
             }
-            let ifLetLocal Symbol? = this.ResolveIfLetLocal(token)
-            if ifLetLocal != nil {
-                return ifLetLocal
-            }
-            let whileLetLocal Symbol? = this.ResolveWhileLetLoopLocal(token)
-            if whileLetLocal != nil {
-                return whileLetLocal
+            let scopedLocal Symbol? = this.ResolveRegionScopedLocal(token)
+            if scopedLocal != nil {
+                return scopedLocal
             }
             let function FunctionDeclarationSyntax? = this.FindContainingFunction(token)
             if function != nil && this.localDeclarations.TryGetValue(function, out var locals) && locals.TryGetValue(
@@ -675,16 +685,17 @@ shared class SemanticLookup {
         /// then-region, never in the else branch. The innermost such region
         /// wins, which also makes a later same-named binding shadow an earlier
         /// one.
-        private func ResolveIfLetLocal(token SyntaxToken) Symbol? {
+        private func ResolveIfLetLocal(token SyntaxToken)(Symbol Symbol?, RegionStart int32, RegionLength int32) {
+            var best Symbol? = nil
+            var bestRegionStart = 0
+            var bestRegionLength = int32.MaxValue
             if token?.SyntaxTree == nil {
-                return nil
+                return (nil, 0, bestRegionLength)
             }
             let fileName = token.SyntaxTree.Text?.FileName ?? string.Empty
             if !this.cachedIfLetsByFile.TryGetValue(fileName, out var ifLets) {
-                return nil
+                return (nil, 0, bestRegionLength)
             }
-            var best Symbol? = nil
-            var bestRegionLength = int32.MaxValue
             for node in ifLets {
                 var thenEnd = 0
                 if node is IfLetStatementSyntax statement {
@@ -715,19 +726,76 @@ shared class SemanticLookup {
                     let symbol Symbol? = this.Resolve(binding.Identifier)
                     if symbol != nil {
                         best = symbol
+                        bestRegionStart = regionStart
                         bestRegionLength = thenEnd - regionStart
                     }
                 }
             }
-            return best
+            return (best, bestRegionStart, bestRegionLength)
         }
 
-        private func ResolveWhileLetLoopLocal(token SyntaxToken) Symbol? {
-            if token?.SyntaxTree == nil {
+        /// Issue #4961 / ADR-0200: resolves a use of a region-scoped binding
+        /// (`if let` in either form, or `while let`), choosing the innermost
+        /// region across both kinds so `if let v … { while let v … { v } }`
+        /// and the opposite nesting both pick the inner binding. An ordinary
+        /// local of the same name declared inside that region, earlier, in a
+        /// block that encloses the use shadows the binding; the lookup then
+        /// defers to the by-name local path, which resolves that local.
+        private func ResolveRegionScopedLocal(token SyntaxToken) Symbol? {
+            let ifLet = this.ResolveIfLetLocal(token)
+            let whileLet = this.ResolveWhileLetLoopLocal(token)
+            let (symbol, regionStart) = if whileLet.Symbol != nil &&
+                (ifLet.Symbol == nil || whileLet.RegionLength < ifLet.RegionLength) {
+                (whileLet.Symbol, whileLet.RegionStart)
+            } else {
+                (ifLet.Symbol, ifLet.RegionStart)
+            }
+            if symbol == nil || this.IsShadowedByNestedLocal(token, regionStart) {
                 return nil
             }
+            return symbol
+        }
+
+        private func IsShadowedByNestedLocal(token SyntaxToken, regionStart int32) bool {
+            let fileName = token.SyntaxTree?.Text?.FileName ?? string.Empty
+            if !this.cachedVariableDeclarationsByFile.TryGetValue(fileName, out var declarations) {
+                return false
+            }
+            for declaration in declarations {
+                if declaration.Identifier == nil ||
+                    declaration
+                    .Span
+                    .Start < regionStart ||
+                    token
+                    .Span
+                    .Start < declaration
+                    .Span
+                    .End ||
+                    !string.Equals(declaration.Identifier.Text, token.Text, StringComparison.Ordinal) {
+                    continue
+                }
+                var block SyntaxNode? = declaration.Parent
+                while block != nil && block !is BlockStatementSyntax {
+                    block = block.Parent
+                }
+                if block != nil && block.Span.Start <= token.Span.Start && token.Span.End <= block.Span.End {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func ResolveWhileLetLoopLocal(token SyntaxToken)(
+            Symbol Symbol?,
+            RegionStart int32,
+            RegionLength int32
+        ) {
             var best Symbol? = nil
+            var bestRegionStart = 0
             var bestSpanLength = int32.MaxValue
+            if token?.SyntaxTree == nil {
+                return (nil, 0, bestSpanLength)
+            }
             for statement in this.GetWhileLetsForToken(token) {
                 if statement.Body == nil ||
                     token
@@ -759,11 +827,12 @@ shared class SemanticLookup {
                     }
                     if symbol != nil {
                         best = symbol
+                        bestRegionStart = statement.Body.Span.Start
                         bestSpanLength = statement.Body.Span.Length
                     }
                 }
             }
-            return best
+            return (best, bestRegionStart, bestSpanLength)
         }
 
         private func ResolveForRangeLoopLocal(token SyntaxToken) Symbol? {
