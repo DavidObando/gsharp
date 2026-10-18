@@ -239,16 +239,16 @@ Check a comment-only change with:
 python3 build/check-comment-only-diff.py --base origin/main
 ```
 
-It passes only if each changed file differs from the base in its comments.
-It reads `.gs` files with the compiler's lexer (it builds `build/gstokens`
-first), `.py` files with Python's `tokenize`, and `.yml` files with PyYAML.
-A change inside a string literal fails, and so does a change to a Python
-docstring or to a YAML block scalar such as `run: |`. If you delete a comment
-inside a line, keep the space it leaves, because the parser can depend on
-whether two tokens touch. Shell scripts, C# and
-other file types fail as "unsupported: review manually". A comment in a test
-input (the cs2gs corpus, or a fixture that a test reads) can be test data, so
-run the tests that read the file.
+It supports `.gs` files only. It reads the base and the head with the
+compiler's lexer (it builds `build/gstokens` first) and passes only if the
+tokens that are not comments are identical. A change inside a string literal
+fails. A change to the structure of a `///` comment fails too: a tag such as
+`@param a`, a `(cref:...)` target, or the declaration the block comes before.
+Its prose can change. If you delete a comment inside a line, keep the space
+it leaves, because the parser can depend on whether two tokens touch. Every
+other file type (`.py`, `.yml`, `.sh`, `.cs`) fails as "unsupported: review
+manually". A comment in a test input (the cs2gs corpus, or a fixture that a
+test reads) can be test data, so run the tests that read the file.
 
 ## Documentation site
 

@@ -291,10 +291,9 @@ jobs:
         run: dotnet build GSharp.slnx --configuration Release --no-restore -graph
 
       - name: Verify the comment-only diff checker contract
-        # The G# tests read source with the compiler's own lexer through
-        # build/gstokens; the YAML tests need PyYAML.
+        # The tests read G# source with the compiler's own lexer through
+        # build/gstokens.
         run: |
-          python3 -c 'import yaml' 2>/dev/null || { sudo apt-get update && sudo apt-get install --yes python3-yaml; }
           dotnet restore build/gstokens/GsTokens.gsproj --locked-mode
           python3 build/test-check-comment-only-diff.py
 
