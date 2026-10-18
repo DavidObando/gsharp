@@ -7,6 +7,7 @@ package Gsharp.HotReload.Runtime
 import System
 import System.Collections.Concurrent
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Diagnostics
 import System.Globalization
 import System.IO
@@ -51,6 +52,8 @@ shared class HotReloadAgent {
                 Timeout.Infinite,
                 Timeout.Infinite
             )
+            // Installed before the first update can be applied.
+            HotReloadAgent.MetadataUpdateHandlers.ClearOnAssemblyLoad()
         }
 
         prop ProcessGuard Mutex -> this.processGuard
@@ -219,27 +222,42 @@ shared class HotReloadAgent {
                     return
                 }
                 case HotReloadDeltaStatus.Ready {
+                    // Each project has its own agent, so serialize applying a
+                    // delta and running the handlers process-wide, as
+                    // dotnet watch applies one update at a time: two updates'
+                    // handler phases never interleave. The gate is awaited,
+                    // never blocked on, and only update pipelines take it.
+                    await HotReloadAgent.MetadataUpdateGate.WaitAsync().ConfigureAwait(false)
                     try {
-                        MetadataUpdater.ApplyUpdate(
-                            this.assembly,
-                            update.MetadataDelta,
-                            update.IlDelta,
-                            update.PdbDelta
-                        )
-                        update.Commit()
-                        HotReloadAgent.WriteDiagnostic(
-                            "applied ${update.UpdatedMethods.Length} method update(s) to '${this.assembly.GetName().Name}': ${string.Join(", ", update.UpdatedMethods)}"
-                        )
-                    } catch (ex Exception) when ex is InvalidOperationException ||
-                        ex is NotSupportedException ||
-                        ex is ArgumentException {
-                        this.disabled = true
-                        HotReloadAgent.WriteDiagnostic(
-                            "GSHR1003: runtime rejected delta for '${this.manifest.ProjectPath}': ${ex.Message}"
-                        )
+                        if this.TryApplyUpdate(update) {
+                            HotReloadAgent.MetadataUpdateHandlers.MetadataUpdated(
+                                HotReloadAgent.ResolveUpdatedTypes(this.assembly, update.UpdatedTypes)
+                            )
+                        }
+                    } finally {
+                        HotReloadAgent.MetadataUpdateGate.Release()
                     }
                     return
                 }
+            }
+        }
+
+        private func TryApplyUpdate(update HotReloadDelta) bool {
+            try {
+                MetadataUpdater.ApplyUpdate(this.assembly, update.MetadataDelta, update.IlDelta, update.PdbDelta)
+                update.Commit()
+                HotReloadAgent.WriteDiagnostic(
+                    "applied ${update.UpdatedMethods.Length} method update(s) to '${this.assembly.GetName().Name}': ${string.Join(", ", update.UpdatedMethods)}"
+                )
+                return true
+            } catch (ex Exception) when ex is InvalidOperationException ||
+                ex is NotSupportedException ||
+                ex is ArgumentException {
+                this.disabled = true
+                HotReloadAgent.WriteDiagnostic(
+                    "GSHR1003: runtime rejected delta for '${this.manifest.ProjectPath}': ${ex.Message}"
+                )
+                return false
             }
         }
 
@@ -292,6 +310,10 @@ shared class HotReloadAgent {
         StringComparer.OrdinalIgnoreCase
     )
     private var assemblyLoadHookInitialized int32
+    private let MetadataUpdateGate SemaphoreSlim = SemaphoreSlim(1, 1)
+    private let MetadataUpdateHandlers MetadataUpdateHandlerInvoker = MetadataUpdateHandlerInvoker(
+        (message string) -> WriteDiagnostic(message)
+    )
 
     /// Registers an assembly and its build manifest when launched under
     /// `dotnet watch`.
@@ -391,6 +413,27 @@ shared class HotReloadAgent {
         if assemblyName != nil && ManifestPaths.TryGetValue(assemblyName, out var manifestPath) {
             Start(assembly, manifestPath)
         }
+    }
+
+    /// Resolves the TypeDef tokens of an applied delta to the types passed to
+    /// metadata update handlers, reporting a token that does not resolve.
+    /// @param assembly The updated assembly.
+    /// @param tokens TypeDef tokens in update order.
+    /// @returns The resolved types, in the same order.
+    private func ResolveUpdatedTypes(assembly Assembly, tokens ImmutableArray[int32])[]Type {
+        let types = List[Type](tokens.Length)
+        for token in tokens {
+            // Hot reload supports single-module assemblies only, so every
+            // updated type is in the manifest module.
+            try {
+                types.Add(assembly.ManifestModule.ResolveType(token))
+            } catch (ex Exception) {
+                WriteDiagnostic(
+                    "GSHR1005: failed to load updated type 0x${token.ToString("X8", CultureInfo.InvariantCulture)}: ${ex.Message}"
+                )
+            }
+        }
+        return types.ToArray()
     }
 
     private func IsEnabled(value string?) bool -> string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||

@@ -7,3 +7,13 @@ class BaseValues {
         }
     }
 }
+
+class BaseLabel {
+    class Inner {
+        shared {
+            func Text() string {
+                return "label-a"
+            }
+        }
+    }
+}

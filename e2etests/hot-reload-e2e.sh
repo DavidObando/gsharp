@@ -2,6 +2,8 @@
 # Issue #3339: validates dotnet-watch project loading plus G# runtime deltas.
 # Covers a local body edit, a transitive G# project, and an Avalonia-style
 # generated C# source that must pass through gsgen before gsc.
+# Issue #4960: every applied delta also runs the sample's MetadataUpdateHandler
+# callbacks in the existing process, in dotnet watch's order.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -50,21 +52,89 @@ wait_for() {
     done
 }
 
+wait_for_count() {
+    local pattern="$1"
+    local expected="$2"
+    local description="$3"
+    local attempts=0
+
+    while [[ "$(grep -c "$pattern" "$LOG" 2>/dev/null || true)" -lt "$expected" ]]; do
+        if ! kill -0 "$WATCH_PID" 2>/dev/null; then
+            echo "FAIL: dotnet watch exited while waiting for $description"
+            cat "$LOG"
+            exit 1
+        fi
+
+        attempts=$((attempts + 1))
+        if [[ $attempts -ge 600 ]]; then
+            echo "FAIL: timed out waiting for $description"
+            cat "$LOG"
+            exit 1
+        fi
+
+        sleep 0.2
+    done
+}
+
+# Replaces each BEFORE with its AFTER (once) in a single write, so the agent
+# sees all of them in one delta.
 replace_once() {
     local path="$1"
-    local before="$2"
-    local after="$3"
-    python3 - "$path" "$before" "$after" <<'PY'
+    shift
+    python3 - "$path" "$@" <<'PY'
 import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1])
-before = sys.argv[2]
-after = sys.argv[3]
+pairs = sys.argv[2:]
 text = path.read_text()
-if before not in text:
-    raise SystemExit(f"missing expected text in {path}: {before}")
-path.write_text(text.replace(before, after, 1))
+for before, after in zip(pairs[0::2], pairs[1::2]):
+    if before not in text:
+        raise SystemExit(f"missing expected text in {path}: {before}")
+    text = text.replace(before, after, 1)
+path.write_text(text)
+PY
+}
+
+# Issue #4960: checks the metadata update handler output of the Nth applied
+# delta. Each delta prints one block of five lines: the transitive Base
+# handler's ClearCache before the app's handlers' (the failing one is
+# registered first and throws), and every ClearCache before any
+# UpdateApplication, all with the same updated types.
+expect_handler_block() {
+    local index="$1"
+    local types="$2"
+    local label="$3"
+    python3 - "$LOG" "$index" "$types" "$label" <<'PY'
+import re
+import sys
+
+log, index, types, label = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+lines = [m.group(0) for m in (re.search(r"handler=.*$", line) for line in open(log)) if m]
+blocks = [lines[i:i + 5] for i in range(0, len(lines), 5)]
+if len(blocks) < index:
+    raise SystemExit(f"FAIL: expected at least {index} handler blocks, saw {len(blocks)}:\n" + "\n".join(lines))
+block = blocks[index - 1]
+if types == "*":
+    match = re.match(r"handler=base phase=ClearCache types=(.+)$", block[0])
+    if not match:
+        raise SystemExit(f"FAIL: handler block {index} does not start with the Base ClearCache:\n" + "\n".join(block))
+    types = match.group(1)
+expected = [
+    f"handler=base phase=ClearCache types={types}",
+    "handler=failing phase=ClearCache",
+    f"handler=app phase=ClearCache types={types}",
+    f"handler=base phase=UpdateApplication types={types}",
+    f"handler=app phase=UpdateApplication types={types} label={label}",
+]
+if block != expected:
+    raise SystemExit(
+        f"FAIL: handler block {index} is out of order or has the wrong types.\nexpected:\n"
+        + "\n".join(expected)
+        + "\nactual:\n"
+        + "\n".join(block)
+    )
+print(f"handler block {index}: OK ({types})")
 PY
 }
 
@@ -114,14 +184,36 @@ fi
 echo "==> Applying local G# method-body edit"
 replace_once "$SAMPLE/App/App.gs" "return 1" "return 11"
 wait_for "values=11,2,3" "local G# delta"
+wait_for_count "handler=app phase=UpdateApplication" 1 "metadata update handlers after the local delta"
+# The first delta can also carry generated bootstrap methods, so only the
+# order is pinned here.
+expect_handler_block 1 "*" "label-a"
 
 echo "==> Applying transitive project-reference method-body edit"
-replace_once "$SAMPLE/Base/Values.gs" "return 2" "return 22"
+# Two types plus a nested type change in one delta: the handlers receive the
+# top-level types in metadata order, then the nested type, each once.
+replace_once "$SAMPLE/Base/Values.gs" "return 2" "return 22" '"label-a"' '"label-b"'
 wait_for "values=11,22,3" "transitive project-reference delta"
+wait_for_count "handler=app phase=UpdateApplication" 2 "metadata update handlers after the transitive delta"
+expect_handler_block 2 "HotReloadBase.BaseValues,HotReloadBase.BaseLabel,HotReloadBase.BaseLabel+Inner" "label-b"
 
 echo "==> Applying Avalonia-style generated-input edit"
 replace_once "$SAMPLE/App/GeneratedValue.axaml" 'Value="3"' 'Value="33"'
 wait_for "values=11,22,33" "generated gsgen delta"
+wait_for_count "handler=app phase=UpdateApplication" 3 "metadata update handlers after the generated delta"
+expect_handler_block 3 "HotReloadApp.GeneratedLike" "label-b"
+
+FAILURE_COUNT=$(grep -c "GSHR1005: exception from 'HotReloadApp.FailingUpdateHandler.ClearCache': System.InvalidOperationException: handler-failure-probe" "$LOG" || true)
+if [[ "$FAILURE_COUNT" -lt 3 ]]; then
+    echo "FAIL: expected the failing handler's exception to be reported for each delta, saw $FAILURE_COUNT"
+    cat "$LOG"
+    exit 1
+fi
+if grep "GSHR1005" "$LOG" | grep -vq "handler-failure-probe"; then
+    echo "FAIL: unexpected metadata update handler diagnostic:"
+    grep "GSHR1005" "$LOG" | grep -v "handler-failure-probe"
+    exit 1
+fi
 
 if grep -q "MSB4057" "$LOG"; then
     echo "FAIL: design-time project load still reports MSB4057"
@@ -176,4 +268,11 @@ if [[ "$PID_COUNT_AFTER" != "1" ]]; then
 fi
 
 tail -200 "$LOG"
-echo "PASS: dotnet watch launched one modifiable process while G# applied local, transitive-project, and generated gsgen deltas without restart, and rejected a suspension-flipping edit as GSHR1002."
+HANDLER_BLOCKS=$(grep -c "handler=app phase=UpdateApplication" "$LOG" || true)
+if [[ "$HANDLER_BLOCKS" != "3" ]]; then
+    echo "FAIL: the rejected suspension edit ran metadata update handlers (blocks: $HANDLER_BLOCKS)"
+    cat "$LOG"
+    exit 1
+fi
+
+echo "PASS: dotnet watch launched one modifiable process while G# applied local, transitive-project, and generated gsgen deltas without restart, ran the metadata update handlers after each one, and rejected a suspension-flipping edit as GSHR1002."
