@@ -112,14 +112,14 @@ The exit code is non-zero if any project fails a stage.
 
 ### Warning suppressions
 
-`cs2gs` turns a `#pragma warning disable` region into a `@SuppressDiagnostic` annotation for these IDs only:
+`cs2gs` turns the range that a `#pragma warning disable` covers, up to the matching `#pragma warning restore` or the end of the file, into a `@SuppressDiagnostic` annotation for these IDs only:
 
 - An ID that starts with `GSA` (a G# analyzer) keeps its ID.
 - `CS8600`, `CS8601`, `CS8604` and `CS8620` become `GS0612`. These are the C# nullability warnings that gsc reports as `GS0612` at a `ref`, `out` or `in` argument.
 
 `cs2gs` drops every other ID, such as `CA*`, `IDE*`, `SA*` and the other `CS*` warnings, because those analyzers don't run on G# code. It also drops a `#pragma warning disable` that names no ID. The `#pragma warning` lines themselves don't appear in the G# file.
 
-The annotation goes on each method, property, field, constructor, event or finalizer that the region covers completely. A region that spans a whole file puts the annotation on every member in it. A region that starts or ends inside a member suppresses nothing in that member, so gsc reports the warning there.
+The annotation goes on each method, property, field, constructor, event or finalizer that the range covers completely. A range that spans a whole file puts the annotation on every member in it. A range that starts or ends inside a member suppresses nothing in that member, so gsc reports the warning there.
 
 `cs2gs` also adds `@SuppressDiagnostic("GS0612")` to a statement that passes `x!` as a `ref`, `out` or `in` argument to a method in the migrated code, when the variable's nullability differs from the parameter's. G# has no `!` on a variable, so the annotation keeps the warning silent, as it was in C#. Where the annotation can't go on the statement without changing what the code means, such as on a `using` declaration, `cs2gs` leaves it out and gsc reports the warning.
 
