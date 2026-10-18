@@ -83,7 +83,7 @@ class GSharpTests(CommentOnlyCase):
 
     def test_header_comment_insertion_and_deletion_pass(self) -> None:
         self.assertPasses("a.gs", "// History.\nlet x = 1\n", "let x = 1\n")
-        self.assertPasses("a.gs", "let x = 1\n", "/// Summary.\nlet x = 1\n")
+        self.assertPasses("a.gs", "let x = 1\n", "// Note.\nlet x = 1\n")
 
     def test_comment_reword_beside_tricky_strings_passes(self) -> None:
         base = (
@@ -143,6 +143,33 @@ class GSharpTests(CommentOnlyCase):
                 self.assertFails("a.gs", base, base.replace(old, new), "directive comment changed")
         self.assertFails("a.gs", base, base.replace("/// Adds.\n", "/// Adds.\n/// @returns The sum.\n"), "directive comment changed")
 
+    def test_doc_comment_markup_the_compiler_reads_fails(self) -> None:
+        base = (
+            "/// Adds [`a`](paramref).\n"
+            "/// ```xmldoc\n"
+            '/// <see cref="A"/>\n'
+            "/// ```\n"
+            "/// @param a The value.\n"
+            "func Add(a int32) int32 -> a\n"
+        )
+        for old, new in (("[`a`](paramref)", "[`b`](paramref)"), ('cref="A"', 'cref="B"'), ("@param a", "@param\ta")):
+            with self.subTest(old=old):
+                self.assertIn(old, base)
+                self.assertFails("a.gs", base, base.replace(old, new), "directive comment changed")
+
+    def test_gap_between_doc_comment_and_declaration_fails(self) -> None:
+        base = "/// @param a Value.\nfunc F(a int32) {}\n"
+        for gap in ("\n", "// note\n"):
+            with self.subTest(gap=gap):
+                self.assertFails("a.gs", base, base.replace("\nfunc", "\n" + gap + "func"), "directive comment changed")
+
+    def test_trailing_doc_comment_change_fails(self) -> None:
+        base = "func F() {}\n"
+        tagged = base + "/// @unknown-tag content\n"
+        self.assertFails("a.gs", base, tagged, "directive comment changed")
+        self.assertFails("a.gs", tagged, base, "directive comment changed")
+        self.assertFails("a.gs", tagged, tagged.replace("@unknown-tag", "@other-tag"), "directive comment changed")
+
     def test_doc_comment_moved_to_another_declaration_fails(self) -> None:
         base = "/// @param a The value.\nfunc F(a int32) {}\nfunc G(a int32) {}\n"
         head = "func F(a int32) {}\n/// @param a The value.\nfunc G(a int32) {}\n"
@@ -182,7 +209,7 @@ class GSharpTests(CommentOnlyCase):
         lines = text.splitlines(keepends=True)
 
         def edit(token: list, new: str) -> str:
-            kind, line, old = token
+            kind, line, old = token[:3]
             row = lines[line - 1]
             self.assertEqual(row.count(old.rstrip("\r\n")), 1, f"{kind} on line {line}")
             changed = lines[: line - 1] + [row.replace(old.rstrip("\r\n"), new)] + lines[line:]
