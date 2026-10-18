@@ -134,6 +134,23 @@ open class Issue4989BoundReceiverTests {
         Assert.Contains(items, (item CompletionItem) -> item.Label == "Count")
     }
 
+    @Theory
+    @InlineData("System.DayOfWeek(2)")
+    @InlineData("DayOfWeek(2)")
+    @InlineData("cast[DayOfWeek](2)")
+    func Completion_ExplicitConversionReceiver_KeepsTheConvertedType(receiver string) {
+        let source = "package Repro\nimport System\nfunc Run() string { return " + receiver + ".ToString() }\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        let accessor = Assert.IsType[AccessorExpressionSyntax](TokenAt(content, source, "ToString", 0).Parent?.Parent)
+        Assert.Equal(typeof(DayOfWeek), BoundSemantics.GetExpressionType(compilation, accessor.LeftPart)?.ClrType)
+        let items = CompletionComputer.ComputeCompletions(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ToString")
+        )
+        Assert.Contains(items, (item CompletionItem) -> item.Label == "HasFlag")
+    }
+
     @Fact
     func Hover_ConstructedGenericMember_ShowsTheSubstitutedType() {
         let content = LanguageServerTestHelpers.Content(GenericSource)

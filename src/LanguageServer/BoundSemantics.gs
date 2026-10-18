@@ -258,8 +258,7 @@ shared class BoundSemantics {
     }
 
     /// Removes the conversions and nil-unwraps the binder adds around a read
-    /// without user syntax of their own (they carry no syntax or the
-    /// enclosing accessor's), so the node reached is the read itself.
+    /// without user syntax of their own, so the node reached is the read itself.
     private func Unwrap(node BoundExpression?) BoundExpression? {
         var current = node
         while current != nil {
@@ -282,8 +281,9 @@ shared class BoundSemantics {
         return current
     }
 
+    // An accessor anchor alone is not proof: explicit qualified conversions
+    // inherit it too, but their operand has its own, different syntax.
     private func IsSynthesizedWrapper(wrapper BoundExpression, inner BoundExpression) bool -> wrapper.Syntax == nil ||
-        wrapper.Syntax is AccessorExpressionSyntax ||
         object.ReferenceEquals(wrapper.Syntax, inner.Syntax)
 
     /// Gets the symbol a bound read or call refers to, whatever its origin.
