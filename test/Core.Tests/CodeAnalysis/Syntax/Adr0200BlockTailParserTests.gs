@@ -103,6 +103,36 @@ open class Adr0200BlockTailParserTests {
         Assert.Equal(41, Walk(tree.Root).OfType[SwitchStatementSyntax]().Count())
     }
 
+    // The single-arm fallback skips brace bodies, so a switch nested in a
+    // first-arm guard is not parsed twice per level either.
+    @Fact
+    func NestedSwitchesInFirstArmGuards_ParseInLinearTime() {
+        var inner = "switch 0 { default { } }"
+        for var i = 0; i < 40; i++ {
+            inner = "switch 0 { case _ when true ? { " + inner + " true } : false { } }"
+        }
+        let source = "func f() {\n" + inner + "\n}"
+        let stopwatch = System.Diagnostics.Stopwatch.StartNew()
+        let tree = Parse(source)
+        stopwatch.Stop()
+        Assert.True(stopwatch.ElapsedMilliseconds < 5000, "parse took ${stopwatch.ElapsedMilliseconds} ms")
+        Assert.Equal(41, Walk(tree.Root).OfType[SwitchStatementSyntax]().Count())
+    }
+
+    // A long `-> { … }.ToString()` is still one continued expression: the
+    // continuation is decided at the real closing brace, not within a capped
+    // lookahead.
+    @Fact
+    func LongContinuedArrowBraceBody_StaysOneExpression() {
+        let body = System.Text.StringBuilder()
+        for var i = 0; i < 2000; i++ {
+            body.Append("Log()\n")
+        }
+        let tree = Parse("func f() string -> {\n" + body.ToString() + "1 }.ToString()\nfunc Log() { }")
+        let returned = Assert.IsType[ReturnStatementSyntax](Assert.Single(Body(tree, "f").Statements))
+        Assert.IsNotType[BlockExpressionSyntax](returned.Expression)
+    }
+
     @Fact
     func CommaArms_FoldIntoDisjunctionsInBothForms() {
         let tree = Parse(`func f(x int32) string {

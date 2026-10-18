@@ -76,8 +76,9 @@ tokens are ambiguous without the grammar: `->` (the deprecated separator, or
 the arrow of a function-type pattern such as `case f is (int32) -> string
 { … }`) and `?` (a nullable type such as `int32?`, or a `? :` conditional whose
 `:` is not the separator). Only when the first arm contains one of them is that
-one arm's pattern and guard parsed to decide. No header is parsed twice, so
-nested headers stay linear. Like an `if` item, the
+one arm's pattern and guard parsed to decide, with brace bodies inside it
+skimmed to their matching brace rather than parsed. No header is parsed twice
+and no switch nested in a guard is parsed twice, so nesting stays linear. Like an `if` item, the
 switch item ends at its closing brace.
 
 A colon-arm switch at statement start was a parse error before, so no valid
@@ -155,9 +156,10 @@ body whose value may be void — there is no value to produce, so:
   else { list.Clear() } }` as an `Action`, which reported GS0263 although the
   identical if statement compiles;
 - a void switch, like the switch statement, needs no `default`: an unmatched
-  value runs no arm;
-- a bare `default` branch has no target type to take, so it reports `GS0362`
-  as any targetless `default` does.
+  value runs no arm, so definite assignment and narrowing join the incoming
+  state as one more path;
+- a bare `default` branch — also as a block's tail inside a branch — has no
+  target type to take, so it reports `GS0362` as any targetless `default` does.
 
 Branches that all produce values keep their common type, so a lambda whose body
 ends in such an `if … else …` still returns it (ADR-0128).

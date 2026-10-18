@@ -500,10 +500,39 @@ try { g() } catch (e Exception) { Console.WriteLine(e.Message) }`, "x\ny\n")
 case 1: System.Console.WriteLine("one")
 default: default
 }`, "GS0362", 3, 10)
+        AssertDiagnostic(`func f(c bool) -> if c {
+    let n = 1
+    default
+}`, "GS0362", 3, 5)
         AssertDiagnostic(`func f(c bool) int32 {
     let t = (if c { return 1 } else { return 2 }, 0)
     return 3
 }`, "GS0124", 2, 13)
+    }
+
+    // A void switch with no default can run no arm, so it does not
+    // definitely assign anything (GS0238 for the out parameter), while a
+    // default arm that assigns makes it definite.
+    @Fact
+    func VoidSwitchWithoutDefault_DoesNotDefinitelyAssign() {
+        let result = EmittedOracle.Evaluate(`func Set(out a int32) { a = 1 }
+func Bad(x int32, out a int32) {
+    switch x {
+    case 1: Set(out a)
+    }
+}`)
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0238")
+        AssertOutput(`import System
+func Set(out a int32, v int32) { a = v }
+func Good(x int32, out a int32) {
+    switch x {
+    case 1: Set(out a, 10)
+    default: Set(out a, 20)
+    }
+}
+var r int32
+Good(2, out r)
+Console.WriteLine(r)`, "20\n")
     }
 
     // Value position keeps its rules: GS0276, GS0277, GS0176, and GS0124 for a

@@ -953,6 +953,35 @@ internal partial class ExpressionBinder {
         return false
     }
 
+    /// Issue #4966 (ADR-0200): reports GS0362 for each unresolved bare
+    /// `default` placeholder that [`value`](paramref) yields — the value itself,
+    /// a block expression's tail, or a conditional's branch, recursively.
+    /// @param value The value of a discarded position.
+    /// @returns `true` when any was reported.
+    private func ReportUnresolvedBareDefaults(value BoundExpression?) bool {
+        switch value {
+            case BoundDefaultExpression{
+                Type: var defaultType,
+                Syntax: DefaultExpressionSyntax bareDefault
+            } when defaultType ==
+            TypeSymbol.Error && bareDefault.TypeClause == nil {
+                Diagnostics.ReportBareDefaultNoTargetType(bareDefault.Location)
+                return true
+            }
+            case block is BoundBlockExpression {
+                return ReportUnresolvedBareDefaults(block.Expression)
+            }
+            case conditional is BoundConditionalExpression {
+                let inTrue = ReportUnresolvedBareDefaults(conditional.WhenTrue)
+                let inFalse = ReportUnresolvedBareDefaults(conditional.WhenFalse)
+                return inTrue || inFalse
+            }
+            default {
+                return false
+            }
+        }
+    }
+
     /// Issue #4966 (ADR-0200): turns [`value`](paramref) into a void
     /// expression for a position whose value is discarded (the void `if`, a
     /// void switch-expression arm). A void or never-typed value is returned as
@@ -960,11 +989,9 @@ internal partial class ExpressionBinder {
     private func DiscardValue(value BoundExpression) BoundExpression {
         // A bare `default` takes its type from a target, and a discarded
         // position has none: report it rather than leave the untyped
-        // placeholder to the emitter (GS0362, as for any targetless `default`).
-        if value is BoundDefaultExpression{Type: var defaultType, Syntax: DefaultExpressionSyntax bareDefault} &&
-            defaultType == TypeSymbol.Error &&
-            bareDefault.TypeClause == nil {
-            Diagnostics.ReportBareDefaultNoTargetType(bareDefault.Location)
+        // placeholder to the emitter (GS0362, as for any targetless `default`),
+        // also when it is the tail of a block or a branch inside the value.
+        if ReportUnresolvedBareDefaults(value) {
             return BoundErrorExpression(nil)
         }
         if value.Type == TypeSymbol.Void || value.Type == TypeSymbol.Never || value.Type == TypeSymbol.Error {

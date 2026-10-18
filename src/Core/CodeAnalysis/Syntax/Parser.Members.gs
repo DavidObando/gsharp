@@ -1217,7 +1217,7 @@ open partial class Parser {
         // any other statement ending are checked exactly as in
         // `func f() T { … }`. A brace followed by a continuation
         // (`-> { … }.ToString()`, `-> { … } + 1`) is still one expression.
-        if Current.Kind == SyntaxKind.OpenBraceToken && !NestedBraceStartsContinuedExpression() {
+        if Current.Kind == SyntaxKind.OpenBraceToken && !ArrowBraceIsContinued() {
             let block = ParseBlockExpression()
             let bodyStatements = ImmutableArray.CreateBuilder[StatementSyntax]()
             bodyStatements.AddRange(block.Statements)
@@ -1237,6 +1237,17 @@ open partial class Parser {
         let closeBrace = SyntaxToken(syntaxTree, SyntaxKind.CloseBraceToken, arrowPosition, "}", nil)
         let statement = SynthesizeArrowBodyStatement(expression, arrowPosition, asReturn, asRefReturn)
         return BlockStatementSyntax(syntaxTree, openBrace, ImmutableArray.Create(statement), closeBrace)
+    }
+
+    // Issue #4966 (ADR-0200): whether the `{` after `->` is followed, past
+    // its matching `}`, by a postfix/binary continuation (`-> { … }.ToString()`),
+    // which makes the whole thing one expression. Decided at the real closing
+    // brace however long the block is; a capped lookahead would read "not
+    // continued" for a long block.
+    private func ArrowBraceIsContinued() bool {
+        let after = SkipBalancedGroup(0)
+        return Peek(after).Kind != SyntaxKind.EndOfFileToken &&
+            IsExpressionContinuationAfterBraceAt(after, Peek(after - 1))
     }
 
     // ADR-0131: the statement an arrow body's value desugars to — `return

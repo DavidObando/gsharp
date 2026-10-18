@@ -13,6 +13,11 @@ import System.Runtime.CompilerServices
 
 open partial class Parser {
     private func ParseBlockStatement() BlockStatementSyntax {
+        if skimBraceBodies > 0 && Current.Kind == SyntaxKind.OpenBraceToken {
+            // See skimBraceBodies (Parser.gs).
+            let (skimmedOpen, skimmedClose) = SkimBraceBody()
+            return BlockStatementSyntax(syntaxTree, skimmedOpen, ImmutableArray[StatementSyntax].Empty, skimmedClose)
+        }
         let statements = ImmutableArray.CreateBuilder[StatementSyntax]()
         let openBraceToken = MatchToken(SyntaxKind.OpenBraceToken)
         while Current.Kind != SyntaxKind.EndOfFileToken && Current.Kind != SyntaxKind.CloseBraceToken {

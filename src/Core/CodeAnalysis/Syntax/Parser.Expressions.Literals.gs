@@ -779,6 +779,16 @@ open partial class Parser {
     // body — is parsed the same way; whether a missing tail is an error
     // (GS0277), a void block, or a `never` block is the binder's decision.
     private func ParseBlockExpression() BlockExpressionSyntax {
+        if skimBraceBodies > 0 && Current.Kind == SyntaxKind.OpenBraceToken {
+            let (skimmedOpen, skimmedClose) = SkimBraceBody()
+            return BlockExpressionSyntax(
+                syntaxTree,
+                skimmedOpen,
+                ImmutableArray[StatementSyntax].Empty,
+                nil,
+                skimmedClose
+            )
+        }
         let statements = ImmutableArray.CreateBuilder[StatementSyntax]()
         var trailingExpression ExpressionSyntax? = nil
         let openBraceToken = MatchToken(SyntaxKind.OpenBraceToken)

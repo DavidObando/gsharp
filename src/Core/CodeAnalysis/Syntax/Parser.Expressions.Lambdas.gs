@@ -554,6 +554,7 @@ open partial class Parser {
         let savedPosition = position
         let savedTokens = tokens
         let savedDiagnosticCount = Diagnostics.Count
+        skimBraceBodies++
         try {
             let _ = MatchToken(SyntaxKind.OpenBraceToken)
             let _ = MatchToken(SyntaxKind.CaseKeyword)
@@ -561,10 +562,31 @@ open partial class Parser {
             let _ = ParseOptionalWhenGuard()
             return Current.Kind == SyntaxKind.ColonToken || Current.Kind == SyntaxKind.RightArrowToken
         } finally {
+            skimBraceBodies--
             position = savedPosition
             tokens = savedTokens
             Diagnostics.TruncateTo(savedDiagnosticCount)
         }
+    }
+
+    // Issue #4963 (ADR-0200): consumes a whole brace body, from the current `{`
+    // to its matching `}`, without parsing it (see skimBraceBodies).
+    private func SkimBraceBody()(OpenBrace SyntaxToken, CloseBrace SyntaxToken) {
+        let openBrace = MatchToken(SyntaxKind.OpenBraceToken)
+        var depth = 1
+        while Current.Kind != SyntaxKind.EndOfFileToken {
+            if Current.Kind == SyntaxKind.OpenBraceToken {
+                depth++
+            } else if Current.Kind == SyntaxKind.CloseBraceToken {
+                depth--
+                if depth == 0 {
+                    break
+                }
+            }
+            let _ = NextToken()
+        }
+        let closeBrace = MatchToken(SyntaxKind.CloseBraceToken)
+        return (openBrace, closeBrace)
     }
 
     // Returns the offset just past the group that opens at [`offset`](paramref)
