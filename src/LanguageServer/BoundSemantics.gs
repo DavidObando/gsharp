@@ -172,7 +172,7 @@ shared class BoundSemantics {
             root = accessor
         }
         if object.ReferenceEquals(root, expression) {
-            return PeelConversions(model.GetBoundNode(expression) as BoundExpression)
+            return PeelConversions(model.GetBoundNode(expression) as BoundExpression, expression)
         }
         let segments = List[ExpressionSyntax]()
         var current ExpressionSyntax = root
@@ -191,24 +191,27 @@ shared class BoundSemantics {
         if index < 0 {
             return nil
         }
-        var node BoundExpression? = PeelConversions(model.GetBoundNode(root) as BoundExpression)
+        var node BoundExpression? = PeelConversions(
+            model.GetBoundNode(root) as BoundExpression,
+            segments[segments.Count - 1]
+        )
         // A `?.` hop binds its access over a synthetic capture of the receiver;
         // the walk maps each capture back to the receiver it stands for.
         let captures = Dictionary[VariableSymbol, BoundExpression]()
         for var depth = segments.Count - 1; depth > index && node != nil; depth-- {
-            var member = PeelConversions(node)
+            var member = PeelConversions(node, segments[depth])
             while member is BoundNullConditionalAccessExpression hop {
                 captures[hop.Capture] = hop.Receiver
-                member = PeelConversions(hop.WhenNotNull)
+                member = PeelConversions(hop.WhenNotNull, segments[depth])
             }
             member = Unwrap(member)
             node = if member == nil {
                 default(BoundExpression?)
             } else {
-                PeelConversions(ReceiverOf(member))
+                PeelConversions(ReceiverOf(member), segments[depth - 1])
             }
             if node is BoundVariableExpression read && captures.TryGetValue(read.Variable, out var captured) {
-                node = PeelConversions(captured)
+                node = PeelConversions(captured, segments[depth - 1])
             }
         }
         return node
@@ -248,10 +251,11 @@ shared class BoundSemantics {
     /// user syntax of their own. A narrowed value-type read keeps its
     /// synthesized `!!`: that node's type is the read's flow type (`S`,
     /// where the read below it is still `S?`).
-    private func PeelConversions(node BoundExpression?) BoundExpression? {
+    private func PeelConversions(node BoundExpression?, expression ExpressionSyntax) BoundExpression? {
+        let receiverSyntax = AssignmentTargetSyntaxFacts.UnwrapParentheses(expression)
         var current = node
         while current is BoundConversionExpression conversion &&
-            IsSynthesizedWrapper(conversion, conversion.Expression) {
+            IsSynthesizedWrapper(conversion, conversion.Expression, receiverSyntax) {
             current = conversion.Expression
         }
         return current
@@ -281,9 +285,17 @@ shared class BoundSemantics {
         return current
     }
 
-    // An accessor anchor alone is not proof: explicit qualified conversions
-    // inherit it too, but their operand has its own, different syntax.
-    private func IsSynthesizedWrapper(wrapper BoundExpression, inner BoundExpression) bool -> wrapper.Syntax == nil ||
+    // For type queries, a conversion anchored on the whole accessor is implicit
+    // only when its operand is the queried receiver, not a conversion argument.
+    private func IsSynthesizedWrapper(
+        wrapper BoundExpression,
+        inner BoundExpression,
+        expression ExpressionSyntax? = nil
+    ) bool -> wrapper.Syntax == nil ||
+        (
+        wrapper.Syntax is AccessorExpressionSyntax &&
+            (expression == nil || object.ReferenceEquals(inner.Syntax, expression))
+    ) ||
         object.ReferenceEquals(wrapper.Syntax, inner.Syntax)
 
     /// Gets the symbol a bound read or call refers to, whatever its origin.

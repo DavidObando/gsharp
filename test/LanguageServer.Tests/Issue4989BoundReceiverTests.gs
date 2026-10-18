@@ -151,6 +151,31 @@ open class Issue4989BoundReceiverTests {
         Assert.Contains(items, (item CompletionItem) -> item.Label == "HasFlag")
     }
 
+    @Theory
+    @InlineData("Make()", "Length")
+    @InlineData("(Make())", "Length")
+    @InlineData("System.DayOfWeek(2)", "HasFlag")
+    @InlineData("(System.DayOfWeek(2))", "HasFlag")
+    func Completion_ExtensionReceiver_UsesItsTypeBeforeArgumentConversion(receiver string, member string) {
+        let source = "package Repro\nimport System\n" +
+            "func Make() string -> \"text\"\nfunc (value object) Tag() int32 -> 0\n" +
+            "func Run() int32 { return ${receiver}.Tag() }\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        let accessor = Assert.IsType[AccessorExpressionSyntax](TokenAt(content, source, "Tag()", 1).Parent?.Parent)
+        let expectedType = if member == "Length" {
+            typeof(string)
+        } else {
+            typeof(DayOfWeek)
+        }
+        Assert.Equal(expectedType, BoundSemantics.GetExpressionType(compilation, accessor.LeftPart)?.ClrType)
+        let items = CompletionComputer.ComputeCompletions(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Tag()", 1)
+        )
+        Assert.Contains(items, (item CompletionItem) -> item.Label == member)
+    }
+
     @Fact
     func Hover_ConstructedGenericMember_ShowsTheSubstitutedType() {
         let content = LanguageServerTestHelpers.Content(GenericSource)
