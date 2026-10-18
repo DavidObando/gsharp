@@ -242,9 +242,10 @@ python3 build/check-comment-only-diff.py --base origin/main
 It supports `.gs` files only. It reads the base and the head with the
 compiler's lexer (it builds `build/gstokens` first) and passes only if the
 tokens that are not comments are identical. A change inside a string literal
-fails. A change to the structure of a `///` comment fails too: a tag such as
-`@param a`, a `(cref:...)` target, or the declaration the block comes before.
-Its prose can change. If you delete a comment inside a line, keep the space
+fails. A change to what the compiler reads from a `///` comment fails too: a
+tag such as `@param a`, a `(cref:...)` or `[`a`](paramref)` reference, an
+`xmldoc` element, the declaration the block comes before, or a block that is
+added or removed. Its prose can change. If you delete a comment inside a line, keep the space
 it leaves, because the parser can depend on whether two tokens touch. Every
 other file type (`.py`, `.yml`, `.sh`, `.cs`) fails as "unsupported: review
 manually". A comment in a test input (the cs2gs corpus, or a fixture that a
