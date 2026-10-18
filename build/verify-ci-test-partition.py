@@ -32,10 +32,11 @@ import tempfile
 from pathlib import Path
 
 
-def matrix(solution: str) -> list[dict]:
+def matrix(solution: str, projects=None) -> list[dict]:
     generator = Path(__file__).resolve().parent / "generate-ci-test-matrix.py"
     result = subprocess.run(
-        [sys.executable, str(generator), solution],
+        [sys.executable, str(generator), solution,
+         *(["--projects", projects] if projects is not None else [])],
         check=True, capture_output=True, text=True,
     )
     return json.loads(result.stdout)["include"]
@@ -131,10 +132,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--solution", default="GSharp.slnx")
     parser.add_argument("--configuration", default="Release")
+    parser.add_argument("--projects", default=None)
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parent.parent
-    entries = matrix(args.solution)
+    entries = matrix(args.solution, args.projects)
+    if not entries:
+        raise SystemExit("verify-ci-test-partition: no selected test projects.")
 
     # One enumeration per project, however many shards share it.
     shards_by_project: dict[str, list[dict]] = {}
