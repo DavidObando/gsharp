@@ -951,6 +951,13 @@ internal partial class StatementBinder {
     }
 
     private func BindExpressionStatement(syntax ExpressionStatementSyntax) BoundStatement {
+        // ADR-0072 / issue #4967: a `??=` statement discards its value, so it
+        // keeps the statement lowering (`if read == nil { write }`) instead
+        // of the value-producing one; both share one operand binder.
+        if syntax.Expression is NullCoalescingAssignmentExpressionSyntax coalescing &&
+            bindNullCoalescingAssignmentStatement is {} bindCoalescingStatement {
+            return bindCoalescingStatement(coalescing)
+        }
         let expression = bindExpression(syntax.Expression, true)
         return BoundExpressionStatement(syntax, expression)
     }

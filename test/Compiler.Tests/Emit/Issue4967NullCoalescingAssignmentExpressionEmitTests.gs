@@ -349,7 +349,9 @@ import System
 func main() {
     var s string? = "kept"
     s ??= throw Exception("missing")
-    let k = (s ??= throw Exception("missing"))
+    Console.WriteLine(s)
+    var t string? = "also kept"
+    let k = (t ??= throw Exception("missing"))
     Console.WriteLine(k)
     var u string? = nil
     try {
@@ -366,7 +368,7 @@ func main() {
 
 main()`
         Assert.Equal(
-            "kept${Environment.NewLine}thrown${Environment.NewLine}thrown again${Environment.NewLine}",
+            "kept${Environment.NewLine}also kept${Environment.NewLine}thrown${Environment.NewLine}thrown again${Environment.NewLine}",
             CompileAndRun(source)
         )
     }
@@ -392,6 +394,24 @@ func main() {
 
 main()`
         Assert.Equal("3 7${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    /// The statement form keeps its lowering (`if read == nil { write }`),
+    /// so its existing flow facts are unchanged: after `t ??= throw e` the
+    /// target is non-nil on every path that continues and stays narrowed.
+    @Fact
+    func Statement_ThrowingRhs_KeepsItsNarrowing() {
+        let source = `package Test
+import System
+
+func main() {
+    var t string? = "text"
+    t ??= throw Exception("missing")
+    Console.WriteLine(t.Length)
+}
+
+main()`
+        Assert.Equal("4${Environment.NewLine}", CompileAndRun(source))
     }
 
     shared {

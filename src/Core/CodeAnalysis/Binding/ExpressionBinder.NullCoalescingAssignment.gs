@@ -16,38 +16,34 @@ import System.Reflection
 import System.Threading
 
 internal partial class ExpressionBinder {
-    /// ADR-0072 / issue #709, issue #4967: binds the null-coalescing
-    /// compound assignment `target ??= value`, in statement and value
-    /// position alike. The target must be an assignable expression of nullable
-    /// (or platform) type. Any non-trivial receiver and every index of the
-    /// target is captured into a synthetic local first, so it is evaluated
-    /// exactly once; the target is then read once, and only when that read is
-    /// nil is the right-hand side evaluated and written back through the same
-    /// lvalue. The value is the target's final value: the value read when it
-    /// was not nil, otherwise the assigned value. The lowering is the
-    /// compound-assignment shape, a (cref:BoundBlockExpression) of the
-    /// captures over
-    ///
-    /// ```text
-    /// read ?? { let <ncaVal> = value; write(<ncaVal>); <ncaVal> }
-    /// ```
-    ///
-    /// so the `??` operator table types the result: `T` when the stored
-    /// value is known non-nil, otherwise `T?`. A throwing right-hand side is
-    /// the fallback itself (`read ?? throw E`). At statement level the value
-    /// is discarded.
+    /// ADR-0072 / issue #709, issue #4967: binds what both positions of the
+    /// null-coalescing compound assignment `target ??= value` share. The
+    /// target must be an assignable expression of nullable (or platform)
+    /// type; GS0298 rejects any other. The right-hand side is bound against
+    /// the target's `T?`, so the author can write either an underlying-typed
+    /// value (which lifts via the implicit `T -> T?` conversion) or another
+    /// nullable value. Statement position
+    /// ((cref:BindNullCoalescingAssignmentStatement)) and value position
+    /// ((cref:BindNullCoalescingAssignmentExpression)) differ only in
+    /// whether the lowering yields a value.
     /// @param syntax The `??=` expression.
-    /// @returns The bound, lowered expression.
-    private func BindNullCoalescingAssignmentExpression(
-        syntax NullCoalescingAssignmentExpressionSyntax
-    ) BoundExpression {
+    /// @returns The bound target read, the bound right-hand side, the type it
+    /// was bound against, the target's nullable view, and whether the target
+    /// is a non-nullable reference element; all `null` after an error.
+    private func BindNullCoalescingAssignmentOperands(syntax NullCoalescingAssignmentExpressionSyntax)(
+        Read BoundExpression?,
+        Rhs BoundExpression?,
+        RhsTargetType TypeSymbol?,
+        NullableType NullableTypeSymbol?,
+        NonNullableReferenceTarget bool
+    ) {
         // Bind the LHS as a read-side expression. This decides the lvalue
         // shape (variable / field / property / indexer) we need to mirror
         // on the write side, and surfaces the type to validate nullability.
         let boundRead = BindExpression(syntax.Target)
         if boundRead is BoundErrorExpression || boundRead.Type == TypeSymbol.Error {
             let _ = BindExpression(syntax.Value)
-            return BoundErrorExpression(nil)
+            return (nil, nil, nil, nil, false)
         }
         var nullableType NullableTypeSymbol? = boundRead.Type as NullableTypeSymbol
         // ADR-0186 §6: `??=` accepts a `T!` left operand and GS0298 does not
@@ -64,7 +60,7 @@ internal partial class ExpressionBinder {
         if nullableType == nil && !isNonNullableReferenceTarget {
             Diagnostics.ReportNullCoalescingAssignmentTargetNotNullable(syntax.OperatorToken.Location, boundRead.Type)
             let _ = BindExpression(syntax.Value)
-            return BoundErrorExpression(nil)
+            return (nil, nil, nil, nil, false)
         }
         // Bind the RHS, converting it to the LHS's nullable type so the
         // author can write either an underlying-typed value (which lifts
@@ -72,8 +68,88 @@ internal partial class ExpressionBinder {
         let rhsTargetType = nullableType ?? boundRead.Type
         let boundRhs = BindExpression(syntax.Value, rhsTargetType)
         if boundRhs is BoundErrorExpression || boundRhs.Type == TypeSymbol.Error {
+            return (nil, nil, nil, nil, false)
+        }
+        return (boundRead, boundRhs, rhsTargetType, nullableType, isNonNullableReferenceTarget)
+    }
+
+    /// ADR-0072 / issue #709: binds `target ??= value` in statement position
+    /// (an expression statement whose value is discarded) to
+    /// `if read(target) == nil { write(target) = value }`, after capturing
+    /// any non-trivial receiver and every index so that `obj.field ??= …`
+    /// does not evaluate `obj` twice. Issue #4967 keeps this lowering, the
+    /// one the statement form always had, so existing statements emit the
+    /// same IL; it shares (cref:BindNullCoalescingAssignmentOperands) and
+    /// (cref:TryBuildNullCoalescingReadWrite) with the value form.
+    /// @param syntax The `??=` expression of the statement.
+    /// @returns The lowered statement.
+    internal func BindNullCoalescingAssignmentStatement(
+        syntax NullCoalescingAssignmentExpressionSyntax
+    ) BoundStatement {
+        let (boundRead, boundRhs, _, _, isNonNullableReferenceTarget) = BindNullCoalescingAssignmentOperands(syntax)
+        if boundRead == nil || boundRhs == nil {
+            return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+        }
+        let preStatements = ImmutableArray.CreateBuilder[BoundStatement]()
+        let (read, write) = TryBuildNullCoalescingReadWrite(syntax, boundRead, boundRhs, preStatements)
+        if read == nil || write == nil {
+            return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+        }
+        // Condition: read == nil. Routes through the existing nil-compare
+        // operator so any value-type Nullable<T> lowering is handled in the
+        // same code path as `x == nil` elsewhere.
+        var conditionRead = read
+        if isNonNullableReferenceTarget {
+            conditionRead = BoundConversionExpression(syntax, NullableTypeSymbol.Get(read.Type), read)
+        }
+        let nilLiteral = BoundLiteralExpression(syntax, nil, TypeSymbol.Null)
+        let eqOp = Invariant.Required(
+            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, conditionRead.Type, TypeSymbol.Null),
+            "a nullable coalescing assignment target supports nil comparison",
+            expression: "BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, conditionRead.Type, TypeSymbol.Null)"
+        )
+        let condition BoundExpression = BoundBinaryExpression(syntax, conditionRead, eqOp, nilLiteral)
+        let thenStmt = BoundExpressionStatement(syntax, write)
+        let ifStmt BoundStatement = BoundIfStatement(syntax, condition, thenStmt, elseStatement: nil)
+        if preStatements.Count == 0 {
+            return ifStmt
+        }
+        preStatements.Add(ifStmt)
+        return BoundBlockStatement(syntax, preStatements.ToImmutable())
+    }
+
+    /// Issue #4967: binds `target ??= value` in value position. The value is
+    /// the target's final value: the value read when it was not nil,
+    /// otherwise the stored value. The lowering is the compound-assignment
+    /// shape, a (cref:BoundBlockExpression) of the receiver and index
+    /// captures over
+    ///
+    /// ```text
+    /// read ?? { let <ncaVal> = value; write(<ncaVal>); <ncaVal> }
+    /// ```
+    ///
+    /// so the target is read once, the right-hand side runs only when that
+    /// read is nil, and the `??` operator table types the result: `T` when
+    /// the stored value is known non-nil, otherwise `T?`. A throwing
+    /// right-hand side is the fallback itself (`read ?? throw E`).
+    /// @param syntax The `??=` expression.
+    /// @returns The bound, lowered expression.
+    private func BindNullCoalescingAssignmentExpression(
+        syntax NullCoalescingAssignmentExpressionSyntax
+    ) BoundExpression {
+        let (
+            operandRead,
+            operandRhs,
+            operandTargetType,
+            nullableType,
+            isNonNullableReferenceTarget
+        ) = BindNullCoalescingAssignmentOperands(syntax)
+        if operandRead == nil || operandRhs == nil || operandTargetType == nil {
             return BoundErrorExpression(nil)
         }
+        let boundRead BoundExpression = operandRead
+        let boundRhs BoundExpression = operandRhs
+        let rhsTargetType TypeSymbol = operandTargetType
         // Issue #4967: the value `??=` yields is the value it stores. Binding
         // the right-hand side against `T?` wraps a non-nullable value in the
         // lifting conversion; the value is the pre-conversion value converted

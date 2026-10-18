@@ -43,20 +43,29 @@
 > - Evaluation is unchanged in both positions: the target's receiver and
 >   indices are evaluated once, the target is read once, and `b` is evaluated
 >   and written back only when that read is nil.
-> - Narrowing is unchanged: neither position narrows the target afterwards,
->   which is what the statement form already did (narrowing after `??=` is
->   tracked in #4978). A `??=` inside a closure still invalidates the
->   target's narrowing in both positions.
+> - Narrowing is unchanged. The statement form keeps its lowering, so it keeps
+>   its flow facts: it does not narrow the target after `a ??= b`, except
+>   that a throwing `b` (`a ??= throw e`) leaves `a` narrowed through the
+>   `if`-join rule, as before. The expression form does not narrow the target
+>   (narrowing after `??=` is tracked in #4978). A `??=` inside a closure
+>   still invalidates the target's narrowing in both positions.
 > - cs2gs keeps translating a C# value-position `??=` through its existing
 >   lowering until the pinned SDK includes this change (N-1); #4979 tracks
 >   emitting the expression form.
 >
-> One binder routine (`BindNullCoalescingAssignmentExpression`) serves both
-> positions. It keeps this ADR's receiver capture, target validation and
-> diagnostics, and produces the compound-assignment lowering shape, a
-> `BoundBlockExpression` of the captures over
-> `read ?? { let v = b; write(v); v }`, so the nil test is the `??`
-> operator's own and no new `BoundNodeKind` is introduced.
+> One routine (`BindNullCoalescingAssignmentOperands`) binds what both
+> positions share: target validation, diagnostics and the right-hand side.
+> One routine (`TryBuildNullCoalescingReadWrite`) captures the receiver and
+> indices and builds the read and the write. The positions differ only in
+> what follows from value position:
+>
+> - A statement keeps this ADR's lowering, `if read == nil { write(b) }`, so
+>   existing statements emit byte-identical IL. The IL baseline gate
+>   (`RefactoringBaselineTests`) pins this.
+> - An expression uses the compound-assignment lowering shape, a
+>   `BoundBlockExpression` of the captures over
+>   `read ?? { let v = b; write(v); v }`. The nil test is the `??`
+>   operator's own, and no new `BoundNodeKind` is introduced.
 >
 > One deliberate difference from `=` is recorded here: `(x = v)` has `x`'s
 > declared type (`T?`), while `(x ??= v)` has `T` for a known non-nil `v`,
@@ -209,10 +218,10 @@ current scope, and emits the bound shape:
 }
 ```
 
-(Amended by #4967. The original shape was
-`if __ncaRecv.Member == nil { __ncaRecv.Member = <rhs-expr>; }`, which
-leaves no value; the `??` form reads the target once, evaluates the right
-side only on nil, and yields the final value.)
+(Amended by #4967. This is the value-position shape. A statement keeps the
+original shape, `if __ncaRecv.Member == nil { __ncaRecv.Member = <rhs-expr>; }`,
+which leaves no value. The `??` form reads the target once, evaluates the
+right side only on nil, and yields the final value.)
 
 A receiver that is already a simple `BoundVariableExpression` (a local,
 parameter, or package-level variable) needs no spill — reading it twice has
@@ -225,8 +234,11 @@ code and do not collide with user-chosen identifiers.
 
 ### Bound tree
 
-`??=` does **not** introduce a new `BoundNodeKind`. It desugars at bind time
-into a `BoundBlockExpression` (the compound-assignment lowering shape)
+`??=` does **not** introduce a new `BoundNodeKind`. A statement desugars at
+bind time into a `BoundBlockStatement` containing zero or more
+`BoundVariableDeclaration` nodes followed by a single `BoundIfStatement` whose
+then-branch writes the right-hand side. An expression (#4967) desugars into a
+`BoundBlockExpression` (the compound-assignment lowering shape)
 containing zero or more `BoundVariableDeclaration` nodes over a single
 null-coalescing `BoundBinaryExpression` whose right operand is a
 `BoundBlockExpression` that stores the right-hand side in a synthetic local,
@@ -235,8 +247,8 @@ the LHS shape
 (`BoundAssignmentExpression`, `BoundFieldAssignmentExpression`,
 `BoundPropertyAssignmentExpression`, `BoundClrPropertyAssignmentExpression`,
 `BoundIndexAssignmentExpression`, or `BoundClrIndexAssignmentExpression`),
-and yields the local. (Before the #4967 amendment it desugared into a
-`BoundBlockStatement` over a `BoundIfStatement`.) This deliberately sidesteps the bound-tree-discipline overhead (rewriter,
+and yields the local. Both shapes use one of the existing assignment-expression
+nodes for the write. This deliberately sidesteps the bound-tree-discipline overhead (rewriter,
 walker, printer, spill rewriter, exhaustiveness allowlists) because the
 existing lowering already handles every node it produces, and both backends
 (emit and interpreter) already evaluate those nodes correctly.

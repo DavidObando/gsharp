@@ -69,6 +69,7 @@ internal partial class StatementBinder {
     /// order), re-converges the whole group's captured-variable sets to a
     /// fixed point — see `LambdaBinder.ReconcileGenericLocalFunctionGroupCaptures`.
     private let reconcileGenericLocalFunctionGroupCaptures((IReadOnlyList[BoundFunctionLiteralExpression]) -> void)?
+    private let bindNullCoalescingAssignmentStatement((NullCoalescingAssignmentExpressionSyntax) -> BoundStatement)?
 
     private let exceptionHandlerRegions Stack[SyntaxNode] = Stack[SyntaxNode]()
     private let activeFinallyClauses Stack[FinallyClauseSyntax] = Stack[FinallyClauseSyntax]()
@@ -125,7 +126,8 @@ internal partial class StatementBinder {
         bindFunctionLiteralWithSelfDeclaration(
             (FunctionLiteralExpressionSyntax, (FunctionSymbol, FunctionTypeSymbol) -> void) -> BoundExpression
         )? = nil,
-        reconcileGenericLocalFunctionGroupCaptures((IReadOnlyList[BoundFunctionLiteralExpression]) -> void)? = nil
+        reconcileGenericLocalFunctionGroupCaptures((IReadOnlyList[BoundFunctionLiteralExpression]) -> void)? = nil,
+        bindNullCoalescingAssignmentStatement((NullCoalescingAssignmentExpressionSyntax) -> BoundStatement)? = nil
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.conversions = conversions ?? throw ArgumentNullException("conversions")
@@ -153,6 +155,7 @@ internal partial class StatementBinder {
         this.checkNonGenericLocalFunctionEnclosingTypeParameterReference = checkNonGenericLocalFunctionEnclosingTypeParameterReference
         this.bindFunctionLiteralWithSelfDeclaration = bindFunctionLiteralWithSelfDeclaration
         this.reconcileGenericLocalFunctionGroupCaptures = reconcileGenericLocalFunctionGroupCaptures
+        this.bindNullCoalescingAssignmentStatement = bindNullCoalescingAssignmentStatement
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics

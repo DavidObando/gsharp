@@ -422,6 +422,9 @@ class Binder {
             },
             reconcileGenericLocalFunctionGroupCaptures: (group IReadOnlyList[BoundFunctionLiteralExpression]) -> {
                 Lambdas.ReconcileGenericLocalFunctionGroupCaptures(group)
+            },
+            bindNullCoalescingAssignmentStatement: (syntax NullCoalescingAssignmentExpressionSyntax) -> {
+                return Expressions.BindNullCoalescingAssignmentStatement(syntax)
             }
         )
         let BindTypeOfExpressionForDeclarations = func (syntax TypeOfExpressionSyntax) BoundExpression {

@@ -1812,8 +1812,10 @@ is a platform (`T!`) value, which is stored unchecked, or when `b` is an `if`,
 `switch`, conditional or block expression, which the target types as a whole.
 A platform target follows the same rule. The value is converted to the target
 once, so a boxed value is the same object in `a` and in the result. A throwing
-right side (`a ??= throw e`) is the coalesce's fallback. Neither the statement
-nor the expression form narrows `a` afterwards.
+right side (`a ??= throw e`) is the coalesce's fallback. Flow narrowing is
+unchanged: the expression form does not narrow `a` afterwards, and the
+statement form does so only when the right side throws, since `a` is then
+non-nil on every path that continues.
 
 The semantics, including single evaluation of the receiver and any index
 expressions, are:
@@ -1832,9 +1834,11 @@ a ??= b
 }
 ```
 
-For nullable value types (`int32?`, `bool?`, …) the same shape applies; the
-nil test is the `??` operator's `Nullable<T>` test, so the write only fires
-when `HasValue == false`.
+As a statement, where the value is discarded, the `??` is an
+`if __recv.member == nil { __recv.member = b }` test with the same captures.
+For nullable value types (`int32?`, `bool?`, …) the same shapes apply; the nil
+test is the `Nullable<T>` test, so the write only fires when
+`HasValue == false`.
 
 ### Switch statements
 
