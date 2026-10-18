@@ -87,6 +87,30 @@ naming the function (ADR-0174). Press
 `<GsharpEnableHotReload>false</GsharpEnableHotReload>` to disable it, or set
 the property explicitly to `true` for another supported host.
 
+After each applied update, the running process calls the
+`[assembly: MetadataUpdateHandler(typeof(T))]` handlers of its loaded
+assemblies, as `dotnet watch` does for C#. Every static
+`ClearCache(Type[]?)` runs before any static `UpdateApplication(Type[]?)`,
+and handlers in a referenced assembly run before those of the assemblies that
+reference it. Both receive the types the update changed: the type of each
+edited method and the types that contain it, top-level types first. A handler
+that throws, or a handler type whose methods do not have that static
+`void (Type[]?)` shape, is reported as `GSHR1005`; the other handlers still
+run.
+
+```go
+@assembly: MetadataUpdateHandler(typeof(ReloadHandler))
+
+internal class ReloadHandler {
+    shared {
+        func ClearCache(updatedTypes []?Type) { }
+        func UpdateApplication(updatedTypes []?Type) {
+            Console.WriteLine("updated")
+        }
+    }
+}
+```
+
 G# currently emits metadata and IL deltas, but not Portable PDB deltas.
 Updated code executes without restarting; existing breakpoint and stepping
 locations remain bound to the baseline PDB. Restart after edits that move

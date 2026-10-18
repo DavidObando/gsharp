@@ -183,6 +183,7 @@ internal class HotReloadDeltaBuilder {
             metadataBuilder.ToArray(),
             ilBuilder.ToArray(),
             updatedMethodNames.MoveToImmutable(),
+            ImmutableArray.Create(GetUpdatedTypes(currentReader, changedMethods)),
             commit: () -> {
                 this.previousImage = currentImage
                 this.standaloneSignatures = nextSignatures
@@ -208,6 +209,45 @@ internal class HotReloadDeltaBuilder {
 
     shared {
         private let OperandTypes IReadOnlyDictionary[uint16, OperandType] = CreateOperandTypeMap()
+
+        /// Returns the TypeDef tokens of the types a delta changes, as Roslyn
+        /// reports them in `EmitDifferenceResult.ChangedTypes` (the list
+        /// `dotnet watch` passes to metadata update handlers): each changed
+        /// method's declaring type plus every type that contains it, once
+        /// each, in the delta writer's traversal order. That order is the
+        /// top-level types in TypeDef order, then nested types breadth-first.
+        /// @param reader Metadata of the candidate image.
+        /// @param methods Methods whose bodies the delta replaces.
+        /// @returns TypeDef tokens in update order, without duplicates.
+        private func GetUpdatedTypes(reader MetadataReader, methods List[MethodDefinitionHandle])[]int32 {
+            let changedTypes = HashSet[TypeDefinitionHandle]()
+            for methodHandle in methods {
+                var type = reader.GetMethodDefinition(methodHandle).GetDeclaringType()
+                // A type already in the set has had its containers added too.
+                while !type.IsNil && changedTypes.Add(type) {
+                    type = reader.GetTypeDefinition(type).GetDeclaringType()
+                }
+            }
+            let ordered = List[int32](changedTypes.Count)
+            let pending = Queue[TypeDefinitionHandle]()
+            for handle in reader.TypeDefinitions {
+                if reader.GetTypeDefinition(handle).GetDeclaringType().IsNil {
+                    pending.Enqueue(handle)
+                }
+            }
+            while pending.Count > 0 {
+                let handle = pending.Dequeue()
+                // An unchanged type contains no changed type, so only changed
+                // types need their nested types visited.
+                if changedTypes.Contains(handle) {
+                    ordered.Add(MetadataTokens.GetToken(handle))
+                    for nested in reader.GetTypeDefinition(handle).GetNestedTypes() {
+                        pending.Enqueue(nested)
+                    }
+                }
+            }
+            return ordered.ToArray()
+        }
 
         private func GetMetadataReader(peReader PEReader) MetadataReader {
             if !peReader.HasMetadata {
@@ -1180,6 +1220,7 @@ internal class HotReloadDelta {
         ilDelta[]uint8,
         pdbDelta[]uint8,
         updatedMethods ImmutableArray[string],
+        updatedTypes ImmutableArray[int32],
         diagnostic string?,
         commit(() -> void)?
     ) {
@@ -1188,6 +1229,7 @@ internal class HotReloadDelta {
         this.IlDelta = ilDelta
         this.PdbDelta = pdbDelta
         this.UpdatedMethods = updatedMethods
+        this.UpdatedTypes = updatedTypes
         this.Diagnostic = diagnostic
         this.commit = commit
     }
@@ -1212,6 +1254,13 @@ internal class HotReloadDelta {
         get;
     }
 
+    /// TypeDef tokens of the types whose members the delta changes, in
+    /// update order and without duplicates; passed to metadata update
+    /// handlers.
+    prop UpdatedTypes ImmutableArray[int32] {
+        get;
+    }
+
     prop Diagnostic string? {
         get;
     }
@@ -1223,6 +1272,7 @@ internal class HotReloadDelta {
             metadataDelta[]uint8,
             ilDelta[]uint8,
             updatedMethods ImmutableArray[string],
+            updatedTypes ImmutableArray[int32],
             commit() -> void,
             pdbDelta[]?uint8 = nil
         ) HotReloadDelta -> HotReloadDelta(
@@ -1231,6 +1281,7 @@ internal class HotReloadDelta {
             ilDelta,
             pdbDelta ?? Array.Empty[uint8](),
             updatedMethods,
+            updatedTypes,
             diagnostic: nil,
             commit
         )
@@ -1241,6 +1292,7 @@ internal class HotReloadDelta {
             Array.Empty[uint8](),
             Array.Empty[uint8](),
             ImmutableArray[string].Empty,
+            ImmutableArray[int32].Empty,
             diagnostic: nil,
             commit: nil
         )
@@ -1251,6 +1303,7 @@ internal class HotReloadDelta {
             Array.Empty[uint8](),
             Array.Empty[uint8](),
             ImmutableArray[string].Empty,
+            ImmutableArray[int32].Empty,
             diagnostic,
             commit: nil
         )
