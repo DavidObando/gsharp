@@ -151,6 +151,10 @@ def select(paths, event, projects=None, go_exists=None):
                 "sdk", "compiler", "interpreter", "extensions", "channels", "cs2gs", "generators"))
             jobs.update({"build", "e2e", "ilverify", "desktop-msbuild-sdk-smoke", "cs2gs-corpus"})
             docs_jobs.update({"build", "visual"})
+        if "sdk" in areas:
+            # Core and all frontends consume the bundled runtimes.
+            suites.update(all_tests)
+            jobs.update({"vscode-extension", "vsix", "visual-studio-extension"})
         if "cs2gs" in areas:
             suites.update({CS2GS, GENERATOR})
             jobs.update({"cs2gs-corpus", "e2e"})
@@ -159,7 +163,7 @@ def select(paths, event, projects=None, go_exists=None):
             suites.update(SUITES[key] for key in ("formatting", "language-server", "interpreter", "cs2gs"))
             suites.add(GENERATOR)
             jobs.add("cs2gs-corpus")
-        if "language-server" in areas:
+        if areas.intersection({"language-server", "formatting"}):
             suites.add(SUITES["interpreter"])
             jobs.update({"vscode-extension", "vsix", "visual-studio-extension"})
         if areas.intersection({"vscode", "editor-assets"}):

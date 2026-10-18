@@ -87,12 +87,12 @@ class SelectionTests(unittest.TestCase):
     def test_owning_suites_and_downstream_consumers(self):
         for path, suites, jobs in (
             ("src/Formatting/Gsfmt.Cli/Program.gs", ["formatting", "language-server", "cs2gs"],
-             ["format", "cs2gs-corpus"]),
+             ["format", "cs2gs-corpus", "visual-studio-extension", "vsix"]),
             ("src/LanguageServer/Server.gs", ["language-server", "interpreter"],
              ["vscode-extension", "vsix", "visual-studio-extension"]),
             ("src/Repl/Program.gs", ["interpreter"], ["tests"]),
             ("src/Sdk/Gsharp.NET.Sdk/BuildTask.gs", ["sdk", "compiler", "cs2gs"],
-             ["build", "e2e", "desktop-msbuild-sdk-smoke"]),
+             ["build", "e2e", "desktop-msbuild-sdk-smoke", "vscode-extension"]),
             ("tools/gsgen/Gsgen.Cli/Program.gs", ["generators", "compiler", "cs2gs"],
              ["build", "e2e"]),
             ("samples/Trail/README.md", ["compiler", "formatting", "language-server"],
