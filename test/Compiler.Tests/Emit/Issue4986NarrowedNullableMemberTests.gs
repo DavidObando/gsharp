@@ -234,13 +234,13 @@ import System.Collections.Generic
 func pairValue(p KeyValuePair[string, int32]?) int32 -> p != nil ? p.Value : -1
 func withCollections(n int32?) int32 {
     if n != nil {
-        return n.GetValueOrDefault() + 1
+        return n.GetValueOrDefault() + n.GetValueOrDefault(defaultValue: 0) + 1
     }
     return 0
 }
 Console.WriteLine("${pairValue(KeyValuePair[string, int32]("a", 7))} ${pairValue(nil)} ${withCollections(4)} ${withCollections(nil)}")
 `)
-        Assert.Equal("7 -1 5 0" + Environment.NewLine, result.Output)
+        Assert.Equal("7 -1 9 0" + Environment.NewLine, result.Output)
     }
 
     @Fact
@@ -310,6 +310,50 @@ func argument(n int32?) int32 -> n != nil ? n.GetValueOrDefault(Object()) : 0
 Console.WriteLine("${explicitPick(7)} ${argument(7)} ${explicitPick(nil)} ${argument(nil)}")
 `, fixture.AssemblyPath)
         Assert.Equal("81 91 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
+    func Other_Arguments_Can_Complete_Nullable_Extension_Receiver_Inference() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public static class Extensions {
+        public static int GetValueOrDefault<T>(this T? value, T fallback) where T : struct => 99;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func direct(n int32) int32 -> n.GetValueOrDefault(0)
+func narrowed(n int32?) int32 -> n != nil ? n.GetValueOrDefault(0) : 0
+func named(n int32?) int32 -> n != nil ? n.GetValueOrDefault(fallback: 0) : 0
+func statement(n int32?) int32 {
+    if n != nil { return n.GetValueOrDefault(0) }
+    return 0
+}
+Console.WriteLine("${direct(7)} ${narrowed(7)} ${statement(7)} ${named(7)} ${narrowed(nil)} ${statement(nil)} ${named(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99 99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
+    func Other_Arguments_Can_Complete_Converted_Generic_Extension_Receiver_Inference() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public struct Meter {
+        public static implicit operator System.Collections.Generic.KeyValuePair<string, int>(Meter value) => default;
+    }
+    public static class Extensions {
+        public static int GetValueOrDefault<T>(this System.Collections.Generic.KeyValuePair<T, int> value, T fallback) => 99;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func direct(n Meter) int32 -> n.GetValueOrDefault("")
+func narrowed(n Meter?) int32 -> n != nil ? n.GetValueOrDefault("") : 0
+func statement(n Meter?) int32 {
+    if n != nil { return n.GetValueOrDefault("") }
+    return 0
+}
+Console.WriteLine("${direct(Meter())} ${narrowed(Meter())} ${statement(Meter())} ${narrowed(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99 99 99 0 0" + Environment.NewLine, result.Output)
     }
 
     /// A second argument bind hoisted another `out var`, reporting GS0102.

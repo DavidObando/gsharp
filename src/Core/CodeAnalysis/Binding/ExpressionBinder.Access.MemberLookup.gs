@@ -70,12 +70,12 @@ internal partial class ExpressionBinder {
         // `Value`, an overload that turns out inapplicable, an applicable
         // extension) keeps the narrowed binding and its diagnostics.
         let narrowingUnwrap = receiver as BoundUnaryExpression
-        let headToken = AccessorHeadToken(rightPart)
+        let headToken = AccessorHeadToken(rightPart, out var callSyntax)
         if narrowingUnwrap != nil &&
             narrowingUnwrap.IsNarrowingUnwrap &&
             headToken != nil &&
             NullableOnlyMemberNames.Contains(headToken.ValueText) &&
-            !NarrowedTypeMayHaveMember(narrowingUnwrap.Type, headToken.ValueText) {
+            !NarrowedTypeMayHaveMember(narrowingUnwrap.Type, headToken.ValueText, callSyntax) {
             return BindAccessorStepOnReceiver(
                 narrowingUnwrap.Operand,
                 classSymbol,
@@ -96,12 +96,13 @@ internal partial class ExpressionBinder {
     /// the answer is `true`, which keeps the narrowed binding.
     /// @param type The narrowed type.
     /// @param name The member name.
+    /// @param callSyntax The unbound call, or `nil` for a method group.
     /// @returns `false` only when no member of that name can apply.
-    private func NarrowedTypeMayHaveMember(type TypeSymbol, name string) bool {
+    private func NarrowedTypeMayHaveMember(type TypeSymbol, name string, callSyntax CallExpressionSyntax?) bool {
         if !$scope.TryLookupExtensionFunctions(type, name).IsDefaultOrEmpty {
             return true
         }
-        if ImportedExtensionMayApply(type, name) {
+        if ImportedExtensionMayApply(type, name, callSyntax) {
             return true
         }
         switch type {
@@ -224,10 +225,20 @@ internal partial class ExpressionBinder {
         }
     }
 
-    private func ImportedExtensionMayApply(type TypeSymbol, name string) bool {
+    private func ImportedExtensionMayApply(type TypeSymbol, name string, callSyntax CallExpressionSyntax?) bool {
+        let argumentNames = if callSyntax != nil {
+            BuildDeferredArgumentNames(callSyntax, 1)
+        } else {
+            default(IReadOnlyList[string?]?)
+        }
         for candidate in this.memberLookup.CollectImportedExtensionMethods(name) {
             try {
-                if ClrOverloadResolution.MayAcceptExtensionReceiver(candidate, type) {
+                if ClrOverloadResolution.MayAcceptExtensionReceiver(
+                    candidate,
+                    type,
+                    callSyntax?.Arguments.Count,
+                    argumentNames
+                ) {
                     return true
                 }
             } catch (ex Exception) when !(ex is OutOfMemoryException) {
@@ -4656,17 +4667,30 @@ internal partial class ExpressionBinder {
         /// accessor step looks up: `Value` in `n.Value.X`,
         /// `GetValueOrDefault` in `n.GetValueOrDefault(7)`.
         /// @param rightPart The syntax after the receiver's `.`.
+        /// @param callSyntax The unbound head call, or `nil` for a method group.
         /// @returns The head identifier token, or `nil` without a member name
         /// or for explicit generic calls (`Nullable<T>` has no generic methods).
-        private func AccessorHeadToken(rightPart ExpressionSyntax?) SyntaxToken? -> switch rightPart {
-            case name is NameExpressionSyntax: name.IdentifierToken
-            case call is CallExpressionSyntax when call.TypeArgumentList == nil: call.Identifier
-            case accessor is AccessorExpressionSyntax: AccessorHeadToken(accessor.LeftPart)
-            case index is IndexExpressionSyntax: AccessorHeadToken(index.Target)
-            case unary is UnaryExpressionSyntax when unary
-                .OperatorToken
-                .Kind == SyntaxKind.BangBangToken: AccessorHeadToken(unary.Operand)
-            default: default(SyntaxToken?)
+        private func AccessorHeadToken(rightPart ExpressionSyntax?, out callSyntax CallExpressionSyntax?) SyntaxToken? {
+            callSyntax = nil
+            switch rightPart {
+                case name is NameExpressionSyntax {
+                    return name.IdentifierToken
+                }
+                case call is CallExpressionSyntax when call.TypeArgumentList == nil {
+                    callSyntax = call
+                    return call.Identifier
+                }
+                case accessor is AccessorExpressionSyntax {
+                    return AccessorHeadToken(accessor.LeftPart, out callSyntax)
+                }
+                case index is IndexExpressionSyntax {
+                    return AccessorHeadToken(index.Target, out callSyntax)
+                }
+                case unary is UnaryExpressionSyntax when unary.OperatorToken.Kind == SyntaxKind.BangBangToken {
+                    return AccessorHeadToken(unary.Operand, out callSyntax)
+                }
+            }
+            return nil
         }
 
         private func TryGetTupleElementIndex(memberName string, tupleType TupleTypeSymbol, out zeroBased int32) bool {

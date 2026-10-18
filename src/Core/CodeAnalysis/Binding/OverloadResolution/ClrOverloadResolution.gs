@@ -1213,7 +1213,12 @@ internal shared class ClrOverloadResolution {
     /// Tests only an extension receiver, without binding its arguments.
     /// Shares final resolution's inference, constraints and CLR conversions;
     /// unknown symbolic receivers or argument-dependent bounds stay possible.
-    internal func MayAcceptExtensionReceiver(method MethodInfo, receiver TypeSymbol) bool {
+    internal func MayAcceptExtensionReceiver(
+        method MethodInfo,
+        receiver TypeSymbol,
+        argumentCount int32?,
+        argumentNames IReadOnlyList[string?]?
+    ) bool {
         let receiverClr = receiver.ClrType
         if receiverClr == nil || receiverClr.ContainsGenericParameters || TypeSymbol.ContainsSameCompilationUserType(
             receiver
@@ -1233,11 +1238,36 @@ internal shared class ClrOverloadResolution {
             if !UnifyForInference(parameterType, receiverClr, bounds) {
                 return false
             }
+            let typeParameters = method.GetGenericArguments()
+            var remainingParameters = parameters.Skip(1).Take(argumentCount ?? int32.MaxValue).ToArray()
+            if argumentNames != nil {
+                if !TryBuildNamedArgumentReordering(method, argumentNames.Count, argumentNames, out var mapping) &&
+                    !TryBuildNamedArgumentReordering(
+                    method,
+                    argumentNames.Count,
+                    argumentNames,
+                    isExpanded: true,
+                    out mapping
+                ) {
+                    remainingParameters = Array.Empty[ParameterInfo]()
+                } else if mapping != nil {
+                    remainingParameters = mapping.Skip(1).Select((index int32) -> parameters[index]).ToArray()
+                }
+            }
+            let argumentDependentReceiver = remainingParameters.Any(
+                (parameter ParameterInfo) -> typeParameters.Any(
+                    (typeParameter Type) -> MentionsGenericParameter(parameterType, typeParameter) &&
+                        MentionsGenericParameter(parameter.ParameterType, typeParameter)
+                )
+            )
             if !TryCloseInferredType(parameterType, bounds, out var closedReceiver) || closedReceiver == nil {
-                return false
+                return argumentDependentReceiver && typeParameters.All(
+                    (typeParameter Type) -> bounds.ContainsKey(typeParameter.Name) || remainingParameters.Any(
+                        (parameter ParameterInfo) -> MentionsGenericParameter(parameter.ParameterType, typeParameter)
+                    )
+                )
             }
             parameterType = closedReceiver
-            let typeParameters = method.GetGenericArguments()
             let typeArguments = [typeParameters.Length]Type
             for var i = 0; i < typeParameters.Length; i++ {
                 typeArguments[i] = if bounds.TryGetValue(typeParameters[i].Name, out var argument) {
@@ -1249,12 +1279,7 @@ internal shared class ClrOverloadResolution {
             if !SatisfiesGenericConstraints(method, typeArguments) {
                 // Other arguments can widen an inferred receiver bound (for
                 // example, int32 plus object fixes `T : class` to object).
-                return parameters.Skip(1).Any(
-                    (parameter ParameterInfo) -> typeParameters.Any(
-                        (typeParameter Type) -> bounds.ContainsKey(typeParameter.Name) &&
-                            MentionsGenericParameter(parameter.ParameterType, typeParameter)
-                    )
-                )
+                return argumentDependentReceiver
             }
         }
         return ClassifyImplicit(parameterType, receiverClr) != ImplicitConversionKind.None ||

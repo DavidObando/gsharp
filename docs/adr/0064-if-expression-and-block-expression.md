@@ -316,7 +316,7 @@ type-parameter constraints, or an applicable source or imported extension.
 Imported extension receivers use the CLR overload resolver's existing input
 inference, constraint checks and implicit conversions, including generic
 struct receivers and numeric widening. Unknown symbolic receivers and bounds
-that can be widened by other arguments remain conservative. Explicit generic
+that other arguments can complete or widen remain conservative. Explicit generic
 calls keep the narrowed binding (`Nullable<T>` declares no generic methods).
 Only when none can is the member bound against the storage read. The member
 and its arguments are bound once either way, so a member `T` declares keeps
