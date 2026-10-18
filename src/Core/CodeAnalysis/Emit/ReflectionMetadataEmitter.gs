@@ -1021,7 +1021,7 @@ internal class ReflectionMetadataEmitter {
             this.userTokens.ResolveFieldToken,
             this.customAttrEncoder.EmitNullableAttributeOnProperty,
             this.customAttrEncoder.EmitNullableAttributeOnEvent,
-            this.customAttrEncoder.EmitNullableAttributeOnParameter,
+            this.customAttrEncoder.EmitMethodNullability,
             this.customAttrEncoder.EmitTupleElementNamesAttribute,
             this.customAttrEncoder.EmitUserAttributes
         )
@@ -1052,7 +1052,7 @@ internal class ReflectionMetadataEmitter {
                 NullableFlagsBuilder.NotAnnotated
             ),
             this.customAttrEncoder.EmitNullableAttributeOnField,
-            this.customAttrEncoder.EmitNullableAttributeOnParameter,
+            this.customAttrEncoder.EmitMethodNullability,
             (paramHandle ParameterHandle, paramType TypeSymbol) -> this
                 .customAttrEncoder
                 .EmitTupleElementNamesAttribute(paramHandle, paramType),
@@ -1094,7 +1094,7 @@ internal class ReflectionMetadataEmitter {
             ),
             this.typeDefEmitter.EmitValueStructDefaultConstructor,
             this.userTokens.ResolveUserInstanceMethodToken,
-            this.customAttrEncoder.EmitNullableAttributeOnParameter,
+            this.customAttrEncoder.EmitMethodNullability,
             this.memberRefs.GetCtorReference,
             this.userTokens.ResolveUserPropertyAccessorToken
         )

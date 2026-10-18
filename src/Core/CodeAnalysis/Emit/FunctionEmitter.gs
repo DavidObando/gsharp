@@ -21,7 +21,7 @@ import System.Runtime.InteropServices
 /// (cref:FunctionSymbol) into an ECMA-335 `MethodDef` (plus its
 /// Param / Constant / CustomAttribute / GenericParam / PDB rows): the ordinary
 /// managed-body emitter `EmitFunction` and its method-level
-/// `NullableContextAttribute` compaction (`ChooseMethodNullableContext`,
+/// `NullableContextAttribute` compaction (`MethodNullabilityPlan`,
 /// issue #834); the two interop shapes — the classic `@DllImport`
 /// PinvokeImpl (`EmitPInvokeFunction`, ADR-0086 / issue #727) and the
 /// `@LibraryImport` managed-stub-plus-blittable-inner pair
@@ -505,16 +505,13 @@ internal class FunctionEmitter {
         // appear in ascending sequence number, anchored by
         // MethodDef.parameterList).
         let firstParamHandle = this.outer.customAttrEncoder.NextParameterHandle()
-        let hasReturnAttributes = !function.Attributes.IsDefaultOrEmpty && function.Attributes.Any(
-            (a BoundAttribute) -> a.Target == AttributeTargetKind.Return
-        )
         // Compute nullable flags for return + each non-`this` parameter. An
         // async kickoff's emitted return is the builder's task type, not
         // `function.Type`, so its flags describe that physical shape. They
         // used to be left EMPTY, on the
         // reasoning that a non-null `Task<T>` matches the assembly-level
         // NullableContextAttribute(1) default. That holds only while the
-        // METHOD context stays 1: ChooseMethodNullableContext picks the
+        // METHOD context stays 1: MethodNullabilityPlan picks the
         // majority byte across return and parameters, so a method with more
         // nilable parameters than non-null ones got [NullableContext(2)], and
         // the omitted return then re-imported as `Task[T]?` (issue #4287, found
@@ -527,57 +524,42 @@ internal class FunctionEmitter {
         // #1904: the kickoff blocks on the task and unwraps the result), so its
         // flags are those of `function.Type`, exactly like a non-async method.
         let drivenSynchronously = isEntryPoint && asyncPlan?.StateMachine.BuilderInfo.TaskProperty != nil
-        let returnFlags = if asyncPlan == nil || drivenSynchronously {
-            NullableFlagsBuilder.Build(function.Type)
+        // Issue #4988: the parameters that get Param rows below — every
+        // emitted parameter except the implicit receiver — are exactly the
+        // positions the plan covers, so plan and rows cannot drift apart.
+        let rowParameters = function
+            .EmittedParameters
+            .Where((p ParameterSymbol) -> !object.ReferenceEquals(p, function.ThisParameter))
+            .ToImmutableArray()
+        // Pick a method-level NullableContextAttribute the way Roslyn does
+        // (see MethodNullabilityPlan): the most compact metadata shape C#
+        // emits for the same source.
+        let nullability = if asyncPlan == nil || drivenSynchronously {
+            MethodNullabilityPlan.ForParameters(function.Type, rowParameters, function.TypeParameters)
         } else {
-            this.AsyncKickoffReturnFlags(asyncPlan)
+            MethodNullabilityPlan.ForParameters(
+                this.AsyncKickoffReturnFlags(asyncPlan),
+                rowParameters,
+                function.TypeParameters
+            )
         }
-        let paramFlagsList = List[ImmutableArray[uint8]]()
-        for p in function.EmittedParameters {
-            if object.ReferenceEquals(p, function.ThisParameter) &&
-                !(function.IsExtension && !function.IsInstanceMethod) {
-                continue
-            }
-            paramFlagsList.Add(NullableFlagsBuilder.Build(p.Type))
-        }
-        // Pick a method-level NullableContextAttribute. Roslyn picks the
-        // single byte value that appears most often across return + parameter
-        // positions (ties go to NotAnnotated = 1, which is also the assembly
-        // default), emits NullableContextAttribute(common) on the method when
-        // `common` differs from the assembly default, and skips per-position
-        // NullableAttribute rows that match `common` exactly. The result is
-        // the most compact metadata shape C# emits for the same source.
-        let (effectiveDefault, contextByteToEmit) = ChooseMethodNullableContext(returnFlags, paramFlagsList)
-        let returnNeedsNullableAttribute = !returnFlags.IsDefaultOrEmpty &&
-            !(returnFlags.Length == 1 && returnFlags[0] == effectiveDefault)
         // ADR-0172 Phase B: a tuple-typed return with declared element names
         // also needs the sequence-0 Param row to carry
         // [TupleElementNamesAttribute]. The flattened array for an async
         // kickoff's `Task<(a, b)>` equals the tuple's own array (only tuples
         // contribute entries; wrappers are traversed transparently), so
         // `function.Type` is the right input in both cases.
-        let returnTupleNames = TupleElementNamesBuilder.Build(function.Type)
         var returnParamHandle ParameterHandle? = nil
-        if hasReturnAttributes ||
-            returnNeedsNullableAttribute ||
-            !returnTupleNames.IsDefaultOrEmpty ||
-            function.ReturnRefKind == RefKind
-            .RefReadOnly {
-            returnParamHandle = this
-                .emitCtx
-                .Metadata
-                .AddParameter(attributes: ParameterAttributes.None, name: default(StringHandle), sequenceNumber: 0)
+        if ParameterMetadataEmitter.NeedsReturnParameter(nullability, function.Type, function.ReturnRefKind, function) {
+            let returnRow = ParameterMetadataEmitter.AddReturnParameter(this.emitCtx)
+            returnParamHandle = returnRow
             if function.ReturnRefKind == RefKind.RefReadOnly {
-                this.outer.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter(returnParamHandle!!)
+                this.outer.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter(returnRow)
             }
         }
-        let paramHandles = List[(Symbol ParameterSymbol, Handle ParameterHandle, NullableFlags ImmutableArray[uint8])]()
+        let paramHandles = List[(Symbol ParameterSymbol, Handle ParameterHandle)]()
         var sequenceNumber = 1
-        var flagsIndex = 0
-        for p in function.EmittedParameters {
-            if object.ReferenceEquals(p, function.ThisParameter) {
-                continue
-            }
+        for p in rowParameters {
             // ADR-0060 §6: stamp the per-parameter row with ParameterAttributes.Out for
             // `out`, .In for `in`. `ref` carries neither (the CLR distinguishes ref from
             // out only via the .out flag); the `in` parameter also gets an
@@ -600,18 +582,9 @@ internal class FunctionEmitter {
                     this.outer.customAttrEncoder.EmitParamCollectionAttributeOnParameter(paramHandle)
                 }
             }
-            paramHandles.Add((p, paramHandle, paramFlagsList[flagsIndex]))
-            flagsIndex++
+            paramHandles.Add((p, paramHandle))
         }
-        return FunctionParameterMetadata(
-            firstParamHandle,
-            returnParamHandle,
-            paramHandles,
-            returnFlags,
-            effectiveDefault,
-            contextByteToEmit,
-            returnNeedsNullableAttribute
-        )
+        return FunctionParameterMetadata(firstParamHandle, returnParamHandle, paramHandles, nullability)
     }
 
     private func EmitMethodDefinition(
@@ -718,44 +691,32 @@ internal class FunctionEmitter {
         if parameterMetadata.ReturnParameterHandle is {} retHandle {
             this.outer.customAttrEncoder.EmitUserAttributes(retHandle, function, AttributeTargetKind.Return)
         }
-        for (paramSym, paramHandle, _) in parameterMetadata.ParameterHandles {
+        for (paramSym, paramHandle) in parameterMetadata.ParameterHandles {
             this.outer.customAttrEncoder.EmitUserAttributes(paramHandle, paramSym, AttributeTargetKind.Param)
         }
-        // Issue #834: emit [NullableContextAttribute] on the MethodDef when
-        // the chosen method-level default differs from the assembly default
-        // (1 = NotAnnotated). Then stamp [NullableAttribute] on every Param
-        // row whose nullability bytes deviate from that effective default.
-        // C# consumers then see `T?` reference parameters / returns as
-        // annotated (CS8602 silenced) and non-nullable positions stay
-        // implicit. The byte-array form is used only for nested generic
-        // inner-position bytes (e.g. `IEnumerable<string?>?`).
-        if parameterMetadata.NullableContextByteToEmit is uint8 ctxByte {
-            this.outer.customAttrEncoder.EmitNullableContextAttributeOnMethod(handle, ctxByte)
+        // Issue #834 / #4988: [NullableContextAttribute] on the MethodDef when
+        // the chosen method-level default differs from the type's, then
+        // [NullableAttribute] on every Param row whose bytes deviate from it.
+        let parameterRows = ImmutableArray.CreateBuilder[ParameterHandle](parameterMetadata.ParameterHandles.Count)
+        for (_, paramHandle) in parameterMetadata.ParameterHandles {
+            parameterRows.Add(paramHandle)
         }
-        if parameterMetadata.ReturnParameterHandle is {} returnHandleForNullable &&
-            parameterMetadata
-            .ReturnNeedsNullableAttribute {
-            this
-                .outer
-                .customAttrEncoder
-                .EmitNullableAttributeOnParameter(returnHandleForNullable, parameterMetadata.ReturnFlags)
-        }
-        for (_, paramHandle, paramFlags) in parameterMetadata.ParameterHandles {
-            if paramFlags.IsDefaultOrEmpty {
-                continue
-            }
-            if paramFlags.Length == 1 && paramFlags[0] == parameterMetadata.EffectiveNullableDefault {
-                continue
-            }
-            this.outer.customAttrEncoder.EmitNullableAttributeOnParameter(paramHandle, paramFlags)
-        }
+        this
+            .outer
+            .customAttrEncoder
+            .EmitMethodNullability(
+            handle,
+            parameterMetadata.Nullability,
+            parameterMetadata.ReturnParameterHandle,
+            parameterRows.MoveToImmutable()
+        )
         // ADR-0172 Phase B: stamp [TupleElementNamesAttribute] on the return
         // row and on every parameter whose declared type carries tuple
         // element names, so C# consumers (and re-imports) see `r.line`.
         if parameterMetadata.ReturnParameterHandle is {} returnHandleForTupleNames {
             this.outer.customAttrEncoder.EmitTupleElementNamesAttribute(returnHandleForTupleNames, function.Type)
         }
-        for (paramSym, paramHandle, _) in parameterMetadata.ParameterHandles {
+        for (paramSym, paramHandle) in parameterMetadata.ParameterHandles {
             this.outer.customAttrEncoder.EmitTupleElementNamesAttribute(paramHandle, paramSym.Type)
         }
         // Issue #792 / ADR-0084. Stamp [ExtensionAttribute] on every G#-
@@ -819,9 +780,17 @@ internal class FunctionEmitter {
             implAttrs |= MethodImplAttributes.PreserveSig
         }
         // Allocate Parameter rows so each source parameter shows up in
-        // metadata. Matches the regular EmitFunction path.
+        // metadata. Matches the regular EmitFunction path, including the
+        // nullability plan (issue #4988).
         let firstParamHandle = this.outer.customAttrEncoder.NextParameterHandle()
+        let nullability = MethodNullabilityPlan.ForParameters(function.Type, function.Parameters)
+        let returnRow ParameterHandle? = if nullability.ReturnNeedsAttribute {
+            ParameterMetadataEmitter.AddReturnParameter(this.emitCtx)
+        } else {
+            nil
+        }
         let paramHandles = List[(Symbol ParameterSymbol, Handle ParameterHandle)]()
+        let parameterRows = ImmutableArray.CreateBuilder[ParameterHandle](function.Parameters.Length)
         var sequenceNumber = 1
         for p in function.Parameters {
             // ADR-0096 / issue #762: stamp HasFieldMarshal when the
@@ -834,6 +803,7 @@ internal class FunctionEmitter {
             }
             let paramHandle = ParameterMetadataEmitter.AddParameter(this.emitCtx, p, sequenceNumber++, paramAttrs)
             paramHandles.Add((p, paramHandle))
+            parameterRows.Add(paramHandle)
             if p.MarshalAsMetadata != nil {
                 EmitFieldMarshalRow(paramHandle, p.MarshalAsMetadata!!)
             }
@@ -849,6 +819,10 @@ internal class FunctionEmitter {
             bodyOffset: -1,
             parameterList: firstParamHandle
         )
+        this
+            .outer
+            .customAttrEncoder
+            .EmitMethodNullability(methodHandle, nullability, returnRow, parameterRows.MoveToImmutable())
         // ModuleRef (deduplicated by library name).
         if !this.cache.PInvokeModuleRefs.TryGetValue(pInvoke.LibraryName, out var moduleRef) {
             moduleRef = this
@@ -951,7 +925,16 @@ internal class FunctionEmitter {
         // Allocate outer Parameter rows BEFORE the inner ones so they
         // line up with the outer MethodDef row.
         let outerFirstParam = this.outer.customAttrEncoder.NextParameterHandle()
+        // Issue #4988: the user-visible stub carries the declared signature's
+        // nullability; the hidden blittable inner P/Invoke below is private.
+        let outerNullability = MethodNullabilityPlan.ForParameters(function.Type, function.Parameters)
+        let outerReturnRow ParameterHandle? = if outerNullability.ReturnNeedsAttribute {
+            ParameterMetadataEmitter.AddReturnParameter(this.emitCtx)
+        } else {
+            nil
+        }
         let outerParamHandles = List[(Symbol ParameterSymbol, Handle ParameterHandle)]()
+        let outerParameterRows = ImmutableArray.CreateBuilder[ParameterHandle](function.Parameters.Length)
         var outerSeq = 1
         for p in function.Parameters {
             // ADR-0096 / issue #762: stamp HasFieldMarshal on the outer
@@ -966,6 +949,7 @@ internal class FunctionEmitter {
             }
             let paramHandle = ParameterMetadataEmitter.AddParameter(this.emitCtx, p, outerSeq++, outerParamAttrs)
             outerParamHandles.Add((p, paramHandle))
+            outerParameterRows.Add(paramHandle)
             if p.MarshalAsMetadata != nil {
                 EmitFieldMarshalRow(paramHandle, p.MarshalAsMetadata!!)
             }
@@ -982,6 +966,15 @@ internal class FunctionEmitter {
             signature: this.emitCtx.Metadata.GetOrAddBlob(outerSigBlob),
             bodyOffset: outerBodyOffset,
             parameterList: outerFirstParam
+        )
+        this
+            .outer
+            .customAttrEncoder
+            .EmitMethodNullability(
+            outerMethodHandle,
+            outerNullability,
+            outerReturnRow,
+            outerParameterRows.MoveToImmutable()
         )
         // Surface unrelated user-written method attributes on the managed
         // wrapper. Attributes that control the native transition belong only
@@ -1251,11 +1244,8 @@ internal class FunctionEmitter {
     private data struct FunctionParameterMetadata(
         FirstParameterHandle ParameterHandle,
         ReturnParameterHandle ParameterHandle?,
-        ParameterHandles List[(Symbol ParameterSymbol, Handle ParameterHandle, NullableFlags ImmutableArray[uint8])],
-        ReturnFlags ImmutableArray[uint8],
-        EffectiveNullableDefault uint8,
-        NullableContextByteToEmit uint8?,
-        ReturnNeedsNullableAttribute bool
+        ParameterHandles List[(Symbol ParameterSymbol, Handle ParameterHandle)],
+        Nullability MethodNullabilityPlan
     ) : IEquatable[FunctionParameterMetadata] { }
 
     shared {
@@ -1462,73 +1452,6 @@ internal class FunctionEmitter {
                 }
             }
             return methodAttrs
-        }
-
-        /// Issue #834: chooses the method-level `NullableContextAttribute`
-        /// byte for an emitted method. Mirrors Roslyn's compaction: pick the
-        /// most frequent byte across return + per-parameter flag bytes; emit a
-        /// `NullableContextAttribute(common)` on the MethodDef only when
-        /// `common` differs from the assembly default (1 = NotAnnotated).
-        /// Per-position `NullableAttribute` rows are then required only for
-        /// positions whose single byte deviates from `effectiveDefault`.
-        /// @param returnFlags The return slot's nullable byte array (DFS pre-order).
-        /// @param paramFlags Each non-`this` parameter's nullable byte array.
-        /// @returns A tuple of the effective method-level default byte (used by per-position
-        /// emission to decide which rows to skip) and the optional context byte to
-        /// stamp on the MethodDef. The context byte is `null`
-        /// when the assembly default (1) wins and there's nothing to emit on the
-        /// method itself.
-        private func ChooseMethodNullableContext(
-            returnFlags ImmutableArray[uint8],
-            paramFlags List[ImmutableArray[uint8]]
-        )(EffectiveDefault uint8, ContextByteToEmit uint8?) {
-            const AssemblyDefault = NullableFlagsBuilder.NotAnnotated
-            var countOblivious = 0
-            var countNotAnnotated = 0
-            var countAnnotated = 0
-            let Tally = func (flags ImmutableArray[uint8]) {
-                if flags.IsDefaultOrEmpty {
-                    return
-                }
-                for b in flags {
-                    switch b {
-                        case 0 {
-                            countOblivious++
-                        }
-                        case 1 {
-                            countNotAnnotated++
-                        }
-                        case 2 {
-                            countAnnotated++
-                        }
-                    }
-                }
-            }
-            Tally(returnFlags)
-            for pf in paramFlags {
-                Tally(pf)
-            }
-            if countOblivious + countNotAnnotated + countAnnotated == 0 {
-                // No reference-typed positions at all — assembly default wins,
-                // nothing to emit. Per-position emission also has nothing to do.
-                return (AssemblyDefault, nil)
-            }
-            // Pick the most frequent byte. Tie-breakers favour the assembly
-            // default (NotAnnotated = 1) so we emit the smallest amount of
-            // metadata when a method is half non-null / half annotated.
-            var common = AssemblyDefault
-            var best = countNotAnnotated
-            if countAnnotated > best {
-                common = NullableFlagsBuilder.Annotated
-                best = countAnnotated
-            }
-            if countOblivious > best {
-                common = uint8(0)
-            }
-            if common == AssemblyDefault {
-                return (AssemblyDefault, nil)
-            }
-            return (common, common)
         }
 
         private func MapPInvokeImportAttributes(pInvoke PInvokeMetadata) MethodImportAttributes {

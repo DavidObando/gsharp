@@ -463,7 +463,18 @@ NestedScalarTuple.Item1!!.Add(nil)`
                 []uint8{1, 0, 1},
                 GetNullableFlags(program.GetMethod("ReemitRequiredStructPair")!!.ReturnParameter)
             )
-            Assert.Equal([]uint8{0, 0}, GetNullableFlags(program.GetMethod("ReemitStructValue")!!.ReturnParameter))
+            // Issue #4988: every byte of `ValueContainer[T]` is `0`, so, as csc
+            // compacts it, the method's [NullableContext(0)] carries them and the
+            // return row has no [Nullable] of its own.
+            let reemitStructValue = program.GetMethod("ReemitStructValue")!!
+            Assert.Equal(
+                []uint8{0, 0},
+                ClrNullability.ExpandNullableFlags(
+                    reemitStructValue.ReturnType,
+                    ClrNullability.ReadNullableFlags(reemitStructValue.ReturnParameter, reemitStructValue)
+                )
+                    .ToArray()
+            )
         }
         Assert.Equal(0, Run(result.OutputPath))
     }

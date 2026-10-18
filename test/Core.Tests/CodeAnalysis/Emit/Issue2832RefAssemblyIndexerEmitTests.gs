@@ -50,11 +50,11 @@ open class Issue2832RefAssemblyIndexerEmitTests {
             .Select(md.GetMethodDefinition)
             .Single((m MethodDefinition) -> md.GetString(m.Name) == "set_Item")
         // Two index parameters precede `value`, so its sequence number is 3.
-        let sequenceNumbers = setter
-            .GetParameters()
-            .Select((h ParameterHandle) -> md.GetParameter(h).SequenceNumber)
-            .ToArray()
-        Assert.Equal([]int32{3}, sequenceNumbers)
+        // Issue #4988: the index parameters get their own named rows too, as
+        // on every other accessor path (their nullability lives on them).
+        let rows = setter.GetParameters().Select(md.GetParameter).ToArray()
+        Assert.Equal([]int32{1, 2, 3}, rows.Select((row Parameter) -> row.SequenceNumber).ToArray())
+        Assert.Equal("value", md.GetString(rows[2].Name))
     }
 
     shared {

@@ -5,6 +5,7 @@
 package GSharp.Compiler.Tests
 
 import GSharp.Compiler
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Tests
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
@@ -440,22 +441,14 @@ public static class Factory
         => new() { ["a"] = "nullable" };
 }`
 
-        private func GetNullableFlags(parameter ParameterInfo)[]uint8 {
-            let attribute = parameter.GetCustomAttributesData().Single(
-                (data CustomAttributeData) -> data
-                    .AttributeType
-                    .FullName == "System.Runtime.CompilerServices.NullableAttribute"
-            )
-            let value = attribute.ConstructorArguments[0]
-            return if value.ArgumentType == typeof(uint8) {
-                []uint8{uint8(value.Value!!)}
-            } else {
-                (cast[IEnumerable[CustomAttributeTypedArgument]](value.Value!!)).Select(
-                    (argument CustomAttributeTypedArgument) -> uint8(argument.Value!!)
-                )
-                    .ToArray()
-            }
-        }
+        /// The flags a reader sees at a position: its own `[Nullable]`, or —
+        /// when it repeats the context, which gsc then omits as csc does
+        /// (issue #4988) — the enclosing `[NullableContext]`, expanded.
+        private func GetNullableFlags(parameter ParameterInfo)[]uint8 -> ClrNullability.ExpandNullableFlags(
+            parameter.ParameterType,
+            ClrNullability.ReadNullableFlags(parameter, parameter.Member)
+        )
+            .ToArray()
 
         private func CompileDiagnostic(source string) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_4059_4066_diag_").FullName

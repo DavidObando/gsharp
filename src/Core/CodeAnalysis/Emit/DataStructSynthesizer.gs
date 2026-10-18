@@ -84,14 +84,22 @@ internal class DataStructSynthesizer {
     private let getElementTypeToken(TypeSymbol) -> EntityHandle
     private let getTypeReference(Type) -> TypeReferenceHandle
     private let nextParameterHandle() -> ParameterHandle
-    private let addPrimaryCtorParameters(ImmutableArray[ParameterSymbol]) -> ParameterHandle
+    private let addPrimaryCtorParameters(ImmutableArray[ParameterSymbol]) -> (
+        ParameterHandle,
+        ImmutableArray[ParameterHandle]
+    )
     private let resolveUserTypeToken(StructSymbol) -> EntityHandle
     private let resolveUserFieldToken(StructSymbol, FieldSymbol) -> EntityHandle
     private let resolveUserMethodRef(StructSymbol, EntityHandle, string, BlobBuilder) -> EntityHandle
     private let resolveImportedMethodRef(MethodInfo, TypeSymbol) -> EntityHandle
     private let emitInitializerConstructor(StructSymbol) -> MethodDefinitionHandle
     private let resolveUserInstanceMethodToken(StructSymbol, FunctionSymbol) -> EntityHandle
-    private let emitParameterNullability(ParameterHandle, ImmutableArray[uint8]) -> void
+    private let emitMethodNullability(
+        MethodDefinitionHandle,
+        MethodNullabilityPlan,
+        ParameterHandle?,
+        ImmutableArray[ParameterHandle]
+    ) -> void
     private let resolveImportedConstructorRef(ConstructorInfo, TypeSymbol?) -> MemberReferenceHandle
     private let resolveUserPropertyAccessorToken(StructSymbol, PropertySymbol, bool) -> EntityHandle
     private let equalityContractGetters Dictionary[StructSymbol, MethodDefinitionHandle] = Dictionary[
@@ -115,14 +123,19 @@ internal class DataStructSynthesizer {
         getElementTypeToken(TypeSymbol) -> EntityHandle,
         getTypeReference(Type) -> TypeReferenceHandle,
         nextParameterHandle() -> ParameterHandle,
-        addPrimaryCtorParameters(ImmutableArray[ParameterSymbol]) -> ParameterHandle,
+        addPrimaryCtorParameters(ImmutableArray[ParameterSymbol]) -> (ParameterHandle, ImmutableArray[ParameterHandle]),
         resolveUserTypeToken(StructSymbol) -> EntityHandle,
         resolveUserFieldToken(StructSymbol, FieldSymbol) -> EntityHandle,
         resolveUserMethodRef(StructSymbol, EntityHandle, string, BlobBuilder) -> EntityHandle,
         resolveImportedMethodRef(MethodInfo, TypeSymbol) -> EntityHandle,
         emitInitializerConstructor(StructSymbol) -> MethodDefinitionHandle,
         resolveUserInstanceMethodToken(StructSymbol, FunctionSymbol) -> EntityHandle,
-        emitParameterNullability(ParameterHandle, ImmutableArray[uint8]) -> void,
+        emitMethodNullability(
+            MethodDefinitionHandle,
+            MethodNullabilityPlan,
+            ParameterHandle?,
+            ImmutableArray[ParameterHandle]
+        ) -> void,
         resolveImportedConstructorRef(ConstructorInfo, TypeSymbol?) -> MemberReferenceHandle,
         resolveUserPropertyAccessorToken(StructSymbol, PropertySymbol, bool) -> EntityHandle
     ) {
@@ -147,8 +160,7 @@ internal class DataStructSynthesizer {
             throw ArgumentNullException("emitInitializerConstructor")
         this.resolveUserInstanceMethodToken = resolveUserInstanceMethodToken ??
             throw ArgumentNullException("resolveUserInstanceMethodToken")
-        this.emitParameterNullability = emitParameterNullability ??
-            throw ArgumentNullException("emitParameterNullability")
+        this.emitMethodNullability = emitMethodNullability ?? throw ArgumentNullException("emitMethodNullability")
         this.resolveImportedConstructorRef = resolveImportedConstructorRef ??
             throw ArgumentNullException("resolveImportedConstructorRef")
         this.resolveUserPropertyAccessorToken = resolveUserPropertyAccessorToken ??
@@ -190,7 +202,11 @@ internal class DataStructSynthesizer {
             (r ReturnTypeEncoder) -> r.Void(),
             (ps ParametersEncoder) -> this.encodeTypeSymbol(ps.AddParameter().Type(), field.Type)
         )
-        return this
+        let synthesizedRows = this.AddSynthesizedRows(
+            TypeSymbol.Void,
+            ImmutableArray.Create(ParameterSymbol(field.Name, field.Type))
+        )
+        let synthesizedMethod = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -199,8 +215,10 @@ internal class DataStructSynthesizer {
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: bodyOffset,
-            parameterList: this.nextParameterHandle()
+            parameterList: synthesizedRows.First
         )
+        this.StampSynthesized(synthesizedMethod, synthesizedRows)
+        return synthesizedMethod
     }
 
     private func FinishInlineBody(il InstructionEncoder) int32 {
@@ -260,7 +278,11 @@ internal class DataStructSynthesizer {
             (r ReturnTypeEncoder) -> r.Type().Boolean(),
             (ps ParametersEncoder) -> ps.AddParameter().Type().Object()
         )
-        this
+        let synthesizedRows = this.AddSynthesizedRows(
+            TypeSymbol.Bool,
+            ImmutableArray.Create(ParameterSymbol("obj", NullableTypeSymbol.Get(TypeSymbol.Object)))
+        )
+        let synthesizedMethod = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -269,8 +291,9 @@ internal class DataStructSynthesizer {
             this.emitCtx.Metadata.GetOrAddString("Equals"),
             this.emitCtx.Metadata.GetOrAddBlob(sig),
             this.FinishInlineBody(il),
-            this.nextParameterHandle()
+            synthesizedRows.First
         )
+        this.StampSynthesized(synthesizedMethod, synthesizedRows)
     }
 
     private func EmitInlineEqualsTyped(structSym StructSymbol, field FieldSymbol, fieldHandle EntityHandle) {
@@ -305,7 +328,11 @@ internal class DataStructSynthesizer {
             (r ReturnTypeEncoder) -> r.Type().Boolean(),
             (ps ParametersEncoder) -> this.encodeTypeSymbol(ps.AddParameter().Type(), structSym)
         )
-        this
+        let synthesizedRows = this.AddSynthesizedRows(
+            TypeSymbol.Bool,
+            ImmutableArray.Create(ParameterSymbol("other", structSym))
+        )
+        let synthesizedMethod = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -314,8 +341,9 @@ internal class DataStructSynthesizer {
             this.emitCtx.Metadata.GetOrAddString("Equals"),
             this.emitCtx.Metadata.GetOrAddBlob(sig),
             this.FinishInlineBody(il),
-            this.nextParameterHandle()
+            synthesizedRows.First
         )
+        this.StampSynthesized(synthesizedMethod, synthesizedRows)
     }
 
     private func EmitInlineGetHashCode(structSym StructSymbol, field FieldSymbol, fieldHandle EntityHandle) {
@@ -335,7 +363,8 @@ internal class DataStructSynthesizer {
             (r ReturnTypeEncoder) -> r.Type().Int32(),
             (_ ParametersEncoder) -> { }
         )
-        this
+        let synthesizedRows = this.AddSynthesizedRows(TypeSymbol.Int32, ImmutableArray[ParameterSymbol].Empty)
+        let synthesizedMethod = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -344,8 +373,9 @@ internal class DataStructSynthesizer {
             this.emitCtx.Metadata.GetOrAddString("GetHashCode"),
             this.emitCtx.Metadata.GetOrAddBlob(sig),
             this.FinishInlineBody(il),
-            this.nextParameterHandle()
+            synthesizedRows.First
         )
+        this.StampSynthesized(synthesizedMethod, synthesizedRows)
     }
 
     private func EmitInlineToString(structSym StructSymbol, field FieldSymbol, fieldHandle EntityHandle) {
@@ -369,7 +399,8 @@ internal class DataStructSynthesizer {
             (r ReturnTypeEncoder) -> r.Type().String(),
             (_ ParametersEncoder) -> { }
         )
-        this
+        let synthesizedRows = this.AddSynthesizedRows(TypeSymbol.String, ImmutableArray[ParameterSymbol].Empty)
+        let synthesizedMethod = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -378,8 +409,9 @@ internal class DataStructSynthesizer {
             this.emitCtx.Metadata.GetOrAddString("ToString"),
             this.emitCtx.Metadata.GetOrAddBlob(sig),
             this.FinishInlineBody(il),
-            this.nextParameterHandle()
+            synthesizedRows.First
         )
+        this.StampSynthesized(synthesizedMethod, synthesizedRows)
     }
 
     private func EmitInlineEqualityOperator(
@@ -424,7 +456,11 @@ internal class DataStructSynthesizer {
                 this.encodeTypeSymbol(ps.AddParameter().Type(), structSym)
             }
         )
-        this
+        let synthesizedRows = this.AddSynthesizedRows(
+            TypeSymbol.Bool,
+            ImmutableArray.Create(ParameterSymbol("left", structSym), ParameterSymbol("right", structSym))
+        )
+        let synthesizedMethod = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -442,8 +478,9 @@ internal class DataStructSynthesizer {
             ),
             this.emitCtx.Metadata.GetOrAddBlob(sig),
             this.FinishInlineBody(il),
-            this.nextParameterHandle()
+            synthesizedRows.First
         )
+        this.StampSynthesized(synthesizedMethod, synthesizedRows)
     }
 
     private func EmitInlineDeconstruct(structSym StructSymbol, field FieldSymbol, fieldHandle EntityHandle) {
@@ -470,13 +507,11 @@ internal class DataStructSynthesizer {
             (r ReturnTypeEncoder) -> r.Void(),
             (ps ParametersEncoder) -> this.encodeTypeSymbol(ps.AddParameter().Type(isByRef: true), field.Type)
         )
-        let firstParameter = this.nextParameterHandle()
-        ParameterMetadataEmitter.AddParameter(
-            this.emitCtx,
-            ParameterSymbol(field.Name, field.Type, refKind: RefKind.Out),
-            sequenceNumber: 1
+        let synthesizedRows = this.AddSynthesizedRows(
+            TypeSymbol.Void,
+            ImmutableArray.Create(ParameterSymbol(field.Name, field.Type, refKind: RefKind.Out))
         )
-        this
+        let synthesizedMethod = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -485,8 +520,9 @@ internal class DataStructSynthesizer {
             this.emitCtx.Metadata.GetOrAddString("Deconstruct"),
             this.emitCtx.Metadata.GetOrAddBlob(sig),
             this.FinishInlineBody(il),
-            firstParameter
+            synthesizedRows.First
         )
+        this.StampSynthesized(synthesizedMethod, synthesizedRows)
     }
 
     /// Issue #410 / ADR-0029: emits the synthesized members for a
@@ -631,7 +667,14 @@ internal class DataStructSynthesizer {
         } else {
             attributes |= MethodAttributes.Family | MethodAttributes.Virtual | MethodAttributes.NewSlot
         }
-        return this
+        let synthesizedRows = this.AddSynthesizedRows(
+            TypeSymbol.FromClrTypeWithoutNullability(
+                this.emitCtx.CoreSystemType,
+                NullabilityFreeReason.CompilerProduced
+            ),
+            ImmutableArray[ParameterSymbol].Empty
+        )
+        let synthesizedMethod = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -640,8 +683,10 @@ internal class DataStructSynthesizer {
             this.emitCtx.Metadata.GetOrAddString("get_EqualityContract"),
             this.emitCtx.Metadata.GetOrAddBlob(signature),
             bodyOffset,
-            this.nextParameterHandle()
+            synthesizedRows.First
         )
+        this.StampSynthesized(synthesizedMethod, synthesizedRows)
+        return synthesizedMethod
     }
 
     /// Emits the copy constructor shared by data classes and non-data
@@ -687,8 +732,10 @@ internal class DataStructSynthesizer {
         } else {
             MethodAttributes.Family
         }
-        let firstParameter = this.nextParameterHandle()
-        ParameterMetadataEmitter.AddParameter(this.emitCtx, ParameterSymbol("original", structSym), sequenceNumber: 1)
+        let synthesizedRows = this.AddSynthesizedRows(
+            TypeSymbol.Void,
+            ImmutableArray.Create(ParameterSymbol("original", structSym))
+        )
         let copyConstructor = this
             .emitCtx
             .Metadata
@@ -698,8 +745,9 @@ internal class DataStructSynthesizer {
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
             this.emitCtx.Metadata.GetOrAddBlob(signature),
             bodyOffset,
-            firstParameter
+            synthesizedRows.First
         )
+        this.StampSynthesized(copyConstructor, synthesizedRows)
         if this
             .cache
             .DataClassCopyConstructorHandles
@@ -739,6 +787,7 @@ internal class DataStructSynthesizer {
         if structSym.IsAbstract {
             attributes |= MethodAttributes.Abstract
         }
+        let synthesizedRows = this.AddSynthesizedRows(structSym, ImmutableArray[ParameterSymbol].Empty)
         let cloneMethod = this
             .emitCtx
             .Metadata
@@ -748,8 +797,9 @@ internal class DataStructSynthesizer {
             this.emitCtx.Metadata.GetOrAddString("<Clone>$$"),
             this.emitCtx.Metadata.GetOrAddBlob(signature),
             bodyOffset,
-            this.nextParameterHandle()
+            synthesizedRows.First
         )
+        this.StampSynthesized(cloneMethod, synthesizedRows)
         if this
             .cache
             .DataClassCloneHandles
@@ -929,7 +979,18 @@ internal class DataStructSynthesizer {
                 }
             }
         )
-        return this
+        // Issue #4988: the rows come from the shared primary-constructor helper
+        // (names, `params`, user annotations); their nullability from the plan.
+        let (primaryFirst, primaryRows) = this.addPrimaryCtorParameters(parameters)
+        let synthesizedRows = SignatureRows(
+            primaryFirst,
+            MethodNullabilityPlan.ForParameters(TypeSymbol.Void, parameters),
+            nil,
+            TypeSymbol.Void,
+            parameters,
+            primaryRows
+        )
+        let synthesizedMethod = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -938,8 +999,10 @@ internal class DataStructSynthesizer {
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: bodyOffset,
-            parameterList: this.addPrimaryCtorParameters(parameters)
+            parameterList: synthesizedRows.First
         )
+        this.StampSynthesized(synthesizedMethod, synthesizedRows)
+        return synthesizedMethod
     }
 
     /// Issue #410 / ADR-0029: emits
@@ -986,6 +1049,10 @@ internal class DataStructSynthesizer {
             (r ReturnTypeEncoder) -> r.Type().Boolean(),
             (ps ParametersEncoder) -> ps.AddParameter().Type().Object()
         )
+        let synthesizedRows = this.AddSynthesizedRows(
+            TypeSymbol.Bool,
+            ImmutableArray.Create(structSym.DataEqualsObject.Parameters[0])
+        )
         let handle = this
             .emitCtx
             .Metadata
@@ -995,8 +1062,9 @@ internal class DataStructSynthesizer {
             name: this.emitCtx.Metadata.GetOrAddString("Equals"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: this.FinishInlineBody(il),
-            parameterList: this.EmitEqualityParameter(structSym.DataEqualsObject.Parameters[0])
+            parameterList: synthesizedRows.First
         )
+        this.StampSynthesized(handle, synthesizedRows)
         this.cache.MethodHandles[structSym.DataEqualsObject] = handle
     }
 
@@ -1070,7 +1138,11 @@ internal class DataStructSynthesizer {
         if IsDataTypeSealed(structSym) {
             attributes |= MethodAttributes.Final
         }
-        return this
+        let synthesizedRows = this.AddSynthesizedRows(
+            TypeSymbol.Bool,
+            ImmutableArray.Create(structSym.DataEqualsSelf.Parameters[0])
+        )
+        let synthesizedMethod = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -1079,8 +1151,10 @@ internal class DataStructSynthesizer {
             name: this.emitCtx.Metadata.GetOrAddString("Equals"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: this.FinishInlineBody(il),
-            parameterList: this.EmitEqualityParameter(structSym.DataEqualsSelf.Parameters[0])
+            parameterList: synthesizedRows.First
         )
+        this.StampSynthesized(synthesizedMethod, synthesizedRows)
+        return synthesizedMethod
     }
 
     private func EmitDataClassEqualsBase(structSym StructSymbol, method FunctionSymbol) {
@@ -1105,6 +1179,7 @@ internal class DataStructSynthesizer {
             (r ReturnTypeEncoder) -> r.Type().Boolean(),
             (ps ParametersEncoder) -> this.encodeTypeSymbol(ps.AddParameter().Type(), method.Parameters[0].Type)
         )
+        let synthesizedRows = this.AddSynthesizedRows(TypeSymbol.Bool, ImmutableArray.Create(method.Parameters[0]))
         let handle = this
             .emitCtx
             .Metadata
@@ -1114,8 +1189,9 @@ internal class DataStructSynthesizer {
             this.emitCtx.Metadata.GetOrAddString("Equals"),
             this.emitCtx.Metadata.GetOrAddBlob(signature),
             this.FinishInlineBody(il),
-            this.EmitEqualityParameter(method.Parameters[0])
+            synthesizedRows.First
         )
+        this.StampSynthesized(handle, synthesizedRows)
         this.cache.MethodHandles[method] = handle
         if !this.TryResolveDirectBaseEqualsToken(structSym, out var baseEqualsToken) {
             throw InvalidOperationException("Data class '${structSym.Name}' has no direct typed-base equality slot.")
@@ -1136,14 +1212,27 @@ internal class DataStructSynthesizer {
         return !token.IsNil
     }
 
-    private func EmitEqualityParameter(parameter ParameterSymbol) ParameterHandle {
-        let handle = ParameterMetadataEmitter.AddParameter(this.emitCtx, parameter, sequenceNumber: 1)
-        let flags = NullableFlagsBuilder.Build(parameter.Type)
-        if !flags.IsDefaultOrEmpty {
-            this.emitParameterNullability(handle, flags)
-        }
-        return handle
-    }
+    /// Issue #4988: mints a synthesized member's `Param` rows and plans its
+    /// nullability through the same plan every MethodDef uses. Call it
+    /// immediately before `AddMethodDefinition` and pass the result to
+    /// (cref:StampSynthesized) afterwards.
+    /// @param returnType The member's return type.
+    /// @param parameters The member's parameters, in order.
+    /// @returns The rows and their plan.
+    private func AddSynthesizedRows(
+        returnType TypeSymbol,
+        parameters ImmutableArray[ParameterSymbol]
+    ) SignatureRows -> ParameterMetadataEmitter.AddSignatureRows(this.emitCtx, returnType, RefKind.None, parameters)
+
+    /// Issue #4988: stamps the nullability (cref:AddSynthesizedRows) planned.
+    /// @param handle The synthesized member's MethodDef.
+    /// @param rows The rows minted for it.
+    private func StampSynthesized(handle MethodDefinitionHandle, rows SignatureRows) -> this.emitMethodNullability(
+        handle,
+        rows.Nullability,
+        rows.ReturnRow,
+        rows.Rows
+    )
 
     /// Issue #410 / ADR-0029: emits
     /// `public override int GetHashCode()`. For up to 8 fields the
@@ -1217,7 +1306,8 @@ internal class DataStructSynthesizer {
             (r ReturnTypeEncoder) -> r.Type().Int32(),
             (_ ParametersEncoder) -> { }
         )
-        this
+        let synthesizedRows = this.AddSynthesizedRows(TypeSymbol.Int32, ImmutableArray[ParameterSymbol].Empty)
+        let synthesizedMethod = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -1226,8 +1316,9 @@ internal class DataStructSynthesizer {
             name: this.emitCtx.Metadata.GetOrAddString("GetHashCode"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: bodyOffset,
-            parameterList: this.nextParameterHandle()
+            parameterList: synthesizedRows.First
         )
+        this.StampSynthesized(synthesizedMethod, synthesizedRows)
     }
 
     /// ADR-0199: emits the C#-record `PrintMembers(StringBuilder)`: it
@@ -1315,6 +1406,7 @@ internal class DataStructSynthesizer {
         } else {
             attributes |= MethodAttributes.Private
         }
+        let synthesizedRows = this.AddSynthesizedRows(TypeSymbol.Bool, ImmutableArray.Create(slot.Parameters[0]))
         let handle = this
             .emitCtx
             .Metadata
@@ -1324,8 +1416,9 @@ internal class DataStructSynthesizer {
             name: this.emitCtx.Metadata.GetOrAddString(DataPrintMembersModel.Name),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: bodyOffset,
-            parameterList: this.EmitEqualityParameter(slot.Parameters[0])
+            parameterList: synthesizedRows.First
         )
+        this.StampSynthesized(handle, synthesizedRows)
         if this.cache.MethodHandles.TryGetValue(slot, out var planned) && planned != handle {
             throw InvalidOperationException(
                 "Data type '${structSym.Name}' PrintMembers MethodDef row ${MetadataTokens.GetRowNumber(handle)} did not match the planned row ${MetadataTokens.GetRowNumber(planned)}."
@@ -1569,7 +1662,8 @@ internal class DataStructSynthesizer {
             (r ReturnTypeEncoder) -> r.Type().String(),
             (_ ParametersEncoder) -> { }
         )
-        this
+        let synthesizedRows = this.AddSynthesizedRows(TypeSymbol.String, ImmutableArray[ParameterSymbol].Empty)
+        let synthesizedMethod = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -1578,8 +1672,9 @@ internal class DataStructSynthesizer {
             name: this.emitCtx.Metadata.GetOrAddString("ToString"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: bodyOffset,
-            parameterList: this.nextParameterHandle()
+            parameterList: synthesizedRows.First
         )
+        this.StampSynthesized(synthesizedMethod, synthesizedRows)
     }
 
     /// Issue #410 / ADR-0029: emits
@@ -1679,10 +1774,19 @@ internal class DataStructSynthesizer {
                 this.encodeTypeSymbol(ps.AddParameter().Type(), structSym)
             }
         )
-        let firstParameter = this.nextParameterHandle()
-        ParameterMetadataEmitter.AddParameter(this.emitCtx, ParameterSymbol("left", structSym), sequenceNumber: 1)
-        ParameterMetadataEmitter.AddParameter(this.emitCtx, ParameterSymbol("right", structSym), sequenceNumber: 2)
-        return this
+        // Issue #4988: a data class's operands are references either of which may
+        // be nil — the body above tests both, as C#'s record `==(R? left, R? right)`
+        // does — so the declared parameters are `R?`. A data struct's are values.
+        let operand = if structSym.IsClass {
+            cast[TypeSymbol](NullableTypeSymbol.Get(structSym))
+        } else {
+            cast[TypeSymbol](structSym)
+        }
+        let synthesizedRows = this.AddSynthesizedRows(
+            TypeSymbol.Bool,
+            ImmutableArray.Create(ParameterSymbol("left", operand), ParameterSymbol("right", operand))
+        )
+        let synthesizedMethod = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -1700,8 +1804,10 @@ internal class DataStructSynthesizer {
             ),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: this.FinishInlineBody(il),
-            parameterList: firstParameter
+            parameterList: synthesizedRows.First
         )
+        this.StampSynthesized(synthesizedMethod, synthesizedRows)
+        return synthesizedMethod
     }
 
     private func EmitDataStructDeconstruct(structSym StructSymbol) {
@@ -1784,16 +1890,14 @@ internal class DataStructSynthesizer {
                 }
             }
         )
-        let firstParameter = this.nextParameterHandle()
-        for var i = 0; i < members.Length; i++ {
-            let member = members[i]
-            ParameterMetadataEmitter.AddParameter(
-                this.emitCtx,
-                ParameterSymbol(member.Name, GetDeconstructionMemberType(member), refKind: RefKind.Out),
-                sequenceNumber: i + 1
+        let deconstructParameters = ImmutableArray.CreateBuilder[ParameterSymbol](members.Length)
+        for member in members {
+            deconstructParameters.Add(
+                ParameterSymbol(member.Name, GetDeconstructionMemberType(member), refKind: RefKind.Out)
             )
         }
-        this
+        let synthesizedRows = this.AddSynthesizedRows(TypeSymbol.Void, deconstructParameters.MoveToImmutable())
+        let synthesizedMethod = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -1802,8 +1906,9 @@ internal class DataStructSynthesizer {
             name: this.emitCtx.Metadata.GetOrAddString("Deconstruct"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: this.FinishInlineBody(il),
-            parameterList: firstParameter
+            parameterList: synthesizedRows.First
         )
+        this.StampSynthesized(synthesizedMethod, synthesizedRows)
     }
 
     /// ADR-0087 §3 R3: resolves the right token for the call to

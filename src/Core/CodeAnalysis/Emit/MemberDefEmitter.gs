@@ -72,7 +72,12 @@ internal class MemberDefEmitter {
     private let resolveFieldToken(StructSymbol, FieldSymbol) -> EntityHandle
     private let emitNullableAttributeOnProperty(PropertyDefinitionHandle, TypeSymbol) -> void
     private let emitNullableAttributeOnEvent(EventDefinitionHandle, TypeSymbol) -> void
-    private let emitNullableAttributeOnParameter(ParameterHandle, ImmutableArray[uint8]) -> void
+    private let emitMethodNullability(
+        MethodDefinitionHandle,
+        MethodNullabilityPlan,
+        ParameterHandle?,
+        ImmutableArray[ParameterHandle]
+    ) -> void
     private let emitTupleElementNamesAttribute(EntityHandle, TypeSymbol) -> void
     private let emitUserAttributes(EntityHandle, Symbol, AttributeTargetKind) -> void
 
@@ -88,7 +93,12 @@ internal class MemberDefEmitter {
         resolveFieldToken(StructSymbol, FieldSymbol) -> EntityHandle,
         emitNullableAttributeOnProperty(PropertyDefinitionHandle, TypeSymbol) -> void,
         emitNullableAttributeOnEvent(EventDefinitionHandle, TypeSymbol) -> void,
-        emitNullableAttributeOnParameter(ParameterHandle, ImmutableArray[uint8]) -> void,
+        emitMethodNullability(
+            MethodDefinitionHandle,
+            MethodNullabilityPlan,
+            ParameterHandle?,
+            ImmutableArray[ParameterHandle]
+        ) -> void,
         emitTupleElementNamesAttribute(EntityHandle, TypeSymbol) -> void,
         emitUserAttributes(EntityHandle, Symbol, AttributeTargetKind) -> void
     ) {
@@ -105,8 +115,7 @@ internal class MemberDefEmitter {
             throw ArgumentNullException("emitNullableAttributeOnProperty")
         this.emitNullableAttributeOnEvent = emitNullableAttributeOnEvent ??
             throw ArgumentNullException("emitNullableAttributeOnEvent")
-        this.emitNullableAttributeOnParameter = emitNullableAttributeOnParameter ??
-            throw ArgumentNullException("emitNullableAttributeOnParameter")
+        this.emitMethodNullability = emitMethodNullability ?? throw ArgumentNullException("emitMethodNullability")
         this.emitTupleElementNamesAttribute = emitTupleElementNamesAttribute ??
             throw ArgumentNullException("emitTupleElementNamesAttribute")
         this.emitUserAttributes = emitUserAttributes ?? throw ArgumentNullException("emitUserAttributes")
@@ -243,16 +252,87 @@ internal class MemberDefEmitter {
         )
     }
 
-    private func GetPropertyGetterParameterList(property PropertySymbol) ParameterHandle {
-        let firstParameter = this.nextParameterHandle()
-        if property.ReturnRefKind == RefKind.RefReadOnly {
-            let returnParameter = this
-                .emitCtx
-                .Metadata
-                .AddParameter(ParameterAttributes.None, default(StringHandle), sequenceNumber: 0)
-            this.EmitReadOnlyRefAttribute(returnParameter, property)
+    /// Issue #4988: mints an accessor MethodDef's `Param` rows — the
+    /// sequence-0 return row when the signature needs one, then one row per
+    /// parameter — and plans the signature's nullability. Every accessor that
+    /// does not go through `EmitFunction` (auto-properties, field-like events,
+    /// interface and abstract slots, the metadata-only fallbacks) mints its rows
+    /// here, so its signature carries exactly the annotations a bodied accessor's
+    /// would. Call it immediately before `AddMethodDefinition` and pass the
+    /// result to (cref:StampAccessor) afterwards.
+    /// @param returnType The accessor's return type (`void` for setters and event accessors).
+    /// @param readOnlyRefProperty The property whose `ref readonly` return the row marks, if any.
+    /// @param parameters The accessor's parameters: index parameters, then any `value`.
+    /// @returns The rows and their plan.
+    private func AddAccessorRows(
+        returnType TypeSymbol,
+        readOnlyRefProperty PropertySymbol?,
+        parameters ImmutableArray[ParameterSymbol]
+    ) SignatureRows {
+        let rows = ParameterMetadataEmitter.AddSignatureRows(
+            this.emitCtx,
+            returnType,
+            readOnlyRefProperty?.ReturnRefKind ?? RefKind.None,
+            parameters
+        )
+        if rows.ReturnRow is {} returnRow && readOnlyRefProperty != nil {
+            this.EmitReadOnlyRefAttribute(returnRow, readOnlyRefProperty)
         }
-        return firstParameter
+        return rows
+    }
+
+    /// Issue #4988: stamps the rows (cref:AddAccessorRows) minted once the
+    /// accessor's MethodDef exists: parameter annotations, the planned
+    /// nullability, and tuple element names.
+    /// @param handle The accessor's MethodDef.
+    /// @param rows The rows minted for it.
+    private func StampAccessor(handle MethodDefinitionHandle, rows SignatureRows) {
+        for var i = 0; i < rows.Rows.Length; i++ {
+            this.emitUserAttributes(rows.Rows[i], rows.Parameters[i], AttributeTargetKind.Param)
+        }
+        this.emitMethodNullability(handle, rows.Nullability, rows.ReturnRow, rows.Rows)
+        if rows.ReturnRow is {} returnRow {
+            this.emitTupleElementNamesAttribute(returnRow, rows.ReturnType)
+        }
+        for var i = 0; i < rows.Rows.Length; i++ {
+            this.emitTupleElementNamesAttribute(rows.Rows[i], rows.Parameters[i].Type)
+        }
+    }
+
+    /// The `value` parameter a property setter takes after its index parameters.
+    private func SetterParameters(prop PropertySymbol) ImmutableArray[ParameterSymbol] {
+        let parameters = ImmutableArray.CreateBuilder[ParameterSymbol]()
+        if !prop.Parameters.IsDefaultOrEmpty {
+            parameters.AddRange(prop.Parameters)
+        }
+        parameters.Add(ParameterSymbol(prop.SetterParameterName ?? "value", prop.Type))
+        return parameters.ToImmutable()
+    }
+
+    /// A property getter's parameters: its index parameters, if any.
+    private func GetterParameters(prop PropertySymbol) ImmutableArray[ParameterSymbol] -> if prop
+        .Parameters
+        .IsDefaultOrEmpty {
+        ImmutableArray[ParameterSymbol].Empty
+    } else {
+        prop.Parameters
+    }
+
+    /// An event `add`/`remove` accessor's single `value` parameter.
+    private func EventAccessorParameters(ev EventSymbol) ImmutableArray[ParameterSymbol] -> ImmutableArray.Create(
+        ParameterSymbol("value", ev.Type)
+    )
+
+    /// A `raise` accessor's parameters: the handler delegate's, named `arg0`...
+    private func RaiseParameters(raiseShape FunctionTypeSymbol?) ImmutableArray[ParameterSymbol] {
+        if raiseShape == nil {
+            return ImmutableArray[ParameterSymbol].Empty
+        }
+        let parameters = ImmutableArray.CreateBuilder[ParameterSymbol](raiseShape.ParameterTypes.Length)
+        for var i = 0; i < raiseShape.ParameterTypes.Length; i++ {
+            parameters.Add(ParameterSymbol("arg$i", raiseShape.ParameterTypes[i]))
+        }
+        return parameters.MoveToImmutable()
     }
 
     /// Emits a property accessor's method body, shared by all four property
@@ -446,7 +526,8 @@ internal class MemberDefEmitter {
         } else {
             "get_${prop.Name}"
         }
-        return this
+        let accessorRows = this.AddAccessorRows(prop.Type, prop, this.GetterParameters(prop))
+        let accessor = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -455,8 +536,10 @@ internal class MemberDefEmitter {
             name: this.emitCtx.Metadata.GetOrAddString(getterName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
-            parameterList: this.GetPropertyGetterParameterList(prop)
+            parameterList: accessorRows.First
         )
+        this.StampAccessor(accessor, accessorRows)
+        return accessor
     }
 
     /// ADR-0051 Phase 6: emits a setter accessor MethodDef (set_PropertyName).
@@ -532,18 +615,9 @@ internal class MemberDefEmitter {
             // so its MethodImpl row (emitted separately) is ECMA-335-valid.
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         }
-        // Emit a Parameter row for "value" so the setter has a named parameter.
-        // Issue #2832: for an indexer the value parameter follows the index
-        // parameters, so its sequence number is offset accordingly.
-        let firstParamHandle = this.nextParameterHandle()
-        this
-            .emitCtx
-            .Metadata
-            .AddParameter(
-            attributes: ParameterAttributes.None,
-            name: this.emitCtx.Metadata.GetOrAddString(prop.SetterParameterName ?? "value"),
-            sequenceNumber: indexParameterCount + 1
-        )
+        // Emit the Parameter rows: the index parameters, then "value", so the
+        // setter has named parameters (issue #2832: for an indexer the value
+        // parameter follows the index parameters).
         // ADR-0149: see the matching comment in EmitPropertyGetter.
         let setterName = if prop.HasExplicitInterfaceClause {
             "set_" + ExplicitInterfaceMetadataNaming.GetMetadataName(
@@ -557,7 +631,8 @@ internal class MemberDefEmitter {
         } else {
             "set_${prop.Name}"
         }
-        return this
+        let accessorRows = this.AddAccessorRows(TypeSymbol.Void, nil, this.SetterParameters(prop))
+        let accessor = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -566,8 +641,10 @@ internal class MemberDefEmitter {
             name: this.emitCtx.Metadata.GetOrAddString(setterName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
-            parameterList: firstParamHandle
+            parameterList: accessorRows.First
         )
+        this.StampAccessor(accessor, accessorRows)
+        return accessor
     }
 
     private func EmitAbstractClassPropertyAccessor(prop PropertySymbol, isGetter bool) MethodDefinitionHandle {
@@ -610,53 +687,18 @@ internal class MemberDefEmitter {
         } else {
             prop.SetterAccessibility
         }
-        let firstParameter = this.nextParameterHandle()
-        let propertyNullableFlags = NullableFlagsBuilder.Build(prop.Type)
-        let propertyTupleNames = TupleElementNamesBuilder.Build(prop.Type)
-        if isGetter && (!propertyNullableFlags.IsDefaultOrEmpty || !propertyTupleNames.IsDefaultOrEmpty) {
-            let returnParameter = this
-                .emitCtx
-                .Metadata
-                .AddParameter(ParameterAttributes.None, default(StringHandle), sequenceNumber: 0)
-            if !propertyNullableFlags.IsDefaultOrEmpty {
-                this.emitNullableAttributeOnParameter(returnParameter, propertyNullableFlags)
-            }
-            this.emitTupleElementNamesAttribute(returnParameter, prop.Type)
-        }
-        for var index = 0; index < prop.Parameters.Length; index++ {
-            let parameterHandle = ParameterMetadataEmitter.AddParameter(
-                this.emitCtx,
-                prop.Parameters[index],
-                sequenceNumber: index + 1
-            )
-            let nullableFlags = NullableFlagsBuilder.Build(prop.Parameters[index].Type)
-            if !nullableFlags.IsDefaultOrEmpty {
-                this.emitNullableAttributeOnParameter(parameterHandle, nullableFlags)
-            }
-            this.emitTupleElementNamesAttribute(parameterHandle, prop.Parameters[index].Type)
-            this.emitUserAttributes(parameterHandle, prop.Parameters[index], AttributeTargetKind.Param)
-        }
-        if !isGetter {
-            let valueParameter = this
-                .emitCtx
-                .Metadata
-                .AddParameter(
-                ParameterAttributes.None,
-                this.emitCtx.Metadata.GetOrAddString(prop.SetterParameterName),
-                sequenceNumber: prop.Parameters.Length + 1
-            )
-            if !propertyNullableFlags.IsDefaultOrEmpty {
-                this.emitNullableAttributeOnParameter(valueParameter, propertyNullableFlags)
-            }
-            this.emitTupleElementNamesAttribute(valueParameter, prop.Type)
-        }
         var methodAttrs = AccessibilityMap.ToMethodVisibility(
             accessibility
         ) | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Virtual | MethodAttributes.Abstract
         if !prop.IsOverride || (isGetter && MethodInfoHelpers.IsCovariantPropertyGetter(prop)) {
             methodAttrs |= MethodAttributes.NewSlot
         }
-        return this
+        let accessorRows = if isGetter {
+            this.AddAccessorRows(prop.Type, nil, this.GetterParameters(prop))
+        } else {
+            this.AddAccessorRows(TypeSymbol.Void, nil, this.SetterParameters(prop))
+        }
+        let accessor = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -665,8 +707,10 @@ internal class MemberDefEmitter {
             name: this.emitCtx.Metadata.GetOrAddString("${(if isGetter { "get" } else { "set" })}_${prop.Name}"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: -1,
-            parameterList: firstParameter
+            parameterList: accessorRows.First
         )
+        this.StampAccessor(accessor, accessorRows)
+        return accessor
     }
 
     /// Issue #263: emits accessor MethodDefs, PropertyDef rows, PropertyMap,
@@ -754,7 +798,8 @@ internal class MemberDefEmitter {
         let methodAttrs = AccessibilityMap.ToMethodVisibility(
             prop.GetterAccessibility
         ) | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static
-        return this
+        let accessorRows = this.AddAccessorRows(prop.Type, prop, ImmutableArray[ParameterSymbol].Empty)
+        let accessor = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -763,8 +808,10 @@ internal class MemberDefEmitter {
             name: this.emitCtx.Metadata.GetOrAddString("get_${prop.Name}"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
-            parameterList: this.GetPropertyGetterParameterList(prop)
+            parameterList: accessorRows.First
         )
+        this.StampAccessor(accessor, accessorRows)
+        return accessor
     }
 
     /// Issue #263: emits a static setter accessor MethodDef (set_PropertyName).
@@ -782,16 +829,8 @@ internal class MemberDefEmitter {
         let methodAttrs = AccessibilityMap.ToMethodVisibility(
             prop.SetterAccessibility
         ) | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static
-        let firstParamHandle = this.nextParameterHandle()
-        this
-            .emitCtx
-            .Metadata
-            .AddParameter(
-            attributes: ParameterAttributes.None,
-            name: this.emitCtx.Metadata.GetOrAddString(prop.SetterParameterName ?? "value"),
-            sequenceNumber: 1
-        )
-        return this
+        let accessorRows = this.AddAccessorRows(TypeSymbol.Void, nil, this.SetterParameters(prop))
+        let accessor = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -800,8 +839,10 @@ internal class MemberDefEmitter {
             name: this.emitCtx.Metadata.GetOrAddString("set_${prop.Name}"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
-            parameterList: firstParamHandle
+            parameterList: accessorRows.First
         )
+        this.StampAccessor(accessor, accessorRows)
+        return accessor
     }
 
     /// Issue #263: emits add/remove accessor MethodDefs, EventDef rows, EventMap,
@@ -900,16 +941,8 @@ internal class MemberDefEmitter {
             (ps ParametersEncoder) -> this.encodeTypeSymbol(ps.AddParameter().Type(), ev.Type)
         )
         let methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static
-        let firstParamHandle = this.nextParameterHandle()
-        this
-            .emitCtx
-            .Metadata
-            .AddParameter(
-            attributes: ParameterAttributes.None,
-            name: this.emitCtx.Metadata.GetOrAddString("value"),
-            sequenceNumber: 1
-        )
-        return this
+        let accessorRows = this.AddAccessorRows(TypeSymbol.Void, nil, this.EventAccessorParameters(ev))
+        let accessor = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -918,8 +951,10 @@ internal class MemberDefEmitter {
             name: this.emitCtx.Metadata.GetOrAddString("add_${ev.Name}"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
-            parameterList: firstParamHandle
+            parameterList: accessorRows.First
         )
+        this.StampAccessor(accessor, accessorRows)
+        return accessor
     }
 
     /// Issue #263: emits a static remove_X accessor MethodDef for a static event.
@@ -961,16 +996,8 @@ internal class MemberDefEmitter {
             (ps ParametersEncoder) -> this.encodeTypeSymbol(ps.AddParameter().Type(), ev.Type)
         )
         let methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static
-        let firstParamHandle = this.nextParameterHandle()
-        this
-            .emitCtx
-            .Metadata
-            .AddParameter(
-            attributes: ParameterAttributes.None,
-            name: this.emitCtx.Metadata.GetOrAddString("value"),
-            sequenceNumber: 1
-        )
-        return this
+        let accessorRows = this.AddAccessorRows(TypeSymbol.Void, nil, this.EventAccessorParameters(ev))
+        let accessor = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -979,8 +1006,10 @@ internal class MemberDefEmitter {
             name: this.emitCtx.Metadata.GetOrAddString("remove_${ev.Name}"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
-            parameterList: firstParamHandle
+            parameterList: accessorRows.First
         )
+        this.StampAccessor(accessor, accessorRows)
+        return accessor
     }
 
     /// ADR-0052: determines whether an event on a class/struct implicitly implements
@@ -1344,15 +1373,6 @@ internal class MemberDefEmitter {
             // Final additionally prevents an accidental by-name override.
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         }
-        let firstParamHandle = this.nextParameterHandle()
-        this
-            .emitCtx
-            .Metadata
-            .AddParameter(
-            attributes: ParameterAttributes.None,
-            name: this.emitCtx.Metadata.GetOrAddString("value"),
-            sequenceNumber: 1
-        )
         // ADR-0149: a collision-free metadata name, mirroring
         // EmitPropertyGetter/Setter's getterName/setterName synthesis.
         let addName = if ev.HasExplicitInterfaceClause {
@@ -1367,7 +1387,8 @@ internal class MemberDefEmitter {
         } else {
             "add_${ev.Name}"
         }
-        return this
+        let accessorRows = this.AddAccessorRows(TypeSymbol.Void, nil, this.EventAccessorParameters(ev))
+        let accessor = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -1376,8 +1397,10 @@ internal class MemberDefEmitter {
             name: this.emitCtx.Metadata.GetOrAddString(addName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
-            parameterList: firstParamHandle
+            parameterList: accessorRows.First
         )
+        this.StampAccessor(accessor, accessorRows)
+        return accessor
     }
 
     /// ADR-0052: emits the remove_X accessor MethodDef for an event.
@@ -1438,15 +1461,6 @@ internal class MemberDefEmitter {
             // ADR-0149: see the matching comment in EmitEventAddAccessor.
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         }
-        let firstParamHandle = this.nextParameterHandle()
-        this
-            .emitCtx
-            .Metadata
-            .AddParameter(
-            attributes: ParameterAttributes.None,
-            name: this.emitCtx.Metadata.GetOrAddString("value"),
-            sequenceNumber: 1
-        )
         // ADR-0149: see the matching comment in EmitEventAddAccessor.
         let removeName = if ev.HasExplicitInterfaceClause {
             "remove_" + ExplicitInterfaceMetadataNaming.GetMetadataName(
@@ -1460,7 +1474,8 @@ internal class MemberDefEmitter {
         } else {
             "remove_${ev.Name}"
         }
-        return this
+        let accessorRows = this.AddAccessorRows(TypeSymbol.Void, nil, this.EventAccessorParameters(ev))
+        let accessor = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -1469,8 +1484,10 @@ internal class MemberDefEmitter {
             name: this.emitCtx.Metadata.GetOrAddString(removeName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
-            parameterList: firstParamHandle
+            parameterList: accessorRows.First
         )
+        this.StampAccessor(accessor, accessorRows)
+        return accessor
     }
 
     /// Issue #257: emits the raise_X accessor MethodDef for an event.
@@ -1544,17 +1561,6 @@ internal class MemberDefEmitter {
         } else if ev.ExplicitInterfaceMember != nil {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         }
-        let firstParamHandle = this.nextParameterHandle()
-        for var i = 0; i < paramCount; i++ {
-            this
-                .emitCtx
-                .Metadata
-                .AddParameter(
-                attributes: ParameterAttributes.None,
-                name: this.emitCtx.Metadata.GetOrAddString("arg$i"),
-                sequenceNumber: i + 1
-            )
-        }
         // ADR-0149: see the matching comment in EmitEventAddAccessor.
         let raiseName = if ev.HasExplicitInterfaceClause {
             "raise_" + ExplicitInterfaceMetadataNaming.GetMetadataName(
@@ -1568,7 +1574,8 @@ internal class MemberDefEmitter {
         } else {
             "raise_${ev.Name}"
         }
-        return this
+        let accessorRows = this.AddAccessorRows(TypeSymbol.Void, nil, this.RaiseParameters(raiseShape))
+        let accessor = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
@@ -1577,8 +1584,10 @@ internal class MemberDefEmitter {
             name: this.emitCtx.Metadata.GetOrAddString(raiseName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
-            parameterList: firstParamHandle
+            parameterList: accessorRows.First
         )
+        this.StampAccessor(accessor, accessorRows)
+        return accessor
     }
 
     /// Issue #256: produces a MethodSpec for Interlocked.CompareExchange<EventType>.
@@ -1713,6 +1722,7 @@ internal class MemberDefEmitter {
             if prop.IsStatic {
                 attrs |= MethodAttributes.Static
             }
+            let accessorRows = this.AddAccessorRows(prop.Type, nil, this.GetterParameters(prop))
             emittedGetter = this
                 .emitCtx
                 .Metadata
@@ -1722,8 +1732,9 @@ internal class MemberDefEmitter {
                 name: this.emitCtx.Metadata.GetOrAddString("get_${prop.Name}"),
                 signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
                 bodyOffset: -1,
-                parameterList: this.nextParameterHandle()
+                parameterList: accessorRows.First
             )
+            this.StampAccessor(emittedGetter, accessorRows)
         }
         return emittedGetter
     }
@@ -1769,6 +1780,7 @@ internal class MemberDefEmitter {
             if prop.IsStatic {
                 attrs |= MethodAttributes.Static
             }
+            let accessorRows = this.AddAccessorRows(TypeSymbol.Void, nil, this.SetterParameters(prop))
             emittedSetter = this
                 .emitCtx
                 .Metadata
@@ -1778,8 +1790,9 @@ internal class MemberDefEmitter {
                 name: this.emitCtx.Metadata.GetOrAddString("set_${prop.Name}"),
                 signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
                 bodyOffset: -1,
-                parameterList: this.nextParameterHandle()
+                parameterList: accessorRows.First
             )
+            this.StampAccessor(emittedSetter, accessorRows)
         }
         return emittedSetter
     }
@@ -1808,6 +1821,7 @@ internal class MemberDefEmitter {
                 (ps ParametersEncoder) -> this.encodeTypeSymbol(ps.AddParameter().Type(), ev.Type)
             )
             let addAttrs = MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual | MethodAttributes.Abstract | MethodAttributes.NewSlot | MethodAttributes.SpecialName
+            let addRows = this.AddAccessorRows(TypeSymbol.Void, nil, this.EventAccessorParameters(ev))
             let emittedAdd = this
                 .emitCtx
                 .Metadata
@@ -1817,8 +1831,9 @@ internal class MemberDefEmitter {
                 name: this.emitCtx.Metadata.GetOrAddString("add_${ev.Name}"),
                 signature: this.emitCtx.Metadata.GetOrAddBlob(addSigBlob),
                 bodyOffset: -1,
-                parameterList: this.nextParameterHandle()
+                parameterList: addRows.First
             )
+            this.StampAccessor(emittedAdd, addRows)
             // Emit abstract remove_X MethodDef.
             let removeSigBlob = BlobBuilder()
             BlobEncoder(removeSigBlob).MethodSignature(isInstanceMethod: true).Parameters(
@@ -1827,6 +1842,7 @@ internal class MemberDefEmitter {
                 (ps ParametersEncoder) -> this.encodeTypeSymbol(ps.AddParameter().Type(), ev.Type)
             )
             let removeAttrs = MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual | MethodAttributes.Abstract | MethodAttributes.NewSlot | MethodAttributes.SpecialName
+            let removeRows = this.AddAccessorRows(TypeSymbol.Void, nil, this.EventAccessorParameters(ev))
             let emittedRemove = this
                 .emitCtx
                 .Metadata
@@ -1836,8 +1852,9 @@ internal class MemberDefEmitter {
                 name: this.emitCtx.Metadata.GetOrAddString("remove_${ev.Name}"),
                 signature: this.emitCtx.Metadata.GetOrAddBlob(removeSigBlob),
                 bodyOffset: -1,
-                parameterList: this.nextParameterHandle()
+                parameterList: removeRows.First
             )
+            this.StampAccessor(emittedRemove, removeRows)
             // Emit EventDef row.
             let eventTypeHandle = this.GetEventTypeHandle(ev.Type)
             let eventDef = this
@@ -1885,6 +1902,7 @@ internal class MemberDefEmitter {
                     }
                 )
                 let raiseAttrs = MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual | MethodAttributes.Abstract | MethodAttributes.NewSlot | MethodAttributes.SpecialName
+                let raiseRows = this.AddAccessorRows(TypeSymbol.Void, nil, this.RaiseParameters(raiseShape))
                 let emittedRaise = this
                     .emitCtx
                     .Metadata
@@ -1894,8 +1912,9 @@ internal class MemberDefEmitter {
                     name: this.emitCtx.Metadata.GetOrAddString("raise_${ev.Name}"),
                     signature: this.emitCtx.Metadata.GetOrAddBlob(raiseSigBlob),
                     bodyOffset: -1,
-                    parameterList: this.nextParameterHandle()
+                    parameterList: raiseRows.First
                 )
+                this.StampAccessor(emittedRaise, raiseRows)
                 this.emitCtx.Metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Raiser, emittedRaise)
             }
         }
