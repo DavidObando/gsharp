@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Lowering.Async
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
@@ -95,6 +96,24 @@ internal partial class ExpressionBinder {
         if boundRead == nil || boundRhs == nil {
             return BoundExpressionStatement(statement, BoundErrorExpression(nil))
         }
+        let receiver = GetNullCoalescingReceiver(boundRead)
+        // Evaluate a suspending value before entering the write node: generic
+        // operand spilling would otherwise spill a struct receiver by value.
+        let suspendingStorageWrite = receiver != nil &&
+            !ReceiverTypeIsReference(receiver.Type) &&
+            AsyncBoundTreeQueries.HasAwait(boundRhs)
+        let rhsLocal LocalVariableSymbol? = if suspendingStorageWrite && boundRhs.Type != TypeSymbol.Never {
+            LocalVariableSymbol(
+                "<ncaRhs${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
+                isReadOnly: true,
+                boundRhs.Type
+            )
+        } else {
+            default(LocalVariableSymbol?)
+        }
+        if rhsLocal != nil {
+            $scope.TryDeclareVariable(rhsLocal)
+        }
         let preStatements = ImmutableArray.CreateBuilder[BoundStatement]()
         let (read, write) = TryBuildNullCoalescingReadWrite(
             syntax,
@@ -102,7 +121,11 @@ internal partial class ExpressionBinder {
             syntax.Target,
             syntax,
             boundRead,
-            boundRhs,
+            if rhsLocal == nil {
+                boundRhs
+            } else {
+                BoundVariableExpression(syntax.Value, rhsLocal)
+            },
             preStatements,
             snapshotReceivers: false
         )
@@ -127,7 +150,19 @@ internal partial class ExpressionBinder {
             expression: "BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, conditionRead.Type, TypeSymbol.Null)"
         )
         let condition BoundExpression = BoundBinaryExpression(nil, conditionRead, eqOp, nilLiteral)
-        let thenStmt = BoundExpressionStatement(statement, write)
+        let thenStmt BoundStatement = if suspendingStorageWrite && boundRhs.Type == TypeSymbol.Never {
+            BoundExpressionStatement(statement, boundRhs)
+        } else if rhsLocal == nil {
+            BoundExpressionStatement(statement, write)
+        } else {
+            BoundBlockStatement(
+                statement,
+                ImmutableArray.Create[BoundStatement](
+                    BoundVariableDeclaration(statement, rhsLocal, boundRhs),
+                    BoundExpressionStatement(statement, write)
+                )
+            )
+        }
         let ifStmt BoundStatement = BoundIfStatement(statement, condition, thenStmt, elseStatement: nil)
         if preStatements.Count == 0 {
             return ifStmt
@@ -298,6 +333,25 @@ internal partial class ExpressionBinder {
         preStatements ImmutableArray[BoundStatement].Builder,
         snapshotReceivers bool
     )(Read BoundExpression?, Write BoundExpression?) {
+        let memberReceiver = GetNullCoalescingReceiver(boundRead)
+        if memberReceiver != nil && !ReceiverTypeIsReference(memberReceiver.Type) {
+            if ReceiverBlocksValueTypeMemberWrite(memberReceiver) || RefCapabilities.IsReadOnlyReference(
+                memberReceiver
+            ) {
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, syntax.Target.ToString())
+                return (nil, nil)
+            }
+            if !IsWritableStructFieldReceiver(memberReceiver) && !RefCapabilities.IsNativeRefReturningCall(
+                memberReceiver
+            ) {
+                Diagnostics.ReportFieldAssignmentThroughStructTemporary(
+                    syntax.OperatorToken.Location,
+                    syntax.Target.ToString(),
+                    memberReceiver.Type
+                )
+                return (nil, nil)
+            }
+        }
         let SnapshotsReference = func (receiver BoundExpression?) bool {
             return snapshotReceivers && receiver != nil && ReceiverTypeIsReference(receiver.Type)
         }
@@ -366,9 +420,9 @@ internal partial class ExpressionBinder {
                     // CaptureReceiver unconditionally NREs on receiver.Type for
                     // the static case.
                     let receiver = if fieldAccess.Receiver == nil {
-                        default(BoundVariableExpression?)
+                        default(BoundExpression?)
                     } else {
-                        CaptureReceiver(
+                        CaptureStorageReceiver(
                             captureAnchor,
                             fieldAccess.Receiver,
                             preStatements,
@@ -385,24 +439,30 @@ internal partial class ExpressionBinder {
                         ),
                         fieldAccess.Field
                     )
-                    // Use the VariableSymbol-based constructor: every receiver
-                    // captured by CaptureReceiver is a BoundVariableExpression
-                    // (either the original simple variable or a synthetic local
-                    // that holds the spilled receiver). The interpreter and the
-                    // existing rewriters all assume this shape for the simple
-                    // receiver path; routing through ReceiverExpression bypasses
-                    // the interpreter's class-field write logic (issue #709).
-                    let write = BoundFieldAssignmentExpression(
-                        writeAnchor,
-                        receiver?.Variable,
-                        Invariant.Required(
-                            fieldAccess.StructType,
-                            "a user field assignment has a declaring struct type",
-                            expression: "fieldAccess.StructType"
-                        ),
-                        fieldAccess.Field,
-                        boundRhs
+                    let declaringType = Invariant.Required(
+                        fieldAccess.StructType,
+                        "a user field assignment has a declaring struct type",
+                        expression: "fieldAccess.StructType"
                     )
+                    let variableReceiver = receiver as BoundVariableExpression
+                    let isAlias = variableReceiver?.Variable is LocalVariableSymbol and {RefKind: not RefKind.None}
+                    let write = if receiver == nil || (variableReceiver != nil && !isAlias) {
+                        BoundFieldAssignmentExpression(
+                            writeAnchor,
+                            variableReceiver?.Variable,
+                            declaringType,
+                            fieldAccess.Field,
+                            boundRhs
+                        )
+                    } else {
+                        BoundFieldAssignmentExpression.WithExpressionReceiver(
+                            writeAnchor,
+                            receiver,
+                            declaringType,
+                            fieldAccess.Field,
+                            boundRhs
+                        )
+                    }
                     return (read, write)
                 }
             }
@@ -448,9 +508,9 @@ internal partial class ExpressionBinder {
                         }
                     }
                     let receiver = if propAccess.Receiver == nil {
-                        default(BoundVariableExpression?)
+                        default(BoundExpression?)
                     } else {
-                        CaptureReceiver(
+                        CaptureStorageReceiver(
                             captureAnchor,
                             propAccess.Receiver,
                             preStatements,
@@ -501,9 +561,9 @@ internal partial class ExpressionBinder {
                         return (nil, nil)
                     }
                     let receiver = if clrPropAccess.Receiver == nil {
-                        default(BoundVariableExpression?)
+                        default(BoundExpression?)
                     } else {
-                        CaptureReceiver(
+                        CaptureStorageReceiver(
                             captureAnchor,
                             clrPropAccess.Receiver,
                             preStatements,
@@ -558,7 +618,7 @@ internal partial class ExpressionBinder {
                         Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, clrIdx.Indexer.Name)
                         return (nil, nil)
                     }
-                    let target = CaptureReceiver(
+                    let target = CaptureStorageReceiver(
                         captureAnchor,
                         clrIdx.Target,
                         preStatements,
@@ -572,14 +632,26 @@ internal partial class ExpressionBinder {
                     }
                     let args = argsBuilder.ToImmutable()
                     let read = BoundClrIndexExpression(readAnchor, target, clrIdx.Indexer, args, clrIdx.Type)
-                    let write = BoundClrIndexAssignmentExpression(
-                        writeAnchor,
-                        target.Variable,
-                        clrIdx.Indexer,
-                        args,
-                        boundRhs,
-                        clrIdx.Type
-                    )
+                    let write = if target is BoundVariableExpression variable &&
+                        variable.Variable is not LocalVariableSymbol{RefKind: not RefKind.None} {
+                        BoundClrIndexAssignmentExpression(
+                            writeAnchor,
+                            variable.Variable,
+                            clrIdx.Indexer,
+                            args,
+                            boundRhs,
+                            clrIdx.Type
+                        )
+                    } else {
+                        BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                            writeAnchor,
+                            target,
+                            clrIdx.Indexer,
+                            args,
+                            boundRhs,
+                            clrIdx.Type
+                        )
+                    }
                     return (read, write)
                 }
             }
@@ -715,15 +787,86 @@ internal partial class ExpressionBinder {
         return false
     }
 
-    /// ADR-0072 / issue #709: captures a non-trivial receiver expression
+    /// Keep value-type receivers in their original storage. Capture only the
+    /// reference owners and indices of field/element chains, so an awaited RHS
+    /// cannot redirect the write and no managed pointer needs to cross it.
+    private func CaptureStorageReceiver(
+        anchor SyntaxNode,
+        receiver BoundExpression,
+        preStatements ImmutableArray[BoundStatement].Builder,
+        forceCapture bool = false
+    ) BoundExpression {
+        if ReceiverTypeIsReference(receiver.Type) {
+            return CaptureReceiver(anchor, receiver, preStatements, forceCapture)
+        }
+        switch receiver {
+            case _ is BoundVariableExpression {
+                return receiver
+            }
+            case field is BoundFieldAccessExpression {
+                if field.Receiver == nil {
+                    return field
+                }
+                return BoundFieldAccessExpression(
+                    field.Syntax,
+                    CaptureStorageReceiver(anchor, field.Receiver, preStatements, forceCapture: true),
+                    field.StructType,
+                    field.Field,
+                    field.SubstitutedType,
+                    field.NarrowedType
+                )
+            }
+            case index is BoundIndexExpression when index.IsArrayBackedElementAccess {
+                let target = CaptureReceiver(anchor, index.Target, preStatements, forceCapture: true)
+                let indices = ImmutableArray.CreateBuilder[BoundExpression](index.Indices.Length)
+                for argument in index.Indices {
+                    indices.Add(CaptureReceiver(anchor, argument, preStatements, forceCapture: true))
+                }
+                return BoundIndexExpression(index.Syntax, target, indices.MoveToImmutable(), index.Type)
+            }
+            case field is BoundClrPropertyAccessExpression when field.Member is FieldInfo {
+                return BoundClrPropertyAccessExpression(
+                    field.Syntax,
+                    if field.Receiver == nil {
+                        default(BoundExpression?)
+                    } else {
+                        CaptureStorageReceiver(anchor, field.Receiver, preStatements, forceCapture: true)
+                    },
+                    field.Member,
+                    field.Type,
+                    field.StaticContainerType,
+                    field.ConstrainedReceiverTypeParameter,
+                    field.ConstrainedInterfaceType,
+                    field.IsAddressableStaticField,
+                    field.IsReadOnlySubmissionGlobal
+                )
+            }
+            case block is BoundBlockExpression {
+                preStatements.AddRange(block.Statements)
+                return CaptureStorageReceiver(anchor, block.Expression, preStatements, forceCapture)
+            }
+            default {
+                // Opaque ref-returning receivers cannot be reconstructed after
+                // suspension. A native ref alias preserves them once and lets
+                // the existing liveness analyzer reject that case (GS0258).
+                let name = "<ncaStorage${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
+                let local = LocalVariableSymbol(name, isReadOnly: false, receiver.Type, anchor){
+                    RefKind = RefKind.Ref,
+                    ManagedReferenceOrigin = receiver
+                }
+                $scope.TryDeclareVariable(local)
+                preStatements.Add(BoundVariableDeclaration(anchor, local, BoundAddressOfExpression(anchor, receiver)))
+                return BoundVariableExpression(receiver.Syntax, local)
+            }
+        }
+    }
+
+    /// ADR-0072 / issue #709: captures a non-trivial value expression
     /// into a synthetic read-only local declared in the current scope so
     /// the receiver is evaluated exactly once across the read+test+write
-    /// triple. Simple variable references are returned unchanged because
-    /// they have no observable side effects. Always returns a
-    /// (cref:BoundVariableExpression) so callers can use the
-    /// variable-receiver constructors on field / index assignments — the
-    /// expression-receiver overloads bypass interpreter write logic
-    /// (issue #709).
+    /// triple. Simple variable references are returned unchanged unless a
+    /// snapshot is required. Storage receivers use (cref:CaptureStorageReceiver)
+    /// instead, so value-type storage is never replaced with a copy.
     private func CaptureReceiver(
         anchor SyntaxNode,
         receiver BoundExpression,
@@ -742,6 +885,14 @@ internal partial class ExpressionBinder {
     }
 
     shared {
+        private func GetNullCoalescingReceiver(read BoundExpression) BoundExpression? -> switch read {
+            case field is BoundFieldAccessExpression: field.Receiver
+            case property is BoundPropertyAccessExpression: property.Receiver
+            case imported is BoundClrPropertyAccessExpression: imported.Receiver
+            case index is BoundClrIndexExpression: index.Target
+            default: default(BoundExpression?)
+        }
+
         /// Issue #4967: whether a stored `??=` value of static type
         /// [`valueType`](paramref) is known non-nil, so the expression's
         /// value can be typed [`underlying`](paramref) rather than `T?`.

@@ -1842,6 +1842,16 @@ For nullable value types (`int32?`, `bool?`, …) the same shapes apply; the nil
 test is the `Nullable<T>` test, so the write only fires when
 `HasValue == false`.
 
+Value-type member receivers retain their writable storage: `a[i].F ??= v`
+updates the array element and `h.Outer.Inner.F ??= v` updates the nested
+field, in both statement and value positions. Reference owners and indices
+are captured before the nil test, including when the right side suspends
+and reassigns those variables; the struct itself is not copied. A struct
+temporary reports `GS0499`, and read-only receivers are rejected as with `=`.
+An opaque ref-returning receiver is evaluated once through a ref alias; if
+that alias would remain live across an awaited right side, `GS0258` rejects
+the operation instead of re-evaluating the ref-returning call.
+
 ### Switch statements
 
 Switch statement cases use block bodies and never fall through implicitly. A `fallthrough` statement is permitted only as the direct last statement of a non-final arm body. It transfers control to the next arm's body in source order without testing its pattern. The destination pattern must not introduce bindings, and the destination arm must not have a `when` guard. Invalid placement reports `GS0168`, a final-arm use reports `GS0533`, and an ineligible destination reports `GS0534`.

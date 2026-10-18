@@ -44,9 +44,11 @@
 >   `void` result when no target type gives it one. This applies to a block
 >   tail (`() -> { x ??= v }`) and to an expression body (`() -> x ??= v`);
 >   with a target type the lambda yields the value.
-> - A struct receiver that is not a variable (an array element, a nested
->   field) is copied by the shared receiver capture, so the write is lost in
->   both positions; that is a pre-existing statement-form defect (#5005).
+> - A value-type receiver remains in its original writable storage in both
+>   positions (#5005). For array elements and nested fields the shared capture
+>   saves reference owners and indices, not the struct value. These ordinary
+>   values may cross an awaited right side without a managed-pointer field.
+>   Read-only storage and struct temporaries are rejected, as with `=`.
 > - In value position the right side is evaluated into a temporary before
 >   the write. So a reference-typed receiver held in a variable, and every
 >   CLR indexer argument, is captured even when it is a plain variable: a
@@ -73,7 +75,7 @@
 > what follows from value position:
 >
 > - A statement keeps this ADR's lowering, `if read == nil { write(b) }`, so
->   existing statements emit byte-identical IL. The IL baseline gate
+>   unaffected statements emit byte-identical IL. The IL baseline gate
 >   (`RefactoringBaselineTests`) pins this.
 > - An expression uses the compound-assignment lowering shape, a
 >   `BoundBlockExpression` of the captures over
@@ -85,8 +87,9 @@
 > because that is C#'s rule for `??=` and its value is never nil in that
 > case.
 >
-> **Compatibility.** Every program that compiled before compiles to the same
-> behavior: each existing `??=` is in statement position, which still parses
+> **Compatibility.** Except for correcting the lost struct writes in #5005
+> (and rejecting writes to read-only struct storage or temporaries), existing
+> programs keep their behavior: each existing `??=` is in statement position, which still parses
 > (as an expression statement over the new node) and keeps its diagnostics,
 > evaluation order and narrowing. The positions that now compile, such as
 > `let r = (x ??= y)`, `f(x ??= y)`, `return x ??= y`, `a ??= b ??= c` and
@@ -215,9 +218,10 @@ is no second read in the write path.
 
 The desugaring must guarantee that the receiver and any index expressions
 are evaluated **exactly once**, even when the LHS is a member access or an
-indexer. The binder achieves this by spilling any non-trivial receiver (and
-each index expression) into a synthetic read-only local declared in the
-current scope, and emits the bound shape:
+indexer. The binder spills reference receivers and index values into synthetic
+read-only locals. A value-type receiver is instead retained as a storage
+expression over captured reference owners and indices, never a struct copy.
+For a reference receiver the bound shape is:
 
 ```
 {
@@ -236,10 +240,24 @@ original shape, `if __ncaRecv.Member == nil { __ncaRecv.Member = <rhs-expr>; }`,
 which leaves no value. The `??` form reads the target once, evaluates the
 right side only on nil, and yields the final value.)
 
-A receiver that is already a simple `BoundVariableExpression` (a local,
-parameter, or package-level variable) needs no spill — reading it twice has
-no observable side effect — so the desugaring elides the synthetic local
-in that case and emits just the `??` expression.
+A simple value-type variable is already stable storage and needs no spill.
+In value position a reference-type variable is snapshotted too. Statement
+position retains its original simple-reference elision; RHS reassignment of
+that variable or a CLR indexer key remains tracked separately in #5000.
+
+For `a[i].Inner.F ??= b`, capture `a` and `i` and rebuild the element/field
+address for the read and write. This retains the original element even if
+`b` reassigns `a` or `i`, runs each component once, and introduces no byref
+local across an `await`. A nested value field rooted in a class similarly
+captures the class reference, while a nested field rooted in a struct local
+continues to refer to that local's storage.
+
+For a storage receiver, a suspending right side is computed into a value
+local inside the statement's nil branch before the write. This prevents
+general await operand spilling from copying the struct receiver (#5012).
+An opaque ref-returning receiver is instead captured as a native ref alias;
+the existing liveness analysis rejects it across an `await` (`GS0258`)
+rather than re-evaluating the call or hoisting a managed pointer.
 
 The synthetic locals follow the existing `<…>` naming convention used by the
 binder for compiler-generated temporaries; they are not visible to user
@@ -266,13 +284,11 @@ walker, printer, spill rewriter, exhaustiveness allowlists) because the
 existing lowering already handles every node it produces, and both backends
 (emit and interpreter) already evaluate those nodes correctly.
 
-The receiver spilled into a synthetic local is always referenced through a
-`BoundVariableExpression`, so the same `BoundFieldAssignmentExpression`
-constructor used by the rest of the binder applies — the
-`ReceiverExpression` overload (added for closure-boxing lowering, issue
-[#567](https://github.com/DavidObando/gsharp/issues/567)) is intentionally
-avoided because the interpreter only reads `node.Receiver` (the
-`VariableSymbol` form) for class-field writes.
+Simple variable receivers keep the variable-receiver write constructors.
+Reconstructed value-type storage uses the existing expression-receiver
+field/index write constructors, so the emitter takes the field or element's
+address rather than writing a temporary. The REPL compiles submissions through
+the same emitter (ADR-0156); no legacy evaluator path is involved.
 
 ### Diagnostics
 

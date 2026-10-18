@@ -462,6 +462,226 @@ main()`
         )
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func StructReceivers_ArrayElementsAndNestedFields_KeepTheirStorage(valuePosition bool) {
+        let source = `package Test
+import System
+
+struct S {
+    var F string?
+    var gets int32
+    var sets int32
+    prop P string? {
+        get {
+            gets++
+            return F
+        }
+        set {
+            sets++
+            F = value
+        }
+    }
+}
+struct Outer {
+    var Inner S
+}
+class Holder {
+    var O Outer
+}
+var calls = 0
+func index() int32 {
+    calls++
+    return 0
+}
+func main() {
+    var a = []Outer{Outer{}}
+    ARRAY_ASSIGN
+    let h = Holder{}
+    NESTED_ASSIGN
+    var o = Outer{}
+    LOCAL_ASSIGN
+    PROPERTY_ASSIGN
+    KEPT_ASSIGN
+    Console.WriteLine("${a[0].Inner.F ?? "nil"} ${h.O.Inner.F ?? "nil"} ${o.Inner.F ?? "nil"} ${calls}")
+    Console.WriteLine("${a[0].Inner.gets} ${a[0].Inner.sets} ${h.O.Inner.gets} ${h.O.Inner.sets}")
+}
+main()`.Replace(
+            "ARRAY_ASSIGN",
+            if valuePosition {
+                `Console.WriteLine(a[index()].Inner.F ??= "array")`
+            } else {
+                `a[index()].Inner.F ??= "array"`
+            }
+        ).Replace(
+            "NESTED_ASSIGN",
+            if valuePosition {
+                `Console.WriteLine(h.O.Inner.P ??= "nested")`
+            } else {
+                `h.O.Inner.P ??= "nested"`
+            }
+        ).Replace(
+            "LOCAL_ASSIGN",
+            if valuePosition {
+                `Console.WriteLine(o.Inner.F ??= "local")`
+            } else {
+                `o.Inner.F ??= "local"`
+            }
+        ).Replace(
+            "PROPERTY_ASSIGN",
+            if valuePosition {
+                `Console.WriteLine(a[index()].Inner.P ??= "lost")`
+            } else {
+                `a[index()].Inner.P ??= "lost"`
+            }
+        ).Replace(
+            "KEPT_ASSIGN",
+            if valuePosition {
+                `Console.WriteLine(a[index()].Inner.F ??= "lost")`
+            } else {
+                `a[index()].Inner.F ??= "lost"`
+            }
+        )
+        let values = if valuePosition {
+            "array${Environment.NewLine}nested${Environment.NewLine}local${Environment.NewLine}array${Environment.NewLine}array${Environment.NewLine}"
+        } else {
+            ""
+        }
+        Assert.Equal(
+            values + "array nested local 3${Environment.NewLine}1 0 1 1${Environment.NewLine}",
+            CompileAndRun(source)
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func StructReceivers_AwaitRhs_SnapshotsOwnersAndIndicesWithoutCopyingStorage(valuePosition bool) {
+        let source = `package Test
+import System
+import System.Threading.Tasks
+
+struct S {
+    var F string?
+    prop P string? {
+        get {
+            return F
+        }
+        set {
+            F = value
+        }
+    }
+}
+struct Outer {
+    var Inner S
+}
+class Holder {
+    var O Outer
+}
+async func run() string {
+    var a = []S{S{}, S{}}
+    let first = a
+    let other = []S{S{}, S{}}
+    var i = 0
+    ARRAY_ASSIGN
+    var h = Holder{}
+    let firstHolder = h
+    let otherHolder = Holder{}
+    NESTED_ASSIGN
+    return "${first[0].F ?? "nil"} ${other[1].F ?? "nil"} ${firstHolder.O.Inner.F ?? "nil"} ${otherHolder.O.Inner.F ?? "nil"}"
+}
+func main() {
+    Console.WriteLine(run().Result)
+}
+main()`.Replace(
+            "ARRAY_ASSIGN",
+            (
+                if valuePosition {
+                    "let _ = ("
+                } else {
+                    ""
+                }
+            ) +
+                `a[i].F ??= {
+        await Task.Yield()
+        a = other
+        i = 1
+        "array"
+    }` +
+                (
+                if valuePosition {
+                    ")"
+                } else {
+                    ""
+                }
+            )
+        )
+            .Replace(
+            "NESTED_ASSIGN",
+            (
+                if valuePosition {
+                    "let _ = ("
+                } else {
+                    ""
+                }
+            ) +
+                `h.O.Inner.P ??= {
+        await Task.Yield()
+        h = otherHolder
+        "nested"
+    }` +
+                (
+                if valuePosition {
+                    ")"
+                } else {
+                    ""
+                }
+            )
+        )
+        Assert.Equal("array nil nested nil${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func StructReceivers_RefReturningCall_IsEvaluatedOnce(valuePosition bool) {
+        let source = `package Test
+import System
+struct S {
+    var F string?
+}
+var calls = 0
+func pick(a []S) ref S {
+    calls++
+    return ref a[0]
+}
+func main() {
+    var a = []S{S{}}
+    ASSIGN
+    Console.WriteLine("${a[0].F ?? "nil"} ${calls}")
+}
+main()`.Replace(
+            "ASSIGN",
+            if valuePosition {
+                `Console.WriteLine(pick(a).F ??= "ref")`
+            } else {
+                `pick(a).F ??= "ref"`
+            }
+        )
+        Assert.Equal(
+            (
+                if valuePosition {
+                    "ref${Environment.NewLine}"
+                } else {
+                    ""
+                }
+            ) +
+                "ref 1${Environment.NewLine}",
+            CompileAndRun(source)
+        )
+    }
+
     /// Review of #4980: a target-less lambda whose body ends in `??=` infers
     /// `void`, as one ending in `=` does (issue #2152), in block and expression
     /// bodies, so it still passes as a `() -> void` callback. With a target

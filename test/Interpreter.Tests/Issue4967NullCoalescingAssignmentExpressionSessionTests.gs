@@ -29,6 +29,25 @@ Console.WriteLine("result=" + first + "," + second + "," + log + "," + "$k")`
         Assert.Contains("result=one,one,one,42", output)
     }
 
+    @Fact
+    func StructReceivers_WriteArrayElementsAndNestedFieldsInPlace() {
+        let source = `struct S {
+    var F string?
+}
+struct Outer {
+    var Inner S
+}
+class Holder {
+    var O Outer
+}
+var a = []S{S{}}
+let value = (a[0].F ??= "array")
+let h = Holder{}
+h.O.Inner.F ??= "nested"
+Console.WriteLine("storage=" + value + "," + (a[0].F ?? "nil") + "," + (h.O.Inner.F ?? "nil"))`
+        Assert.Contains("storage=array,array,nested", RunSubmission(source))
+    }
+
     shared {
         private func RunSubmission(text string) string {
             using let outWriter = StringWriter()
