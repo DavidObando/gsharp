@@ -173,7 +173,8 @@ class GsLexer:
             except OSError as error:
                 raise CheckError(f"cannot run dotnet: {error}") from error
         if result.returncode != 0:
-            raise CheckError(f"the G# token tool failed: {result.stderr.strip()[-500:]}")
+            detail = (result.stderr.strip() or result.stdout.strip())[-500:]
+            raise CheckError(f"the G# token tool failed with exit code {result.returncode}: {detail}")
         out = []
         for entry in json.loads(result.stdout):
             if entry["errors"]:
@@ -281,7 +282,8 @@ def compare(path: str, base: str, head: str, lexer: GsLexer | None = None) -> st
     if k is not None:
         return describe(base_tokens, head_tokens, k)
     reason = compare_docs(base_docs, head_docs)
-    if reason is None and base_notes != head_notes:
+    # The order of the diagnostics carries no meaning; the blocks are compared above.
+    if reason is None and sorted(base_notes) != sorted(head_notes):
         reason = (
             f"{DIRECTIVE_CHANGED} (the compiler's doc-comment diagnostics differ):\n"
             f"      base: {base_notes}\n      head: {head_notes}"

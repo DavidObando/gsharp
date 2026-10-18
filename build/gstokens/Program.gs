@@ -28,64 +28,89 @@ using let output = Console.OpenStandardOutput()
 using let writer = Utf8JsonWriter(output)
 writer.WriteStartArray()
 for path in args {
-    let source = SourceText.From(File.ReadAllText(path), path)
-    let tokens = SyntaxTree.ParseTokens(source, out var diagnostics)
-    writer.WriteStartObject()
-    writer.WriteString("path", path)
-    writer.WriteStartArray("errors")
-    for diagnostic in diagnostics {
-        if diagnostic.IsError {
-            writer.WriteStringValue(diagnostic.ToString())
+    // Each file is written to its own buffer, so a failure in one file still
+    // gives a JSON entry whose "errors" says what went wrong.
+    let buffer = MemoryStream()
+    try {
+        using let entry = Utf8JsonWriter(buffer)
+        let source = SourceText.From(File.ReadAllText(path), path)
+        let tokens = SyntaxTree.ParseTokens(source, out var diagnostics)
+        entry.WriteStartObject()
+        entry.WriteString("path", path)
+        entry.WriteStartArray("errors")
+        for diagnostic in diagnostics {
+            if diagnostic.IsError {
+                entry.WriteStringValue(diagnostic.ToString())
+            }
         }
-    }
-    writer.WriteEndArray()
-    writer.WriteStartArray("tokens")
-    for token in tokens {
-        writer.WriteStartArray()
-        writer.WriteStringValue(token.Kind.ToString())
-        writer.WriteNumberValue(source.GetLineIndex(token.Position) + 1)
-        writer.WriteStringValue(token.Text ?? "")
-        writer.WriteNumberValue(token.Position)
-        writer.WriteEndArray()
-    }
-    writer.WriteEndArray()
-    // Attach each block the way the compiler does: the first documentable
-    // declaration after the block, if Attach() gave it this block's text.
-    let tree = SyntaxTree.Parse(source)
-    let attached = DocumentationAttacher.Attach(tree)
-    let declarations = DocumentationAttacher.GetDocumentableDeclarations(tree)
-    writer.WriteStartArray("docs")
-    var next = 0
-    for block in DocumentationAttacher.GetBlocks(tree) {
-        while next < declarations.Count && declarations[next].Span.Start < block.EndPosition {
-            next++
+        entry.WriteEndArray()
+        entry.WriteStartArray("tokens")
+        for token in tokens {
+            entry.WriteStartArray()
+            entry.WriteStringValue(token.Kind.ToString())
+            entry.WriteNumberValue(source.GetLineIndex(token.Position) + 1)
+            entry.WriteStringValue(token.Text ?? "")
+            entry.WriteNumberValue(token.Position)
+            entry.WriteEndArray()
         }
-        var declaration = -1
-        if next < declarations.Count && attached.TryGetValue(declarations[next], out var text) && text == block.Text {
-            declaration = declarations[next].Span.Start
+        entry.WriteEndArray()
+        // Attach each block the way the compiler does: the first documentable
+        // declaration after the block, if Attach() gave it this block's text.
+        let tree = SyntaxTree.Parse(source)
+        let attached = DocumentationAttacher.Attach(tree)
+        let declarations = DocumentationAttacher.GetDocumentableDeclarations(tree)
+        entry.WriteStartArray("docs")
+        var next = 0
+        for block in DocumentationAttacher.GetBlocks(tree) {
+            while next < declarations.Count && declarations[next].Span.Start < block.EndPosition {
+                next++
+            }
+            var declaration = -1
+            if next < declarations.Count && attached.TryGetValue(declarations[next], out var text) &&
+                text == block.Text {
+                declaration = declarations[next].Span.Start
+            }
+            entry.WriteStartObject()
+            entry.WriteNumber("line", block.FirstLine + 1)
+            entry.WriteNumber("end", block.EndPosition)
+            entry.WriteNumber("declaration", declaration)
+            entry.WriteString(
+                "xml",
+                DocumentationXmlWriter.WriteXmlFragment(GSharpDocumentationParser.Parse(block.Text))
+            )
+            entry.WriteEndObject()
         }
+        entry.WriteEndArray()
+        let docDiagnostics = DiagnosticBag()
+        DocumentationValidator.Validate(
+            tree,
+            ImmutableArray[FunctionSymbol].Empty,
+            ImmutableArray[StructSymbol].Empty,
+            docDiagnostics,
+            false
+        )
+        entry.WriteStartArray("docDiagnostics")
+        for diagnostic in docDiagnostics {
+            entry.WriteStringValue(diagnostic.Message)
+        }
+        entry.WriteEndArray()
+        entry.WriteEndObject()
+        entry.Flush()
+        writer.WriteRawValue(buffer.ToArray())
+    } catch (ex Exception) {
         writer.WriteStartObject()
-        writer.WriteNumber("line", block.FirstLine + 1)
-        writer.WriteNumber("end", block.EndPosition)
-        writer.WriteNumber("declaration", declaration)
-        writer.WriteString("xml", DocumentationXmlWriter.WriteXmlFragment(GSharpDocumentationParser.Parse(block.Text)))
+        writer.WriteString("path", path)
+        writer.WriteStartArray("errors")
+        writer.WriteStringValue("gstokens: " + ex.GetType().Name + ": " + ex.Message)
+        writer.WriteEndArray()
+        writer.WriteStartArray("tokens")
+        writer.WriteEndArray()
+        writer.WriteStartArray("docs")
+        writer.WriteEndArray()
+        writer.WriteStartArray("docDiagnostics")
+        writer.WriteEndArray()
         writer.WriteEndObject()
     }
-    writer.WriteEndArray()
-    let docDiagnostics = DiagnosticBag()
-    DocumentationValidator.Validate(
-        tree,
-        ImmutableArray[FunctionSymbol].Empty,
-        ImmutableArray[StructSymbol].Empty,
-        docDiagnostics,
-        false
-    )
-    writer.WriteStartArray("docDiagnostics")
-    for diagnostic in docDiagnostics {
-        writer.WriteStringValue(diagnostic.Message)
-    }
-    writer.WriteEndArray()
-    writer.WriteEndObject()
 }
 writer.WriteEndArray()
 writer.Flush()

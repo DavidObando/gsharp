@@ -30,7 +30,14 @@ check = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = check
 SPEC.loader.exec_module(check)
 
-LEXER = check.GsLexer.build()
+LEXER = check.GsLexer(check.GSTOKENS_DLL)
+
+
+def setUpModule() -> None:
+    # Build the token tool once, before any test runs. A build failure is
+    # reported as a module setup error.
+    global LEXER
+    LEXER = check.GsLexer.build()
 
 
 class CommentOnlyCase(unittest.TestCase):
