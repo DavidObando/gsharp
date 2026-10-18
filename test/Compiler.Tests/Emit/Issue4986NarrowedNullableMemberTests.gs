@@ -120,6 +120,38 @@ Console.WriteLine("${ternary(Point{X: 2, Y: 3})} ${ternary(nil)} ${ternaryEnum(C
         )
     }
 
+    /// A `struct`-constrained type parameter's `T?` binds `Value` and
+    /// `HasValue` against the open `Nullable<>`, and its getter goes through
+    /// the same constructed-`Nullable<T>` MemberRef as a same-compilation
+    /// struct's, guarded or not. The if-statement and early-return forms
+    /// reported GS0158 before. (`GetValueOrDefault` on `T?` is #5001.)
+    @Fact
+    func Struct_Constrained_Type_Parameter_Nullable_Members_Bind() {
+        let result = CompileAndRun(`import System
+func has[T struct](x T?) bool -> x.HasValue
+func val[T struct](x T?) T -> x.Value
+func ternary[T struct](x T?, fallback T) T -> x != nil ? x.Value : fallback
+func statement[T struct](x T?) string {
+    if x != nil {
+        return "${x.Value}/${x.HasValue}"
+    }
+    return "none"
+}
+func early[T struct](x T?) bool {
+    if x == nil {
+        return false
+    }
+    return x.HasValue
+}
+Console.WriteLine("${has[int32](3)} ${has[int32](nil)} ${val[int32](4)} ${ternary[int32](5, -1)} ${ternary[int32](nil, -1)}")
+Console.WriteLine("${statement[DayOfWeek](DayOfWeek.Friday)} ${statement[int32](nil)} ${early[int64](7)} ${early[int64](nil)}")
+`)
+        Assert.Equal(
+            string.Join(Environment.NewLine, "True False 4 5 -1", "Friday/True none True False") + Environment.NewLine,
+            result.Output
+        )
+    }
+
     /// A member the narrowed type declares itself wins: `Box` has its own
     /// `Value`, so `b.Value` in the proven branch is `Box.Value` (an
     /// `int32`), not `Nullable<Box>.Value` (a `Box`).
