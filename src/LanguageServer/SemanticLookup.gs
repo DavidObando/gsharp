@@ -129,7 +129,9 @@ shared class SemanticLookup {
         private var cachedStructsByFile Dictionary[string, []StructDeclarationSyntax]
         private var cachedWhileLetsByFile Dictionary[string, []WhileLetStatementSyntax]
         private var cachedIfLetsByFile Dictionary[string, []SyntaxNode]
-        private var cachedVariableDeclarationsByFile Dictionary[string, []VariableDeclarationSyntax]
+        // (file, identifier text) → that file's same-named local declarations,
+        // for the region-scoped shadowing check.
+        private var cachedVariableDeclarationsByName Dictionary[(string, string), []VariableDeclarationSyntax]
         private var cachedAccessorsByTree Dictionary[SyntaxTree, []AccessorExpressionSyntax]
         private var cachedFieldAssignmentsByTree Dictionary[SyntaxTree, []FieldAssignmentExpressionSyntax]
         private var cachedForRangesByTree Dictionary[SyntaxTree, []ForRangeStatementSyntax]
@@ -193,7 +195,7 @@ shared class SemanticLookup {
             let structsByFile = Dictionary[string, List[StructDeclarationSyntax]]()
             let whileLetsByFile = Dictionary[string, List[WhileLetStatementSyntax]]()
             let ifLetsByFile = Dictionary[string, List[SyntaxNode]]()
-            let variableDeclarationsByFile = Dictionary[string, List[VariableDeclarationSyntax]]()
+            let variableDeclarationsByName = Dictionary[(string, string), List[VariableDeclarationSyntax]]()
             this.memberAccessTokenSpans = HashSet[(string, int32, int32)]()
             this.fieldAssignmentTokenSpans = HashSet[(string, int32, int32)]()
             for var i = 0; i < treeArray.Length; i++ {
@@ -233,12 +235,18 @@ shared class SemanticLookup {
                     whileLets.AddRange(bucket.WhileLets)
                 }
                 // Only files with region-scoped bindings need the shadowing check.
-                if (bucket.IfLets.Count > 0 || bucket.WhileLets.Count > 0) && bucket.VariableDeclarations.Count > 0 {
-                    if !variableDeclarationsByFile.TryGetValue(fileName, out var variableDeclarations) {
-                        variableDeclarations = List[VariableDeclarationSyntax]()
-                        variableDeclarationsByFile[fileName] = variableDeclarations
+                if bucket.IfLets.Count > 0 || bucket.WhileLets.Count > 0 {
+                    for declaration in bucket.VariableDeclarations {
+                        if declaration.Identifier == nil {
+                            continue
+                        }
+                        let nameKey = (fileName, declaration.Identifier.Text)
+                        if !variableDeclarationsByName.TryGetValue(nameKey, out var sameNamed) {
+                            sameNamed = List[VariableDeclarationSyntax]()
+                            variableDeclarationsByName[nameKey] = sameNamed
+                        }
+                        sameNamed.Add(declaration)
                     }
-                    variableDeclarations.AddRange(bucket.VariableDeclarations)
                 }
                 if bucket.IfLets.Count > 0 {
                     if !ifLetsByFile.TryGetValue(fileName, out var ifLets) {
@@ -278,9 +286,9 @@ shared class SemanticLookup {
                 (kvp KeyValuePair[string, List[WhileLetStatementSyntax]]) -> kvp.Key,
                 (kvp KeyValuePair[string, List[WhileLetStatementSyntax]]) -> kvp.Value.ToArray()
             )
-            this.cachedVariableDeclarationsByFile = variableDeclarationsByFile.ToDictionary(
-                (kvp KeyValuePair[string, List[VariableDeclarationSyntax]]) -> kvp.Key,
-                (kvp KeyValuePair[string, List[VariableDeclarationSyntax]]) -> kvp.Value.ToArray()
+            this.cachedVariableDeclarationsByName = variableDeclarationsByName.ToDictionary(
+                (kvp KeyValuePair[(string, string), List[VariableDeclarationSyntax]]) -> kvp.Key,
+                (kvp KeyValuePair[(string, string), List[VariableDeclarationSyntax]]) -> kvp.Value.ToArray()
             )
             this.cachedIfLetsByFile = ifLetsByFile.ToDictionary(
                 (kvp KeyValuePair[string, List[SyntaxNode]]) -> kvp.Key,
@@ -792,20 +800,11 @@ shared class SemanticLookup {
 
         private func IsShadowedByNestedLocal(token SyntaxToken, regionStart int32) bool {
             let fileName = token.SyntaxTree?.Text?.FileName ?? string.Empty
-            if !this.cachedVariableDeclarationsByFile.TryGetValue(fileName, out var declarations) {
+            if !this.cachedVariableDeclarationsByName.TryGetValue((fileName, token.Text), out var declarations) {
                 return false
             }
             for declaration in declarations {
-                if declaration.Identifier == nil ||
-                    declaration
-                    .Span
-                    .Start < regionStart ||
-                    token
-                    .Span
-                    .Start < declaration
-                    .Span
-                    .End ||
-                    !string.Equals(declaration.Identifier.Text, token.Text, StringComparison.Ordinal) {
+                if declaration.Span.Start < regionStart || token.Span.Start < declaration.Span.End {
                     continue
                 }
                 var block SyntaxNode? = declaration.Parent

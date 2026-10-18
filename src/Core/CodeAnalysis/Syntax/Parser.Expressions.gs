@@ -101,11 +101,7 @@ open partial class Parser {
             let leftName = NameExpressionSyntax(syntaxTree, identifierToken)
             return EventSubscriptionExpressionSyntax(syntaxTree, leftName, opToken, rhs)
         }
-        var expression = if guarded {
-            ParseIfLetGuardedCoalescing()
-        } else {
-            ParseRangeExpression()
-        }
+        var expression = ParseRangeExpression(guarded)
         // Issue #507: indexer assignment whose target is an arbitrary expression
         // (e.g. `obj.Member[k] = v`, `a.b.c[k] = v`, `(GetThing())[i] = v`). The
         // bare-identifier form `id[k] = v` is already handled above as
@@ -283,13 +279,17 @@ open partial class Parser {
     // While parsing an index bound the range layer is suppressed (see
     // <see cref="suppressRangeOperator"/>) so `a[lo..hi]` / `a[^2..]` stay owned
     // by <see cref="ParseIndexArgument"/>.
-    private func ParseRangeExpression() ExpressionSyntax {
+    //
+    // Issue #4961 / ADR-0200: `guarded` (a `let`-binding initializer) parses
+    // each bound with ParseIfLetGuardedCoalescing, so a top-level `&&` / `||`
+    // ends the initializer instead of joining a bound.
+    private func ParseRangeExpression(guarded bool = false) ExpressionSyntax {
         if suppressRangeOperator > 0 {
-            return ParseNullCoalescingExpression()
+            return ParseRangeBound(guarded)
         }
         var lower ExpressionSyntax? = nil
         if Current.Kind != SyntaxKind.DotDotToken {
-            lower = ParseNullCoalescingExpression()
+            lower = ParseRangeBound(guarded)
         }
         if Current.Kind != SyntaxKind.DotDotToken {
             // No `..` follows — an ordinary expression (`lower` is non-null here
@@ -299,9 +299,15 @@ open partial class Parser {
         let dotDotToken = NextToken()
         var upper ExpressionSyntax? = nil
         if RangeUpperBoundFollows(dotDotToken) {
-            upper = ParseRangeUpperBound()
+            upper = ParseRangeUpperBound(guarded)
         }
         return RangeExpressionSyntax(syntaxTree, lower, dotDotToken, upper)
+    }
+
+    private func ParseRangeBound(guarded bool) ExpressionSyntax -> if guarded {
+        ParseIfLetGuardedCoalescing()
+    } else {
+        ParseNullCoalescingExpression()
     }
 
     // Issue #1038: decide whether an upper bound follows a standalone `lo..`. The
@@ -335,13 +341,13 @@ open partial class Parser {
     // here (immediately after `..`) is the from-end marker (`lo..^hi`, `..^3`),
     // reusing the #1022 `FromEndIndexExpressionSyntax`; otherwise the bound is an
     // ordinary null-coalescing expression.
-    private func ParseRangeUpperBound() ExpressionSyntax {
+    private func ParseRangeUpperBound(guarded bool = false) ExpressionSyntax {
         if Current.Kind == SyntaxKind.HatToken {
             let hatToken = NextToken()
-            let operand = ParseNullCoalescingExpression()
+            let operand = ParseRangeBound(guarded)
             return FromEndIndexExpressionSyntax(syntaxTree, hatToken, operand)
         }
-        return ParseNullCoalescingExpression()
+        return ParseRangeBound(guarded)
     }
 
     // Issue #941: `a ?? b` binary null-coalescing operator. Parsed as its own

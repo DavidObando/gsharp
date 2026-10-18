@@ -164,6 +164,24 @@ func F() int32 {
     }
 
     @Fact
+    func RangeInitializer_IsKept_AndItsBoundsStopAtTheGuard() {
+        // The range layer stays in the guarded grammar too: a range is never a
+        // nullable initializer (the binder reports GS0296), but it must still
+        // parse as one rather than fail to parse.
+        const source = `package P
+func F(a int32, b int32, ok bool) {
+    if let r = a..b && ok {
+        Use(r)
+    }
+}`
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        let stmt = FindFirst[IfLetStatementSyntax](tree)
+        Assert.IsType[RangeExpressionSyntax](stmt.Bindings[0].Initializer)
+        Assert.Equal("ok", Assert.IsType[NameExpressionSyntax](stmt.Guard).IdentifierToken.Text)
+    }
+
+    @Fact
     func TopLevelLogicalOr_AfterTheBindings_ReportsGS0626_InBothForms() {
         const source = `package P
 func F(a string?, c bool) bool {
