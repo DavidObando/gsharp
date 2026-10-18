@@ -947,73 +947,34 @@ open partial class Parser {
         while true {
             // Locate this link's then-block opening brace: the first `{` at
             // paren and bracket depth zero after the `if` keyword at offset i.
-            var parenDepth = 0
-            var bracketDepth = 0
             var j = i + 1
             while true {
-                if j > LookaheadMaxScan {
-                    return false
-                }
-                let k = Peek(j).Kind
-                if k == SyntaxKind.EndOfFileToken {
-                    return false
-                }
-                if parenDepth == 0 && bracketDepth == 0 && k == SyntaxKind.OpenBraceToken {
-                    break
-                }
-                switch k {
-                    case SyntaxKind.OpenParenthesisToken {
-                        parenDepth++
-                    }
-                    case SyntaxKind.CloseParenthesisToken {
-                        if parenDepth > 0 {
-                            parenDepth--
-                        }
-                    }
-                    case SyntaxKind.OpenSquareBracketToken {
-                        bracketDepth++
-                    }
-                    case SyntaxKind.CloseSquareBracketToken {
-                        if bracketDepth > 0 {
-                            bracketDepth--
-                        }
-                    }
-                    default {
-                        let _ = 0
-                    }
-                }
-                j++
-            }
-            // Scan from the then-block's opening brace to its matching close brace.
-            var braceDepth = 0
-            while true {
-                if j > LookaheadMaxScan {
-                    return false
-                }
                 let k = Peek(j).Kind
                 if k == SyntaxKind.EndOfFileToken {
                     return false
                 }
                 if k == SyntaxKind.OpenBraceToken {
-                    braceDepth++
-                } else if k == SyntaxKind.CloseBraceToken {
-                    braceDepth--
-                    if braceDepth == 0 {
-                        break
-                    }
+                    break
                 }
-                j++
+                if k == SyntaxKind.OpenParenthesisToken ||
+                    k == SyntaxKind.OpenSquareBracketToken ||
+                    k == SyntaxKind.QuestionOpenBracketToken {
+                    j = SkipBalancedGroup(j)
+                } else {
+                    j++
+                }
             }
-            // `j` is now at this link's matching close brace. Inspect what
+            j = SkipBalancedGroup(j)
+            // `j` is now just past this link's matching close brace. Inspect what
             // follows to decide whether the chain continues or terminates.
-            if Peek(j + 1).Kind != SyntaxKind.ElseKeyword {
+            if Peek(j).Kind != SyntaxKind.ElseKeyword {
                 // No `else`: this link has a path with no value, so the whole
                 // chain is a void if-statement.
                 return false
             }
-            if Peek(j + 2).Kind == SyntaxKind.IfKeyword {
+            if Peek(j + 1).Kind == SyntaxKind.IfKeyword {
                 // `else if`: continue walking the chain from the inner `if`.
-                i = j + 2
+                i = j + 1
                 continue
             }
             // Plain final `else { ... }`: shape requirement satisfied (every
@@ -1024,30 +985,14 @@ open partial class Parser {
             // value and must be a void if-statement instead. Scan the final
             // else-block to its own matching close brace to find that
             // position.
-            var elseBraceDepth = 0
-            var m = j + 2
-            while true {
-                if m > LookaheadMaxScan {
-                    return false
-                }
-                let k = Peek(m).Kind
-                if k == SyntaxKind.EndOfFileToken {
-                    return false
-                }
-                if k == SyntaxKind.OpenBraceToken {
-                    elseBraceDepth++
-                } else if k == SyntaxKind.CloseBraceToken {
-                    elseBraceDepth--
-                    if elseBraceDepth == 0 {
-                        break
-                    }
-                }
-                m++
+            if Peek(j + 1).Kind != SyntaxKind.OpenBraceToken {
+                return false
             }
-            // `m` is now at the final else-block's matching close brace.
+            let m = SkipBalancedGroup(j + 1)
+            // `m` is now just past the final else-block's matching close brace.
             // Value-producing only when immediately followed by the
             // enclosing block expression's own closing brace (tail position).
-            return Peek(m + 1).Kind == SyntaxKind.CloseBraceToken
+            return Peek(m).Kind == SyntaxKind.CloseBraceToken
         }
     }
 

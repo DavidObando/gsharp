@@ -61,9 +61,10 @@ the block is its trailing value when it has an expression shape:
 
 Anything else is a statement, as before.
 
-A nested brace is classified at its actual matching closing brace, without a
-lookahead-token limit. Its length cannot change the lambda's inferred type or
-whether a postfix/binary continuation belongs to that expression.
+A nested brace or trailing if/if-let chain is classified at its actual matching
+closing braces, without a lookahead-token limit. Its length cannot change the
+lambda's inferred type or whether a postfix/binary continuation belongs to a
+nested brace expression.
 
 ### 2. `switch` is decided by its arm shape
 
@@ -160,9 +161,12 @@ body whose value may be void — there is no value to produce, so:
   else { list.Clear() } }` as an `Action`, which reported GS0263 although the
   identical if statement compiles;
 - a void switch, like the switch statement, needs no `default`: an unmatched
-  value runs no arm, so definite assignment and narrowing join the incoming
-  state as one more path only when there is no unguarded default or discard
-  arm. A guarded discard can fail and does not remove that path;
+  value runs no result. Definite assignment and narrowing propagate dispatch
+  through pattern-failure and guard-failure paths, preserving side effects of
+  evaluated guards. The unmatched state joins result states only when there
+  is no unguarded default or discard arm. A guarded discard always evaluates
+  its guard but can skip its result. As in emission, `default` is considered
+  after all other patterns, regardless of its textual position;
 - a bare `default` branch — also as a block's tail, a nested switch-arm result,
   or a tail behind `defer` / `using let` cleanup — has no target type to take,
   so it reports `GS0362` as any targetless `default` does. Validation happens

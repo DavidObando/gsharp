@@ -1890,22 +1890,36 @@ internal partial class StatementBinder {
         protected open override func VisitSwitchExpression(node BoundSwitchExpression) {
             VisitExpression(node.Discriminant)
             let branchStart = CaptureCallableState()
+            var dispatchState = CloneCallableState(branchStart)
+            var canMiss = true
             var joined(
                 Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]],
                 Unknown HashSet[VariableSymbol],
                 External HashSet[VariableSymbol]
             )? = nil
-            for arm in node.Arms {
-                RestoreCallableState(branchStart)
+            for arm in node.GetDispatchArms() {
+                RestoreCallableState(dispatchState)
                 VisitPattern(arm.Pattern)
+                let patternFailure = CaptureCallableState()
                 VisitExpression(arm.Guard)
+                let guardFailure = CaptureCallableState()
                 VisitExpression(arm.Result)
                 joined = JoinCallableStates(joined, CaptureCallableState())
+                if arm.IsCatchAll {
+                    canMiss = false
+                    break
+                }
+                dispatchState = if arm.Guard == nil {
+                    patternFailure
+                } else if arm.PatternMatchesAllInputs {
+                    guardFailure
+                } else {
+                    JoinCallableStates(patternFailure, guardFailure)
+                }
             }
-            // Issue #4966 (ADR-0202): a void switch with no default arm can run
-            // no arm, so the incoming state joins too.
-            if node.Type == TypeSymbol.Void && !node.Arms.Any((arm BoundSwitchExpressionArm) -> arm.IsCatchAll) {
-                joined = JoinCallableStates(joined, CloneCallableState(branchStart))
+            // The unmatched path includes evaluated guards, but no result.
+            if node.Type == TypeSymbol.Void && canMiss {
+                joined = JoinCallableStates(joined, dispatchState)
             }
             RestoreCallableState(joined ?? branchStart)
         }

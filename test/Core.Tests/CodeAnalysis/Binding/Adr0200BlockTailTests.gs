@@ -635,6 +635,67 @@ Run(() -> { {
 ` + body.ToString() + "42 } })", "func 42\n")
     }
 
+    @Fact
+    func VoidSwitchGuardAssignments_ReachTheUnmatchedPath() {
+        AssertOutput(`import System
+func Set(out a int32) { a = 1 }
+func F(x int32, out a int32) {
+    switch x { case _ when { Set(out a) false }: Console.WriteLine("unused") }
+}
+func G(x int32, out a int32) {
+    switch x {
+    default: Console.WriteLine("default")
+    case _ when { Set(out a) false }: Console.WriteLine("unused")
+    }
+}
+var a int32
+F(1, out a)
+Console.WriteLine(a)
+G(1, out a)
+Console.WriteLine(a)`, "1\ndefault\n1\n")
+    }
+
+    @Theory
+    @InlineData("")
+    @InlineData("default: noop()\n")
+    func VoidSwitchGuardCallableEffects_ReachTheUnmatchedPath(defaultArm string) {
+        let source = `func Run(x int32) int32 {
+    var text string? = nil
+    text = "safe"
+    try { goto Done }
+    finally {
+        let mutate = func() { text = nil }
+        let noop = func() { }
+        var action (() -> void) = noop
+        switch x {
+` + defaultArm + `case _ when { action = mutate false }: { action = noop noop() }
+        }
+        action()
+    }
+Done:
+    return text.Length
+}
+Run(1)`
+        let result = EmittedOracle.Evaluate(source)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
+    func LongTrailingIfLet_StillSelectsTheValueOverload() {
+        let body = System.Text.StringBuilder()
+        for var i = 0; i < 2000; i++ {
+            body.Append("Log()\n")
+        }
+        AssertOutput(`import System
+func Log() { }
+func Run(f Func[int32]) { Console.WriteLine("func ${f()}") }
+func Run(a Action) { a() Console.WriteLine("action") }
+let input string? = "value"
+Run(() -> { if let s = input {
+` + body.ToString() + "42 } else { 0 } })", "func 42\n")
+    }
+
     // Value position keeps its rules: GS0276, GS0277, GS0176, and GS0124 for a
     // `never` initializer (which crashed the compiler, GS9998, before).
     @Fact
