@@ -4,6 +4,7 @@
 
 package GSharp.Core.CodeAnalysis.Syntax
 
+import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Generic
@@ -162,65 +163,81 @@ open partial class Parser {
     /// `?:` condition and false arm, range bounds, a `with` receiver, and an
     /// assignment's value. Everything else (parenthesized expressions, calls,
     /// lambdas, a `?:` true arm, ...) is nested and keeps its operators.
+    ///
+    /// The walk is iterative (an explicit stack visited in source order), so a
+    /// long left-associated `a && b && c …` chain cannot exhaust the call
+    /// stack.
     private func FindTopLevelLogicalOperator(expression ExpressionSyntax?) SyntaxToken? {
-        switch expression {
-            case binary is BinaryExpressionSyntax {
-                let left = FindTopLevelLogicalOperator(binary.Left)
-                if left != nil {
-                    return left
+        let pending = Stack[SyntaxNode]()
+        if expression != nil {
+            pending.Push(expression)
+        }
+        while pending.Count > 0 {
+            let node = pending.Pop()
+            switch node {
+                case token is SyntaxToken {
+                    return token
                 }
-                if binary
-                    .OperatorToken
-                    .Kind == SyntaxKind.AmpersandAmpersandToken ||
-                    binary
-                    .OperatorToken
-                    .Kind == SyntaxKind.PipePipeToken {
-                    return binary.OperatorToken
+                case binary is BinaryExpressionSyntax {
+                    // Visited left operand, then the operator, then the right
+                    // operand: pushed in reverse.
+                    pending.Push(binary.Right)
+                    if binary
+                        .OperatorToken
+                        .Kind == SyntaxKind.AmpersandAmpersandToken ||
+                        binary
+                        .OperatorToken
+                        .Kind == SyntaxKind.PipePipeToken {
+                        pending.Push(binary.OperatorToken)
+                    }
+                    pending.Push(binary.Left)
                 }
-                return FindTopLevelLogicalOperator(binary.Right)
-            }
-            case conditional is ConditionalExpressionSyntax {
-                return FindTopLevelLogicalOperator(conditional.Condition) ??
-                    FindTopLevelLogicalOperator(conditional.WhenFalse)
-            }
-            case rangeExpression is RangeExpressionSyntax {
-                return FindTopLevelLogicalOperator(rangeExpression.LowerBound) ??
-                    FindTopLevelLogicalOperator(rangeExpression.UpperBound)
-            }
-            case with_ is WithExpressionSyntax {
-                return FindTopLevelLogicalOperator(with_.Receiver)
-            }
-            case assignment is AssignmentExpressionSyntax {
-                return FindTopLevelLogicalOperator(assignment.Expression)
-            }
-            case field is FieldAssignmentExpressionSyntax {
-                return FindTopLevelLogicalOperator(field.Value)
-            }
-            case memberField is MemberFieldAssignmentExpressionSyntax {
-                return FindTopLevelLogicalOperator(memberField.Value)
-            }
-            case index is IndexAssignmentExpressionSyntax {
-                return FindTopLevelLogicalOperator(index.Value)
-            }
-            case memberIndex is MemberIndexAssignmentExpressionSyntax {
-                return FindTopLevelLogicalOperator(memberIndex.Value)
-            }
-            case compoundIndex is CompoundIndexAssignmentExpressionSyntax {
-                return FindTopLevelLogicalOperator(compoundIndex.Value)
-            }
-            case indirect is IndirectAssignmentExpressionSyntax {
-                return FindTopLevelLogicalOperator(indirect.Value)
-            }
-            case indirectCompound is IndirectCompoundAssignmentExpressionSyntax {
-                return FindTopLevelLogicalOperator(indirectCompound.Value)
-            }
-            case subscription is EventSubscriptionExpressionSyntax {
-                return FindTopLevelLogicalOperator(subscription.Value)
-            }
-            default {
-                return nil
+                case conditional is ConditionalExpressionSyntax {
+                    pending.Push(conditional.WhenFalse)
+                    pending.Push(conditional.Condition)
+                }
+                case rangeExpression is RangeExpressionSyntax {
+                    if rangeExpression.UpperBound != nil {
+                        pending.Push(rangeExpression.UpperBound)
+                    }
+                    if rangeExpression.LowerBound != nil {
+                        pending.Push(rangeExpression.LowerBound)
+                    }
+                }
+                case with_ is WithExpressionSyntax {
+                    pending.Push(with_.Receiver)
+                }
+                case assignment is AssignmentExpressionSyntax {
+                    pending.Push(assignment.Expression)
+                }
+                case field is FieldAssignmentExpressionSyntax {
+                    pending.Push(field.Value)
+                }
+                case memberField is MemberFieldAssignmentExpressionSyntax {
+                    pending.Push(memberField.Value)
+                }
+                case index is IndexAssignmentExpressionSyntax {
+                    pending.Push(index.Value)
+                }
+                case memberIndex is MemberIndexAssignmentExpressionSyntax {
+                    pending.Push(memberIndex.Value)
+                }
+                case compoundIndex is CompoundIndexAssignmentExpressionSyntax {
+                    pending.Push(compoundIndex.Value)
+                }
+                case indirect is IndirectAssignmentExpressionSyntax {
+                    pending.Push(indirect.Value)
+                }
+                case indirectCompound is IndirectCompoundAssignmentExpressionSyntax {
+                    pending.Push(indirectCompound.Value)
+                }
+                case subscription is EventSubscriptionExpressionSyntax {
+                    pending.Push(subscription.Value)
+                }
+                default { }
             }
         }
+        return nil
     }
 
     private func ParseOptionalTypeClauseBeforeEquals() TypeClauseSyntax? {
@@ -232,6 +249,106 @@ open partial class Parser {
             return nil
         }
         return ParseOptionalTypeClause()
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    //  Issue #4961: parse memo for `if let` constructs.
+    // ──────────────────────────────────────────────────────────────────────
+    /// The parser state an `if let` construct's parse depends on, besides the
+    /// token stream itself.
+    private data struct IfLetParseKey(
+        Start int32,
+        SuppressTrailingObjectInitializer int32,
+        SuppressStructLiteral int32,
+        AllowEmptyStructLiteralInHeader bool,
+        UnsafeDepth int32,
+        SharedClassBody bool,
+        SuppressRangeOperator int32,
+        TupleTypeBeforeArrowBodyPosition int32?,
+        PatternContext PatternParseContext,
+        PatternNestingDepth int32
+    ) : IEquatable[IfLetParseKey] { }
+
+    /// A recorded `if let` parse: the node, the token stream before and after
+    /// it (a parse can split a fused token), the end position, the furthest
+    /// position it looked at, the token limit it ran under, and the
+    /// diagnostics it reported.
+    private data struct IfLetParseResult(
+        Node SyntaxNode,
+        TokensBefore ImmutableArray[SyntaxToken],
+        TokensAfter ImmutableArray[SyntaxToken],
+        End int32,
+        FurthestPeek int32,
+        Limit int32,
+        Diagnostics ImmutableArray[Diagnostic]
+    ) : IEquatable[IfLetParseResult] { }
+
+    private let ifLetParseMemo Dictionary[IfLetParseKey, IfLetParseResult] = Dictionary[
+        IfLetParseKey,
+        IfLetParseResult
+    ]()
+
+    /// Issue #4961: parses an `if let` statement or expression at most once per
+    /// start position and parser state. ParseIfLetGuardedInitializer parses an
+    /// initializer speculatively and then again, and its guard is parsed both
+    /// in that speculation and by the header, so without the memo an `if let`
+    /// nested in a guard or initializer would be re-parsed once per enclosing
+    /// level (exponential in the nesting depth). A recorded parse is reused
+    /// only when the token stream is the same and neither its token limit nor
+    /// the current one fell within the tokens it looked at, so the reused node
+    /// is exactly what a fresh parse would produce; its diagnostics are
+    /// replayed.
+    private func ParseIfLetMemoized[T SyntaxNode](parse() -> T) T {
+        let key = IfLetParseKey(
+            Current.Position,
+            suppressTrailingObjectInitializer,
+            suppressStructLiteral,
+            allowEmptyStructLiteralInHeader,
+            unsafeDepth,
+            sharedClassBody,
+            suppressRangeOperator,
+            tupleTypeBeforeArrowBodyPosition,
+            patternParseContext,
+            patternNestingDepth
+        )
+        if ifLetParseMemo.TryGetValue(key, out var recorded) && recorded.TokensBefore.Equals(tokens) &&
+            recorded.FurthestPeek < recorded.Limit &&
+            recorded.FurthestPeek < tokenLimitPosition &&
+            recorded.Node is T {
+            let reused = cast[T](recorded.Node)
+            position = recorded.End
+            tokens = recorded.TokensAfter
+            if recorded.FurthestPeek > furthestPeekPosition {
+                furthestPeekPosition = recorded.FurthestPeek
+            }
+            Diagnostics.AddRange(recorded.Diagnostics)
+            return reused
+        }
+        let tokensBefore = tokens
+        let diagnosticMark = Diagnostics.Count
+        let outerFurthestPeek = furthestPeekPosition
+        furthestPeekPosition = -1
+        let limit = tokenLimitPosition
+        var node T
+        var innerFurthestPeek = -1
+        try {
+            node = parse()
+        } finally {
+            innerFurthestPeek = furthestPeekPosition
+            if outerFurthestPeek > furthestPeekPosition {
+                furthestPeekPosition = outerFurthestPeek
+            }
+        }
+        ifLetParseMemo[key] = IfLetParseResult(
+            node,
+            tokensBefore,
+            tokens,
+            position,
+            innerFurthestPeek,
+            limit,
+            Diagnostics.Since(diagnosticMark)
+        )
+        return node
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -249,7 +366,7 @@ open partial class Parser {
         EnsureNestedParseAllowed()
         recursionDepth++
         try {
-            return ParseIfLetExpressionCore()
+            return ParseIfLetMemoized(() -> ParseIfLetExpressionCore())
         } finally {
             recursionDepth--
         }

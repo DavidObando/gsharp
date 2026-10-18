@@ -109,9 +109,9 @@ if let a = e1, let b = e2 { body }
 ```
 
 *Superseded by [ADR-0201](0201-align-if-let-statement-and-expression.md): the
-bindings now short-circuit, and with an `else` arm the statement is one
-two-armed `if` over the shared short-circuit condition; the flag shape below
-made a both-arms-return statement report GS0100.*
+bindings now short-circuit, and with an `else` arm and more than one test the
+statement lowers to forward conditional gotos to a single else label; the flag
+shape below made a both-arms-return statement report GS0100.*
 
 Multiple bindings **with** an `else` arm use a synthesized `bool` flag so the
 else-block appears in the bound tree exactly once:
@@ -292,7 +292,7 @@ the binding grammar and the binding semantics but not the shape around them:
 | Initializer grammar | Stops at a top-level `&&` or `\|\|`; `??` and `?:` tails accepted; parenthesize to keep a logical operator in the initializer (ADR-0201) | Same |
 | Multiple bindings | Left-to-right short circuit; later initializers see earlier bindings narrowed (ADR-0201) | Same |
 | Result | No value | Common type of the branch tails (GS0263) |
-| Lowering | Nested `BoundIfStatement`s, or one `if`/`else` over the shared short-circuit condition when there is an `else` and more than one test (ADR-0201; replaces the matched flag below) | `BoundBlockExpression` + `BoundConditionalExpression` (ADR-0064 nodes) |
+| Lowering | Nested `BoundIfStatement`s, or forward conditional gotos to one else label when there is an `else` and more than one test (ADR-0201; replaces the matched flag below) | `BoundBlockExpression` + `BoundConditionalExpression` (ADR-0064 nodes) |
 
 Both forms:
 

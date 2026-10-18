@@ -97,7 +97,11 @@ tree is located: an operand of a binary operator, a `?:` condition or false
 arm, a range bound, a `with` receiver, or an assignment's value. If there is
 one, the initializer is re-parsed with the token stream ending just before
 it. A construct the locator does not know keeps its logical operators, which
-is the pre-ADR-0201 parse, so the rule fails safe.
+is the pre-ADR-0201 parse, so the rule fails safe. The locator walks the tree
+iteratively. A parse memo keyed by start position and parser state, and
+reused only when no token limit falls within the tokens the recorded parse
+looked at, keeps an `if let` nested in a guard or an initializer from being
+re-parsed once per enclosing level.
 
 ### 2. Guard
 
@@ -129,6 +133,12 @@ both forms: the narrowing a `true` guard implies (`&& other != nil`,
 `ClassifyIfExpressionNarrowing` for the expression), so the guard narrows
 exactly as the same condition would after `if`.
 
+For name uses in these regions, the language server uses the compiler semantic
+model's selected symbol before its syntax-based fallbacks. Pattern flow scope
+and inner declarations, including tuple-loop locals, therefore follow the same
+binder decision as compilation. Member-receiver fast paths retain the name's
+syntax anchor so these uses participate in that lookup too.
+
 ### 5. Every binding strips one nullable layer
 
 A later initializer that is already non-nullable (`if let t = s, let u =
@@ -154,7 +164,7 @@ mistyped initializer that the author believed could be `nil`.
 | --- | --- | --- | --- |
 | `else` | Optional; any statement | Mandatory (GS0276); block, `if` or `if let` | A value position needs a value on every path |
 | Branch bodies | Statements | Blocks ending in a value (GS0277), unified (GS0263) | Same |
-| Lowering | Nested `BoundIfStatement`s, or one `if`/`else` over the shared short-circuit condition | `BoundConditionalExpression` over the same condition | A statement then-block can `return`, `break`, `continue`, `goto`, `yield`, `await` and capture; without an `else` it stays in plain statement nodes |
+| Lowering | Nested `BoundIfStatement`s, or forward conditional gotos to one else label | `BoundConditionalExpression` over a short-circuit condition | A statement then-block can `return`, `break`, `continue`, `goto`, `yield`, `await` and capture; without an `else` it stays in plain statement nodes |
 
 Without an `else` branch, or with a single test, the statement lowers to nested
 statements:
@@ -165,19 +175,34 @@ if let a = e0, let b = e1 && g { T }
 { let a = e0; if a != nil { let b = e1; if b != nil && g { T } } }
 ```
 
-With an `else` branch and more than one test it is one two-armed `if` over
-`IfLetBindingSupport.BuildShortCircuitCondition`, the condition the expression
-form uses:
+With an `else` branch and more than one test it lowers to forward conditional
+gotos to one else label:
 
 ```text
 if let a = e0, let b = e1 && g { T } else { F }
 =>
-if ({ let a = e0 } → a != nil ? ({ let b = e1 } → b != nil ? g : false) : false) { T } else { F }
+{
+    let a = e0
+    if a == nil goto <else>
+    let b = e1
+    if b == nil goto <else>
+    if !g goto <else>
+    T
+    goto <end>
+<else>:
+    F
+<end>:
+}
 ```
 
 This replaces ADR-0071's matched-flag shape (`var <matched> = false; …;
-if !<matched> { F }`), under which return analysis could not see that a
-statement whose both arms `return` always returns, so it reported GS0100.
+if !<matched> { F }`). Under that shape, return analysis could not see that a
+statement whose arms both `return` always returns, so it reported GS0100.
+Plain control flow keeps every flow analysis exact. A short-circuit
+block-expression condition (the expression form's) was rejected here as well:
+definite-assignment analysis cannot see through it that the then-branch runs
+only after every initializer ran, so an `out` argument of a later initializer
+was reported unassigned (GS0238).
 
 ### Not changed by this ADR
 
@@ -250,6 +275,6 @@ its output keeps its meaning.
 - **Keep ADR-0071's matched-flag lowering for a multi-binding statement with
   an `else`.** Rejected: a `bool` flag hides from return analysis that the two
   arms are exhaustive (GS0100 on a both-arms-return statement, already present
-  on `main`), whereas the shared condition gives a plain two-armed `if`. The
-  emit tests run `return`, `continue`, `yield`, `await` and closures through
-  both lowerings.
+  on `main`), whereas forward gotos keep the branch structure visible to every
+  flow analysis. The emit tests run `return`, `continue`, `yield`, `await`,
+  closures and out arguments through both lowerings.

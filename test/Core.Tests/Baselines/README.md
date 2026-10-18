@@ -182,3 +182,11 @@ conflicted entries. `DataStruct` keeps the equality parent's hash.
 `DataStructErgonomics` and `WebsiteSwift` compose the equality and hierarchy
 metadata with the existing whole-value copy bodies. The other 157 entries,
 five null entries, inventory, and hashing policy are unchanged.
+
+The #4961 statement alignment changes only `samples/IfLetGuardLet.gs` in the
+160-entry map. Its multi-binding statement with an `else` uses forward
+conditional gotos instead of a short-circuit block-expression condition, so
+flow analysis sees every initializer's assignments. Only its `MethodBodies`
+digest changes; all metadata-table digests and the other 159 sample entries
+remain unchanged. The nullable-binding emit tests verify the control flow,
+stdout and IL. The sample inventory and hashing policy are unchanged.

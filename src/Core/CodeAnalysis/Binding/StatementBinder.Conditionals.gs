@@ -174,9 +174,10 @@ internal partial class StatementBinder {
     /// { let a = e0; if a != nil { let b = e1; if b != nil && g { T } } }
     /// ```
     ///
-    /// With an else branch and more than one test it is one `if`/`else` over
-    /// (cref:IfLetBindingSupport.BuildShortCircuitCondition), the condition
-    /// the expression form uses, so each branch appears exactly once.
+    /// With an else branch and more than one test it lowers to forward
+    /// conditional gotos to a single else label, so each branch appears
+    /// exactly once and definite-assignment and return analysis see plain
+    /// control flow.
     private func BindIfLetStatement(syntax IfLetStatementSyntax) BoundStatement {
         // The header (initializers and guard) runs before either branch, like
         // an `if` condition: fold its callable effects into the alias state
@@ -262,16 +263,51 @@ internal partial class StatementBinder {
                 LowerIfLetClauses(syntax, clauses, 0, usableGuard, thenStatement, elseStatement)
             )
         }
-        // More than one test and an else branch: one `if`/`else` over the
-        // shared short-circuit condition, so each branch appears exactly once
-        // and return/reachability analysis sees a plain two-armed `if`. (The
-        // matched-flag shape ADR-0071 used here made a both-arms-return
-        // statement report GS0100.) An erroneous clause has already reported;
-        // only the valid ones take part.
-        let valid = clauses.Where((clause IfLetBindingSupport.BoundIfLetClause) -> clause.Binding.IsValid)
-            .ToImmutableArray()
-        let condition = IfLetBindingSupport.BuildShortCircuitCondition(valid, 0, usableGuard)
-        return BoundIfStatement(syntax, condition, thenStatement, elseStatement)
+        // More than one test and an else branch: lower to forward conditional
+        // gotos so each branch appears exactly once and every analysis
+        // (definite assignment, return/reachability) sees plain control flow:
+        //
+        //   let a = e0
+        //   if a == nil goto <else>
+        //   let b = e1
+        //   if b == nil goto <else>
+        //   if !g goto <else>
+        //   T
+        //   goto <end>
+        // <else>:
+        //   F
+        // <end>:
+        //
+        // (ADR-0071's matched flag hid the branch structure, so a statement
+        // whose arms both return reported GS0100; a short-circuit block
+        // condition lost which initializers ran, so an out argument of a later
+        // initializer was not definitely assigned in the then-branch.) An
+        // erroneous clause has already reported; it contributes only its
+        // declaration.
+        binderCtx.LabelCounter++
+        let elseLabel = BoundLabel("ifLetElse${binderCtx.LabelCounter}")
+        let endLabel = BoundLabel("ifLetEnd${binderCtx.LabelCounter}")
+        let lowered = ImmutableArray.CreateBuilder[BoundStatement]()
+        for clause in clauses {
+            lowered.Add(DeclareIfLetClause(clause))
+            if clause.Binding.IsValid {
+                let test = Invariant.Required(
+                    IfLetBindingSupport.BuildNilCheckChain(clause.Syntax, []VariableSymbol{clause.Binding.Variable}),
+                    "a valid if-let binding has a nil check",
+                    expression: "IfLetBindingSupport.BuildNilCheckChain(clause.Syntax, new[] { clause.Binding.Variable })"
+                )
+                lowered.Add(BoundConditionalGotoStatement(syntax, elseLabel, test, jumpIfTrue: false))
+            }
+        }
+        if usableGuard != nil {
+            lowered.Add(BoundConditionalGotoStatement(syntax, elseLabel, usableGuard, jumpIfTrue: false))
+        }
+        lowered.Add(thenStatement)
+        lowered.Add(BoundGotoStatement(syntax, endLabel))
+        lowered.Add(BoundLabelStatement(syntax, elseLabel))
+        lowered.Add(Invariant.Required(elseStatement, "the goto shape has an else branch", expression: "elseStatement"))
+        lowered.Add(BoundLabelStatement(syntax, endLabel))
+        return BoundBlockStatement(syntax, lowered.ToImmutable())
     }
 
     /// Issue #4961 / ADR-0201: lowers clauses `index..` of an `if let`

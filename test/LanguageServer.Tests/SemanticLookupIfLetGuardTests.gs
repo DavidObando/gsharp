@@ -255,6 +255,132 @@ func Run(maybe string?) int32 {
         Assert.Same(binding, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 8)))
     }
 
+    @Fact
+    func PatternVariables_ShadowTheBinding_OnlyInsideTheirStatement() {
+        const Source = `func Use(x object) { }
+func Nested(maybe string?, obj object) {
+    if let value = maybe {
+        if obj is int32 value {
+            Use(value)
+        }
+        Use(value)
+    }
+}
+func StatementGuard(maybe string?, obj object) {
+    if let value = maybe && obj is int32 value {
+        Use(value)
+    }
+}
+func ExpressionGuard(maybe string?, obj object) int32 {
+    return if let value = maybe && obj is string value { value.Length } else { 0 }
+}`
+        let tree = SyntaxTree.Parse(Source)
+        let compilation = Compilation(tree)
+        let firstBinding Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 1))
+        let nestedPattern Symbol? = SemanticLookup.ResolveSymbol(
+            compilation,
+            IdentifierAt(tree, "value", occurrence: 2)
+        )
+        Assert.IsAssignableFrom[VariableSymbol](firstBinding)
+        Assert.IsAssignableFrom[VariableSymbol](nestedPattern)
+        Assert.NotSame(firstBinding, nestedPattern)
+        // Inside the nested `if`, the pattern variable; after it, the binding.
+        Assert.Same(
+            nestedPattern,
+            SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 3))
+        )
+        Assert.Same(firstBinding, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 4)))
+        // A guard's pattern variable is what the then-region sees, in both forms.
+        let statementBinding Symbol? = SemanticLookup.ResolveSymbol(
+            compilation,
+            IdentifierAt(tree, "value", occurrence: 5)
+        )
+        let guardPattern Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 6))
+        Assert.IsAssignableFrom[VariableSymbol](guardPattern)
+        Assert.NotSame(statementBinding, guardPattern)
+        Assert.Same(guardPattern, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 7)))
+        let expressionBinding Symbol? = SemanticLookup.ResolveSymbol(
+            compilation,
+            IdentifierAt(tree, "value", occurrence: 8)
+        )
+        let expressionPattern Symbol? = SemanticLookup.ResolveSymbol(
+            compilation,
+            IdentifierAt(tree, "value", occurrence: 9)
+        )
+        Assert.IsAssignableFrom[VariableSymbol](expressionPattern)
+        Assert.NotSame(expressionBinding, expressionPattern)
+        Assert.Same(
+            expressionPattern,
+            SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 10))
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func PatternFlowAndTupleLoops_SelectTheBoundSymbol(expressionForm bool) {
+        let prefix = if expressionForm {
+            "return "
+        } else {
+            ""
+        }
+        let tail = if expressionForm {
+            "value.Length"
+        } else {
+            "return value.Length"
+        }
+        let otherwise = if expressionForm {
+            "0"
+        } else {
+            "return 0"
+        }
+        let source = `func Use(x object) { }
+func Run(maybe string?, obj object, pairs [](int32, int32)) int32 {
+    PREFIXif let value = maybe {
+        if obj !is int32 value {
+            Use(value)
+        } else {
+            Use(value)
+        }
+        let nested = if obj is int32 value { value } else { value.Length }
+        for (value, score) in pairs {
+            Use(value)
+        }
+        Use(value)
+        TAIL
+    } else { OTHERWISE }
+}`.Replace("PREFIX", prefix).Replace("TAIL", tail).Replace("OTHERWISE", otherwise)
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        Assert.Empty(tree.Diagnostics)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let binding = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 1))
+        let negativePattern = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 2))
+        let positivePattern = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 5))
+        let tupleLocal = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 8))
+        Assert.IsAssignableFrom[VariableSymbol](binding)
+        Assert.IsAssignableFrom[VariableSymbol](negativePattern)
+        Assert.IsAssignableFrom[VariableSymbol](positivePattern)
+        Assert.IsAssignableFrom[VariableSymbol](tupleLocal)
+        Assert.NotSame(binding, negativePattern)
+        Assert.NotSame(binding, positivePattern)
+        Assert.NotSame(binding, tupleLocal)
+        Assert.Same(binding, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 3)))
+        Assert.Same(
+            negativePattern,
+            SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 4))
+        )
+        Assert.Same(
+            positivePattern,
+            SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 6))
+        )
+        Assert.Same(binding, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 7)))
+        Assert.Same(tupleLocal, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 9)))
+        Assert.Same(binding, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 10)))
+        Assert.Same(binding, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 11)))
+    }
+
     shared {
         private func IdentifierAt(tree SyntaxTree, text string, occurrence int32) SyntaxToken? {
             var seen = 0

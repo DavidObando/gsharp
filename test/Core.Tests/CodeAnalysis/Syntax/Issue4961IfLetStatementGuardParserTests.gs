@@ -6,8 +6,11 @@ package GSharp.Core.Tests.CodeAnalysis.Syntax
 
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Syntax
+import System
 import System.Collections.Generic
+import System.Diagnostics
 import System.Linq
+import System.Text
 import Xunit
 
 /// Issue #4961 / ADR-0201 — parser coverage for the binding header shared by
@@ -213,6 +216,51 @@ func F(flag bool, point Point) int32 {
         )
         Assert.NotNull(statements[1].Guard)
         Assert.IsType[ConditionalExpressionSyntax](FindFirst[GuardLetStatementSyntax](tree).Bindings[0].Initializer)
+    }
+
+    @Fact
+    func NestedGuardsAndInitializers_ParseInBoundedTime() {
+        // Each initializer is parsed speculatively and its guard twice; the
+        // `if let` parse memo keeps a construct nested in a guard or an
+        // initializer from being re-parsed once per enclosing level, which
+        // would be exponential in the depth (2^24 parses here).
+        const depth = 24
+        let guardNest = StringBuilder()
+        let initializerNest = StringBuilder()
+        for var i = 0; i < depth; i++ {
+            guardNest.Append("(if let a${i} = s && ")
+            initializerNest.Append("(if let b${i} = ")
+        }
+        guardNest.Append("true")
+        initializerNest.Append("s")
+        for var i = 0; i < depth; i++ {
+            guardNest.Append(" { true } else { false })")
+            initializerNest.Append(" && b${depth - 1 - i}.Length > 0 { s } else { s })")
+        }
+        let source = "package P\nfunc F(s string?) bool {\n    let g = ${guardNest}\n    let i = ${initializerNest}\n    return g\n}\n"
+        let watch = Stopwatch.StartNew()
+        let tree = SyntaxTree.Parse(source)
+        watch.Stop()
+        Assert.Empty(tree.Diagnostics)
+        Assert.Equal(2 * depth, Walk(tree.Root).OfType[IfLetExpressionSyntax]().Count())
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), "nested if-let parse took ${watch.Elapsed}")
+    }
+
+    @Fact
+    func LongGuardChain_FindsTheDelimiterWithoutDeepRecursion() {
+        // A long left-associated `&&` chain is built iteratively by the binary
+        // parser; the delimiter search over it must not recurse per operator.
+        const length = 20000
+        let chain = StringBuilder()
+        for var i = 0; i < length; i++ {
+            chain.Append(" && ok")
+        }
+        let source = "package P\nfunc F(maybe string?, ok bool) {\n    if let x = maybe${chain} {\n    }\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        Assert.DoesNotContain(tree.Diagnostics, (d Diagnostic) -> d.Id != "GS0417")
+        let stmt = FindFirst[IfLetStatementSyntax](tree)
+        Assert.IsType[NameExpressionSyntax](stmt.Bindings[0].Initializer)
+        Assert.NotNull(stmt.Guard)
     }
 
     @Fact

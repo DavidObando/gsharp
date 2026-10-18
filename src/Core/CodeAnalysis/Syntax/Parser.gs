@@ -31,6 +31,10 @@ open partial class Parser {
     // int32.MaxValue means no limit.
     private var tokenLimitPosition int32 = int32.MaxValue
 
+    // Issue #4961: the furthest source position Peek has looked at (see
+    // ParseIfLetMemoized).
+    private var furthestPeekPosition int32 = -1
+
     // Issue #3587: declaration return/property types can contain a slice-wrapped
     // tuple immediately before an expression-body arrow. This position marks
     // the one ambiguous tuple that must be parsed as a tuple, not a function type.
@@ -564,6 +568,11 @@ open partial class Parser {
             return tokens[tokens.Length - 1]
         }
         let token = tokens[index]
+        // Issue #4961: the `if let` parse memo needs to know how far a parse
+        // looked ahead, to reuse it only where a token limit cannot matter.
+        if token.Position > furthestPeekPosition {
+            furthestPeekPosition = token.Position
+        }
         // Issue #4961 / ADR-0201: while a `let` initializer is re-parsed up to
         // its guard delimiter, the stream ends just before that token.
         if token.Position >= tokenLimitPosition {

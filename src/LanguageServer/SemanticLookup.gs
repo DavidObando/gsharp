@@ -795,6 +795,14 @@ shared class SemanticLookup {
             if symbol == nil {
                 return nil
             }
+            // Use the binder's selected symbol instead of reconstructing pattern
+            // flow scopes or enumerating every kind of shadowing declaration.
+            if token.Parent is NameExpressionSyntax name && this.compilation.SyntaxTrees.Contains(name.SyntaxTree) {
+                let boundSymbol Symbol? = this.compilation.GetSemanticModel(name.SyntaxTree).GetSymbolInfo(name).Symbol
+                if boundSymbol != nil {
+                    return boundSymbol
+                }
+            }
             // A `for … in` / `await for` loop variable of the same name in a
             // narrower region is the binding in effect; defer to the existing
             // lookup path, which resolves loop variables.

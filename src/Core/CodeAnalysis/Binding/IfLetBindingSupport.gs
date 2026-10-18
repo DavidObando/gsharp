@@ -298,11 +298,9 @@ internal shared class IfLetBindingSupport {
     ///
     /// The short circuit lives in conditionals rather than a `&&` chain so
     /// each initializer sits in the arm reached only once every earlier
-    /// binding matched. The `if let` expression uses it as its condition, and
-    /// the statement form uses it when it has an else branch and more than one
-    /// test, so the then- and else-branches each appear exactly once under a
-    /// single `if`/`else` (which keeps return and reachability analysis
-    /// exact).
+    /// binding matched. The `if let` expression uses it as its condition; the
+    /// statement form lowers to statement-level control flow instead
+    /// (StatementBinder.BindIfLetStatement).
     /// @param clauses The bound clauses; every one must be valid.
     /// @param index The first clause to declare.
     /// @param guard The optional guard, evaluated after the final binding matched.

@@ -256,6 +256,35 @@ Console.WriteLine(Guarded("a", "a"))`
     }
 
     @Fact
+    func MultipleBindingsWithElse_OutArgumentOfALaterInitializer_IsDefinitelyAssigned() {
+        // The then-branch runs only after every initializer ran, so an out
+        // argument assigned by a later initializer is definitely assigned
+        // there; the else-branch assigns it itself.
+        let source = `package Test
+import System
+
+func Next(out value string?) string? {
+    value = "out"
+    return "next"
+}
+func Try(s string?, out value string?) bool {
+    if let a = s, let b = Next(out value) {
+        return true
+    } else {
+        value = nil
+        return false
+    }
+}
+
+var v string? = nil
+Console.WriteLine(Try("s", out v))
+Console.WriteLine(v ?? "nil")
+Console.WriteLine(Try(nil, out v))
+Console.WriteLine(v ?? "nil")`
+        Assert.Equal(Lines("True", "out", "False", "nil"), CompileAndRun(source))
+    }
+
+    @Fact
     func MultipleBindingsWithElse_ThenBlockCarriesClosuresYieldAndLoopControl() {
         let source = `package Test
 import System
