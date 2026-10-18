@@ -6,7 +6,8 @@
 - **Finalized**: 2026-06-11 (issue [#711](https://github.com/DavidObando/gsharp/issues/711))
 - **Amended**: 2026-10-17 (issue [#4962](https://github.com/DavidObando/gsharp/issues/4962)): the if-expression accepts the if-statement's `SimpleStmt ';'` header initializer, with the same scoping. See the addendum at the end.
 - **Phase**: Phase 8 — language ergonomics / expression surface
-- **Related**: ADR-0062 (generalized ternary), ADR-0009 (switch semantics), issues #669, #706, #711, #3355
+- **Related**: ADR-0062 (generalized ternary), ADR-0009 (switch semantics), ADR-0069 (smart casts), issues #669, #706, #711, #3355, #4964
+- **Amended**: 2026-10-17 (issue [#4964](https://github.com/DavidObando/gsharp/issues/4964)): the ternary narrows its branches exactly as the if-expression does
 
 ## Context
 
@@ -250,3 +251,77 @@ empty-struct-literal allowance of an enclosing `for … in` collection header.
 That matters only for an if-expression written directly as a `for … in`
 collection whose condition is itself `Name { }`, which no code in the
 repository does. No migration path is needed.
+
+## Addendum (issue #4964, 2026-10-17): one narrowing rule for both conditional forms
+
+The Finalized addendum says the if-expression keeps the smart-cast narrowing of
+variables tested in its condition inside both branches. Issue #2640 implemented
+that for the if-expression only. The ternary, which binds to the same
+`BoundConditionalExpression`, bound its branches with pattern variables
+(ADR-0166) but without narrowing, so `s != nil ? s.Length : 0` reported GS0158
+while `if s != nil { s.Length } else { 0 }` compiled.
+
+**Rule.** `c ? a : b` and `if c { a } else { b }` bind `a` under the narrowing
+`c` implies when true and `b` under the narrowing it implies when false. One
+helper, `ExpressionBinder.ClassifyConditionalNarrowing`, computes both frames
+for both binders: a top-level nil guard (`x != nil`, `x == nil`, `nil != x`,
+value-type nullables and ADR-0186 platform values included), merged with the
+type-test and short-circuit frames (`x is T`, `x !is T`, `!`, `&&`, `||`).
+Narrowing ends with the branch; nothing is lifted past the conditional in
+either form. A narrowed value-type nullable read goes through
+`ExpressionBinder.BuildNarrowedRead`, as in every other narrowing region.
+
+The only differences left between the two forms follow from syntax: an
+if-expression branch is a block with a value tail, and its `else` is
+mandatory, while a ternary branch is a single expression.
+
+**Compatibility.** This is a deliberate breaking change for parity. A narrowed
+branch has its narrowed type, so a ternary whose branch reads the guarded
+variable can now have a narrower result type, exactly as the matching
+if-expression already had. With `n int32?`, `n != nil ? n : 0` is now `int32`
+(it was `int32?`), which can change the inferred type of a `let`/`var` and the
+overload chosen for an argument, and a user `!!` on the narrowed variable in
+the proven branch now reports the GS0536 redundant-assertion warning.
+
+Code that compiled before, in 0.4.1270 and 0.5.7, stops compiling in these
+cases:
+
+- **`Nullable<T>` members on the narrowed value.** `n != nil ? n.Value : 0`,
+  `n.GetValueOrDefault()` and `n.HasValue` in the proven branch report GS0158 /
+  GS0159, because `n` is `int32` there. The if-statement and if-expression
+  have always rejected these. Migration: the narrowed value is the value, so
+  write `n` for `n.Value` and `n.GetValueOrDefault()`, and `true` for
+  `n.HasValue`. Issue #4986 tracks a fix hint (or a rule that keeps the C#
+  idiom compiling in every form).
+- **The narrower type no longer fits.** A later `nil` assignment to an
+  inferred local, or a call to overloads that differ only in reference
+  nullability (`f(string)` / `f(string?)`), which are ambiguous for any
+  non-null argument (issue #4971). Migration: state the type
+  (`let r int32? = …`).
+- **Expression-tree lambdas.** `(v int32?) -> v != nil ? v + 1 : 0` converted to
+  `Expression[Func[int32?, int32]]` compiled, then threw `ArgumentException`
+  when the tree was built (the body had type `Nullable<int32>`). It now reports
+  GS0473, as the if-expression form already did, because the expression-tree
+  lowerer does not yet lower a narrowed value-type read. Migration:
+  `(v ?? -1) + 1`. A type-test narrowed read in an expression-tree lambda
+  compiles and then throws at tree construction in every form (if-expression,
+  `&&`, and now `?:`). Both gaps are issue #4974.
+
+At the time of the change the repository held no nil-guard or type-test
+ternary that reads its guarded variable in compiler, tool or sample source
+(cs2gs lowers a C# `?:` to an if-expression, so its output was already
+narrowed); the cases in test sources are listed in the PR.
+
+**Known gap, shared by both forms.** A nil guard on a value-type nullable
+under `!`, `&&` or `||` (`!(n == nil)`, `a != nil && b != nil` with `int32?`)
+does not narrow in either form, because the short-circuit classifier accepts
+reference nullables only. The if-statement does narrow these. That
+statement/expression difference, and the if-statement's `[NotNullWhen]` call
+narrowing, are tracked in issue #4969.
+
+**Known gap, shared by every narrowing region.** An assignment inside the
+narrowed expression does not end the narrowing for the rest of that
+expression: `s != nil ? consume((s = nil), s.Length) : 0` compiles and
+dereferences nil, as the if-expression, if-statement and `&&` forms already
+did. Invalidation runs at statement granularity; issue #4985 tracks moving it
+to the assignment.

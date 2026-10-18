@@ -443,6 +443,8 @@ func Describe(a Animal) string {
 }
 ```
 
+The branches of an `if` expression and of the conditional operator narrow the same way, so `(a is Dog) ? a.Bark() : a.Name` and `if a is Dog { a.Bark() } else { a.Name }` are equivalent; a nil guard narrows too (`s != nil ? s.Length : 0`).
+
 Reassignment to a narrowed receiver inside the narrowed region drops the narrowing for the remainder of the region. Fields, properties, and indexed expressions are never narrowed because their reads are not idempotent.
 
 ## Pattern variables
