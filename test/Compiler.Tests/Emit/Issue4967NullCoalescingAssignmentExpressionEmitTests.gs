@@ -414,6 +414,54 @@ main()`
         Assert.Equal("4${Environment.NewLine}", CompileAndRun(source))
     }
 
+    /// Review of #4980: in value position the right side runs before the
+    /// write, so a reference receiver or CLR indexer key held in a variable is
+    /// snapshotted; a right side that reassigns it does not redirect the write
+    /// (C#: the target is evaluated once). A struct receiver keeps writing
+    /// through its storage. The statement form is tracked separately in #5000.
+    @Fact
+    func ValuePosition_RhsReassigningReceiverOrKey_WritesTheOriginalTarget() {
+        let source = `package Test
+import System
+import System.Collections.Generic
+
+class Box {
+    var F string?
+}
+struct S {
+    var F string?
+}
+
+func main() {
+    let first = Box{}
+    let other = Box{}
+    var box = first
+    let r = (box.F ??= {
+        box = other
+        "v"
+    })
+    Console.WriteLine("${r} first=${first.F ?? "nil"} other=${other.F ?? "nil"}")
+    let d = Dictionary[string, string?]()
+    d["a"] = nil
+    d["b"] = nil
+    var key = "a"
+    let r2 = (d[key] ??= {
+        key = "b"
+        "w"
+    })
+    Console.WriteLine("${r2} a=${d["a"] ?? "nil"} b=${d["b"] ?? "nil"}")
+    var s = S{}
+    let r3 = (s.F ??= "struct")
+    Console.WriteLine("${r3} ${s.F ?? "nil"}")
+}
+
+main()`
+        Assert.Equal(
+            "v first=v other=nil${Environment.NewLine}w a=w b=nil${Environment.NewLine}struct struct${Environment.NewLine}",
+            CompileAndRun(source)
+        )
+    }
+
     shared {
         private func CompileAndRun(source string) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_issue4967_").FullName
@@ -458,9 +506,18 @@ stderr:
                 psi.ArgumentList.Add(Path.ChangeExtension(outPath, ".runtimeconfig.json"))
                 psi.ArgumentList.Add(outPath)
                 using let proc = Process.Start(psi) ?? throw InvalidOperationException("Failed to start dotnet exec")
-                let stdout = proc.StandardOutput.ReadToEnd()
-                let stderr = proc.StandardError.ReadToEnd()
-                Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out")
+                // Drain both pipes concurrently and enforce the timeout before
+                // collecting them, so a stalled sample fails instead of hanging.
+                let stdoutTask = proc.StandardOutput.ReadToEndAsync()
+                let stderrTask = proc.StandardError.ReadToEndAsync()
+                if !proc.WaitForExit(30_000) {
+                    try {
+                        proc.Kill(entireProcessTree: true)
+                    } catch (InvalidOperationException) { }
+                    Assert.Fail("dotnet exec timed out")
+                }
+                let stdout = stdoutTask.GetAwaiter().GetResult()
+                let stderr = stderrTask.GetAwaiter().GetResult()
                 Assert.True(proc.ExitCode == 0, (`sample exited ` + "${proc.ExitCode}" + `
 stdout:
 ` + "$stdout" + `

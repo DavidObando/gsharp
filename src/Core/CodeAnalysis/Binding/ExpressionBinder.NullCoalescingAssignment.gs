@@ -80,42 +80,60 @@ internal partial class ExpressionBinder {
     /// does not evaluate `obj` twice. Issue #4967 keeps this lowering, the
     /// one the statement form always had, so existing statements emit the
     /// same IL; it shares (cref:BindNullCoalescingAssignmentOperands) and
-    /// (cref:TryBuildNullCoalescingReadWrite) with the value form.
+    /// (cref:TryBuildNullCoalescingReadWrite) with the value form. The
+    /// lowered statement and its captures are anchored to the statement, a
+    /// rebuilt target read to the target and the write to the `??=`
+    /// expression, so the semantic model resolves each syntax node.
+    /// @param statement The expression statement.
     /// @param syntax The `??=` expression of the statement.
     /// @returns The lowered statement.
     internal func BindNullCoalescingAssignmentStatement(
+        statement ExpressionStatementSyntax,
         syntax NullCoalescingAssignmentExpressionSyntax
     ) BoundStatement {
         let (boundRead, boundRhs, _, _, isNonNullableReferenceTarget) = BindNullCoalescingAssignmentOperands(syntax)
         if boundRead == nil || boundRhs == nil {
-            return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+            return BoundExpressionStatement(statement, BoundErrorExpression(nil))
         }
         let preStatements = ImmutableArray.CreateBuilder[BoundStatement]()
-        let (read, write) = TryBuildNullCoalescingReadWrite(syntax, boundRead, boundRhs, preStatements)
+        let (read, write) = TryBuildNullCoalescingReadWrite(
+            syntax,
+            statement,
+            syntax.Target,
+            syntax,
+            boundRead,
+            boundRhs,
+            preStatements,
+            snapshotReceivers: false
+        )
         if read == nil || write == nil {
-            return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+            return BoundExpressionStatement(statement, BoundErrorExpression(nil))
         }
         // Condition: read == nil. Routes through the existing nil-compare
         // operator so any value-type Nullable<T> lowering is handled in the
         // same code path as `x == nil` elsewhere.
+        // The test is synthesized and has no syntax of its own: lowering turns
+        // the `if` into a conditional goto with no anchor, so an anchored test
+        // would become the semantic model's answer for the statement, the
+        // target or the `??=` expression.
         var conditionRead = read
         if isNonNullableReferenceTarget {
-            conditionRead = BoundConversionExpression(syntax, NullableTypeSymbol.Get(read.Type), read)
+            conditionRead = BoundConversionExpression(nil, NullableTypeSymbol.Get(read.Type), read)
         }
-        let nilLiteral = BoundLiteralExpression(syntax, nil, TypeSymbol.Null)
+        let nilLiteral = BoundLiteralExpression(nil, nil, TypeSymbol.Null)
         let eqOp = Invariant.Required(
             BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, conditionRead.Type, TypeSymbol.Null),
             "a nullable coalescing assignment target supports nil comparison",
             expression: "BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, conditionRead.Type, TypeSymbol.Null)"
         )
-        let condition BoundExpression = BoundBinaryExpression(syntax, conditionRead, eqOp, nilLiteral)
-        let thenStmt = BoundExpressionStatement(syntax, write)
-        let ifStmt BoundStatement = BoundIfStatement(syntax, condition, thenStmt, elseStatement: nil)
+        let condition BoundExpression = BoundBinaryExpression(nil, conditionRead, eqOp, nilLiteral)
+        let thenStmt = BoundExpressionStatement(statement, write)
+        let ifStmt BoundStatement = BoundIfStatement(statement, condition, thenStmt, elseStatement: nil)
         if preStatements.Count == 0 {
             return ifStmt
         }
         preStatements.Add(ifStmt)
-        return BoundBlockStatement(syntax, preStatements.ToImmutable())
+        return BoundBlockStatement(statement, preStatements.ToImmutable())
     }
 
     /// Issue #4967: binds `target ??= value` in value position. The value is
@@ -193,7 +211,16 @@ internal partial class ExpressionBinder {
                 conversions.BindConversion(syntax.Value.Location, valueRead, rhsTargetType)
             }
         }
-        let (read, write) = TryBuildNullCoalescingReadWrite(syntax, boundRead, storedValue, preStatements)
+        let (read, write) = TryBuildNullCoalescingReadWrite(
+            syntax,
+            syntax,
+            syntax.Target,
+            syntax,
+            boundRead,
+            storedValue,
+            preStatements,
+            snapshotReceivers: true
+        )
         if read == nil || write == nil {
             return BoundErrorExpression(nil)
         }
@@ -247,12 +274,33 @@ internal partial class ExpressionBinder {
     /// so the receiver is evaluated exactly once. Returns
     /// `(null, null)` with a diagnostic when the target shape is
     /// not assignable or the target is read-only.
+    /// @param syntax The `??=` expression; diagnostics use its operator.
+    /// @param captureAnchor The syntax the capture declarations are anchored to.
+    /// @param readAnchor The syntax a rebuilt target read is anchored to.
+    /// @param writeAnchor The syntax the write is anchored to.
+    /// @param boundRead The bound target read.
+    /// @param boundRhs The value to write.
+    /// @param preStatements Receives the capture declarations.
+    /// @param snapshotReceivers Issue #4967: in value position the value is
+    /// computed before the write, so a reference-typed receiver held in a
+    /// variable, and every CLR indexer argument, is captured even when it is
+    /// a plain variable; otherwise a right-hand side that reassigns it would
+    /// redirect the write. A value-type receiver is never copied (the write
+    /// must reach its storage).
+    /// @returns The read and the write, or `(null, null)`.
     private func TryBuildNullCoalescingReadWrite(
         syntax NullCoalescingAssignmentExpressionSyntax,
+        captureAnchor SyntaxNode,
+        readAnchor SyntaxNode,
+        writeAnchor SyntaxNode,
         boundRead BoundExpression,
         boundRhs BoundExpression,
-        preStatements ImmutableArray[BoundStatement].Builder
+        preStatements ImmutableArray[BoundStatement].Builder,
+        snapshotReceivers bool
     )(Read BoundExpression?, Write BoundExpression?) {
+        let SnapshotsReference = func (receiver BoundExpression?) bool {
+            return snapshotReceivers && receiver != nil && ReceiverTypeIsReference(receiver.Type)
+        }
         switch boundRead {
             case varExpr is BoundVariableExpression {
                 {
@@ -260,7 +308,7 @@ internal partial class ExpressionBinder {
                         Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, varExpr.Variable.Name)
                         return (nil, nil)
                     }
-                    let write = BoundAssignmentExpression(syntax, varExpr.Variable, boundRhs)
+                    let write = BoundAssignmentExpression(writeAnchor, varExpr.Variable, boundRhs)
                     return (boundRead, write)
                 }
             }
@@ -272,13 +320,13 @@ internal partial class ExpressionBinder {
                             return (nil, nil)
                         }
                         let interfaceRead = BoundFieldAccessExpression(
-                            syntax,
+                            readAnchor,
                             fieldAccess.Field,
                             fieldAccess.InterfaceType!!,
                             fieldAccess.SubstitutedType
                         )
                         let interfaceWrite = BoundFieldAssignmentExpression(
-                            syntax,
+                            writeAnchor,
                             fieldAccess.Field,
                             fieldAccess.InterfaceType!!,
                             boundRhs,
@@ -320,10 +368,15 @@ internal partial class ExpressionBinder {
                     let receiver = if fieldAccess.Receiver == nil {
                         default(BoundVariableExpression?)
                     } else {
-                        CaptureReceiver(syntax, fieldAccess.Receiver, preStatements)
+                        CaptureReceiver(
+                            captureAnchor,
+                            fieldAccess.Receiver,
+                            preStatements,
+                            forceCapture: SnapshotsReference(fieldAccess.Receiver)
+                        )
                     }
                     let read = BoundFieldAccessExpression(
-                        syntax,
+                        readAnchor,
                         receiver,
                         Invariant.Required(
                             fieldAccess.StructType,
@@ -340,7 +393,7 @@ internal partial class ExpressionBinder {
                     // receiver path; routing through ReceiverExpression bypasses
                     // the interpreter's class-field write logic (issue #709).
                     let write = BoundFieldAssignmentExpression(
-                        syntax,
+                        writeAnchor,
                         receiver?.Variable,
                         Invariant.Required(
                             fieldAccess.StructType,
@@ -397,10 +450,15 @@ internal partial class ExpressionBinder {
                     let receiver = if propAccess.Receiver == nil {
                         default(BoundVariableExpression?)
                     } else {
-                        CaptureReceiver(syntax, propAccess.Receiver, preStatements)
+                        CaptureReceiver(
+                            captureAnchor,
+                            propAccess.Receiver,
+                            preStatements,
+                            forceCapture: SnapshotsReference(propAccess.Receiver)
+                        )
                     }
                     let read = BoundPropertyAccessExpression(
-                        syntax,
+                        readAnchor,
                         receiver,
                         propAccess.StructType,
                         propAccess.Property,
@@ -409,7 +467,7 @@ internal partial class ExpressionBinder {
                         propAccess.InterfaceType
                     )
                     let write = BoundPropertyAssignmentExpression(
-                        syntax,
+                        writeAnchor,
                         receiver,
                         propAccess.StructType,
                         propAccess.Property,
@@ -445,10 +503,15 @@ internal partial class ExpressionBinder {
                     let receiver = if clrPropAccess.Receiver == nil {
                         default(BoundVariableExpression?)
                     } else {
-                        CaptureReceiver(syntax, clrPropAccess.Receiver, preStatements)
+                        CaptureReceiver(
+                            captureAnchor,
+                            clrPropAccess.Receiver,
+                            preStatements,
+                            forceCapture: SnapshotsReference(clrPropAccess.Receiver)
+                        )
                     }
                     let read = BoundClrPropertyAccessExpression(
-                        syntax,
+                        readAnchor,
                         receiver,
                         clrPropAccess.Member,
                         clrPropAccess.Type,
@@ -457,7 +520,7 @@ internal partial class ExpressionBinder {
                         clrPropAccess.ConstrainedInterfaceType
                     )
                     let write = BoundClrPropertyAssignmentExpression(
-                        syntax,
+                        writeAnchor,
                         receiver,
                         clrPropAccess.Member,
                         boundRhs,
@@ -472,15 +535,15 @@ internal partial class ExpressionBinder {
             case idx is BoundIndexExpression {
                 {
                     // Spill target and every index so none is re-evaluated.
-                    let target = CaptureReceiver(syntax, idx.Target, preStatements, forceCapture: true)
+                    let target = CaptureReceiver(captureAnchor, idx.Target, preStatements, forceCapture: true)
                     let indices = ImmutableArray.CreateBuilder[BoundExpression](idx.Indices.Length)
                     for index in idx.Indices {
-                        indices.Add(CaptureReceiver(syntax, index, preStatements, forceCapture: true))
+                        indices.Add(CaptureReceiver(captureAnchor, index, preStatements, forceCapture: true))
                     }
                     let capturedIndices = indices.MoveToImmutable()
-                    let read = BoundIndexExpression(syntax, target, capturedIndices, idx.Type)
+                    let read = BoundIndexExpression(readAnchor, target, capturedIndices, idx.Type)
                     let write = BoundIndexAssignmentExpression(
-                        syntax,
+                        writeAnchor,
                         target.Variable,
                         capturedIndices,
                         boundRhs,
@@ -495,15 +558,22 @@ internal partial class ExpressionBinder {
                         Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, clrIdx.Indexer.Name)
                         return (nil, nil)
                     }
-                    let target = CaptureReceiver(syntax, clrIdx.Target, preStatements)
+                    let target = CaptureReceiver(
+                        captureAnchor,
+                        clrIdx.Target,
+                        preStatements,
+                        forceCapture: SnapshotsReference(clrIdx.Target)
+                    )
                     let argsBuilder = ImmutableArray.CreateBuilder[BoundExpression](clrIdx.Arguments.Length)
                     for arg in clrIdx.Arguments {
-                        argsBuilder.Add(CaptureReceiver(syntax, arg, preStatements))
+                        argsBuilder.Add(
+                            CaptureReceiver(captureAnchor, arg, preStatements, forceCapture: snapshotReceivers)
+                        )
                     }
                     let args = argsBuilder.ToImmutable()
-                    let read = BoundClrIndexExpression(syntax, target, clrIdx.Indexer, args, clrIdx.Type)
+                    let read = BoundClrIndexExpression(readAnchor, target, clrIdx.Indexer, args, clrIdx.Type)
                     let write = BoundClrIndexAssignmentExpression(
-                        syntax,
+                        writeAnchor,
                         target.Variable,
                         clrIdx.Indexer,
                         args,
@@ -535,7 +605,7 @@ internal partial class ExpressionBinder {
                     }
                     let baseWrite BoundExpression = if baseProperty.SetterSymbol == nil {
                         BoundBaseClassCallExpression(
-                            syntax,
+                            writeAnchor,
                             baseRead.Receiver,
                             baseRead.BaseClass,
                             method: nil,
@@ -546,7 +616,7 @@ internal partial class ExpressionBinder {
                         )
                     } else {
                         BoundBaseClassCallExpression(
-                            syntax,
+                            writeAnchor,
                             baseRead.Receiver,
                             baseRead.BaseClass,
                             baseProperty.SetterSymbol,
@@ -576,7 +646,7 @@ internal partial class ExpressionBinder {
                         return (nil, nil)
                     }
                     let clrBaseWrite = BoundImportedInstanceCallExpression(
-                        syntax,
+                        writeAnchor,
                         clrBaseRead.Receiver,
                         setter,
                         TypeSymbol.Void,
@@ -655,7 +725,7 @@ internal partial class ExpressionBinder {
     /// expression-receiver overloads bypass interpreter write logic
     /// (issue #709).
     private func CaptureReceiver(
-        syntax NullCoalescingAssignmentExpressionSyntax,
+        anchor SyntaxNode,
         receiver BoundExpression,
         preStatements ImmutableArray[BoundStatement].Builder,
         forceCapture bool = false
@@ -666,9 +736,9 @@ internal partial class ExpressionBinder {
         let name = "<ncaRecv${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
         let local = LocalVariableSymbol(name, isReadOnly: true, receiver.Type)
         $scope.TryDeclareVariable(local)
-        let declaration = BoundVariableDeclaration(syntax, local, receiver)
+        let declaration = BoundVariableDeclaration(anchor, local, receiver)
         preStatements.Add(declaration)
-        return BoundVariableExpression(syntax, local)
+        return BoundVariableExpression(anchor, local)
     }
 
     shared {

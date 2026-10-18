@@ -956,7 +956,7 @@ internal partial class StatementBinder {
         // of the value-producing one; both share one operand binder.
         if syntax.Expression is NullCoalescingAssignmentExpressionSyntax coalescing &&
             bindNullCoalescingAssignmentStatement is {} bindCoalescingStatement {
-            return bindCoalescingStatement(coalescing)
+            return bindCoalescingStatement(syntax, coalescing)
         }
         let expression = bindExpression(syntax.Expression, true)
         return BoundExpressionStatement(syntax, expression)

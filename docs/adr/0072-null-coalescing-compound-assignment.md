@@ -40,6 +40,12 @@
 > - The stored value is converted to the target once and the same value is
 >   yielded, so a boxed value keeps its identity. A throwing right side
 >   (`a ??= throw e`) is the coalesce's fallback as in `a ?? throw e`.
+> - In value position the right side is evaluated into a temporary before
+>   the write. So a reference-typed receiver held in a variable, and every
+>   CLR indexer argument, is captured even when it is a plain variable: a
+>   right side that reassigns it does not redirect the write. A value-type
+>   receiver is never copied. The statement lowering does not capture these
+>   yet, and a right side that reassigns them redirects or crashes it (#5000).
 > - Evaluation is unchanged in both positions: the target's receiver and
 >   indices are evaluated once, the target is read once, and `b` is evaluated
 >   and written back only when that read is nil.
