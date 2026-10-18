@@ -169,7 +169,7 @@ func main() {
     Console.WriteLine(show(s ??= "arg"))
     Console.WriteLine(pick(nil) + " " + pick("given"))
     var w string? = nil
-    let f = () -> w ??= "lambda"
+    let f () -> string = () -> w ??= "lambda"
     Console.WriteLine(f() + " " + w!!)
     var m string? = nil
     Console.WriteLine((m ??= "abc").Length + 1)
@@ -460,6 +460,46 @@ main()`
             "v first=v other=nil${Environment.NewLine}w a=w b=nil${Environment.NewLine}struct struct${Environment.NewLine}",
             CompileAndRun(source)
         )
+    }
+
+    /// Review of #4980: a target-less lambda whose body ends in `??=` infers
+    /// `void`, as one ending in `=` does (issue #2152), in block and expression
+    /// bodies, so it still passes as a `() -> void` callback. With a target
+    /// type the lambda yields the value.
+    @Fact
+    func LambdaTail_InfersVoidLikeAssignment_UnlessTargetTyped() {
+        let source = `package Test
+import System
+
+func run(cb () -> void) {
+    cb()
+}
+
+func main() {
+    var x string? = nil
+    let fill = () -> {
+        x ??= "block"
+    }
+    run(fill)
+    var y string? = nil
+    let fillExpr = () -> y ??= "expr"
+    run(fillExpr)
+    var z string? = nil
+    let get () -> string = () -> z ??= "typed"
+    var a string? = nil
+    run(() -> {
+        a ??= "direct"
+    })
+    var c string? = nil
+    let f Func[string] = () -> c ??= "func"
+    var d string? = nil
+    let act Action = () -> d ??= "action"
+    act()
+    Console.WriteLine("${x} ${y} ${get()} ${a} ${f()} ${d}")
+}
+
+main()`
+        Assert.Equal("block expr typed direct func action${Environment.NewLine}", CompileAndRun(source))
     }
 
     shared {

@@ -40,6 +40,13 @@
 > - The stored value is converted to the target once and the same value is
 >   yielded, so a boxed value keeps its identity. A throwing right side
 >   (`a ??= throw e`) is the coalesce's fallback as in `a ?? throw e`.
+> - As with `=` (issue #2152), a lambda whose body ends in `??=` infers a
+>   `void` result when no target type gives it one. This applies to a block
+>   tail (`() -> { x ??= v }`) and to an expression body (`() -> x ??= v`);
+>   with a target type the lambda yields the value.
+> - A struct receiver that is not a variable (an array element, a nested
+>   field) is copied by the shared receiver capture, so the write is lost in
+>   both positions; that is a pre-existing statement-form defect (#5005).
 > - In value position the right side is evaluated into a temporary before
 >   the write. So a reference-typed receiver held in a variable, and every
 >   CLR indexer argument, is captured even when it is a plain variable: a

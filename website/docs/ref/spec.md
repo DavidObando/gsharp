@@ -1812,7 +1812,9 @@ is a platform (`T!`) value, which is stored unchecked, or when `b` is an `if`,
 `switch`, conditional or block expression, which the target types as a whole.
 A platform target follows the same rule. The value is converted to the target
 once, so a boxed value is the same object in `a` and in the result. A throwing
-right side (`a ??= throw e`) is the coalesce's fallback. Flow narrowing is
+right side (`a ??= throw e`) is the coalesce's fallback. As with `=`, a
+lambda whose body ends in `??=` infers a `void` result when no target type
+gives it one. Flow narrowing is
 unchanged: the expression form does not narrow `a` afterwards, and the
 statement form does so only when the right side throws, since `a` is then
 non-nil on every path that continues.

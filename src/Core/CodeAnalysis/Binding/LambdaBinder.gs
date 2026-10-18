@@ -3747,6 +3747,12 @@ internal class LambdaBinder {
         // trailing assignment as contributing `void` (G#'s Kotlin-like Unit
         // semantics) on the target-less inference path.
         private func IsAssignmentExpression(expression BoundExpression) bool {
+            // Issue #4967: `??=` is an assignment too. Its value lowering is a
+            // block or `??` expression, so it is recognized by the syntax every
+            // such lowering is anchored to.
+            if expression.Syntax is NullCoalescingAssignmentExpressionSyntax {
+                return true
+            }
             let kind = expression.Kind
             return kind == BoundNodeKind.AssignmentExpression ||
                 kind == BoundNodeKind.FieldAssignmentExpression ||
