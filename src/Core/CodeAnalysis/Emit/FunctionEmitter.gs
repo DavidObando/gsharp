@@ -535,9 +535,13 @@ internal class FunctionEmitter {
         // (see MethodNullabilityPlan): the most compact metadata shape C#
         // emits for the same source.
         let nullability = if asyncPlan == nil || drivenSynchronously {
-            MethodNullabilityPlan.ForParameters(function.Type, rowParameters)
+            MethodNullabilityPlan.ForParameters(function.Type, rowParameters, function.TypeParameters)
         } else {
-            MethodNullabilityPlan.ForParameters(this.AsyncKickoffReturnFlags(asyncPlan), rowParameters)
+            MethodNullabilityPlan.ForParameters(
+                this.AsyncKickoffReturnFlags(asyncPlan),
+                rowParameters,
+                function.TypeParameters
+            )
         }
         // ADR-0172 Phase B: a tuple-typed return with declared element names
         // also needs the sequence-0 Param row to carry

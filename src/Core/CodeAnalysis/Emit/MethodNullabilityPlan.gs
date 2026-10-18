@@ -77,33 +77,68 @@ internal class MethodNullabilityPlan {
     func ParameterNeedsAttribute(index int32) bool -> NeedsAttribute(ParameterFlags[index], EffectiveDefault)
 
     shared {
-        /// Plans a signature from its declared return type and parameters.
+        /// Plans a non-generic signature from its declared return type and parameters.
         /// @param returnType The declared return type; `null` or `void` for none.
         /// @param parameters The parameters that get `Param` rows, in order.
         /// @returns The plan.
-        func ForParameters(returnType TypeSymbol?, parameters IEnumerable[ParameterSymbol]) MethodNullabilityPlan {
-            let parameterFlags = ImmutableArray.CreateBuilder[ImmutableArray[uint8]]()
-            for parameter in parameters {
-                parameterFlags.Add(NullableFlagsBuilder.Build(parameter.Type))
-            }
-            return FromFlags(ReturnFlagsOf(returnType), parameterFlags.ToImmutable())
-        }
+        func ForParameters(
+            returnType TypeSymbol?,
+            parameters IEnumerable[ParameterSymbol]
+        ) MethodNullabilityPlan -> ForParameters(
+            ReturnFlagsOf(returnType),
+            parameters,
+            ImmutableArray[TypeParameterSymbol].Empty
+        )
+
+        /// Plans a signature from its declared return type, parameters and
+        /// method type parameters.
+        /// @param returnType The declared return type; `null` or `void` for none.
+        /// @param parameters The parameters that get `Param` rows, in order.
+        /// @param typeParameters The method's own type parameters.
+        /// @returns The plan.
+        func ForParameters(
+            returnType TypeSymbol?,
+            parameters IEnumerable[ParameterSymbol],
+            typeParameters ImmutableArray[TypeParameterSymbol]
+        ) MethodNullabilityPlan -> ForParameters(ReturnFlagsOf(returnType), parameters, typeParameters)
 
         /// Plans a signature whose return position's physical type differs from
         /// the declared one (an async kickoff returns its builder's task), so
         /// the caller supplies the return bytes.
         /// @param returnFlags The physical return position's bytes.
         /// @param parameters The parameters that get `Param` rows, in order.
+        /// @param typeParameters The method's own type parameters.
         /// @returns The plan.
         func ForParameters(
             returnFlags ImmutableArray[uint8],
-            parameters IEnumerable[ParameterSymbol]
+            parameters IEnumerable[ParameterSymbol],
+            typeParameters ImmutableArray[TypeParameterSymbol]
         ) MethodNullabilityPlan {
             let parameterFlags = ImmutableArray.CreateBuilder[ImmutableArray[uint8]]()
             for parameter in parameters {
                 parameterFlags.Add(NullableFlagsBuilder.Build(parameter.Type))
             }
-            return FromFlags(returnFlags, parameterFlags.ToImmutable())
+            return FromFlags(returnFlags, parameterFlags.ToImmutable(), KeepsTypeContext(typeParameters))
+        }
+
+        /// A method's `[NullableContext]` is also what a reader applies to its
+        /// generic parameters' own nullability (a `class` constraint reads as
+        /// `class?` under context 2) and to their constraint types, and gsc
+        /// stamps neither of those rows (#4996). So a method whose type
+        /// parameters read the context keeps the enclosing type's, which is
+        /// what those rows have always meant; only its Param rows carry
+        /// deviations. A type parameter constrained to `struct` with no
+        /// constraint type has nothing that reads the context.
+        private func KeepsTypeContext(typeParameters ImmutableArray[TypeParameterSymbol]) bool {
+            if typeParameters.IsDefaultOrEmpty {
+                return false
+            }
+            for typeParameter in typeParameters {
+                if !typeParameter.HasValueTypeConstraint || typeParameter.ConstraintReferenceType != nil {
+                    return true
+                }
+            }
+            return false
         }
 
         /// Whether a position needs its own `[Nullable]` under a context: it
@@ -138,9 +173,13 @@ internal class MethodNullabilityPlan {
         /// context, which emits the least metadata.
         private func FromFlags(
             returnFlags ImmutableArray[uint8],
-            parameterFlags ImmutableArray[ImmutableArray[uint8]]
+            parameterFlags ImmutableArray[ImmutableArray[uint8]],
+            keepTypeContext bool
         ) MethodNullabilityPlan {
             const TypeDefault = NullableFlagsBuilder.NotAnnotated
+            if keepTypeContext {
+                return MethodNullabilityPlan(returnFlags, parameterFlags, TypeDefault, nil)
+            }
             var countOblivious = 0
             var countNotAnnotated = 0
             var countAnnotated = 0

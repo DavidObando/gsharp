@@ -147,6 +147,43 @@ open class Issue4988SignatureNullabilityMatrixTests {
         }
     }
 
+    /// A generic method's `[NullableContext]` is also what C# reads for its
+    /// type parameters' constraints, which gsc does not stamp (#4996). So a
+    /// `T class` method keeps the type's context however its signature
+    /// votes: under `[NullableContext(2)]` C# would import `where T : class?`
+    /// and stop warning on a nullable type argument. Checked through a real C#
+    /// consumer, for a bodyless interface method and for a method with a body
+    /// (whose majority-`2` context used to do exactly that).
+    @Fact
+    func CSharpConsumer_KeepsTheClassConstraintOfGenericMethods() {
+        let tempDir = Directory.CreateTempSubdirectory("gs_issue4988_constraint_").FullName
+        try {
+            let libraryPath = CompileGSharp(tempDir, GenericConstraintSource, "net10.0", List[string](), verify: true)
+            let references = ReferenceResolver
+                .HostTrustedPlatformAssemblyPaths()
+                .Concat([]string{libraryPath})
+                .Select((path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path)))
+            let compilation = CSharpCompilation.Create(
+                "ConstraintConsumer",
+                []SyntaxTree{CSharpSyntaxTree.ParseText(GenericConstraintConsumerSource)},
+                references,
+                CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary,
+                    nullableContextOptions: NullableContextOptions.Enable
+                )
+            )
+            let diagnostics = compilation.GetDiagnostics()
+            Assert.DoesNotContain(diagnostics, (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+            let constraintWarnings = diagnostics.Where((d Diagnostic) -> d.Id == "CS8634").ToArray()
+            Assert.True(
+                constraintWarnings.Length == 2,
+                "both `Pick[string?]` calls must violate `T class`:\n" + string.Join("\n", diagnostics)
+            )
+        } finally {
+            TryDelete(tempDir)
+        }
+    }
+
     /// Emit stays byte-for-byte reproducible with every signature routed
     /// through the plan.
     @Fact
@@ -901,6 +938,28 @@ open class Issue4988SignatureNullabilityMatrixTests {
 
             }
         }
+
+        private const GenericConstraintSource string = `package Generic
+
+interface IGen {
+    func Pick[T class](p T?, q string?) T?;
+}
+
+class Gen {
+    func Pick[T class](p T?, q string?) T? {
+        return p
+    }
+}
+`
+
+        private const GenericConstraintConsumerSource string = `#nullable enable
+public static class Use {
+    public static void Run(Generic.IGen face, Generic.Gen gen) {
+        face.Pick<string?>(null, null);
+        gen.Pick<string?>(null, null);
+    }
+}
+`
 
         private const ContractSource string = `package Contract
 

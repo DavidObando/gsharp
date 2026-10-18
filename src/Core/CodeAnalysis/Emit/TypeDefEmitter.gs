@@ -1186,7 +1186,7 @@ internal class TypeDefEmitter {
         // Issue #4988: the return row comes from the same decision a method
         // with a body makes — a bodyless slot returning `Task[Token?]` needs
         // it just as much.
-        let nullability = MethodNullabilityPlan.ForParameters(method.Type, method.Parameters)
+        let nullability = MethodNullabilityPlan.ForParameters(method.Type, method.Parameters, method.TypeParameters)
         let returnHandle = this.AddReturnRow(nullability, method.Type, method.ReturnRefKind, method)
         var firstParamHandle = this.AddRefKindAwareParameterRows(method.Parameters, out var paramHandles)
         firstParamHandle = returnHandle ?? firstParamHandle
@@ -1313,7 +1313,7 @@ internal class TypeDefEmitter {
         )
         // Issue #1610: Parameter rows with names and In/Out flags, mirroring
         // EmitFunction.
-        let nullability = MethodNullabilityPlan.ForParameters(method.Type, method.Parameters)
+        let nullability = MethodNullabilityPlan.ForParameters(method.Type, method.Parameters, method.TypeParameters)
         let returnHandle = this.AddReturnRow(nullability, method.Type, method.ReturnRefKind, method)
         var firstParamHandle = this.AddRefKindAwareParameterRows(method.Parameters, out var paramHandles)
         firstParamHandle = returnHandle ?? firstParamHandle

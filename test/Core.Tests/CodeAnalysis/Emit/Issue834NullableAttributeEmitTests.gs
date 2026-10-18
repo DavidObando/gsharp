@@ -96,16 +96,16 @@ func (self T?) Filter[T class](predicate (T) -> bool) T? {
             BindingFlags.Public | BindingFlags.Static | BindingFlags.NonPublic
         )
         Assert.NotNull(filter)
-        let methodContext = GetNullableContextAttributeValue(filter!!)
         // The most common byte across (T? return) + (T? self) + (Func<T, bool> predicate)
-        // is `2` (annotated) — Roslyn collapses to NullableContextAttribute(2).
-        Assert.Equal(uint8(2), methodContext)
-        // With method-level default 2, the predicate parameter (single
-        // NotAnnotated byte for the delegate ref slot) needs its own
-        // NullableAttribute(1).
-        let predicate = filter!!.GetParameters()[1]
-        let predicateAttr = GetNullableAttributeValue(predicate)
-        Assert.Equal(uint8(1), predicateAttr)
+        // is `2`, but a generic method keeps the type's context (issue #4988):
+        // its `T class` GenericParam row carries no [Nullable] of its own, so
+        // NullableContextAttribute(2) would make C# read the constraint as
+        // `class?`. The `T?` positions carry their own NullableAttribute(2)
+        // instead, and the non-null predicate needs none.
+        Assert.Null(GetNullableContextAttributeValue(filter!!))
+        Assert.Equal(uint8(2), GetNullableAttributeValue(filter!!.GetParameters()[0]))
+        Assert.Null(GetNullableAttributeValue(filter!!.GetParameters()[1]))
+        Assert.Equal(uint8(2), GetNullableAttributeValue(filter!!.ReturnParameter))
     }
 
     @Fact
