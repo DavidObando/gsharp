@@ -1519,7 +1519,9 @@ class LspServer {
             return Array.Empty[Location]()
         }
         let symbol = SemanticLookup.ResolveSymbol(compilation, token, ct)
-        let typeSymbol TypeSymbol? = switch symbol {
+        // Issue #4989: the expression's bound (flow) type over the symbol's declared one.
+        let typeSymbol TypeSymbol? = BoundSemantics.GetExpressionType(compilation, token.Parent as ExpressionSyntax) ??
+            switch symbol {
             case ps is ParameterSymbol: ps.Type
             case vs is VariableSymbol: vs.Type
             case fs is FunctionSymbol: fs.Type
