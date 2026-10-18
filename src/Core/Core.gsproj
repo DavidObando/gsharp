@@ -27,6 +27,10 @@
          header with its declaring part's through PartialMethodMerger's own
          token normalization, so the two comparisons cannot drift. -->
     <InternalsVisibleTo Include="GSharp.GSharp.GeneratorHost" />
+    <!-- build/check-comment-only-diff.py compares doc comments through the
+         compiler's own attachment and parsing (build/gstokens), so the check
+         cannot drift from what the compiler reads. -->
+    <InternalsVisibleTo Include="gstokens" />
   </ItemGroup>
 
   <ItemGroup>

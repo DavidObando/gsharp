@@ -85,6 +85,14 @@ jobs:
           dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --check .
           dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --check .
 
+      - name: Verify the comment-only diff checker contract
+        # The tests read G# source with the compiler's own lexer through
+        # build/gstokens. It runs here, after the solution build, and not in
+        # test-partition, whose 30-minute limit leaves no room for it.
+        run: |
+          dotnet restore build/gstokens/GsTokens.gsproj --locked-mode
+          python3 build/test-check-comment-only-diff.py
+
       - name: Test the netstandard host-reference check
         run: python3 build/test-check-netstandard-host-refs.py
 
