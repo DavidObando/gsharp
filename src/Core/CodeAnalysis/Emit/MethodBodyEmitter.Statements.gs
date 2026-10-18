@@ -367,6 +367,8 @@ internal partial class MethodBodyEmitter {
             if clause.Filter != nil {
                 filterStart = this.il.DefineLabel()
                 this.il.MarkLabel(filterStart)
+                // Hide the generated type check and exception-local setup.
+                this.RecordSequencePoint(nil)
                 let matched = this.il.DefineLabel()
                 let done = this.il.DefineLabel()
                 this.il.OpCode(ILOpCode.Isinst)
@@ -389,6 +391,8 @@ internal partial class MethodBodyEmitter {
             let handlerStart = this.il.DefineLabel()
             let handlerEnd = this.il.DefineLabel()
             this.il.MarkLabel(handlerStart)
+            // Hide the exception-store prologue before the first handler statement.
+            this.RecordSequencePoint(nil)
             // ADR-0174 P3-8: a MoveNext body's outermost catch is the
             // builder's SetException route; the async-stepping blob names it.
             if this.tryDepth == 1 && this.outermostCatchHandlerOffset < 0 {
