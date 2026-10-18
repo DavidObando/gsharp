@@ -5,6 +5,7 @@
 package GSharp.Compiler.Tests.Emit
 
 import System
+import System.Collections.Generic
 import System.IO
 import System.Linq
 import System.Reflection
@@ -699,12 +700,11 @@ public abstract class Base {
                     (handle ParameterHandle) -> metadata.GetString(metadata.GetParameter(handle).Name) == "key"
                 )
             )
-            Assert.Contains(
-                parameter.GetCustomAttributes(),
-                (handle CustomAttributeHandle) -> GetCustomAttributeTypeName(
-                    metadata,
-                    handle
-                ) == "System.Runtime.CompilerServices.NullableAttribute"
+            // Issue #4988: a position whose nullability repeats the method's
+            // is carried by the method's [NullableContext], as csc emits it.
+            Assert.True(
+                CarriesNullability(metadata, getter, parameter.GetCustomAttributes()),
+                "get_Item's `key string?` must carry its nullability in $path"
             )
             Assert.Contains(
                 parameter.GetCustomAttributes(),
@@ -722,25 +722,20 @@ public abstract class Base {
                         ) == accessorName
                     )
                 )
-                let contractParameter = metadata.GetParameter(
-                    Assert.Single(
-                        accessor.GetParameters(),
-                        (handle ParameterHandle) -> metadata.GetParameter(handle)
-                            .SequenceNumber == (
-                            if accessorName == "get_Value" {
-                                0
-                            } else {
-                                1
-                            }
-                        )
-                    )
-                )
-                Assert.Contains(
-                    contractParameter.GetCustomAttributes(),
-                    (handle CustomAttributeHandle) -> GetCustomAttributeTypeName(
-                        metadata,
-                        handle
-                    ) == "System.Runtime.CompilerServices.NullableAttribute"
+                let rowSequence = if accessorName == "get_Value" {
+                    0
+                } else {
+                    1
+                }
+                let contractAttributes = accessor
+                    .GetParameters()
+                    .Select((handle ParameterHandle) -> metadata.GetParameter(handle))
+                    .Where((row MetadataParameter) -> row.SequenceNumber == rowSequence)
+                    .SelectMany((row MetadataParameter) -> row.GetCustomAttributes().Cast[CustomAttributeHandle]())
+                    .ToArray()
+                Assert.True(
+                    CarriesNullability(metadata, accessor, contractAttributes),
+                    "$accessorName's `string?` must carry its nullability in $path"
                 )
             }
         }
@@ -1098,6 +1093,35 @@ public class LegacyItem : Legacy { public override prop Name int32 -> 7 }`, "Abs
             Assert.Equal(expected.Attributes, actual.Attributes)
             Assert.Equal(expected.MethodImplCount, actual.MethodImplCount)
             Assert.Equal(expected.DeclarationName, actual.DeclarationName)
+        }
+
+        /// Issue #4988: whether an annotated position carries `[Nullable]` itself
+        /// or inherits it from its method's `[NullableContext(2)]`.
+        private func CarriesNullability(
+            metadata MetadataReader,
+            method MethodDefinition,
+            positionAttributes IEnumerable[CustomAttributeHandle]
+        ) bool {
+            if positionAttributes.Any(
+                (handle CustomAttributeHandle) -> GetCustomAttributeTypeName(
+                    metadata,
+                    handle
+                ) == "System.Runtime.CompilerServices.NullableAttribute"
+            ) {
+                return true
+            }
+            for handle in method.GetCustomAttributes() {
+                if GetCustomAttributeTypeName(
+                    metadata,
+                    handle
+                ) != "System.Runtime.CompilerServices.NullableContextAttribute" {
+                    continue
+                }
+                // Prolog (2 bytes), then the context byte.
+                let value = metadata.GetBlobBytes(metadata.GetCustomAttribute(handle).Value)
+                return value.Length > 2 && value[2] == uint8(2)
+            }
+            return false
         }
 
         private func GetCustomAttributeTypeName(metadata MetadataReader, handle CustomAttributeHandle) string {

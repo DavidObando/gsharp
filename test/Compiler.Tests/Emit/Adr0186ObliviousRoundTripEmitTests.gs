@@ -310,7 +310,18 @@ class Service {
                 let text = ClrNullability.GetReturnTypeSymbol(textMethod)
                 Assert.IsNotType[PlatformTypeSymbol](text)
                 Assert.Same(TypeSymbol.String, FirstTypeArgument(text))
-                Assert.Equal([]uint8{1, 1}, NullableBytes(textMethod.ReturnParameter.GetCustomAttributesData()))
+                // Issue #4988: `Task[string]` repeats the context byte at every
+                // position, so, as csc emits it, it carries no [Nullable] of its
+                // own and reads back through the context.
+                Assert.Null(NullableBytes(textMethod.ReturnParameter.GetCustomAttributesData()))
+                Assert.Equal(
+                    []uint8{1, 1},
+                    ClrNullability.ExpandNullableFlags(
+                        textMethod.ReturnType,
+                        ClrNullability.ReadNullableFlags(textMethod.ReturnParameter, textMethod)
+                    )
+                        .ToArray()
+                )
                 let numberMethod = service.GetMethod("Number")!!
                 let number = ClrNullability.GetReturnTypeSymbol(numberMethod)
                 Assert.Same(TypeSymbol.Int32, FirstTypeArgument(number))
