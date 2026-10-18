@@ -120,7 +120,7 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         if IsVoidInDiscardedPosition(canBeVoid, []BoundExpression{whenTrue, whenFalse}) {
-            // ADR-0200: the void if-let, as for the plain if-expression.
+            // ADR-0202: the void if-let, as for the plain if-expression.
             return BoundConditionalExpression(
                 nil,
                 Invariant.Required(

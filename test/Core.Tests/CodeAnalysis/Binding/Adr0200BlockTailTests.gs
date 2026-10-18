@@ -10,7 +10,7 @@ import System
 import System.Linq
 import Xunit
 
-/// ADR-0200 / issues #4963, #4965, #4966: one rule for what the last item of a
+/// ADR-0202 / issues #4963, #4965, #4966: one rule for what the last item of a
 /// value-capable block means, a `never` type for a value block whose end is
 /// unreachable, and statement meaning for if/switch where the value is
 /// discarded. Each test is an issue repro (or a shape the rule covers) run
@@ -114,7 +114,7 @@ Console.WriteLine(f(false))
 g()`, "11\n0\n0\n20\n")
     }
 
-    // ADR-0200 §5: the exit predicate covers break, structured exits, and
+    // ADR-0202 §5: the exit predicate covers break, structured exits, and
     // defer/using prefixes; evaluation order of a partially evaluated operand
     // is kept (the left operand runs before the exiting branch).
     @Fact
@@ -317,7 +317,7 @@ stmt(2)
 stmt(3)`, "blk\narr\nlam\ninferred\n3\none\nother\nlow 2\nstmt two\n")
     }
 
-    // ADR-0200 §6: an if/else with one void branch in a void lambda is the void
+    // ADR-0202 §6: an if/else with one void branch in a void lambda is the void
     // `if` (it reported GS0263), and a non-void value of the other branch is
     // discarded.
     @Fact

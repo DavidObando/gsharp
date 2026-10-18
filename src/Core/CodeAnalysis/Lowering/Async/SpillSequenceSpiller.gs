@@ -398,7 +398,7 @@ shared class SpillSequenceSpiller {
                 expression = spilled.Value
             }
             if expression.Type == TypeSymbol.Never {
-                // Issue #4965 (ADR-0200): see StoreOperand.
+                // Issue #4965 (ADR-0202): see StoreOperand.
                 builder.Add(BoundExpressionStatement(nil, expression))
                 return BoundThrowExpression(nil, BoundLiteralExpression(nil, value: nil))
             }
@@ -1630,7 +1630,7 @@ shared class SpillSequenceSpiller {
             // Null exactly when the conditional is void: testing resultLocal
             // rather than a separate bool is what lets the analyzer see the
             // local is present wherever it is assigned or read.
-            // Issue #4965 (ADR-0200): a never-typed conditional (every branch
+            // Issue #4965 (ADR-0202): a never-typed conditional (every branch
             // exits) has no value to carry either.
             let resultLocal LocalVariableSymbol? = if conditional.Type == TypeSymbol.Void ||
                 conditional.Type == TypeSymbol.Never {
@@ -1759,7 +1759,7 @@ shared class SpillSequenceSpiller {
             sideEffects.Add(BoundVariableDeclaration(nil, armIndexLocal, indexSwitch))
             // Phase 2: dispatch on the stored arm index, evaluating only the
             // selected arm's (possibly awaiting) result. Issue #4966
-            // (ADR-0200): a void switch (or one whose every arm exits) has no
+            // (ADR-0202): a void switch (or one whose every arm exits) has no
             // result to carry, so each selected arm runs as a statement.
             let resultLocal LocalVariableSymbol? = if switchExpr.Type == TypeSymbol.Void ||
                 switchExpr.Type == TypeSymbol.Never {
@@ -1822,7 +1822,7 @@ shared class SpillSequenceSpiller {
             )
         }
 
-        /// Issue #4965 / #4966 (ADR-0200): the value a spilled construct with
+        /// Issue #4965 / #4966 (ADR-0202): the value a spilled construct with
         /// no result leaves behind — the void placeholder for a void one, and
         /// for a never-typed one (every path exited) an unreachable `throw nil`
         /// trap that keeps the bottom type for the consumer.
@@ -2684,7 +2684,7 @@ shared class SpillSequenceSpiller {
             return LocalVariableSymbol(name, isReadOnly: false, type)
         }
 
-        /// Issue #4965 (ADR-0200): stores a spilled operand in a fresh temp and
+        /// Issue #4965 (ADR-0202): stores a spilled operand in a fresh temp and
         /// returns the read of it. An operand of the bottom (`never`) type — a
         /// throw expression, or a block, if or switch every path of which exits
         /// — is never stored: it runs as a statement, and the operand becomes

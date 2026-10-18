@@ -481,7 +481,7 @@ open partial class Parser {
         return SwitchExpressionSyntax(syntaxTree, switchKeyword, expression, openBrace, arms.ToImmutable(), closeBrace)
     }
 
-    // Issue #4963 (ADR-0200): with the current token at the `{` that opens a
+    // Issue #4963 (ADR-0202): with the current token at the `{` that opens a
     // switch body, decides whether the arms have the expression shape
     // (`case P:` / `default:`, or the deprecated `->`) or the statement shape
     // (`case P { … }` / `default { … }`); an empty body is a statement. It is a
@@ -569,7 +569,7 @@ open partial class Parser {
         }
     }
 
-    // Issue #4963 (ADR-0200): consumes a whole brace body, from the current `{`
+    // Issue #4963 (ADR-0202): consumes a whole brace body, from the current `{`
     // to its matching `}`, without parsing it (see skimBraceBodies).
     private func SkimBraceBody()(OpenBrace SyntaxToken, CloseBrace SyntaxToken) {
         let openBrace = MatchToken(SyntaxKind.OpenBraceToken)

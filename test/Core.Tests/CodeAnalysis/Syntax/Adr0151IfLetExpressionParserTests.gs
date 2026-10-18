@@ -249,7 +249,7 @@ func F(a string?) int32 {
 
     @Fact
     func LambdaBlockBody_TrailingIfLet_IsTheExpressionForm() {
-        // ADR-0200: every value-capable block, arrow-lambda bodies included,
+        // ADR-0202: every value-capable block, arrow-lambda bodies included,
         // reads its last item by one rule, so a trailing
         // `if let … else …` is the expression form here too (it used to stay
         // the ADR-0071 statement in a lambda body). A body ending in

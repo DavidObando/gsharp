@@ -325,7 +325,7 @@ class ControlFlowGraph {
                         }
                         case BoundNodeKind.VariableDeclaration, BoundNodeKind.ExpressionStatement
                         when ControlFlowGraph.HasNeverValue(statement) {
-                            // Issue #4965 (ADR-0200): a never-typed value — a
+                            // Issue #4965 (ADR-0202): a never-typed value — a
                             // throw expression, or a block/if/switch every path
                             // of which exits — never completes, like a throw.
                             Connect(current, end)
@@ -584,7 +584,7 @@ class ControlFlowGraph {
             return hasDefault
         }
 
-        /// Issue #4965 (ADR-0200): whether [`statement`](paramref) evaluates a
+        /// Issue #4965 (ADR-0202): whether [`statement`](paramref) evaluates a
         /// never-typed value — a throw expression, or a block, if-, if-let- or
         /// switch-expression every path of which exits — as an expression
         /// statement or a local's initializer. Such a statement never completes

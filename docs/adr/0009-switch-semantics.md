@@ -1,6 +1,6 @@
 # ADR-0009: `switch` semantics — expression + statement, patterns, exhaustive
 
-- **Status**: Accepted; amended by [ADR-0200](0200-one-rule-for-block-tails-and-arrow-bodies.md) (2026-10-17)
+- **Status**: Accepted; amended by [ADR-0202](0202-one-rule-for-block-tails-and-arrow-bodies.md) (2026-10-17)
 - **Date**: 2026-05-22
 - **Phase**: Phase 2 (statement form), Phase 6 (expression + patterns), Phase 0 (lock)
 - **Related**: gaps doc §3.2.3, §6.1; execution plan §0 D9, §2.6, §6.1; design doc D9; ADR-0013 (drop fallthrough)
@@ -57,7 +57,7 @@ Neutral:
 
 ## Implementation notes
 
-**ADR-0200 (2026-10-17).** The example above is now implemented as written.
+**ADR-0202 (2026-10-17).** The example above is now implemented as written.
 Comma multi-pattern arms (`case 1, 2, 3`, issue #3501 A3) fold into the `or`
 disjunction in both forms through one parser helper, so they mean the same in
 the statement form (`case 1, 2 { … }`) and the expression form

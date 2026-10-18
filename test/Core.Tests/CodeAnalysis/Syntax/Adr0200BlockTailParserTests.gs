@@ -9,7 +9,7 @@ import System.Collections.Generic
 import System.Linq
 import Xunit
 
-/// ADR-0200 / issues #4963, #4965, #4966: the parser decides what the last item
+/// ADR-0202 / issues #4963, #4965, #4966: the parser decides what the last item
 /// of a value-capable block means by one rule, decides `switch` by its arm
 /// shape, accepts comma arms in both switch forms, and parses `-> { … }` member
 /// bodies as block bodies.

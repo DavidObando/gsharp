@@ -81,7 +81,7 @@ internal partial class MethodBodyEmitter {
     // produce the expression's value.
     private func EmitSwitchExpression(node BoundSwitchExpression) {
         let (resultSlot, discrSlot) = this.switchExpressionSlots[node]
-        // Issue #4966 (ADR-0200): a void switch (or one whose every arm exits)
+        // Issue #4966 (ADR-0202): a void switch (or one whose every arm exits)
         // has no value to carry, so it has no result slot; see SlotPlanner.
         let hasResult = SlotPlanner.SwitchExpressionHasResult(node)
         this.EmitExpression(node.Discriminant)

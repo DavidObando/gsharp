@@ -1207,7 +1207,7 @@ open partial class Parser {
     private func ParseArrowExpressionBody(asReturn bool, asRefReturn bool = false) BlockStatementSyntax {
         let arrowToken = MatchToken(SyntaxKind.RightArrowToken)
         let arrowPosition = arrowToken.Position
-        // Issue #4966 §1 (ADR-0200): `-> { … }` is the same block body an arrow
+        // Issue #4966 §1 (ADR-0202): `-> { … }` is the same block body an arrow
         // lambda has (ADR-0128) — a statement block with an optional trailing
         // value — not a value-position block expression. It is parsed by the
         // shared block-body parser and desugared to the equivalent block body:
@@ -1239,7 +1239,7 @@ open partial class Parser {
         return BlockStatementSyntax(syntaxTree, openBrace, ImmutableArray.Create(statement), closeBrace)
     }
 
-    // Issue #4966 (ADR-0200): whether the `{` after `->` is followed, past
+    // Issue #4966 (ADR-0202): whether the `{` after `->` is followed, past
     // its matching `}`, by a postfix/binary continuation (`-> { … }.ToString()`),
     // which makes the whole thing one expression. Decided at the real closing
     // brace however long the block is; a capped lookahead would read "not

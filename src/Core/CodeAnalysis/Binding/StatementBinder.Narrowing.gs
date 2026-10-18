@@ -1902,7 +1902,7 @@ internal partial class StatementBinder {
                 VisitExpression(arm.Result)
                 joined = JoinCallableStates(joined, CaptureCallableState())
             }
-            // Issue #4966 (ADR-0200): a void switch with no default arm can run
+            // Issue #4966 (ADR-0202): a void switch with no default arm can run
             // no arm, so the incoming state joins too.
             if node.Type == TypeSymbol.Void && !node.Arms.Any((arm BoundSwitchExpressionArm) -> arm.IsDefault) {
                 joined = JoinCallableStates(joined, CloneCallableState(branchStart))
@@ -2754,7 +2754,7 @@ internal partial class StatementBinder {
                     )
                     variableType = TypeSymbol.Error
                 } else if syntax.TypeClause == nil && ContainsNever(variableType) {
-                    // Issue #4965 (ADR-0200): an initializer that never produces
+                    // Issue #4965 (ADR-0202): an initializer that never produces
                     // a value (`let a = throw e`, or a block/if/switch every
                     // path of which exits) gives the local no type to infer.
                     // Report it like a void initializer rather than inferring the
@@ -3990,7 +3990,7 @@ internal partial class StatementBinder {
         /// @returns `true` when [`type`](paramref) is reference-like.
         private func IsReferenceLikeType(type TypeSymbol?) bool -> type != nil && Conversion.IsReferenceLikeTarget(type)
 
-        /// Issue #4965 (ADR-0200): whether [`type`](paramref) is, or is a tuple
+        /// Issue #4965 (ADR-0202): whether [`type`](paramref) is, or is a tuple
         /// with an element that is, the bottom type — the inferred type of an
         /// initializer that never produces a value (`throw e`,
         /// `(if c { return 1 } else { return 2 }, 0)`). Such a type cannot be
@@ -4011,7 +4011,7 @@ internal partial class StatementBinder {
             return false
         }
 
-        /// Issue #4965 (ADR-0200): whether the end of a block whose bound
+        /// Issue #4965 (ADR-0202): whether the end of a block whose bound
         /// statements are [`statements`](paramref) is unreachable, so that a
         /// value block ending this way has the bottom (`never`) type instead
         /// of needing a trailing value (GS0277). The last statement must be a
@@ -4036,7 +4036,7 @@ internal partial class StatementBinder {
             return EndsInEscapingExit(statements[statements.Length - 1])
         }
 
-        /// Issue #4965 (ADR-0200): the tail-position walk behind
+        /// Issue #4965 (ADR-0202): the tail-position walk behind
         /// (cref:BlockEndIsUnreachable). A goto counts as an exit everywhere
         /// except inside a switch statement, where it may target the switch's
         /// own exit label.

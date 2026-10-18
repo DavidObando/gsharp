@@ -23,7 +23,7 @@ internal partial class ExpressionBinder {
         targetType: nil
     )
 
-    /// @param canBeVoid Issue #4966 §2 (ADR-0200): the switch is in a position
+    /// @param canBeVoid Issue #4966 §2 (ADR-0202): the switch is in a position
     /// whose value is discarded (an expression statement, a void arrow body, a
     /// lambda body). When an arm is then void, the whole switch is the void
     /// switch — the switch statement's meaning: arm values are discarded, and

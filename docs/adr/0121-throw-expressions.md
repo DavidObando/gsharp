@@ -1,6 +1,6 @@
 # ADR-0121: Throw expressions (`throw` in value position)
 
-- **Status**: Accepted; extended by [ADR-0200](0200-one-rule-for-block-tails-and-arrow-bodies.md) (2026-10-17)
+- **Status**: Accepted; extended by [ADR-0202](0202-one-rule-for-block-tails-and-arrow-bodies.md) (2026-10-17)
 - **Date**: 2026-06-23
 - **Phase**: Phase 9 — language depth / null-handling ergonomics
 - **Related**: ADR-0062 (general ternary conditional), ADR-0116 (`??` null-coalescing operator), ADR-0072 (`??=`), ADR-0115 (cs2gs migration tool), issue [#1018](https://github.com/DavidObando/gsharp/issues/1018)
@@ -88,7 +88,7 @@ implicitly convertible to any target type and never produces a value, so
   cs2gs).** Rejected: not an expression, doesn't compose as a `??`/ternary
   operand, and produces less faithful IL/source.
 
-## Addendum (ADR-0200)
+## Addendum (ADR-0202)
 
 The `never` type is no longer produced only by a throw expression: a value
 block whose end is unreachable (it ends in `throw`, `return`, `break`,

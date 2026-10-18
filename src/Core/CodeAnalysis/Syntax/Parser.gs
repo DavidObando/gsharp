@@ -90,7 +90,7 @@ open partial class Parser {
     // MaxRecursionDepth above.
     private var recursionDepth int32
 
-    // Issue #4963 (ADR-0200): while positive, brace bodies (block expressions,
+    // Issue #4963 (ADR-0202): while positive, brace bodies (block expressions,
     // lambda and function-literal blocks) are skipped to their matching brace
     // instead of parsed. Only the switch-form fallback
     // (FirstArmPatternEndsInExpressionSeparator) sets it: it needs where the

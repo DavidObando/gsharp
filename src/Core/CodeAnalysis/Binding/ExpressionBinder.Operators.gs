@@ -789,7 +789,7 @@ internal partial class ExpressionBinder {
         this.binderCtx.DeferTargetlessConditional = false
         let diagMark = Diagnostics.Count
         // An if-expression in value position must have an else branch.
-        // Issue #4966 §2 (ADR-0200): where the value is discarded (`canBeVoid`:
+        // Issue #4966 §2 (ADR-0202): where the value is discarded (`canBeVoid`:
         // a void arrow body, a lambda body, an expression statement) there is
         // no value to produce, so an `if` without `else` is the void `if`,
         // exactly as the equivalent block body's if statement is.
@@ -838,7 +838,7 @@ internal partial class ExpressionBinder {
         deferOnFailure bool,
         diagMark int32
     ) BoundExpression {
-        // Issue #4966 (ADR-0200): nil only for the void `if` of a discarded
+        // Issue #4966 (ADR-0202): nil only for the void `if` of a discarded
         // position; BindIfExpression rejects it elsewhere (GS0276).
         let elseSyntax = syntax.ElseExpression
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
@@ -928,7 +928,7 @@ internal partial class ExpressionBinder {
         return BoundConditionalExpression(nil, condition, convertedTrue, convertedFalse, resultType)
     }
 
-    /// Issue #4966 (ADR-0200): the one rule for an if-, if-let- or
+    /// Issue #4966 (ADR-0202): the one rule for an if-, if-let- or
     /// switch-expression in a position whose value may be discarded
     /// ([`canBeVoid`](paramref): an expression statement, a void arrow body,
     /// a lambda body). When any branch is void there is no common value, so
@@ -953,7 +953,7 @@ internal partial class ExpressionBinder {
         return false
     }
 
-    /// Issue #4966 (ADR-0200): reports GS0362 for each unresolved bare
+    /// Issue #4966 (ADR-0202): reports GS0362 for each unresolved bare
     /// `default` placeholder that [`value`](paramref) yields — the value itself,
     /// a block expression's tail, or a conditional's branch, recursively.
     /// @param value The value of a discarded position.
@@ -982,7 +982,7 @@ internal partial class ExpressionBinder {
         }
     }
 
-    /// Issue #4966 (ADR-0200): turns [`value`](paramref) into a void
+    /// Issue #4966 (ADR-0202): turns [`value`](paramref) into a void
     /// expression for a position whose value is discarded (the void `if`, a
     /// void switch-expression arm). A void or never-typed value is returned as
     /// is; any other value is evaluated as an expression statement.
@@ -1112,7 +1112,7 @@ internal partial class ExpressionBinder {
         var result VariableSymbol? = nil
         let bindTrailingStatement() -> BoundStatement = () -> {
             boundExpression = bindValue()
-            // Issue #4965 (ADR-0200): a `never` tail (every path exits) has no
+            // Issue #4965 (ADR-0202): a `never` tail (every path exits) has no
             // value to keep across the cleanup region either.
             if boundExpression is BoundErrorExpression ||
                 boundExpression.Type == TypeSymbol.Void ||
@@ -1199,7 +1199,7 @@ internal partial class ExpressionBinder {
         return BoundBlockExpression(syntax, boundStatements, boundExpression)
     }
 
-    /// Issue #4965 / #4966 (ADR-0200): binds a block expression that has no
+    /// Issue #4965 / #4966 (ADR-0202): binds a block expression that has no
     /// trailing value. Two cases need no value, and they are the only ones:
     ///
     /// - The block's end is unreachable — it ends in `return`, `throw`,

@@ -1,4 +1,4 @@
-# ADR-0200: One rule for block tails and arrow bodies
+# ADR-0202: One rule for block tails and arrow bodies
 
 - **Status**: Accepted
 - **Date**: 2026-10-17

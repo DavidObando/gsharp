@@ -7,7 +7,7 @@
 - **Amended**: 2026-10-17 (issue [#4962](https://github.com/DavidObando/gsharp/issues/4962)): the if-expression accepts the if-statement's `SimpleStmt ';'` header initializer, with the same scoping. See the addendum at the end.
 - **Phase**: Phase 8 — language ergonomics / expression surface
 - **Related**: ADR-0062 (generalized ternary), ADR-0009 (switch semantics), issues #669, #706, #711, #3355
-- **Amended by**: [ADR-0200](0200-one-rule-for-block-tails-and-arrow-bodies.md) (2026-10-17): a block whose end is unreachable has the `never` type instead of reporting GS0277; a switch expression can be a block's trailing value; the `throw` addendum below is superseded
+- **Amended by**: [ADR-0202](0202-one-rule-for-block-tails-and-arrow-bodies.md) (2026-10-17): a block whose end is unreachable has the `never` type instead of reporting GS0277; a switch expression can be a block's trailing value; the `throw` addendum below is superseded
 
 ## Context
 
@@ -88,7 +88,7 @@ original ADR and are now pinned down:
   if-expression branch follow the *same* common-type rule, so the two forms
   compose cleanly: a `switch { ... }` value may be the trailing expression of
   a block, and an `if … else if … else …` chain may sit in an arm body.
-- **`throw` in a branch tail.** *Superseded by ADR-0200.* This bullet
+- **`throw` in a branch tail.** *Superseded by ADR-0202.* This bullet
   predates throw expressions (ADR-0121), which made both of its claims false:
   `throw` is also an expression, and switch-expression arms accept it. A branch
   may now simply end in `throw` (or `return`, `break`, `continue`): a block whose
@@ -116,7 +116,7 @@ original ADR and are now pinned down:
   expression split is unchanged for plain `if`.
 - **Block-as-expression rules.** A `{ stmt*; tailExpr }` block in value
   position requires a non-empty tail (GS0277), unless its end is unreachable
-  (ADR-0200: it then has the `never` type) or its value is discarded (ADR-0200:
+  (ADR-0202: it then has the `never` type) or its value is discarded (ADR-0202:
   it is then a void block). A block with only statements
   is still legal in *statement* position via `BlockStatementSyntax`; only the
   expression-position lifting needs a tail.
@@ -253,7 +253,7 @@ That matters only for an if-expression written directly as a `for … in`
 collection whose condition is itself `Name { }`, which no code in the
 repository does. No migration path is needed.
 
-## Addendum (ADR-0200, issues #4963, #4965, #4966)
+## Addendum (ADR-0202, issues #4963, #4965, #4966)
 
 - The *Interaction with the switch expression* bullet above is now implemented:
   a `switch` whose arms use `:` is the switch expression wherever a statement
@@ -265,4 +265,4 @@ repository does. No migration path is needed.
   GS0276), and an if-expression with a void branch is the void `if`.
 - Every value-capable block — including arrow-lambda and arrow-member bodies —
   parses its last item by the same rule, so a final nested `{ … }` is the value
-  everywhere. See ADR-0200 for the full rule and the compatibility measurement.
+  everywhere. See ADR-0202 for the full rule and the compatibility measurement.

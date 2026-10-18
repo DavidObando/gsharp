@@ -11,7 +11,7 @@ import System.IO
 import System.Linq
 import Xunit
 
-/// ADR-0200 / issues #4963, #4965, #4966: every shape that gives a value block
+/// ADR-0202 / issues #4963, #4965, #4966: every shape that gives a value block
 /// the `never` type, or makes an if/switch the void construct, must emit
 /// verifiable IL — the never-produced value sits after an exiting statement,
 /// a void or never switch has no result slot, and lowering must not

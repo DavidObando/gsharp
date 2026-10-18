@@ -774,7 +774,7 @@ open partial class Parser {
     // Issue #669: parse a block expression `{ stmt*; expr? }`.
     // The last item in the block, if it is an expression statement, becomes
     // the trailing value-producing expression of the block.
-    // ADR-0200: every value-capable block — a general block expression, an
+    // ADR-0202: every value-capable block — a general block expression, an
     // if-/if-let-expression branch, an arrow-lambda body and an arrow-member
     // body — is parsed the same way; whether a missing tail is an error
     // (GS0277), a void block, or a `never` block is the binder's decision.
@@ -821,7 +821,7 @@ open partial class Parser {
     // a statement and an expression form (`if`, `switch`, a nested `{ … }`)
     // and picks the expression form when the item has the expression shape.
     //
-    // Issue #4963 / #4965 / #4966 (ADR-0200): this is the ONE place that
+    // Issue #4963 / #4965 / #4966 (ADR-0202): this is the ONE place that
     // decides what the last item of a value-capable block means — a general
     // block expression, an if-/if-let-expression branch, an arrow-lambda block
     // body and an arrow-member block body (`func f() T -> { … }`, which
@@ -848,7 +848,7 @@ open partial class Parser {
         // (value-producing), parse it as an expression statement wrapping
         // an IfExpressionSyntax. This handles nested `if` in block position.
         //
-        // ADR-0151 / ADR-0200: an `if let … else …` chain ending in a plain
+        // ADR-0151 / ADR-0202: an `if let … else …` chain ending in a plain
         // `else` is likewise the value-producing binding form, in every
         // value-capable block. (It used to stay the ADR-0071 statement in an
         // arrow-lambda body; a body ending in

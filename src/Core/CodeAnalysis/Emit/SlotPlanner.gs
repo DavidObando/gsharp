@@ -1426,7 +1426,7 @@ internal class SlotPlanner {
     }
 
     shared {
-        // Issue #4966 (ADR-0200): whether a switch expression carries a value
+        // Issue #4966 (ADR-0202): whether a switch expression carries a value
         // in a result slot. A void switch (discarded position) and a switch
         // whose every arm exits (`never`) have none. The planner and the
         // emitter both call this so they agree on the slot.

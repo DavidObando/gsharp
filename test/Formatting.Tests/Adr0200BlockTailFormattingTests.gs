@@ -8,7 +8,7 @@ import GSharp.Core.CodeAnalysis.Text
 import GSharp.Formatting
 import Xunit
 
-/// ADR-0200 / issues #4963, #4965, #4966: the formatter keeps the meaning of
+/// ADR-0202 / issues #4963, #4965, #4966: the formatter keeps the meaning of
 /// the forms the block-tail rule now accepts and formats them stably.
 class Adr0200BlockTailFormattingTests {
     @Fact

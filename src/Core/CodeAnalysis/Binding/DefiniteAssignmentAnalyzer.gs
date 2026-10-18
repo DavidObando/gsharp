@@ -1347,7 +1347,7 @@ internal shared class DefiniteAssignmentAnalyzer {
                         armAssigned.Add(currentAssigned)
                         armAliases.Add(currentAliases)
                     }
-                    // Issue #4966 (ADR-0200): a void switch with no default
+                    // Issue #4966 (ADR-0202): a void switch with no default
                     // arm runs no arm for an unmatched value (like the switch
                     // statement), so the incoming state is one of the paths. A
                     // value-producing switch without a default throws instead.
