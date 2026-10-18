@@ -52,7 +52,8 @@ shared class HotReloadAgent {
                 Timeout.Infinite,
                 Timeout.Infinite
             )
-            HotReloadAgent.EnsureMetadataUpdateHandlerHook()
+            // Installed before the first update can be applied.
+            HotReloadAgent.MetadataUpdateHandlers.ClearOnAssemblyLoad()
         }
 
         prop ProcessGuard Mutex -> this.processGuard
@@ -313,7 +314,6 @@ shared class HotReloadAgent {
     private let MetadataUpdateHandlers MetadataUpdateHandlerInvoker = MetadataUpdateHandlerInvoker(
         (message string) -> WriteDiagnostic(message)
     )
-    private var metadataUpdateHandlerHookInitialized int32
 
     /// Registers an assembly and its build manifest when launched under
     /// `dotnet watch`.
@@ -412,17 +412,6 @@ shared class HotReloadAgent {
         let assemblyName string? = assembly.GetName().Name
         if assemblyName != nil && ManifestPaths.TryGetValue(assemblyName, out var manifestPath) {
             Start(assembly, manifestPath)
-        }
-    }
-
-    /// Discards the cached metadata update handlers whenever an assembly
-    /// loads, so the next update discovers handlers it brought. Installed
-    /// before the first update can be applied.
-    private func EnsureMetadataUpdateHandlerHook() {
-        if Interlocked.Exchange(&metadataUpdateHandlerHookInitialized, 1) == 0 {
-            AppDomain
-                .CurrentDomain
-                .AssemblyLoad += (_ object?, args AssemblyLoadEventArgs) -> MetadataUpdateHandlers.Clear()
         }
     }
 

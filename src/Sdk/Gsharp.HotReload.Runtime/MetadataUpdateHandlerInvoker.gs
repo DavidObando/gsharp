@@ -26,6 +26,7 @@ internal class MetadataUpdateHandlerInvoker {
     private var actions RegisteredActions?
     private var actionsVersion int32
     private var assemblyLoadVersion int32
+    private var assemblyLoadHookInstalled int32
 
     /// Creates an invoker over the current application domain's assemblies.
     /// @param report Receives one warning per handler problem.
@@ -45,6 +46,16 @@ internal class MetadataUpdateHandlerInvoker {
     /// Discards the cached handlers. Call when an assembly loads.
     func Clear() {
         Interlocked.Increment(&this.assemblyLoadVersion)
+    }
+
+    /// Calls (cref:Clear) whenever an assembly loads into the application
+    /// domain, as dotnet watch's agent does, so the next update discovers
+    /// handlers in assemblies loaded after the first one. Installs the hook
+    /// once; later calls do nothing.
+    func ClearOnAssemblyLoad() {
+        if Interlocked.Exchange(&this.assemblyLoadHookInstalled, 1) == 0 {
+            AppDomain.CurrentDomain.AssemblyLoad += (_ object?, args AssemblyLoadEventArgs) -> this.Clear()
+        }
     }
 
     /// Invokes every `ClearCache` handler, then every `UpdateApplication`

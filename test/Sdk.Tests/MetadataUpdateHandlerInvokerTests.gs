@@ -4,9 +4,13 @@
 
 package GSharp.Sdk.Tests
 
+import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Syntax
 import Gsharp.HotReload.Runtime
 import System
 import System.Collections.Generic
+import System.IO
 import System.Linq
 import System.Reflection
 import System.Reflection.Metadata
@@ -231,6 +235,49 @@ open class MetadataUpdateHandlerInvokerTests {
     }
 
     @Fact
+    func AssemblyLoadedAfterTheFirstUpdate_IsDiscoveredByTheNextUpdate() {
+        // The agent's real wiring: discovery over the application domain,
+        // invalidated by the AssemblyLoad hook. A handler in an assembly
+        // that loads after the first update must run on the next one.
+        let assemblyName = "Issue4960Late" + Guid.NewGuid().ToString("N")
+        let clearKey = assemblyName + ".ClearCache"
+        let updateKey = assemblyName + ".UpdateApplication"
+        let source = `package Issue4960Late
+
+import System
+import System.Reflection.Metadata
+
+@assembly: MetadataUpdateHandler(typeof(LateHandler))
+
+internal class LateHandler {
+    shared {
+        func ClearCache(updatedTypes []?Type) {
+            AppDomain.CurrentDomain.SetData("CLEAR_KEY", "ran")
+        }
+
+        func UpdateApplication(updatedTypes []?Type) {
+            AppDomain.CurrentDomain.SetData("UPDATE_KEY", "ran")
+        }
+    }
+}`
+        let image = Issue4960LibraryCompiler.EmitLibrary(
+            assemblyName,
+            source.Replace("CLEAR_KEY", clearKey).Replace("UPDATE_KEY", updateKey)
+        )
+        let reports = List[string]()
+        let invoker = MetadataUpdateHandlerInvoker((message string) -> reports.Add(message))
+        invoker.ClearOnAssemblyLoad()
+        invoker.MetadataUpdated(Type.EmptyTypes)
+        Assert.Null(AppDomain.CurrentDomain.GetData(clearKey))
+        let late = Assembly.Load(image)
+        Assert.Equal(assemblyName, late.GetName().Name)
+        invoker.MetadataUpdated(Type.EmptyTypes)
+        Assert.Equal("ran", AppDomain.CurrentDomain.GetData(clearKey))
+        Assert.Equal("ran", AppDomain.CurrentDomain.GetData(updateKey))
+        Assert.DoesNotContain(reports, (report string) -> report.Contains(assemblyName, StringComparison.Ordinal))
+    }
+
+    @Fact
     func Discovery_IsCachedUntilAnAssemblyLoads() {
         Issue4960HandlerLog.Reset()
         let reports = List[string]()
@@ -259,6 +306,34 @@ open class MetadataUpdateHandlerInvokerTests {
         invoker.MetadataUpdated(Type.EmptyTypes)
         Assert.Equal(2, scans)
         Assert.Empty(reports)
+    }
+}
+
+internal class Issue4960LibraryCompiler {
+    shared {
+        func EmitLibrary(assemblyName string, source string)[]uint8 {
+            let compilation = Compilation(SyntaxTree.Parse(source)){
+                AssemblyName = assemblyName,
+                IsLibrary = true,
+                Optimize = false
+            }
+            using let peStream = MemoryStream()
+            let result = compilation.Emit(
+                peStream,
+                pdbStream: nil,
+                refStream: nil,
+                assemblyName: assemblyName,
+                assemblyVersion: "1.0.0"
+            )
+            Assert.True(
+                result.Success,
+                string.Join(
+                    Environment.NewLine,
+                    result.Diagnostics.Select((diagnostic Diagnostic) -> diagnostic.ToString())
+                )
+            )
+            return peStream.ToArray()
+        }
     }
 }
 
