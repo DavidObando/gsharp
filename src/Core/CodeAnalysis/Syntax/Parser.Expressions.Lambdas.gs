@@ -462,6 +462,12 @@ open partial class Parser {
     private func ParseSwitchExpression() ExpressionSyntax {
         let switchKeyword = MatchToken(SyntaxKind.SwitchKeyword)
         let expression = ParseExpressionInBodyHeader()
+        return ParseSwitchExpressionBody(switchKeyword, expression)
+    }
+
+    // Issue #4963: the arms of a switch expression whose header has already
+    // been parsed (ParseStatement parses the header once, then decides the form).
+    private func ParseSwitchExpressionBody(switchKeyword SyntaxToken, expression ExpressionSyntax) ExpressionSyntax {
         let openBrace = MatchToken(SyntaxKind.OpenBraceToken)
         let arms = ImmutableArray.CreateBuilder[SwitchExpressionArmSyntax]()
         while Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken {
@@ -475,34 +481,97 @@ open partial class Parser {
         return SwitchExpressionSyntax(syntaxTree, switchKeyword, expression, openBrace, arms.ToImmutable(), closeBrace)
     }
 
-    // Issue #4963: a `switch` that begins a block item is the switch
-    // EXPRESSION when its arms have the expression shape (`case P:` /
-    // `default:`, or the deprecated `->` separator) and the switch STATEMENT
-    // when they have the statement shape (`case P { … }` / `default { … }`) or
-    // the body is empty. The arm separator is the one thing that tells the two
-    // forms apart, so this speculatively parses the header and the first arm's
-    // pattern list and guard with the same routines the switch expression
-    // uses, then looks at the token that follows. Position, the token list
-    // (which pattern/type parsing may split) and diagnostics are all restored.
-    private func SwitchHasExpressionArms() bool {
+    // Issue #4963 (ADR-0200): with the current token at the `{` that opens a
+    // switch body, decides whether the arms have the expression shape
+    // (`case P:` / `default:`, or the deprecated `->`) or the statement shape
+    // (`case P { … }` / `default { … }`); an empty body is a statement. It is a
+    // linear, non-consuming token scan of the first arm only — parenthesized,
+    // bracketed and braced groups are skipped whole, so neither the header nor
+    // any nested switch is parsed twice. A braced group followed by the next
+    // arm or the end of the body was the statement arm's body; any other
+    // braced group belongs to the pattern (a property pattern) or the guard.
+    // Inside a `when` guard a `:` that closes a `? :` conditional is skipped.
+    // A `->` in the first arm (the deprecated separator, or a function-type
+    // pattern) is decided by parsing that arm; see
+    // FirstArmPatternEndsInExpressionSeparator.
+    private func SwitchBodyHasExpressionArms() bool {
+        if Current.Kind != SyntaxKind.OpenBraceToken {
+            return false
+        }
+        if Peek(1).Kind == SyntaxKind.DefaultKeyword {
+            let separator = Peek(2).Kind
+            return separator == SyntaxKind.ColonToken || separator == SyntaxKind.RightArrowToken
+        }
+        if Peek(1).Kind != SyntaxKind.CaseKeyword {
+            return false
+        }
+        var offset = 2
+        var inGuard = false
+        var pendingConditionals = 0
+        while true {
+            let token = Peek(offset)
+            switch token.Kind {
+                case SyntaxKind.EndOfFileToken, SyntaxKind.CloseBraceToken {
+                    return false
+                }
+                case SyntaxKind.OpenParenthesisToken,
+                SyntaxKind.OpenSquareBracketToken,
+                SyntaxKind.QuestionOpenBracketToken {
+                    offset = SkipBalancedGroup(offset)
+                }
+                case SyntaxKind.OpenBraceToken {
+                    offset = SkipBalancedGroup(offset)
+                    let next = Peek(offset).Kind
+                    if next == SyntaxKind.CaseKeyword ||
+                        next == SyntaxKind.DefaultKeyword ||
+                        next == SyntaxKind.CloseBraceToken ||
+                        next == SyntaxKind.EndOfFileToken {
+                        return false
+                    }
+                }
+                case SyntaxKind.ColonToken {
+                    if inGuard && pendingConditionals > 0 {
+                        pendingConditionals--
+                        offset++
+                    } else {
+                        return true
+                    }
+                }
+                case SyntaxKind.RightArrowToken {
+                    // `->` is either the deprecated arm separator or the arrow
+                    // of a function-type pattern (`case f is (int32) -> string
+                    // { … }`); only the pattern grammar can tell, so parse this
+                    // one arm's pattern and guard.
+                    return FirstArmPatternEndsInExpressionSeparator()
+                }
+                case SyntaxKind.QuestionToken {
+                    if inGuard {
+                        pendingConditionals++
+                    }
+                    offset++
+                }
+                default {
+                    if token.Kind == SyntaxKind.IdentifierToken && token.Text == "when" {
+                        inGuard = true
+                    }
+                    offset++
+                }
+            }
+        }
+    }
+
+    // The precise fallback of SwitchBodyHasExpressionArms for a first arm that
+    // contains `->`: parses that arm's pattern list and guard with the
+    // switch-expression rules and checks the separator that follows. Only the
+    // first arm is parsed (the header was already consumed), and position, the
+    // token list (which type parsing may split) and diagnostics are restored.
+    private func FirstArmPatternEndsInExpressionSeparator() bool {
         let savedPosition = position
         let savedTokens = tokens
         let savedDiagnosticCount = Diagnostics.Count
         try {
-            let _ = MatchToken(SyntaxKind.SwitchKeyword)
-            let _ = ParseExpressionInBodyHeader()
-            if Current.Kind != SyntaxKind.OpenBraceToken {
-                return false
-            }
-            let _ = NextToken()
-            if Current.Kind == SyntaxKind.DefaultKeyword {
-                let next = Peek(1).Kind
-                return next == SyntaxKind.ColonToken || next == SyntaxKind.RightArrowToken
-            }
-            if Current.Kind != SyntaxKind.CaseKeyword {
-                return false
-            }
-            let _ = NextToken()
+            let _ = MatchToken(SyntaxKind.OpenBraceToken)
+            let _ = MatchToken(SyntaxKind.CaseKeyword)
             let _ = ParseSwitchArmPattern(PatternParseContext.SwitchExpression)
             let _ = ParseOptionalWhenGuard()
             return Current.Kind == SyntaxKind.ColonToken || Current.Kind == SyntaxKind.RightArrowToken
@@ -510,6 +579,34 @@ open partial class Parser {
             position = savedPosition
             tokens = savedTokens
             Diagnostics.TruncateTo(savedDiagnosticCount)
+        }
+    }
+
+    // Returns the offset just past the group that opens at [`offset`](paramref)
+    // (a `(`, `[`, `?[` or `{`), counting all bracket kinds together, or the
+    // end-of-file offset when the group is unclosed.
+    private func SkipBalancedGroup(offset int32) int32 {
+        var depth = 0
+        var current = offset
+        while true {
+            let kind = Peek(current).Kind
+            if kind == SyntaxKind.EndOfFileToken {
+                return current
+            }
+            if kind == SyntaxKind.OpenParenthesisToken ||
+                kind == SyntaxKind.OpenSquareBracketToken ||
+                kind == SyntaxKind.QuestionOpenBracketToken ||
+                kind == SyntaxKind.OpenBraceToken {
+                depth++
+            } else if kind == SyntaxKind.CloseParenthesisToken ||
+                kind == SyntaxKind.CloseSquareBracketToken ||
+                kind == SyntaxKind.CloseBraceToken {
+                depth--
+                if depth == 0 {
+                    return current + 1
+                }
+            }
+            current++
         }
     }
 

@@ -190,11 +190,14 @@ open partial class Parser {
                 // when it ends a value-capable block, the void switch when its
                 // value is discarded. Arms with the statement shape
                 // (`case P { … }`) keep the switch statement. Like the `if`
-                // item, it ends at its closing brace.
-                if SwitchHasExpressionArms() {
-                    return ExpressionStatementSyntax(syntaxTree, ParseSwitchExpression())
+                // item, it ends at its closing brace. The header is parsed
+                // once; SwitchBodyHasExpressionArms then scans the first arm.
+                let switchKeyword = MatchToken(SyntaxKind.SwitchKeyword)
+                let header = ParseExpressionInBodyHeader()
+                if SwitchBodyHasExpressionArms() {
+                    return ExpressionStatementSyntax(syntaxTree, ParseSwitchExpressionBody(switchKeyword, header))
                 }
-                return ParseSwitchStatement()
+                return ParseSwitchStatementBody(switchKeyword, header)
             }
             case SyntaxKind.FallthroughKeyword {
                 return ParseFallthroughStatement()

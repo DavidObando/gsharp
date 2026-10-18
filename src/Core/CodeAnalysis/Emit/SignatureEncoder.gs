@@ -77,6 +77,12 @@ internal class SignatureEncoder {
         }
         if t is ByRefTypeSymbol byRef {
             EncodeTypeSymbol(enc.Type(isByRef: true), byRef.PointeeType)
+        } else if t == TypeSymbol.Never {
+            // Issue #4965 (ADR-0200): fail-safe for any local that lowering
+            // still types with the bottom type. Its initializer never completes,
+            // so it is never written or read at run time; `object` is a valid
+            // slot for that unreachable code, and `never` has no CLR form.
+            EncodeTypeSymbol(enc.Type(), TypeSymbol.Object)
         } else {
             EncodeTypeSymbol(enc.Type(), t)
         }

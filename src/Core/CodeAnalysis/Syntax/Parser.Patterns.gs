@@ -25,6 +25,12 @@ open partial class Parser {
     private func ParseSwitchStatement() StatementSyntax {
         let switchKeyword = MatchToken(SyntaxKind.SwitchKeyword)
         let expression = ParseExpressionInBodyHeader()
+        return ParseSwitchStatementBody(switchKeyword, expression)
+    }
+
+    // Issue #4963: the body of a switch statement whose header has already been
+    // parsed (ParseStatement parses the header once, then decides the form).
+    private func ParseSwitchStatementBody(switchKeyword SyntaxToken, expression ExpressionSyntax) StatementSyntax {
         let openBrace = MatchToken(SyntaxKind.OpenBraceToken)
         let cases = ImmutableArray.CreateBuilder[SwitchCaseSyntax]()
         while Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken {

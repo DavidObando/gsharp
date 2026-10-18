@@ -34,14 +34,54 @@ open class Adr0200BlockTailParserTests {
     default { B() }
     }
     switch x { }
+    switch g {
+    case h is (int32) -> string { A() }
+    default { B() }
+    }
 }`)
         let body = Body(tree, "f")
-        Assert.Equal(5, body.Statements.Length)
+        Assert.Equal(6, body.Statements.Length)
+        // A `->` in a function-type pattern does not make the arm an
+        // expression arm.
+        Assert.IsType[SwitchStatementSyntax](body.Statements[5])
         Assert.IsType[SwitchExpressionSyntax](Assert.IsType[ExpressionStatementSyntax](body.Statements[0]).Expression)
         Assert.IsType[SwitchStatementSyntax](body.Statements[1])
         Assert.IsType[SwitchExpressionSyntax](Assert.IsType[ExpressionStatementSyntax](body.Statements[2]).Expression)
         Assert.IsType[SwitchStatementSyntax](body.Statements[3])
         Assert.IsType[SwitchStatementSyntax](body.Statements[4])
+    }
+
+    // The deprecated `->` arm separator still selects the expression form.
+    @Fact
+    func DeprecatedArrowSeparator_SelectsTheExpressionForm() {
+        let tree = SyntaxTree.Parse(`func f(x int32) {
+    switch x {
+    case 1 -> A()
+    default -> B()
+    }
+}`)
+        Assert.All(tree.Diagnostics, (d GSharp.Core.CodeAnalysis.Diagnostic) -> Assert.Equal("GS0302", d.Id))
+        Assert.NotEmpty(tree.Diagnostics)
+        Assert.IsType[SwitchExpressionSyntax](
+            Assert.IsType[ExpressionStatementSyntax](Assert.Single(Body(tree, "f").Statements)).Expression
+        )
+    }
+
+    // The switch form is decided by a token scan after the header is parsed
+    // once, so nested switch headers parse in linear time (a speculative
+    // header parse doubled the work at every level).
+    @Fact
+    func NestedSwitchHeaders_ParseInLinearTime() {
+        var inner = "switch 0 { default { } }"
+        for var i = 0; i < 40; i++ {
+            inner = "switch { " + inner + " 0 } { default { } }"
+        }
+        let source = "func f() {\n" + inner + "\n}"
+        let stopwatch = System.Diagnostics.Stopwatch.StartNew()
+        let tree = Parse(source)
+        stopwatch.Stop()
+        Assert.True(stopwatch.ElapsedMilliseconds < 5000, "parse took ${stopwatch.ElapsedMilliseconds} ms")
+        Assert.Equal(41, Walk(tree.Root).OfType[SwitchStatementSyntax]().Count())
     }
 
     @Fact

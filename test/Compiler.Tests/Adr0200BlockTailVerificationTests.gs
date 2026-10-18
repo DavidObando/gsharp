@@ -147,6 +147,21 @@ func F() {
     let f = () -> { { throw Exception("x") } }
     f()
 }`}
+            yield[]object{"return-inside-return-operand", `
+package P
+func F(c bool) int64 {
+    let f = (b bool) -> { return if b { return int64(2) } else { 1 } }
+    let g = (b bool) -> { return if b { 1 } else { return int64(3) } }
+    return f(c) + g(c)
+}`}
+            yield[]object{"exiting-call-arguments", `
+package P
+func Sink(a int32, b int32) int32 {
+    return a + b
+}
+func F(c bool) int32 {
+    return Sink(if c { return 1 } else { return 2 }, if c { 3 } else { return 4 })
+}`}
             yield[]object{"void-if-and-void-switch", `
 package P
 import System

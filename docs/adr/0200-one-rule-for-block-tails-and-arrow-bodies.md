@@ -67,9 +67,17 @@ At the start of any statement (every block, not only value blocks), `switch` is 
 switch **expression**, as an expression statement, when its first arm is
 `case P:` / `default:` (or the deprecated `->` separator), and the switch
 **statement** when it is `case P { … }` / `default { … }` or the body is empty.
-The parser decides by a speculative parse of the header and the first arm's
-pattern and guard (`SwitchHasExpressionArms`); position, tokens and diagnostics
-are restored. Like an `if` item, the switch item ends at its closing brace.
+The parser parses the header once and then decides with a linear,
+non-consuming token scan of the first arm (`SwitchBodyHasExpressionArms`):
+parenthesized, bracketed and braced groups are skipped whole, a braced group
+followed by the next arm or the end of the body was the statement arm's body,
+any other braced group belongs to a property pattern or the guard, and inside a
+`when` guard a `:` that closes a `? :` conditional is skipped. A `->` in the
+first arm is either the deprecated separator or the arrow of a function-type
+pattern (`case f is (int32) -> string { … }`), so only then is that one arm's
+pattern and guard parsed to decide. No header is parsed twice, so nested
+headers stay linear. Like an `if` item, the
+switch item ends at its closing brace.
 
 A colon-arm switch at statement start was a parse error before, so no valid
 program changes meaning. ADR-0009 and ADR-0069 already showed this form.
@@ -112,11 +120,15 @@ the block's last statement is:
 
 The never-produced value is represented by an unreachable `throw nil` trap after
 the exiting statement, so no new bound node is needed and every later pass
-already handles it. A `never` value keeps no result storage, also behind a
+already handles it. A `never` value is never stored. Where lowering still asks
+for storage around one (a spilled operand list), the spill-temp factory and the
+local-signature encoder type it `object`; it is never written or read at run
+time, and `never` has no CLR form. A `never` value keeps no result storage, also behind a
 `defer` / `using let` prefix. Statements whose value is `never` are terminators
 in the control-flow graph (all-paths-return analysis). Lambda return-type
-inference collects `return`s inside the trailing value and ignores a `never`
-tail; a block-bodied lambda whose every path exits is void when no delegate
+inference collects `return`s inside the trailing value — and inside another
+`return`'s operand (`return if c { return a } else { b }`), converting each to
+the inferred type — and ignores a `never` tail; a block-bodied lambda whose every path exits is void when no delegate
 target supplies a return type (`() -> { { throw e } }`), exactly like
 `() -> { throw e }`. An expression-bodied `() -> throw e` keeps its
 `() -> never` type, which adapts to any delegate signature (#2716).

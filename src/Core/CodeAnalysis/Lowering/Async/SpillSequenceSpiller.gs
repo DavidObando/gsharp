@@ -2697,7 +2697,19 @@ shared class SpillSequenceSpiller {
 
         private func MakeSpillTemp(type TypeSymbol) LocalVariableSymbol {
             let name = GeneratedNames.SpillTempField(spillOrdinal++, spillTempDomain)
-            return LocalVariableSymbol(name, isReadOnly: false, type)
+            // Issue #4965 (ADR-0200): a `never` operand (a block, if or switch
+            // every path of which exits) is never stored — its evaluation does
+            // not complete — but an operand list spilled around it still asks
+            // for a temp. `never` has no CLR form, so the temp is typed
+            // `object`; it is never written or read at run time. This is the
+            // one factory for spill temps, including those hoisted into a
+            // state machine.
+            let storageType = if type == TypeSymbol.Never {
+                TypeSymbol.Object
+            } else {
+                type
+            }
+            return LocalVariableSymbol(name, isReadOnly: false, storageType)
         }
 
         private func MakeLabel() BoundLabel {

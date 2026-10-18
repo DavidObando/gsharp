@@ -427,6 +427,38 @@ default { Console.WriteLine("other") }
 Console.WriteLine(a)`, "stmt\nshort\n")
     }
 
+    // A `return` nested in another `return`'s operand contributes to the
+    // inferred type and is converted to it, on both paths.
+    @Fact
+    func ReturnInsideAReturnOperand_IsInferredAndConverted() {
+        AssertOutput(`import System
+let f = (c bool) -> { return if c { return int64(2) } else { 1 } }
+let g = (c bool) -> { return if c { 1 } else { return int64(3) } }
+Console.WriteLine("${f(true)} ${f(false)} ${g(true)} ${g(false)} ${f(true).GetType().Name}")`, "2 1 1 3 Int64\n")
+    }
+
+    // Operands spilled around an exiting operand keep their left-to-right
+    // order and allocate no `never` storage (it was GS9998).
+    @Fact
+    func ExitingCallArguments_KeepOrderAndNeedNoStorage() {
+        AssertOutput(`import System
+func Sink(a int32, b int32) int32 { return a * 10 + b }
+func log(s string, v int32) int32 {
+    Console.WriteLine(s)
+    return v
+}
+func one(c bool) int32 {
+    return Sink(log("first", 1), if c { log("second", 2) } else { return -1 })
+}
+func both(c bool) int32 {
+    return Sink(if c { return 1 } else { return 2 }, if c { 3 } else { return 4 })
+}
+Console.WriteLine(one(true))
+Console.WriteLine(one(false))
+Console.WriteLine(both(true))
+Console.WriteLine(both(false))`, "first\nsecond\n12\nfirst\n-1\n1\n2\n")
+    }
+
     // Value position keeps its rules: GS0276, GS0277, GS0176, and GS0124 for a
     // `never` initializer (which crashed the compiler, GS9998, before).
     @Fact

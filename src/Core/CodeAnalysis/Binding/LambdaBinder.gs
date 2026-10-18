@@ -2617,6 +2617,9 @@ internal class LambdaBinder {
         protected override func VisitReturnStatement(node BoundReturnStatement) {
             if node.Expression != nil {
                 ReturnTypes.Add(node.Expression.Type ?? TypeSymbol.Void)
+                // Issue #4965 (ADR-0200): the operand can itself hold a
+                // `return` (`return if c { return a } else { b }`).
+                VisitExpression(node.Expression)
             } else {
                 ReturnTypes.Add(TypeSymbol.Void)
             }
@@ -2653,11 +2656,18 @@ internal class LambdaBinder {
             if returnType == TypeSymbol.Void {
                 return node
             }
-            if node.Expression.Type == returnType {
-                return node
+            // Issue #4965 (ADR-0200): convert any `return` nested inside the
+            // operand first (`return if c { return a } else { b }`).
+            let operand = RewriteExpression(node.Expression)
+            if operand.Type == returnType {
+                return if object.ReferenceEquals(operand, node.Expression) {
+                    cast[BoundStatement](node)
+                } else {
+                    cast[BoundStatement](BoundReturnStatement(node.Syntax, operand, node.IsRef))
+                }
             }
             let location = node.Syntax?.Location ?? syntax.Body.Location
-            let converted = conversions.BindConversion(location, node.Expression, returnType)
+            let converted = conversions.BindConversion(location, operand, returnType)
             return BoundReturnStatement(node.Syntax, converted, node.IsRef)
         }
     }
