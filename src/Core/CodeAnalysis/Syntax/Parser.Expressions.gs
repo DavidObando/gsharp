@@ -28,17 +28,24 @@ open partial class Parser {
     // Issue #1602: depth-guarded wrapper — see MaxRecursionDepth. Covers every
     // expression nesting cycle that funnels through ParseExpression as well as
     // the direct right-hand-side self-recursion of assignment forms.
-    private func ParseAssignmentExpression() ExpressionSyntax {
+    //
+    // Issue #4961 / ADR-0200: `guarded` parses a `let`-binding initializer
+    // (see ParseIfLetGuardedInitializer): the full grammar, assignments
+    // included, except that a top-level `&&` / `||` ends it. It applies to
+    // this level, an assignment's right-hand side, and a `?:` false arm;
+    // every nested context (parentheses, arguments, ...) re-enters through
+    // ParseExpression and gets the full grammar.
+    private func ParseAssignmentExpression(guarded bool = false) ExpressionSyntax {
         EnsureNestedParseAllowed()
         recursionDepth++
         try {
-            return ParseAssignmentExpressionCore()
+            return ParseAssignmentExpressionCore(guarded)
         } finally {
             recursionDepth--
         }
     }
 
-    private func ParseAssignmentExpressionCore() ExpressionSyntax {
+    private func ParseAssignmentExpressionCore(guarded bool) ExpressionSyntax {
         if Peek(0).Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.OpenSquareBracketToken &&
             TryFindMatchingCloseBracketFollowedByEquals(out var equalsOffset) {
             let identifierToken = NextToken()
@@ -49,7 +56,7 @@ open partial class Parser {
             let indices = ParseIndexArguments()
             let closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken)
             let equalsToken = MatchToken(SyntaxKind.EqualsToken)
-            let value = ParseAssignmentExpression()
+            let value = ParseAssignmentExpression(guarded)
             return IndexAssignmentExpressionSyntax(
                 syntaxTree,
                 identifierToken,
@@ -68,7 +75,7 @@ open partial class Parser {
             let dotToken = MatchToken(SyntaxKind.DotToken)
             let fieldIdentifier = MatchToken(SyntaxKind.IdentifierToken)
             let equalsToken = MatchToken(SyntaxKind.EqualsToken)
-            let value = ParseAssignmentExpression()
+            let value = ParseAssignmentExpression(guarded)
             return FieldAssignmentExpressionSyntax(
                 syntaxTree,
                 identifierToken,
@@ -81,7 +88,7 @@ open partial class Parser {
         if Peek(0).Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.EqualsToken {
             let identifierToken = NextToken()
             let operatorToken = NextToken()
-            let right = ParseAssignmentExpression()
+            let right = ParseAssignmentExpression(guarded)
             return AssignmentExpressionSyntax(syntaxTree, identifierToken, operatorToken, right)
         }
         if Peek(0).Kind == SyntaxKind.IdentifierToken && SyntaxFacts.TryGetCompoundAssignmentBaseOperator(
@@ -90,11 +97,15 @@ open partial class Parser {
         ) {
             let identifierToken = NextToken()
             let opToken = NextToken()
-            let rhs = ParseAssignmentExpression()
+            let rhs = ParseAssignmentExpression(guarded)
             let leftName = NameExpressionSyntax(syntaxTree, identifierToken)
             return EventSubscriptionExpressionSyntax(syntaxTree, leftName, opToken, rhs)
         }
-        var expression = ParseRangeExpression()
+        var expression = if guarded {
+            ParseIfLetGuardedCoalescing()
+        } else {
+            ParseRangeExpression()
+        }
         // Issue #507: indexer assignment whose target is an arbitrary expression
         // (e.g. `obj.Member[k] = v`, `a.b.c[k] = v`, `(GetThing())[i] = v`). The
         // bare-identifier form `id[k] = v` is already handled above as
@@ -111,7 +122,7 @@ open partial class Parser {
             out var indexedLhs
         ) {
             let equalsToken = NextToken()
-            let value = ParseAssignmentExpression()
+            let value = ParseAssignmentExpression(guarded)
             return MemberIndexAssignmentExpressionSyntax(syntaxTree, indexedLhs!!, equalsToken, value)
         }
         // Issue #648: chained member-access assignment whose target is an
@@ -126,7 +137,7 @@ open partial class Parser {
             out var memberField
         ) {
             let equalsToken = NextToken()
-            let value = ParseAssignmentExpression()
+            let value = ParseAssignmentExpression(guarded)
             return MemberFieldAssignmentExpressionSyntax(
                 syntaxTree,
                 memberReceiver!!,
@@ -147,7 +158,7 @@ open partial class Parser {
             AssignmentTargetSyntaxFacts
             .TryLiftTrailingIndexer(expression, out var compoundIndexedLhs) {
             let compoundOpToken = NextToken()
-            let compoundRhs = ParseAssignmentExpression()
+            let compoundRhs = ParseAssignmentExpression(guarded)
             return CompoundIndexAssignmentExpressionSyntax(
                 syntaxTree,
                 compoundIndexedLhs!!,
@@ -163,7 +174,7 @@ open partial class Parser {
         // for backward compatibility; otherwise produce the general
         // ConditionalExpressionSyntax.
         if Current.Kind == SyntaxKind.QuestionToken {
-            expression = ParseConditionalTail(expression)
+            expression = ParseConditionalTail(expression, guardedFalseArm: guarded)
         }
         // ADR-0060 §13: indirect assignment `*p = expr`. Detected when the
         // parsed primary is a unary `*` dereference followed by `=`. The
@@ -176,7 +187,7 @@ open partial class Parser {
             Current.Kind == SyntaxKind
             .EqualsToken {
             let equalsToken = NextToken()
-            let value = ParseAssignmentExpression()
+            let value = ParseAssignmentExpression(guarded)
             return IndirectAssignmentExpressionSyntax(syntaxTree, unaryDeref, equalsToken, value)
         }
         // Issue #1925: compound indirect assignment `*p op= expr` (e.g.
@@ -192,7 +203,7 @@ open partial class Parser {
             SyntaxFacts
             .TryGetCompoundAssignmentBaseOperator(Current.Kind, out _) {
             let compoundOpToken = NextToken()
-            let value = ParseAssignmentExpression()
+            let value = ParseAssignmentExpression(guarded)
             return IndirectCompoundAssignmentExpressionSyntax(syntaxTree, unaryDerefCompound, compoundOpToken, value)
         }
         // Issue #4350: a writable ref-returning call is storage. Parse direct
@@ -201,7 +212,7 @@ open partial class Parser {
         // actually returns a writable reference and captures its address once.
         if AssignmentTargetSyntaxFacts.IsCallResult(expression) && Current.Kind == SyntaxKind.EqualsToken {
             let equalsToken = NextToken()
-            let value = ParseAssignmentExpression()
+            let value = ParseAssignmentExpression(guarded)
             return IndirectAssignmentExpressionSyntax(syntaxTree, expression, equalsToken, value)
         }
         if AssignmentTargetSyntaxFacts.IsCallResult(expression) && SyntaxFacts.TryGetCompoundAssignmentBaseOperator(
@@ -209,7 +220,7 @@ open partial class Parser {
             out _
         ) {
             let compoundOpToken = NextToken()
-            let value = ParseAssignmentExpression()
+            let value = ParseAssignmentExpression(guarded)
             return IndirectCompoundAssignmentExpressionSyntax(syntaxTree, expression, compoundOpToken, value)
         }
         // Stream B′: `receiver.Event += handler` / `receiver.Event -= handler`
@@ -230,7 +241,7 @@ open partial class Parser {
             SyntaxFacts
             .TryGetCompoundAssignmentBaseOperator(Current.Kind, out _) {
             let opToken = NextToken()
-            let rhs = ParseAssignmentExpression()
+            let rhs = ParseAssignmentExpression(guarded)
             return EventSubscriptionExpressionSyntax(syntaxTree, accessor, opToken, rhs)
         }
         // Issue #1104: base-selector property assignment
@@ -244,7 +255,7 @@ open partial class Parser {
             Current.Kind == SyntaxKind
             .EqualsToken {
             let equalsToken = NextToken()
-            let value = ParseAssignmentExpression()
+            let value = ParseAssignmentExpression(guarded)
             return BaseInterfaceCallExpressionSyntax(
                 syntaxTree,
                 basePropForm.BaseKeyword,

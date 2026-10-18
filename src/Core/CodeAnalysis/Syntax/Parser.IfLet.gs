@@ -117,12 +117,35 @@ open partial class Parser {
         return IfLetBindingClauseSyntax(syntaxTree, letKeyword, identifier, typeClause, equalsToken, initializer)
     }
 
-    /// ADR-0151: parses an `if let` EXPRESSION binding initializer, which
-    /// stops before a top-level `&&` so the delimiter can start
-    /// the optional guard. Reuse the complete expression grammar, including
-    /// assignment, coalescing and conditional expressions. Nested expression
-    /// contexts reset the delimiter; the false arm of a conditional retains it.
-    private func ParseIfLetGuardedInitializer() ExpressionSyntax -> ParseExpression(stopAtTopLevelLogicalAnd: true)
+    /// ADR-0151 / ADR-0200: parses a binding initializer of any `let`-binding
+    /// header. It is the full expression grammar (assignments, `??`, `?:`)
+    /// except that a TOP-LEVEL `&&` or `||` ends it, so the delimiter can
+    /// start the optional guard. The rule is applied by the assignment layer
+    /// in its `guarded` mode, which replaces the range/binary operand with
+    /// (cref:ParseIfLetGuardedCoalescing) and carries the rule into an
+    /// assignment's right-hand side and a `?:` false arm. A logical operator
+    /// that genuinely belongs to the initializer is written parenthesized.
+    private func ParseIfLetGuardedInitializer() ExpressionSyntax -> ParseAssignmentExpression(guarded: true)
+
+    /// The operand of a guarded initializer: the binary loop entered at the
+    /// logical-and precedence tier (which also stops at a top-level `||`),
+    /// plus the right-associative `??` tail that sits below that tier.
+    private func ParseIfLetGuardedCoalescing() ExpressionSyntax {
+        // Issue #1602: the right-associative `??` tail self-recurses.
+        EnsureNestedParseAllowed()
+        recursionDepth++
+        try {
+            let left = ParseBinaryExpression(SyntaxKind.AmpersandAmpersandToken.GetBinaryOperatorPrecedence())
+            if Current.Kind == SyntaxKind.QuestionQuestionToken {
+                let operatorToken = NextToken()
+                let right = ParseIfLetGuardedCoalescing()
+                return BinaryExpressionSyntax(syntaxTree, left, operatorToken, right)
+            }
+            return left
+        } finally {
+            recursionDepth--
+        }
+    }
 
     private func ParseOptionalTypeClauseBeforeEquals() TypeClauseSyntax? {
         // A binding clause is always followed by `=`; if we see `=` directly

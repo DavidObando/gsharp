@@ -131,6 +131,39 @@ func F(a string?, b string?) string {
     }
 
     @Fact
+    func AssignmentInitializer_IsKept_AndItsRightHandSideStopsAtTheGuard() {
+        // The guarded initializer is the full grammar, assignments included:
+        // `cached = Next()` was a valid initializer before ADR-0200 and stays
+        // one in every let-binding form.
+        const source = `package P
+var cached string? = nil
+func Next() string? { return "n" }
+func F() int32 {
+    if let a = cached = Next() && a.Length > 0 {
+        return 1
+    }
+    while let b = cached = Next() {
+        break
+    }
+    guard let c = cached = Next() else {
+        return 0
+    }
+    return if let d = cached = Next() && d.Length > 0 { 2 } else { 3 }
+}`
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        let stmt = FindFirst[IfLetStatementSyntax](tree)
+        let assignment = Assert.IsType[AssignmentExpressionSyntax](stmt.Bindings[0].Initializer)
+        Assert.IsType[CallExpressionSyntax](assignment.Expression)
+        Assert.NotNull(stmt.Guard)
+        Assert.IsType[AssignmentExpressionSyntax](FindFirst[WhileLetStatementSyntax](tree).Bindings[0].Initializer)
+        Assert.IsType[AssignmentExpressionSyntax](FindFirst[GuardLetStatementSyntax](tree).Bindings[0].Initializer)
+        let expr = FindFirst[IfLetExpressionSyntax](tree)
+        Assert.IsType[AssignmentExpressionSyntax](expr.Bindings[0].Initializer)
+        Assert.NotNull(expr.Guard)
+    }
+
+    @Fact
     func TopLevelLogicalOr_AfterTheBindings_ReportsGS0626_InBothForms() {
         const source = `package P
 func F(a string?, c bool) bool {

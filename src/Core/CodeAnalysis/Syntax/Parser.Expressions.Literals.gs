@@ -666,13 +666,16 @@ open partial class Parser {
     // returns a ConditionalRefArgumentExpressionSyntax (for back-compat) so
     // the binder can reject mismatches; otherwise returns the general
     // ConditionalExpressionSyntax (ADR-0062).
-    private func ParseConditionalTail(condition ExpressionSyntax) ExpressionSyntax {
+    // Issue #4961 / ADR-0200: `guardedFalseArm` keeps a `let`-binding
+    // initializer's rule in the false arm, so `flag ? x : y && guard` ends the
+    // initializer before the guard. The true arm is closed by `:`.
+    private func ParseConditionalTail(condition ExpressionSyntax, guardedFalseArm bool = false) ExpressionSyntax {
         let questionToken = NextToken()
         let whenTrueMod SyntaxToken? = TryConsumeInnerRefModifier()
         let whenTrue = ParseExpression()
         let colonToken = MatchToken(SyntaxKind.ColonToken)
         let whenFalseMod SyntaxToken? = TryConsumeInnerRefModifier()
-        let whenFalse = ParseAssignmentExpression()
+        let whenFalse = ParseAssignmentExpression(guardedFalseArm)
         if whenTrueMod != nil || whenFalseMod != nil {
             // Legacy ADR-0061 inner-modifier shape: keep producing the
             // dedicated ref-arg node so the binder retains GS0262 etc.
