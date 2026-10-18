@@ -776,7 +776,7 @@ internal partial class ExpressionBinder {
 
     /// The narrowing frames an if-expression condition implies for its
     /// branches. Shared by the if-expression and, for its guard, the `if let`
-    /// expression (issue #4961 / ADR-0200).
+    /// expression (issue #4961 / ADR-0201).
     private func ClassifyIfExpressionNarrowing(condition BoundExpression)(
         Then Dictionary[AccessPath, TypeSymbol]?,
         Else Dictionary[AccessPath, TypeSymbol]?

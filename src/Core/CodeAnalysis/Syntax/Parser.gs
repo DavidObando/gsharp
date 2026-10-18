@@ -26,7 +26,7 @@ open partial class Parser {
     private var tokens ImmutableArray[SyntaxToken]
     private var position int32
 
-    // Issue #4961 / ADR-0200: Peek reports end-of-file for every token at or
+    // Issue #4961 / ADR-0201: Peek reports end-of-file for every token at or
     // after this source position (see ParseIfLetGuardedInitializer).
     // int32.MaxValue means no limit.
     private var tokenLimitPosition int32 = int32.MaxValue
@@ -564,7 +564,7 @@ open partial class Parser {
             return tokens[tokens.Length - 1]
         }
         let token = tokens[index]
-        // Issue #4961 / ADR-0200: while a `let` initializer is re-parsed up to
+        // Issue #4961 / ADR-0201: while a `let` initializer is re-parsed up to
         // its guard delimiter, the stream ends just before that token.
         if token.Position >= tokenLimitPosition {
             return tokens[tokens.Length - 1]

@@ -9,7 +9,7 @@ import GSharp.Tests
 import System.Linq
 import Xunit
 
-/// Issue #4961 / ADR-0200 — binder coverage for the aligned `if let`
+/// Issue #4961 / ADR-0201 — binder coverage for the aligned `if let`
 /// statement and expression: the guard sees the bound names, the bound names
 /// are visible in later initializers, the guard and the then-region only, and
 /// each unsupported compound form names its syntax instead of reporting
@@ -78,7 +78,7 @@ Statement("abc") + Expression("ab")`)
 
     @Fact
     func BothForms_NonNullableLaterInitializer_IsGS0296() {
-        // ADR-0200: every binding strips one nullable layer, in both forms, so
+        // ADR-0201: every binding strips one nullable layer, in both forms, so
         // a later initializer that is already non-nullable stays GS0296.
         let result = EmittedOracle.Evaluate(`func Run(s string?) string {
     if let t = s, let u = t.ToUpper() {
@@ -104,7 +104,7 @@ Run("x")`)
 
     @Fact
     func Compatibility_LogicalAndConditionalInitializer_ReportsGS0624() {
-        // Before ADR-0200 the statement form parsed `a && b ? x : y` as one
+        // Before ADR-0201 the statement form parsed `a && b ? x : y` as one
         // initializer. The `&&` now starts the guard, which leaves a `bool`
         // initializer: GS0624 says to parenthesize instead of GS0296, and
         // nothing reports GS0157 on the bound name.

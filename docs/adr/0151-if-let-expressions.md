@@ -1,7 +1,7 @@
 # ADR-0151: `if let` expressions
 
 - **Status**: Accepted; partly superseded by
-  [ADR-0200](0200-align-if-let-statement-and-expression.md) (semantics item 9
+  [ADR-0201](0201-align-if-let-statement-and-expression.md) (semantics item 9
   and the statement-form paragraph of "The `&&` delimiter rule"); amended by
   [ADR-0202](0202-one-rule-for-block-tails-and-arrow-bodies.md) (2026-10-17)
 - **Date**: 2026-07-26
@@ -106,6 +106,7 @@ if let first = GetFirst(), let second = GetSecond(first) && second.IsValid {
 9. **Statement forms are unchanged.** A statement-leading `if let` still parses
    as the ADR-0071 statement, and `guard let` is untouched. Source that
    compiled before continues to compile identically.
+<<<<<<< HEAD
    **Amended by ADR-0202:** the *last* item of every value-capable block,
    arrow-lambda bodies included, follows one rule, so a trailing
    `if let … else …` is the expression form there too (the parser used to keep
@@ -114,6 +115,9 @@ if let first = GetFirst(), let second = GetSecond(first) && second.IsValid {
    exiting branches have the `never` type — and one whose branches are void is
    the void if-let.
    *Superseded by [ADR-0200](0200-align-if-let-statement-and-expression.md):
+=======
+   *Superseded by [ADR-0201](0201-align-if-let-statement-and-expression.md):
+>>>>>>> 7eb04f7d5 (Reconcile if-let baselines and ADR numbering with main)
    the statement form now shares this form's header (initializer rule, guard,
    short circuit, progressive narrowing).*
 
@@ -144,9 +148,9 @@ The **statement** form keeps parsing initializers with the full expression
 grammar (`if let x = a && b { … }` still binds `a && b`); the statement form has
 no guard clause, so there is nothing to delimit.
 
-> *Superseded by [ADR-0200](0200-align-if-let-statement-and-expression.md):
+> *Superseded by [ADR-0201](0201-align-if-let-statement-and-expression.md):
 > every `let`-binding header now uses this delimiter rule, and the statement
-> form accepts the same guard. ADR-0200 also accepts a `?:` initializer whose
+> form accepts the same guard. ADR-0201 also accepts a `?:` initializer whose
 > false arm follows the rule, in both forms.*
 
 ### Lowering

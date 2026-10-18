@@ -30,7 +30,7 @@ shared class GSharpPrinter {
     // SyntaxFacts.GetUnaryOperatorPrecedence.
     private const UnaryPrecedence int32 = 6
 
-    // ADR-0151 / ADR-0200: the minimum precedence an `if let` / `while let`
+    // ADR-0151 / ADR-0201: the minimum precedence an `if let` / `while let`
     // binding initializer (statement or expression) may sit at without
     // parentheses. gsc parses such an
     // initializer only down to the logical-and tier — the first top-level
@@ -1818,7 +1818,7 @@ shared class GSharpPrinter {
         // release, whose statement grammar has none (see IfLetStatement).
         // Initializers are still printed at IfLetInitializerPrecedence because
         // gsc ends every binding initializer at a top-level `&&` / `||`
-        // (ADR-0200).
+        // (ADR-0201).
         let sb = StringBuilder()
         sb.Append("${pad}if $bindings ${RenderBlock(ifLet.Then, indent)}")
         if ifLet.Else is IfStatement elseIf {

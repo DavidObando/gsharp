@@ -21,7 +21,7 @@ import System.Threading
 internal partial class StatementBinder {
     /// The narrowing frames an `if` condition implies for its then- and
     /// else-branches. Shared by the `if` statement and, for its guard, the
-    /// `if let` statement (issue #4961 / ADR-0200).
+    /// `if let` statement (issue #4961 / ADR-0201).
     private func ClassifyIfConditionNarrowing(condition BoundExpression)(
         Then Dictionary[AccessPath, TypeSymbol]?,
         Else Dictionary[AccessPath, TypeSymbol]?
@@ -160,7 +160,7 @@ internal partial class StatementBinder {
     //  rewriter / walker / printer / spiller / emitter / interpreter
     //  surface needs no updates.
     // ──────────────────────────────────────────────────────────────────────
-    /// ADR-0071 / issue #708, issue #4961 / ADR-0200: binds the `if let`
+    /// ADR-0071 / issue #708, issue #4961 / ADR-0201: binds the `if let`
     /// STATEMENT. The header (bindings, optional guard, then-region) goes
     /// through (cref:IfLetBindingSupport.BindHeader), shared with the
     /// expression form, so a later initializer and the guard see earlier
@@ -274,7 +274,7 @@ internal partial class StatementBinder {
         return BoundIfStatement(syntax, condition, thenStatement, elseStatement)
     }
 
-    /// Issue #4961 / ADR-0200: lowers clauses `index..` of an `if let`
+    /// Issue #4961 / ADR-0201: lowers clauses `index..` of an `if let`
     /// statement into nested statements, assuming every earlier binding
     /// matched: the clause's declaration, then an `if` on its nil test (an
     /// erroneous clause has no test) wrapping the remaining clauses. The final

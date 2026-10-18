@@ -10,7 +10,7 @@ import System.Collections.Generic
 import System.Linq
 import Xunit
 
-/// Issue #4961 / ADR-0200 — parser coverage for the binding header shared by
+/// Issue #4961 / ADR-0201 — parser coverage for the binding header shared by
 /// every `let`-binding form: a top-level `&&` after the final binding starts
 /// the guard in the `if let` statement exactly as in the expression, a `?:`
 /// initializer is accepted by both forms, and the unsupported shapes report
@@ -133,7 +133,7 @@ func F(a string?, b string?) string {
     @Fact
     func AssignmentInitializer_IsKept_AndItsRightHandSideStopsAtTheGuard() {
         // The guarded initializer is the full grammar, assignments included:
-        // `cached = Next()` was a valid initializer before ADR-0200 and stays
+        // `cached = Next()` was a valid initializer before ADR-0201 and stays
         // one in every let-binding form.
         const source = `package P
 var cached string? = nil

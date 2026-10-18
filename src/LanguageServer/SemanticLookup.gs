@@ -81,7 +81,7 @@ shared class SemanticLookup {
             get;
         }
 
-        /// Issue #4961 / ADR-0200: the `if let` statements and expressions
+        /// Issue #4961 / ADR-0201: the `if let` statements and expressions
         /// ((cref:IfLetStatementSyntax) / (cref:IfLetExpressionSyntax)).
         prop IfLets List[SyntaxNode] {
             get;
@@ -721,7 +721,7 @@ shared class SemanticLookup {
             return best
         }
 
-        /// Issue #4961 / ADR-0200: resolves a use of an `if let` binding (either
+        /// Issue #4961 / ADR-0201: resolves a use of an `if let` binding (either
         /// form). A binding is in scope from the end of its own clause — so in
         /// later initializers and the guard — through the end of the
         /// then-region, never in the else branch. The innermost such region
@@ -776,7 +776,7 @@ shared class SemanticLookup {
             return (best, bestRegionStart, bestRegionLength)
         }
 
-        /// Issue #4961 / ADR-0200: resolves a use of a region-scoped binding
+        /// Issue #4961 / ADR-0201: resolves a use of a region-scoped binding
         /// (`if let` in either form, or `while let`), choosing the innermost
         /// region across both kinds so `if let v … { while let v … { v } }`
         /// and the opposite nesting both pick the inner binding. An ordinary

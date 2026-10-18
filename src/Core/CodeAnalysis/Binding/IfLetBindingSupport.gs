@@ -149,7 +149,7 @@ internal shared class IfLetBindingSupport {
         return BoundIfLetBinding(variable, underlying, initializerExpr)
     }
 
-    /// Issue #4961 / ADR-0200: one clause of a bound `if let` header, in
+    /// Issue #4961 / ADR-0201: one clause of a bound `if let` header, in
     /// source order. An erroneous clause keeps its placeholder declaration
     /// (`Binding.IsValid` is false) so later references still resolve.
     /// @param Syntax The clause syntax.
@@ -158,7 +158,7 @@ internal shared class IfLetBindingSupport {
         BoundIfLetClause
     ] { }
 
-    /// Issue #4961 / ADR-0200: binds the header shared by the `if let`
+    /// Issue #4961 / ADR-0201: binds the header shared by the `if let`
     /// STATEMENT and EXPRESSION — the bindings, the optional guard, and the
     /// then-region — with one scope and one narrowing frame, so both forms
     /// make the same scoping decisions:
@@ -262,7 +262,7 @@ internal shared class IfLetBindingSupport {
         }
     }
 
-    /// Issue #4961 / ADR-0200: reports a non-nullable final initializer that
+    /// Issue #4961 / ADR-0201: reports a non-nullable final initializer that
     /// is followed by a guard. A `bool` there is what `let v = a && b ? x : y`
     /// (or any `a && b` meant as the initializer) becomes once the `&&` starts
     /// the guard, so it gets GS0624's parenthesize hint; any other type is the
@@ -288,7 +288,7 @@ internal shared class IfLetBindingSupport {
         }
     }
 
-    /// ADR-0151 / ADR-0200: builds the boolean condition that declares each
+    /// ADR-0151 / ADR-0201: builds the boolean condition that declares each
     /// binding in turn and short-circuits on the first `nil`, then evaluates
     /// the guard:
     ///

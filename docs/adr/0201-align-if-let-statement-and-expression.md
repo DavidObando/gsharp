@@ -1,4 +1,4 @@
-# ADR-0200: Align the statement and expression forms of `if let`
+# ADR-0201: Align the statement and expression forms of `if let`
 
 - **Status**: Accepted (maintainer decision on issue #4961, 2026-10-17)
 - **Date**: 2026-10-17
@@ -97,7 +97,7 @@ tree is located: an operand of a binary operator, a `?:` condition or false
 arm, a range bound, a `with` receiver, or an assignment's value. If there is
 one, the initializer is re-parsed with the token stream ending just before
 it. A construct the locator does not know keeps its logical operators, which
-is the pre-ADR-0200 parse, so the rule fails safe.
+is the pre-ADR-0201 parse, so the rule fails safe.
 
 ### 2. Guard
 

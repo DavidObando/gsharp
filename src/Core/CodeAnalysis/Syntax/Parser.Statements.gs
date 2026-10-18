@@ -797,7 +797,7 @@ open partial class Parser {
     // ──────────────────────────────────────────────────────────────────────
     private func ParseIfLetStatement() IfLetStatementSyntax {
         let ifKeyword = MatchToken(SyntaxKind.IfKeyword)
-        // Issue #4961 / ADR-0200: the same header routine as the expression
+        // Issue #4961 / ADR-0201: the same header routine as the expression
         // form, so a top-level `&&` after the final binding starts the guard.
         let (bindings, guardOperator, guard_) = ParseIfLetHeader()
         let thenStatement = ParseStatement()

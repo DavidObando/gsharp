@@ -12,7 +12,7 @@ import System.Collections.Generic
 import System.Linq
 import Xunit
 
-/// Issue #4961 / ADR-0200: gsc now ends every `let`-binding initializer at a
+/// Issue #4961 / ADR-0201: gsc now ends every `let`-binding initializer at a
 /// top-level `&&` or `||` (the `&&` starts the statement form's guard too).
 /// cs2gs never emits a statement-form guard (its output must still compile
 /// with the pinned previous release), so it must keep parenthesizing an

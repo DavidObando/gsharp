@@ -24,7 +24,7 @@ open partial class Parser {
     // ──────────────────────────────────────────────────────────────────────
     //  Shared binding header: `let name [T] = expr (, let …)* [&& guard]`
     // ──────────────────────────────────────────────────────────────────────
-    /// Issue #4961 / ADR-0200: parses the binding header shared by EVERY
+    /// Issue #4961 / ADR-0201: parses the binding header shared by EVERY
     /// `let`-binding form — the `if let` statement and expression, `guard let`,
     /// and `while let` — so the initializer-termination and guard decision is
     /// made in exactly one place. Each initializer stops before a top-level
@@ -117,7 +117,7 @@ open partial class Parser {
         return IfLetBindingClauseSyntax(syntaxTree, letKeyword, identifier, typeClause, equalsToken, initializer)
     }
 
-    /// ADR-0151 / ADR-0200: parses a binding initializer of any `let`-binding
+    /// ADR-0151 / ADR-0201: parses a binding initializer of any `let`-binding
     /// header. It is the FULL expression grammar, except that the first
     /// TOP-LEVEL `&&` or `||` ends it, so the delimiter can start the
     /// optional guard. A logical operator that genuinely belongs to the
@@ -131,7 +131,7 @@ open partial class Parser {
     /// initializer. Otherwise the initializer is re-parsed with the same
     /// grammar, the token stream ending just before that operator. A shape
     /// the finder does not recognize keeps its logical operators inside the
-    /// initializer, which is the pre-ADR-0200 statement-form parse, so the
+    /// initializer, which is the pre-ADR-0201 statement-form parse, so the
     /// rule can only ever fail safe.
     private func ParseIfLetGuardedInitializer() ExpressionSyntax {
         let savedPosition = position
@@ -154,7 +154,7 @@ open partial class Parser {
         }
     }
 
-    /// Issue #4961 / ADR-0200: the first `&&` / `||` token of
+    /// Issue #4961 / ADR-0201: the first `&&` / `||` token of
     /// [`expression`](paramref) that is a top-level operator of a `let`
     /// initializer, or `null`. Only the operands that continue the
     /// initializer at its own level are searched: both operands of a binary

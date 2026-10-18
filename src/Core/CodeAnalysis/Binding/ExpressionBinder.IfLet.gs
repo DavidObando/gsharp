@@ -63,7 +63,7 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportIfExpressionMissingElse(syntax.IfKeyword.Location)
             return BoundErrorExpression(nil)
         }
-        // Issue #4961 / ADR-0200: the bindings, the guard, and the then-block
+        // Issue #4961 / ADR-0201: the bindings, the guard, and the then-block
         // are bound through the header helper the STATEMENT form shares, so
         // scoping (then-region only, never the else branch), progressive
         // narrowing, and the guard rules cannot drift between the forms.

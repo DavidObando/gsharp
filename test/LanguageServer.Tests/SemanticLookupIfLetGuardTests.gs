@@ -10,7 +10,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.LanguageServer
 import Xunit
 
-/// Issue #4961 / ADR-0200: the LSP symbol mapping (hover, definition,
+/// Issue #4961 / ADR-0201: the LSP symbol mapping (hover, definition,
 /// references) for an `if let` guard. In both forms, the bound name in the
 /// guard and in the then-region resolves to the binding's own symbol, and a
 /// same-named outer local is what the else branch and the code after it see.

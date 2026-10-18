@@ -12,7 +12,7 @@ import System.Diagnostics
 import System.IO
 import Xunit
 
-/// Issue #4961 / ADR-0200 — end-to-end emit coverage for the aligned
+/// Issue #4961 / ADR-0201 — end-to-end emit coverage for the aligned
 /// STATEMENT form of `if let`: the optional top-level `&&` guard, the
 /// left-to-right short circuit across bindings, later initializers that see
 /// earlier bindings narrowed, and the statement-only control flow (`await`,

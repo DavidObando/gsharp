@@ -216,7 +216,7 @@ func F(a string?) {
 
     @Fact
     func StatementForm_IfLet_TopLevelLogicalAndStartsTheGuard() {
-        // Issue #4961 / ADR-0200 (supersedes the ADR-0151 statement-form
+        // Issue #4961 / ADR-0201 (supersedes the ADR-0151 statement-form
         // carve-out): the statement form shares the expression form's header,
         // so a top-level `&&` after the final binding starts the guard instead
         // of extending the initializer.

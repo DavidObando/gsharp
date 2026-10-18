@@ -263,7 +263,7 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             // cs2gs emits no statement-form `if let` guard (N-1: the pinned
-            // release predates ADR-0200). Nesting a residual
+            // release predates ADR-0201). Nesting a residual
             // or conjoined guard would require attaching the same C# else branch
             // to both binding failure and guard failure; a leading prefix would
             // add a third copy. Let the general pattern lowering keep one branch.
@@ -364,7 +364,7 @@ partial class CSharpToGSharpTranslator {
                     }
                 )
             } else {
-                // cs2gs emits no statement-form `if let` guard (N-1; ADR-0200). Nest the residual
+                // cs2gs emits no statement-form `if let` guard (N-1; ADR-0201). Nest the residual
                 // test/extra conjuncts inside its binding scope. Reuse the same else
                 // branch both when binding fails and when the nested guard fails.
                 if guard_ != nil {

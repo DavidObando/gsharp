@@ -8,7 +8,7 @@ import GSharp.Core.CodeAnalysis.Text
 import GSharp.Formatting
 import Xunit
 
-/// Issue #4961 / ADR-0200: gsfmt formats the statement-form `if let` guard
+/// Issue #4961 / ADR-0201: gsfmt formats the statement-form `if let` guard
 /// like the expression form's, keeps parenthesized and `?:` initializers
 /// intact in both forms, and is idempotent.
 class Issue4961IfLetGuardFormattingTests {
@@ -42,7 +42,7 @@ func Run(s string?,t string?,flag bool) {
         Assert.Contains("    if let e = flag ? s", text)
         Assert.Contains("t && e.Length > 1 {", text)
         Assert.Contains("    let r = if let v = s && v.Length > 0 {", text)
-        // ADR-0200: the expression form now parses a `?:` initializer too
+        // ADR-0201: the expression form now parses a `?:` initializer too
         // (it was a parse error, so gsfmt reported diagnostics).
         Assert.Contains("    let q = if let w = flag ? s", text)
         Assert.Contains("t && w.Length > 1 {", text)

@@ -77,13 +77,13 @@ when every binding is non-nil. Header initializers bind in the enclosing scope,
 so a binding introduced by one clause is not available to another clause.
 This differs from the value-producing ADR-0151 `if let` expression, whose
 binding chain short-circuits and permits a later initializer to consume an
-earlier narrowed binding. (*Since [ADR-0200](0200-align-if-let-statement-and-expression.md)
+earlier narrowed binding. (*Since [ADR-0201](0201-align-if-let-statement-and-expression.md)
 statement-form `if let` also short-circuits, so the eager sequencing here is
 specific to `while let`; #4968 tracks aligning it.*)
 
 `while let` has no header-level `&&` guard. Statement-form binding initializers
 retain the full expression grammar, matching ADR-0071. (*Revised by
-[ADR-0200](0200-align-if-let-statement-and-expression.md): initializers end at
+[ADR-0201](0201-align-if-let-statement-and-expression.md): initializers end at
 a top-level `&&`/`||`, and a guard reports GS0625; #4968 tracks support.*) A migration tool can
 preserve `pattern && predicate` by placing a negated predicate guard at the
 start of the body, where the binding is in scope.
@@ -221,7 +221,7 @@ Negative:
 - **Add `while let ... && guard` grammar.** Rejected for now: statement-form
   `if let` has no such delimiter and its initializer owns top-level `&&`.
   Body-prologue guarding is equivalent and keeps the shared grammar stable.
-  *Revisited by [ADR-0200](0200-align-if-let-statement-and-expression.md):
+  *Revisited by [ADR-0201](0201-align-if-let-statement-and-expression.md):
   statement `if let` now has the delimiter, and `while let` shares its header
   parser. A `while let` initializer therefore ends at a top-level `&&`/`||`,
   and a guard reports GS0625 until #4968 decides its semantics.*

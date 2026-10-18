@@ -49,14 +49,14 @@ class IfLetStatementSyntax : StatementSyntax {
         get;
     }
 
-    /// Issue #4961 / ADR-0200: gets the optional `&&` token introducing the
+    /// Issue #4961 / ADR-0201: gets the optional `&&` token introducing the
     /// guard; `null` when there is no guard. In erroneous source it may be a
     /// `||` token (reported as GS0626 by the parser).
     prop GuardOperatorToken SyntaxToken? {
         get;
     }
 
-    /// Issue #4961 / ADR-0200: gets the optional guard expression; `null`
+    /// Issue #4961 / ADR-0201: gets the optional guard expression; `null`
     /// when absent. It is evaluated only after
     /// every binding matched, with all bound names in scope and narrowed.
     prop Guard ExpressionSyntax? {
