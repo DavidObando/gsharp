@@ -1076,7 +1076,11 @@ internal partial class ExpressionBinder {
         var result VariableSymbol? = nil
         let bindTrailingStatement() -> BoundStatement = () -> {
             boundExpression = bindValue()
-            if boundExpression is BoundErrorExpression || boundExpression.Type == TypeSymbol.Void {
+            // Issue #4965 (ADR-0200): a `never` tail (every path exits) has no
+            // value to keep across the cleanup region either.
+            if boundExpression is BoundErrorExpression ||
+                boundExpression.Type == TypeSymbol.Void ||
+                boundExpression.Type == TypeSymbol.Never {
                 return BoundExpressionStatement(valueSyntax, boundExpression)
             }
             result = LocalVariableSymbol(
@@ -1094,6 +1098,10 @@ internal partial class ExpressionBinder {
             (
                 if boundExpression is BoundErrorExpression {
                     boundExpression
+                } else if boundExpression?.Type == TypeSymbol.Never {
+                    // The unreachable value after the exiting tail (see
+                    // BindValuelessBlockExpression).
+                    cast[BoundExpression](BoundThrowExpression(nil, BoundLiteralExpression(nil, value: nil)))
                 } else {
                     cast[BoundExpression](BoundLiteralExpression(valueSyntax, value: 0, TypeSymbol.Void))
                 }

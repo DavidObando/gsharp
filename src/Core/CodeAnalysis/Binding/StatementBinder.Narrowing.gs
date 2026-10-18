@@ -3991,22 +3991,62 @@ internal partial class StatementBinder {
         /// of needing a trailing value (GS0277). The last statement must be a
         /// `return`, `throw` or `rethrow`, a direct `break`/`continue`/`goto`
         /// (bound as a goto, which always leaves the block because the block
-        /// ends right after it), or a structured statement every branch of
-        /// which ends in `return`/`throw` (see EndsInUnconditionalExit).
-        /// Gotos nested inside such a structured statement are deliberately
-        /// not counted: a `break` in a switch-statement arm targets the switch's
-        /// own exit label and falls through to the end of the block, so
-        /// counting it would type a block that completes normally as `never`
-        /// (fail-safe; a tail if-else is an if-expression and is typed by its
-        /// own branches instead).
+        /// ends right after it) — also when it sits in the tail of a nested
+        /// block, an if/else, or a try (which is how a `defer` or `using let`
+        /// prefix wraps the rest of the block) — or a structured statement
+        /// every branch of which ends in `return`/`throw` (see
+        /// EndsInUnconditionalExit). Gotos inside a switch statement are
+        /// deliberately not counted: a `break` in a switch-statement arm
+        /// targets the switch's own exit label and falls through to the end of
+        /// the block, so counting it would type a block that completes normally
+        /// as `never` (fail-safe; a tail if-else is an if-expression and is
+        /// typed by its own branches instead).
         /// @param statements The bound statements of the block.
         /// @returns `true` when control can never reach the block's end.
         internal func BlockEndIsUnreachable(statements ImmutableArray[BoundStatement]) bool {
             if statements.IsDefaultOrEmpty {
                 return false
             }
-            let last = statements[statements.Length - 1]
-            return last is BoundGotoStatement || EndsInUnconditionalExit(last, gotoExits: false)
+            return EndsInEscapingExit(statements[statements.Length - 1])
+        }
+
+        /// Issue #4965 (ADR-0200): the tail-position walk behind
+        /// (cref:BlockEndIsUnreachable). A goto counts as an exit everywhere
+        /// except inside a switch statement, where it may target the switch's
+        /// own exit label.
+        /// @param statement The statement to classify.
+        /// @returns `true` when the statement never completes normally.
+        private func EndsInEscapingExit(statement BoundStatement?) bool {
+            switch statement {
+                case nil {
+                    return false
+                }
+                case BoundGotoStatement {
+                    return true
+                }
+                case block is BoundBlockStatement {
+                    return !block
+                        .Statements
+                        .IsDefaultOrEmpty &&
+                        EndsInEscapingExit(block.Statements[block.Statements.Length - 1])
+                }
+                case nested is BoundIfStatement {
+                    return nested.ElseStatement != nil &&
+                        EndsInEscapingExit(nested.ThenStatement) &&
+                        EndsInEscapingExit(nested.ElseStatement)
+                }
+                case nestedTry is BoundTryStatement {
+                    if nestedTry.FinallyBlock != nil && EndsInEscapingExit(nestedTry.FinallyBlock) {
+                        return true
+                    }
+                    return EndsInEscapingExit(nestedTry.TryBlock) && nestedTry.CatchClauses.All(
+                        (clause BoundCatchClause) -> EndsInEscapingExit(clause.Body)
+                    )
+                }
+                default {
+                    return EndsInUnconditionalExit(statement, gotoExits: false)
+                }
+            }
         }
 
         /// ADR-0069 / issue #700: structurally determine whether the given
@@ -4067,16 +4107,15 @@ internal partial class StatementBinder {
                         // covers every input the discriminator can take — i.e.,
                         // a default arm exists. Without a default the switch
                         // can fall through past every arm without entering any.
-                        var hasDefault = false
+                        // Issue #4965: a GUARDED discard (`case _ when …`) can
+                        // fail, so it is not a default; SwitchHandlesAllValues
+                        // is the shared test.
                         for arm in nestedSwitch.Arms {
-                            if arm.Pattern == nil || arm.Pattern is BoundDiscardPattern {
-                                hasDefault = true
-                            }
                             if !EndsInUnconditionalExit(arm.Body, gotoExits) {
                                 return false
                             }
                         }
-                        return hasDefault
+                        return SwitchHandlesAllValues(nestedSwitch.Arms, nestedSwitch.Discriminant.Type)
                     }
                 }
                 default {

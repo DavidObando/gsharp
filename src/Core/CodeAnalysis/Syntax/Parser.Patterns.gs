@@ -505,10 +505,13 @@ open partial class Parser {
                 next
                 .Kind
                 .GetBinaryOperatorPrecedence() != 0
+            // Issue #4963: a comma separates the patterns of a comma-arm list
+            // (`case string { Length: 1 }, string { Length: 2 }`) in both forms.
             case PatternParseContext.SwitchStatement: next.Kind == SyntaxKind.OpenBraceToken ||
+                next.Kind == SyntaxKind.CommaToken ||
                 (next.Kind == SyntaxKind.IdentifierToken && next.Text == "when")
             case PatternParseContext.SwitchExpression: (
-                next.Kind is SyntaxKind.ColonToken or SyntaxKind.RightArrowToken
+                next.Kind is SyntaxKind.ColonToken or SyntaxKind.RightArrowToken or SyntaxKind.CommaToken
             ) ||
                 (next.Kind == SyntaxKind.IdentifierToken && next.Text == "when")
             default: false

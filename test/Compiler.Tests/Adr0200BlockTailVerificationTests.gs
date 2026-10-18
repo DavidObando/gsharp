@@ -123,6 +123,30 @@ async func F(x int32) -> switch x {
 case 1: await Task.Delay(1)
 case 2: Console.WriteLine("two")
 }`}
+            yield[]object{"never-tail-under-cleanup-in-lambda", `
+package P
+import System
+func F(c bool) int32 {
+    let f = (b bool) -> {
+        defer Console.WriteLine("d")
+        if b { return 1 } else { return 2 }
+    }
+    for var i = 0; i < 3; i++ {
+        let v int32 = if i == 1 {
+            defer Console.WriteLine("skip")
+            continue
+        } else { i }
+        Console.WriteLine(v)
+    }
+    return f(c)
+}`}
+            yield[]object{"never-only-lambda", `
+package P
+import System
+func F() {
+    let f = () -> { { throw Exception("x") } }
+    f()
+}`}
             yield[]object{"void-if-and-void-switch", `
 package P
 import System

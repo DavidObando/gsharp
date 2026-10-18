@@ -332,6 +332,101 @@ f(false)
 Console.WriteLine(list.Count)`, "2\n0\n")
     }
 
+    // A `defer` / `using let` prefix wraps the rest of the block in a try, so a
+    // `continue` / `break` tail sits inside it; it still leaves the block, and
+    // the cleanup runs first.
+    @Fact
+    func CleanupWrappedLoopExit_IsStillAnExitingTail() {
+        AssertOutput(`import System
+func Log(s string) { Console.WriteLine(s) }
+func f() int32 {
+    var t = 0
+    for var i = 0; i < 4; i++ {
+        let v int32 = if i == 1 {
+            defer Log("skip ${i}")
+            continue
+        } else if i == 3 {
+            defer Log("stop ${i}")
+            break
+        } else { i }
+        t = t + v
+    }
+    return t
+}
+Console.WriteLine(f())`, "skip 1\nstop 3\n2\n")
+    }
+
+    // A `never` tail after a cleanup prefix keeps no result local (it was
+    // GS9998: a `never`-typed local cannot be encoded).
+    @Fact
+    func NeverTailAfterCleanup_KeepsNoResultStorage() {
+        AssertOutput(`import System
+let f = (c bool) -> {
+    defer Console.WriteLine("d")
+    if c { return 1 } else { return 2 }
+}
+Console.WriteLine(f(true))
+let g Func[bool, int32] = (c) -> {
+    using let m = System.IO.MemoryStream()
+    if c { return 3 } else { throw Exception("g") }
+}
+Console.WriteLine(g(true))`, "d\n1\n3\n")
+    }
+
+    // A block-bodied lambda whose every path exits infers void with no target,
+    // like `() -> { throw e }` (it was GS9998: `never` has no CLR form), and
+    // adopts a delegate target's type.
+    @Fact
+    func NeverOnlyBlockLambda_IsVoidWithoutATarget() {
+        AssertOutput(`import System
+let f = () -> { { throw Exception("x") } }
+let g Func[int32] = () -> { { throw Exception("y") } }
+let h = (c bool) -> { if c { throw Exception("a") } else { throw Exception("b") } }
+try { f() } catch (e Exception) { Console.WriteLine(e.Message) }
+try { g() } catch (e Exception) { Console.WriteLine(e.Message) }
+try { h(true) } catch (e Exception) { Console.WriteLine(e.Message) }`, "x\ny\na\n")
+    }
+
+    // A guarded discard can fail, so a switch whose only catch-all is
+    // `case _ when …` does not make the block's end unreachable.
+    @Fact
+    func GuardedDiscard_DoesNotMakeTheEndUnreachable() {
+        AssertDiagnostic(`func f(x int32) int32 {
+    let v int32 = {
+        switch x {
+        case _ when x > 0 { return 1 }
+        }
+    }
+    return v
+}`, "GS0277", 6, 5)
+        AssertOutput(`import System
+func f(x int32) int32 {
+    let v int32 = {
+        switch x {
+        case _ when x > 0 { return 1 }
+        default { return 0 }
+        }
+    }
+    return v
+}
+Console.WriteLine(f(5) + f(-5))`, "1\n")
+    }
+
+    // Comma arms accept type/property patterns in both forms.
+    @Fact
+    func CommaArms_AcceptPropertyPatterns() {
+        AssertOutput(`import System
+let a = switch "ab" {
+case string { Length: 1 }, string { Length: 2 }: "short"
+default: "long"
+}
+switch "abc" {
+case string { Length: 1 }, string { Length: 3 } { Console.WriteLine("stmt") }
+default { Console.WriteLine("other") }
+}
+Console.WriteLine(a)`, "stmt\nshort\n")
+    }
+
     // Value position keeps its rules: GS0276, GS0277, GS0176, and GS0124 for a
     // `never` initializer (which crashed the compiler, GS9998, before).
     @Fact

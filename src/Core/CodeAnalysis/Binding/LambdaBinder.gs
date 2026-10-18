@@ -3619,8 +3619,19 @@ internal class LambdaBinder {
             // Preserve the direct expression-body type before common-type
             // aggregation. This path has one candidate by construction and also
             // remains stable when Core itself is compiled from migrated G#.
+            // Issue #4965 (ADR-0200): a BLOCK body whose tail never completes
+            // (`() -> { { throw e } }`, `() -> { if c { throw a } else { throw b } }`)
+            // produces no value; with no target to adopt it is a void lambda,
+            // exactly as `() -> { throw e }` (a throw statement) already is.
+            // An expression body `() -> throw e` keeps its `() -> never` type,
+            // which adapts to any delegate signature (issue #2716).
+            let neverBlockTail = trailingType == TypeSymbol.Never && syntax.Body is BlockExpressionSyntax
             if targetFunctionType == nil && !hasExplicitReturn && !trailingIsAssignment {
-                return trailingType
+                return if neverBlockTail {
+                    TypeSymbol.Void
+                } else {
+                    trailingType
+                }
             }
             // Issue #891: a block-body arrow lambda whose body never completes
             // normally — every path throws (or otherwise terminates) without a

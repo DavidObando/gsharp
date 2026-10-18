@@ -99,18 +99,27 @@ the block's last statement is:
 
 - `return`, `throw` or `rethrow`;
 - a direct `break`, `continue` or `goto` (it leaves the block, which ends right
-  after it);
+  after it), also in the tail of a nested block, an if/else, or a try — which is
+  how a `defer` or `using let` prefix wraps the rest of the block, so
+  `{ defer log() continue }` exits too;
 - a structured statement every branch of which ends in `return` / `throw`
-  (`StatementBinder.EndsInUnconditionalExit` with gotos not counted: a `break`
-  inside a switch-statement arm targets the switch's own exit and falls through
-  to the end of the block). A tail `if … else …` is an if-expression and is typed
-  by its own branches, so `if c { continue } else { break }` is `never` too.
+  (`StatementBinder.EndsInUnconditionalExit` with gotos not counted inside a
+  switch statement: a `break` in a switch-statement arm targets the switch's own
+  exit and falls through to the end of the block). A switch counts only when it
+  has an unguarded default or discard arm; `case _ when …` can fail. A tail
+  `if … else …` is an if-expression and is typed by its own branches, so
+  `if c { continue } else { break }` is `never` too.
 
 The never-produced value is represented by an unreachable `throw nil` trap after
 the exiting statement, so no new bound node is needed and every later pass
-already handles it. Statements whose value is `never` are terminators in the
-control-flow graph (all-paths-return analysis), and lambda return-type inference
-collects `return`s inside the trailing value and ignores a `never` tail.
+already handles it. A `never` value keeps no result storage, also behind a
+`defer` / `using let` prefix. Statements whose value is `never` are terminators
+in the control-flow graph (all-paths-return analysis). Lambda return-type
+inference collects `return`s inside the trailing value and ignores a `never`
+tail; a block-bodied lambda whose every path exits is void when no delegate
+target supplies a return type (`() -> { { throw e } }`), exactly like
+`() -> { throw e }`. An expression-bodied `() -> throw e` keeps its
+`() -> never` type, which adapts to any delegate signature (#2716).
 
 A local whose initializer is `never` and that has no type clause
 (`let a = throw e`, `let a = if c { return 1 } else { return 2 }`) reports
