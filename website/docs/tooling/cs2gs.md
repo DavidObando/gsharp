@@ -102,7 +102,9 @@ The exit code is non-zero if any project fails a stage.
 
 ### Comments and directives
 
-- `cs2gs` keeps `//`, `/* */` and XML documentation comments. It rewrites block comments as `//` lines and XML documentation comments as G# documentation comments.
+- `cs2gs` keeps `//`, `/* */` and `///` comments on the lines above a type, a member or a statement. It rewrites `/* */` comments as `//` lines and `///` comments as G# documentation comments.
+- `cs2gs` also keeps a `//` comment at the end of a statement's line, and the comments just before the closing brace of a block.
+- `cs2gs` drops comments in other places, such as a comment at the end of a member declaration's line. It also drops `/** */` documentation comments. Review the comments after you migrate.
 - A license or copyright header at the top of a C# file stays at the top of the G# file.
 - `cs2gs` drops `#region` and `#endregion` lines. It translates the code between them as usual.
 - `cs2gs` also drops the other directive lines, such as `#nullable`, `#define`, `#line`, `#error` and `#warning`. G# has no preprocessor.
@@ -124,10 +126,13 @@ The annotation goes on each method, property, field, constructor, event or final
 ### Member order and layout
 
 - In a class or struct, instance members keep their source order. `cs2gs` moves the static members, in source order, into one `shared { }` block after the instance members.
-- A `static class` becomes a `shared class`. Its members keep their source order, with no `shared { }` block.
+- A `static class` becomes a `shared class`, with no `shared { }` block. Its nested types come first, then its other members in source order.
 - Nested types stay in the body of the enclosing type, in source order among the instance members.
 - Operator overloads, delegate types declared inside a type, and extension methods in a static class become top-level declarations. `cs2gs` places them right after the top-level type that contained them.
-- G# has no property initializer. `cs2gs` moves the initial value of a `{ get; }` or `{ get; init; }` auto-property to the start of each constructor that doesn't call `this(...)`. A class with no constructor gets a parameterless `init()` that sets the value.
+- G# has no property initializer. For an auto-property declared `{ get; }` or `{ get; init; }`, `cs2gs` moves the initial value to the start of each constructor that doesn't call `this(...)`.
+  - A class with no constructor gets a synthesized `init()` that sets the values. If the class has a primary constructor, the synthesized `init` takes its parameters.
+  - If a primary-constructor parameter is also used elsewhere in the class, `cs2gs` reports an error and drops the initial values.
+  - A static, `virtual` or `override` property, or one declared in a record, keeps its initial value on a backing field instead.
 - `cs2gs` doesn't keep the C# blank lines. Statements inside a body have no blank lines between them. With the default formatting, one blank line separates members.
 
 ### Modifiers
