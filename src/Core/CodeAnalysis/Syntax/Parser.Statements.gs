@@ -795,9 +795,7 @@ open partial class Parser {
     // ──────────────────────────────────────────────────────────────────────
     //  ADR-0071 / issue #708: `if let` and `guard let` binding statements.
     // ──────────────────────────────────────────────────────────────────────
-    private func ParseIfLetStatement() IfLetStatementSyntax -> ParseIfLetMemoized(() -> ParseIfLetStatementCore())
-
-    private func ParseIfLetStatementCore() IfLetStatementSyntax {
+    private func ParseIfLetStatement() IfLetStatementSyntax {
         let ifKeyword = MatchToken(SyntaxKind.IfKeyword)
         // Issue #4961 / ADR-0201: the same header routine as the expression
         // form, so a top-level `&&` after the final binding starts the guard.

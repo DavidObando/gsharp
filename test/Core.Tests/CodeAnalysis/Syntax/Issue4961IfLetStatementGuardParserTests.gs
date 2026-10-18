@@ -218,8 +218,10 @@ func F(flag bool, point Point) int32 {
         Assert.IsType[ConditionalExpressionSyntax](FindFirst[GuardLetStatementSyntax](tree).Bindings[0].Initializer)
     }
 
-    @Fact
-    func NestedGuardsAndInitializers_ParseInBoundedTime() {
+    @Theory
+    @InlineData("s")
+    @InlineData("default([]?[]int32)")
+    func NestedGuardsAndInitializers_ParseInBoundedTime(initializer string) {
         // Each initializer is parsed speculatively and its guard twice; the
         // `if let` parse memo keeps a construct nested in a guard or an
         // initializer from being re-parsed once per enclosing level, which
@@ -228,11 +230,11 @@ func F(flag bool, point Point) int32 {
         let guardNest = StringBuilder()
         let initializerNest = StringBuilder()
         for var i = 0; i < depth; i++ {
-            guardNest.Append("(if let a${i} = s && ")
+            guardNest.Append("(if let a${i} = $initializer && ")
             initializerNest.Append("(if let b${i} = ")
         }
         guardNest.Append("true")
-        initializerNest.Append("s")
+        initializerNest.Append(initializer)
         for var i = 0; i < depth; i++ {
             guardNest.Append(" { true } else { false })")
             initializerNest.Append(" && b${depth - 1 - i}.Length > 0 { s } else { s })")
@@ -244,6 +246,34 @@ func F(flag bool, point Point) int32 {
         Assert.Empty(tree.Diagnostics)
         Assert.Equal(2 * depth, Walk(tree.Root).OfType[IfLetExpressionSyntax]().Count())
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), "nested if-let parse took ${watch.Elapsed}")
+    }
+
+    @Theory
+    @InlineData("while let")
+    @InlineData("guard let")
+    func UnsupportedNestedHeaderGuards_ParseInBoundedTime(form string) {
+        const depth = 24
+        let initializer = StringBuilder()
+        for var i = 0; i < depth; i++ {
+            initializer.Append("{ $form value${i} = ")
+        }
+        initializer.Append("s")
+        for var i = 0; i < depth; i++ {
+            initializer.Append(
+                if form == "while let" {
+                    " && true { break } s }"
+                } else {
+                    " && true else { return } s }"
+                }
+            )
+        }
+        let source = "package P\nfunc F(s string?) {\n    let value = $initializer\n}\n"
+        let watch = Stopwatch.StartNew()
+        let tree = SyntaxTree.Parse(source)
+        watch.Stop()
+        Assert.Equal(depth, tree.Diagnostics.Length)
+        Assert.All(tree.Diagnostics, (diagnostic Diagnostic) -> Assert.Equal("GS0625", diagnostic.Id))
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), "nested $form parse took ${watch.Elapsed}")
     }
 
     @Fact

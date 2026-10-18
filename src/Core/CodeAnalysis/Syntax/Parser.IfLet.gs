@@ -39,7 +39,7 @@ open partial class Parser {
     /// @param unsupportedGuardForm The form's spelling when it does not accept a guard
     /// (`guard let`, `while let`); `null` for `if let`.
     /// @returns The binding list plus the optional guard operator and guard.
-    private func ParseIfLetHeader(unsupportedGuardForm string? = nil)(
+    private func ParseIfLetHeaderCore(unsupportedGuardForm string?)(
         Bindings SeparatedSyntaxList[IfLetBindingClauseSyntax],
         GuardOperator SyntaxToken?,
         Guard ExpressionSyntax?
@@ -252,9 +252,9 @@ open partial class Parser {
     }
 
     // ──────────────────────────────────────────────────────────────────────
-    //  Issue #4961: parse memo for `if let` constructs.
+    //  Issue #4961: parse memo for the shared binding header.
     // ──────────────────────────────────────────────────────────────────────
-    /// The parser state an `if let` construct's parse depends on, besides the
+    /// The parser state a binding header's parse depends on, besides the
     /// token stream itself.
     private data struct IfLetParseKey(
         Start int32,
@@ -266,15 +266,18 @@ open partial class Parser {
         SuppressRangeOperator int32,
         TupleTypeBeforeArrowBodyPosition int32?,
         PatternContext PatternParseContext,
-        PatternNestingDepth int32
+        PatternNestingDepth int32,
+        UnsupportedGuardForm string?
     ) : IEquatable[IfLetParseKey] { }
 
-    /// A recorded `if let` parse: the node, the token stream before and after
+    /// A recorded binding header: its syntax, the token stream before and after
     /// it (a parse can split a fused token), the end position, the furthest
     /// position it looked at, the token limit it ran under, and the
     /// diagnostics it reported.
     private data struct IfLetParseResult(
-        Node SyntaxNode,
+        Bindings SeparatedSyntaxList[IfLetBindingClauseSyntax],
+        GuardOperator SyntaxToken?,
+        Guard ExpressionSyntax?,
         TokensBefore ImmutableArray[SyntaxToken],
         TokensAfter ImmutableArray[SyntaxToken],
         End int32,
@@ -288,17 +291,21 @@ open partial class Parser {
         IfLetParseResult
     ]()
 
-    /// Issue #4961: parses an `if let` statement or expression at most once per
+    /// Issue #4961: parses a shared binding header at most once per
     /// start position and parser state. ParseIfLetGuardedInitializer parses an
     /// initializer speculatively and then again, and its guard is parsed both
-    /// in that speculation and by the header, so without the memo an `if let`
+    /// in that speculation and by the header, so without the memo a binding form
     /// nested in a guard or initializer would be re-parsed once per enclosing
     /// level (exponential in the nesting depth). A recorded parse is reused
     /// only when the token stream is the same and neither its token limit nor
-    /// the current one fell within the tokens it looked at, so the reused node
+    /// the current one fell within the tokens it looked at, so the reused header
     /// is exactly what a fresh parse would produce; its diagnostics are
     /// replayed.
-    private func ParseIfLetMemoized[T SyntaxNode](parse() -> T) T {
+    private func ParseIfLetHeader(unsupportedGuardForm string? = nil)(
+        Bindings SeparatedSyntaxList[IfLetBindingClauseSyntax],
+        GuardOperator SyntaxToken?,
+        Guard ExpressionSyntax?
+    ) {
         let key = IfLetParseKey(
             Current.Position,
             suppressTrailingObjectInitializer,
@@ -309,46 +316,52 @@ open partial class Parser {
             suppressRangeOperator,
             tupleTypeBeforeArrowBodyPosition,
             patternParseContext,
-            patternNestingDepth
+            patternNestingDepth,
+            unsupportedGuardForm
         )
         if ifLetParseMemo.TryGetValue(key, out var recorded) && recorded.TokensBefore.Equals(tokens) &&
             recorded.FurthestPeek < recorded.Limit &&
-            recorded.FurthestPeek < tokenLimitPosition &&
-            recorded.Node is T {
-            let reused = cast[T](recorded.Node)
+            recorded.FurthestPeek < tokenLimitPosition {
             position = recorded.End
             tokens = recorded.TokensAfter
             if recorded.FurthestPeek > furthestPeekPosition {
                 furthestPeekPosition = recorded.FurthestPeek
             }
             Diagnostics.AddRange(recorded.Diagnostics)
-            return reused
+            return (recorded.Bindings, recorded.GuardOperator, recorded.Guard)
         }
         let tokensBefore = tokens
         let diagnosticMark = Diagnostics.Count
         let outerFurthestPeek = furthestPeekPosition
         furthestPeekPosition = -1
         let limit = tokenLimitPosition
-        var node T
-        var innerFurthestPeek = -1
+        bindingHeaderDepth++
         try {
-            node = parse()
+            let header = ParseIfLetHeaderCore(unsupportedGuardForm)
+            ifLetParseMemo[key] = IfLetParseResult(
+                header.Bindings,
+                header.GuardOperator,
+                header.Guard,
+                tokensBefore,
+                tokens,
+                position,
+                furthestPeekPosition,
+                limit,
+                Diagnostics.Since(diagnosticMark)
+            )
+            return header
         } finally {
-            innerFurthestPeek = furthestPeekPosition
             if outerFurthestPeek > furthestPeekPosition {
                 furthestPeekPosition = outerFurthestPeek
             }
+            bindingHeaderDepth--
+            if bindingHeaderDepth == 0 {
+                // No enclosing header can replay these streams now. Do not
+                // retain every split array across unrelated headers in a file.
+                ifLetParseMemo.Clear()
+                splitTokenStreams.Clear()
+            }
         }
-        ifLetParseMemo[key] = IfLetParseResult(
-            node,
-            tokensBefore,
-            tokens,
-            position,
-            innerFurthestPeek,
-            limit,
-            Diagnostics.Since(diagnosticMark)
-        )
-        return node
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -366,7 +379,7 @@ open partial class Parser {
         EnsureNestedParseAllowed()
         recursionDepth++
         try {
-            return ParseIfLetMemoized(() -> ParseIfLetExpressionCore())
+            return ParseIfLetExpressionCore()
         } finally {
             recursionDepth--
         }

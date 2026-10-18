@@ -98,10 +98,14 @@ arm, a range bound, a `with` receiver, or an assignment's value. If there is
 one, the initializer is re-parsed with the token stream ending just before
 it. A construct the locator does not know keeps its logical operators, which
 is the pre-ADR-0201 parse, so the rule fails safe. The locator walks the tree
-iteratively. A parse memo keyed by start position and parser state, and
-reused only when no token limit falls within the tokens the recorded parse
-looked at, keeps an `if let` nested in a guard or an initializer from being
-re-parsed once per enclosing level.
+iteratively. The shared binding header is memoized by start position and
+parser state, including the form's unsupported-guard policy. Reuse requires
+that neither token limit falls within the recorded lookahead. This covers
+all callers, including nested `while let` and `guard let` initializers that
+report GS0625. Fused-token splits reuse the same immutable stream for the same
+input stream and split position, so speculative rollback does not invalidate
+the header memo by manufacturing equivalent arrays. The memo and split streams
+are released when the outermost header finishes.
 
 ### 2. Guard
 
