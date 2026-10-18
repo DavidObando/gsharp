@@ -106,6 +106,9 @@ internal partial class ExpressionBinder {
             return true
         }
         switch type {
+            case tupleType is TupleTypeSymbol when TryGetTupleElementIndex(name, tupleType, out _) {
+                return true
+            }
             case structType is StructSymbol {
                 return StructMayHaveMember(structType, name)
             }

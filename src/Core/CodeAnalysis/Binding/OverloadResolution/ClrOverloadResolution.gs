@@ -1261,7 +1261,10 @@ internal shared class ClrOverloadResolution {
                 )
             )
             if !TryCloseInferredType(parameterType, bounds, out var closedReceiver) || closedReceiver == nil {
-                return argumentDependentReceiver && typeParameters.All(
+                return argumentDependentReceiver &&
+                    MayConvertToOpenReceiver(parameterType, receiverClr) &&
+                    typeParameters
+                    .All(
                     (typeParameter Type) -> bounds.ContainsKey(typeParameter.Name) || remainingParameters.Any(
                         (parameter ParameterInfo) -> MentionsGenericParameter(parameter.ParameterType, typeParameter)
                     )
@@ -1285,6 +1288,54 @@ internal shared class ClrOverloadResolution {
         return ClassifyImplicit(parameterType, receiverClr) != ImplicitConversionKind.None ||
             Conversion
             .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(parameters[0])).IsImplicit
+    }
+
+    private func MayConvertToOpenReceiver(target Type, source Type) bool {
+        if MayHaveStandardConversionToOpenReceiver(target, source) {
+            return true
+        }
+        let operators = List[MethodInfo]()
+        ClrOperatorResolution.CollectOperators(source, "op_Implicit", operators)
+        ClrOperatorResolution.CollectOperators(
+            NullableLifting.GetValueTypeNullableUnderlyingClr(target) ?? target,
+            "op_Implicit",
+            operators
+        )
+        return operators.Any(
+            (method MethodInfo) -> {
+                let parameters = method.GetParameters()
+                return parameters.Length == 1 &&
+                    MayHaveStandardConversionToOpenReceiver(parameters[0].ParameterType, source) &&
+                    MayHaveStandardConversionToOpenReceiver(target, method.ReturnType)
+            }
+        )
+    }
+
+    /// Open arguments may change, but an impossible outer conversion cannot.
+    /// Keep user-defined conversions to one operator plus standard conversions.
+    private func MayHaveStandardConversionToOpenReceiver(target Type, source Type) bool {
+        if target.IsGenericParameter || source.IsGenericParameter {
+            return true
+        }
+        if !target.ContainsGenericParameters && !source.ContainsGenericParameters {
+            let conversion = ClassifyImplicit(target, source)
+            return conversion != ImplicitConversionKind.None && conversion != ImplicitConversionKind.UserDefinedImplicit
+        }
+        if target.IsGenericType {
+            let definition = target.GetGenericTypeDefinition()
+            if FindClosedGeneric(source, definition) != nil || ClrTypeUtilities.SafeGetInterfaces(source).Any(
+                (interfaceType Type) -> interfaceType.IsGenericType &&
+                    MatchesOpenDefinition(interfaceType.GetGenericTypeDefinition(), definition, definition.FullName)
+            ) {
+                return true
+            }
+        }
+        let underlying = NullableLifting.GetValueTypeNullableUnderlyingClr(target)
+        if underlying != nil && source.IsValueType {
+            return MayHaveStandardConversionToOpenReceiver(underlying, source)
+        }
+        return target.IsArray && source.IsArray && target.GetArrayRank() == source.GetArrayRank() &&
+            MayHaveStandardConversionToOpenReceiver(target.GetElementType()!!, source.GetElementType()!!)
     }
 
     /// Partial method type inference for deferred arrow-lambda arguments

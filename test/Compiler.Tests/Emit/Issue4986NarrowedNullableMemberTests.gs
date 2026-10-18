@@ -244,6 +244,21 @@ Console.WriteLine("${pairValue(KeyValuePair[string, int32]("a", 7))} ${pairValue
     }
 
     @Fact
+    func Named_Tuple_Elements_Keep_Precedence_Over_Nullable_Storage() {
+        let result = CompileAndRun(`import System
+func direct(t (HasValue bool, X int32)) bool -> t.HasValue
+func ternary(t (HasValue bool, X int32)?) bool -> t != nil ? t.HasValue : false
+func expression(t (HasValue bool, X int32)?) bool -> if t != nil { t.HasValue } else { false }
+func statement(t (HasValue bool, X int32)?) bool {
+    if t != nil { return t.HasValue }
+    return false
+}
+Console.WriteLine("${direct((false, 1))} ${ternary((false, 1))} ${expression((false, 1))} ${statement((false, 1))} ${ternary((true, 1))} ${expression((true, 1))} ${statement((true, 1))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`)
+        Assert.Equal("False False False False True True True False False False" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
     func Imported_Extension_Receiver_Conversions_Keep_The_Narrowed_Binding() {
         using let fixture = CSharpFixture(`namespace Fixture4986 {
     public struct Meter {
@@ -354,6 +369,30 @@ func statement(n Meter?) int32 {
 Console.WriteLine("${direct(Meter())} ${narrowed(Meter())} ${statement(Meter())} ${narrowed(nil)} ${statement(nil)}")
 `, fixture.AssemblyPath)
         Assert.Equal("99 99 99 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData("System.Collections.Generic.List<T>")
+    @InlineData("System.Collections.Generic.IEnumerable<T>")
+    @InlineData("T[]")
+    func Impossible_Open_Generic_Receivers_Do_Not_Block_Storage(receiver string) {
+        using let fixture = CSharpFixture(
+            "namespace Fixture4986 { public static class Extensions { public static int GetValueOrDefault<T>(this " +
+                receiver +
+                " value, T fallback) => 99; } }"
+        )
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n int32?) int32 -> n != nil ? n.GetValueOrDefault(0) : 0
+func named(n int32?) int32 -> n != nil ? n.GetValueOrDefault(defaultValue: 0) : 0
+func expression(n int32?) int32 -> if n != nil { n.GetValueOrDefault(0) } else { 0 }
+func statement(n int32?) int32 {
+    if n != nil { return n.GetValueOrDefault(0) }
+    return 0
+}
+Console.WriteLine("${ternary(7)} ${expression(7)} ${statement(7)} ${named(7)} ${ternary(nil)} ${expression(nil)} ${statement(nil)} ${named(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("7 7 7 7 0 0 0 0" + Environment.NewLine, result.Output)
     }
 
     /// A second argument bind hoisted another `out var`, reporting GS0102.

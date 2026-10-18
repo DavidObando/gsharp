@@ -311,12 +311,17 @@ in one place, `ExpressionBinder.BindAccessorStep`: the narrowed read that
 `BuildNarrowedRead` builds is marked (`BoundUnaryExpression.IsNarrowingUnwrap`),
 and when the accessed name is one `Nullable<T>` itself declares, a lookup that
 binds nothing (`NarrowedTypeMayHaveMember`) asks whether `T` could have a
-member of that name: its own instance or static members, its interfaces or
-type-parameter constraints, or an applicable source or imported extension.
+member of that name: its own instance or static members (including named
+tuple elements), its interfaces or type-parameter constraints, or an
+applicable source or imported extension.
 Imported extension receivers use the CLR overload resolver's existing input
 inference, constraint checks and implicit conversions, including generic
 struct receivers and numeric widening. Unknown symbolic receivers and bounds
-that other arguments can complete or widen remain conservative. Explicit generic
+that supplied arguments can complete or widen remain conservative, but an
+incomplete generic receiver must still have a possible standard conversion
+or a single implicit operator between compatible outer shapes. Inferring
+an element type cannot turn an `int32` receiver into a collection.
+Explicit generic
 calls keep the narrowed binding (`Nullable<T>` declares no generic methods).
 Only when none can is the member bound against the storage read. The member
 and its arguments are bound once either way, so a member `T` declares keeps
