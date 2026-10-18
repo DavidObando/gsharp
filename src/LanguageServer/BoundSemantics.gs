@@ -45,7 +45,7 @@ shared class BoundSemantics {
         if model.GetDeclaredSymbol(token) is {} declared && declared.Name == token.Text {
             return declared
         }
-        let node = FindReferencedNode(model, token)
+        let node = Unwrap(FindReferencedNode(model, token))
         return if node == nil {
             default(Symbol?)
         } else {
@@ -63,7 +63,7 @@ shared class BoundSemantics {
         if model == nil || token == nil {
             return nil
         }
-        let member MemberInfo? = switch FindReferencedNode(model, token) {
+        let member MemberInfo? = switch Unwrap(FindReferencedNode(model, token)) {
             case instanceCall is BoundImportedInstanceCallExpression: instanceCall.Method
             case staticCall is BoundImportedCallExpression: staticCall.Function?.Method
             case property is BoundClrPropertyAccessExpression: property.Member
@@ -100,7 +100,10 @@ shared class BoundSemantics {
         }
         // A name or call segment must be the one the binder bound: a mismatch
         // means the chain walk landed on another segment.
-        if anchor != nil && ReferencedSymbol(node) is {} referenced && referenced.Name != anchor.Text {
+        if anchor != nil &&
+            Unwrap(node) is {} read &&
+            ReferencedSymbol(read) is {} referenced &&
+            referenced.Name != anchor.Text {
             return nil
         }
         return node.Type
@@ -169,7 +172,7 @@ shared class BoundSemantics {
             root = accessor
         }
         if object.ReferenceEquals(root, expression) {
-            return Unwrap(model.GetBoundNode(expression) as BoundExpression)
+            return PeelConversions(model.GetBoundNode(expression) as BoundExpression)
         }
         let segments = List[ExpressionSyntax]()
         var current ExpressionSyntax = root
@@ -188,9 +191,14 @@ shared class BoundSemantics {
         if index < 0 {
             return nil
         }
-        var node BoundExpression? = Unwrap(model.GetBoundNode(root) as BoundExpression)
+        var node BoundExpression? = PeelConversions(model.GetBoundNode(root) as BoundExpression)
         for var depth = segments.Count - 1; depth > index && node != nil; depth-- {
-            node = Unwrap(ReceiverOf(node))
+            let member = Unwrap(node)
+            node = if member == nil {
+                default(BoundExpression?)
+            } else {
+                PeelConversions(ReceiverOf(member))
+            }
         }
         return node
     }
@@ -223,6 +231,19 @@ shared class BoundSemantics {
             // Metadata that cannot be read is treated as a plain static call.
             return false
         }
+    }
+
+    /// Removes the implicit conversions the binder adds around a read without
+    /// user syntax of their own. A narrowed value-type read keeps its
+    /// synthesized `!!`: that node's type is the read's flow type (`S`,
+    /// where the read below it is still `S?`).
+    private func PeelConversions(node BoundExpression?) BoundExpression? {
+        var current = node
+        while current is BoundConversionExpression conversion &&
+            IsSynthesizedWrapper(conversion, conversion.Expression) {
+            current = conversion.Expression
+        }
+        return current
     }
 
     /// Removes the conversions and nil-unwraps the binder adds around a read

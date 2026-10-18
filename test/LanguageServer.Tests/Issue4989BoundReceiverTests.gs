@@ -109,7 +109,138 @@ open class Issue4989BoundReceiverTests {
         }
     }
 
+    @Fact
+    func ExpressionType_NarrowedNullableValueReceivers_AreTheUnderlyingTypes() {
+        // A narrowed `S?` read is the binder's `!!` around a read still typed
+        // `S?`; the receiver's flow type is the `!!`'s `S`.
+        let content = LanguageServerTestHelpers.Content(ValueReceiverSource)
+        let compilation = Compilation(content.SyntaxTree)
+        let point = ReceiverType(compilation, content, ValueReceiverSource, "p.X")
+        Assert.True(point is StructSymbol, "p reads at ${point}")
+        Assert.Equal("Point", point?.Name)
+        let number = ReceiverType(compilation, content, ValueReceiverSource, "n.GetHashCode")
+        Assert.False(number is NullableTypeSymbol, "n reads at ${number}")
+        Assert.Equal("int32", number?.Name)
+    }
+
+    @Fact
+    func Completion_ChainedReceiverOnANarrowedBinding_UsesTheBoundChain() {
+        let content = LanguageServerTestHelpers.Content(ChainSource)
+        let items = CompletionComputer.ComputeCompletions(
+            content,
+            LanguageServerTestHelpers.PositionOf(ChainSource, "Count()", 1)
+        )
+        Assert.Contains(items, (item CompletionItem) -> item.Label == "Count")
+    }
+
+    @Fact
+    func Hover_ConstructedGenericMember_ShowsTheSubstitutedType() {
+        let content = LanguageServerTestHelpers.Content(GenericSource)
+        let hover = HoverText(content, GenericSource, "Value", 2)
+        Assert.Contains("Value int32", hover, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func References_ConstructedGenericMember_IncludeTheDeclaration() {
+        let content = LanguageServerTestHelpers.Content(GenericSource)
+        let compilation = Compilation(content.SyntaxTree)
+        let declaration = SemanticLookup.ResolveSymbol(compilation, TokenAt(content, GenericSource, "Value", 0))
+        let use = TokenAt(content, GenericSource, "Value", 2)
+        let references = SemanticLookup.FindReferences(compilation, declaration).ToList()
+        Assert.Contains(references, (token SyntaxToken) -> token.Span.Start == use.Span.Start)
+        let fromUse = SemanticLookup.ResolveSymbol(compilation, use)
+        Assert.Contains(
+            SemanticLookup.FindReferences(compilation, fromUse),
+            (token SyntaxToken) -> token.Span.Start == TokenAt(content, GenericSource, "Value", 0).Span.Start
+        )
+    }
+
+    @Fact
+    func Hover_OverloadedMethodCall_ShowsTheBoundOverload() {
+        let content = LanguageServerTestHelpers.Content(OverloadSource)
+        let hover = HoverText(content, OverloadSource, "M()", 1)
+        Assert.Contains("M() int32", hover, StringComparison.Ordinal)
+        Assert.DoesNotContain("M(x int32)", hover, StringComparison.Ordinal)
+        let uri = Assert.IsType[DocumentUri](DocumentUri.From("file:///issue4989-overload.gs"))
+        let location = Assert.IsType[Location](
+            DefinitionComputer.ComputeDefinition(
+                uri,
+                content,
+                LanguageServerTestHelpers.PositionOf(OverloadSource, "M()", 1)
+            )
+        )
+        Assert.Equal(LanguageServerTestHelpers.PositionOf(OverloadSource, "M()", 0).Line, location.Range.Start.Line)
+    }
+
     shared {
+        private const ValueReceiverSource string = `package Repro
+
+struct Point {
+    var X int32
+}
+
+func Run(p Point?, n int32?) int32 {
+    if p != nil && n != nil {
+        return p.X + n.GetHashCode()
+    }
+    return 0
+}
+`
+
+        private const ChainSource string = `package Repro
+
+class Holder {
+    func Count() int32 -> 1
+}
+
+class Store {
+    var Box Holder = Holder()
+}
+
+func Run(store Store?) int32 {
+    guard let s = store else {
+        return 0
+    }
+    return s.Box.Count()
+}
+`
+
+        private const GenericSource string = `package Repro
+
+class Box[T] {
+    var Value T
+}
+
+func Run() int32 {
+    let b = Box[int32]{Value: 3}
+    return b.Value
+}
+`
+
+        private const OverloadSource string = `package Repro
+
+class C {
+    func M() int32 -> 1
+    func M(x int32) int32 -> x
+}
+
+func Run(c C) int32 {
+    return c.M()
+}
+`
+
+        /// Gets the bound type of the receiver that starts [`text`](paramref).
+        private func ReceiverType(
+            compilation Compilation,
+            content DocumentContent,
+            source string,
+            text string
+        ) TypeSymbol? -> BoundSemantics
+            .GetExpressionType(
+            compilation,
+            TokenAt(content, source, text, 0).Parent as GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax
+        )
+
         private const IssueSource string = `package Repro
 
 import System

@@ -2043,8 +2043,10 @@ shared class CompletionComputer {
                     offset
                 )
                 // Issue #4989: the receiver's bound (flow) type when the binder has
-                // one; a speculative bind otherwise (an incomplete chain).
-                let receiverType TypeSymbol? = BoundSemantics.GetExpressionType(compilation, receiverExpression) ??
+                // one; a speculative bind of the reconstructed chain otherwise
+                // (incomplete code). The bound query takes the receiver segment in
+                // the document's own tree, which the binder indexed.
+                let receiverType TypeSymbol? = BoundSemantics.GetExpressionType(compilation, accessor.LeftPart) ??
                     GSharp
                     .Core
                     .CodeAnalysis

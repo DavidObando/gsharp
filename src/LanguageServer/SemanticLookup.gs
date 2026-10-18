@@ -12,6 +12,7 @@ import GSharp.Core.CodeAnalysis.Text
 import GSharp.LanguageServer.Protocol
 import System
 import System.Collections
+import System.Collections.Concurrent
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
@@ -96,6 +97,10 @@ shared class SemanticLookup {
         private let localDeclarations Dictionary[SyntaxNode, Dictionary[string, Symbol]]
         private let referencesLock object = SystemObject()
         private var referencesIndex Dictionary[Symbol, List[SyntaxToken]]?
+        private let canonicalMembers ConcurrentDictionary[SyntaxNode, Symbol] = ConcurrentDictionary[
+            SyntaxNode,
+            Symbol
+        ](ReferenceEqualityComparer.Instance)
 
         // Cached tree-walk results. Resolve's fallback path used to call
         // FindNodes<FunctionDeclarationSyntax> and FindNodes<StructDeclarationSyntax>
@@ -269,7 +274,7 @@ shared class SemanticLookup {
             // binding form they do not enumerate.
             let bound Symbol? = BoundSemantics.GetSymbol(this.compilation, token)
             if bound != nil {
-                return this.Canonicalize(bound)
+                return bound
             }
             // Instance/static member access: when the token is the member identifier on the right
             // side of `receiver.Member` (AccessorExpressionSyntax) or the field identifier of
@@ -324,22 +329,20 @@ shared class SemanticLookup {
             }
         }
 
-        /// Returns the instance this model already maps [`symbol`](paramref)'s
-        /// declaration to, so references, rename and code lens compare a bound
-        /// symbol by the same identity as its declaration.
-        private func Canonicalize(symbol Symbol) Symbol {
-            for declaration in symbol.DeclaringSyntaxNodes {
-                let identifier SyntaxToken? = switch declaration {
-                    case token is SyntaxToken: token
-                    case function is FunctionDeclarationSyntax: function.Identifier
-                    case variable is VariableDeclarationSyntax: variable.Identifier
-                    default: default(SyntaxToken?)
-                }
-                if identifier != nil && this.declarations.TryGetValue(identifier, out var known) {
-                    return known
-                }
+        /// Returns one instance per member declaration, so references compare a
+        /// member reached through a constructed generic type (a substituted
+        /// copy that keeps the declaration) with the declaration itself.
+        private func CanonicalMember(symbol Symbol?) Symbol? {
+            if symbol == nil || symbol is not(FunctionSymbol or FieldSymbol or PropertySymbol or EventSymbol) {
+                return symbol
             }
-            return symbol
+            let member Symbol = symbol
+            let declarations = member.DeclaringSyntaxNodes
+            return if declarations.IsDefaultOrEmpty {
+                member
+            } else {
+                this.canonicalMembers.GetOrAdd(declarations[0], member)
+            }
         }
 
         func GetLocals(declaration FunctionDeclarationSyntax?) IReadOnlyList[VariableSymbol] {
@@ -369,7 +372,7 @@ shared class SemanticLookup {
                     index = this.referencesIndex
                 }
             }
-            let normalizedTarget Symbol? = NormalizeForReferences(target)
+            let normalizedTarget Symbol? = this.CanonicalMember(NormalizeForReferences(target))
             if normalizedTarget == nil {
                 return Array.Empty[SyntaxToken]()
             }
@@ -405,7 +408,7 @@ shared class SemanticLookup {
                         if token.IsMissing || token.Kind != SyntaxKind.IdentifierToken {
                             continue
                         }
-                        let symbol Symbol? = NormalizeForReferences(this.Resolve(token))
+                        let symbol Symbol? = this.CanonicalMember(NormalizeForReferences(this.Resolve(token)))
                         if symbol == nil {
                             continue
                         }
