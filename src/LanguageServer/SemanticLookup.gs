@@ -263,6 +263,14 @@ shared class SemanticLookup {
             if token.IsMissing {
                 return nil
             }
+            // Issue #4989: what the binder bound the token to wins over every
+            // syntactic fallback below. Those recompute a receiver's type from its
+            // declaration, so they miss flow narrowing, interface members, and any
+            // binding form they do not enumerate.
+            let bound Symbol? = BoundSemantics.GetSymbol(this.compilation, token)
+            if bound != nil {
+                return this.Canonicalize(bound)
+            }
             // Instance/static member access: when the token is the member identifier on the right
             // side of `receiver.Member` (AccessorExpressionSyntax) or the field identifier of
             // `receiver.Field = value` (FieldAssignmentExpressionSyntax), resolve the receiver's
@@ -314,6 +322,24 @@ shared class SemanticLookup {
             } else {
                 ResolvePrimitiveOrImportedType(token.Text)
             }
+        }
+
+        /// Returns the instance this model already maps [`symbol`](paramref)'s
+        /// declaration to, so references, rename and code lens compare a bound
+        /// symbol by the same identity as its declaration.
+        private func Canonicalize(symbol Symbol) Symbol {
+            for declaration in symbol.DeclaringSyntaxNodes {
+                let identifier SyntaxToken? = switch declaration {
+                    case token is SyntaxToken: token
+                    case function is FunctionDeclarationSyntax: function.Identifier
+                    case variable is VariableDeclarationSyntax: variable.Identifier
+                    default: default(SyntaxToken?)
+                }
+                if identifier != nil && this.declarations.TryGetValue(identifier, out var known) {
+                    return known
+                }
+            }
+            return symbol
         }
 
         func GetLocals(declaration FunctionDeclarationSyntax?) IReadOnlyList[VariableSymbol] {
@@ -581,6 +607,11 @@ shared class SemanticLookup {
         }
 
         private func ResolveReceiverTypeSymbol(tree SyntaxTree, expression ExpressionSyntax) TypeSymbol? {
+            // Issue #4989: the receiver's bound (flow) type first.
+            let boundType = BoundSemantics.GetExpressionType(this.compilation, expression)
+            if boundType != nil {
+                return boundType
+            }
             switch expression {
                 case name is NameExpressionSyntax {
                     return AsTypeSymbol(this.Resolve(name.IdentifierToken))
@@ -2260,9 +2291,10 @@ shared class SemanticLookup {
             return false
         }
         try {
-            if effectiveReceiverType.IsAssignableFrom(receiverClrType) || receiverClrType.IsAssignableFrom(
-                effectiveReceiverType
-            ) {
+            // Issue #4989: only a member the receiver's type can reach is a
+            // match. A method declared on a SUBTYPE of the receiver's type is
+            // never what the call bound to, so the reverse test is not made.
+            if effectiveReceiverType.IsAssignableFrom(receiverClrType) {
                 return true
             }
         } catch (NotSupportedException) {
@@ -2285,7 +2317,7 @@ shared class SemanticLookup {
         return string.Equals(receiverDefinition.FullName, candidateDefinition.FullName, StringComparison.Ordinal)
     }
 
-    private func CountSameNamedMethods(method MethodInfo) int32 {
+    internal func CountSameNamedMethods(method MethodInfo) int32 {
         let declaringType Type? = method.DeclaringType
         if declaringType == nil {
             return 1
