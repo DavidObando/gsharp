@@ -290,6 +290,13 @@ jobs:
       - name: Build
         run: dotnet build GSharp.slnx --configuration Release --no-restore -graph
 
+      - name: Verify the comment-only diff checker contract
+        # The tests read G# source with the compiler's own lexer through
+        # build/gstokens.
+        run: |
+          dotnet restore build/gstokens/GsTokens.gsproj --locked-mode
+          python3 build/test-check-comment-only-diff.py
+
       - name: Verify every test is run exactly once
         run: python3 build/verify-ci-test-partition.py | tee -a "$GITHUB_STEP_SUMMARY"
 
