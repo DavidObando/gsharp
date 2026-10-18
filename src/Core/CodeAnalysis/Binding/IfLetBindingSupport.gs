@@ -175,7 +175,8 @@ internal shared class IfLetBindingSupport {
     ///   pattern variables;
     /// - when a guard is present and the final initializer — which the shared
     ///   parser ended at the guard's `&&` — is a non-nullable `bool`,
-    ///   GS0624 replaces GS0296 and tells the user to parenthesize.
+    ///   GS0624 replaces GS0296. A nullable conversion hiding that boolean in
+    ///   an assignment/conditional continuation gets the same migration hint.
     ///
     /// The caller still owns the lowering, which differs only because one form
     /// is a statement and the other produces a value.
@@ -231,6 +232,17 @@ internal shared class IfLetBindingSupport {
                     declareLocal,
                     reportNonNullable
                 )
+                if bound.IsValid &&
+                    guardSyntax != nil &&
+                    i == bindings.Count - 1 &&
+                    binding.Initializer is not ParenthesizedExpressionSyntax &&
+                    HasAmbiguousBooleanContinuation(bound.Initializer) {
+                    diagnostics.ReportIfLetGuardSplitsInitializer(
+                        binding.Initializer.Location,
+                        binding.Identifier.ValueText,
+                        bound.Initializer.Type
+                    )
+                }
                 if bound.IsValid {
                     narrowing[bound.Variable] = Invariant.Required(
                         bound.Underlying,
@@ -285,6 +297,56 @@ internal shared class IfLetBindingSupport {
                 clause.Identifier.ValueText,
                 type
             )
+        }
+    }
+
+    private func HasAmbiguousBooleanContinuation(expression BoundExpression) bool {
+        // Follow source continuations and their synthesized conversion/operator
+        // nodes, stopping at an ordinary source expression. This keeps explicit
+        // casts and calls opaque while covering compound-assignment lowering.
+        var value = expression
+        var absorbsLogicalTail = false
+        while true {
+            var next BoundExpression? = switch value {
+                case conversion is BoundConversionExpression when conversion.Syntax == nil || object.ReferenceEquals(
+                    conversion.Syntax,
+                    conversion.Expression.Syntax
+                ): conversion.Expression
+                case assignment is BoundAssignmentExpression: assignment.Expression
+                case field is BoundFieldAssignmentExpression: field.Value
+                case property is BoundPropertyAssignmentExpression: property.Value
+                case index is BoundIndexAssignmentExpression: index.Value
+                case clrIndex is BoundClrIndexAssignmentExpression: clrIndex.Value
+                case clrProperty is BoundClrPropertyAssignmentExpression: clrProperty.Value
+                case indirect is BoundIndirectAssignmentExpression: indirect.Value
+                case conditional is BoundConditionalExpression: conditional.WhenFalse
+                default: nil
+            }
+            var isCompoundAssignment = false
+            if value.Syntax is {} syntax {
+                for child in syntax.GetChildren() {
+                    if child is SyntaxToken token && SyntaxFacts.TryGetCompoundAssignmentBaseOperator(
+                        token.Kind,
+                        out _
+                    ) {
+                        isCompoundAssignment = true
+                        break
+                    }
+                }
+            }
+            if next == nil && (value.Syntax == nil || isCompoundAssignment) {
+                let children = value.ChildNodes
+                if children.Length > 0 {
+                    next = children[children.Length - 1] as BoundExpression
+                }
+            }
+            if next == nil {
+                return absorbsLogicalTail && value.Type == TypeSymbol.Bool
+            }
+            if value is not BoundConversionExpression {
+                absorbsLogicalTail = true
+            }
+            value = next
         }
     }
 

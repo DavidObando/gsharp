@@ -493,6 +493,23 @@ Run()`
     }
 
     @Fact
+    func ParenthesizedNullableBooleanAssignment_PreservesFalseValueAndBody() {
+        let source = `package Test
+import System
+
+func Run(a bool, b bool) {
+    var cached bool? = nil
+    if let v = (cached = a && b) {
+        Console.WriteLine(v)
+    }
+    Console.WriteLine(cached ?? true)
+    Console.WriteLine(if let w = (cached = a && b) { w } else { true })
+}
+Run(true, false)`
+        Assert.Equal(Lines("False", "False", "False"), CompileAndRun(source))
+    }
+
+    @Fact
     func ExpressionForm_AcceptsAConditionalInitializer() {
         // Aligned initializer grammar: the value-position form used to fail
         // to parse a `?:` initializer that the statement form accepted.

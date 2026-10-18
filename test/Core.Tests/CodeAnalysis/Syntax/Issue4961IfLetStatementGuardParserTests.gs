@@ -222,10 +222,8 @@ func F(flag bool, point Point) int32 {
     @InlineData("s")
     @InlineData("default([]?[]int32)")
     func NestedGuardsAndInitializers_ParseInBoundedTime(initializer string) {
-        // Each initializer is parsed speculatively and its guard twice; the
-        // `if let` parse memo keeps a construct nested in a guard or an
-        // initializer from being re-parsed once per enclosing level, which
-        // would be exponential in the depth (2^24 parses here).
+        // Re-parsing each initializer and guard multiplies the work at every
+        // level; the ordinary expression parser must consume each only once.
         const depth = 24
         let guardNest = StringBuilder()
         let initializerNest = StringBuilder()
@@ -277,9 +275,30 @@ func F(flag bool, point Point) int32 {
     }
 
     @Fact
+    func NestedInterpolationGuards_ParseInBoundedTime() {
+        const depth = 24
+        let nested = StringBuilder()
+        for var i = 0; i < depth; i++ {
+            nested.Append("(if let value${i} = s && \"")
+            nested.Append(`${`)
+        }
+        nested.Append("true")
+        for var i = 0; i < depth; i++ {
+            nested.Append(`}" == "True" { true } else { false })`)
+        }
+        let source = "package P\nfunc F(s string?) bool { return $nested }\n"
+        let watch = Stopwatch.StartNew()
+        let tree = SyntaxTree.Parse(source)
+        watch.Stop()
+        Assert.Empty(tree.Diagnostics)
+        Assert.Equal(depth, Walk(tree.Root).OfType[IfLetExpressionSyntax]().Count())
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), "nested interpolation parse took ${watch.Elapsed}")
+    }
+
+    @Fact
     func LongGuardChain_FindsTheDelimiterWithoutDeepRecursion() {
-        // A long left-associated `&&` chain is built iteratively by the binary
-        // parser; the delimiter search over it must not recurse per operator.
+        // A long left-associated `&&` guard stays in the ordinary iterative
+        // binary parser, with no additional recursive delimiter walk.
         const length = 20000
         let chain = StringBuilder()
         for var i = 0; i < length; i++ {

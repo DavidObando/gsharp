@@ -795,14 +795,6 @@ shared class SemanticLookup {
             if symbol == nil {
                 return nil
             }
-            // Use the binder's selected symbol instead of reconstructing pattern
-            // flow scopes or enumerating every kind of shadowing declaration.
-            if token.Parent is NameExpressionSyntax name && this.compilation.SyntaxTrees.Contains(name.SyntaxTree) {
-                let boundSymbol Symbol? = this.compilation.GetSemanticModel(name.SyntaxTree).GetSymbolInfo(name).Symbol
-                if boundSymbol != nil {
-                    return boundSymbol
-                }
-            }
             // A `for … in` / `await for` loop variable of the same name in a
             // narrower region is the binding in effect; defer to the existing
             // lookup path, which resolves loop variables.
@@ -2155,7 +2147,12 @@ shared class SemanticLookup {
                     .SelectMany((b NodeBuckets) -> b.IfLets.SelectMany(GetIfLetBindings))
                     .Select((binding IfLetBindingClauseSyntax) -> binding.Identifier)
             )
-            for (identifier, variable) in MatchBoundLocals(program.Statement, topLevelLoopIdentifiers) {
+            // Function-body identifiers must not consume a script local through
+            // the matcher's by-name fallback, or replace their own exact mapping.
+            for (identifier, variable) in MatchBoundLocals(
+                program.Statement,
+                topLevelLoopIdentifiers.Where((identifier SyntaxToken) -> !declarations.ContainsKey(identifier))
+            ) {
                 declarations[identifier] = variable
             }
         }
@@ -2335,6 +2332,10 @@ shared class SemanticLookup {
             if exactBindingIndex >= 0 && !used.Contains(exactBindingIndex) {
                 used.Add(exactBindingIndex)
                 result.Add((syntaxIdentifier, boundDeclarations[exactBindingIndex].Item1))
+                continue
+            }
+            if syntaxIdentifier.Parent is IfLetBindingClauseSyntax {
+                // A binding's name does not identify its region.
                 continue
             }
             for var i = 0; i < boundDeclarations.Count; i++ {

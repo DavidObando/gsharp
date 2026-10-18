@@ -59,7 +59,7 @@ internal partial class OverloadResolver {
         // of the type-erased native-function Invoke, which would otherwise
         // mismatch the value's actual runtime (named-delegate) shape and fail
         // IL verification.
-        var receiverLoad = BuildCalleeLoad(variable, syntax.Identifier.Location, narrowedTargetType)
+        var receiverLoad = BuildCalleeLoad(variable, syntax.Identifier, narrowedTargetType)
         let receiverType = receiverLoad.Type ?? narrowedTargetType ?? variable.Type
         // Issue #1213 / #2798 / #2799 follow-up: the null-conditional
         // invocation form `Ev?(args)` of a structural function-typed value
@@ -163,15 +163,7 @@ internal partial class OverloadResolver {
             !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(nullable.UnderlyingType, out var functionType) {
             return false
         }
-        let delegateLoad = if TryBuildImplicitMemberLoad(variable, syntax.Identifier.Location, out var implicitLoad) {
-            Invariant.Required(
-                implicitLoad,
-                "an implicit member load succeeds with a bound expression",
-                expression: "implicitLoad"
-            )
-        } else {
-            cast[BoundExpression](BoundVariableExpression(nil, variable))
-        }
+        let delegateLoad = BuildCalleeLoad(variable, syntax.Identifier, narrowedType: nil)
         if delegateLoad is BoundErrorExpression {
             result = delegateLoad
             return true
@@ -763,14 +755,15 @@ internal partial class OverloadResolver {
     /// `Nullable<nint>` storage on the stack for `calli`, which jumped to a
     /// garbage address.
     /// @param variable The callee variable.
-    /// @param location The callee location, for member-load diagnostics.
+    /// @param identifier The callee name, for diagnostics and semantic lookup.
     /// @param narrowedType The active narrowed type, or `null`.
     /// @returns The callee load.
     private func BuildCalleeLoad(
         variable VariableSymbol,
-        location TextLocation,
+        identifier SyntaxToken,
         narrowedType TypeSymbol?
     ) BoundExpression {
+        let location = identifier.Location
         let bareRead = if TryBuildImplicitMemberLoad(variable, location, out var memberLoad) {
             Invariant.Required(
                 memberLoad,
@@ -778,12 +771,15 @@ internal partial class OverloadResolver {
                 expression: "memberLoad"
             )
         } else {
-            cast[BoundExpression](BoundVariableExpression(nil, variable))
+            cast[BoundExpression](BoundVariableExpression(identifier, variable))
+        }
+        if bareRead is not BoundErrorExpression {
+            bareRead.AnchorSyntax(identifier)
         }
         if narrowedType == nil || bareRead is BoundErrorExpression {
             return bareRead
         }
-        return ExpressionBinder.BuildNarrowedRead(
+        let narrowedRead = ExpressionBinder.BuildNarrowedRead(
             bareRead,
             bareRead.Type,
             narrowedType,
@@ -795,9 +791,13 @@ internal partial class OverloadResolver {
                         expression: "narrowedLoad"
                     )
                 }
-                return BoundVariableExpression(nil, variable, narrowed)
+                return BoundVariableExpression(identifier, variable, narrowed)
             }
         )
+        if narrowedRead is not BoundErrorExpression {
+            narrowedRead.AnchorSyntax(identifier)
+        }
+        return narrowedRead
     }
 
     private func TryBuildImplicitMemberLoad(

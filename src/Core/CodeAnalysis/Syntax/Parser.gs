@@ -26,21 +26,7 @@ open partial class Parser {
     private var tokens ImmutableArray[SyntaxToken]
     private var position int32
 
-    private let splitTokenStreams Dictionary[
-        (ImmutableArray[SyntaxToken], int32),
-        ImmutableArray[SyntaxToken]
-    ] = Dictionary[(ImmutableArray[SyntaxToken], int32), ImmutableArray[SyntaxToken]]()
-
-    private var bindingHeaderDepth int32
-
-    // Issue #4961 / ADR-0201: Peek reports end-of-file for every token at or
-    // after this source position (see ParseIfLetGuardedInitializer).
-    // int32.MaxValue means no limit.
-    private var tokenLimitPosition int32 = int32.MaxValue
-
-    // Issue #4961: the furthest source position Peek has looked at (see
-    // ParseIfLetHeader).
-    private var furthestPeekPosition int32 = -1
+    private var stopAtTopLevelLogical bool
 
     // Issue #3587: declaration return/property types can contain a slice-wrapped
     // tuple immediately before an expression-body arrow. This position marks
@@ -575,16 +561,6 @@ open partial class Parser {
             return tokens[tokens.Length - 1]
         }
         let token = tokens[index]
-        // Issue #4961: the `if let` parse memo needs to know how far a parse
-        // looked ahead, to reuse it only where a token limit cannot matter.
-        if token.Position > furthestPeekPosition {
-            furthestPeekPosition = token.Position
-        }
-        // Issue #4961 / ADR-0201: while a `let` initializer is re-parsed up to
-        // its guard delimiter, the stream ends just before that token.
-        if token.Position >= tokenLimitPosition {
-            return tokens[tokens.Length - 1]
-        }
         return token
     }
 
@@ -602,20 +578,10 @@ open partial class Parser {
     /// indexing (`a?[i]`); in a nullable-array type clause whose element is
     /// itself an array (`[]?[]T`) they must be parsed separately.
     private func SplitQuestionOpenBracketToken() {
-        let key = (tokens, position)
-        if bindingHeaderDepth > 0 && splitTokenStreams.TryGetValue(key, out var split) {
-            tokens = split
-            return
-        }
         let fused = tokens[position]
         let question = SyntaxToken(syntaxTree, SyntaxKind.QuestionToken, fused.Position, "?", nil)
         let open_ = SyntaxToken(syntaxTree, SyntaxKind.OpenSquareBracketToken, fused.Position + 1, "[", nil)
         tokens = tokens.SetItem(position, question).Insert(position + 1, open_)
-        // Repeated splits after speculative rollback must recover the same
-        // stream identity, so binding-header memo entries remain reusable.
-        if bindingHeaderDepth > 0 {
-            splitTokenStreams[key] = tokens
-        }
     }
 
     /// ADR-0122 / issue #1014: returns whether (cref:Current) begins on a

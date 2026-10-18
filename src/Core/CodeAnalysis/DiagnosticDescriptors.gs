@@ -2435,7 +2435,7 @@ internal shared class DiagnosticDescriptors {
     internal let IfLetGuardSplitsInitializer DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0624",
         DiagnosticSeverity.Error,
-        "The '&&' after binding '{0}' starts the 'if let' guard, so the initializer ends before it and has the non-nullable type '{1}'. If the '&&' belongs to the initializer, parenthesize the initializer: 'if let {0} = (…)'."
+        "The '&&' after binding '{0}' starts the 'if let' guard, so the initializer ends before it and has type '{1}'. Parenthesize the entire initializer to make the boundary explicit: 'if let {0} = (…)'."
     )
     internal let LetBindingGuardNotSupported DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0625",

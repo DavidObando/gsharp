@@ -124,6 +124,36 @@ Run(true, true, "x", "y")`)
     }
 
     @Fact
+    func Compatibility_NullableAssignmentBeforeGuard_ReportsGS0624() {
+        let result = EmittedOracle.Evaluate(`func Run(a bool, b bool) bool {
+    var cached bool? = nil
+    if let v = cached = a && b { return v }
+    return if let w = cached = a && b { w } else { false }
+}
+func Conditional(flag bool, fallback bool?, b bool) bool {
+    if let v = flag ? fallback : false && b { return v }
+    return false
+}
+func Compound(a bool, b bool) {
+    var cached bool? = true
+    if let v = cached &= a && b { }
+}
+Run(true, false)`)
+        Assert.Equal([]string{"GS0624@3:16", "GS0624@4:23", "GS0624@7:16", "GS0624@12:16"}, Ids(result))
+    }
+
+    @Fact
+    func ExplicitNullableConversionBeforeGuard_IsNotAnAmbiguousBooleanContinuation() {
+        let result = EmittedOracle.Evaluate(`func Run(b bool) bool {
+    var cached bool? = nil
+    if let v = cached = cast[bool?](false) && b { }
+    return if let w = cached = cast[bool?](false) && b { w } else { false }
+}
+Run(false)`)
+        Assert.Empty(result.Diagnostics)
+    }
+
+    @Fact
     func Compatibility_ParenthesizedInitializer_KeepsItsMeaning() {
         let result = EmittedOracle.Evaluate(`func Run(a bool, b bool, x string?, y string?) string {
     if let v = (a && b ? x : y) {

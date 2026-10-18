@@ -669,6 +669,7 @@ open partial class Parser {
     private func ParseConditionalTail(condition ExpressionSyntax) ExpressionSyntax {
         let questionToken = NextToken()
         let whenTrueMod SyntaxToken? = TryConsumeInnerRefModifier()
+        // The true arm is nested; the false arm continues the outer expression.
         let whenTrue = ParseExpression()
         let colonToken = MatchToken(SyntaxKind.ColonToken)
         let whenFalseMod SyntaxToken? = TryConsumeInnerRefModifier()

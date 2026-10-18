@@ -65,13 +65,6 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         }
     }
 
-    /// Issue #4961: the diagnostics added after the bag reached
-    /// [`count`](paramref) entries, in insertion order. The parser's `if let`
-    /// memo replays them when it reuses a parse.
-    /// @param count The earlier diagnostic count.
-    /// @returns The diagnostics added since.
-    internal func Since(count int32) ImmutableArray[Diagnostic] -> diagnostics.Skip(count).ToImmutableArray()
-
     /// ```xmldoc
     /// <inheritdoc />
     /// ```

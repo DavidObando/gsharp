@@ -381,6 +381,82 @@ func Run(maybe string?, obj object, pairs [](int32, int32)) int32 {
         Assert.Same(binding, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 11)))
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func GuardDelegateCallee_ResolvesThePatternVariable(expressionForm bool) {
+        let prefix = if expressionForm {
+            "return "
+        } else {
+            ""
+        }
+        let tail = if expressionForm {
+            "1"
+        } else {
+            "return 1"
+        }
+        let otherwise = if expressionForm {
+            "0"
+        } else {
+            "return 0"
+        }
+        let source = `import System
+func Run(maybe string?, obj object) int32 {
+    PREFIXif let value = maybe && obj is Action value {
+        value()
+        TAIL
+    } else { OTHERWISE }
+}`.Replace("PREFIX", prefix).Replace("TAIL", tail).Replace("OTHERWISE", otherwise)
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        Assert.Empty(tree.Diagnostics)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let binding = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 1))
+        let pattern = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 2))
+        Assert.IsAssignableFrom[VariableSymbol](pattern)
+        Assert.NotSame(binding, pattern)
+        Assert.Same(pattern, SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 3)))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ScriptBinding_DoesNotReplaceTheFunctionBindingDeclaration(expressionBody bool) {
+        let function = if expressionBody {
+            `func Run(s string?) string -> if let value = s { value } else { "" }`
+        } else {
+            `func Run(s string?) {
+    if let value = s {
+        let local = value
+    }
+}`
+        }
+        let source = function + `
+let maybe string? = "script"
+if let value = maybe {
+    let script = value
+}`
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree)
+        Assert.Empty(tree.Diagnostics)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let functionBinding = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 1))
+        let scriptBinding = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 3))
+        Assert.IsAssignableFrom[VariableSymbol](functionBinding)
+        Assert.IsAssignableFrom[VariableSymbol](scriptBinding)
+        Assert.NotSame(functionBinding, scriptBinding)
+        Assert.Same(
+            functionBinding,
+            SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 2))
+        )
+        Assert.Same(
+            scriptBinding,
+            SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "value", occurrence: 4))
+        )
+    }
+
     shared {
         private func IdentifierAt(tree SyntaxTree, text string, occurrence int32) SyntaxToken? {
             var seen = 0

@@ -91,21 +91,15 @@ if let v = (a && b ? x : y) { … }                // parenthesized: one initial
 The rule is implemented once, in `Parser.ParseIfLetHeader`, which every
 `let`-binding form (`if let` statement and expression, `guard let`,
 `while let`) calls. The initializer is not parsed by a re-implemented
-"restricted" grammar. It is parsed speculatively with the ordinary expression
-grammar, and the first logical operator that is a top-level operator of that
-tree is located: an operand of a binary operator, a `?:` condition or false
-arm, a range bound, a `with` receiver, or an assignment's value. If there is
-one, the initializer is re-parsed with the token stream ending just before
-it. A construct the locator does not know keeps its logical operators, which
-is the pre-ADR-0201 parse, so the rule fails safe. The locator walks the tree
-iteratively. The shared binding header is memoized by start position and
-parser state, including the form's unsupported-guard policy. Reuse requires
-that neither token limit falls within the recorded lookahead. This covers
-all callers, including nested `while let` and `guard let` initializers that
-report GS0625. Fused-token splits reuse the same immutable stream for the same
-input stream and split position, so speculative rollback does not invalidate
-the header memo by manufacturing equivalent arrays. The memo and split streams
-are released when the outermost header finishes.
+"restricted" grammar. `ParseExpression(stopAtTopLevelLogical: true)` uses the
+ordinary assignment, conditional, range, coalescing and binary parsers. The
+binary loop stops before `&&` or `||` in this context. Assignment values,
+coalescing tails and conditional false arms continue in the same context;
+nested expression entries (parentheses, arguments, lambdas, conditional true
+arms, and so on) reset it and use the full grammar. The previous context is
+restored on exit. Initializers and guards are each parsed once, including
+interpolation holes and unsupported `while let` / `guard let` guards. No
+speculative reparse, syntax-tree delimiter walk, or parse memo is required.
 
 ### 2. Guard
 
@@ -141,7 +135,14 @@ For name uses in these regions, the language server uses the compiler semantic
 model's selected symbol before its syntax-based fallbacks. Pattern flow scope
 and inner declarations, including tuple-loop locals, therefore follow the same
 binder decision as compilation. Member-receiver fast paths retain the name's
-syntax anchor so these uses participate in that lookup too.
+syntax anchor so these uses participate in that lookup too. Bare delegate
+callees are anchored on their identifier, independently of the invocation's
+method symbol. The shared `BoundSemantics` accessor introduced by #4995
+prefers that exact token anchor before its expression fallback. The script
+binding pass excludes identifiers already mapped from a function body before
+its by-name matching. Binding-clause identifiers require an exact syntax
+match, so an unmapped function declaration cannot consume a script binding
+through that fallback either.
 
 ### 5. Every binding strips one nullable layer
 
@@ -157,7 +158,7 @@ mistyped initializer that the author believed could be `nil`.
 | Code | When |
 | --- | --- |
 | GS0296 | An initializer is not nullable (unchanged). |
-| **GS0624** | A guard is present and the final initializer, which the shared rule ended at the guard's `&&`, is a non-nullable `bool`. Replaces GS0296 there and says to parenthesize. This is the migration diagnostic for the compatibility case below. |
+| **GS0624** | A guard leaves a non-nullable `bool` initializer, or an unparenthesized assignment/conditional continuation hides that boolean behind a nullable conversion. Parenthesize the entire initializer to make its boundary explicit. |
 | **GS0625** | `guard let` or `while let` has a `&& guard`; only `if let` supports one (follow-up #4968). Reported by the parser, so the `&&` never leaks into the initializer and no GS0157 follows. |
 | **GS0626** | A top-level `\|\|` follows a binding list. Only `&&` introduces a guard. |
 | GS0155 | The guard does not convert to `bool` (unchanged; now also for the statement form). |
@@ -224,12 +225,23 @@ top level contains `&&` or `||`.
   `if let x = p || q { … }` were never valid, and `a ?? (b && c)` has type
   `bool` and was never valid either. G# has no user-defined `operator true` /
   `operator false`, so no imported operator makes `&&` produce a nullable.
-- The one shape that **was** valid is a `?:` initializer whose condition has a
+- One previously valid shape is a `?:` initializer whose condition has a
   top-level logical operator: `if let v = a && b ? x : y { … }` with `x` and
   `y` nullable. It now parses as initializer `a` and guard `b ? x : y`. It
   never compiles silently: the `bool` initializer reports GS0624 (parenthesize)
   and the non-`bool` guard reports GS0155. The fix that preserves meaning is
   `if let v = (a && b ? x : y) { … }`.
+- Assignment conversion or conditional unification can also hide the boolean:
+  with `cached bool?`, `if let v = cached = a && b` previously stored `a && b`
+  and entered the body even when false. Likewise, a nullable true arm in
+  `flag ? fallback : false && b` can make the whole initializer nullable.
+  Compound assignments such as `cached &= a && b` have the same ambiguity.
+  GS0624 diagnoses these continuations instead of silently moving the logical
+  operation outside them. Use `(cached = a && b)` or
+  `(flag ? fallback : false && b)` to keep the original meaning, or parenthesize
+  only the prefix assignment/conditional to make the new guard explicit.
+  The check follows implicit conversions and synthesized operator nodes, but
+  does not look through an explicit nullable cast or an ordinary source call.
 - An assignment initializer (`if let v = cached = Next() { … }`) keeps
   working in every form; a guard may follow it.
 - A `?:` initializer without a top-level logical operator
@@ -268,6 +280,10 @@ its output keeps its meaning.
 
 ## Alternatives considered
 
+- **Speculative full-expression parsing with a delimiter walk and memo.**
+  Rejected: token splitting, other header forms and fresh interpolation-hole
+  parsers bypassed progressively broader caches. A boundary in the ordinary
+  binary loop removes the repeated work instead of caching individual shapes.
 - **Keep the full grammar in the statement form and add a guard only after a
   parenthesized initializer.** Rejected: the same header would still mean two
   different things depending on position, which is the bug.
