@@ -322,6 +322,9 @@ func validateAnalysis(a Analysis) error {
 		if err := require(value.ID, "packageId", value.PackageID, "package"); err != nil {
 			return err
 		}
+		if err := require(value.ID, "ownerSymbolId", value.OwnerSymbolID, "symbol"); err != nil {
+			return err
+		}
 		if err := require(value.ID, "typeId", value.TypeID, "type"); err != nil {
 			return err
 		}
@@ -799,7 +802,8 @@ func validateRecordFields(a Analysis) error {
 		}
 	}
 	for _, value := range a.MethodSets {
-		if value.ID == "" || value.PackageID == "" || value.TypeID == "" || value.MethodSymbolIDs == nil {
+		if value.ID == "" || value.PackageID == "" || value.OwnerSymbolID == "" ||
+			value.TypeID == "" || value.MethodSymbolIDs == nil {
 			return fmt.Errorf("method set %q has invalid required fields", value.ID)
 		}
 	}
@@ -975,6 +979,13 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 			}
 		}
 		symbols[symbol.ID] = symbol
+	}
+	for _, methodSet := range a.MethodSets {
+		owner, ok := symbols[methodSet.OwnerSymbolID]
+		if !ok || owner.PackageID != methodSet.PackageID ||
+			owner.Kind != "type" || owner.TypeID != methodSet.TypeID {
+			return fmt.Errorf("method set %q owner symbol relationship is inconsistent", methodSet.ID)
+		}
 	}
 	for _, node := range a.Nodes {
 		if node.DeclarationID == "" {

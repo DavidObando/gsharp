@@ -175,6 +175,94 @@ func TestTypeIdentityOmitsSignatureParameterAndResultNames(t *testing.T) {
 	}
 }
 
+func TestTypeIdentityMatchesGoStructuralEquivalence(t *testing.T) {
+	field := func(name string, typ types.Type) *types.Var {
+		return types.NewField(token.NoPos, nil, name, typ, false)
+	}
+	leaf := func(typ types.Type) types.Type {
+		return types.NewStruct([]*types.Var{field("Value", typ)}, nil)
+	}
+	sharedLeaf := leaf(types.Typ[types.Int])
+	shared := types.NewStruct([]*types.Var{
+		field("Left", sharedLeaf),
+		field("Right", sharedLeaf),
+	}, nil)
+	duplicated := types.NewStruct([]*types.Var{
+		field("Left", leaf(types.Typ[types.Int])),
+		field("Right", leaf(types.Typ[types.Int])),
+	}, nil)
+	differentGraph := types.NewStruct([]*types.Var{
+		field("Left", leaf(types.Typ[types.Int])),
+		field("Right", leaf(types.Typ[types.String])),
+	}, nil)
+
+	union := func(reverse bool, second types.Type) types.Type {
+		terms := []*types.Term{
+			types.NewTerm(true, types.Typ[types.Int]),
+			types.NewTerm(false, second),
+		}
+		if reverse {
+			terms[0], terms[1] = terms[1], terms[0]
+		}
+		return types.NewUnion(terms)
+	}
+
+	method := func(name string) *types.Func {
+		return types.NewFunc(token.NoPos, nil, name,
+			types.NewSignatureType(nil, nil, nil, nil, nil, false))
+	}
+	embedded := func(name string) types.Type {
+		return types.NewInterfaceType([]*types.Func{method(name)}, nil).Complete()
+	}
+	firstEmbed, secondEmbed := embedded("First"), embedded("Second")
+	embedding := func(reverse bool, second types.Type) types.Type {
+		embeds := []types.Type{firstEmbed, second}
+		if reverse {
+			embeds[0], embeds[1] = embeds[1], embeds[0]
+		}
+		return types.NewInterfaceType(nil, embeds).Complete()
+	}
+
+	signature := func(receiver, parameter types.Type) types.Type {
+		return types.NewSignatureType(
+			types.NewVar(token.NoPos, nil, "receiver", receiver),
+			nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "value", parameter)),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "result", types.Typ[types.Bool])),
+			false)
+	}
+
+	for _, test := range []struct {
+		name                   string
+		first, second, control types.Type
+	}{
+		{"shared-versus-duplicated", shared, duplicated, differentGraph},
+		{"union-order", union(false, types.Typ[types.String]), union(true, types.Typ[types.String]),
+			union(false, types.Typ[types.Bool])},
+		{"interface-embed-order", embedding(false, secondEmbed), embedding(true, secondEmbed),
+			embedding(false, embedded("Different"))},
+		{"signature-receiver", signature(types.Typ[types.Int], types.Typ[types.String]),
+			signature(types.Typ[types.Bool], types.Typ[types.String]),
+			signature(types.Typ[types.Bool], types.Typ[types.Int])},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if !types.Identical(test.first, test.second) {
+				t.Fatal("go/types unexpectedly considers equivalent fixture types distinct")
+			}
+			if types.Identical(test.first, test.control) {
+				t.Fatal("go/types unexpectedly considers the non-identical control equivalent")
+			}
+			if canonicalTypeIdentity(test.first) != canonicalTypeIdentity(test.second) {
+				t.Fatalf("equivalent types received different identities:\nfirst:  %s\nsecond: %s",
+					canonicalTypeIdentity(test.first), canonicalTypeIdentity(test.second))
+			}
+			if canonicalTypeIdentity(test.first) == canonicalTypeIdentity(test.control) {
+				t.Fatal("non-identical control received the same identity")
+			}
+		})
+	}
+}
+
 func TestTypeIdentityAlphaNormalizesBoundTypeParameters(t *testing.T) {
 	emptyConstraint := func() types.Type {
 		return types.NewInterfaceType(nil, nil).Complete()

@@ -213,8 +213,9 @@ authoritative GOROOT/toolchain identity, to the actual serialized
 module/replacement record identity, import path, and test variant. Type IDs bind
 that profile discriminator to the canonical Go identity, so equal types still
 deduplicate across packages within one profile but target-dependent records do
-not alias across profiles. Method-set records carry their owning package ID, so
-ordinary and test-variant method sets cannot alias. Symbol IDs retain canonical type-ownership inputs
+not alias across profiles. Method-set records carry their owning type-symbol
+and package IDs, so validation binds each set to one declared type and package
+variant. Symbol IDs retain canonical type-ownership inputs
 that are not duplicated into their records and remain covered by uniqueness,
 reference, and ownership checks. File roles are closed to `compiled`, `active`,
 `test`, `ignored`, `native`, and `embed`, with exact native/embed flag

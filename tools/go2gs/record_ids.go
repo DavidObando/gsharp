@@ -88,7 +88,8 @@ func callRecordID(value CallRecord) string {
 }
 
 func methodSetRecordID(value MethodSetRecord) string {
-	return stableID("methodSet", value.PackageID+"\x00"+value.TypeID+"\x00"+strconv.FormatBool(value.Pointer))
+	return stableID("methodSet", value.PackageID+"\x00"+value.OwnerSymbolID+"\x00"+
+		value.TypeID+"\x00"+strconv.FormatBool(value.Pointer))
 }
 
 func instanceRecordID(value InstanceRecord) string {

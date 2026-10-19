@@ -3692,11 +3692,28 @@ func TestScopeIdentityIncludesSourcePath(t *testing.T) {
 func TestMethodSetsRetainPackageTestVariantOwnership(t *testing.T) {
 	root := t.TempDir()
 	for name, source := range map[string]string{
-		"go.mod":        "module example.com/methodsetowner\n\ngo 1.27.0\n",
-		"value.go":      "package methodsetowner\ntype Value struct{}\nfunc (Value) Production() {}\n",
+		"go.mod": "module example.com/methodsetowner\n\ngo 1.27.0\n",
+		"value.go": `package methodsetowner
+import "example.com/methodsetowner/dep"
+type Value struct{}
+func (Value) Production() {}
+var _ dep.Imported
+`,
 		"value_test.go": "package methodsetowner\nfunc (Value) TestOnly() {}\n",
+		"external_test.go": `package methodsetowner_test
+type External struct{}
+func (External) ExternalOnly() {}
+`,
+		"dep/dep.go": `package dep
+type Imported struct{}
+func (Imported) ImportedMethod() {}
+`,
 	} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(source), 0o644); err != nil {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -3704,43 +3721,69 @@ func TestMethodSetsRetainPackageTestVariantOwnership(t *testing.T) {
 	if err != nil || !complete {
 		t.Fatalf("test-variant method-set fixture failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
 	}
-	var valueTypeID string
-	for _, record := range analysis.Types {
-		if record.Display == "example.com/methodsetowner.Value" {
-			valueTypeID = record.ID
-			break
-		}
-	}
-	if valueTypeID == "" {
-		t.Fatal("Value type was not inventoried")
-	}
-	variants := map[string]string{}
+	packages := map[string]PackageRecord{}
 	for _, pkg := range analysis.Packages {
-		if pkg.ImportPath == "example.com/methodsetowner" {
-			variants[pkg.ID] = pkg.Variant
-		}
+		packages[pkg.ID] = pkg
 	}
-	symbolNames := map[string]string{}
+	symbols := map[string]SymbolRecord{}
 	for _, symbol := range analysis.Symbols {
-		symbolNames[symbol.ID] = symbol.Name
+		symbols[symbol.ID] = symbol
 	}
-	methodsByVariant := map[string][]string{}
+	type methodSets struct {
+		ownerID string
+		methods map[bool][]string
+	}
+	setsByOwner := map[string]methodSets{}
 	for _, methodSet := range analysis.MethodSets {
-		if methodSet.TypeID != valueTypeID || methodSet.Pointer {
+		owner, ok := symbols[methodSet.OwnerSymbolID]
+		if !ok || owner.Kind != "type" || owner.PackageID != methodSet.PackageID ||
+			owner.TypeID != methodSet.TypeID {
+			t.Fatalf("method set has inconsistent owner relation: %#v owner=%#v", methodSet, owner)
+		}
+		pkg := packages[methodSet.PackageID]
+		key := pkg.ImportPath + "|" + pkg.Variant + "|" + owner.Name
+		if key != "example.com/methodsetowner|ordinary|Value" &&
+			key != "example.com/methodsetowner|in-package-test|Value" &&
+			key != "example.com/methodsetowner_test|external-test|External" &&
+			key != "example.com/methodsetowner/dep|ordinary|Imported" {
 			continue
 		}
 		var names []string
 		for _, symbolID := range methodSet.MethodSymbolIDs {
-			names = append(names, symbolNames[symbolID])
+			names = append(names, symbols[symbolID].Name)
 		}
 		sort.Strings(names)
-		methodsByVariant[variants[methodSet.PackageID]] = names
+		entry := setsByOwner[key]
+		if entry.methods == nil {
+			entry = methodSets{ownerID: methodSet.OwnerSymbolID, methods: map[bool][]string{}}
+		}
+		if _, duplicate := entry.methods[methodSet.Pointer]; duplicate {
+			t.Fatalf("duplicate pointer=%v method set for %s", methodSet.Pointer, key)
+		}
+		entry.methods[methodSet.Pointer] = names
+		setsByOwner[key] = entry
 	}
-	if !slices.Equal(methodsByVariant["ordinary"], []string{"Production"}) {
-		t.Fatalf("ordinary method set = %v", methodsByVariant["ordinary"])
+	expected := map[string][]string{
+		"example.com/methodsetowner|ordinary|Value":              {"Production"},
+		"example.com/methodsetowner|in-package-test|Value":       {"Production", "TestOnly"},
+		"example.com/methodsetowner_test|external-test|External": {"ExternalOnly"},
+		"example.com/methodsetowner/dep|ordinary|Imported":       {"ImportedMethod"},
 	}
-	if !slices.Equal(methodsByVariant["in-package-test"], []string{"Production", "TestOnly"}) {
-		t.Fatalf("in-package-test method set = %v", methodsByVariant["in-package-test"])
+	for key, want := range expected {
+		entry, ok := setsByOwner[key]
+		if !ok || len(entry.methods) != 2 {
+			t.Fatalf("%s method sets = %#v, want value and pointer records", key, entry.methods)
+		}
+		for _, pointer := range []bool{false, true} {
+			if !slices.Equal(entry.methods[pointer], want) {
+				t.Fatalf("%s pointer=%v methods = %v, want %v", key, pointer, entry.methods[pointer], want)
+			}
+		}
+	}
+	ordinary := setsByOwner["example.com/methodsetowner|ordinary|Value"].ownerID
+	inPackageTest := setsByOwner["example.com/methodsetowner|in-package-test|Value"].ownerID
+	if ordinary == "" || inPackageTest == "" || ordinary == inPackageTest {
+		t.Fatalf("ordinary and in-package test owner symbols aliased: %q", ordinary)
 	}
 }
 
@@ -4448,15 +4491,6 @@ func TestValidateAnalysisRejectsStalePayloadDerivedRecordIDs(t *testing.T) {
 		t.Fatal("identity fixture has no alternate node")
 		return ""
 	}
-	differentPackageID := func(value *Analysis, current string) string {
-		for _, pkg := range value.Packages {
-			if pkg.ID != current {
-				return pkg.ID
-			}
-		}
-		t.Fatal("identity fixture has no alternate package")
-		return ""
-	}
 	tests := []struct {
 		name   string
 		kind   string
@@ -4501,8 +4535,8 @@ func TestValidateAnalysisRejectsStalePayloadDerivedRecordIDs(t *testing.T) {
 		{"method-set", "methodSet", complete, func(value *Analysis) {
 			value.MethodSets[0].Pointer = !value.MethodSets[0].Pointer
 		}},
-		{"method-set-owner", "methodSet", complete, func(value *Analysis) {
-			value.MethodSets[0].PackageID = differentPackageID(value, value.MethodSets[0].PackageID)
+		{"method-set-owner-symbol", "methodSet", complete, func(value *Analysis) {
+			value.MethodSets[0].OwnerSymbolID += "-stale"
 		}},
 		{"instance", "instance", complete, func(value *Analysis) {
 			value.Instances[0].NodeID = differentNodeID(value, value.Instances[0].NodeID)
@@ -4550,6 +4584,34 @@ func TestValidateAnalysisRejectsStalePayloadDerivedRecordIDs(t *testing.T) {
 				t.Fatalf("stale %s identity was accepted: %v", test.kind, err)
 			}
 		})
+	}
+}
+
+func TestMethodSetOwnershipRejectsCoordinatedRebinding(t *testing.T) {
+	analysis, complete, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("fixture analysis failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	if len(analysis.MethodSets) == 0 {
+		t.Fatal("fixture produced no method sets")
+	}
+	target := &analysis.MethodSets[0]
+	var alternate SymbolRecord
+	for _, symbol := range analysis.Symbols {
+		if symbol.Kind == "type" && symbol.PackageID != target.PackageID && symbol.TypeID != target.TypeID {
+			alternate = symbol
+			break
+		}
+	}
+	if alternate.ID == "" {
+		t.Fatal("fixture produced no alternate package/type owner")
+	}
+	target.PackageID = alternate.PackageID
+	target.OwnerSymbolID = alternate.ID
+	target.ID = methodSetRecordID(*target)
+	err = validateAnalysis(analysis)
+	if err == nil || !strings.Contains(err.Error(), "owner symbol relationship is inconsistent") {
+		t.Fatalf("coordinated method-set package/owner/ID rebinding was accepted: %v", err)
 	}
 }
 
@@ -5307,12 +5369,20 @@ func TestValidateAnalysisCommandRejectsMalformedNestedRecords(t *testing.T) {
 		name   string
 		mutate func(map[string]any) bool
 	}{
-		{"method-set-package-owner", func(root map[string]any) bool {
+		{"method-set-package", func(root map[string]any) bool {
 			methodSets := root["methodSets"].([]any)
 			if len(methodSets) == 0 {
 				return false
 			}
 			delete(methodSets[0].(map[string]any), "packageId")
+			return true
+		}},
+		{"method-set-owner-symbol", func(root map[string]any) bool {
+			methodSets := root["methodSets"].([]any)
+			if len(methodSets) == 0 {
+				return false
+			}
+			delete(methodSets[0].(map[string]any), "ownerSymbolId")
 			return true
 		}},
 		{"struct-field-type", func(root map[string]any) bool {

@@ -2446,12 +2446,17 @@ func (b *inventoryBuilder) addMethodSets(pkg *packages.Package) {
 			continue
 		}
 		t := typeName.Type()
+		typeID := b.addType(pkg, t)
+		ownerSymbolID := b.addObject(pkg, typeName, SourceSpan{})
+		// TypeID identifies the declared owner. Pointer selects the T or *T method set.
 		for _, candidate := range []struct {
 			t       types.Type
 			pointer bool
 		}{{t, false}, {types.NewPointer(t), true}} {
-			typeID := b.addType(pkg, candidate.t)
-			record := MethodSetRecord{PackageID: b.packageIDs[pkg], TypeID: typeID, Pointer: candidate.pointer}
+			record := MethodSetRecord{
+				PackageID: b.packageIDs[pkg], OwnerSymbolID: ownerSymbolID,
+				TypeID: typeID, Pointer: candidate.pointer,
+			}
 			record.ID = methodSetRecordID(record)
 			id := record.ID
 			if b.seenMethodSets[id] {

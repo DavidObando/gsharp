@@ -319,6 +319,7 @@ type CallRecord struct {
 type MethodSetRecord struct {
 	ID              string   `json:"id"`
 	PackageID       string   `json:"packageId"`
+	OwnerSymbolID   string   `json:"ownerSymbolId"`
 	TypeID          string   `json:"typeId"`
 	Pointer         bool     `json:"pointer"`
 	MethodSymbolIDs []string `json:"methodSymbolIds"`
