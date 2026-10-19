@@ -493,6 +493,49 @@ Console.WriteLine("${direct(Probe())} ${ternary(Probe())} ${statement(Probe())} 
     }
 
     @Theory
+    @InlineData("Input<U>", "Input[int32]", "Input[int32](7)", "Token(), 0", "T")
+    @InlineData(
+        "System.Collections.Generic.KeyValuePair<T,int>",
+        "KeyValuePair[string,int32]",
+        "KeyValuePair[string,int32](\"x\", 7)",
+        "\"\", Token()",
+        "U"
+    )
+    func Operator_Input_Independence_Is_Per_Type_Parameter(
+        input string,
+        receiverType string,
+        present string,
+        arguments string,
+        constrainedParameter string
+    ) {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public struct Input<T> { public int V; public Input(int value) { V = value; } }
+    public struct Token : System.IDisposable { public void Dispose() {} }
+    public struct Box<T,U> {
+        public static implicit operator Box<T,U>(` + input + ` value) => default;
+    }
+    public static class Extensions {
+        public static int GetValueOrDefault<T,U>(this Box<T,U> value, T fallback, U other)
+            where ` + constrainedParameter + ` : struct, System.IDisposable => 99;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import System.Collections.Generic
+import Fixture4986
+func direct(n RECEIVER) int32 -> n.GetValueOrDefault(ARGUMENTS)
+func ternary(n RECEIVER?) int32 -> n != nil ? n.GetValueOrDefault(ARGUMENTS) : 0
+func expression(n RECEIVER?) int32 -> if n != nil { n.GetValueOrDefault(ARGUMENTS) } else { 0 }
+func statement(n RECEIVER?) int32 {
+    if n != nil { return n.GetValueOrDefault(ARGUMENTS) }
+    return 0
+}
+let present = PRESENT
+Console.WriteLine("${direct(present)} ${ternary(present)} ${expression(present)} ${statement(present)} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`.Replace("RECEIVER", receiverType).Replace("ARGUMENTS", arguments).Replace("PRESENT", present), fixture.AssemblyPath)
+        Assert.Equal("99 99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
     @InlineData("", "0")
     @InlineData("where T : System.IDisposable, new()", "System.IO.MemoryStream()")
     @InlineData("where T : struct, System.IDisposable", "Token()")
@@ -527,6 +570,11 @@ Console.WriteLine("${direct(7)} ${ternary(7)} ${expression(7)} ${statement(7)} $
     @InlineData("System.Exception", "string", "where T : System.Collections.Generic.List<U>")
     @InlineData("object", "string", "where T : System.IDisposable where U : T")
     @InlineData("object", "int", "where T : U")
+    @InlineData(
+        "object",
+        "System.Collections.Generic.Comparer<string>",
+        "where T : System.IDisposable where U : System.Collections.Generic.IComparer<T>"
+    )
     func Dependent_Constraints_Preserve_Fixed_Argument_Obligations(
         bound string,
         fixedArgument string,
@@ -554,6 +602,32 @@ func statement(n Probe?) int32 {
 Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
 `, fixture.AssemblyPath)
         Assert.Equal("7 7 7 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
+    func Dependent_Contravariant_Constraints_Can_Refine_Unknown_Bounds() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public interface IProbe<in T, U> {}
+    public struct Probe : IProbe<object, System.Collections.Generic.Comparer<System.IO.MemoryStream>> {}
+    public static class Extensions {
+        public static int GetValueOrDefault<T,U>(this IProbe<T,U> value,
+            System.Collections.Generic.IComparer<T> fallback) where T : System.IDisposable, new()
+            where U : System.Collections.Generic.IComparer<T> => 99;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import System.IO
+import System.Collections.Generic
+import Fixture4986
+func direct(n Probe) int32 -> n.GetValueOrDefault(Comparer[MemoryStream].Default)
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Comparer[MemoryStream].Default) : 0
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Comparer[MemoryStream].Default) }
+    return 0
+}
+Console.WriteLine("${direct(Probe())} ${ternary(Probe())} ${statement(Probe())} ${ternary(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99 99 99 0 0" + Environment.NewLine, result.Output)
     }
 
     @Theory

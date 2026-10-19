@@ -287,9 +287,10 @@ Narrowing ends with the branch; nothing is lifted past the conditional in
 either form. A narrowed value-type nullable read goes through
 `ExpressionBinder.BuildNarrowedRead`, as in every other narrowing region.
 
-The only differences left between the two forms follow from syntax: an
-if-expression branch is a block with a value tail, and its `else` is
-mandatory, while a ternary branch is a single expression.
+The remaining syntax differences are structural: an if-expression's branches
+are blocks, while a ternary's branches are single expressions. An if-expression
+in a value-required position needs `else`; the discarded void forms can omit it
+under ADR-0202.
 
 **Compatibility.** A narrowed branch has its narrowed type, so a ternary
 whose branch reads the guarded variable can now have a narrower result type,
@@ -335,7 +336,10 @@ parameter free for later arguments, including value-type/interface or enum
 constraints for which no representative type is available. Unknown subtype
 bounds retain their dependent obligations: known arguments are substituted
 before testing upper bounds, and fixed arguments that constrain an unknown
-bound from below are checked rather than erased with the open parameter.
+bound from below or above are checked rather than erased with the open
+parameter. Operator input bounds are substituted first; freedom is tracked
+per output parameter, so an input that fixes `U` does not also fix unrelated
+`T`. Fixed input bounds keep their constraint checks.
 Inferring an element type cannot turn an `int32` receiver into a collection.
 Explicit generic
 calls keep the narrowed binding (`Nullable<T>` declares no generic methods).
