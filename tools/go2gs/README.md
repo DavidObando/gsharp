@@ -218,14 +218,19 @@ and package IDs, so validation binds each set to one declared type and package
 variant. Every package-scope type has one value and one pointer record,
 including empty sets. Method membership symbols reference the source method
 declaration, its declared receiver or interface owner, and the complete
-`go/types` selection index path. Validation follows promoted embedded fields,
-alias targets, and pointer eligibility, and requires one reverse reference for
-each membership symbol. Symbol IDs retain canonical type-ownership inputs
+`go/types` selection index path. `methodAuthorityFileIds` captures the compiled
+Go source closure needed to re-type-check those declarations without reading
+the checkout, module cache, or GOROOT. Validation derives complete value and
+pointer method sets with `go/types.NewMethodSet`, compares source method origins
+and exact selection paths bidirectionally, and requires one reverse reference
+for each membership symbol. Symbol IDs retain canonical type-ownership inputs
 that are not duplicated into their records and remain covered by uniqueness,
 reference, and ownership checks. File roles are closed to `compiled`, `active`,
-`test`, `ignored`, `native`, and `embed`, with exact native/embed flag
+`test`, `ignored`, `native`, `embed`, and `method-authority`, with exact
+native/embed flag
 agreement; `compiled` role must exactly match membership in the owning
-package's `compiledFileIds`. Compiled sources selected by `go:embed` retain
+package's `compiledFileIds`, and authority-only dependency source must match
+`methodAuthorityFileIds`. Compiled sources selected by `go:embed` retain
 the `compiled` role and are also linked by embed records. Every serialized
 syntax node must belong to a compiled file, and
 every node-bearing file must form one parent-linked `*ast.File` tree without

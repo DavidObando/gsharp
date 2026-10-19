@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -10,12 +11,16 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	pathpkg "path"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"golang.org/x/tools/go/packages"
 )
 
 func validateAnalysis(a Analysis) error {
@@ -195,6 +200,9 @@ func validateAnalysis(a Analysis) error {
 			return err
 		}
 		if err := requireMany(value.ID, "compiledFileIds", value.CompiledFileIDs, "file"); err != nil {
+			return err
+		}
+		if err := requireMany(value.ID, "methodAuthorityFileIds", value.MethodAuthorityFileIDs, "file"); err != nil {
 			return err
 		}
 		if err := requireMany(value.ID, "importPackageIds", value.ImportPackageIDs, "package"); err != nil {
@@ -724,7 +732,8 @@ func validateRecordFields(a Analysis) error {
 		validVariant := value.Variant == "ordinary" || value.Variant == "in-package-test" ||
 			value.Variant == "external-test" || value.Variant == "synthetic-test-main"
 		if value.ID == "" || value.ImportPath == "" || value.Name == "" || !validVariant ||
-			value.FileIDs == nil || value.CompiledFileIDs == nil || value.ImportPackageIDs == nil ||
+			value.FileIDs == nil || value.CompiledFileIDs == nil || value.MethodAuthorityFileIDs == nil ||
+			value.ImportPackageIDs == nil ||
 			value.InitializationOrder == nil || value.DiagnosticIDs == nil {
 			return fmt.Errorf("package %q has invalid required fields", value.ID)
 		}
@@ -934,11 +943,11 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 	packages := make(map[string]PackageRecord, len(a.Packages))
 	files := make(map[string]FileRecord, len(a.Files))
 	nodes := make(map[string]NodeRecord, len(a.Nodes))
-	typesByID := make(map[string]TypeRecord, len(a.Types))
 	symbols := make(map[string]SymbolRecord, len(a.Symbols))
 	packagePaths := make(map[string]bool, len(a.Packages))
 	fileListings := map[string]map[string]int{}
 	compiledFileListings := map[string]map[string]bool{}
+	methodAuthorityFileListings := map[string]map[string]bool{}
 	positionMaps := map[string]*sourcePositionMap{}
 	for _, pkg := range a.Packages {
 		packages[pkg.ID] = pkg
@@ -962,9 +971,17 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 			}
 		}
 		compiledFileListings[pkg.ID] = compiled
-	}
-	for _, record := range a.Types {
-		typesByID[record.ID] = record
+		authority := map[string]bool{}
+		for _, fileID := range pkg.MethodAuthorityFileIDs {
+			if authority[fileID] {
+				return fmt.Errorf("package %q lists method-authority file %q more than once", pkg.ID, fileID)
+			}
+			authority[fileID] = true
+			if listings[fileID] != 1 {
+				return fmt.Errorf("package %q method-authority file %q is not listed exactly once", pkg.ID, fileID)
+			}
+		}
+		methodAuthorityFileListings[pkg.ID] = authority
 	}
 	for _, file := range a.Files {
 		if _, ok := packages[file.PackageID]; !ok {
@@ -1017,6 +1034,14 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 	if err := validateNodeTrees(nodeFileOrder, nodesByFile, nodes); err != nil {
 		return err
 	}
+	for _, file := range a.Files {
+		authority := methodAuthorityFileListings[file.PackageID][file.ID]
+		if (file.Role == "method-authority" && !authority) ||
+			(authority && file.Role != "compiled" && file.Role != "method-authority") {
+			return fmt.Errorf("file %q role %q disagrees with package %q methodAuthorityFileIds membership",
+				file.ID, file.Role, file.PackageID)
+		}
+	}
 	if a.InventoryComplete {
 		for _, pkg := range a.Packages {
 			for _, fileID := range pkg.CompiledFileIDs {
@@ -1037,50 +1062,6 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 		}
 		symbols[symbol.ID] = symbol
 	}
-	declarations, err := indexSourceDeclarations(a.Files, packages)
-	if err != nil {
-		return err
-	}
-	packageTypes := map[string]SymbolRecord{}
-	for _, symbol := range a.Symbols {
-		if symbol.Declaration == nil || !packages[symbol.PackageID].InventoryComplete {
-			continue
-		}
-		key := sourceDeclarationKey(symbol.PackageID, *symbol.Declaration)
-		typeDeclaration, isType := declarations.types[key]
-		methodDeclaration, isMethod := declarations.methods[key]
-		if symbol.PackageScopeType != isType {
-			return fmt.Errorf("symbol %q package-scope type provenance disagrees with source", symbol.ID)
-		}
-		if isType && (symbol.Kind != "type" || symbol.Name != typeDeclaration.name) {
-			return fmt.Errorf("symbol %q package-scope type declaration is inconsistent", symbol.ID)
-		}
-		if isType && packages[symbol.PackageID].InventoryComplete && !symbol.MethodSetOwner {
-			return fmt.Errorf("symbol %q source-backed package-scope type lacks method-set ownership", symbol.ID)
-		}
-		if (symbol.MethodDeclarationOwnerID != "") != isMethod {
-			return fmt.Errorf("symbol %q method declaration provenance disagrees with source", symbol.ID)
-		}
-		if !isMethod {
-			continue
-		}
-		owner, ok := symbols[symbol.MethodDeclarationOwnerID]
-		if !ok || owner.PackageID != symbol.PackageID || !owner.PackageScopeType ||
-			owner.Name != methodDeclaration.ownerName ||
-			symbol.Name != methodDeclaration.name ||
-			symbol.MethodDeclarationPointer != methodDeclaration.pointer {
-			return fmt.Errorf("symbol %q method declaration relationship is inconsistent", symbol.ID)
-		}
-	}
-	for _, symbol := range a.Symbols {
-		if symbol.PackageScopeType {
-			packageTypes[symbol.PackageID+"\x00"+symbol.Name] = symbol
-		}
-	}
-	if err := validateDeclaredMethodIndexes(a.Symbols); err != nil {
-		return err
-	}
-	methodSets := map[string]map[bool]int{}
 	membershipReferences := map[string]int{}
 	for _, methodSet := range a.MethodSets {
 		owner, ok := symbols[methodSet.OwnerSymbolID]
@@ -1088,10 +1069,6 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 			owner.Kind != "type" || owner.TypeID != methodSet.TypeID {
 			return fmt.Errorf("method set %q owner symbol relationship is inconsistent", methodSet.ID)
 		}
-		if methodSets[owner.ID] == nil {
-			methodSets[owner.ID] = map[bool]int{}
-		}
-		methodSets[owner.ID][methodSet.Pointer]++
 		for _, methodSymbolID := range methodSet.MethodSymbolIDs {
 			membershipReferences[methodSymbolID]++
 			method, ok := symbols[methodSymbolID]
@@ -1109,11 +1086,6 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 				return fmt.Errorf("method set %q method symbol %q origin is inconsistent",
 					methodSet.ID, methodSymbolID)
 			}
-			if err := validateMethodSelection(
-				methodSet, method, origin, symbols, typesByID, packages, packageTypes, declarations,
-			); err != nil {
-				return err
-			}
 		}
 	}
 	for _, symbol := range a.Symbols {
@@ -1122,14 +1094,8 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 				symbol.ID, membershipReferences[symbol.ID])
 		}
 	}
-	for _, symbol := range a.Symbols {
-		pkg := packages[symbol.PackageID]
-		if !symbol.MethodSetOwner || !pkg.InventoryComplete {
-			continue
-		}
-		if methodSets[symbol.ID][false] != 1 || methodSets[symbol.ID][true] != 1 {
-			return fmt.Errorf("package-scope type symbol %q requires complete value and pointer method sets", symbol.ID)
-		}
+	if err := validateRetypedMethodSets(a, files, symbols); err != nil {
+		return err
 	}
 	for _, node := range a.Nodes {
 		if node.DeclarationID == "" {
@@ -1277,6 +1243,361 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 		}
 	}
 	return nil
+}
+
+type retypedMethodAuthority struct {
+	packages         map[string]*packages.Package
+	typeBySymbol     map[string]*types.TypeName
+	symbolByMethod   map[*types.Func]string
+	symbolByType     map[*types.TypeName]string
+	declarationOwner map[*types.Func]*types.TypeName
+	declarationIndex map[*types.Func]int
+}
+
+func validateRetypedMethodSets(
+	a Analysis,
+	files map[string]FileRecord,
+	symbols map[string]SymbolRecord,
+) error {
+	authority, err := retypeMethodAuthority(a, files, symbols)
+	if err != nil {
+		return err
+	}
+
+	sets := map[string]map[bool]MethodSetRecord{}
+	for _, record := range a.MethodSets {
+		if sets[record.OwnerSymbolID] == nil {
+			sets[record.OwnerSymbolID] = map[bool]MethodSetRecord{}
+		}
+		if sets[record.OwnerSymbolID][record.Pointer].ID != "" {
+			return fmt.Errorf("type symbol %q has duplicate pointer=%v method sets",
+				record.OwnerSymbolID, record.Pointer)
+		}
+		sets[record.OwnerSymbolID][record.Pointer] = record
+	}
+	for _, symbol := range a.Symbols {
+		if !symbol.MethodSetOwner {
+			continue
+		}
+		typeName := authority.typeBySymbol[symbol.ID]
+		if typeName == nil {
+			return fmt.Errorf("method-set owner symbol %q is absent from re-type-checked source", symbol.ID)
+		}
+		for _, pointer := range []bool{false, true} {
+			record := sets[symbol.ID][pointer]
+			if record.ID == "" {
+				return fmt.Errorf("package-scope type symbol %q requires complete value and pointer method sets", symbol.ID)
+			}
+			expected, err := retypedMethodSetTuples(typeName, pointer, authority.symbolByMethod)
+			if err != nil {
+				return fmt.Errorf("method set %q cannot derive captured-source membership: %w", record.ID, err)
+			}
+			actual := make([]string, 0, len(record.MethodSymbolIDs))
+			for _, methodID := range record.MethodSymbolIDs {
+				method := symbols[methodID]
+				actual = append(actual, methodSetTuple(
+					method.MethodOriginSymbolID, method.MethodSelectionIndexPath))
+			}
+			sort.Strings(actual)
+			if !slices.Equal(actual, expected) {
+				return fmt.Errorf(
+					"method set %q membership differs from re-type-checked captured source: expected %q, got %q",
+					record.ID, expected, actual)
+			}
+		}
+	}
+	return nil
+}
+
+func retypeMethodAuthority(
+	a Analysis,
+	files map[string]FileRecord,
+	symbols map[string]SymbolRecord,
+) (retypedMethodAuthority, error) {
+	result := retypedMethodAuthority{
+		packages:         map[string]*packages.Package{},
+		typeBySymbol:     map[string]*types.TypeName{},
+		symbolByMethod:   map[*types.Func]string{},
+		symbolByType:     map[*types.TypeName]string{},
+		declarationOwner: map[*types.Func]*types.TypeName{},
+		declarationIndex: map[*types.Func]int{},
+	}
+	loaded := make([]*packages.Package, 0, len(a.Packages))
+	for _, record := range a.Packages {
+		pkg := &packages.Package{
+			ID: record.ID, PkgPath: record.ImportPath, Name: record.Name,
+			Imports: map[string]*packages.Package{},
+		}
+		if record.LanguageVersion != "" {
+			pkg.Module = &packages.Module{GoVersion: strings.TrimPrefix(record.LanguageVersion, "go")}
+		}
+		result.packages[record.ID] = pkg
+		loaded = append(loaded, pkg)
+	}
+	sources := map[string][]byte{}
+	sourceHashes := map[string]string{}
+	for _, record := range a.Packages {
+		pkg := result.packages[record.ID]
+		for _, fileID := range record.MethodAuthorityFileIDs {
+			file := files[fileID]
+			data, err := base64.StdEncoding.DecodeString(file.ContentBase64)
+			if err != nil {
+				return result, fmt.Errorf("method-authority source file %q has invalid content", fileID)
+			}
+			if existing := sourceHashes[file.Path]; existing != "" && existing != file.SHA256 {
+				return result, fmt.Errorf("method-authority source path %q has conflicting captured content", file.Path)
+			}
+			data, err = methodAuthoritySource(file.Path, data)
+			if err != nil {
+				return result, fmt.Errorf("prepare method-authority source file %q: %w", fileID, err)
+			}
+			sourceHashes[file.Path] = file.SHA256
+			sources[file.Path] = data
+			pkg.GoFiles = append(pkg.GoFiles, file.Path)
+		}
+		if len(pkg.GoFiles) == 0 {
+			name := record.Name
+			if name == "" {
+				name = pathpkg.Base(record.ImportPath)
+			}
+			pkg.Types = types.NewPackage(record.ImportPath, name)
+		}
+	}
+	for _, record := range a.Packages {
+		pkg := result.packages[record.ID]
+		for _, importID := range record.ImportPackageIDs {
+			imported := result.packages[importID]
+			if imported == nil {
+				return result, fmt.Errorf("package %q has unavailable captured import %q", record.ID, importID)
+			}
+			if existing := pkg.Imports[imported.PkgPath]; existing != nil && existing != imported {
+				return result, fmt.Errorf("package %q has ambiguous captured import path %q",
+					record.ID, imported.PkgPath)
+			}
+			pkg.Imports[imported.PkgPath] = imported
+		}
+	}
+	profile := Profile{
+		RequestedGoVersion: strings.TrimPrefix(a.Toolchain.ActualVersion, "go"),
+		GOARCH:             a.Profile.GOARCH,
+	}
+	if err := typeCheckMethodAuthorityPackages(context.Background(), loaded, sources, profile); err != nil {
+		return result, fmt.Errorf("re-type-check captured source: %w", err)
+	}
+	for _, record := range a.Packages {
+		pkg := result.packages[record.ID]
+		if !record.InventoryComplete {
+			continue
+		}
+		if pkg.Types == nil || pkg.IllTyped {
+			message := "unknown type-check failure"
+			if len(pkg.Errors) != 0 {
+				message = pkg.Errors[0].Error()
+			}
+			return result, fmt.Errorf("re-type-check package %q from captured source: %s", record.ID, message)
+		}
+	}
+
+	declarations := map[string]SymbolRecord{}
+	for _, symbol := range symbols {
+		if symbol.Declaration != nil {
+			declarations[sourceDeclarationKey(symbol.PackageID, *symbol.Declaration)] = symbol
+		}
+	}
+	for _, record := range a.Packages {
+		pkg := result.packages[record.ID]
+		if pkg.TypesInfo == nil || pkg.Fset == nil {
+			continue
+		}
+		type definition struct {
+			name string
+			key  string
+			obj  types.Object
+		}
+		definitions := make([]definition, 0, len(pkg.TypesInfo.Defs))
+		for identifier, object := range pkg.TypesInfo.Defs {
+			if object == nil {
+				continue
+			}
+			start := pkg.Fset.PositionFor(identifier.Pos(), false)
+			end := pkg.Fset.PositionFor(identifier.End(), false)
+			key := sourceDeclarationKey(record.ID, SourceSpan{
+				Path: start.Filename, StartByte: start.Offset, EndByte: end.Offset,
+			})
+			definitions = append(definitions, definition{
+				name: identifier.Name, key: key, obj: object,
+			})
+		}
+		sort.Slice(definitions, func(i, j int) bool {
+			if definitions[i].key != definitions[j].key {
+				return definitions[i].key < definitions[j].key
+			}
+			return definitions[i].name < definitions[j].name
+		})
+		for _, definition := range definitions {
+			symbol := declarations[definition.key]
+			switch object := objectOrigin(definition.obj).(type) {
+			case *types.Func:
+				if symbol.ID != "" {
+					result.symbolByMethod[object] = symbol.ID
+				}
+			case *types.TypeName:
+				if symbol.ID != "" {
+					result.typeBySymbol[symbol.ID] = object
+					result.symbolByType[object] = symbol.ID
+				}
+			}
+		}
+	}
+	for _, record := range a.Packages {
+		pkg := result.packages[record.ID]
+		if pkg.Types == nil || !record.InventoryComplete {
+			continue
+		}
+		names := pkg.Types.Scope().Names()
+		sort.Strings(names)
+		for _, name := range names {
+			typeName, ok := pkg.Types.Scope().Lookup(name).(*types.TypeName)
+			if !ok {
+				continue
+			}
+			symbolID := result.symbolByType[typeName]
+			if symbolID == "" {
+				continue
+			}
+			indexRetypedDeclaredMethods(
+				typeName, result.declarationOwner, result.declarationIndex)
+		}
+	}
+	type declarationAuthority struct {
+		method   *types.Func
+		methodID string
+		ownerID  string
+	}
+	var declarationsToValidate []declarationAuthority
+	for method, owner := range result.declarationOwner {
+		method = method.Origin()
+		methodID := result.symbolByMethod[method]
+		ownerID := result.symbolByType[owner]
+		if methodID == "" {
+			continue
+		}
+		if ownerID == "" {
+			return result, fmt.Errorf("re-type-checked method declaration lacks serialized source provenance")
+		}
+		declarationsToValidate = append(declarationsToValidate, declarationAuthority{
+			method: method, methodID: methodID, ownerID: ownerID,
+		})
+	}
+	sort.Slice(declarationsToValidate, func(i, j int) bool {
+		return declarationsToValidate[i].methodID < declarationsToValidate[j].methodID
+	})
+	for _, declaration := range declarationsToValidate {
+		method, methodID, ownerID := declaration.method, declaration.methodID, declaration.ownerID
+		symbol := symbols[methodID]
+		if symbol.MethodDeclarationOwnerID != ownerID ||
+			symbol.MethodDeclarationIndex != result.declarationIndex[method] ||
+			symbol.MethodDeclarationPointer != methodReceiverPointer(method) {
+			return result, fmt.Errorf(
+				"method declaration symbol %q disagrees with re-type-checked captured source", methodID)
+		}
+	}
+	return result, nil
+}
+
+func methodAuthoritySource(path string, data []byte) ([]byte, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution|parser.AllErrors)
+	if err != nil {
+		return nil, err
+	}
+	tokenFile := fset.File(file.Pos())
+	result := append([]byte{}, data...)
+	blank := func(start, end token.Pos) {
+		first, last := tokenFile.Offset(start), tokenFile.Offset(end)
+		for index := first; index < last; index++ {
+			if result[index] != '\n' && result[index] != '\r' {
+				result[index] = ' '
+			}
+		}
+	}
+	for _, declaration := range file.Decls {
+		switch value := declaration.(type) {
+		case *ast.GenDecl:
+			if value.Tok == token.VAR {
+				blank(value.Pos(), value.End())
+			}
+		case *ast.FuncDecl:
+			if value.Recv == nil {
+				blank(value.Pos(), value.End())
+			}
+		}
+	}
+	return result, nil
+}
+
+func indexRetypedDeclaredMethods(
+	typeName *types.TypeName,
+	owners map[*types.Func]*types.TypeName,
+	indexes map[*types.Func]int,
+) {
+	switch value := typeName.Type().(type) {
+	case *types.Alias:
+		if iface, ok := value.Rhs().(*types.Interface); ok {
+			iface.Complete()
+			for index := 0; index < iface.NumExplicitMethods(); index++ {
+				method := iface.ExplicitMethod(index).Origin()
+				owners[method] = typeName
+				indexes[method] = index
+			}
+		}
+	case *types.Named:
+		value = value.Origin()
+		for index := 0; index < value.NumMethods(); index++ {
+			method := value.Method(index).Origin()
+			owners[method] = value.Obj()
+			indexes[method] = index
+		}
+		if iface, ok := value.Underlying().(*types.Interface); ok {
+			iface.Complete()
+			for index := 0; index < iface.NumExplicitMethods(); index++ {
+				method := iface.ExplicitMethod(index).Origin()
+				owners[method] = value.Obj()
+				indexes[method] = index
+			}
+		}
+	}
+}
+
+func retypedMethodSetTuples(
+	typeName *types.TypeName,
+	pointer bool,
+	symbolByMethod map[*types.Func]string,
+) ([]string, error) {
+	var target types.Type = typeName.Type()
+	if pointer {
+		target = types.NewPointer(target)
+	}
+	set := types.NewMethodSet(target)
+	result := make([]string, 0, set.Len())
+	for index := 0; index < set.Len(); index++ {
+		selection := set.At(index)
+		method, ok := objectOrigin(selection.Obj()).(*types.Func)
+		if !ok {
+			return nil, fmt.Errorf("selection %q is not a function", selection.Obj().Name())
+		}
+		originID := symbolByMethod[method]
+		if originID == "" {
+			return nil, fmt.Errorf("method %q has no serialized source declaration", method.Name())
+		}
+		result = append(result, methodSetTuple(originID, selection.Index()))
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func methodSetTuple(originID string, indexPath []int) string {
+	return originID + "@" + selectionIndexKey(indexPath)
 }
 
 type sourceTypeReference struct {

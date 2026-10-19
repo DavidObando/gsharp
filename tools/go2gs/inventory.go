@@ -30,44 +30,46 @@ var overlayDiagnosticPath = regexp.MustCompile(`[^\s\n]*gocommand-[0-9]+[/\\][0-
 var inventorySyntaxNodeTestHook func()
 
 type inventoryBuilder struct {
-	analysis              *Analysis
-	sourceRoot            string
-	goroot                string
-	profile               Profile
-	semanticProfileID     string
-	packageIDs            map[*packages.Package]string
-	packageModuleIDs      map[*packages.Package]string
-	packagePathIDs        map[string]string
-	typeOwners            map[*types.Package]*packages.Package
-	typeIDs               map[types.Type]string
-	objectIDs             map[objectRef]string
-	fileIDs               map[string]string
-	moduleIDs             map[string]string
-	seenModules           map[string]bool
-	seenFiles             map[string]bool
-	seenTypes             map[string]bool
-	seenSymbols           map[string]bool
-	seenMethodSets        map[string]bool
-	seenBlockers          map[string]bool
-	scopeIDs              map[*types.Scope]string
-	scopeIndexes          map[string]*scopeIndex
-	diagnosticSeq         int
-	sourceSnapshot        map[string][]byte
-	snapshotPortable      map[string]string
-	inputDrift            map[string]bool
-	snapshotFiles         map[string][]string
-	selectedSnapshotFiles map[string][]string
-	snapshotRoles         map[string]map[string]string
-	diagnosticRedactions  []string
-	memberIdentity        map[types.Object]string
-	memberIndex           map[types.Object]int
-	memberOwner           map[types.Object]*types.TypeName
-	skipSemantics         map[*packages.Package]bool
-	positionMaps          map[string]*sourcePositionMap
-	maxRecords            int
-	records               int
-	err                   error
-	ctx                   context.Context
+	analysis               *Analysis
+	sourceRoot             string
+	goroot                 string
+	profile                Profile
+	semanticProfileID      string
+	packageIDs             map[*packages.Package]string
+	packageModuleIDs       map[*packages.Package]string
+	packagePathIDs         map[string]string
+	typeOwners             map[*types.Package]*packages.Package
+	typeIDs                map[types.Type]string
+	objectIDs              map[objectRef]string
+	fileIDs                map[string]string
+	moduleIDs              map[string]string
+	seenModules            map[string]bool
+	seenFiles              map[string]bool
+	seenTypes              map[string]bool
+	seenSymbols            map[string]bool
+	seenMethodSets         map[string]bool
+	seenBlockers           map[string]bool
+	scopeIDs               map[*types.Scope]string
+	scopeIndexes           map[string]*scopeIndex
+	diagnosticSeq          int
+	sourceSnapshot         map[string][]byte
+	methodAuthoritySources map[string][]byte
+	methodAuthorityFiles   map[string][]string
+	snapshotPortable       map[string]string
+	inputDrift             map[string]bool
+	snapshotFiles          map[string][]string
+	selectedSnapshotFiles  map[string][]string
+	snapshotRoles          map[string]map[string]string
+	diagnosticRedactions   []string
+	memberIdentity         map[types.Object]string
+	memberIndex            map[types.Object]int
+	memberOwner            map[types.Object]*types.TypeName
+	skipSemantics          map[*packages.Package]bool
+	positionMaps           map[string]*sourcePositionMap
+	maxRecords             int
+	records                int
+	err                    error
+	ctx                    context.Context
 }
 
 func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile Profile) *inventoryBuilder {
@@ -84,6 +86,7 @@ func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile 
 		scopeIDs:       map[*types.Scope]string{},
 		scopeIndexes:   map[string]*scopeIndex{},
 		inputDrift:     map[string]bool{}, snapshotFiles: map[string][]string{},
+		methodAuthoritySources: map[string][]byte{}, methodAuthorityFiles: map[string][]string{},
 		selectedSnapshotFiles: map[string][]string{}, snapshotPortable: map[string]string{},
 		snapshotRoles: map[string]map[string]string{}, memberIdentity: map[types.Object]string{},
 		memberIndex: map[types.Object]int{}, memberOwner: map[types.Object]*types.TypeName{},
@@ -219,9 +222,11 @@ func (b *inventoryBuilder) addPackage(pkg *packages.Package) error {
 			return err
 		}
 	}
-
 	if !b.skipSemantics[pkg] {
 		b.addInitialization(pkg, &record)
+	}
+	if err := b.addMethodAuthorityFiles(pkg, &record); err != nil {
+		return err
 	}
 	sort.Strings(record.DiagnosticIDs)
 	if !appendInventoryRecord(b, &b.analysis.Packages, record) {
@@ -1523,6 +1528,42 @@ func recognizedNativePackageInput(path string) bool {
 }
 
 func (b *inventoryBuilder) addFile(pkg *packages.Package, path, role, reason string) (string, error) {
+	return b.addCapturedFile(pkg, path, role, reason, b.sourceSnapshot, "go/packages")
+}
+
+func (b *inventoryBuilder) addMethodAuthorityFiles(pkg *packages.Package, record *PackageRecord) error {
+	if !record.InventoryComplete || b.skipSemantics[pkg] {
+		return nil
+	}
+	for _, path := range b.methodAuthorityFiles[packageInputKey(pkg)] {
+		fileID := b.fileIDs[b.fileKey(pkg, path)]
+		if fileID == "" {
+			if len(b.seenFiles) >= b.profile.Limits.MaxFiles {
+				return fmt.Errorf("file count exceeds limit %d", b.profile.Limits.MaxFiles)
+			}
+			var err error
+			fileID, err = b.addCapturedFile(
+				pkg, path, "method-authority",
+				"captured compiled Go source required to independently derive method sets",
+				b.methodAuthoritySources, "go/packages-typed-source")
+			if err != nil {
+				return err
+			}
+			record.FileIDs = append(record.FileIDs, fileID)
+		}
+		record.MethodAuthorityFileIDs = append(record.MethodAuthorityFileIDs, fileID)
+	}
+	sort.Strings(record.FileIDs)
+	sort.Strings(record.MethodAuthorityFileIDs)
+	return nil
+}
+
+func (b *inventoryBuilder) addCapturedFile(
+	pkg *packages.Package,
+	path, role, reason string,
+	sources map[string][]byte,
+	provenance string,
+) (string, error) {
 	key := b.fileKey(pkg, path)
 	if id := b.fileIDs[key]; id != "" {
 		return id, nil
@@ -1535,9 +1576,9 @@ func (b *inventoryBuilder) addFile(pkg *packages.Package, path, role, reason str
 			return "", err
 		}
 	}
-	data, captured := b.sourceSnapshot[path]
+	data, captured := sources[path]
 	if !captured {
-		return "", fmt.Errorf("selected package input was not captured in the immutable loader snapshot: %s", filepath.Base(path))
+		return "", fmt.Errorf("package input was not captured for %s: %s", role, filepath.Base(path))
 	}
 	native, embed, validRole := fileRoleFlags(role)
 	if !validRole {
@@ -1547,7 +1588,7 @@ func (b *inventoryBuilder) addFile(pkg *packages.Package, path, role, reason str
 		PackageID: b.packageIDs[pkg], Path: portable, Role: role, Reason: reason,
 		LanguageVersion: fileLanguageVersion(pkg, path), SHA256: hashBytes(data), Bytes: int64(len(data)),
 		ContentBase64: base64.StdEncoding.EncodeToString(data), ValidUTF8: utf8.Valid(data),
-		Native: native, Embed: embed, Provenance: "go/packages",
+		Native: native, Embed: embed, Provenance: provenance,
 	}
 	record.ID = fileRecordID(record)
 	if !appendInventoryRecord(b, &b.analysis.Files, record) {
@@ -3286,6 +3327,9 @@ func normalizeAnalysisCollections(a *Analysis) {
 		}
 		if a.Packages[i].CompiledFileIDs == nil {
 			a.Packages[i].CompiledFileIDs = []string{}
+		}
+		if a.Packages[i].MethodAuthorityFileIDs == nil {
+			a.Packages[i].MethodAuthorityFileIDs = []string{}
 		}
 		if a.Packages[i].ImportPackageIDs == nil {
 			a.Packages[i].ImportPackageIDs = []string{}

@@ -1980,7 +1980,8 @@ func TestSchemaValidationRejectsUnknownRequiredKindAndDanglingID(t *testing.T) {
 	analysis = validIncompleteAnalysis()
 	record := PackageRecord{
 		ImportPath: "example.com/test", Name: "test", Variant: "ordinary",
-		FileIDs: []string{}, CompiledFileIDs: []string{}, ImportPackageIDs: []string{"package:missing"},
+		FileIDs: []string{}, CompiledFileIDs: []string{}, MethodAuthorityFileIDs: []string{},
+		ImportPackageIDs:    []string{"package:missing"},
 		InitializationOrder: []InitializationRecord{}, DiagnosticIDs: []string{},
 	}
 	record.ID = packageRecordID(semanticProfileIdentity(analysis.Profile, analysis.Toolchain), record)
@@ -4631,6 +4632,25 @@ func TestMethodSetRecordIDBindsPackageID(t *testing.T) {
 	}
 }
 
+func TestMethodSetSymbolIDBindsSourceProvenance(t *testing.T) {
+	record := SymbolRecord{
+		PackageID: "package", Name: "Method", TypeID: "type",
+		MethodSetOwnerSymbolID: "owner", MethodSetPointer: true,
+		MethodOriginSymbolID: "origin", MethodSelectionIndexPath: []int{1, 2},
+	}
+	baseline := methodSetSymbolID(record)
+	withoutOrigin := record
+	withoutOrigin.MethodOriginSymbolID = ""
+	if baseline == methodSetSymbolID(withoutOrigin) {
+		t.Fatal("method-set symbol identity omitted MethodOriginSymbolID")
+	}
+	withoutPath := record
+	withoutPath.MethodSelectionIndexPath = nil
+	if baseline == methodSetSymbolID(withoutPath) {
+		t.Fatal("method-set symbol identity omitted MethodSelectionIndexPath")
+	}
+}
+
 func methodSetAuthorityFixture(t *testing.T) Analysis {
 	t.Helper()
 	root := t.TempDir()
@@ -4643,14 +4663,23 @@ func (A) Alpha() {}
 type Empty struct{}
 type Base struct{}
 func (Base) Value() {}
+func (Base) hidden() {}
 func (*Base) Pointer() {}
 type Embedded struct{ Base }
+type MultiLevel struct{ Embedded }
 type PointerEmbedded struct{ *Base }
 type Alias = Base
 type PointerAlias = *Base
 type Interface interface{ InterfaceMethod() }
 type EmbeddedInterface interface{ Interface }
 type AnonymousInterfaceAlias = interface{ AnonymousMethod() }
+type Left struct{}
+func (Left) M() {}
+type Right struct{}
+func (Right) M() {}
+type Ambiguous struct{ Left; Right }
+type Generic[T any] struct{}
+func (Generic[T]) GenericMethod() {}
 `,
 		"b/b.go": `package b
 import "example.com/membership/a"
@@ -4721,11 +4750,12 @@ func TestMethodSetProducerPublishesAuthoritativeSelectionProvenance(t *testing.T
 	expected := map[string]map[bool][]string{
 		"example.com/membership/a.A":               {false: {"Alpha"}, true: {"Alpha"}},
 		"example.com/membership/a.Empty":           {false: {}, true: {}},
-		"example.com/membership/a.Base":            {false: {"Value"}, true: {"Pointer", "Value"}},
-		"example.com/membership/a.Embedded":        {false: {"Value"}, true: {"Pointer", "Value"}},
-		"example.com/membership/a.PointerEmbedded": {false: {"Pointer", "Value"}, true: {"Pointer", "Value"}},
-		"example.com/membership/a.Alias":           {false: {"Value"}, true: {"Pointer", "Value"}},
-		"example.com/membership/a.PointerAlias":    {false: {"Pointer", "Value"}, true: {}},
+		"example.com/membership/a.Base":            {false: {"Value", "hidden"}, true: {"Pointer", "Value", "hidden"}},
+		"example.com/membership/a.Embedded":        {false: {"Value", "hidden"}, true: {"Pointer", "Value", "hidden"}},
+		"example.com/membership/a.MultiLevel":      {false: {"Value", "hidden"}, true: {"Pointer", "Value", "hidden"}},
+		"example.com/membership/a.PointerEmbedded": {false: {"Pointer", "Value", "hidden"}, true: {"Pointer", "Value", "hidden"}},
+		"example.com/membership/a.Alias":           {false: {"Value", "hidden"}, true: {"Pointer", "Value", "hidden"}},
+		"example.com/membership/a.PointerAlias":    {false: {"Pointer", "Value", "hidden"}, true: {}},
 		"example.com/membership/a.Interface":       {false: {"InterfaceMethod"}, true: {}},
 		"example.com/membership/a.EmbeddedInterface": {
 			false: {"InterfaceMethod"}, true: {},
@@ -4733,8 +4763,12 @@ func TestMethodSetProducerPublishesAuthoritativeSelectionProvenance(t *testing.T
 		"example.com/membership/a.AnonymousInterfaceAlias": {
 			false: {"AnonymousMethod"}, true: {},
 		},
-		"example.com/membership/b.B":        {false: {"Beta"}, true: {"Beta"}},
-		"example.com/membership/b.Imported": {false: {"Value"}, true: {"Pointer", "Value"}},
+		"example.com/membership/a.Left":      {false: {"M"}, true: {"M"}},
+		"example.com/membership/a.Right":     {false: {"M"}, true: {"M"}},
+		"example.com/membership/a.Ambiguous": {false: {}, true: {}},
+		"example.com/membership/a.Generic":   {false: {"GenericMethod"}, true: {"GenericMethod"}},
+		"example.com/membership/b.B":         {false: {"Beta"}, true: {"Beta"}},
+		"example.com/membership/b.Imported":  {false: {"Value", "hidden"}, true: {"Pointer", "Value", "hidden"}},
 	}
 	references := map[string]int{}
 	for ownerName, byPointer := range expected {
@@ -4773,6 +4807,44 @@ func TestMethodSetProducerPublishesAuthoritativeSelectionProvenance(t *testing.T
 			t.Fatalf("method membership %q has %d reverse references", symbol.ID, references[symbol.ID])
 		}
 	}
+}
+
+func TestMethodSetAuthorityCapturesRelevantImportedSource(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"),
+		[]byte("module example.com/imported-authority\n\ngo 1.27.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte(`package importedauthority
+import "sync"
+type Locked struct{ sync.Mutex }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	analysis, complete, err := analyze(t.Context(), root, out, testProfile())
+	if err != nil || !complete {
+		t.Fatalf("imported authority analysis failed: complete=%v err=%v blockers=%#v",
+			complete, err, analysis.Blockers)
+	}
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(out); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatalf("imported authority artifact was rejected: %v", err)
+	}
+	for _, pkg := range analysis.Packages {
+		if pkg.ImportPath == "sync" {
+			if len(pkg.MethodAuthorityFileIDs) == 0 {
+				t.Fatal("relevant imported package has no captured method-authority source")
+			}
+			return
+		}
+	}
+	t.Fatal("sync package record is missing")
 }
 
 func rebindMethodSet(
@@ -4848,7 +4920,30 @@ func TestMethodSetAuthorityRejectsCoordinatedMutations(t *testing.T) {
 		}
 		sort.Slice(mutated.Symbols, func(i, j int) bool { return mutated.Symbols[i].ID < mutated.Symbols[j].ID })
 		sort.Slice(mutated.MethodSets, func(i, j int) bool { return mutated.MethodSets[i].ID < mutated.MethodSets[j].ID })
-		assertMethodAuthorityError(t, mutated, "selection reaches owner")
+		assertMethodAuthorityError(t, mutated, "membership differs from re-type-checked captured source")
+	})
+
+	t.Run("coordinated-membership-and-symbol-deletion", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		index := setIndex("example.com/membership/a.A", false)
+		methodID := mutated.MethodSets[index].MethodSymbolIDs[0]
+		mutated.MethodSets[index].MethodSymbolIDs = []string{}
+		mutated.MethodSets[index].ID = methodSetRecordID(mutated.MethodSets[index])
+		mutated.Symbols = slices.DeleteFunc(mutated.Symbols, func(value SymbolRecord) bool {
+			return value.ID == methodID
+		})
+		mutated.RecordCounts.Symbols--
+		mutated.RecordCounts.Total--
+		assertMethodAuthorityError(t, mutated, "membership differs from re-type-checked captured source")
+	})
+
+	t.Run("missing-value-record", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		index := setIndex("example.com/membership/a.Empty", false)
+		mutated.MethodSets = slices.Delete(mutated.MethodSets, index, index+1)
+		mutated.RecordCounts.MethodSets--
+		mutated.RecordCounts.Total--
+		assertMethodAuthorityError(t, mutated, "requires complete value and pointer method sets")
 	})
 
 	t.Run("missing-value-and-pointer-records", func(t *testing.T) {
@@ -4866,6 +4961,15 @@ func TestMethodSetAuthorityRejectsCoordinatedMutations(t *testing.T) {
 		mutated := cloneAnalysis(t, baseline)
 		index := setIndex("example.com/membership/a.A", false)
 		mutated.MethodSets[index].MethodSymbolIDs = []string{}
+		assertMethodAuthorityError(t, mutated, "requires exactly one reverse reference")
+	})
+
+	t.Run("duplicate-membership-reference", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		index := setIndex("example.com/membership/a.A", false)
+		mutated.MethodSets[index].MethodSymbolIDs = append(
+			mutated.MethodSets[index].MethodSymbolIDs,
+			mutated.MethodSets[index].MethodSymbolIDs[0])
 		assertMethodAuthorityError(t, mutated, "requires exactly one reverse reference")
 	})
 
@@ -4903,7 +5007,7 @@ func TestMethodSetAuthorityRejectsCoordinatedMutations(t *testing.T) {
 		mutated.RecordCounts.Total -= 1 + len(replacedMemberships)
 		sort.Slice(mutated.Symbols, func(i, j int) bool { return mutated.Symbols[i].ID < mutated.Symbols[j].ID })
 		sort.Slice(mutated.MethodSets, func(i, j int) bool { return mutated.MethodSets[i].ID < mutated.MethodSets[j].ID })
-		assertMethodAuthorityError(t, mutated, "selection reaches owner")
+		assertMethodAuthorityError(t, mutated, "membership differs from re-type-checked captured source")
 	})
 
 	t.Run("empty-set-owner-type-relation", func(t *testing.T) {
@@ -4950,7 +5054,113 @@ func TestMethodSetAuthorityRejectsCoordinatedMutations(t *testing.T) {
 			break
 		}
 		sort.Slice(mutated.Symbols, func(i, j int) bool { return mutated.Symbols[i].ID < mutated.Symbols[j].ID })
-		assertMethodAuthorityError(t, mutated, "selection field index")
+		assertMethodAuthorityError(t, mutated, "membership differs from re-type-checked captured source")
+	})
+
+	t.Run("coordinated-declaration-index-and-selection-path-swap", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		baseOwner := owner("example.com/membership/a.Base")
+		originIndexes := map[string]int{}
+		for index, symbol := range mutated.Symbols {
+			if symbol.MethodDeclarationOwnerID == baseOwner.ID &&
+				(symbol.Name == "Value" || symbol.Name == "Pointer") {
+				originIndexes[symbol.Name] = index
+			}
+		}
+		if len(originIndexes) != 2 {
+			t.Fatalf("Base method declarations are missing: %v", originIndexes)
+		}
+		valueOrigin := mutated.Symbols[originIndexes["Value"]].ID
+		pointerOrigin := mutated.Symbols[originIndexes["Pointer"]].ID
+		mutated.Symbols[originIndexes["Value"]].MethodDeclarationIndex,
+			mutated.Symbols[originIndexes["Pointer"]].MethodDeclarationIndex =
+			mutated.Symbols[originIndexes["Pointer"]].MethodDeclarationIndex,
+			mutated.Symbols[originIndexes["Value"]].MethodDeclarationIndex
+		replacements := map[string]string{}
+		for index := range mutated.Symbols {
+			method := &mutated.Symbols[index]
+			if method.MethodSetOwnerSymbolID == "" ||
+				(method.MethodOriginSymbolID != valueOrigin &&
+					method.MethodOriginSymbolID != pointerOrigin) {
+				continue
+			}
+			last := len(method.MethodSelectionIndexPath) - 1
+			if last < 0 {
+				t.Fatalf("membership %q has no selection index path", method.ID)
+			}
+			if method.MethodOriginSymbolID == valueOrigin {
+				method.MethodSelectionIndexPath[last] =
+					mutated.Symbols[originIndexes["Value"]].MethodDeclarationIndex
+			} else {
+				method.MethodSelectionIndexPath[last] =
+					mutated.Symbols[originIndexes["Pointer"]].MethodDeclarationIndex
+			}
+			oldID := method.ID
+			method.ID = methodSetSymbolID(*method)
+			replacements[oldID] = method.ID
+		}
+		for setIndex := range mutated.MethodSets {
+			for methodIndex, methodID := range mutated.MethodSets[setIndex].MethodSymbolIDs {
+				if replacement := replacements[methodID]; replacement != "" {
+					mutated.MethodSets[setIndex].MethodSymbolIDs[methodIndex] = replacement
+				}
+			}
+		}
+		sort.Slice(mutated.Symbols, func(i, j int) bool { return mutated.Symbols[i].ID < mutated.Symbols[j].ID })
+		assertMethodAuthorityError(t, mutated, "disagrees with re-type-checked captured source")
+	})
+
+	t.Run("source-declaration-index", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		baseOwner := owner("example.com/membership/a.Base")
+		for index := range mutated.Symbols {
+			symbol := &mutated.Symbols[index]
+			if symbol.MethodDeclarationOwnerID == baseOwner.ID && symbol.Name == "Value" {
+				symbol.MethodDeclarationIndex = 99
+				assertMethodAuthorityError(t, mutated, "disagrees with re-type-checked captured source")
+				return
+			}
+		}
+		t.Fatal("Base.Value declaration is missing")
+	})
+
+	t.Run("forged-interface-final-index", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		index := setIndex("example.com/membership/a.EmbeddedInterface", false)
+		methodID := mutated.MethodSets[index].MethodSymbolIDs[0]
+		for symbolIndex := range mutated.Symbols {
+			method := &mutated.Symbols[symbolIndex]
+			if method.ID != methodID {
+				continue
+			}
+			last := len(method.MethodSelectionIndexPath) - 1
+			if last < 0 {
+				t.Fatalf("interface membership %q has no selection index path", method.ID)
+			}
+			method.MethodSelectionIndexPath[last] = 99
+			method.ID = methodSetSymbolID(*method)
+			mutated.MethodSets[index].MethodSymbolIDs[0] = method.ID
+			break
+		}
+		sort.Slice(mutated.Symbols, func(i, j int) bool { return mutated.Symbols[i].ID < mutated.Symbols[j].ID })
+		assertMethodAuthorityError(t, mutated, "membership differs from re-type-checked captured source")
+	})
+
+	t.Run("forged-ambiguous-promotion", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		leftIndex := setIndex("example.com/membership/a.Left", false)
+		ambiguousIndex := setIndex("example.com/membership/a.Ambiguous", false)
+		method := baselineSymbols[mutated.MethodSets[leftIndex].MethodSymbolIDs[0]]
+		method.MethodSetOwnerSymbolID = owner("example.com/membership/a.Ambiguous").ID
+		method.MethodSetPointer = false
+		method.MethodSelectionIndexPath = []int{0, 0}
+		method.ID = methodSetSymbolID(method)
+		mutated.Symbols = append(mutated.Symbols, method)
+		mutated.MethodSets[ambiguousIndex].MethodSymbolIDs = []string{method.ID}
+		mutated.RecordCounts.Symbols++
+		mutated.RecordCounts.Total++
+		sort.Slice(mutated.Symbols, func(i, j int) bool { return mutated.Symbols[i].ID < mutated.Symbols[j].ID })
+		assertMethodAuthorityError(t, mutated, "membership differs from re-type-checked captured source")
 	})
 
 	t.Run("pointer-only-method-in-value-set", func(t *testing.T) {
@@ -4979,7 +5189,7 @@ func TestMethodSetAuthorityRejectsCoordinatedMutations(t *testing.T) {
 		mutated.RecordCounts.Symbols++
 		mutated.RecordCounts.Total++
 		sort.Slice(mutated.Symbols, func(i, j int) bool { return mutated.Symbols[i].ID < mutated.Symbols[j].ID })
-		assertMethodAuthorityError(t, mutated, "pointer-only method in a value method set")
+		assertMethodAuthorityError(t, mutated, "membership differs from re-type-checked captured source")
 	})
 }
 
@@ -4996,7 +5206,7 @@ func TestMethodSetOwnershipRejectsCoordinatedRebinding(t *testing.T) {
 	rebindMethodSet(t, &analysis, setIndexes["example.com/membership/b.B|false"], ownerA, symbolIndexes)
 	sort.Slice(analysis.Symbols, func(i, j int) bool { return analysis.Symbols[i].ID < analysis.Symbols[j].ID })
 	sort.Slice(analysis.MethodSets, func(i, j int) bool { return analysis.MethodSets[i].ID < analysis.MethodSets[j].ID })
-	assertMethodAuthorityError(t, analysis, "selection reaches owner")
+	assertMethodAuthorityError(t, analysis, "membership differs from re-type-checked captured source")
 }
 
 func TestSemanticProfileAndReplacementIdentitySeparatePackagesAndTypes(t *testing.T) {
@@ -5753,6 +5963,14 @@ func TestValidateAnalysisCommandRejectsMalformedNestedRecords(t *testing.T) {
 		name   string
 		mutate func(map[string]any) bool
 	}{
+		{"package-method-authority-files", func(root map[string]any) bool {
+			packages := root["packages"].([]any)
+			if len(packages) == 0 {
+				return false
+			}
+			delete(packages[0].(map[string]any), "methodAuthorityFileIds")
+			return true
+		}},
 		{"method-set-package", func(root map[string]any) bool {
 			methodSets := root["methodSets"].([]any)
 			if len(methodSets) == 0 {
@@ -6699,7 +6917,8 @@ func TestPackageVariantsAreClosed(t *testing.T) {
 		analysis := validIncompleteAnalysis()
 		record := PackageRecord{
 			ImportPath: "example.com/test", Name: "test", Variant: variant,
-			FileIDs: []string{}, CompiledFileIDs: []string{}, ImportPackageIDs: []string{},
+			FileIDs: []string{}, CompiledFileIDs: []string{}, MethodAuthorityFileIDs: []string{},
+			ImportPackageIDs:    []string{},
 			InitializationOrder: []InitializationRecord{}, DiagnosticIDs: []string{},
 		}
 		record.ID = packageRecordID(semanticProfileIdentity(analysis.Profile, analysis.Toolchain), record)
@@ -6714,7 +6933,8 @@ func TestPackageVariantsAreClosed(t *testing.T) {
 		analysis := validIncompleteAnalysis()
 		record := PackageRecord{
 			ImportPath: "example.com/test", Name: "test", Variant: variant,
-			FileIDs: []string{}, CompiledFileIDs: []string{}, ImportPackageIDs: []string{},
+			FileIDs: []string{}, CompiledFileIDs: []string{}, MethodAuthorityFileIDs: []string{},
+			ImportPackageIDs:    []string{},
 			InitializationOrder: []InitializationRecord{}, DiagnosticIDs: []string{},
 		}
 		record.ID = packageRecordID(semanticProfileIdentity(analysis.Profile, analysis.Toolchain), record)

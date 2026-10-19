@@ -486,6 +486,8 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	builder.snapshotFiles = sourceSnapshot.packageFiles
 	builder.selectedSnapshotFiles = sourceSnapshot.selectedFiles
 	builder.snapshotRoles = sourceSnapshot.packageRoles
+	builder.methodAuthoritySources = typedSources
+	builder.methodAuthorityFiles = methodAuthorityPackageFiles(all, sourceSnapshot.packageFiles)
 	if len(builder.inputDrift) > 0 {
 		builder.block("input-drift", "selected package inputs changed while loading", nil, nil)
 	}
@@ -510,6 +512,113 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 		return Analysis{}, false, err
 	}
 	return analysis, analysis.InventoryComplete, nil
+}
+
+func methodAuthorityPackageFiles(
+	loaded []*packages.Package,
+	selectedFiles map[string][]string,
+) map[string][]string {
+	selected := map[*packages.Package]bool{}
+	scanned := map[*packages.Package]bool{}
+	result := map[string][]string{}
+	for _, pkg := range loaded {
+		if len(selectedFiles[packageInputKey(pkg)]) != 0 {
+			selected[pkg] = true
+		}
+	}
+	for {
+		changed := false
+		for _, pkg := range loaded {
+			if !selected[pkg] || scanned[pkg] {
+				continue
+			}
+			scanned[pkg] = true
+			changed = true
+			result[packageInputKey(pkg)] = uniqueSorted(pkg.GoFiles)
+			for _, imported := range methodAuthorityImports(pkg) {
+				if imported != nil {
+					selected[imported] = true
+				}
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	return result
+}
+
+func methodAuthorityImports(pkg *packages.Package) []*packages.Package {
+	selected := map[*packages.Package]bool{}
+	for _, file := range pkg.Syntax {
+		imports := map[string]*packages.Package{}
+		var dotImports []*packages.Package
+		for _, specification := range file.Imports {
+			path, err := strconv.Unquote(specification.Path.Value)
+			if err != nil {
+				continue
+			}
+			imported := pkg.Imports[path]
+			if imported == nil || path == "unsafe" {
+				continue
+			}
+			name := ""
+			if specification.Name != nil {
+				name = specification.Name.Name
+			}
+			switch name {
+			case "_":
+				continue
+			case ".":
+				dotImports = append(dotImports, imported)
+			case "":
+				name = imported.Name
+				if name == "" {
+					name = filepath.Base(path)
+				}
+				imports[name] = imported
+			default:
+				imports[name] = imported
+			}
+		}
+		inspect := func(node ast.Node) {
+			ast.Inspect(node, func(candidate ast.Node) bool {
+				selector, ok := candidate.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				identifier, ok := selector.X.(*ast.Ident)
+				if ok && imports[identifier.Name] != nil {
+					selected[imports[identifier.Name]] = true
+				}
+				return true
+			})
+			for _, imported := range dotImports {
+				selected[imported] = true
+			}
+		}
+		for _, declaration := range file.Decls {
+			switch value := declaration.(type) {
+			case *ast.GenDecl:
+				if value.Tok == token.TYPE || value.Tok == token.CONST {
+					inspect(value)
+				}
+			case *ast.FuncDecl:
+				if value.Recv != nil {
+					inspect(value.Recv)
+					inspect(value.Type)
+				}
+			}
+		}
+	}
+	result := make([]*packages.Package, 0, len(selected))
+	for imported := range selected {
+		result = append(result, imported)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return packageSortKey(result[i]) < packageSortKey(result[j])
+	})
+	return result
 }
 
 func finishInventory(builder *inventoryBuilder, maxRecords int) error {
@@ -2079,11 +2188,34 @@ func verifyTypedSourcesContext(ctx context.Context, captured map[string][]byte) 
 }
 
 func typeCheckPackages(ctx context.Context, loaded []*packages.Package, sources map[string][]byte, profile Profile) error {
+	return typeCheckPackagesWithOptions(ctx, loaded, sources, profile, false)
+}
+
+func typeCheckMethodAuthorityPackages(
+	ctx context.Context,
+	loaded []*packages.Package,
+	sources map[string][]byte,
+	profile Profile,
+) error {
+	return typeCheckPackagesWithOptions(ctx, loaded, sources, profile, true)
+}
+
+func typeCheckPackagesWithOptions(
+	ctx context.Context,
+	loaded []*packages.Package,
+	sources map[string][]byte,
+	profile Profile,
+	methodAuthority bool,
+) error {
 	state := map[*packages.Package]uint8{}
 	var contextErr error
 	var check func(*packages.Package)
 	check = func(pkg *packages.Package) {
 		if contextErr != nil || pkg == nil || state[pkg] == 2 {
+			return
+		}
+		if methodAuthority && len(pkg.GoFiles) == 0 && pkg.Types != nil {
+			state[pkg] = 2
 			return
 		}
 		if err := ctx.Err(); err != nil {
@@ -2152,9 +2284,11 @@ func typeCheckPackages(ctx context.Context, loaded []*packages.Package, sources 
 			pkg.Errors = append(pkg.Errors, packages.Error{Kind: packages.TypeError, Msg: "unsupported target type sizes for " + profile.GOARCH})
 		}
 		config := types.Config{
-			GoVersion: packageGoVersion(pkg, profile.RequestedGoVersion),
-			Importer:  capturedPackageImporter{imports: pkg.Imports},
-			Sizes:     sizes,
+			GoVersion:                packageGoVersion(pkg, profile.RequestedGoVersion),
+			Importer:                 capturedPackageImporter{imports: pkg.Imports},
+			Sizes:                    sizes,
+			IgnoreFuncBodies:         methodAuthority,
+			DisableUnusedImportCheck: methodAuthority,
 			Error: func(err error) {
 				entry := packages.Error{Kind: packages.TypeError, Msg: err.Error()}
 				if typed, ok := err.(types.Error); ok {

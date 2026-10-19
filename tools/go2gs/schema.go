@@ -158,18 +158,19 @@ type ModuleRecord struct {
 }
 
 type PackageRecord struct {
-	ID                  string                 `json:"id"`
-	ImportPath          string                 `json:"importPath"`
-	Name                string                 `json:"name"`
-	Variant             string                 `json:"variant"`
-	ModuleID            string                 `json:"moduleId,omitempty"`
-	LanguageVersion     string                 `json:"languageVersion,omitempty"`
-	FileIDs             []string               `json:"fileIds"`
-	CompiledFileIDs     []string               `json:"compiledFileIds"`
-	ImportPackageIDs    []string               `json:"importPackageIds"`
-	InitializationOrder []InitializationRecord `json:"initializationOrder"`
-	DiagnosticIDs       []string               `json:"diagnosticIds"`
-	InventoryComplete   bool                   `json:"inventoryComplete"`
+	ID                     string                 `json:"id"`
+	ImportPath             string                 `json:"importPath"`
+	Name                   string                 `json:"name"`
+	Variant                string                 `json:"variant"`
+	ModuleID               string                 `json:"moduleId,omitempty"`
+	LanguageVersion        string                 `json:"languageVersion,omitempty"`
+	FileIDs                []string               `json:"fileIds"`
+	CompiledFileIDs        []string               `json:"compiledFileIds"`
+	MethodAuthorityFileIDs []string               `json:"methodAuthorityFileIds"`
+	ImportPackageIDs       []string               `json:"importPackageIds"`
+	InitializationOrder    []InitializationRecord `json:"initializationOrder"`
+	DiagnosticIDs          []string               `json:"diagnosticIds"`
+	InventoryComplete      bool                   `json:"inventoryComplete"`
 }
 
 type InitializationRecord struct {

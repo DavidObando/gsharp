@@ -4,7 +4,7 @@ package main
 
 func fileRoleFlags(role string) (native, embed, valid bool) {
 	switch role {
-	case "compiled", "active", "test", "ignored":
+	case "compiled", "active", "test", "ignored", "method-authority":
 		return false, false, true
 	case "native":
 		return true, false, true
