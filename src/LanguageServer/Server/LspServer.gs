@@ -1327,7 +1327,14 @@ class LspServer {
             } else {
                 default(ProjectState?)
             }
-            let content = DocumentContent(document.Value.SyntaxTree, document.Value.Lines, project, this.workspaceState)
+            // Issue #5024: attach the project's tree, not the standalone parse recorded before discovery.
+            // UpdateFile preserves the current buffer and reuses matching cached trees.
+            let syntaxTree = if project != nil && !string.IsNullOrEmpty(filePath) {
+                project.UpdateFile(filePath!!, document.Value.SyntaxTree.Text.ToString())
+            } else {
+                document.Value.SyntaxTree
+            }
+            let content = DocumentContent(syntaxTree, document.Value.Lines, project, this.workspaceState)
             this.documentContentService.AddOrUpdate(document.Key, content)
             if !this.clientSupportsPullDiagnostics {
                 this.SchedulePushDiagnosticsBind(uri, DiagnosticComputationResult(content, Array.Empty[Diagnostic]()))

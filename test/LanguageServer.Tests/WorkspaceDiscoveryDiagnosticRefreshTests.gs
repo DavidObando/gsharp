@@ -27,6 +27,108 @@ import Xunit
 /// to refresh diagnostics. Project-aware requests such as Go-to-Definition then work immediately,
 /// and the resulting re-pull clears the spurious diagnostics.
 open class WorkspaceDiscoveryDiagnosticRefreshTests {
+    @Theory
+    @InlineData(false, false, 0)
+    @InlineData(false, false, 1)
+    @InlineData(false, true, 0)
+    @InlineData(false, true, 1)
+    @InlineData(true, false, 0)
+    @InlineData(true, false, 1)
+    @InlineData(true, true, 0)
+    @InlineData(true, true, 1)
+    async func LocalHover_DiscoveryAfterOpen_UsesCurrentProjectTree(
+        openAfterInitialized bool,
+        editDuringDiscovery bool,
+        occurrence int32
+    ) {
+        let rootDir = CreateSampleWorkspace()
+        let continueDiscovery = TaskCompletionSource[bool](TaskCreationOptions.RunContinuationsAsynchronously)
+        let discoveryStopped = TaskCompletionSource[bool](TaskCreationOptions.RunContinuationsAsynchronously)
+        let documents = DocumentContentService()
+        let workspace = WorkspaceState()
+        let server = LspServer(documents, workspace)
+        var discoveryScheduled = false
+        try {
+            let fooPath = Path.Combine(rootDir, "Demo", "Foo.gs")
+            File.WriteAllText(fooPath, LocalSource)
+            let uri = DocumentUri.FromFileSystemPath(fooPath)!!
+            let discoveryStarted = TaskCompletionSource[bool](TaskCreationOptions.RunContinuationsAsynchronously)
+            server.TestBeforeWorkspaceDiscovery = () -> {
+                discoveryStarted.TrySetResult(true)
+                continueDiscovery.Task.GetAwaiter().GetResult()
+            }
+            server.TestAfterWorkspaceDiscovery = () -> discoveryStopped.TrySetResult(true)
+            await server.InitializeAsync(InitializeParams{RootPath: rootDir, Capabilities: PullClientCapabilities()})
+            if !openAfterInitialized {
+                await server.DidOpenAsync(
+                    DidOpenTextDocumentParams{TextDocument: TextDocumentItem{Uri: uri, Text: LocalSource}}
+                )
+            }
+            using let doc = JsonDocument.Parse("{}")
+            server.Initialized(doc.RootElement.Clone())
+            discoveryScheduled = true
+            await discoveryStarted.Task.WaitAsync(TimeSpan.FromSeconds(10))
+            if openAfterInitialized {
+                await server.DidOpenAsync(
+                    DidOpenTextDocumentParams{TextDocument: TextDocumentItem{Uri: uri, Text: LocalSource}}
+                )
+            }
+            let source = if editDuringDiscovery {
+                LocalSource.Replace("int32", "string").Replace("42", "\"unsaved\"")
+            } else {
+                LocalSource
+            }
+            if editDuringDiscovery {
+                await server.DidChangeAsync(
+                    DidChangeTextDocumentParams{
+                        TextDocument: VersionedTextDocumentIdentifier{Uri: uri},
+                        ContentChanges: List[TextDocumentContentChangeEvent]{
+                            TextDocumentContentChangeEvent{Text: source}
+                        }
+                    }
+                )
+            }
+            Assert.Null(workspace.GetProjectForFile(fooPath))
+            continueDiscovery.TrySetResult(true)
+            await discoveryStopped.Task.WaitAsync(TimeSpan.FromSeconds(10))
+            Assert.Empty(await PullDiagnosticsAsync(server, uri))
+            let position = LanguageServerTestHelpers.PositionOf(source, "answer", occurrence)
+            let hover = Assert.IsType[Hover](
+                await server.HoverAsync(HoverParams{TextDocument: TextDocumentIdentifier{Uri: uri}, Position: position})
+            )
+            let expectedType = if editDuringDiscovery {
+                "string"
+            } else {
+                "int32"
+            }
+            Assert.Contains(
+                "(local variable) answer ${expectedType}",
+                hover.Contents.ToString(),
+                StringComparison.Ordinal
+            )
+            Assert.Equal(position.Line, hover.Range.Start.Line)
+            Assert.Equal(position.Character, hover.Range.Start.Character)
+            Assert.Equal(position.Line, hover.Range.End.Line)
+            Assert.Equal(position.Character + "answer".Length, hover.Range.End.Character)
+            Assert.True(documents.TryGet(uri.ToString(), out var content))
+            let project = Assert.IsType[ProjectState](workspace.GetProjectForFile(fooPath))
+            Assert.Same(project, content.Project)
+            Assert.Equal(source, content.SyntaxTree.Text.ToString())
+            Assert.Equal(fooPath, content.SyntaxTree.Text.FileName)
+            Assert.True(project.TryGetSyntaxTree(fooPath, out var tree))
+            Assert.Same(tree, content.SyntaxTree)
+            Assert.Contains(content.SyntaxTree, project.GetCompilation().SyntaxTrees)
+            Assert.Equal(LocalSource, File.ReadAllText(fooPath))
+        } finally {
+            server.Shutdown()
+            continueDiscovery.TrySetResult(true)
+            if discoveryScheduled {
+                await discoveryStopped.Task.WaitAsync(TimeSpan.FromSeconds(10))
+            }
+            Directory.Delete(rootDir, recursive: true)
+        }
+    }
+
     @Fact
     async func PullClient_DiscoveryAfterOpen_RequestsRefreshAndSubsequentPullIsClean() {
         let rootDir = CreateSampleWorkspace()
@@ -291,6 +393,14 @@ func Passes() {
     }
 
     shared {
+        private const LocalSource string = `class Example {
+    func Read() int32 {
+        let answer = 42
+        return answer
+    }
+}
+`
+
         // Foo references a type + method defined in a sibling file (Bar.gs) of the SAME project.
         // Bound alone (project-less) both are unresolved; bound with the project they resolve.
         private const BarSource string = `class Bar {
