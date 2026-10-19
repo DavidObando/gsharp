@@ -5,6 +5,76 @@ import Xunit
 
 open class Issue5023TuplePropertyStorageTests {
     @Theory
+    @InlineData("Pick()", false)
+    @InlineData("owner.Pick()", false)
+    @InlineData("owner.Slot", false)
+    @InlineData("TupleOpaque5023.External.Pick()", true)
+    @InlineData("owner.Pick()", true)
+    @InlineData("owner.Slot", true)
+    func OpaqueTupleBorrow_RejectsSuspensionButPreservesSingleSelection(receiver string, imported bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace TupleOpaque5023 {
+    public sealed class Borrower<T> {
+        public T Value { get; }
+        public Borrower(in T value, int ignored) { Value = value; }
+    }
+    public struct Cell {
+        public int Stored;
+        public int Value { get => Stored; set => Stored = value; }
+    }
+    public sealed class Owner {
+        public int Selected;
+        public int Calls;
+        public (Cell, int)[] Items = {
+            (new Cell { Stored = 1 }, 0), (new Cell { Stored = 2 }, 0)
+        };
+        public ref (Cell, int) Pick() { Calls++; return ref Items[Selected]; }
+        public ref (Cell, int) Slot => ref Pick();
+    }
+    public static class External {
+        public static Owner Current = new Owner();
+        public static ref (Cell, int) Pick() => ref Current.Pick();
+    }
+}`, "TupleOpaque5023")
+        for action in[]string{
+            "Console.WriteLine(Read($receiver.Item1, await Change()))",
+            "$receiver.Item1.Value = await Change()",
+            "let copy = TupleOpaque5023.Borrower[Cell]($receiver.Item1, await Change())"
+        } {
+            let source = OpaqueBorrowSource(action, imported)
+            let (exit, output) = fixture.TryCompile(source, "OpaqueTuple5023", executable: true, "/r:" + contract)
+            Assert.Equal(1, exit)
+            let marker = source.IndexOf("await Change()")
+            let line = source.Substring(0, marker).Split('\n').Length
+            let column = marker - source.LastIndexOf('\n', marker)
+            Assert.Contains(
+                "OpaqueTuple5023.gs($line,$column,$line,${column + "await Change()".Length}): error GS0604:",
+                output
+            )
+            Assert.DoesNotContain("GS9998", output)
+        }
+        let ordered = OpaqueBorrowSource(`Console.WriteLine(Read(RECEIVER.Item1, 0))
+Console.WriteLine(owner.Calls)
+let ignored = await Change()
+Console.WriteLine(Read(RECEIVER.Item1, ignored))
+Console.WriteLine(owner.Calls)
+let copy = TupleOpaque5023.Borrower[Cell](RECEIVER.Item1, 0)
+Console.WriteLine("${copy.Value.Stored} ${owner.Calls}")
+owner.Selected = 0
+RECEIVER.Item1.Value = {
+    owner.Selected = 1
+    9
+}
+Console.WriteLine("${owner.Items[0].Item1.Stored} ${owner.Items[1].Item1.Stored} ${owner.Calls}")`.Replace(
+                "RECEIVER",
+                receiver
+            ), imported)
+        let executable = fixture.Compile(ordered, "OpaqueTupleOrdered5023", true, "/r:" + contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal("1\n1\n2\n2\n2 3\n9 2 4\n", fixture.Run(executable))
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func ReadOnlyTupleBorrow_ObservesLaterArgumentMutation(symbolic bool) {
@@ -409,6 +479,58 @@ Run().GetAwaiter().GetResult()`.Replace(
     }
 
     shared {
+        private func OpaqueBorrowSource(actions string, imported bool) string -> `package Test
+import System
+import System.Threading.Tasks
+DECLARATIONS
+INITIALIZATION
+func Read(in value Cell, ignored int32) int32 -> value.Stored
+async func Change() int32 {
+    await Task.Yield()
+    owner.Selected = 1
+    return 0
+}
+async func Run() {
+ACTIONS
+}
+Run().GetAwaiter().GetResult()`.Replace(
+            "DECLARATIONS",
+            if imported {
+                "import TupleOpaque5023"
+            } else {
+                `
+struct Cell {
+    var Stored int32
+    prop Value int32 {
+        get -> Stored
+        set { Stored = value }
+    }
+}
+class Owner {
+    var Selected int32
+    var Calls int32
+    var Items [](Cell, int32) = [](Cell, int32){(Cell{Stored: 1}, 0), (Cell{Stored: 2}, 0)}
+    func Pick() ref (Cell, int32) {
+        Calls += 1
+        return ref Items[Selected]
+    }
+    prop Slot ref (Cell, int32) {
+        get {
+            Calls += 1
+            return ref Items[Selected]
+        }
+    }
+}`
+            }
+        ).Replace(
+            "INITIALIZATION",
+            if imported {
+                "let owner = Owner()\nExternal.Current = owner"
+            } else {
+                "let owner = Owner{}\nfunc Pick() ref (Cell, int32) { return ref owner.Pick() }"
+            }
+        ).Replace("ACTIONS", actions)
+
         private func CompileAndRun(source string) string {
             using let fixture = NativeSliceLanguageTests.Fixture()
             let executable = fixture.Compile(source, "TupleStorage5023", true)

@@ -80,6 +80,15 @@ If you also added new samples, they will appear in the regenerated JSON
 automatically — both `samples/*.gs` and `samples/refactoring-baseline/*.gs`
 are scanned.
 
+The #5023 tuple-storage repair intentionally changes `TupleSequenceIterators`.
+Its five `int32.ToString()` receivers now use tuple-field addresses instead of
+scalar copies: five `ldfld`/`stloc.s`/`ldloca.s` sequences become `ldflda`,
+five temporary locals disappear (13 locals become eight), and branch offsets
+adjust. Only the entry-point body and its local signature change; the other
+20 method bodies and their local signatures are identical. Genuine before/after
+images produce byte-identical stdout and pass unsuppressed ILVerify. The sample
+inventory, existing compile-failure entries, and hashing policy are unchanged.
+
 The hierarchy-mode transport in PR #4808 intentionally changes 48 of the
 160 existing hashes. All 107 other emitted hashes and five existing `null`
 entries remain unchanged. A complete comparison against the genuine previous

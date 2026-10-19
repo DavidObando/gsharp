@@ -318,6 +318,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         for argument in arguments {
             this.CheckScopedStore(argument)
         }
+        this.CheckArguments(arguments, constructor?.Function)
     }
 
     private func CheckPrimaryConstructorParameters(type StructSymbol) {
@@ -491,9 +492,12 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         }
     }
 
-    private func IsManagedLocation(expression BoundExpression) bool -> switch expression {
+    private func IsManagedLocation(expression BoundExpression) bool -> RefCapabilities.IsNativeRefReturningCall(
+        expression
+    ) ||
+        switch expression {
         case call is BoundImportedInstanceCallExpression: ManagedReferenceOrigins.IsHandleBorrow(call) ||
-            (call.Type is ByRefTypeSymbol && this.IsManagedLocation(call.Receiver))
+            call.Type is ByRefTypeSymbol
         case call is BoundUserInstanceCallExpression: call
             .Method
             .ReturnRefKind != RefKind.None &&
@@ -510,6 +514,9 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         case block is BoundBlockExpression: this.IsManagedLocation(block.Expression)
         case address is BoundAddressOfExpression: this.IsManagedLocation(address.Operand)
         case dereference is BoundDereferenceExpression: this.IsManagedLocation(dereference.Operand)
+        case tuple is BoundTupleElementAccessExpression: this.IsManagedLocation(tuple.Receiver)
+        case conditional is BoundConditionalAddressExpression: this.IsManagedLocation(conditional.WhenTrueOperand) ||
+            this.IsManagedLocation(conditional.WhenFalseOperand)
         case BoundFieldAccessExpression{Receiver: {} receiver}: this.IsManagedLocation(receiver)
         case BoundClrPropertyAccessExpression{Receiver: {} receiver, Member: FieldInfo}: this.IsManagedLocation(
             receiver
@@ -527,7 +534,8 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
             variable.Variable is LocalVariableSymbol{RefKind: not RefKind.None, ManagedReferenceOrigin: {} origin} &&
                 this.IsManagedLocation(origin)
         )
-        default: false
+        // An opaque managed pointer cannot be hoisted or reconstructed by repeating user code.
+        default: expression.Type is ByRefTypeSymbol
     }
 
     private func CheckConstruction(

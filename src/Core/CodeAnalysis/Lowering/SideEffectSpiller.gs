@@ -280,6 +280,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             (
             SideEffectAnalyzer.HasObservableSideEffect(rewritten.Receiver) ||
                 BindingBinder.IsReferenceTypeForConstraint(rewritten.Receiver.Type) &&
+                !IsStableLocalRead(rewritten.Receiver) &&
                 SideEffectAnalyzer.HasObservableSideEffect(rewritten.Value)
         )
         var value = rewritten.Value
@@ -374,6 +375,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             SideEffectAnalyzer.HasObservableSideEffect(original) || BindingBinder.IsReferenceTypeForConstraint(
                 original.Type
             ) &&
+                !IsStableLocalRead(original) &&
                 SideEffectAnalyzer.HasObservableSideEffect(rewritten.Value)
         )
         var value = rewritten.Value
@@ -602,6 +604,15 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                 }
             }
             default {
+                if IsOpaqueStorageReceiver(receiver) {
+                    let local = LocalVariableSymbol(
+                        "$TempPrefix" + "storage${this.counter++}",
+                        isReadOnly: false,
+                        receiver.Type,
+                        receiver.Syntax
+                    )
+                    return CaptureOpaqueStorageReceiver(receiver, receiver.Syntax, statements, local)
+                }
                 return receiver
             }
         }
@@ -669,6 +680,18 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
     }
 
     shared {
+        internal func CaptureOpaqueStorageReceiver(
+            storage BoundExpression,
+            anchor SyntaxNode?,
+            statements ImmutableArray[BoundStatement].Builder,
+            local LocalVariableSymbol
+        ) BoundExpression {
+            local.RefKind = RefKind.Ref
+            local.ManagedReferenceOrigin = storage
+            statements.Add(BoundVariableDeclaration(anchor, local, BoundAddressOfExpression(anchor, storage)))
+            return BoundVariableExpression(storage.Syntax, local)
+        }
+
         internal func CaptureRuntimeGenericStorageReceiver(
             storage BoundExpression,
             anchor SyntaxNode?,
@@ -776,6 +799,14 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             Variable: LocalVariableSymbol{IsReadOnly: true, RefKind: RefKind.None}
         }
 
+        private func IsOpaqueStorageReceiver(expression BoundExpression?) bool -> expression != nil &&
+            (
+            RefCapabilities.IsNativeRefReturningCall(expression) ||
+                expression is BoundDereferenceExpression{
+                Operand: not BoundVariableExpression and {Type: ByRefTypeSymbol}
+            }
+        )
+
         /// Whether [`receiver`](paramref) denotes value storage rather than
         /// a copy: field/element chains and captured conditional addresses.
         /// Only reference owners and collection/index components may be spilled
@@ -835,7 +866,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                         continue
                     }
                     default {
-                        return false
+                        return IsOpaqueStorageReceiver(receiver)
                     }
                 }
             }

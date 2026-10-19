@@ -216,9 +216,14 @@ shared class RefInitializationHoister {
                     return BoundDereferenceExpression(dereference.Syntax, HoistIfNeeded(dereference.Operand, prelude))
                 }
                 default {
-                    // Any other operand form (e.g., a bare variable for
-                    // `ref x = ref y`) is trivially repeatable or already in a
-                    // hoist-safe shape after spilling. Inline directly.
+                    if RefCapabilities.IsNativeRefReturningCall(operand) ||
+                        operand.Type is ByRefTypeSymbol &&
+                        operand is not BoundVariableExpression {
+                        throw System.InvalidOperationException(
+                            "Opaque ref-returning storage must be rejected before async address reconstruction."
+                        )
+                    }
+                    // Other operands are repeatable leaves or already spilled storage.
                     return operand
                 }
             }

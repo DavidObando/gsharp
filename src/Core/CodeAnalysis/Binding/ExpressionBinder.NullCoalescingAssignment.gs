@@ -905,13 +905,10 @@ internal partial class ExpressionBinder {
                 // suspension. A native ref alias preserves them once and lets
                 // the existing liveness analyzer reject that case (GS0258).
                 let name = "<ncaStorage${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
-                let local = LocalVariableSymbol(name, isReadOnly: false, receiver.Type, anchor){
-                    RefKind = RefKind.Ref,
-                    ManagedReferenceOrigin = receiver
-                }
+                let local = LocalVariableSymbol(name, isReadOnly: false, receiver.Type, anchor)
+                let captured = SideEffectSpiller.CaptureOpaqueStorageReceiver(receiver, anchor, preStatements, local)
                 $scope.TryDeclareVariable(local)
-                preStatements.Add(BoundVariableDeclaration(anchor, local, BoundAddressOfExpression(anchor, receiver)))
-                return BoundVariableExpression(receiver.Syntax, local)
+                return captured
             }
         }
     }
