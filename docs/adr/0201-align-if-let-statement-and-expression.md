@@ -247,12 +247,17 @@ top level contains `&&` or `||`.
   operation outside them. Use `(cached = a && b)` or
   `(flag ? fallback : false && b)` to keep the original meaning, or parenthesize
   only the prefix assignment/conditional to make the new guard explicit.
-  The check follows implicit conversions and synthesized operator nodes, but
-  does not look through an explicit nullable cast or an ordinary source call.
-  It records genuine source assignment/ternary continuations before walking
-  bound nodes: nested `if`/`if let` expressions and parentheses close the
-  initializer subexpression even when their bound representation is another
-  conditional or has no parenthesized node.
+  The check follows genuine source assignment/ternary continuations, then
+  locates their final value by its bound syntax anchor, including inside
+  synthesized assignment-result temporary initializers. It strips implicit
+  conversions, but does not look through an explicit nullable cast or an
+  ordinary source call. Nested `if`/`if let` expressions and parentheses close
+  the source continuation even when their bound representation is another
+  conditional or has no parenthesized node; parentheses are unwrapped only to
+  locate that whole value, never to resume the continuation. When target typing
+  has converted a closed conditional or block result, every value arm must be
+  boolean before implicit conversion; inspecting only the false arm would
+  mistake an intrinsically nullable expression for a boolean one.
 - An assignment initializer (`if let v = cached = Next() { … }`) keeps
   working in every form; a guard may follow it.
 - A `?:` initializer without a top-level logical operator

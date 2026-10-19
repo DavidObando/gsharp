@@ -143,6 +143,39 @@ Run(true, false)`)
     }
 
     @Fact
+    func Compatibility_NullableIndexerAssignmentBeforeGuard_ReportsGS0624() {
+        let result = EmittedOracle.Evaluate(`class Box {
+    var stored bool? = true
+    prop this[index int32] bool? {
+        get -> stored
+        set { stored = value }
+    }
+    func Run(a bool, b bool) bool {
+        if let v = this[0] = a && b { return v }
+        return if let w = this[0] = a && b { w } else { false }
+    }
+}
+Box().Run(true, false)`)
+        Assert.Equal([]string{"GS0624@8:20", "GS0624@9:27"}, Ids(result))
+    }
+
+    @Fact
+    func Compatibility_NullableBasePropertyCompoundBeforeGuard_ReportsGS0624() {
+        let result = EmittedOracle.Evaluate(`open class Base {
+    protected prop P bool? { get; set; }
+}
+class Derived : Base {
+    func Run(a bool, b bool) bool {
+        base.P = true
+        if let v = base.P &= a && b { return v }
+        return if let w = base.P &= a && b { w } else { false }
+    }
+}
+Derived().Run(true, false)`)
+        Assert.Equal([]string{"GS0624@7:20", "GS0624@8:27"}, Ids(result))
+    }
+
+    @Fact
     func ExplicitNullableConversionBeforeGuard_IsNotAnAmbiguousBooleanContinuation() {
         let result = EmittedOracle.Evaluate(`func Run(b bool) bool {
     var cached bool? = nil
@@ -151,6 +184,20 @@ Run(true, false)`)
 }
 Run(false)`)
         Assert.Empty(result.Diagnostics)
+    }
+
+    @Theory
+    @InlineData("if flag { a } else { false }")
+    @InlineData("if let other = cached { a } else { false }")
+    @InlineData("{ a }")
+    func Compatibility_TargetTypedBooleanValueBeforeGuard_ReportsGS0624(initializer string) {
+        let result = EmittedOracle.Evaluate(`func Run(flag bool, a bool, b bool) bool {
+    var cached bool? = nil
+    if let v = cached = INITIALIZER && b { return v }
+    return if let w = cached = INITIALIZER && b { w } else { false }
+}
+Run(true, true, false)`.Replace("INITIALIZER", initializer))
+        Assert.Equal([]string{"GS0624@3:16", "GS0624@4:23"}, Ids(result))
     }
 
     @Theory

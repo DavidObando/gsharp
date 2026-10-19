@@ -304,7 +304,7 @@ internal shared class IfLetBindingSupport {
         // Only assignment values and ternary false arms can absorb a following
         // logical operator. Bound conditionals also represent closed if/if-let
         // expressions, and parentheses need not survive in the bound tree.
-        let continuations = HashSet[SyntaxNode]()
+        var hasContinuation = false
         var source = initializer
         while true {
             var nextSource ExpressionSyntax? = nil
@@ -332,50 +332,54 @@ internal shared class IfLetBindingSupport {
             if nextSource == nil {
                 break
             }
-            continuations.Add(source)
+            hasContinuation = true
             source = nextSource
         }
-        if continuations.Count == 0 {
+        if !hasContinuation {
             return false
         }
-        var value = expression
-        var absorbsLogicalTail = false
-        while true {
-            let syntax = value.Syntax
-            var next BoundExpression? = switch value {
+        // Find the original value even when assignment lowering captures it in
+        // a temporary. Unwrap parentheses only for lookup, not to resume the
+        // source continuation walk inside a closed expression.
+        source = AssignmentTargetSyntaxFacts.UnwrapParentheses(source)
+        for node in expression.DescendantsAndSelf() {
+            if node is BoundExpression value && object.ReferenceEquals(value.Syntax, source) {
+                return HasBooleanValueBeforeContextualConversion(value)
+            }
+        }
+        return false
+    }
+
+    private func HasBooleanValueBeforeContextualConversion(expression BoundExpression) bool {
+        // Target typing can convert every value arm of a closed expression.
+        // Inspect the whole result, not just one arm as a continuation.
+        let pending = Stack[BoundExpression]()
+        pending.Push(expression)
+        while pending.Count > 0 {
+            let value = pending.Pop()
+            if value.Type == TypeSymbol.Bool || value.Type == TypeSymbol.Never {
+                continue
+            }
+            switch value {
                 case conversion is BoundConversionExpression when conversion.Syntax == nil || object.ReferenceEquals(
                     conversion.Syntax,
                     conversion.Expression.Syntax
-                ): conversion.Expression
-                default: nil
-            }
-            if next == nil && (syntax == nil || continuations.Contains(syntax)) {
-                next = switch value {
-                    case assignment is BoundAssignmentExpression: assignment.Expression
-                    case field is BoundFieldAssignmentExpression: field.Value
-                    case property is BoundPropertyAssignmentExpression: property.Value
-                    case index is BoundIndexAssignmentExpression: index.Value
-                    case clrIndex is BoundClrIndexAssignmentExpression: clrIndex.Value
-                    case clrProperty is BoundClrPropertyAssignmentExpression: clrProperty.Value
-                    case indirect is BoundIndirectAssignmentExpression: indirect.Value
-                    case conditional is BoundConditionalExpression: conditional.WhenFalse
-                    default: nil
+                ) {
+                    pending.Push(conversion.Expression)
                 }
-                if next == nil {
-                    let children = value.ChildNodes
-                    if children.Length > 0 {
-                        next = children[children.Length - 1] as BoundExpression
-                    }
+                case conditional is BoundConditionalExpression {
+                    pending.Push(conditional.WhenTrue)
+                    pending.Push(conditional.WhenFalse)
+                }
+                case block is BoundBlockExpression {
+                    pending.Push(block.Expression)
+                }
+                default {
+                    return false
                 }
             }
-            if next == nil {
-                return absorbsLogicalTail && value.Type == TypeSymbol.Bool
-            }
-            if value is not BoundConversionExpression {
-                absorbsLogicalTail = true
-            }
-            value = next
         }
+        return true
     }
 
     /// ADR-0151 / ADR-0201: builds the boolean condition that declares each
