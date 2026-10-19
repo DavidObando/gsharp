@@ -505,7 +505,14 @@ internal partial class ExpressionBinder {
     }
 
     private func IsWritableStructFieldReceiver(receiver BoundExpression) bool {
-        if receiver is BoundVariableExpression {
+        if receiver is BoundVariableExpression variable {
+            // Unboxing a narrowed reference slot yields a controlled-mutability
+            // address, not writable struct storage.
+            if variable.NarrowedType != nil &&
+                ReceiverTypeIsReference(variable.Variable.Type) &&
+                !ReceiverTypeIsReference(variable.Type) {
+                return false
+            }
             return !ReceiverBlocksValueTypeMemberWrite(receiver)
         }
         // Issue #3185: a prior-cell submission global (or a value-type CLR

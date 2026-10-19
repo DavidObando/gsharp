@@ -4503,7 +4503,10 @@ internal class ReflectionMetadataEmitter {
         ) {
             return false
         }
-        if receiver is BoundClrPropertyAccessExpression clrField && IsAddressableClrFieldChain(clrField) {
+        // The constrained emitter still needs a spill for CLR type-parameter fields.
+        if receiver.Type is not TypeParameterSymbol &&
+            receiver is BoundClrPropertyAccessExpression clrField &&
+            IsAddressableClrFieldChain(clrField) {
             return false
         }
         return true

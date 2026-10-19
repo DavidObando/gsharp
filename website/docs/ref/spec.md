@@ -1850,7 +1850,8 @@ and reassigns those variables; the struct itself is not copied. A struct
 temporary reports `GS0499`, and read-only receivers are rejected as with `=`.
 The receiver's null and bounds checks occur before indexer arguments are
 evaluated. Capturing a reference owner preserves CLR field storage, including
-fields reached through a previous REPL submission.
+fields reached through a previous REPL submission. A smart-cast boxed struct
+is not writable struct storage and reports `GS0499`.
 An opaque ref-returning receiver is evaluated once through a ref alias; if
 that alias would remain live across an awaited right side, `GS0258` rejects
 the operation instead of re-evaluating the ref-returning call.

@@ -19,6 +19,43 @@ import Xunit
 /// of the target's receiver and indices, and a right side evaluated only
 /// when the target is nil.
 open class Issue4967NullCoalescingAssignmentExpressionEmitTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func StructReceivers_ProjectedGenericClrField_UsesSymbolicStorage(constrainedReceiver bool) {
+        let source = `package Test
+import System
+import System.Runtime.CompilerServices
+FUNCTION
+Console.WriteLine(CALL)`.Replace(
+            "FUNCTION",
+            if constrainedReceiver {
+                `func Compare[T IComparable[T]](box StrongBox[T], other T) int32 -> box.Value.CompareTo(other)`
+            } else {
+                `func Count[T](box StrongBox[ArraySegment[T]]) int32 -> box.Value.Count`
+            }
+        )
+            .Replace(
+            "CALL",
+            if constrainedReceiver {
+                `Compare(StrongBox[int32](7), 3)`
+            } else {
+                `Count(StrongBox[ArraySegment[int32]](ArraySegment[int32]([]int32{7, 3})))`
+            }
+        )
+        Assert.Equal(
+            (
+                if constrainedReceiver {
+                    "1"
+                } else {
+                    "2"
+                }
+            ) +
+                Environment.NewLine,
+            CompileAndRun(source)
+        )
+    }
+
     /// The issue's exact repro: `??=` is accepted in value position like `=` and `+=`.
     @Fact
     func Issue4967_Repro_ExpressionAndStatementFormsAgree() {

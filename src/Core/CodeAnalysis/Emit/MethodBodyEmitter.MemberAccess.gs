@@ -1694,21 +1694,8 @@ internal partial class MethodBodyEmitter {
         if !ReflectionMetadataEmitter.IsAddressableClrFieldChain(access) {
             return false
         }
-        this.EmitClrFieldAddressCore(access)
+        this.EmitAddressOf(BoundAddressOfExpression(nil, access))
         return true
-    }
-
-    private func EmitClrFieldAddressCore(access BoundClrPropertyAccessExpression) {
-        let field = cast[FieldInfo](access.Member)
-        let receiver = access.Receiver
-        if receiver == nil {
-            this.il.OpCode(ILOpCode.Ldsflda)
-            this.il.Token(this.outer.memberRefs.GetFieldReference(field))
-            return
-        }
-        this.EmitInstanceReceiver(receiver, isReadOnlyCall: true)
-        this.il.OpCode(ILOpCode.Ldflda)
-        this.il.Token(this.outer.memberRefs.GetFieldReference(field))
     }
 
     /// Issue #3292: emits the managed-pointer address of an array-backed

@@ -51,6 +51,9 @@ open class Issue4967NullCoalescingAssignmentSemanticModelTests {
     @InlineData(`let _ = (Make().F ??= "v")`, "GS0499")
     @InlineData(`let s = S{}; let _ = (s.F ??= "v")`, "GS0127")
     @InlineData(`let o = Outer{}; o.Inner.F ??= "v"`, "GS0499")
+    @InlineData(`var o object = S{}; if o is S { o.F ??= "v" }`, "GS0499")
+    @InlineData(`var o object = S{}; if o is S { let _ = (o.F ??= "v") }`, "GS0499")
+    @InlineData(`var o object = Outer{}; if o is Outer { o.Inner.F ??= "v" }`, "GS0499")
     func StructReceiver_MustBeWritableStorage(body string, diagnosticId string) {
         let source = `package P
 struct S {

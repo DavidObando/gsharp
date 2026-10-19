@@ -252,6 +252,10 @@ local across an `await`. A nested value field rooted in a class similarly
 captures the class reference, while a nested field rooted in a struct local
 continues to refer to that local's storage.
 
+A smart-cast struct receiver stored in an object or interface slot is
+rejected with `GS0499`. Its unboxed address has controlled mutability and
+cannot serve as writable struct storage.
+
 Before capturing indexer arguments, evaluate and discard the storage receiver's
 address. Null and array-bounds checks therefore precede argument side effects,
 without retaining a managed pointer across suspension. CLR field chains retain
