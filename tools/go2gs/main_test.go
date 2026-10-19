@@ -3758,9 +3758,12 @@ func (Imported) ImportedMethod() {}
 		var names []string
 		for _, symbolID := range methodSet.MethodSymbolIDs {
 			method := symbols[symbolID]
+			origin := symbols[method.MethodOriginSymbolID]
 			if method.PackageID != methodSet.PackageID || method.Kind != "function" ||
 				method.MethodSetOwnerSymbolID != methodSet.OwnerSymbolID ||
-				method.MethodSetPointer != methodSet.Pointer {
+				method.MethodSetPointer != methodSet.Pointer ||
+				len(method.MethodSelectionIndexPath) == 0 ||
+				origin.MethodDeclarationOwnerID == "" || origin.Declaration == nil {
 				t.Fatalf("method set has inconsistent method membership: %#v method=%#v", methodSet, method)
 			}
 			names = append(names, method.Name)
@@ -4628,13 +4631,33 @@ func TestMethodSetRecordIDBindsPackageID(t *testing.T) {
 	}
 }
 
-func TestMethodSetOwnershipRejectsCoordinatedRebinding(t *testing.T) {
+func methodSetAuthorityFixture(t *testing.T) Analysis {
+	t.Helper()
 	root := t.TempDir()
 	for name, source := range map[string]string{
 		"go.mod":  "module example.com/membership\n\ngo 1.27.0\n",
-		"main.go": "package membership\nimport (_ \"example.com/membership/a\"; _ \"example.com/membership/b\")\n",
-		"a/a.go":  "package a\ntype A struct{}\nfunc (A) Alpha() {}\n",
-		"b/b.go":  "package b\ntype B struct{}\nfunc (B) Beta() {}\n",
+		"main.go": "package membership\nimport (_ \"example.com/membership/a\"; _ \"example.com/membership/b\")\nfunc Top() {}\n",
+		"a/a.go": `package a
+type A struct{}
+func (A) Alpha() {}
+type Empty struct{}
+type Base struct{}
+func (Base) Value() {}
+func (*Base) Pointer() {}
+type Embedded struct{ Base }
+type PointerEmbedded struct{ *Base }
+type Alias = Base
+type PointerAlias = *Base
+type Interface interface{ InterfaceMethod() }
+type EmbeddedInterface interface{ Interface }
+type AnonymousInterfaceAlias = interface{ AnonymousMethod() }
+`,
+		"b/b.go": `package b
+import "example.com/membership/a"
+type B struct{}
+func (B) Beta() {}
+type Imported struct{ a.Base }
+`,
 	} {
 		path := filepath.Join(root, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -4648,75 +4671,332 @@ func TestMethodSetOwnershipRejectsCoordinatedRebinding(t *testing.T) {
 	if err != nil || !complete {
 		t.Fatalf("fixture analysis failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
 	}
+	return analysis
+}
+
+func cloneAnalysis(t *testing.T, analysis Analysis) Analysis {
+	t.Helper()
+	data, err := marshalCanonical(analysis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result Analysis
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func methodSetFixtureIndexes(t *testing.T, analysis Analysis) (
+	map[string]PackageRecord,
+	map[string]SymbolRecord,
+	map[string]int,
+	map[string]int,
+) {
+	t.Helper()
 	packages := map[string]PackageRecord{}
 	for _, pkg := range analysis.Packages {
 		packages[pkg.ID] = pkg
 	}
-	var ownerA, ownerB SymbolRecord
-	for _, symbol := range analysis.Symbols {
-		if symbol.Kind != "type" {
-			continue
-		}
-		switch packages[symbol.PackageID].ImportPath + "." + symbol.Name {
-		case "example.com/membership/a.A":
-			ownerA = symbol
-		case "example.com/membership/b.B":
-			ownerB = symbol
+	symbols := map[string]SymbolRecord{}
+	owners := map[string]int{}
+	for index, symbol := range analysis.Symbols {
+		symbols[symbol.ID] = symbol
+		if symbol.PackageScopeType {
+			owners[packages[symbol.PackageID].ImportPath+"."+symbol.Name] = index
 		}
 	}
-	if ownerA.ID == "" || ownerB.ID == "" {
-		t.Fatalf("fixture owners missing: A=%#v B=%#v", ownerA, ownerB)
-	}
-	targetIndex, replacementIndex := -1, -1
+	methodSets := map[string]int{}
 	for index, methodSet := range analysis.MethodSets {
-		if methodSet.Pointer {
-			continue
+		owner := symbols[methodSet.OwnerSymbolID]
+		methodSets[packages[owner.PackageID].ImportPath+"."+owner.Name+"|"+
+			strconv.FormatBool(methodSet.Pointer)] = index
+	}
+	return packages, symbols, owners, methodSets
+}
+
+func TestMethodSetProducerPublishesAuthoritativeSelectionProvenance(t *testing.T) {
+	analysis := methodSetAuthorityFixture(t)
+	packages, symbols, _, methodSets := methodSetFixtureIndexes(t, analysis)
+	expected := map[string]map[bool][]string{
+		"example.com/membership/a.A":               {false: {"Alpha"}, true: {"Alpha"}},
+		"example.com/membership/a.Empty":           {false: {}, true: {}},
+		"example.com/membership/a.Base":            {false: {"Value"}, true: {"Pointer", "Value"}},
+		"example.com/membership/a.Embedded":        {false: {"Value"}, true: {"Pointer", "Value"}},
+		"example.com/membership/a.PointerEmbedded": {false: {"Pointer", "Value"}, true: {"Pointer", "Value"}},
+		"example.com/membership/a.Alias":           {false: {"Value"}, true: {"Pointer", "Value"}},
+		"example.com/membership/a.PointerAlias":    {false: {"Pointer", "Value"}, true: {}},
+		"example.com/membership/a.Interface":       {false: {"InterfaceMethod"}, true: {}},
+		"example.com/membership/a.EmbeddedInterface": {
+			false: {"InterfaceMethod"}, true: {},
+		},
+		"example.com/membership/a.AnonymousInterfaceAlias": {
+			false: {"AnonymousMethod"}, true: {},
+		},
+		"example.com/membership/b.B":        {false: {"Beta"}, true: {"Beta"}},
+		"example.com/membership/b.Imported": {false: {"Value"}, true: {"Pointer", "Value"}},
+	}
+	references := map[string]int{}
+	for ownerName, byPointer := range expected {
+		for pointer, want := range byPointer {
+			index, ok := methodSets[ownerName+"|"+strconv.FormatBool(pointer)]
+			if !ok {
+				t.Fatalf("%s pointer=%v method set is missing", ownerName, pointer)
+			}
+			methodSet := analysis.MethodSets[index]
+			var names []string
+			for _, methodID := range methodSet.MethodSymbolIDs {
+				references[methodID]++
+				method := symbols[methodID]
+				origin := symbols[method.MethodOriginSymbolID]
+				declarationOwner := symbols[origin.MethodDeclarationOwnerID]
+				if method.MethodSetOwnerSymbolID != methodSet.OwnerSymbolID ||
+					method.MethodSetPointer != pointer ||
+					len(method.MethodSelectionIndexPath) == 0 ||
+					origin.Declaration == nil || declarationOwner.ID == "" {
+					t.Fatalf("method membership lacks authoritative provenance: set=%#v method=%#v origin=%#v",
+						methodSet, method, origin)
+				}
+				if packages[origin.PackageID].ImportPath != packages[declarationOwner.PackageID].ImportPath {
+					t.Fatalf("method origin and declaration owner packages differ: %#v %#v", origin, declarationOwner)
+				}
+				names = append(names, method.Name)
+			}
+			sort.Strings(names)
+			if !slices.Equal(names, want) {
+				t.Fatalf("%s pointer=%v methods = %v, want %v", ownerName, pointer, names, want)
+			}
 		}
-		switch methodSet.OwnerSymbolID {
-		case ownerA.ID:
-			targetIndex = index
-		case ownerB.ID:
-			replacementIndex = index
-		}
 	}
-	if targetIndex < 0 || replacementIndex < 0 {
-		t.Fatalf("fixture value method sets missing: %#v", analysis.MethodSets)
-	}
-	target := analysis.MethodSets[targetIndex]
-	if len(target.MethodSymbolIDs) != 1 {
-		t.Fatalf("A method set = %#v", target)
-	}
-	methods := map[string]SymbolRecord{}
 	for _, symbol := range analysis.Symbols {
-		methods[symbol.ID] = symbol
-	}
-	if methods[target.MethodSymbolIDs[0]].Name != "Alpha" {
-		t.Fatalf("A method set did not retain Alpha: %#v", target)
-	}
-	target.PackageID = ownerB.PackageID
-	target.OwnerSymbolID = ownerB.ID
-	target.TypeID = ownerB.TypeID
-	target.ID = methodSetRecordID(target)
-	var methodSets []MethodSetRecord
-	for index, methodSet := range analysis.MethodSets {
-		switch index {
-		case targetIndex:
-			methodSets = append(methodSets, target)
-		case replacementIndex:
-			continue
-		default:
-			methodSets = append(methodSets, methodSet)
+		if symbol.MethodSetOwnerSymbolID != "" && references[symbol.ID] != 1 {
+			t.Fatalf("method membership %q has %d reverse references", symbol.ID, references[symbol.ID])
 		}
 	}
-	sort.Slice(methodSets, func(i, j int) bool { return methodSets[i].ID < methodSets[j].ID })
-	analysis.MethodSets = methodSets
-	analysis.RecordCounts.MethodSets--
-	analysis.RecordCounts.Total--
-	err = validateAnalysis(analysis)
-	if err == nil || !strings.Contains(err.Error(), "method symbol") ||
-		!strings.Contains(err.Error(), "membership is inconsistent") {
-		t.Fatalf("coordinated method-set package/owner/ID rebinding was accepted: %v", err)
+}
+
+func rebindMethodSet(
+	t *testing.T,
+	analysis *Analysis,
+	setIndex int,
+	newOwner SymbolRecord,
+	symbolIndexes map[string]int,
+) {
+	t.Helper()
+	methodSet := &analysis.MethodSets[setIndex]
+	methodSet.PackageID = newOwner.PackageID
+	methodSet.OwnerSymbolID = newOwner.ID
+	methodSet.TypeID = newOwner.TypeID
+	for index, oldID := range methodSet.MethodSymbolIDs {
+		symbolIndex, ok := symbolIndexes[oldID]
+		if !ok {
+			t.Fatalf("method membership %q is missing", oldID)
+		}
+		method := &analysis.Symbols[symbolIndex]
+		method.PackageID = newOwner.PackageID
+		method.MethodSetOwnerSymbolID = newOwner.ID
+		method.MethodSetPointer = methodSet.Pointer
+		method.ID = methodSetSymbolID(*method)
+		methodSet.MethodSymbolIDs[index] = method.ID
 	}
+	methodSet.ID = methodSetRecordID(*methodSet)
+}
+
+func assertMethodAuthorityError(t *testing.T, analysis Analysis, contains string) {
+	t.Helper()
+	err := validateAnalysis(analysis)
+	if err == nil || !strings.Contains(err.Error(), contains) {
+		t.Fatalf("method-set authority mutation was accepted or failed for the wrong invariant: %v", err)
+	}
+	for _, proxy := range []string{"payload-derived identity", "unknown symbol reference", "recordCounts"} {
+		if strings.Contains(err.Error(), proxy) {
+			t.Fatalf("method-set authority mutation failed through proxy %q: %v", proxy, err)
+		}
+	}
+}
+
+func TestMethodSetAuthorityRejectsCoordinatedMutations(t *testing.T) {
+	baseline := methodSetAuthorityFixture(t)
+	_, baselineSymbols, ownerIndexes, setIndexes := methodSetFixtureIndexes(t, baseline)
+	owner := func(name string) SymbolRecord {
+		t.Helper()
+		index, ok := ownerIndexes[name]
+		if !ok {
+			t.Fatalf("owner %q is missing", name)
+		}
+		return baseline.Symbols[index]
+	}
+	setIndex := func(name string, pointer bool) int {
+		t.Helper()
+		index, ok := setIndexes[name+"|"+strconv.FormatBool(pointer)]
+		if !ok {
+			t.Fatalf("method set %q pointer=%v is missing", name, pointer)
+		}
+		return index
+	}
+
+	t.Run("complete-cross-package-swap", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		symbolIndexes := map[string]int{}
+		for index, symbol := range mutated.Symbols {
+			symbolIndexes[symbol.ID] = index
+		}
+		ownerA, ownerB := owner("example.com/membership/a.A"), owner("example.com/membership/b.B")
+		for _, pointer := range []bool{false, true} {
+			rebindMethodSet(t, &mutated, setIndex("example.com/membership/a.A", pointer), ownerB, symbolIndexes)
+			rebindMethodSet(t, &mutated, setIndex("example.com/membership/b.B", pointer), ownerA, symbolIndexes)
+		}
+		sort.Slice(mutated.Symbols, func(i, j int) bool { return mutated.Symbols[i].ID < mutated.Symbols[j].ID })
+		sort.Slice(mutated.MethodSets, func(i, j int) bool { return mutated.MethodSets[i].ID < mutated.MethodSets[j].ID })
+		assertMethodAuthorityError(t, mutated, "selection reaches owner")
+	})
+
+	t.Run("missing-value-and-pointer-records", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		emptyOwner := owner("example.com/membership/a.Empty")
+		mutated.MethodSets = slices.DeleteFunc(mutated.MethodSets, func(value MethodSetRecord) bool {
+			return value.OwnerSymbolID == emptyOwner.ID
+		})
+		mutated.RecordCounts.MethodSets -= 2
+		mutated.RecordCounts.Total -= 2
+		assertMethodAuthorityError(t, mutated, "requires complete value and pointer method sets")
+	})
+
+	t.Run("unreferenced-membership-symbol", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		index := setIndex("example.com/membership/a.A", false)
+		mutated.MethodSets[index].MethodSymbolIDs = []string{}
+		assertMethodAuthorityError(t, mutated, "requires exactly one reverse reference")
+	})
+
+	t.Run("ordinary-symbol-with-membership-pointer", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		for index := range mutated.Symbols {
+			symbol := &mutated.Symbols[index]
+			if symbol.Kind == "function" && symbol.MethodSetOwnerSymbolID == "" &&
+				symbol.MethodDeclarationOwnerID == "" {
+				symbol.MethodSetPointer = true
+				assertMethodAuthorityError(t, mutated, "inconsistent method-set membership provenance")
+				return
+			}
+		}
+		t.Fatal("fixture has no ordinary function symbol")
+	})
+
+	t.Run("one-record-rebound-and-replaced-record-removed", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		symbolIndexes := map[string]int{}
+		for index, symbol := range mutated.Symbols {
+			symbolIndexes[symbol.ID] = index
+		}
+		targetIndex := setIndex("example.com/membership/a.A", false)
+		replacedIndex := setIndex("example.com/membership/b.B", false)
+		replacedMemberships := append([]string{}, mutated.MethodSets[replacedIndex].MethodSymbolIDs...)
+		rebindMethodSet(
+			t, &mutated, targetIndex, owner("example.com/membership/b.B"), symbolIndexes)
+		mutated.MethodSets = slices.Delete(mutated.MethodSets, replacedIndex, replacedIndex+1)
+		mutated.Symbols = slices.DeleteFunc(mutated.Symbols, func(value SymbolRecord) bool {
+			return slices.Contains(replacedMemberships, value.ID)
+		})
+		mutated.RecordCounts.MethodSets--
+		mutated.RecordCounts.Symbols -= len(replacedMemberships)
+		mutated.RecordCounts.Total -= 1 + len(replacedMemberships)
+		sort.Slice(mutated.Symbols, func(i, j int) bool { return mutated.Symbols[i].ID < mutated.Symbols[j].ID })
+		sort.Slice(mutated.MethodSets, func(i, j int) bool { return mutated.MethodSets[i].ID < mutated.MethodSets[j].ID })
+		assertMethodAuthorityError(t, mutated, "selection reaches owner")
+	})
+
+	t.Run("empty-set-owner-type-relation", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		index := setIndex("example.com/membership/a.Empty", false)
+		mutated.MethodSets[index].TypeID = owner("example.com/membership/a.A").TypeID
+		mutated.MethodSets[index].ID = methodSetRecordID(mutated.MethodSets[index])
+		sort.Slice(mutated.MethodSets, func(i, j int) bool { return mutated.MethodSets[i].ID < mutated.MethodSets[j].ID })
+		assertMethodAuthorityError(t, mutated, "owner symbol relationship is inconsistent")
+	})
+
+	t.Run("membership-origin-is-source-backed", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		index := setIndex("example.com/membership/a.A", false)
+		methodID := mutated.MethodSets[index].MethodSymbolIDs[0]
+		for symbolIndex := range mutated.Symbols {
+			if mutated.Symbols[symbolIndex].ID != methodID {
+				continue
+			}
+			mutated.Symbols[symbolIndex].MethodOriginSymbolID =
+				baseline.MethodSets[setIndex("example.com/membership/b.B", false)].MethodSymbolIDs[0]
+			mutated.Symbols[symbolIndex].MethodOriginSymbolID =
+				baselineSymbols[mutated.Symbols[symbolIndex].MethodOriginSymbolID].MethodOriginSymbolID
+			mutated.Symbols[symbolIndex].ID = methodSetSymbolID(mutated.Symbols[symbolIndex])
+			mutated.MethodSets[index].MethodSymbolIDs[0] = mutated.Symbols[symbolIndex].ID
+			break
+		}
+		sort.Slice(mutated.Symbols, func(i, j int) bool { return mutated.Symbols[i].ID < mutated.Symbols[j].ID })
+		assertMethodAuthorityError(t, mutated, "origin is inconsistent")
+	})
+
+	t.Run("promoted-selection-index-path", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		index := setIndex("example.com/membership/a.Embedded", false)
+		methodID := mutated.MethodSets[index].MethodSymbolIDs[0]
+		for symbolIndex := range mutated.Symbols {
+			method := &mutated.Symbols[symbolIndex]
+			if method.ID != methodID {
+				continue
+			}
+			method.MethodSelectionIndexPath[0] = 99
+			method.ID = methodSetSymbolID(*method)
+			mutated.MethodSets[index].MethodSymbolIDs[0] = method.ID
+			break
+		}
+		sort.Slice(mutated.Symbols, func(i, j int) bool { return mutated.Symbols[i].ID < mutated.Symbols[j].ID })
+		assertMethodAuthorityError(t, mutated, "selection field index")
+	})
+
+	t.Run("pointer-only-method-in-value-set", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		valueIndex := setIndex("example.com/membership/a.Base", false)
+		pointerIndex := setIndex("example.com/membership/a.Base", true)
+		symbols := map[string]SymbolRecord{}
+		for _, symbol := range mutated.Symbols {
+			symbols[symbol.ID] = symbol
+		}
+		var pointerMethod SymbolRecord
+		for _, methodID := range mutated.MethodSets[pointerIndex].MethodSymbolIDs {
+			if symbols[methodID].Name == "Pointer" {
+				pointerMethod = symbols[methodID]
+				break
+			}
+		}
+		if pointerMethod.ID == "" {
+			t.Fatal("pointer-only method membership is missing")
+		}
+		pointerMethod.MethodSetPointer = false
+		pointerMethod.ID = methodSetSymbolID(pointerMethod)
+		mutated.Symbols = append(mutated.Symbols, pointerMethod)
+		mutated.MethodSets[valueIndex].MethodSymbolIDs =
+			append(mutated.MethodSets[valueIndex].MethodSymbolIDs, pointerMethod.ID)
+		mutated.RecordCounts.Symbols++
+		mutated.RecordCounts.Total++
+		sort.Slice(mutated.Symbols, func(i, j int) bool { return mutated.Symbols[i].ID < mutated.Symbols[j].ID })
+		assertMethodAuthorityError(t, mutated, "pointer-only method in a value method set")
+	})
+}
+
+func TestMethodSetOwnershipRejectsCoordinatedRebinding(t *testing.T) {
+	analysis := methodSetAuthorityFixture(t)
+	_, _, ownerIndexes, setIndexes := methodSetFixtureIndexes(t, analysis)
+	ownerA := analysis.Symbols[ownerIndexes["example.com/membership/a.A"]]
+	ownerB := analysis.Symbols[ownerIndexes["example.com/membership/b.B"]]
+	symbolIndexes := map[string]int{}
+	for index, symbol := range analysis.Symbols {
+		symbolIndexes[symbol.ID] = index
+	}
+	rebindMethodSet(t, &analysis, setIndexes["example.com/membership/a.A|false"], ownerB, symbolIndexes)
+	rebindMethodSet(t, &analysis, setIndexes["example.com/membership/b.B|false"], ownerA, symbolIndexes)
+	sort.Slice(analysis.Symbols, func(i, j int) bool { return analysis.Symbols[i].ID < analysis.Symbols[j].ID })
+	sort.Slice(analysis.MethodSets, func(i, j int) bool { return analysis.MethodSets[i].ID < analysis.MethodSets[j].ID })
+	assertMethodAuthorityError(t, analysis, "selection reaches owner")
 }
 
 func TestSemanticProfileAndReplacementIdentitySeparatePackagesAndTypes(t *testing.T) {
@@ -5497,6 +5777,38 @@ func TestValidateAnalysisCommandRejectsMalformedNestedRecords(t *testing.T) {
 			delete(symbols[0].(map[string]any), "methodSetPointer")
 			return true
 		}},
+		{"method-declaration-pointer", func(root map[string]any) bool {
+			symbols := root["symbols"].([]any)
+			if len(symbols) == 0 {
+				return false
+			}
+			delete(symbols[0].(map[string]any), "methodDeclarationPointer")
+			return true
+		}},
+		{"method-declaration-index", func(root map[string]any) bool {
+			symbols := root["symbols"].([]any)
+			if len(symbols) == 0 {
+				return false
+			}
+			delete(symbols[0].(map[string]any), "methodDeclarationIndex")
+			return true
+		}},
+		{"package-scope-type", func(root map[string]any) bool {
+			symbols := root["symbols"].([]any)
+			if len(symbols) == 0 {
+				return false
+			}
+			delete(symbols[0].(map[string]any), "packageScopeType")
+			return true
+		}},
+		{"method-set-owner-eligibility", func(root map[string]any) bool {
+			symbols := root["symbols"].([]any)
+			if len(symbols) == 0 {
+				return false
+			}
+			delete(symbols[0].(map[string]any), "methodSetOwner")
+			return true
+		}},
 		{"method-set-symbol-owner", func(root map[string]any) bool {
 			for _, raw := range root["symbols"].([]any) {
 				symbol := raw.(map[string]any)
@@ -5516,6 +5828,22 @@ func TestValidateAnalysisCommandRejectsMalformedNestedRecords(t *testing.T) {
 				}
 			}
 			return false
+		}},
+		{"type-element-provenance", func(root map[string]any) bool {
+			types := root["types"].([]any)
+			if len(types) == 0 {
+				return false
+			}
+			delete(types[0].(map[string]any), "elementTypeId")
+			return true
+		}},
+		{"type-alias-target-provenance", func(root map[string]any) bool {
+			types := root["types"].([]any)
+			if len(types) == 0 {
+				return false
+			}
+			delete(types[0].(map[string]any), "aliasTargetTypeId")
+			return true
 		}},
 		{"partial-node-span", func(root map[string]any) bool {
 			nodes := root["nodes"].([]any)

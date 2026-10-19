@@ -215,8 +215,12 @@ that profile discriminator to the canonical Go identity, so equal types still
 deduplicate across packages within one profile but target-dependent records do
 not alias across profiles. Method-set records carry their owning type-symbol
 and package IDs, so validation binds each set to one declared type and package
-variant. Their method symbols also bind the owner and value or pointer
-eligibility, including promoted and alias methods. Symbol IDs retain canonical type-ownership inputs
+variant. Every package-scope type has one value and one pointer record,
+including empty sets. Method membership symbols reference the source method
+declaration, its declared receiver or interface owner, and the complete
+`go/types` selection index path. Validation follows promoted embedded fields,
+alias targets, and pointer eligibility, and requires one reverse reference for
+each membership symbol. Symbol IDs retain canonical type-ownership inputs
 that are not duplicated into their records and remain covered by uniqueness,
 reference, and ownership checks. File roles are closed to `compiled`, `active`,
 `test`, `ignored`, `native`, and `embed`, with exact native/embed flag

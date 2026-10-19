@@ -60,6 +60,8 @@ type inventoryBuilder struct {
 	snapshotRoles         map[string]map[string]string
 	diagnosticRedactions  []string
 	memberIdentity        map[types.Object]string
+	memberIndex           map[types.Object]int
+	memberOwner           map[types.Object]*types.TypeName
 	skipSemantics         map[*packages.Package]bool
 	positionMaps          map[string]*sourcePositionMap
 	maxRecords            int
@@ -84,6 +86,7 @@ func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile 
 		inputDrift:     map[string]bool{}, snapshotFiles: map[string][]string{},
 		selectedSnapshotFiles: map[string][]string{}, snapshotPortable: map[string]string{},
 		snapshotRoles: map[string]map[string]string{}, memberIdentity: map[types.Object]string{},
+		memberIndex: map[types.Object]int{}, memberOwner: map[types.Object]*types.TypeName{},
 		skipSemantics: map[*packages.Package]bool{}, positionMaps: map[string]*sourcePositionMap{},
 		maxRecords: profile.Limits.MaxRecords, records: analysisRecordCount(analysis),
 		ctx: context.Background(),
@@ -2448,6 +2451,12 @@ func (b *inventoryBuilder) addMethodSets(pkg *packages.Package) {
 		t := typeName.Type()
 		typeID := b.addType(pkg, t)
 		ownerSymbolID := b.addObject(pkg, typeName, SourceSpan{})
+		for index := range b.analysis.Symbols {
+			if b.analysis.Symbols[index].ID == ownerSymbolID {
+				b.analysis.Symbols[index].MethodSetOwner = true
+				break
+			}
+		}
 		// TypeID identifies the declared owner. Pointer selects the T or *T method set.
 		for _, candidate := range []struct {
 			t       types.Type
@@ -2463,7 +2472,7 @@ func (b *inventoryBuilder) addMethodSets(pkg *packages.Package) {
 				continue
 			}
 			b.seenMethodSets[id] = true
-			for _, method := range methodSetObjects(candidate.t) {
+			for _, method := range methodSetSelections(candidate.t) {
 				record.MethodSymbolIDs = append(record.MethodSymbolIDs,
 					b.addMethodSetObject(pkg, method, ownerSymbolID, candidate.pointer))
 			}
@@ -2613,6 +2622,12 @@ func (b *inventoryBuilder) addType(pkg *packages.Package, t types.Type) string {
 		Package: pkgPath, Name: name, Alias: alias, Named: named, Underlying: underlying,
 		Comparable: types.Comparable(t), Size: -1, Align: -1,
 	}
+	switch value := t.(type) {
+	case *types.Alias:
+		record.AliasTargetTypeID = b.addType(pkg, value.Rhs())
+	case *types.Pointer:
+		record.ElementTypeID = b.addType(pkg, value.Elem())
+	}
 	for _, arg := range args {
 		record.TypeArgs = append(record.TypeArgs, b.addType(pkg, arg))
 	}
@@ -2673,26 +2688,26 @@ func (b *inventoryBuilder) addObject(pkg *packages.Package, object types.Object,
 
 func (b *inventoryBuilder) addMethodSetObject(
 	pkg *packages.Package,
-	object types.Object,
+	selection *types.Selection,
 	ownerSymbolID string,
 	pointer bool,
 ) string {
-	object = objectOrigin(object)
+	object := objectOrigin(selection.Obj())
 	pkgID := b.packageIDs[pkg]
-	declarationKey := "method-set\x00" + ownerSymbolID + "\x00" +
-		strconv.FormatBool(pointer) + "\x00" + object.Name() + "\x00" +
-		b.typeIdentity(pkg, object.Type())
-	id := stableID("symbol", objectCanonical(pkgID, object, declarationKey))
-	if b.seenSymbols[id] {
-		return id
-	}
-	b.seenSymbols[id] = true
-	appendInventoryRecord(b, &b.analysis.Symbols, SymbolRecord{
-		ID: id, PackageID: pkgID, Name: object.Name(), Kind: objectKind(object),
+	record := SymbolRecord{
+		PackageID: pkgID, Name: object.Name(), Kind: objectKind(object),
 		TypeID: b.addType(pkg, object.Type()), Exported: object.Exported(),
 		MethodSetOwnerSymbolID: ownerSymbolID, MethodSetPointer: pointer,
-	})
-	return id
+		MethodOriginSymbolID:     b.addObject(pkg, object, SourceSpan{}),
+		MethodSelectionIndexPath: append([]int{}, selection.Index()...),
+	}
+	record.ID = methodSetSymbolID(record)
+	if b.seenSymbols[record.ID] {
+		return record.ID
+	}
+	b.seenSymbols[record.ID] = true
+	appendInventoryRecord(b, &b.analysis.Symbols, record)
+	return record.ID
 }
 
 func (b *inventoryBuilder) addObjectWithFallback(pkg *packages.Package, object types.Object, declaration SourceSpan, fallback string) string {
@@ -2744,9 +2759,26 @@ func (b *inventoryBuilder) addObjectWithFallback(pkg *packages.Package, object t
 		return id
 	}
 	b.seenSymbols[id] = true
+	packageScopePackageID := ""
+	if object.Pkg() != nil {
+		if object.Pkg().Path() == pkg.PkgPath {
+			packageScopePackageID = b.packageIDs[pkg]
+		} else {
+			packageScopePackageID = b.packagePathIDs[object.Pkg().Path()]
+		}
+	}
 	record := SymbolRecord{
 		ID: id, PackageID: pkgID, Name: object.Name(), Kind: objectKind(object),
 		TypeID: b.addType(pkg, object.Type()), Exported: object.Exported(),
+		PackageScopeType: objectKind(object) == "type" && object.Pkg() != nil &&
+			object.Parent() == object.Pkg().Scope() && packageScopePackageID == pkgID,
+	}
+	if function, ok := object.(*types.Func); ok {
+		if owner := b.memberOwner[function]; owner != nil {
+			record.MethodDeclarationOwnerID = b.addObject(pkg, owner, SourceSpan{})
+			record.MethodDeclarationPointer = methodReceiverPointer(function)
+			record.MethodDeclarationIndex = b.memberIndex[object]
+		}
 	}
 	if declaration.Path != "" {
 		record.Declaration = &declaration
@@ -2774,6 +2806,16 @@ func (b *inventoryBuilder) indexDeclaredMembers(loaded []*packages.Package) {
 		case *types.Pointer:
 			indexType(pkg, value.Elem())
 		case *types.Alias:
+			if underlying, ok := value.Rhs().(*types.Interface); ok {
+				underlying.Complete()
+				owner := b.typeIdentity(pkg, value)
+				for i := 0; i < underlying.NumExplicitMethods(); i++ {
+					method := underlying.ExplicitMethod(i).Origin()
+					b.memberIdentity[method] = owner + "\x00interface-method\x00" + strconv.Itoa(i)
+					b.memberIndex[method] = i
+					b.memberOwner[method] = value.Obj()
+				}
+			}
 			indexType(pkg, value.Origin().Rhs())
 		case *types.Named:
 			value = value.Origin()
@@ -2785,7 +2827,10 @@ func (b *inventoryBuilder) indexDeclaredMembers(loaded []*packages.Package) {
 			for i := 0; i < value.NumMethods(); i++ {
 				method := value.Method(i).Origin()
 				b.memberIdentity[method] = owner + "\x00method\x00" + strconv.Itoa(i)
+				b.memberIndex[method] = i
+				b.memberOwner[method] = value.Obj()
 			}
+
 			switch underlying := value.Underlying().(type) {
 			case *types.Struct:
 				for i := 0; i < underlying.NumFields(); i++ {
@@ -2800,6 +2845,8 @@ func (b *inventoryBuilder) indexDeclaredMembers(loaded []*packages.Package) {
 				for i := 0; i < underlying.NumExplicitMethods(); i++ {
 					method := underlying.ExplicitMethod(i).Origin()
 					b.memberIdentity[method] = owner + "\x00interface-method\x00" + strconv.Itoa(i)
+					b.memberIndex[method] = i
+					b.memberOwner[method] = value.Obj()
 				}
 				for i := 0; i < underlying.NumEmbeddeds(); i++ {
 					indexType(pkg, underlying.EmbeddedType(i))
@@ -2817,6 +2864,15 @@ func (b *inventoryBuilder) indexDeclaredMembers(loaded []*packages.Package) {
 			}
 		}
 	}
+}
+
+func methodReceiverPointer(function *types.Func) bool {
+	signature, ok := function.Type().(*types.Signature)
+	if !ok || signature.Recv() == nil {
+		return false
+	}
+	_, pointer := signature.Recv().Type().(*types.Pointer)
+	return pointer
 }
 
 func (b *inventoryBuilder) addModule(module *packages.Module) (string, error) {
@@ -3049,11 +3105,18 @@ func (b *inventoryBuilder) addTypeForUnknown(t types.Type) string {
 	if !b.seenTypes[id] {
 		b.seenTypes[id] = true
 		pkgPath, name, alias, named, _, underlying := typeDetails(t)
-		appendInventoryRecord(b, &b.analysis.Types, TypeRecord{
+		record := TypeRecord{
 			ID: id, Kind: typeKind(t), Canonical: canonical, Display: display,
 			Package: pkgPath, Name: name, Alias: alias, Named: named,
 			Underlying: underlying, Comparable: types.Comparable(t), Size: -1, Align: -1,
-		})
+		}
+		switch value := t.(type) {
+		case *types.Alias:
+			record.AliasTargetTypeID = b.addTypeForUnknown(value.Rhs())
+		case *types.Pointer:
+			record.ElementTypeID = b.addTypeForUnknown(value.Elem())
+		}
+		appendInventoryRecord(b, &b.analysis.Types, record)
 	}
 	return id
 }

@@ -7,9 +7,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	pathpkg "path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -220,6 +224,12 @@ func validateAnalysis(a Analysis) error {
 		if err := requireMany(value.ID, "typeArgs", value.TypeArgs, "type"); err != nil {
 			return err
 		}
+		if err := require(value.ID, "elementTypeId", value.ElementTypeID, "type"); err != nil {
+			return err
+		}
+		if err := require(value.ID, "aliasTargetTypeId", value.AliasTargetTypeID, "type"); err != nil {
+			return err
+		}
 		for _, field := range value.Fields {
 			if err := require(value.ID, "fields.typeId", field.TypeID, "type"); err != nil {
 				return err
@@ -232,6 +242,15 @@ func validateAnalysis(a Analysis) error {
 		}
 		if err := require(value.ID, "typeId", value.TypeID, "type"); err != nil {
 			return err
+		}
+		for field, id := range map[string]string{
+			"methodDeclarationOwnerId": value.MethodDeclarationOwnerID,
+			"methodSetOwnerSymbolId":   value.MethodSetOwnerSymbolID,
+			"methodOriginSymbolId":     value.MethodOriginSymbolID,
+		} {
+			if err := require(value.ID, field, id, "symbol"); err != nil {
+				return err
+			}
 		}
 	}
 	for _, value := range a.Nodes {
@@ -480,6 +499,13 @@ func validateRecordIDs(a Analysis) error {
 	for _, value := range a.Types {
 		if err := check("type", value.ID, typeRecordID(semanticProfileID, value)); err != nil {
 			return err
+		}
+	}
+	for _, value := range a.Symbols {
+		if value.MethodSetOwnerSymbolID != "" {
+			if err := check("symbol", value.ID, methodSetSymbolID(value)); err != nil {
+				return err
+			}
 		}
 	}
 	for _, value := range a.Nodes {
@@ -740,6 +766,12 @@ func validateRecordFields(a Analysis) error {
 			value.TypeArgs == nil || value.Fields == nil {
 			return fmt.Errorf("type %q has invalid required fields", value.ID)
 		}
+		if (value.Kind == "pointer") != (value.ElementTypeID != "") ||
+			value.Alias != (value.AliasTargetTypeID != "") ||
+			value.Alias != (value.Kind == "alias") {
+			return fmt.Errorf("type %q has inconsistent element or alias target provenance: kind=%q alias=%v element=%q target=%q",
+				value.ID, value.Kind, value.Alias, value.ElementTypeID, value.AliasTargetTypeID)
+		}
 		for index, field := range value.Fields {
 			if field.Name == "" || field.TypeID == "" {
 				return fmt.Errorf("type %q struct field %d has invalid required fields", value.ID, index)
@@ -754,6 +786,27 @@ func validateRecordFields(a Analysis) error {
 	for _, value := range a.Symbols {
 		if value.ID == "" || value.PackageID == "" || value.Name == "" || value.Kind == "" {
 			return fmt.Errorf("symbol %q has invalid required fields", value.ID)
+		}
+		membership := value.MethodSetOwnerSymbolID != ""
+		if membership != (value.MethodOriginSymbolID != "") ||
+			membership != (value.MethodSelectionIndexPath != nil) ||
+			(membership && (value.Kind != "function" || len(value.MethodSelectionIndexPath) == 0 ||
+				value.PackageScopeType || value.MethodDeclarationOwnerID != "")) ||
+			(!membership && value.MethodSetPointer) {
+			return fmt.Errorf("symbol %q has inconsistent method-set membership provenance", value.ID)
+		}
+		declaration := value.MethodDeclarationOwnerID != ""
+		if (declaration && (value.Kind != "function" ||
+			value.MethodDeclarationIndex < 0 || value.PackageScopeType)) ||
+			(!declaration && (value.MethodDeclarationPointer || value.MethodDeclarationIndex != 0)) {
+			return fmt.Errorf("symbol %q has inconsistent method declaration provenance: name=%q kind=%q owner=%q index=%d",
+				value.ID, value.Name, value.Kind, value.MethodDeclarationOwnerID, value.MethodDeclarationIndex)
+		}
+		if value.PackageScopeType && value.Kind != "type" {
+			return fmt.Errorf("symbol %q has inconsistent package-scope type provenance", value.ID)
+		}
+		if value.MethodSetOwner && !value.PackageScopeType {
+			return fmt.Errorf("symbol %q has inconsistent method-set owner eligibility", value.ID)
 		}
 		if value.Declaration != nil {
 			if err := validateSourceSpan(*value.Declaration, value.ID+".declaration"); err != nil {
@@ -881,6 +934,7 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 	packages := make(map[string]PackageRecord, len(a.Packages))
 	files := make(map[string]FileRecord, len(a.Files))
 	nodes := make(map[string]NodeRecord, len(a.Nodes))
+	typesByID := make(map[string]TypeRecord, len(a.Types))
 	symbols := make(map[string]SymbolRecord, len(a.Symbols))
 	packagePaths := make(map[string]bool, len(a.Packages))
 	fileListings := map[string]map[string]int{}
@@ -908,6 +962,9 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 			}
 		}
 		compiledFileListings[pkg.ID] = compiled
+	}
+	for _, record := range a.Types {
+		typesByID[record.ID] = record
 	}
 	for _, file := range a.Files {
 		if _, ok := packages[file.PackageID]; !ok {
@@ -980,23 +1037,63 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 		}
 		symbols[symbol.ID] = symbol
 	}
+	declarations, err := indexSourceDeclarations(a.Files, packages)
+	if err != nil {
+		return err
+	}
+	packageTypes := map[string]SymbolRecord{}
 	for _, symbol := range a.Symbols {
-		if symbol.MethodSetOwnerSymbolID == "" {
+		if symbol.Declaration == nil || !packages[symbol.PackageID].InventoryComplete {
 			continue
 		}
-		owner, ok := symbols[symbol.MethodSetOwnerSymbolID]
-		if !ok || symbol.Kind != "function" || owner.Kind != "type" ||
-			symbol.PackageID != owner.PackageID {
-			return fmt.Errorf("method-set symbol %q owner relationship is inconsistent", symbol.ID)
+		key := sourceDeclarationKey(symbol.PackageID, *symbol.Declaration)
+		typeDeclaration, isType := declarations.types[key]
+		methodDeclaration, isMethod := declarations.methods[key]
+		if symbol.PackageScopeType != isType {
+			return fmt.Errorf("symbol %q package-scope type provenance disagrees with source", symbol.ID)
+		}
+		if isType && (symbol.Kind != "type" || symbol.Name != typeDeclaration.name) {
+			return fmt.Errorf("symbol %q package-scope type declaration is inconsistent", symbol.ID)
+		}
+		if isType && packages[symbol.PackageID].InventoryComplete && !symbol.MethodSetOwner {
+			return fmt.Errorf("symbol %q source-backed package-scope type lacks method-set ownership", symbol.ID)
+		}
+		if (symbol.MethodDeclarationOwnerID != "") != isMethod {
+			return fmt.Errorf("symbol %q method declaration provenance disagrees with source", symbol.ID)
+		}
+		if !isMethod {
+			continue
+		}
+		owner, ok := symbols[symbol.MethodDeclarationOwnerID]
+		if !ok || owner.PackageID != symbol.PackageID || !owner.PackageScopeType ||
+			owner.Name != methodDeclaration.ownerName ||
+			symbol.Name != methodDeclaration.name ||
+			symbol.MethodDeclarationPointer != methodDeclaration.pointer {
+			return fmt.Errorf("symbol %q method declaration relationship is inconsistent", symbol.ID)
 		}
 	}
+	for _, symbol := range a.Symbols {
+		if symbol.PackageScopeType {
+			packageTypes[symbol.PackageID+"\x00"+symbol.Name] = symbol
+		}
+	}
+	if err := validateDeclaredMethodIndexes(a.Symbols); err != nil {
+		return err
+	}
+	methodSets := map[string]map[bool]int{}
+	membershipReferences := map[string]int{}
 	for _, methodSet := range a.MethodSets {
 		owner, ok := symbols[methodSet.OwnerSymbolID]
-		if !ok || owner.PackageID != methodSet.PackageID ||
+		if !ok || owner.PackageID != methodSet.PackageID || !owner.MethodSetOwner ||
 			owner.Kind != "type" || owner.TypeID != methodSet.TypeID {
 			return fmt.Errorf("method set %q owner symbol relationship is inconsistent", methodSet.ID)
 		}
+		if methodSets[owner.ID] == nil {
+			methodSets[owner.ID] = map[bool]int{}
+		}
+		methodSets[owner.ID][methodSet.Pointer]++
 		for _, methodSymbolID := range methodSet.MethodSymbolIDs {
+			membershipReferences[methodSymbolID]++
 			method, ok := symbols[methodSymbolID]
 			if !ok || method.PackageID != methodSet.PackageID ||
 				method.Kind != "function" || method.TypeID == "" ||
@@ -1005,6 +1102,33 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 				return fmt.Errorf("method set %q method symbol %q membership is inconsistent",
 					methodSet.ID, methodSymbolID)
 			}
+			origin, ok := symbols[method.MethodOriginSymbolID]
+			if !ok || origin.MethodDeclarationOwnerID == "" || origin.Declaration == nil ||
+				method.Name != origin.Name || method.TypeID != origin.TypeID ||
+				method.Exported != origin.Exported {
+				return fmt.Errorf("method set %q method symbol %q origin is inconsistent",
+					methodSet.ID, methodSymbolID)
+			}
+			if err := validateMethodSelection(
+				methodSet, method, origin, symbols, typesByID, packages, packageTypes, declarations,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	for _, symbol := range a.Symbols {
+		if symbol.MethodSetOwnerSymbolID != "" && membershipReferences[symbol.ID] != 1 {
+			return fmt.Errorf("method-set symbol %q requires exactly one reverse reference; found %d",
+				symbol.ID, membershipReferences[symbol.ID])
+		}
+	}
+	for _, symbol := range a.Symbols {
+		pkg := packages[symbol.PackageID]
+		if !symbol.MethodSetOwner || !pkg.InventoryComplete {
+			continue
+		}
+		if methodSets[symbol.ID][false] != 1 || methodSets[symbol.ID][true] != 1 {
+			return fmt.Errorf("package-scope type symbol %q requires complete value and pointer method sets", symbol.ID)
 		}
 	}
 	for _, node := range a.Nodes {
@@ -1153,6 +1277,496 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 		}
 	}
 	return nil
+}
+
+type sourceTypeReference struct {
+	name      string
+	qualifier string
+	pointer   bool
+}
+
+type sourceFieldDeclaration struct {
+	name      string
+	embedded  bool
+	reference sourceTypeReference
+}
+
+type sourceTypeDeclaration struct {
+	name            string
+	kind            string
+	alias           bool
+	target          sourceTypeReference
+	fields          []sourceFieldDeclaration
+	interfaceEmbeds []sourceTypeReference
+	imports         map[string]string
+	dotImports      map[string]bool
+}
+
+type sourceMethodDeclaration struct {
+	name      string
+	ownerName string
+	pointer   bool
+}
+
+type sourceDeclarationIndex struct {
+	types   map[string]sourceTypeDeclaration
+	methods map[string]sourceMethodDeclaration
+}
+
+func sourceDeclarationKey(packageID string, span SourceSpan) string {
+	return packageID + "\x00" + span.Path + "\x00" +
+		strconv.Itoa(span.StartByte) + ":" + strconv.Itoa(span.EndByte)
+}
+
+func sourceOffsetKey(packageID, path string, file *token.File, start, end token.Pos) string {
+	return packageID + "\x00" + path + "\x00" +
+		strconv.Itoa(file.Offset(start)) + ":" + strconv.Itoa(file.Offset(end))
+}
+
+func indexSourceDeclarations(
+	files []FileRecord,
+	packages map[string]PackageRecord,
+) (sourceDeclarationIndex, error) {
+	result := sourceDeclarationIndex{
+		types:   map[string]sourceTypeDeclaration{},
+		methods: map[string]sourceMethodDeclaration{},
+	}
+	packageNames := map[string]string{}
+	for _, pkg := range packages {
+		if packageNames[pkg.ImportPath] == "" || pkg.Variant == "ordinary" {
+			packageNames[pkg.ImportPath] = pkg.Name
+		}
+	}
+	for _, record := range files {
+		if record.Role != "compiled" || !packages[record.PackageID].InventoryComplete {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(record.ContentBase64)
+		if err != nil {
+			return result, fmt.Errorf("cannot decode source declarations from file %q", record.ID)
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, record.Path, data, parser.SkipObjectResolution)
+		if err != nil {
+			return result, fmt.Errorf("cannot parse source declarations from file %q: %w", record.ID, err)
+		}
+		tokenFile := fset.File(file.Pos())
+		imports, dotImports := sourceImports(file, packageNames)
+		for _, declaration := range file.Decls {
+			switch value := declaration.(type) {
+			case *ast.GenDecl:
+				if value.Tok != token.TYPE {
+					continue
+				}
+				for _, raw := range value.Specs {
+					specification, ok := raw.(*ast.TypeSpec)
+					if !ok {
+						continue
+					}
+					typeDeclaration := sourceTypeDeclaration{
+						name: specification.Name.Name, alias: specification.Assign.IsValid(),
+						imports: imports, dotImports: dotImports,
+					}
+					typeDeclaration.target, _ = sourceTypeReferenceFor(specification.Type)
+					switch declared := specification.Type.(type) {
+					case *ast.StructType:
+						typeDeclaration.kind = "struct"
+						typeDeclaration.fields = sourceStructFields(declared)
+					case *ast.InterfaceType:
+						typeDeclaration.kind = "interface"
+						for _, field := range declared.Methods.List {
+							if len(field.Names) == 0 {
+								if reference, ok := sourceTypeReferenceFor(field.Type); ok {
+									typeDeclaration.interfaceEmbeds = append(
+										typeDeclaration.interfaceEmbeds, reference)
+								}
+								continue
+							}
+							if _, ok := field.Type.(*ast.FuncType); !ok {
+								continue
+							}
+							for _, name := range field.Names {
+								key := sourceOffsetKey(record.PackageID, record.Path, tokenFile, name.Pos(), name.End())
+								result.methods[key] = sourceMethodDeclaration{
+									name: name.Name, ownerName: specification.Name.Name,
+								}
+							}
+						}
+					default:
+						typeDeclaration.kind = "reference"
+					}
+					key := sourceOffsetKey(
+						record.PackageID, record.Path, tokenFile,
+						specification.Name.Pos(), specification.Name.End(),
+					)
+					result.types[key] = typeDeclaration
+				}
+			case *ast.FuncDecl:
+				if value.Recv == nil || len(value.Recv.List) != 1 {
+					continue
+				}
+				receiver, ok := sourceTypeReferenceFor(value.Recv.List[0].Type)
+				if !ok {
+					continue
+				}
+				key := sourceOffsetKey(record.PackageID, record.Path, tokenFile, value.Name.Pos(), value.Name.End())
+				result.methods[key] = sourceMethodDeclaration{
+					name: value.Name.Name, ownerName: receiver.name, pointer: receiver.pointer,
+				}
+			}
+		}
+	}
+	return result, nil
+}
+
+func sourceImports(file *ast.File, packageNames map[string]string) (map[string]string, map[string]bool) {
+	imports := map[string]string{}
+	dotImports := map[string]bool{}
+	for _, specification := range file.Imports {
+		importPath, err := strconv.Unquote(specification.Path.Value)
+		if err != nil {
+			continue
+		}
+		name := packageNames[importPath]
+		if name == "" {
+			name = pathpkg.Base(importPath)
+		}
+		if specification.Name != nil {
+			name = specification.Name.Name
+		}
+		switch name {
+		case "_":
+			continue
+		case ".":
+			dotImports[importPath] = true
+		default:
+			imports[name] = importPath
+		}
+	}
+	return imports, dotImports
+}
+
+func sourceStructFields(structure *ast.StructType) []sourceFieldDeclaration {
+	var result []sourceFieldDeclaration
+	for _, field := range structure.Fields.List {
+		reference, _ := sourceTypeReferenceFor(field.Type)
+		if len(field.Names) == 0 {
+			result = append(result, sourceFieldDeclaration{embedded: true, reference: reference})
+			continue
+		}
+		for _, name := range field.Names {
+			result = append(result, sourceFieldDeclaration{name: name.Name, reference: reference})
+		}
+	}
+	return result
+}
+
+func sourceTypeReferenceFor(expression ast.Expr) (sourceTypeReference, bool) {
+	result := sourceTypeReference{}
+	for {
+		switch value := expression.(type) {
+		case *ast.ParenExpr:
+			expression = value.X
+		case *ast.StarExpr:
+			if result.pointer {
+				return sourceTypeReference{}, false
+			}
+			result.pointer = true
+			expression = value.X
+		case *ast.IndexExpr:
+			expression = value.X
+		case *ast.IndexListExpr:
+			expression = value.X
+		case *ast.Ident:
+			result.name = value.Name
+			return result, true
+		case *ast.SelectorExpr:
+			qualifier, ok := value.X.(*ast.Ident)
+			if !ok {
+				return sourceTypeReference{}, false
+			}
+			result.qualifier = qualifier.Name
+			result.name = value.Sel.Name
+			return result, true
+		default:
+			return sourceTypeReference{}, false
+		}
+	}
+}
+
+func validateDeclaredMethodIndexes(symbols []SymbolRecord) error {
+	indexes := map[string]map[int]string{}
+	for _, symbol := range symbols {
+		if symbol.MethodDeclarationOwnerID == "" {
+			continue
+		}
+		if indexes[symbol.MethodDeclarationOwnerID] == nil {
+			indexes[symbol.MethodDeclarationOwnerID] = map[int]string{}
+		}
+		if existing := indexes[symbol.MethodDeclarationOwnerID][symbol.MethodDeclarationIndex]; existing != "" {
+			return fmt.Errorf("method declarations %q and %q share owner index %d",
+				existing, symbol.ID, symbol.MethodDeclarationIndex)
+		}
+		indexes[symbol.MethodDeclarationOwnerID][symbol.MethodDeclarationIndex] = symbol.ID
+	}
+	return nil
+}
+
+func validateMethodSelection(
+	methodSet MethodSetRecord,
+	method SymbolRecord,
+	origin SymbolRecord,
+	symbols map[string]SymbolRecord,
+	typesByID map[string]TypeRecord,
+	packages map[string]PackageRecord,
+	packageTypes map[string]SymbolRecord,
+	declarations sourceDeclarationIndex,
+) error {
+	owner := symbols[methodSet.OwnerSymbolID]
+	pointerEligible := methodSet.Pointer
+	var err error
+	owner, pointerEligible, err = resolveMethodOwner(
+		owner, pointerEligible, symbols, typesByID, packages, packageTypes, declarations)
+	if err != nil {
+		return fmt.Errorf("method-set symbol %q selection is inconsistent: %w", method.ID, err)
+	}
+	indexPath := method.MethodSelectionIndexPath
+	for _, fieldIndex := range indexPath[:len(indexPath)-1] {
+		typeRecord := typesByID[owner.TypeID]
+		if fieldIndex < 0 || fieldIndex >= len(typeRecord.Fields) {
+			return fmt.Errorf("method-set symbol %q selection field index %d is out of range", method.ID, fieldIndex)
+		}
+		field := typeRecord.Fields[fieldIndex]
+		if !field.Embedded {
+			return fmt.Errorf("method-set symbol %q selection field index %d is not embedded", method.ID, fieldIndex)
+		}
+		if owner.Declaration != nil {
+			if declaration, ok := declarations.types[sourceDeclarationKey(owner.PackageID, *owner.Declaration)]; ok &&
+				declaration.kind == "struct" {
+				if fieldIndex >= len(declaration.fields) ||
+					!declaration.fields[fieldIndex].embedded ||
+					!sourceReferenceMatchesType(
+						declaration.fields[fieldIndex].reference, declaration,
+						packages[owner.PackageID], typesByID[field.TypeID], typesByID,
+					) {
+					return fmt.Errorf("method-set symbol %q promoted selection path disagrees with source", method.ID)
+				}
+			}
+		}
+		owner, pointerEligible, err = methodOwnerForType(
+			field.TypeID, owner.PackageID, pointerEligible,
+			symbols, typesByID, packages, packageTypes, declarations,
+		)
+		if err != nil {
+			return fmt.Errorf("method-set symbol %q promoted selection is inconsistent: %w", method.ID, err)
+		}
+	}
+	originOwner := symbols[origin.MethodDeclarationOwnerID]
+	if owner.ID != originOwner.ID {
+		reachable, reachErr := interfaceMethodOwnerReachable(
+			owner, originOwner, symbols, typesByID, packages, packageTypes, declarations, map[string]bool{})
+		if reachErr != nil {
+			return fmt.Errorf("method-set symbol %q interface selection is inconsistent: %w", method.ID, reachErr)
+		}
+		if !reachable {
+			return fmt.Errorf("method-set symbol %q selection reaches owner %q, not declaration owner %q",
+				method.ID, owner.ID, originOwner.ID)
+		}
+	}
+	ownerDeclaration := sourceTypeDeclaration{}
+	if originOwner.Declaration != nil {
+		ownerDeclaration = declarations.types[sourceDeclarationKey(originOwner.PackageID, *originOwner.Declaration)]
+	}
+	if ownerDeclaration.kind != "interface" &&
+		indexPath[len(indexPath)-1] != origin.MethodDeclarationIndex {
+		return fmt.Errorf("method-set symbol %q selection method index is inconsistent", method.ID)
+	}
+	if origin.MethodDeclarationPointer && !pointerEligible {
+		return fmt.Errorf("method-set symbol %q includes a pointer-only method in a value method set", method.ID)
+	}
+	return nil
+}
+
+func resolveMethodOwner(
+	owner SymbolRecord,
+	pointerEligible bool,
+	symbols map[string]SymbolRecord,
+	typesByID map[string]TypeRecord,
+	packages map[string]PackageRecord,
+	packageTypes map[string]SymbolRecord,
+	declarations sourceDeclarationIndex,
+) (SymbolRecord, bool, error) {
+	seen := map[string]bool{}
+	for {
+		record := typesByID[owner.TypeID]
+		if !record.Alias {
+			return owner, pointerEligible, nil
+		}
+		if seen[owner.ID] {
+			return SymbolRecord{}, pointerEligible, errors.New("alias owner cycle")
+		}
+		seen[owner.ID] = true
+		if owner.Declaration == nil {
+			return SymbolRecord{}, pointerEligible, errors.New("alias owner has no source declaration")
+		}
+		declaration := declarations.types[sourceDeclarationKey(owner.PackageID, *owner.Declaration)]
+		target := typesByID[record.AliasTargetTypeID]
+		if !declaration.alias ||
+			(declaration.kind == "reference" &&
+				!sourceReferenceMatchesType(declaration.target, declaration, packages[owner.PackageID], target, typesByID)) ||
+			(declaration.kind == "interface" && target.Kind != "interface") ||
+			(declaration.kind == "struct" && target.Kind != "struct") {
+			return SymbolRecord{}, pointerEligible, errors.New("alias target disagrees with source")
+		}
+		targetBase := target
+		for targetBase.Kind == "pointer" {
+			pointerEligible = true
+			targetBase = typesByID[targetBase.ElementTypeID]
+		}
+		if targetBase.Name == "" {
+			return owner, pointerEligible, nil
+		}
+		var err error
+		owner, pointerEligible, err = methodOwnerForType(
+			record.AliasTargetTypeID, owner.PackageID, pointerEligible,
+			symbols, typesByID, packages, packageTypes, declarations,
+		)
+		if err != nil {
+			return SymbolRecord{}, pointerEligible, err
+		}
+	}
+}
+
+func methodOwnerForType(
+	typeID, contextPackageID string,
+	pointerEligible bool,
+	symbols map[string]SymbolRecord,
+	typesByID map[string]TypeRecord,
+	packages map[string]PackageRecord,
+	packageTypes map[string]SymbolRecord,
+	declarations sourceDeclarationIndex,
+) (SymbolRecord, bool, error) {
+	record := typesByID[typeID]
+	for record.Kind == "pointer" {
+		pointerEligible = true
+		record = typesByID[record.ElementTypeID]
+	}
+	if record.Name == "" || record.Package == "" {
+		return SymbolRecord{}, pointerEligible, fmt.Errorf("type %q has no declared owner", typeID)
+	}
+	packageID := contextPackageID
+	if packages[packageID].ImportPath != record.Package {
+		packageID = ""
+		for id, pkg := range packages {
+			if pkg.ImportPath == record.Package &&
+				(packageID == "" || pkg.Variant == "ordinary") {
+				packageID = id
+				if pkg.Variant == "ordinary" {
+					break
+				}
+			}
+		}
+	}
+	owner := packageTypes[packageID+"\x00"+record.Name]
+	if owner.ID == "" {
+		return SymbolRecord{}, pointerEligible,
+			fmt.Errorf("type %q has no package-scope owner symbol", typeID)
+	}
+	return resolveMethodOwner(
+		owner, pointerEligible, symbols, typesByID, packages, packageTypes, declarations)
+}
+
+func sourceReferenceMatchesType(
+	reference sourceTypeReference,
+	declaration sourceTypeDeclaration,
+	pkg PackageRecord,
+	record TypeRecord,
+	typesByID map[string]TypeRecord,
+) bool {
+	pointer := false
+	for record.Kind == "pointer" {
+		pointer = true
+		record = typesByID[record.ElementTypeID]
+	}
+	if reference.name == "" || reference.name != record.Name || reference.pointer != pointer {
+		return false
+	}
+	if reference.qualifier != "" {
+		return declaration.imports[reference.qualifier] == record.Package
+	}
+	return record.Package == pkg.ImportPath || declaration.dotImports[record.Package]
+}
+
+func interfaceMethodOwnerReachable(
+	owner, target SymbolRecord,
+	symbols map[string]SymbolRecord,
+	typesByID map[string]TypeRecord,
+	packages map[string]PackageRecord,
+	packageTypes map[string]SymbolRecord,
+	declarations sourceDeclarationIndex,
+	seen map[string]bool,
+) (bool, error) {
+	if owner.ID == target.ID {
+		return true, nil
+	}
+	if seen[owner.ID] || owner.Declaration == nil {
+		return false, nil
+	}
+	seen[owner.ID] = true
+	declaration := declarations.types[sourceDeclarationKey(owner.PackageID, *owner.Declaration)]
+	if declaration.kind != "interface" {
+		return false, nil
+	}
+	for _, embedded := range declaration.interfaceEmbeds {
+		embeddedOwner := sourceReferenceOwner(embedded, declaration, owner.PackageID, packages, packageTypes)
+		if embeddedOwner.ID == "" {
+			return false, fmt.Errorf("interface owner %q has an unresolved embedded type", owner.ID)
+		}
+		resolved, _, err := resolveMethodOwner(
+			embeddedOwner, false, symbols, typesByID, packages, packageTypes, declarations)
+		if err != nil {
+			return false, err
+		}
+		if reachable, err := interfaceMethodOwnerReachable(
+			resolved, target, symbols, typesByID, packages, packageTypes, declarations, seen,
+		); err != nil || reachable {
+			return reachable, err
+		}
+	}
+	return false, nil
+}
+
+func sourceReferenceOwner(
+	reference sourceTypeReference,
+	declaration sourceTypeDeclaration,
+	contextPackageID string,
+	packages map[string]PackageRecord,
+	packageTypes map[string]SymbolRecord,
+) SymbolRecord {
+	packageID := contextPackageID
+	if reference.qualifier != "" {
+		importPath := declaration.imports[reference.qualifier]
+		packageID = ""
+		for id, pkg := range packages {
+			if pkg.ImportPath == importPath && (packageID == "" || pkg.Variant == "ordinary") {
+				packageID = id
+				if pkg.Variant == "ordinary" {
+					break
+				}
+			}
+		}
+	} else if packageTypes[packageID+"\x00"+reference.name].ID == "" {
+		for importPath := range declaration.dotImports {
+			for id, pkg := range packages {
+				if pkg.ImportPath == importPath && pkg.Variant == "ordinary" {
+					if owner := packageTypes[id+"\x00"+reference.name]; owner.ID != "" {
+						return owner
+					}
+				}
+			}
+		}
+	}
+	return packageTypes[packageID+"\x00"+reference.name]
 }
 
 func validateNodeTrees(fileOrder []string, nodesByFile map[string][]string, nodes map[string]NodeRecord) error {

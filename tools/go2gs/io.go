@@ -851,9 +851,12 @@ func validateAnalysisJSONShape(data []byte) error {
 		}},
 		{"types", []string{
 			"id", "kind", "canonical", "display", "alias", "named", "typeArgs",
-			"fields", "comparable", "size", "align",
+			"elementTypeId", "aliasTargetTypeId", "fields", "comparable", "size", "align",
 		}},
-		{"symbols", []string{"id", "packageId", "name", "kind", "exported", "methodSetPointer"}},
+		{"symbols", []string{
+			"id", "packageId", "name", "kind", "exported", "packageScopeType", "methodSetOwner",
+			"methodDeclarationPointer", "methodDeclarationIndex", "methodSetPointer",
+		}},
 		{"nodes", []string{
 			"id", "packageId", "fileId", "kind", "span", "addressable", "assignable",
 			"isType", "isValue", "isNil", "isBuiltin",

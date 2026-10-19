@@ -904,18 +904,28 @@ func selectionObjectIdentity(selection *types.Selection) string {
 	return "selection\x00" + canonicalTypeIdentity(selection.Recv()) + "\x00" + strings.Join(index, ".")
 }
 
-func methodSetObjects(t types.Type) []types.Object {
+func methodSetSelections(t types.Type) []*types.Selection {
 	set := types.NewMethodSet(t)
-	result := make([]types.Object, 0, set.Len())
+	result := make([]*types.Selection, 0, set.Len())
 	for i := 0; i < set.Len(); i++ {
-		result = append(result, set.At(i).Obj())
+		result = append(result, set.At(i))
 	}
 	sort.Slice(result, func(i, j int) bool {
-		left := result[i].Name() + "\x00" + canonicalType(result[i].Type())
-		right := result[j].Name() + "\x00" + canonicalType(result[j].Type())
+		left := result[i].Obj().Name() + "\x00" + canonicalType(result[i].Obj().Type()) +
+			"\x00" + selectionIndexKey(result[i].Index())
+		right := result[j].Obj().Name() + "\x00" + canonicalType(result[j].Obj().Type()) +
+			"\x00" + selectionIndexKey(result[j].Index())
 		return left < right
 	})
 	return result
+}
+
+func selectionIndexKey(index []int) string {
+	values := make([]string, len(index))
+	for i, value := range index {
+		values[i] = strconv.Itoa(value)
+	}
+	return strings.Join(values, ".")
 }
 
 func constantCategory(t types.Type) string {

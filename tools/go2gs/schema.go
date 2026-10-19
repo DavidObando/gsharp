@@ -198,21 +198,23 @@ type FileRecord struct {
 }
 
 type TypeRecord struct {
-	ID         string              `json:"id"`
-	Kind       string              `json:"kind"`
-	Canonical  string              `json:"canonical"`
-	Display    string              `json:"display"`
-	Package    string              `json:"package,omitempty"`
-	Name       string              `json:"name,omitempty"`
-	Alias      bool                `json:"alias"`
-	Named      bool                `json:"named"`
-	TypeArgs   []string            `json:"typeArgs"`
-	Underlying string              `json:"underlying,omitempty"`
-	Constraint string              `json:"constraint,omitempty"`
-	Fields     []StructFieldRecord `json:"fields"`
-	Comparable bool                `json:"comparable"`
-	Size       int64               `json:"size"`
-	Align      int64               `json:"align"`
+	ID                string              `json:"id"`
+	Kind              string              `json:"kind"`
+	Canonical         string              `json:"canonical"`
+	Display           string              `json:"display"`
+	Package           string              `json:"package,omitempty"`
+	Name              string              `json:"name,omitempty"`
+	Alias             bool                `json:"alias"`
+	Named             bool                `json:"named"`
+	TypeArgs          []string            `json:"typeArgs"`
+	Underlying        string              `json:"underlying,omitempty"`
+	Constraint        string              `json:"constraint,omitempty"`
+	ElementTypeID     string              `json:"elementTypeId"`
+	AliasTargetTypeID string              `json:"aliasTargetTypeId"`
+	Fields            []StructFieldRecord `json:"fields"`
+	Comparable        bool                `json:"comparable"`
+	Size              int64               `json:"size"`
+	Align             int64               `json:"align"`
 }
 
 type StructFieldRecord struct {
@@ -224,15 +226,22 @@ type StructFieldRecord struct {
 }
 
 type SymbolRecord struct {
-	ID                     string      `json:"id"`
-	PackageID              string      `json:"packageId"`
-	Name                   string      `json:"name"`
-	Kind                   string      `json:"kind"`
-	TypeID                 string      `json:"typeId,omitempty"`
-	Exported               bool        `json:"exported"`
-	Declaration            *SourceSpan `json:"declaration,omitempty"`
-	MethodSetOwnerSymbolID string      `json:"methodSetOwnerSymbolId,omitempty"`
-	MethodSetPointer       bool        `json:"methodSetPointer"`
+	ID                       string      `json:"id"`
+	PackageID                string      `json:"packageId"`
+	Name                     string      `json:"name"`
+	Kind                     string      `json:"kind"`
+	TypeID                   string      `json:"typeId,omitempty"`
+	Exported                 bool        `json:"exported"`
+	Declaration              *SourceSpan `json:"declaration,omitempty"`
+	PackageScopeType         bool        `json:"packageScopeType"`
+	MethodSetOwner           bool        `json:"methodSetOwner"`
+	MethodDeclarationOwnerID string      `json:"methodDeclarationOwnerId,omitempty"`
+	MethodDeclarationPointer bool        `json:"methodDeclarationPointer"`
+	MethodDeclarationIndex   int         `json:"methodDeclarationIndex"`
+	MethodSetOwnerSymbolID   string      `json:"methodSetOwnerSymbolId,omitempty"`
+	MethodSetPointer         bool        `json:"methodSetPointer"`
+	MethodOriginSymbolID     string      `json:"methodOriginSymbolId,omitempty"`
+	MethodSelectionIndexPath []int       `json:"methodSelectionIndexPath,omitempty"`
 }
 
 type NodeRecord struct {

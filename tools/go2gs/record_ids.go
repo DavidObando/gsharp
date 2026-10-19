@@ -92,6 +92,12 @@ func methodSetRecordID(value MethodSetRecord) string {
 		value.TypeID+"\x00"+strconv.FormatBool(value.Pointer))
 }
 
+func methodSetSymbolID(value SymbolRecord) string {
+	return stableID("symbol", value.PackageID+"\x00"+value.MethodSetOwnerSymbolID+"\x00"+
+		strconv.FormatBool(value.MethodSetPointer)+"\x00"+value.MethodOriginSymbolID+"\x00"+
+		selectionIndexKey(value.MethodSelectionIndexPath)+"\x00"+value.Name+"\x00"+value.TypeID)
+}
+
 func instanceRecordID(value InstanceRecord) string {
 	return stableID("instance", value.NodeID)
 }
