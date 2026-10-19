@@ -472,10 +472,12 @@ conversions, recursively through arrays and delegates. Both lower/upper
 validation and shared refinement checks use that constraint-domain conversion
 query; the original receiver term remains a separate fail-safe against changing
 G# argument rules. Nominal sealing does not make a variance-compatible array or
-delegate bound exact. Joint array upper bounds reuse the same compatibility
-query on their element bounds, retaining the actual array's fixed interface
-capabilities rather than inventing generic constructor slots. No array
-refinement vectors are enumerated.
+delegate bound exact. Array/interface obligations are projected jointly through
+an array shape over an existing metadata type-parameter slot; the ordinary shared
+bound solver checks its element bounds and actual implemented-interface shapes.
+This retains correlations between array bounds and interface arguments without
+inventing generic parameters or enumerating array refinement vectors. Array rank,
+SZ shape and fixed interface capabilities remain obligations of that shape.
 A nullable value-type lower bound cannot satisfy a nonnullable `struct`
 constraint; the probe uses the same nullable-value reader as declared-constraint
 validation, without excluding nullable arguments from `new()` constraints.

@@ -2342,6 +2342,28 @@ internal shared class ClrOverloadResolution {
         return false
     }
 
+    private func InferenceRefinementShape(type Type) Type? {
+        if !type.IsArray {
+            return if type.IsGenericType {
+                type.GetGenericTypeDefinition()
+            } else {
+                type
+            }
+        }
+        let contextObject = ResolveObjectInSameContext(type) ?? typeof(object)
+        let enumerable = contextObject.Assembly.GetType("System.Collections.Generic.IEnumerable`1")
+        if enumerable == nil {
+            return nil
+        }
+        // Reuse a same-context metadata slot for the array element equation.
+        let element = enumerable.GetGenericArguments()[0]
+        return if type.IsSZArray {
+            element.MakeArrayType()
+        } else {
+            element.MakeArrayType(type.GetArrayRank())
+        }
+    }
+
     private func InferenceUpperBoundsMayRefineTogether(
         bounds IReadOnlyList[Type],
         refinements Dictionary[string, bool]
@@ -2362,12 +2384,13 @@ internal shared class ClrOverloadResolution {
                         bound
                     }
                     if contract.IsInterface && !family.ContainsGenericParameters && family.IsSealed {
-                        let source = if InferenceBoundMayRefine(family) && family.IsGenericType {
-                            family.GetGenericTypeDefinition()
+                        let source = if InferenceBoundMayRefine(family) {
+                            InferenceRefinementShape(family)
                         } else {
                             family
                         }
-                        if !OpenExtensionReceiverStandardShapeMayApply(
+                        if source != nil &&
+                            !OpenExtensionReceiverStandardShapeMayApply(
                             source,
                             contract,
                             tupleElementConversions: false
@@ -2395,20 +2418,19 @@ internal shared class ClrOverloadResolution {
                     } else {
                         other
                     }
-                    if family.IsSealed &&
-                        (
-                        !InferenceBoundMayRefine(family) ||
+                    if family.IsSealed {
+                        if !InferenceBoundMayRefine(family) {
+                            return false
+                        }
+                        let source = InferenceRefinementShape(family)
+                        if source != nil &&
                             !OpenExtensionReceiverStandardShapeMayApply(
-                            if family.IsGenericType {
-                                family.GetGenericTypeDefinition()
-                            } else {
-                                family
-                            },
+                            source,
                             contract,
                             tupleElementConversions: false
-                        )
-                    ) {
-                        return false
+                        ) {
+                            return false
+                        }
                     }
                     continue
                 }
@@ -2424,53 +2446,59 @@ internal shared class ClrOverloadResolution {
                 }
             }
         }
-        let arrayElements = bounds
-            .Where((bound Type) -> bound.IsArray)
-            .Select((bound Type) -> bound.GetElementType())
-            .OfType[Type]()
-            .ToList()
-        if arrayElements.Count > 1 && !InferenceUpperBoundsMayRefineTogether(arrayElements, refinements) {
-            return false
-        }
         let families = HashSet[Type]()
         for bound in bounds {
-            if !bound.IsGenericType || !ClrTypeUtilities.IsDelegateType(bound) || !InferenceBoundMayRefine(bound) {
+            if (!bound.IsArray && (!bound.IsGenericType || !ClrTypeUtilities.IsDelegateType(bound))) ||
+                !InferenceBoundMayRefine(bound) {
                 continue
             }
-            let definition = bound.GetGenericTypeDefinition()
-            if !families.Add(definition) {
+            let definition = InferenceRefinementShape(bound)
+            if definition == nil || !families.Add(definition) {
                 continue
             }
             let terms = bounds
                 .Where(
-                (other Type) -> other.IsGenericType && ClrTypeUtilities.AreSame(
-                    definition,
-                    other.GetGenericTypeDefinition()
-                )
+                (other Type) -> if bound.IsArray {
+                    other.IsInterface ||
+                        other.IsArray &&
+                        other.IsSZArray == bound.IsSZArray &&
+                        other.GetArrayRank() == bound.GetArrayRank()
+                } else {
+                    other.IsGenericType && ClrTypeUtilities.AreSame(definition, other.GetGenericTypeDefinition())
+                }
             )
                 .Select((other Type) -> (definition, other, false))
                 .ToList()
             if terms.Count < 2 {
                 continue
             }
-            let key = string.Join(
+            let key = definition.ToString() + "\0" + string.Join(
                 "\0",
                 terms
                     .Select((term(Type, Type, bool)) -> term.Item2.AssemblyQualifiedName ?? term.Item2.ToString())
                     .Distinct(StringComparer.Ordinal)
                     .OrderBy((name string) -> name, StringComparer.Ordinal)
             )
-            if refinements.TryGetValue(key, out var cached) {
+            let cacheable = !bound.IsArray || terms.All(
+                (term(Type, Type, bool)) -> !term.Item2.ContainsGenericParameters
+            )
+            if cacheable && refinements.TryGetValue(key, out var cached) {
                 if !cached {
                     return false
                 }
                 continue
             }
-            let parameters = definition.GetGenericArguments()
+            let parameters = if definition.GetElementType() is {} element {
+                []Type{element}
+            } else {
+                definition.GetGenericArguments()
+            }
             // Variance relates constructions, not nominal subclasses. Reuse
             // the symbolic solver for all of the family's slot obligations.
             // Active recursive obligations remain unknown, not impossible.
-            refinements[key] = true
+            if cacheable {
+                refinements[key] = true
+            }
             let possible = ArgumentDependentBoundsMaySatisfyConstraints(
                 parameters,
                 parameters,
@@ -2479,7 +2507,9 @@ internal shared class ClrOverloadResolution {
                 nil,
                 refinements: refinements
             )
-            refinements[key] = possible
+            if cacheable {
+                refinements[key] = possible
+            }
             if !possible {
                 return false
             }

@@ -767,6 +767,8 @@ Console.WriteLine("${direct(Probe(7))} ${ternary(Probe(7))} ${expression(Probe(7
     @InlineData("System.Func<System.IO.Stream>,System.Func<System.Exception>", "where T : U")
     @InlineData("System.Action<int>,System.Action<long>", "where T : U")
     @InlineData("System.Action<string>,System.Func<object>", "where T : U")
+    @InlineData("System.Func<object[]>,System.Func<System.IDisposable>", "where T : U")
+    @InlineData("System.Func<int[]>,System.Func<System.Collections.Generic.IList<string>>", "where T : U")
     func Impossible_Joint_Receiver_Bounds_Preserve_Nullable_Storage(receiverArguments string, constraints string) {
         using let fixture = CSharpFixture(`namespace Fixture4986 {
     public class DerivedList<T> : System.Collections.Generic.List<T> {}
@@ -2467,6 +2469,18 @@ Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Prob
     @InlineData("System.Func<IFoo>", "System.Func<IBar>", "System.Func<Both>", 0)
     @InlineData("System.Func<IFoo>", "System.Func<IBar>", "System.Func<Both>", 12)
     @InlineData("IFoo[,]", "IBar[,]", "Both[,]", 0)
+    @InlineData(
+        "System.Func<object[]>",
+        "System.Func<System.Collections.Generic.IList<string>>",
+        "System.Func<string[]>",
+        0
+    )
+    @InlineData(
+        "System.Func<object[]>",
+        "System.Func<System.Collections.Generic.IEnumerable<string>>",
+        "System.Func<string[]>",
+        0
+    )
     func Variant_Reference_Upper_Bounds_Can_Refine_Together(first string, second string, common string, depth int32) {
         var first = first
         var second = second
