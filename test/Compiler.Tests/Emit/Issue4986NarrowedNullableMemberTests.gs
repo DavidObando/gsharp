@@ -1105,33 +1105,145 @@ Console.WriteLine("${ternary(7, fallback)} ${expression(7, fallback)} ${statemen
     }
 
     @Theory
-    @InlineData(false)
-    @InlineData(true)
-    func Fixed_Numeric_Bounds_Preserve_Boxing_Constraints(requiresReference bool) {
+    @InlineData(false, false, false)
+    @InlineData(false, true, false)
+    @InlineData(true, false, false)
+    @InlineData(true, true, false)
+    @InlineData(true, true, true)
+    func Fixed_Numeric_Bounds_Preserve_Boxing_Constraints(
+        requiresReference bool,
+        slotMentionsReceiver bool,
+        invariantReceiver bool
+    ) {
         let receiverConstraint = if requiresReference {
             "class, "
         } else {
             ""
         }
+        let parameters = if slotMentionsReceiver {
+            "IBounds<T,U,V> fallback"
+        } else {
+            "T fallback, U bound"
+        }
+        let fallbackType = if slotMentionsReceiver {
+            "Bounds"
+        } else {
+            "IComparable[int32]"
+        }
+        let fallbackValue = if slotMentionsReceiver {
+            "Bounds()"
+        } else {
+            "0"
+        }
+        let invocation = if slotMentionsReceiver {
+            "fallback"
+        } else {
+            "fallback, 0"
+        }
+        let receiverType = if invariantReceiver {
+            "IProbe<V>"
+        } else {
+            "V"
+        }
+        let type = if invariantReceiver {
+            "Probe"
+        } else {
+            "int32"
+        }
+        let value = if invariantReceiver {
+            "Probe()"
+        } else {
+            "7"
+        }
         using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public interface IProbe<V> {}
+    public struct Probe : IProbe<int> {}
+    public interface IBounds<T,U,V> {}
+    public sealed class Bounds : IBounds<System.IComparable<int>,int,int> {}
     public static class Extensions {
-        public static int GetValueOrDefault<T,U,V>(this V value, T fallback, U bound)
+        public static int GetValueOrDefault<T,U,V>(this ` + receiverType + ` value, ` + parameters + `)
             where V : struct, T where T : ` + receiverConstraint + `System.IComparable<U> where U : struct =>
                 typeof(V) == typeof(int) && typeof(T) == typeof(System.IComparable<int>) && typeof(U) == typeof(int) ? 99 : 98;
     }
 }`)
         let result = CompileAndRun(`import System
 import Fixture4986
-func ternary(n int32?, fallback IComparable[int32]) int32 -> n != nil ? n.GetValueOrDefault(fallback, 0) : 0
-func expression(n int32?, fallback IComparable[int32]) int32 -> if n != nil { n.GetValueOrDefault(fallback, 0) } else { 0 }
-func statement(n int32?, fallback IComparable[int32]) int32 {
-    if n != nil { return n.GetValueOrDefault(fallback, 0) }
+func direct(n ` + type + `, fallback ` + fallbackType + `) int32 -> n.GetValueOrDefault(` + invocation + `)
+func ternary(n ` + type + `?, fallback ` + fallbackType + `) int32 -> n != nil ? n.GetValueOrDefault(` + invocation + `) : 0
+func expression(n ` + type + `?, fallback ` + fallbackType + `) int32 -> if n != nil { n.GetValueOrDefault(` + invocation + `) } else { 0 }
+func statement(n ` + type + `?, fallback ` + fallbackType + `) int32 {
+    if n != nil { return n.GetValueOrDefault(` + invocation + `) }
     return 0
 }
-let fallback IComparable[int32] = 0
-Console.WriteLine("${ternary(7, fallback)} ${expression(7, fallback)} ${statement(7, fallback)} ${ternary(nil, fallback)} ${expression(nil, fallback)} ${statement(nil, fallback)}")
+let fallback ` + fallbackType + ` = ` + fallbackValue + `
+Console.WriteLine("${direct(` + value + `, fallback)} ${ternary(` + value + `, fallback)} ${expression(` + value + `, fallback)} ${statement(` + value + `, fallback)} ${ternary(nil, fallback)} ${expression(nil, fallback)} ${statement(nil, fallback)}")
 `, fixture.AssemblyPath)
-        Assert.Equal("99 99 99 0 0 0" + Environment.NewLine, result.Output)
+        Assert.Equal("99 99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData("IDisposable", false)
+    @InlineData("IComparable<U>", false)
+    @InlineData("IComparable<(long,long)>", true)
+    func Tuple_Promotions_Preserve_Constructor_And_Interface_Obligations(constraint string, compatible bool) {
+        let dependent = constraint == "IComparable<U>"
+        let typeParameters = if dependent {
+            "T,U"
+        } else {
+            "T"
+        }
+        let parameters = if dependent {
+            "IBounds<T,U> fallback"
+        } else {
+            "T fallback"
+        }
+        let constraints = if dependent {
+            "where T : struct, IComparable<U> where U : System.IO.Stream"
+        } else {
+            "where T : " +
+                (
+                if compatible {
+                    "struct, "
+                } else {
+                    ""
+                }
+            ) +
+                constraint
+        }
+        let fallback = if compatible {
+            "(int64(0), int64(0))"
+        } else {
+            "(0,0)"
+        }
+        let body = if compatible {
+            "typeof(T) == typeof((long,long)) ? (99,0) : (98,0)"
+        } else {
+            "(99,0)"
+        }
+        using let fixture = CSharpFixture(`using System;
+namespace Fixture4986 {
+    public interface IBounds<T,U> {}
+    public static class Extensions {
+        public static (int,int) GetValueOrDefault<` + typeParameters + `>(this T value, ` + parameters + `)
+            ` + constraints + ` => ` + body + `;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n (int32,int32)?) int32 -> n != nil ? n.GetValueOrDefault(` + fallback + `).Item1 : 0
+func expression(n (int32,int32)?) int32 -> if n != nil { n.GetValueOrDefault(` + fallback + `).Item1 } else { 0 }
+func statement(n (int32,int32)?) int32 {
+    if n != nil { return n.GetValueOrDefault(` + fallback + `).Item1 }
+    return 0
+}
+Console.WriteLine("${ternary((7,8))} ${expression((7,8))} ${statement((7,8))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        let expected = if compatible {
+            "99 99 99 0 0 0"
+        } else {
+            "7 7 7 0 0 0"
+        }
+        Assert.Equal(expected + Environment.NewLine, result.Output)
     }
 
     @Theory

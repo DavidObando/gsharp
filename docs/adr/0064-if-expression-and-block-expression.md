@@ -444,6 +444,13 @@ Selecting a numeric alternative contributes an exact bound while retaining the
 original receiver conversion. Strict identity/boxing constraints retain boxing
 but cannot become numeric promotions, and independent parameter domains remain
 factored rather than forming a Cartesian receiver completion.
+Tuple element promotion retains the tuple constructor's actual interface
+capabilities. The probe checks those capabilities with open constructor slots,
+propagates method-parameter equations recovered from their interfaces, and
+validates dependent constructor, value/reference and interface obligations.
+Closed slot obligations must also admit conversion of the original tuple's
+elements. It neither fixes the original element types nor enumerates their
+Cartesian product; unresolved constructor slots remain unknown.
 Inferring an element type cannot turn an `int32` receiver into a collection.
 Object- and collection-initializer suffixes are transparent to this name lookup:
 the original unbound head call still supplies the probe's argument shape.

@@ -2795,6 +2795,21 @@ internal shared class ClrOverloadResolution {
             }
             for var lowerIndex = 0; lowerIndex < lowerBounds.Count; lowerIndex++ {
                 let lower = lowerBounds[lowerIndex]
+                if lowerIndex >= fixedLowerCount && lower.IsGenericType && lower.FullName?.StartsWith(
+                    "System.ValueTuple`",
+                    StringComparison.Ordinal
+                ) == true &&
+                    !ExtensionReceiverTupleConstructorMayApply(
+                    lower,
+                    index,
+                    parameters,
+                    arguments,
+                    upperBounds,
+                    receiverTerms,
+                    choices
+                ) {
+                    return false
+                }
                 if upperBounds.Any(
                     (upper Type) -> if upper.ContainsGenericParameters {
                         !OpenExtensionReceiverStandardShapeMayApply(lower, upper, tupleElementConversions: false)
@@ -2916,6 +2931,147 @@ internal shared class ClrOverloadResolution {
                 receiverTerms,
                 refinements
             )
+        }
+        return true
+    }
+
+    private func ExtensionReceiverTupleConstructorMayApply(
+        source Type,
+        index int32,
+        parameters[]Type,
+        arguments[]Type,
+        upperBounds IReadOnlyList[Type],
+        receiverTerms IReadOnlyList[(Type, Type, bool)],
+        choices IReadOnlyDictionary[(Type, Type), Type]
+    ) bool {
+        let definition = source.GetGenericTypeDefinition()
+        for candidate in GetReceiverInferenceCarriers(definition) {
+            let slots = Dictionary[string, Type](StringComparer.Ordinal)
+            if !ExtensionReceiverConstructorObligationsMayApply(
+                candidate,
+                index,
+                parameters,
+                arguments,
+                upperBounds,
+                receiverTerms,
+                choices,
+                slots,
+                HashSet[(int32, Type)]()
+            ) {
+                continue
+            }
+            var promoted Type
+            try {
+                promoted = definition.MakeGenericType(
+                    definition
+                        .GetGenericArguments()
+                        .Select(
+                        (slot Type) -> if slots.TryGetValue(slot.Name, out var bound) {
+                            bound
+                        } else {
+                            slot
+                        }
+                    )
+                        .ToArray()
+                )
+            } catch (ex ArgumentException) {
+                continue
+            }
+            if OpenExtensionReceiverStandardShapeMayApply(source, promoted) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func ExtensionReceiverConstructorObligationsMayApply(
+        candidate Type,
+        index int32,
+        parameters[]Type,
+        arguments[]Type,
+        upperBounds IReadOnlyList[Type],
+        receiverTerms IReadOnlyList[(Type, Type, bool)],
+        choices IReadOnlyDictionary[(Type, Type), Type],
+        slots Dictionary[string, Type],
+        visited HashSet[(int32, Type)]
+    ) bool {
+        if !visited.Add((index, candidate)) {
+            return true
+        }
+        let special = parameters[index].GenericParameterAttributes & GenericParameterAttributes.SpecialConstraintMask
+        if (special & GenericParameterAttributes.ReferenceTypeConstraint) != 0 &&
+            candidate.IsValueType ||
+            (special & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 &&
+            (!candidate.IsValueType || NullableLifting.IsValueTypeNullableClr(candidate)) ||
+            (special & GenericParameterAttributes.DefaultConstructorConstraint) != 0 &&
+            !candidate.IsValueType &&
+            candidate.GetConstructor(Type.EmptyTypes) == nil {
+            return false
+        }
+        let possible = cast[[]Type](arguments.Clone())
+        possible[index] = candidate
+        let pending = Queue[Type](upperBounds.Concat(parameters[index].GetGenericParameterConstraints()))
+        let constraints = HashSet[Type]()
+        while pending.Count > 0 {
+            var constraint = pending.Dequeue()
+            for var i = 0; i < parameters.Length; i++ {
+                if !possible[i].IsGenericParameter {
+                    constraint = SubstituteClrType(constraint, parameters[i], possible[i])
+                }
+            }
+            if !constraints.Add(constraint) {
+                continue
+            }
+            if constraint.IsGenericParameter {
+                for inherited in constraint.GetGenericParameterConstraints() {
+                    pending.Enqueue(inherited)
+                }
+                EnqueueExtensionReceiverUpperBounds(constraint, parameters, possible, choices, receiverTerms, pending)
+                continue
+            }
+            if !OpenExtensionReceiverStandardShapeMayApply(candidate, constraint, tupleElementConversions: false) {
+                return false
+            }
+            if !constraint.IsGenericType {
+                continue
+            }
+            let shapes = GetExtensionReceiverGenericShapes(candidate, constraint.GetGenericTypeDefinition())
+            if shapes.Count != 1 {
+                continue
+            }
+            let shape = shapes[0]
+            if !constraint.ContainsGenericParameters {
+                if !InferExactExtensionReceiverTypeArguments(shape, constraint, slots) {
+                    return false
+                }
+                continue
+            }
+            let inferred = Dictionary[string, Type](StringComparer.Ordinal)
+            // Constructor slots stay unknown, but method-parameter equations
+            // recovered from the actual interface must retain their obligations.
+            InferExactExtensionReceiverTypeArguments(constraint, shape, inferred)
+            for var i = 0; i < parameters.Length; i++ {
+                if !inferred.TryGetValue(parameters[i].Name, out var bound) || bound.IsGenericParameter {
+                    continue
+                }
+                let lower = List[Type]()
+                let upper = List[Type]()
+                CollectFixedExtensionReceiverConstraintBounds(parameters, possible, i, lower, upper, choices)
+                CollectExtensionReceiverTermBounds(parameters, possible, i, receiverTerms, lower, upper, choices)
+                if !ExtensionReceiverConstructorObligationsMayApply(
+                    bound,
+                    i,
+                    parameters,
+                    possible,
+                    upper,
+                    receiverTerms,
+                    choices,
+                    slots,
+                    visited
+                ) {
+                    return false
+                }
+            }
         }
         return true
     }
