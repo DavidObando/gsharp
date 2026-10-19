@@ -1746,7 +1746,7 @@ class Lowerer : BoundTreeRewriter {
             }
         }
 
-        private func Flatten(statement BoundStatement) BoundBlockStatement {
+        internal func Flatten(statement BoundStatement) BoundBlockStatement {
             let builder = ImmutableArray.CreateBuilder[BoundStatement]()
             let stack = Stack[BoundStatement]()
             stack.Push(statement)

@@ -273,13 +273,24 @@ RECEIVER.Item1.MaybeValue ??= {
     owner.Selected = 1
     11
 }
-Console.WriteLine("${owner.Items[0].Item1.Stored} ${owner.Items[1].Item1.Stored} ${owner.Calls}")`.Replace(
-                "RECEIVER",
-                receiver
-            ), imported)
+Console.WriteLine("${owner.Items[0].Item1.Stored} ${owner.Items[1].Item1.Stored} ${owner.Calls}")
+owner.Selected = 0
+Console.WriteLine(Read(RECEIVER.Item1, {
+    if owner.Selected == 0 { owner.Selected = 1 }
+    0
+}))
+Console.WriteLine(owner.Calls)
+await Task.Yield()
+owner.Selected = 0
+let controlCopy = TupleOpaque5023.Borrower[Cell](RECEIVER.Item1, {
+    if owner.Selected == 0 { owner.Selected = 1 }
+    0
+})
+Console.WriteLine("${controlCopy.Value.Stored} ${owner.Calls}")
+await Task.Yield()`.Replace("RECEIVER", receiver), imported)
         let executable = fixture.Compile(ordered, "OpaqueTupleOrdered5023", true, "/r:" + contract)
         IlVerifier.Verify(executable, []string{contract})
-        Assert.Equal("1\n1\n2\n2\n2 3\n9 2 4\n11 2 5\n", fixture.Run(executable))
+        Assert.Equal("1\n1\n2\n2\n2 3\n9 2 4\n11 2 5\n11\n6\n11 7\n", fixture.Run(executable))
     }
 
     @Theory

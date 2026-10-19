@@ -38,6 +38,8 @@ import System.Reflection
 ///
 /// This pass runs after (cref:SpillSequenceSpiller) and before
 /// (cref:AsyncStateMachineTypeBuilder) in the async pipeline.
+/// Opaque borrowed addresses remain MoveNext locals only when the shared
+/// suspension-liveness analysis proves they do not cross a suspension.
 shared class RefInitializationHoister {
     private class Rewriter : BoundTreeRewriter {
         private let refLocals Dictionary[LocalVariableSymbol, BoundExpression]
@@ -54,7 +56,7 @@ shared class RefInitializationHoister {
             // recorded for use-site reconstruction.
             let local = node.Variable as LocalVariableSymbol
             let addressOf BoundAddressOfExpression? = node.Initializer as BoundAddressOfExpression
-            if local?.Type is ByRefTypeSymbol && addressOf != nil {
+            if local != nil && local.Type is ByRefTypeSymbol && addressOf != nil && refLocals.ContainsKey(local) {
                 let prelude = ImmutableArray.CreateBuilder[BoundStatement]()
                 let template = HoistOperand(addressOf.Operand, prelude, captureComponents: true)
                 if (
@@ -69,7 +71,7 @@ shared class RefInitializationHoister {
                         BoundExpressionStatement(node.Syntax, BoundAddressOfExpression(addressOf.Syntax, template))
                     )
                 }
-                refLocals[local!!] = template
+                refLocals[local] = template
                 return BoundBlockStatement(nil, prelude.ToImmutable())
             }
             return base.RewriteVariableDeclaration(node)
@@ -301,9 +303,9 @@ shared class RefInitializationHoister {
         }
     }
 
-    /// Rewrites [`body`](paramref) by eliminating all ref locals.
+    /// Rewrites [`body`](paramref) by reconstructing ref locals where possible.
     /// @param body The spilled async method body.
-    /// @returns The rewritten body with no ref local declarations or usages.
+    /// @returns The rewritten body, preserving opaque ref locals only within a suspension-free lifetime.
     func Rewrite(body BoundBlockStatement) BoundBlockStatement {
         // First pass: collect ref local declarations (we still need to know
         // which locals are ref so the rewriter can recognize their uses). The
@@ -311,6 +313,19 @@ shared class RefInitializationHoister {
         // site itself, where we also emit the hoisting prelude.
         let refLocals = Dictionary[LocalVariableSymbol, BoundExpression]()
         if !CollectRefLocals(body, refLocals) {
+            return body
+        }
+        let crossing = RefStructAsyncLivenessAnalyzer.FindLocalsLiveAcrossSuspension(
+            body,
+            refLocals.Keys.Cast[VariableSymbol]()
+        )
+        for local in refLocals.Keys.ToArray() {
+            if !crossing.Contains(local) && RefCapabilities.IsBorrowedLocation(refLocals[local]) {
+                // Keep an opaque address in a MoveNext local when no suspension needs it.
+                refLocals.Remove(local)
+            }
+        }
+        if refLocals.Count == 0 {
             return body
         }
         // Second pass: rewrite the tree. The rewriter replaces each ref local
