@@ -665,6 +665,75 @@ func Run(obj Holder) int32 {
         }
     }
 
+    @Theory
+    @InlineData("slice[string]", false)
+    @InlineData("slice[string]", true)
+    @InlineData("readonly slice[string]", false)
+    @InlineData("readonly slice[string]", true)
+    func Issue5035_NativeSliceIndex_PreservesSourcePropertyAndDefinition(nativeType string, chained bool) {
+        let source = `package Repro
+class Holder {
+    prop Items NATIVE_TYPE
+}
+func Run(h Holder, Items int32) string {
+    return h.Items[Items]CHAIN
+}
+`.Replace("NATIVE_TYPE", nativeType).Replace(
+            "CHAIN",
+            if chained {
+                ".ToString()"
+            } else {
+                ""
+            }
+        )
+        let root = Path.Combine(
+            Directory.GetCurrentDirectory(),
+            "out",
+            "issue5035-native-" + Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(root)
+        try {
+            let path = Path.Combine(root, "Consumer.gs")
+            File.WriteAllText(path, source)
+            let project = ProjectState(Path.Combine(root, "Consumer.gsproj"))
+            let runtime = Path.Combine(AppContext.BaseDirectory, "Gsharp.Runtime.Values.dll")
+            Assert.True(File.Exists(runtime), runtime)
+            project.References = []string{runtime}
+            let tree = project.UpdateFile(path, source)
+            let lines = Enumerable.Range(0, source.Length).Where((i int32) -> source[i] == '\n').ToList()
+            let content = DocumentContent(tree, lines, project, WorkspaceState())
+            let compilation = project.GetCompilation()
+            Assert.Empty(compilation.GlobalScope.Diagnostics)
+            Assert.Empty(compilation.BoundProgram.Diagnostics)
+            let position = LanguageServerTestHelpers.PositionOf(source, "Items[Items]")
+            let token = TokenAt(content, source, "Items[Items]", 0)
+            let index = Assert.IsType[IndexExpressionSyntax](token.Parent?.Parent)
+            let dereference = Assert.IsType[BoundDereferenceExpression](
+                compilation.GetSemanticModel(tree).GetBoundNode(index.Index)
+            )
+            let block = Assert.IsType[BoundBlockExpression](dereference.Operand)
+            Assert.IsType[BoundClrIndexExpression](block.Expression)
+            let declaration = TokenAt(content, source, "Items " + nativeType, 0)
+            let declared = Assert.IsAssignableFrom[PropertySymbol](BoundSemantics.GetSymbol(compilation, declaration))
+            Assert.Same(declared, BoundSemantics.GetSymbol(compilation, token))
+            AssertIndexedHover(content, position, "Items", "prop Items " + nativeType + " { get; set; }")
+            let uri = DocumentUri.FromFileSystemPath(path)!!
+            let location = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
+            let expected = LanguageServerTestHelpers.PositionOf(source, "Items " + nativeType)
+            Assert.Equal(uri, location.Uri)
+            AssertPosition(expected, location.Range.Start)
+            AssertPosition(Position(expected.Line, expected.Character + "Items".Length), location.Range.End)
+            let argument = TokenAt(content, source, "Items]", 0)
+            let parameter = Assert.IsAssignableFrom[ParameterSymbol](
+                SemanticLookup.ResolveSymbol(compilation, argument)
+            )
+            Assert.Equal(TypeSymbol.Int32, parameter.Type)
+            Assert.Same(BoundSemantics.GetSymbol(compilation, TokenAt(content, source, "Items int32", 0)), parameter)
+        } finally {
+            Directory.Delete(root, recursive: true)
+        }
+    }
+
     shared {
         private const IndexedSource string = `package Repro
 import System.Collections.Generic

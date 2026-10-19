@@ -258,16 +258,14 @@ shared class BoundSemantics {
         if model.GetBoundNode(expression) is BoundExpression anchored {
             return anchored
         }
-        // Index reads may retain the written range as their anchor. Use the
-        // same index-target reachability rule for native and CLR node families.
-        if TerminalSegment(expression) is IndexExpressionSyntax index &&
-            index
-            .Indices
-            .Count == 1 &&
-            index.Index is RangeExpressionSyntax rangeSyntax {
-            let ranged = model.GetBoundNode(rangeSyntax) as BoundExpression
-            if Unwrap(ranged) is {} read && IndexTargetOf(read) != nil {
-                return ranged
+        // Generated index plans can retain the written argument as their anchor.
+        // An ordinary argument requires capture provenance, unlike a range that
+        // can directly anchor a CLR index read.
+        if TerminalSegment(expression) is IndexExpressionSyntax index && index.Indices.Count == 1 {
+            let argumentAnchor = model.GetBoundNode(index.Index) as BoundExpression
+            if Unwrap(argumentAnchor) is {} read &&
+                IndexTargetOf(read, capturedOnly: index.Index is not RangeExpressionSyntax) != nil {
+                return argumentAnchor
             }
         }
         return nil
@@ -281,17 +279,21 @@ shared class BoundSemantics {
         return current
     }
 
-    // AutoDereferenceRefReturn adds no syntax step. Follow only its wrapped
-    // CLR index here, not an explicit dereference or an arbitrary operand.
-    private func IndexTargetOf(node BoundExpression) BoundExpression? -> switch node {
-        case index is BoundIndexExpression: index.Target
-        case index is BoundClrIndexExpression: index.Target
-        case BoundDereferenceExpression{
-            Operand: BoundClrIndexExpression index
-        } dereference when index.Type is ByRefTypeSymbol &&
-            IsSynthesizedWrapper(dereference, index): index.Target
+    // An implicit ref read adds no syntax step. Its operand must itself be a
+    // recognized index or guarded capture plan, never an arbitrary block.
+    private func IndexTargetOf(node BoundExpression, capturedOnly bool = false) BoundExpression? -> switch node {
+        case index is BoundIndexExpression when !capturedOnly: index.Target
+        case index is BoundClrIndexExpression when !capturedOnly: index.Target
+        case dereference is BoundDereferenceExpression when dereference
+            .Operand
+            .Type is ByRefTypeSymbol &&
+            IsSynthesizedWrapper(dereference, dereference.Operand): IndexTargetOf(dereference.Operand, capturedOnly)
         case block is BoundBlockExpression: CapturedIndexTarget(block)
-        default: ReceiverOf(node)
+        default: if capturedOnly {
+            default(BoundExpression?)
+        } else {
+            ReceiverOf(node)
+        }
     }
 
     private func CapturedIndexTarget(block BoundBlockExpression) BoundExpression? {
