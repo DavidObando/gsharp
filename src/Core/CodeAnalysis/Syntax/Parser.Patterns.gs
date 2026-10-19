@@ -25,6 +25,12 @@ open partial class Parser {
     private func ParseSwitchStatement() StatementSyntax {
         let switchKeyword = MatchToken(SyntaxKind.SwitchKeyword)
         let expression = ParseExpressionInBodyHeader()
+        return ParseSwitchStatementBody(switchKeyword, expression)
+    }
+
+    // Issue #4963: the body of a switch statement whose header has already been
+    // parsed (ParseStatement parses the header once, then decides the form).
+    private func ParseSwitchStatementBody(switchKeyword SyntaxToken, expression ExpressionSyntax) StatementSyntax {
         let openBrace = MatchToken(SyntaxKind.OpenBraceToken)
         let cases = ImmutableArray.CreateBuilder[SwitchCaseSyntax]()
         while Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken {
@@ -47,19 +53,26 @@ open partial class Parser {
             return SwitchCaseSyntax(syntaxTree, defaultKeyword, value: nil, whenKeyword: nil, $guard: nil, body)
         }
         let caseKeyword = MatchToken(SyntaxKind.CaseKeyword)
-        var value = ParsePattern(PatternParseContext.SwitchStatement)
-        // Issue #3501 A3: Go-style comma multi-pattern arms — `case 1, 2 { … }`.
-        // Each comma folds into the same disjunction node the `or` combinator
-        // produces (BindBinaryPattern treats any non-`and` operator as `or`),
-        // so downstream binding/emit need no changes.
-        while Current.Kind == SyntaxKind.CommaToken {
-            let comma = NextToken()
-            let next = ParsePattern(PatternParseContext.SwitchStatement)
-            value = BinaryPatternSyntax(syntaxTree, value, comma, next)
-        }
+        let value = ParseSwitchArmPattern(PatternParseContext.SwitchStatement)
         let (whenKeyword, guard_) = ParseOptionalWhenGuard(bodyFollows: true)
         let caseBody = ParseBlockStatement()
         return SwitchCaseSyntax(syntaxTree, caseKeyword, value, whenKeyword, guard_, caseBody)
+    }
+
+    // Issue #3501 A3 / issue #4963: the pattern list of a switch arm, shared by
+    // the statement form (`case 1, 2 { … }`) and the expression form
+    // (`case 1, 2: …`). Go-style comma multi-pattern arms fold each comma into
+    // the same disjunction node the `or` combinator produces
+    // (BindBinaryPattern treats any non-`and` operator as `or`), so downstream
+    // binding/emit need no changes and both forms mean the same thing.
+    private func ParseSwitchArmPattern(context PatternParseContext) PatternSyntax {
+        var value = ParsePattern(context)
+        while Current.Kind == SyntaxKind.CommaToken {
+            let comma = NextToken()
+            let next = ParsePattern(context)
+            value = BinaryPatternSyntax(syntaxTree, value, comma, next)
+        }
+        return value
     }
 
     // Issue #991: a contextual `when <bool-expr>` guard may follow the pattern
@@ -498,10 +511,13 @@ open partial class Parser {
                 next
                 .Kind
                 .GetBinaryOperatorPrecedence() != 0
+            // Issue #4963: a comma separates the patterns of a comma-arm list
+            // (`case string { Length: 1 }, string { Length: 2 }`) in both forms.
             case PatternParseContext.SwitchStatement: next.Kind == SyntaxKind.OpenBraceToken ||
+                next.Kind == SyntaxKind.CommaToken ||
                 (next.Kind == SyntaxKind.IdentifierToken && next.Text == "when")
             case PatternParseContext.SwitchExpression: (
-                next.Kind is SyntaxKind.ColonToken or SyntaxKind.RightArrowToken
+                next.Kind is SyntaxKind.ColonToken or SyntaxKind.RightArrowToken or SyntaxKind.CommaToken
             ) ||
                 (next.Kind == SyntaxKind.IdentifierToken && next.Text == "when")
             default: false

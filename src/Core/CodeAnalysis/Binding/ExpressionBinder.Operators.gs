@@ -789,7 +789,12 @@ internal partial class ExpressionBinder {
         this.binderCtx.DeferTargetlessConditional = false
         let diagMark = Diagnostics.Count
         // An if-expression in value position must have an else branch.
-        if syntax.ElseExpression == nil {
+        // Issue #4966 §2 (ADR-0202): where the value is discarded (`canBeVoid`:
+        // a void arrow body, a lambda body, an expression statement) there is
+        // no value to produce, so an `if` without `else` is the void `if`,
+        // exactly as the equivalent block body's if statement is.
+        let elseSyntax = syntax.ElseExpression
+        if elseSyntax == nil && !canBeVoid {
             Diagnostics.ReportIfExpressionMissingElse(syntax.IfKeyword.Location)
             return BoundErrorExpression(nil)
         }
@@ -833,6 +838,9 @@ internal partial class ExpressionBinder {
         deferOnFailure bool,
         diagMark int32
     ) BoundExpression {
+        // Issue #4966 (ADR-0202): nil only for the void `if` of a discarded
+        // position; BindIfExpression rejects it elsewhere (GS0276).
+        let elseSyntax = syntax.ElseExpression
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
         // Issue #2640: an if-expression branch observes the same nil-guard
         // narrowing as an if-statement. Otherwise a nullable hole can poison
@@ -866,7 +874,11 @@ internal partial class ExpressionBinder {
             return BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
         }
         let bindWhenFalse() -> BoundExpression = () -> {
-            return BindIfExpressionElseBranch(syntax.ElseExpression!!, canBeVoid, targetType)
+            return if elseSyntax == nil {
+                cast[BoundExpression](BoundLiteralExpression(syntax, value: 0, TypeSymbol.Void))
+            } else {
+                BindIfExpressionElseBranch(elseSyntax, canBeVoid, targetType)
+            }
         }
         let bindWhenTrueNarrowed() -> BoundExpression = () -> {
             return BindWithNarrowing(whenTrueNarrowing, bindWhenTrue)
@@ -878,6 +890,17 @@ internal partial class ExpressionBinder {
         var whenFalse = BindWithPatternVariables(patternWhenFalse, bindWhenFalseNarrowed)
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
             return BoundErrorExpression(nil)
+        }
+        if elseSyntax == nil || IsVoidInDiscardedPosition(canBeVoid, []BoundExpression{whenTrue, whenFalse}) {
+            // The void `if` (see above and IsVoidInDiscardedPosition): branch
+            // values, if any, are discarded like an if statement's.
+            return BoundConditionalExpression(
+                nil,
+                condition,
+                DiscardValue(whenTrue),
+                DiscardValue(whenFalse),
+                TypeSymbol.Void
+            )
         }
         TryAdaptConditionalIntegerLiteralArm(&whenTrue, &whenFalse)
         let resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
@@ -894,7 +917,7 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         let convertedTrue = ConvertConditionalBranch(syntax.ThenBlock.Location, whenTrue, resultType)
-        let convertedFalse = ConvertConditionalBranch(syntax.ElseExpression!!.Location, whenFalse, resultType)
+        let convertedFalse = ConvertConditionalBranch(elseSyntax.Location, whenFalse, resultType)
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
@@ -903,6 +926,89 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         return BoundConditionalExpression(nil, condition, convertedTrue, convertedFalse, resultType)
+    }
+
+    /// Issue #4966 (ADR-0202): the one rule for an if-, if-let- or
+    /// switch-expression in a position whose value may be discarded
+    /// ([`canBeVoid`](paramref): an expression statement, a void arrow body,
+    /// a lambda body). When any branch is void there is no common value, so
+    /// the construct is the void one — its statement form's meaning — and
+    /// the other branches' values are discarded. (Without this, `if c {
+    /// list.Remove(x) } else { list.Clear() }` in a void lambda reported
+    /// GS0263 although the identical if statement compiles.) Branches that
+    /// all produce values keep their common type, so a lambda whose body ends
+    /// in such an if/else still returns it (ADR-0128).
+    /// @param canBeVoid Whether the position may be void.
+    /// @param branches The bound branch values.
+    /// @returns `true` when the construct is the void one.
+    private func IsVoidInDiscardedPosition(canBeVoid bool, branches IEnumerable[BoundExpression]) bool {
+        if !canBeVoid {
+            return false
+        }
+        for branch in branches {
+            if branch.Type == TypeSymbol.Void {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Issue #4966 (ADR-0202): reports GS0362 for each unresolved bare
+    /// `default` placeholder that [`value`](paramref) yields — the value itself,
+    /// a block expression's tail, a conditional's branch or a switch arm, recursively.
+    /// @param value The value of a discarded position.
+    /// @returns `true` when any was reported.
+    private func ReportUnresolvedBareDefaults(value BoundExpression?) bool {
+        switch value {
+            case BoundDefaultExpression{
+                Type: var defaultType,
+                Syntax: DefaultExpressionSyntax bareDefault
+            } when defaultType ==
+            TypeSymbol.Error && bareDefault.TypeClause == nil {
+                Diagnostics.ReportBareDefaultNoTargetType(bareDefault.Location)
+                return true
+            }
+            case block is BoundBlockExpression {
+                return ReportUnresolvedBareDefaults(block.Expression)
+            }
+            case conditional is BoundConditionalExpression {
+                let inTrue = ReportUnresolvedBareDefaults(conditional.WhenTrue)
+                let inFalse = ReportUnresolvedBareDefaults(conditional.WhenFalse)
+                return inTrue || inFalse
+            }
+            case switchExpression is BoundSwitchExpression {
+                var reported = false
+                for arm in switchExpression.Arms {
+                    reported = ReportUnresolvedBareDefaults(arm.Result) || reported
+                }
+                return reported
+            }
+            default {
+                return false
+            }
+        }
+    }
+
+    /// Issue #4966 (ADR-0202): turns [`value`](paramref) into a void
+    /// expression for a position whose value is discarded (the void `if`, a
+    /// void switch-expression arm). A void or never-typed value is returned as
+    /// is; any other value is evaluated as an expression statement.
+    private func DiscardValue(value BoundExpression) BoundExpression {
+        // A bare `default` takes its type from a target, and a discarded
+        // position has none: report it rather than leave the untyped
+        // placeholder to the emitter (GS0362, as for any targetless `default`),
+        // also when it is the tail of a block or a branch inside the value.
+        if ReportUnresolvedBareDefaults(value) {
+            return BoundErrorExpression(nil)
+        }
+        if value.Type == TypeSymbol.Void || value.Type == TypeSymbol.Never || value.Type == TypeSymbol.Error {
+            return value
+        }
+        return BoundBlockExpression(
+            nil,
+            ImmutableArray.Create[BoundStatement](BoundExpressionStatement(nil, value)),
+            BoundLiteralExpression(nil, value: 0, TypeSymbol.Void)
+        )
     }
 
     /// Binds the else branch of an if-expression: either a nested if-expression
@@ -1012,17 +1118,26 @@ internal partial class ExpressionBinder {
         var boundExpression BoundExpression? = nil
         var result VariableSymbol? = nil
         let bindTrailingStatement() -> BoundStatement = () -> {
-            boundExpression = bindValue()
-            if boundExpression is BoundErrorExpression || boundExpression.Type == TypeSymbol.Void {
-                return BoundExpressionStatement(valueSyntax, boundExpression)
+            var value = bindValue()
+            // Cleanup replaces a tail with a result-local read. Diagnose an
+            // unresolved value before that replacement hides its defaults.
+            if value.Type == TypeSymbol.Error && ReportUnresolvedBareDefaults(value) {
+                value = BoundErrorExpression(nil)
             }
-            result = LocalVariableSymbol(
+            boundExpression = value
+            // Issue #4965 (ADR-0202): a `never` tail (every path exits) has no
+            // value to keep across the cleanup region either.
+            if value is BoundErrorExpression || value.Type == TypeSymbol.Void || value.Type == TypeSymbol.Never {
+                return BoundExpressionStatement(valueSyntax, value)
+            }
+            let resultVariable = LocalVariableSymbol(
                 "<blockResult${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
                 isReadOnly: true,
-                boundExpression.Type ?? TypeSymbol.Error
+                value.Type ?? TypeSymbol.Error
             )
-            $scope.TryDeclareVariable(result)
-            return BoundVariableDeclaration(valueSyntax, result, boundExpression)
+            result = resultVariable
+            $scope.TryDeclareVariable(resultVariable)
+            return BoundVariableDeclaration(valueSyntax, resultVariable, value)
         }
         let boundStatements = bindStatementList(statements, bindTrailingStatement)
         let resultExpression = if result != nil {
@@ -1031,6 +1146,10 @@ internal partial class ExpressionBinder {
             (
                 if boundExpression is BoundErrorExpression {
                     boundExpression
+                } else if boundExpression?.Type == TypeSymbol.Never {
+                    // The unreachable value after the exiting tail (see
+                    // BindValuelessBlockExpression).
+                    cast[BoundExpression](BoundThrowExpression(nil, BoundLiteralExpression(nil, value: nil)))
                 } else {
                     cast[BoundExpression](BoundLiteralExpression(valueSyntax, value: 0, TypeSymbol.Void))
                 }
@@ -1057,8 +1176,7 @@ internal partial class ExpressionBinder {
         preserveEmptyBlock bool
     ) BoundExpression {
         if syntax.Expression == nil {
-            Diagnostics.ReportBlockExpressionMissingTrailingExpression(syntax.CloseBraceToken.Location)
-            return BoundErrorExpression(nil)
+            return BindValuelessBlockExpression(syntax, canBeVoid)
         }
         // If there are no prefix statements, just bind the expression directly.
         if syntax.Statements.IsDefaultOrEmpty {
@@ -1091,6 +1209,39 @@ internal partial class ExpressionBinder {
             return boundExpression
         }
         return BoundBlockExpression(syntax, boundStatements, boundExpression)
+    }
+
+    /// Issue #4965 / #4966 (ADR-0202): binds a block expression that has no
+    /// trailing value. Two cases need no value, and they are the only ones:
+    ///
+    /// - The block's end is unreachable — it ends in `return`, `throw`,
+    ///   `rethrow`, `break`, `continue` or `goto` (see
+    ///   (cref:StatementBinder.BlockEndIsUnreachable)). Its type is then the
+    ///   bottom type `never`, exactly like a throw expression's, so it unifies
+    ///   with any sibling branch, arm or target type. Its never-produced value
+    ///   is an unreachable `throw nil` trap after the exiting statement, which
+    ///   every later stage already understands as a throw expression.
+    /// - The block is in a position whose value is discarded
+    ///   ([`canBeVoid`](paramref): an expression statement, a void arrow body,
+    ///   a lambda body), where it is a void block, as the equivalent block
+    ///   statement is.
+    ///
+    /// Anything else still reports GS0277.
+    private func BindValuelessBlockExpression(syntax BlockExpressionSyntax, canBeVoid bool) BoundExpression {
+        let statements = if syntax.Statements.IsDefaultOrEmpty {
+            ImmutableArray[BoundStatement].Empty
+        } else {
+            bindStatementList(syntax.Statements, nil)
+        }
+        if StatementBinder.BlockEndIsUnreachable(statements) {
+            let unreachableValue = BoundThrowExpression(nil, BoundLiteralExpression(nil, value: nil))
+            return BoundBlockExpression(syntax, statements, unreachableValue)
+        }
+        if canBeVoid {
+            return BoundBlockExpression(syntax, statements, BoundLiteralExpression(syntax, value: 0, TypeSymbol.Void))
+        }
+        Diagnostics.ReportBlockExpressionMissingTrailingExpression(syntax.CloseBraceToken.Location)
+        return BoundErrorExpression(nil)
     }
 
     private func BindInBlockExpressionScope(bind() -> BoundExpression) BoundExpression {

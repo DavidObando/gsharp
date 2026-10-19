@@ -1738,6 +1738,68 @@ internal partial class StatementBinder {
             base.VisitIndirectCallExpression(node)
         }
 
+        private func VisitPossiblySkipped(visit() -> void) {
+            // A skipped operand cannot erase an earlier callable target.
+            VisitAlternativePaths(() -> { }, visit)
+        }
+
+        private func VisitAlternativePaths(whenTrue() -> void, whenFalse() -> void) {
+            let branchStart = CaptureCallableState()
+            whenTrue()
+            let thenState = CaptureCallableState()
+            RestoreCallableState(branchStart)
+            whenFalse()
+            RestoreCallableState(JoinCallableStates(thenState, CaptureCallableState()))
+        }
+
+        protected open override func VisitBinaryExpression(node BoundBinaryExpression) {
+            VisitExpression(node.Left)
+            if node
+                .Op
+                .Kind is BoundBinaryOperatorKind.LogicalAnd or
+                BoundBinaryOperatorKind.LogicalOr or
+                BoundBinaryOperatorKind.NullCoalesce {
+                VisitPossiblySkipped(() -> VisitExpression(node.Right))
+            } else {
+                VisitExpression(node.Right)
+            }
+        }
+
+        protected open override func VisitNullConditionalAccessExpression(node BoundNullConditionalAccessExpression) {
+            VisitExpression(node.Receiver)
+            VisitPossiblySkipped(() -> VisitExpression(node.WhenNotNull))
+        }
+
+        protected open override func VisitConditionalExpression(node BoundConditionalExpression) {
+            VisitExpression(node.Condition)
+            VisitAlternativePaths(() -> VisitExpression(node.WhenTrue), () -> VisitExpression(node.WhenFalse))
+        }
+
+        protected open override func VisitConditionalAddressExpression(node BoundConditionalAddressExpression) {
+            VisitExpression(node.Condition)
+            VisitAlternativePaths(
+                () -> VisitExpression(node.WhenTrueOperand),
+                () -> VisitExpression(node.WhenFalseOperand)
+            )
+        }
+
+        protected open override func VisitBinaryPattern(node BoundBinaryPattern) {
+            VisitPattern(node.Left)
+            VisitPossiblySkipped(() -> VisitPattern(node.Right))
+        }
+
+        protected open override func VisitPropertyPattern(node BoundPropertyPattern) {
+            for field in node.Fields {
+                VisitPossiblySkipped(() -> VisitPattern(field.Pattern))
+            }
+        }
+
+        protected open override func VisitListPattern(node BoundListPattern) {
+            for element in node.Elements {
+                VisitPossiblySkipped(() -> VisitPattern(element))
+            }
+        }
+
         protected open override func VisitBaseClassCallExpression(node BoundBaseClassCallExpression) {
             AnalyzeCallableArguments(node.Arguments)
             base.VisitBaseClassCallExpression(node)
@@ -1890,17 +1952,36 @@ internal partial class StatementBinder {
         protected open override func VisitSwitchExpression(node BoundSwitchExpression) {
             VisitExpression(node.Discriminant)
             let branchStart = CaptureCallableState()
+            var dispatchState = CloneCallableState(branchStart)
+            var canMiss = true
             var joined(
                 Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]],
                 Unknown HashSet[VariableSymbol],
                 External HashSet[VariableSymbol]
             )? = nil
-            for arm in node.Arms {
-                RestoreCallableState(branchStart)
+            for arm in node.GetDispatchArms() {
+                RestoreCallableState(dispatchState)
                 VisitPattern(arm.Pattern)
+                let patternFailure = CaptureCallableState()
                 VisitExpression(arm.Guard)
+                let guardFailure = CaptureCallableState()
                 VisitExpression(arm.Result)
                 joined = JoinCallableStates(joined, CaptureCallableState())
+                if arm.IsCatchAll {
+                    canMiss = false
+                    break
+                }
+                dispatchState = if arm.Guard == nil {
+                    patternFailure
+                } else if arm.PatternMatchesAllInputs {
+                    guardFailure
+                } else {
+                    JoinCallableStates(patternFailure, guardFailure)
+                }
+            }
+            // The unmatched path includes evaluated guards, but no result.
+            if node.Type == TypeSymbol.Void && canMiss {
+                joined = JoinCallableStates(joined, dispatchState)
             }
             RestoreCallableState(joined ?? branchStart)
         }
@@ -2747,6 +2828,17 @@ internal partial class StatementBinder {
                         initializer,
                         syntax.Initializer!!.Location
                     )
+                    variableType = TypeSymbol.Error
+                } else if syntax.TypeClause == nil && ContainsNever(variableType) {
+                    // Issue #4965 (ADR-0202): an initializer that never produces
+                    // a value (`let a = throw e`, or a block/if/switch every
+                    // path of which exits) gives the local no type to infer.
+                    // Report it like a void initializer rather than inferring the
+                    // bottom type, which has no CLR representation (GS9998).
+                    // `!!`: this branch is reached only when an initializer was
+                    // bound (the `syntax.Initializer == nil` case is above).
+                    Diagnostics.ReportExpressionMustHaveValue(syntax.Initializer!!.Location)
+                    convertedInitializer = BoundErrorExpression(initializer.Syntax)
                     variableType = TypeSymbol.Error
                 } else {
                     convertedInitializer = conversions.BindConversion(
@@ -3974,6 +4066,91 @@ internal partial class StatementBinder {
         /// @returns `true` when [`type`](paramref) is reference-like.
         private func IsReferenceLikeType(type TypeSymbol?) bool -> type != nil && Conversion.IsReferenceLikeTarget(type)
 
+        /// Issue #4965 (ADR-0202): whether [`type`](paramref) is, or is a tuple
+        /// with an element that is, the bottom type — the inferred type of an
+        /// initializer that never produces a value (`throw e`,
+        /// `(if c { return 1 } else { return 2 }, 0)`). Such a type cannot be
+        /// a local's type: `never` has no CLR form.
+        /// @param type The inferred type.
+        /// @returns `true` when the type contains `never`.
+        internal func ContainsNever(type TypeSymbol?) bool {
+            if type == TypeSymbol.Never {
+                return true
+            }
+            if type is TupleTypeSymbol tuple {
+                for element in tuple.ElementTypes {
+                    if ContainsNever(element) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        /// Issue #4965 (ADR-0202): whether the end of a block whose bound
+        /// statements are [`statements`](paramref) is unreachable, so that a
+        /// value block ending this way has the bottom (`never`) type instead
+        /// of needing a trailing value (GS0277). The last statement must be a
+        /// `return`, `throw` or `rethrow`, a direct `break`/`continue`/`goto`
+        /// (bound as a goto, which always leaves the block because the block
+        /// ends right after it) — also when it sits in the tail of a nested
+        /// block, an if/else, or a try (which is how a `defer` or `using let`
+        /// prefix wraps the rest of the block) — or a structured statement
+        /// every branch of which ends in `return`/`throw` (see
+        /// EndsInUnconditionalExit). Gotos inside a switch statement are
+        /// deliberately not counted: a `break` in a switch-statement arm
+        /// targets the switch's own exit label and falls through to the end of
+        /// the block, so counting it would type a block that completes normally
+        /// as `never` (fail-safe; a tail if-else is an if-expression and is
+        /// typed by its own branches instead).
+        /// @param statements The bound statements of the block.
+        /// @returns `true` when control can never reach the block's end.
+        internal func BlockEndIsUnreachable(statements ImmutableArray[BoundStatement]) bool {
+            if statements.IsDefaultOrEmpty {
+                return false
+            }
+            return EndsInEscapingExit(statements[statements.Length - 1])
+        }
+
+        /// Issue #4965 (ADR-0202): the tail-position walk behind
+        /// (cref:BlockEndIsUnreachable). A goto counts as an exit everywhere
+        /// except inside a switch statement, where it may target the switch's
+        /// own exit label.
+        /// @param statement The statement to classify.
+        /// @returns `true` when the statement never completes normally.
+        private func EndsInEscapingExit(statement BoundStatement?) bool {
+            switch statement {
+                case nil {
+                    return false
+                }
+                case BoundGotoStatement {
+                    return true
+                }
+                case block is BoundBlockStatement {
+                    return !block
+                        .Statements
+                        .IsDefaultOrEmpty &&
+                        EndsInEscapingExit(block.Statements[block.Statements.Length - 1])
+                }
+                case nested is BoundIfStatement {
+                    return nested.ElseStatement != nil &&
+                        EndsInEscapingExit(nested.ThenStatement) &&
+                        EndsInEscapingExit(nested.ElseStatement)
+                }
+                case nestedTry is BoundTryStatement {
+                    if nestedTry.FinallyBlock != nil && EndsInEscapingExit(nestedTry.FinallyBlock) {
+                        return true
+                    }
+                    return EndsInEscapingExit(nestedTry.TryBlock) && nestedTry.CatchClauses.All(
+                        (clause BoundCatchClause) -> EndsInEscapingExit(clause.Body)
+                    )
+                }
+                default {
+                    return EndsInUnconditionalExit(statement, gotoExits: false)
+                }
+            }
+        }
+
         /// ADR-0069 / issue #700: structurally determine whether the given
         /// bound statement unconditionally transfers control out of its
         /// enclosing block (return / throw / unconditional goto, which covers
@@ -3987,7 +4164,7 @@ internal partial class StatementBinder {
         /// return/throw do. Callable-alias joins use this because a goto can still
         /// reach code after the enclosing construct.
         /// @returns `true` when the statement always leaves its block.
-        private func EndsInUnconditionalExit(statement BoundStatement?, gotoExits bool = true) bool {
+        internal func EndsInUnconditionalExit(statement BoundStatement?, gotoExits bool = true) bool {
             switch statement {
                 case nil {
                     return false
@@ -4032,16 +4209,15 @@ internal partial class StatementBinder {
                         // covers every input the discriminator can take — i.e.,
                         // a default arm exists. Without a default the switch
                         // can fall through past every arm without entering any.
-                        var hasDefault = false
+                        // Issue #4965: a GUARDED discard (`case _ when …`) can
+                        // fail, so it is not a default; SwitchHandlesAllValues
+                        // is the shared test.
                         for arm in nestedSwitch.Arms {
-                            if arm.Pattern == nil || arm.Pattern is BoundDiscardPattern {
-                                hasDefault = true
-                            }
                             if !EndsInUnconditionalExit(arm.Body, gotoExits) {
                                 return false
                             }
                         }
-                        return hasDefault
+                        return SwitchHandlesAllValues(nestedSwitch.Arms, nestedSwitch.Discriminant.Type)
                     }
                 }
                 default {

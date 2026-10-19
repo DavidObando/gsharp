@@ -90,6 +90,17 @@ open partial class Parser {
     // MaxRecursionDepth above.
     private var recursionDepth int32
 
+    // Issue #4963 (ADR-0202): while positive, brace bodies (block expressions,
+    // lambda and function-literal blocks) are skipped to their matching brace
+    // instead of parsed. The switch-form fallback and trailing-if classifier
+    // need complete header boundaries, not brace-body contents. Skipping keeps
+    // speculative classification from parsing nested bodies twice per level.
+    private var skimBraceBodies int32
+
+    // The expression-form if-let header reserves an unparenthesized && for
+    // its guard. Nested expression contexts reset this through ParseExpression.
+    private var stopAtIfLetGuard bool
+
     /// Initializes a new instance of the (cref:Parser) class.
     /// @param syntaxTree The source syntax tree object.
     convenience init(syntaxTree SyntaxTree) {

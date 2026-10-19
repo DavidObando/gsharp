@@ -1332,10 +1332,15 @@ internal shared class DefiniteAssignmentAnalyzer {
                     )
                     let armAssigned = List[HashSet[VariableSymbol]](switchExpression.Arms.Length)
                     let armAliases = List[Dictionary[VariableSymbol, VariableSymbol]](switchExpression.Arms.Length)
-                    for arm in switchExpression.Arms {
-                        let currentAssigned = HashSet[VariableSymbol](assigned)
-                        let currentAliases = Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
-                        ProcessExpression(arm.Guard, currentAssigned, diagnostics, currentAliases, tracked, flowContext)
+                    var dispatchAssigned = HashSet[VariableSymbol](assigned)
+                    var dispatchAliases = Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
+                    var canMiss = true
+                    for arm in switchExpression.GetDispatchArms() {
+                        let guardAssigned = HashSet[VariableSymbol](dispatchAssigned)
+                        let guardAliases = Dictionary[VariableSymbol, VariableSymbol](dispatchAliases)
+                        ProcessExpression(arm.Guard, guardAssigned, diagnostics, guardAliases, tracked, flowContext)
+                        let currentAssigned = HashSet[VariableSymbol](guardAssigned)
+                        let currentAliases = Dictionary[VariableSymbol, VariableSymbol](guardAliases)
                         ProcessExpression(
                             arm.Result,
                             currentAssigned,
@@ -1346,6 +1351,32 @@ internal shared class DefiniteAssignmentAnalyzer {
                         )
                         armAssigned.Add(currentAssigned)
                         armAliases.Add(currentAliases)
+                        if arm.IsCatchAll {
+                            canMiss = false
+                            break
+                        }
+                        if arm.Guard != nil {
+                            if arm.PatternMatchesAllInputs {
+                                dispatchAssigned = guardAssigned
+                                dispatchAliases = guardAliases
+                            } else {
+                                MergeConditionalFlow(
+                                    dispatchAssigned,
+                                    dispatchAliases,
+                                    []HashSet[VariableSymbol]{HashSet[VariableSymbol](dispatchAssigned), guardAssigned},
+                                    []Dictionary[VariableSymbol, VariableSymbol]{
+                                        Dictionary[VariableSymbol, VariableSymbol](dispatchAliases),
+                                        guardAliases
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    // A void switch can complete unmatched, after running
+                    // guards. A value-producing unmatched switch throws.
+                    if switchExpression.Type == TypeSymbol.Void && canMiss {
+                        armAssigned.Add(dispatchAssigned)
+                        armAliases.Add(dispatchAliases)
                     }
                     if armAssigned.Count > 0 {
                         MergeConditionalFlow(assigned, pointerAliases, armAssigned, armAliases)

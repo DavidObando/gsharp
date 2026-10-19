@@ -397,6 +397,11 @@ shared class SpillSequenceSpiller {
                 FlushSideEffects(spilled, builder)
                 expression = spilled.Value
             }
+            if expression.Type == TypeSymbol.Never {
+                // Issue #4965 (ADR-0202): see StoreOperand.
+                builder.Add(BoundExpressionStatement(nil, expression))
+                return BoundThrowExpression(nil, BoundLiteralExpression(nil, value: nil))
+            }
             let temp = MakeSpillTemp(expression.Type)
             builder.Add(BoundVariableDeclaration(nil, temp, expression))
             return BoundVariableExpression(nil, temp)
@@ -1177,10 +1182,7 @@ shared class SpillSequenceSpiller {
             // If right has await, the left must be spilled to a temp
             // (unless it's a pure constant or simple variable read).
             if rightHasAwait && !CanDeferAcrossLift(left) {
-                let leftTemp = MakeSpillTemp(left.Type)
-                locals.Add(leftTemp)
-                sideEffects.Add(BoundVariableDeclaration(nil, leftTemp, left))
-                left = BoundVariableExpression(nil, leftTemp)
+                left = StoreOperand(left, locals, sideEffects)
             }
             var right BoundExpression
             if rightHasAwait {
@@ -1435,10 +1437,7 @@ shared class SpillSequenceSpiller {
                 receiver = spilledReceiver.Value
             }
             if argsHaveAwait && !CanDeferAcrossLift(receiver) {
-                let recvTemp = MakeSpillTemp(receiver.Type)
-                locals.Add(recvTemp)
-                sideEffects.Add(BoundVariableDeclaration(nil, recvTemp, receiver))
-                receiver = BoundVariableExpression(nil, recvTemp)
+                receiver = StoreOperand(receiver, locals, sideEffects)
             }
             let (argLocals, argSideEffects, args) = SpillArgumentList(arguments)
             locals.AddRange(argLocals)
@@ -1631,7 +1630,10 @@ shared class SpillSequenceSpiller {
             // Null exactly when the conditional is void: testing resultLocal
             // rather than a separate bool is what lets the analyzer see the
             // local is present wherever it is assigned or read.
-            let resultLocal LocalVariableSymbol? = if conditional.Type == TypeSymbol.Void {
+            // Issue #4965 (ADR-0202): a never-typed conditional (every branch
+            // exits) has no value to carry either.
+            let resultLocal LocalVariableSymbol? = if conditional.Type == TypeSymbol.Void ||
+                conditional.Type == TypeSymbol.Never {
                 default(LocalVariableSymbol?)
             } else {
                 MakeSpillTemp(conditional.Type)
@@ -1671,7 +1673,7 @@ shared class SpillSequenceSpiller {
                     nil,
                     locals.ToImmutable(),
                     sideEffects.ToImmutable(),
-                    BoundLiteralExpression(nil, 0, TypeSymbol.Void)
+                    NoValue(conditional.Type)
                 )
             }
             locals.Add(resultLocal)
@@ -1745,13 +1747,26 @@ shared class SpillSequenceSpiller {
                 let arm = arms[i]
                 indexArms.Add(BoundSwitchExpressionArm(nil, arm.Pattern, arm.Guard, BoundLiteralExpression(nil, i)))
             }
+            if switchExpr.Type == TypeSymbol.Void && !arms.Any((arm BoundSwitchExpressionArm) -> arm.IsCatchAll) {
+                // The void switch runs no arm for an unmatched value (see
+                // ExpressionBinder.BindSwitchExpression), so the index switch
+                // gets a default that selects none instead of throwing.
+                indexArms.Add(BoundSwitchExpressionArm(nil, nil, nil, BoundLiteralExpression(nil, -1)))
+            }
             let indexSwitch = BoundSwitchExpression(nil, discriminant, indexArms.ToImmutable(), TypeSymbol.Int32)
             let armIndexLocal = MakeSpillTemp(TypeSymbol.Int32)
             locals.Add(armIndexLocal)
             sideEffects.Add(BoundVariableDeclaration(nil, armIndexLocal, indexSwitch))
             // Phase 2: dispatch on the stored arm index, evaluating only the
-            // selected arm's (possibly awaiting) result.
-            let resultLocal = MakeSpillTemp(switchExpr.Type)
+            // selected arm's (possibly awaiting) result. Issue #4966
+            // (ADR-0202): a void switch (or one whose every arm exits) has no
+            // result to carry, so each selected arm runs as a statement.
+            let resultLocal LocalVariableSymbol? = if switchExpr.Type == TypeSymbol.Void ||
+                switchExpr.Type == TypeSymbol.Never {
+                default(LocalVariableSymbol?)
+            } else {
+                MakeSpillTemp(switchExpr.Type)
+            }
             let endLabel = MakeLabel()
             let eqOperator = Invariant.Required(
                 BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
@@ -1772,7 +1787,11 @@ shared class SpillSequenceSpiller {
                 let spilledResult = SpillExpression(arm.Result)
                 locals.AddRange(spilledResult.Locals)
                 sideEffects.AddRange(spilledResult.SideEffects)
-                if !firstArmResultDeclared {
+                if resultLocal == nil {
+                    if !(spilledResult.Value is BoundLiteralExpression) {
+                        sideEffects.Add(BoundExpressionStatement(nil, spilledResult.Value))
+                    }
+                } else if !firstArmResultDeclared {
                     // Declare resultLocal where the selected arm first assigns
                     // it, avoiding a redundant default initialization.
                     sideEffects.Add(BoundVariableDeclaration(nil, resultLocal, spilledResult.Value))
@@ -1786,6 +1805,14 @@ shared class SpillSequenceSpiller {
                 sideEffects.Add(BoundLabelStatement(nil, nextArmLabel))
             }
             sideEffects.Add(BoundLabelStatement(nil, endLabel))
+            if resultLocal == nil {
+                return BoundSpillSequenceExpression(
+                    nil,
+                    locals.ToImmutable(),
+                    sideEffects.ToImmutable(),
+                    NoValue(switchExpr.Type)
+                )
+            }
             locals.Add(resultLocal)
             return BoundSpillSequenceExpression(
                 nil,
@@ -1793,6 +1820,16 @@ shared class SpillSequenceSpiller {
                 sideEffects.ToImmutable(),
                 BoundVariableExpression(nil, resultLocal)
             )
+        }
+
+        /// Issue #4965 / #4966 (ADR-0202): the value a spilled construct with
+        /// no result leaves behind — the void placeholder for a void one, and
+        /// for a never-typed one (every path exited) an unreachable `throw nil`
+        /// trap that keeps the bottom type for the consumer.
+        private func NoValue(type TypeSymbol) BoundExpression -> if type == TypeSymbol.Never {
+            cast[BoundExpression](BoundThrowExpression(nil, BoundLiteralExpression(nil, value: nil)))
+        } else {
+            cast[BoundExpression](BoundLiteralExpression(nil, 0, TypeSymbol.Void))
         }
 
         /// Spills a null-conditional access (`?.`) expression (issue #1619
@@ -2006,10 +2043,7 @@ shared class SpillSequenceSpiller {
             // it into a spill temp exactly once here so a side effect in the
             // condition (e.g. a method call) can't fire more than once.
             if !CanDeferAcrossLift(condition) {
-                let condTemp = MakeSpillTemp(condition.Type)
-                locals.Add(condTemp)
-                sideEffects.Add(BoundVariableDeclaration(nil, condTemp, condition))
-                condition = BoundVariableExpression(nil, condTemp)
+                condition = StoreOperand(condition, locals, sideEffects)
             }
             var trueOperand = condAddr.WhenTrueOperand
             if trueHasAwait {
@@ -2557,10 +2591,7 @@ shared class SpillSequenceSpiller {
                 left = spilledA.Value
             }
             if bHasAwait && !CanDeferAcrossLift(left) {
-                let temp = MakeSpillTemp(left.Type)
-                locals.Add(temp)
-                sideEffects.Add(BoundVariableDeclaration(nil, temp, left))
-                left = BoundVariableExpression(nil, temp)
+                left = StoreOperand(left, locals, sideEffects)
             }
             var right = b
             if bHasAwait {
@@ -2619,19 +2650,13 @@ shared class SpillSequenceSpiller {
                         hasLaterAwait |= awaitIndex > i
                     }
                     if hasLaterAwait && !CanDeferAcrossLift(spilledArg.Value) {
-                        let temp = MakeSpillTemp(arg.Type)
-                        locals.Add(temp)
-                        sideEffects.Add(BoundVariableDeclaration(nil, temp, spilledArg.Value))
-                        args.Add(BoundVariableExpression(nil, temp))
+                        args.Add(StoreOperand(spilledArg.Value, locals, sideEffects))
                     } else {
                         args.Add(spilledArg.Value)
                     }
                 } else if i < firstAwaitIdx && (spillEveryPreAwaitOperand || !CanDeferAcrossLift(arg)) {
                     // This arg precedes an await — spill to temp.
-                    let temp = MakeSpillTemp(arg.Type)
-                    locals.Add(temp)
-                    sideEffects.Add(BoundVariableDeclaration(nil, temp, arg))
-                    args.Add(BoundVariableExpression(nil, temp))
+                    args.Add(StoreOperand(arg, locals, sideEffects))
                 } else if i > firstAwaitIdx && (spillEveryPreAwaitOperand || !CanDeferAcrossLift(arg)) {
                     // Between awaits, we also need to check if there's a
                     // later await that would require this to be spilled.
@@ -2643,10 +2668,7 @@ shared class SpillSequenceSpiller {
                         }
                     }
                     if needsSpill {
-                        let temp = MakeSpillTemp(arg.Type)
-                        locals.Add(temp)
-                        sideEffects.Add(BoundVariableDeclaration(nil, temp, arg))
-                        args.Add(BoundVariableExpression(nil, temp))
+                        args.Add(StoreOperand(arg, locals, sideEffects))
                     } else {
                         args.Add(arg)
                     }
@@ -2660,6 +2682,34 @@ shared class SpillSequenceSpiller {
         private func MakeSpillTemp(type TypeSymbol) LocalVariableSymbol {
             let name = GeneratedNames.SpillTempField(spillOrdinal++, spillTempDomain)
             return LocalVariableSymbol(name, isReadOnly: false, type)
+        }
+
+        /// Issue #4965 (ADR-0202): stores a spilled operand in a fresh temp and
+        /// returns the read of it. An operand of the bottom (`never`) type — a
+        /// throw expression, or a block, if or switch every path of which exits
+        /// — is never stored: it runs as a statement, and the operand becomes
+        /// the unreachable `throw nil` trap. Nothing after it runs, so no
+        /// later operand, await or call is reached; even a state machine's
+        /// resume edge into the rest of the sequence only reaches a `throw`.
+        /// `never` has no CLR form, so a temp of that type could not be
+        /// encoded (GS9998).
+        /// @param value The operand to store.
+        /// @param locals The spill locals of the current sequence.
+        /// @param sideEffects The side effects of the current sequence.
+        /// @returns The expression that reads the stored operand.
+        private func StoreOperand(
+            value BoundExpression,
+            locals ImmutableArray[LocalVariableSymbol].Builder,
+            sideEffects ImmutableArray[BoundStatement].Builder
+        ) BoundExpression {
+            if value.Type == TypeSymbol.Never {
+                sideEffects.Add(BoundExpressionStatement(nil, value))
+                return BoundThrowExpression(nil, BoundLiteralExpression(nil, value: nil))
+            }
+            let temp = MakeSpillTemp(value.Type)
+            locals.Add(temp)
+            sideEffects.Add(BoundVariableDeclaration(nil, temp, value))
+            return BoundVariableExpression(nil, temp)
         }
 
         private func MakeLabel() BoundLabel {

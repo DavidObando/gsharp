@@ -1,6 +1,6 @@
 # ADR-0009: `switch` semantics — expression + statement, patterns, exhaustive
 
-- **Status**: Accepted
+- **Status**: Accepted; amended by [ADR-0202](0202-one-rule-for-block-tails-and-arrow-bodies.md) (2026-10-17)
 - **Date**: 2026-05-22
 - **Phase**: Phase 2 (statement form), Phase 6 (expression + patterns), Phase 0 (lock)
 - **Related**: gaps doc §3.2.3, §6.1; execution plan §0 D9, §2.6, §6.1; design doc D9; ADR-0013 (drop fallthrough)
@@ -56,6 +56,16 @@ Neutral:
 - Loses Go's `fallthrough`. Cases that genuinely need fall-through can be expressed by sharing a target via labels (Phase 6 or Phase 7) or by listing values in the same case arm.
 
 ## Implementation notes
+
+**ADR-0202 (2026-10-17).** The example above is now implemented as written.
+Comma multi-pattern arms (`case 1, 2, 3`, issue #3501 A3) fold into the `or`
+disjunction in both forms through one parser helper, so they mean the same in
+the statement form (`case 1, 2 { … }`) and the expression form
+(`case 1, 2: …`). A `switch` at the start of a statement is the expression form
+when its arms use `:` (as in the `switch shape { … }` example) and the
+statement form when they use blocks; in statement position its value is
+discarded, a void arm makes it the void switch, and the void switch needs no
+`default` (an unmatched value runs no arm), like the statement form.
 
 `BoundPatternSwitchStatement.IsExhaustive` is semantic metadata, not a definite-return-only cache. The binder originates it, and every reconstruction of the node passes it through — `BoundTreeRewriter.RewritePatternSwitchStatement`, `CaptureBoxingRewriter`, and the flattening pass in `Lowerer`. The constructor requires the value explicitly so a new construction site cannot silently default to "not exhaustive". Its only consuming read is in control-flow-graph construction (`ControlFlowGraph.cs`), where a dispatch that is *not* exhaustive receives an extra fall-out edge to the default/end label.
 

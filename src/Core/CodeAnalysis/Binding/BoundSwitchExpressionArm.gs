@@ -43,4 +43,49 @@ class BoundSwitchExpressionArm : BoundNode {
     /// Gets a value indicating whether this is the `default` arm.
     @MemberNotNullWhen(false, "Pattern")
     prop IsDefault bool -> Pattern == nil
+
+    /// Gets whether this arm matches every input without a guard.
+    internal prop IsCatchAll bool -> Guard == nil && PatternMatchesAllInputs
+
+    /// Gets whether every input reaches this arm's guard or result.
+    internal prop PatternMatchesAllInputs bool -> GetConstantMatch(Pattern) == true
+
+    shared {
+        private func GetConstantMatch(pattern BoundPattern?) bool? {
+            if pattern == nil || pattern is BoundDiscardPattern {
+                return true
+            }
+            if pattern is BoundNotPattern negated {
+                let inner = GetConstantMatch(negated.Pattern)
+                return if inner is bool matches {
+                    !matches
+                } else {
+                    nil
+                }
+            }
+            if pattern is BoundBinaryPattern binary {
+                let left = GetConstantMatch(binary.Left)
+                let right = GetConstantMatch(binary.Right)
+                if binary.IsConjunction {
+                    if left == false || right == false {
+                        return false
+                    }
+                    return if left == true && right == true {
+                        true
+                    } else {
+                        nil
+                    }
+                }
+                if left == true || right == true {
+                    return true
+                }
+                return if left == false && right == false {
+                    false
+                } else {
+                    nil
+                }
+            }
+            return nil
+        }
+    }
 }

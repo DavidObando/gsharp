@@ -41,6 +41,20 @@ class BoundSwitchExpression : BoundExpression {
         get;
     }
 
+    /// Enumerates dispatch order: the default runs after all other patterns.
+    internal func GetDispatchArms() sequence[BoundSwitchExpressionArm] {
+        for arm in Arms {
+            if !arm.IsDefault {
+                yield arm
+            }
+        }
+        for arm in Arms {
+            if arm.IsDefault {
+                yield arm
+            }
+        }
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```

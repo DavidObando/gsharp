@@ -2384,15 +2384,33 @@ internal class LambdaBinder {
         if returnType == TypeSymbol.Error {
             return boundBody
         }
+        let rewriter = ReturnConversionRewriter(conversions, syntax, returnType)
         if boundBody is BoundBlockExpression block {
-            let rewriter = ReturnConversionRewriter(conversions, syntax, returnType)
             let newStatements = ImmutableArray.CreateBuilder[BoundStatement](block.Statements.Length)
             for stmt in block.Statements {
                 newStatements.Add(rewriter.RewriteStatement(stmt))
             }
-            return BoundBlockExpression(block.Syntax, newStatements.ToImmutable(), block.Expression)
+            // Issue #4965 (ADR-0202): returns inside the tail (see
+            // InferLambdaReturnType) get the same conversion.
+            return BoundBlockExpression(
+                block.Syntax,
+                newStatements.ToImmutable(),
+                RewriteTailReturns(rewriter, block.Expression)
+            )
         }
-        return boundBody
+        return RewriteTailReturns(rewriter, boundBody)
+    }
+
+    // Issue #4965 (ADR-0202): converts the returns inside a lambda body's
+    // trailing value, leaving a tail that contains none untouched.
+    private func RewriteTailReturns(rewriter ReturnConversionRewriter, tail BoundExpression) BoundExpression {
+        let collector = ReturnTypeCollector()
+        collector.Visit(tail)
+        return if collector.ReturnTypes.Count == 0 {
+            tail
+        } else {
+            rewriter.RewriteTail(tail)
+        }
     }
 
     private func CollectCapturedVariables(body BoundStatement, function FunctionSymbol) ImmutableArray[VariableSymbol] {
@@ -2599,6 +2617,9 @@ internal class LambdaBinder {
         protected override func VisitReturnStatement(node BoundReturnStatement) {
             if node.Expression != nil {
                 ReturnTypes.Add(node.Expression.Type ?? TypeSymbol.Void)
+                // Issue #4965 (ADR-0202): the operand can itself hold a
+                // `return` (`return if c { return a } else { b }`).
+                VisitExpression(node.Expression)
             } else {
                 ReturnTypes.Add(TypeSymbol.Void)
             }
@@ -2619,6 +2640,11 @@ internal class LambdaBinder {
             this.returnType = returnType
         }
 
+        /// Rewrites the returns inside a lambda body's trailing value.
+        /// @param node The trailing value.
+        /// @returns The rewritten value.
+        internal func RewriteTail(node BoundExpression) BoundExpression -> RewriteExpression(node)
+
         protected override func RewriteReturnStatement(node BoundReturnStatement) BoundStatement {
             if node.Expression == nil {
                 return node
@@ -2630,11 +2656,18 @@ internal class LambdaBinder {
             if returnType == TypeSymbol.Void {
                 return node
             }
-            if node.Expression.Type == returnType {
-                return node
+            // Issue #4965 (ADR-0202): convert any `return` nested inside the
+            // operand first (`return if c { return a } else { b }`).
+            let operand = RewriteExpression(node.Expression)
+            if operand.Type == returnType {
+                return if object.ReferenceEquals(operand, node.Expression) {
+                    cast[BoundStatement](node)
+                } else {
+                    cast[BoundStatement](BoundReturnStatement(node.Syntax, operand, node.IsRef))
+                }
             }
             let location = node.Syntax?.Location ?? syntax.Body.Location
-            let converted = conversions.BindConversion(location, node.Expression, returnType)
+            let converted = conversions.BindConversion(location, operand, returnType)
             return BoundReturnStatement(node.Syntax, converted, node.IsRef)
         }
     }
@@ -3550,19 +3583,29 @@ internal class LambdaBinder {
                 return TypeSymbol.Error
             }
             let trailingType = boundBody.Type ?? TypeSymbol.Void
+            // Issue #4965 (ADR-0202): a `return` can also sit inside the
+            // trailing value — `(c) -> { if c { return 1 } else { return 2 } }`,
+            // whose tail is an if-expression with exiting (`never`) branches —
+            // so the collector walks the tail as well as the prefix statements.
             let collector = ReturnTypeCollector()
             if boundBody is BoundBlockExpression block {
                 for stmt in block.Statements {
                     collector.Visit(stmt)
                 }
+                collector.Visit(block.Expression)
+            } else {
+                collector.Visit(boundBody)
             }
             let returnTypes = collector.ReturnTypes
             let hasExplicitReturn = returnTypes.Count > 0
             let hasExplicitValueReturn = returnTypes.Any((type TypeSymbol) -> type != TypeSymbol.Void)
-            let trailingIsVoidPlaceholder = boundBody is BoundBlockExpression{
-                Expression: BoundLiteralExpression{Type: var trailingLit}
-            } &&
-                trailingLit == TypeSymbol.Void
+            // A never-typed tail (every path exits) produces no value, exactly
+            // like the void placeholder of a body without a tail.
+            let trailingIsVoidPlaceholder = (
+                boundBody is BoundBlockExpression{Expression: BoundLiteralExpression{Type: var trailingLit}} &&
+                    trailingLit == TypeSymbol.Void
+            ) ||
+                (hasExplicitReturn && trailingType == TypeSymbol.Never)
             // Issue #2152: in G#'s Kotlin-like semantics an assignment yields
             // Unit/void, so a block-body lambda whose trailing expression is an
             // assignment (simple `=` or a compound `+=`/`-=`/... which the binder
@@ -3586,8 +3629,19 @@ internal class LambdaBinder {
             // Preserve the direct expression-body type before common-type
             // aggregation. This path has one candidate by construction and also
             // remains stable when Core itself is compiled from migrated G#.
+            // Issue #4965 (ADR-0202): a BLOCK body whose tail never completes
+            // (`() -> { { throw e } }`, `() -> { if c { throw a } else { throw b } }`)
+            // produces no value; with no target to adopt it is a void lambda,
+            // exactly as `() -> { throw e }` (a throw statement) already is.
+            // An expression body `() -> throw e` keeps its `() -> never` type,
+            // which adapts to any delegate signature (issue #2716).
+            let neverBlockTail = trailingType == TypeSymbol.Never && syntax.Body is BlockExpressionSyntax
             if targetFunctionType == nil && !hasExplicitReturn && !trailingIsAssignment {
-                return trailingType
+                return if neverBlockTail {
+                    TypeSymbol.Void
+                } else {
+                    trailingType
+                }
             }
             // Issue #891: a block-body arrow lambda whose body never completes
             // normally — every path throws (or otherwise terminates) without a
@@ -3675,6 +3729,12 @@ internal class LambdaBinder {
                 if result == TypeSymbol.Error {
                     return TypeSymbol.Error
                 }
+            }
+            // Issue #4965 (ADR-0202): a block body every return of which never
+            // completes (`() -> { return { throw e } }`) has no value type
+            // either; see `neverBlockTail` above.
+            if result == TypeSymbol.Never && syntax.Body is BlockExpressionSyntax {
+                return TypeSymbol.Void
             }
             return result ?? TypeSymbol.Error
         }

@@ -576,6 +576,12 @@ internal partial class MethodBodyEmitter {
     }
 
     private func EmitLiteral(literal BoundLiteralExpression) {
+        // Issue #4966 (ADR-0202): a void-typed literal is the binder's "no
+        // value" placeholder (the missing else of a void `if`, the tail of a
+        // void block); it has nothing to push.
+        if literal.Type == TypeSymbol.Void {
+            return
+        }
         // Phase 3.C.2 / ADR-0001: the nil literal is modeled as a null
         // BoundLiteralExpression.Value; on reference-type or nullable
         // targets it emits as ldnull.

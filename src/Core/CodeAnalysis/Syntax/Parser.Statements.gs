@@ -13,6 +13,11 @@ import System.Runtime.CompilerServices
 
 open partial class Parser {
     private func ParseBlockStatement() BlockStatementSyntax {
+        if skimBraceBodies > 0 && Current.Kind == SyntaxKind.OpenBraceToken {
+            // See skimBraceBodies (Parser.gs).
+            let (skimmedOpen, skimmedClose) = SkimBraceBody()
+            return BlockStatementSyntax(syntaxTree, skimmedOpen, ImmutableArray[StatementSyntax].Empty, skimmedClose)
+        }
         let statements = ImmutableArray.CreateBuilder[StatementSyntax]()
         let openBraceToken = MatchToken(SyntaxKind.OpenBraceToken)
         while Current.Kind != SyntaxKind.EndOfFileToken && Current.Kind != SyntaxKind.CloseBraceToken {
@@ -184,7 +189,20 @@ open partial class Parser {
                 return ParseReturnStatement()
             }
             case SyntaxKind.SwitchKeyword {
-                return ParseSwitchStatement()
+                // Issue #4963 (ADR-0202): a `switch` whose arms have the
+                // expression shape (`case P:` / `default:`) is the switch
+                // EXPRESSION as an expression statement — the trailing value
+                // when it ends a value-capable block, the void switch when its
+                // value is discarded. Arms with the statement shape
+                // (`case P { … }`) keep the switch statement. Like the `if`
+                // item, it ends at its closing brace. The header is parsed
+                // once; SwitchBodyHasExpressionArms then scans the first arm.
+                let switchKeyword = MatchToken(SyntaxKind.SwitchKeyword)
+                let header = ParseExpressionInBodyHeader()
+                if SwitchBodyHasExpressionArms() {
+                    return ExpressionStatementSyntax(syntaxTree, ParseSwitchExpressionBody(switchKeyword, header))
+                }
+                return ParseSwitchStatementBody(switchKeyword, header)
             }
             case SyntaxKind.FallthroughKeyword {
                 return ParseFallthroughStatement()

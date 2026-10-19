@@ -669,7 +669,7 @@ open partial class Parser {
     private func ParseConditionalTail(condition ExpressionSyntax) ExpressionSyntax {
         let questionToken = NextToken()
         let whenTrueMod SyntaxToken? = TryConsumeInnerRefModifier()
-        let whenTrue = ParseAssignmentExpression()
+        let whenTrue = ParseExpression()
         let colonToken = MatchToken(SyntaxKind.ColonToken)
         let whenFalseMod SyntaxToken? = TryConsumeInnerRefModifier()
         let whenFalse = ParseAssignmentExpression()
@@ -745,7 +745,7 @@ open partial class Parser {
         // Issue #4962: the same header routine as the if-statement, so the
         // optional `init;` initializer is accepted here too.
         let (initializer, semicolon, condition) = ParseIfHeader()
-        let thenBlock = ParseBlockExpression(valueRequired: true)
+        let thenBlock = ParseBlockExpression()
         var elseKeyword SyntaxToken? = nil
         var elseExpression ExpressionSyntax? = nil
         if Current.Kind == SyntaxKind.ElseKeyword {
@@ -756,7 +756,7 @@ open partial class Parser {
             } else if Current.Kind == SyntaxKind.IfKeyword {
                 elseExpression = ParseIfExpression()
             } else {
-                elseExpression = ParseBlockExpression(valueRequired: true)
+                elseExpression = ParseBlockExpression()
             }
         }
         return IfExpressionSyntax(
@@ -774,18 +774,27 @@ open partial class Parser {
     // Issue #669: parse a block expression `{ stmt*; expr? }`.
     // The last item in the block, if it is an expression statement, becomes
     // the trailing value-producing expression of the block.
-    // ADR-0151: `valueRequired` is true for the branch blocks of an
-    // if-/if-let-expression, where a trailing VALUE is mandatory (GS0277), and
-    // false for an arrow-lambda body block, where a missing tail simply makes
-    // the lambda void (ADR-0128). Only the former promotes a trailing `if let`
-    // to the value-producing binding form; see ParseBlockExpressionItem.
-    private func ParseBlockExpression(valueRequired bool = false) BlockExpressionSyntax {
+    // ADR-0202: every value-capable block — a general block expression, an
+    // if-/if-let-expression branch, an arrow-lambda body and an arrow-member
+    // body — is parsed the same way; whether a missing tail is an error
+    // (GS0277), a void block, or a `never` block is the binder's decision.
+    private func ParseBlockExpression() BlockExpressionSyntax {
+        if skimBraceBodies > 0 && Current.Kind == SyntaxKind.OpenBraceToken {
+            let (skimmedOpen, skimmedClose) = SkimBraceBody()
+            return BlockExpressionSyntax(
+                syntaxTree,
+                skimmedOpen,
+                ImmutableArray[StatementSyntax].Empty,
+                nil,
+                skimmedClose
+            )
+        }
         let statements = ImmutableArray.CreateBuilder[StatementSyntax]()
         var trailingExpression ExpressionSyntax? = nil
         let openBraceToken = MatchToken(SyntaxKind.OpenBraceToken)
         while Current.Kind != SyntaxKind.EndOfFileToken && Current.Kind != SyntaxKind.CloseBraceToken {
             let startToken = Current
-            let statement = ParseBlockExpressionItem(valueRequired)
+            let statement = ParseBlockExpressionItem()
             statements.Add(statement)
             if Current == startToken {
                 NextToken()
@@ -808,81 +817,64 @@ open partial class Parser {
     }
 
     // Issue #669: parse a single item inside a block expression. This is
-    // similar to ParseStatement() but recognizes `if` as potentially
-    // an if-expression (when followed by the block-expression shape).
-    private func ParseBlockExpressionItem(valueRequired bool = false) StatementSyntax {
-        // Issue #3355: a final nested brace block in a value-required block is
-        // itself the trailing expression, not a standalone statement block.
-        // A brace followed by a postfix/binary continuation is likewise
-        // unambiguously expression-shaped. Lambda bodies pass
-        // valueRequired:false, preserving their existing final nested
-        // statement-block interpretation.
-        if Current.Kind == SyntaxKind.OpenBraceToken &&
-            (valueRequired || NestedBraceStartsContinuedExpression()) &&
-            NestedBraceCanBeTrailingExpression() {
+    // similar to ParseStatement() but recognizes the constructs that have both
+    // a statement and an expression form (`if`, `switch`, a nested `{ … }`)
+    // and picks the expression form when the item has the expression shape.
+    //
+    // Issue #4963 / #4965 / #4966 (ADR-0202): this is the ONE place that
+    // decides what the last item of a value-capable block means — a general
+    // block expression, an if-/if-let-expression branch, an arrow-lambda block
+    // body and an arrow-member block body (`func f() T -> { … }`, which
+    // ParseArrowExpressionBody parses through ParseBlockExpression too). Every
+    // one of those blocks applies the same rule, so the same item means the
+    // same thing in all of them.
+    private func ParseBlockExpressionItem() StatementSyntax {
+        // Issue #3355 / #4965 §3: a final nested brace block is itself the
+        // trailing expression, not a standalone statement block — in every
+        // value-capable block, including lambda and arrow-member bodies (the
+        // last-position test is NestedBraceCanBeTrailingExpression). A brace
+        // followed by a postfix/binary continuation is likewise unambiguously
+        // expression-shaped. A nested block whose own tail is void leaves the
+        // enclosing body void, so only a nested block that ends in a value can
+        // change a body's type.
+        if Current.Kind == SyntaxKind.OpenBraceToken && NestedBraceCanBeTrailingExpression() {
             return ExpressionStatementSyntax(syntaxTree, ParseExpression())
         }
+        // Issue #4963 §2: a `switch` item is decided by ParseStatement, which
+        // makes a switch with expression-shaped arms the switch expression, so
+        // it is the block's trailing value the same way a trailing
+        // `if … else …` is.
         // If the current token is `if` and this could be an if-expression
         // (value-producing), parse it as an expression statement wrapping
         // an IfExpressionSyntax. This handles nested `if` in block position.
         //
-        // ADR-0151: a trailing `if let … else …` is likewise promoted to the
-        // value-producing binding form — but ONLY inside a block whose tail
-        // must be a value (`valueRequired`, i.e. an if-/if-let-expression
-        // branch), where the statement form is already rejected with GS0277.
-        // An arrow-lambda body block keeps parsing `if let` as the ADR-0071
-        // STATEMENT so an existing void body that ends in
-        // `if let x = y { return … } else { return … }` is unchanged.
+        // ADR-0151 / ADR-0202: an `if let … else …` chain ending in a plain
+        // `else` is likewise the value-producing binding form, in every
+        // value-capable block. (It used to stay the ADR-0071 statement in an
+        // arrow-lambda body; a body ending in
+        // `if let x = y { return … } else { return … }` is now an if-let
+        // expression whose exiting branches have the `never` type, and one
+        // whose branches are void is the void if-let, so both keep their
+        // meaning.)
         if Current.Kind == SyntaxKind.IfKeyword && LooksLikeIfExpression() {
-            if Peek(1).Kind != SyntaxKind.LetKeyword {
-                return ExpressionStatementSyntax(syntaxTree, ParseIfExpression())
-            }
-            if valueRequired {
-                return ExpressionStatementSyntax(syntaxTree, ParseIfLetExpression())
+            return if Peek(1).Kind == SyntaxKind.LetKeyword {
+                ExpressionStatementSyntax(syntaxTree, ParseIfLetExpression())
+            } else {
+                ExpressionStatementSyntax(syntaxTree, ParseIfExpression())
             }
         }
         return ParseStatement()
     }
 
     private func NestedBraceCanBeTrailingExpression() bool {
-        var depth = 0
-        for var offset = 0; offset <= LookaheadMaxScan; offset++ {
-            let kind = Peek(offset).Kind
-            if kind == SyntaxKind.EndOfFileToken {
-                return false
-            }
-            if kind == SyntaxKind.OpenBraceToken {
-                depth++
-                continue
-            }
-            if kind != SyntaxKind.CloseBraceToken {
-                continue
-            }
-            depth--
-            if depth != 0 {
-                continue
-            }
-            let nextOffset = offset + 1
-            let next = Peek(nextOffset).Kind
-            return next == SyntaxKind.CloseBraceToken || IsExpressionContinuationAfterBraceAt(nextOffset, Peek(offset))
-        }
-        return false
+        let nextOffset = SkipBalancedGroup(0)
+        return Peek(nextOffset).Kind == SyntaxKind.CloseBraceToken ||
+            IsExpressionContinuationAfterBraceAt(nextOffset, Peek(nextOffset - 1))
     }
 
     private func NestedBraceStartsContinuedExpression() bool {
-        var depth = 0
-        for var offset = 0; offset <= LookaheadMaxScan; offset++ {
-            let kind = Peek(offset).Kind
-            if kind == SyntaxKind.EndOfFileToken {
-                return false
-            }
-            if kind == SyntaxKind.OpenBraceToken {
-                depth++
-            } else if kind == SyntaxKind.CloseBraceToken && (depth -= 1) == 0 {
-                return IsExpressionContinuationAfterBraceAt(offset + 1, Peek(offset))
-            }
-        }
-        return false
+        let nextOffset = SkipBalancedGroup(0)
+        return IsExpressionContinuationAfterBraceAt(nextOffset, Peek(nextOffset - 1))
     }
 
     private func IsExpressionContinuationAfterBraceAt(offset int32, closeBrace SyntaxToken) bool {
@@ -938,124 +930,52 @@ open partial class Parser {
     // yields a value (or, for a void-typed lambda body, a void (Action-like)
     // lambda) instead of being rejected with GS0276/GS0124.
     //
-    // We perform look-ahead only (no token consumption): we walk every link of
-    // the `if`/`else if` chain. For each link we scan forward to its then-block
-    // opening brace (the first `{` at paren/bracket depth zero after the `if`
-    // keyword), then to its matching close brace (tracking brace depth, which
-    // handles nested blocks). After the matching `}` we inspect what follows:
-    //   * not `else`                -> void if-statement (return false);
-    //   * `else if`                 -> continue walking from that inner `if`;
-    //   * plain `else { ... }`      -> scan that final else-block to its own
-    //                                  matching close brace, then require
-    //                                  requirement 2 (tail position) above.
+    // Parse the complete header grammar speculatively, skimming brace bodies
+    // instead of recursively parsing them. Initializers can themselves contain
+    // if expressions and braces; a first-brace scan cannot locate their body.
+    // Restoring tokens, position and diagnostics makes this lookahead only.
     private func LooksLikeIfExpression() bool {
-        // `i` is the offset of the `if` keyword for the current chain link.
-        // Peek(0) is the current token (the leading `if`).
-        var i = 0
-        while true {
-            // Locate this link's then-block opening brace: the first `{` at
-            // paren and bracket depth zero after the `if` keyword at offset i.
-            var parenDepth = 0
-            var bracketDepth = 0
-            var j = i + 1
-            while true {
-                if j > LookaheadMaxScan {
-                    return false
-                }
-                let k = Peek(j).Kind
-                if k == SyntaxKind.EndOfFileToken {
-                    return false
-                }
-                if parenDepth == 0 && bracketDepth == 0 && k == SyntaxKind.OpenBraceToken {
-                    break
-                }
-                switch k {
-                    case SyntaxKind.OpenParenthesisToken {
-                        parenDepth++
-                    }
-                    case SyntaxKind.CloseParenthesisToken {
-                        if parenDepth > 0 {
-                            parenDepth--
-                        }
-                    }
-                    case SyntaxKind.OpenSquareBracketToken {
-                        bracketDepth++
-                    }
-                    case SyntaxKind.CloseSquareBracketToken {
-                        if bracketDepth > 0 {
-                            bracketDepth--
-                        }
-                    }
-                    default {
-                        let _ = 0
-                    }
-                }
-                j++
-            }
-            // Scan from the then-block's opening brace to its matching close brace.
-            var braceDepth = 0
-            while true {
-                if j > LookaheadMaxScan {
-                    return false
-                }
-                let k = Peek(j).Kind
-                if k == SyntaxKind.EndOfFileToken {
-                    return false
-                }
-                if k == SyntaxKind.OpenBraceToken {
-                    braceDepth++
-                } else if k == SyntaxKind.CloseBraceToken {
-                    braceDepth--
-                    if braceDepth == 0 {
-                        break
-                    }
-                }
-                j++
-            }
-            // `j` is now at this link's matching close brace. Inspect what
-            // follows to decide whether the chain continues or terminates.
-            if Peek(j + 1).Kind != SyntaxKind.ElseKeyword {
-                // No `else`: this link has a path with no value, so the whole
-                // chain is a void if-statement.
+        let savedPosition = position
+        let savedTokens = tokens
+        let savedDiagnosticCount = Diagnostics.Count
+        skimBraceBodies++
+        try {
+            var statement = ParseStatement()
+            if Current.Kind != SyntaxKind.CloseBraceToken {
                 return false
             }
-            if Peek(j + 2).Kind == SyntaxKind.IfKeyword {
-                // `else if`: continue walking the chain from the inner `if`.
-                i = j + 2
-                continue
-            }
-            // Plain final `else { ... }`: shape requirement satisfied (every
-            // path yields a value). Issue #2349: also require the POSITION
-            // requirement — this chain must be the last item in its
-            // enclosing block expression, i.e. immediately followed by that
-            // block's closing `}`, or it can never actually be used as a
-            // value and must be a void if-statement instead. Scan the final
-            // else-block to its own matching close brace to find that
-            // position.
-            var elseBraceDepth = 0
-            var m = j + 2
             while true {
-                if m > LookaheadMaxScan {
-                    return false
-                }
-                let k = Peek(m).Kind
-                if k == SyntaxKind.EndOfFileToken {
-                    return false
-                }
-                if k == SyntaxKind.OpenBraceToken {
-                    elseBraceDepth++
-                } else if k == SyntaxKind.CloseBraceToken {
-                    elseBraceDepth--
-                    if elseBraceDepth == 0 {
-                        break
+                var elseClause ElseClauseSyntax? = nil
+                switch statement {
+                    case plainIf is IfStatementSyntax {
+                        if plainIf.ThenStatement is not BlockStatementSyntax {
+                            return false
+                        }
+                        elseClause = plainIf.ElseClause
+                    }
+                    case bindingIf is IfLetStatementSyntax {
+                        if bindingIf.ThenStatement is not BlockStatementSyntax {
+                            return false
+                        }
+                        elseClause = bindingIf.ElseClause
+                    }
+                    default {
+                        return false
                     }
                 }
-                m++
+                if elseClause == nil {
+                    return false
+                }
+                statement = elseClause.ElseStatement
+                if statement is BlockStatementSyntax {
+                    return true
+                }
             }
-            // `m` is now at the final else-block's matching close brace.
-            // Value-producing only when immediately followed by the
-            // enclosing block expression's own closing brace (tail position).
-            return Peek(m + 1).Kind == SyntaxKind.CloseBraceToken
+        } finally {
+            skimBraceBodies--
+            position = savedPosition
+            tokens = savedTokens
+            Diagnostics.TruncateTo(savedDiagnosticCount)
         }
     }
 

@@ -1207,27 +1207,73 @@ open partial class Parser {
     private func ParseArrowExpressionBody(asReturn bool, asRefReturn bool = false) BlockStatementSyntax {
         let arrowToken = MatchToken(SyntaxKind.RightArrowToken)
         let arrowPosition = arrowToken.Position
+        // Issue #4966 §1 (ADR-0202): `-> { … }` is the same block body an arrow
+        // lambda has (ADR-0128) — a statement block with an optional trailing
+        // value — not a value-position block expression. It is parsed by the
+        // shared block-body parser and desugared to the equivalent block body:
+        // `{ stmts; return tail }` for a value-returning member and
+        // `{ stmts; tail }` for a void one. With no trailing value the block
+        // body is used as written, so `return` statements, a void `for`, or
+        // any other statement ending are checked exactly as in
+        // `func f() T { … }`. A brace followed by a continuation
+        // (`-> { … }.ToString()`, `-> { … } + 1`) is still one expression.
+        if Current.Kind == SyntaxKind.OpenBraceToken && !ArrowBraceIsContinued() {
+            let block = ParseBlockExpression()
+            let bodyStatements = ImmutableArray.CreateBuilder[StatementSyntax]()
+            bodyStatements.AddRange(block.Statements)
+            let tail = block.Expression
+            if tail != nil {
+                bodyStatements.Add(SynthesizeArrowBodyStatement(tail, arrowPosition, asReturn, asRefReturn))
+            }
+            return BlockStatementSyntax(
+                syntaxTree,
+                block.OpenBraceToken,
+                bodyStatements.ToImmutable(),
+                block.CloseBraceToken
+            )
+        }
         let expression = ParseExpression()
         let openBrace = SyntaxToken(syntaxTree, SyntaxKind.OpenBraceToken, arrowPosition, "{", nil)
         let closeBrace = SyntaxToken(syntaxTree, SyntaxKind.CloseBraceToken, arrowPosition, "}", nil)
-        var statement StatementSyntax
-        if asReturn {
-            let returnKeyword = SyntaxToken(syntaxTree, SyntaxKind.ReturnKeyword, arrowPosition, "return", nil)
-            // Issue #3879: on a `ref`-returning property/indexer the arrow body
-            // desugars to `return ref <expr>`, not `return <expr>` — the `ref`
-            // is already on the declaration (`prop P ref int32 -> slot`), so
-            // repeating it after the arrow would be noise, and desugaring it
-            // away would produce a copy-returning getter that GS0252 rejects.
-            let refKeyword = if asRefReturn {
-                SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, arrowPosition, "ref", nil)
-            } else {
-                default(SyntaxToken?)
-            }
-            statement = ReturnStatementSyntax(syntaxTree, returnKeyword, refKeyword, expression)
-        } else {
-            statement = ExpressionStatementSyntax(syntaxTree, expression)
-        }
+        let statement = SynthesizeArrowBodyStatement(expression, arrowPosition, asReturn, asRefReturn)
         return BlockStatementSyntax(syntaxTree, openBrace, ImmutableArray.Create(statement), closeBrace)
+    }
+
+    // Issue #4966 (ADR-0202): whether the `{` after `->` is followed, past
+    // its matching `}`, by a postfix/binary continuation (`-> { … }.ToString()`),
+    // which makes the whole thing one expression. Decided at the real closing
+    // brace however long the block is; a capped lookahead would read "not
+    // continued" for a long block.
+    private func ArrowBraceIsContinued() bool {
+        let after = SkipBalancedGroup(0)
+        return Peek(after).Kind != SyntaxKind.EndOfFileToken &&
+            IsExpressionContinuationAfterBraceAt(after, Peek(after - 1))
+    }
+
+    // ADR-0131: the statement an arrow body's value desugars to — `return
+    // expr` for a value-returning member and the expression statement `expr`
+    // for a void one (a setter/init, or a function without a result type).
+    private func SynthesizeArrowBodyStatement(
+        expression ExpressionSyntax,
+        arrowPosition int32,
+        asReturn bool,
+        asRefReturn bool
+    ) StatementSyntax {
+        if !asReturn {
+            return ExpressionStatementSyntax(syntaxTree, expression)
+        }
+        let returnKeyword = SyntaxToken(syntaxTree, SyntaxKind.ReturnKeyword, arrowPosition, "return", nil)
+        // Issue #3879: on a `ref`-returning property/indexer the arrow body
+        // desugars to `return ref <expr>`, not `return <expr>` — the `ref`
+        // is already on the declaration (`prop P ref int32 -> slot`), so
+        // repeating it after the arrow would be noise, and desugaring it
+        // away would produce a copy-returning getter that GS0252 rejects.
+        let refKeyword = if asRefReturn {
+            SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, arrowPosition, "ref", nil)
+        } else {
+            default(SyntaxToken?)
+        }
+        return ReturnStatementSyntax(syntaxTree, returnKeyword, refKeyword, expression)
     }
 
     // Issue #1278 / ADR-0131: synthesize the accessor list for an

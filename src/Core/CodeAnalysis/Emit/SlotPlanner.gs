@@ -458,8 +458,16 @@ internal class SlotPlanner {
 
         protected override func VisitSwitchExpression(node BoundSwitchExpression) {
             if !this.switchExpressionSlots.ContainsKey(node) {
-                let resultSlot = this.localTypes.Count
-                this.localTypes.Add(node.Type)
+                // A void or never-typed switch has no result slot (-1); see
+                // SwitchExpressionHasResult.
+                let resultSlot = if SwitchExpressionHasResult(node) {
+                    this.localTypes.Count
+                } else {
+                    -1
+                }
+                if resultSlot >= 0 {
+                    this.localTypes.Add(node.Type)
+                }
                 let discrSlot = this.localTypes.Count
                 this.localTypes.Add(node.Discriminant.Type)
                 this.switchExpressionSlots[node] = (resultSlot, discrSlot)
@@ -1418,6 +1426,13 @@ internal class SlotPlanner {
     }
 
     shared {
+        // Issue #4966 (ADR-0202): whether a switch expression carries a value
+        // in a result slot. A void switch (discarded position) and a switch
+        // whose every arm exits (`never`) have none. The planner and the
+        // emitter both call this so they agree on the slot.
+        internal func SwitchExpressionHasResult(node BoundSwitchExpression) bool -> node.Type != TypeSymbol.Void &&
+            node.Type != TypeSymbol.Never
+
         // Issue #1516: a `??` whose LHS is a bare reference-typed type
         // parameter (NOT wrapped in a `NullableTypeSymbol`). This shape arises
         // from `x as T ?? fallback` because `BoundAsExpression.Type` for a

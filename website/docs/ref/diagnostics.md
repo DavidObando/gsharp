@@ -137,7 +137,7 @@ declaration.
 | GS0121 | Error | Invalid `return`. | `return` used outside of a function. |
 | GS0122 | Error | Void function cannot return an expression. | `return 42` inside a function declared without a return type. |
 | GS0123 | Error | Missing return expression. | `return` with no value inside a function that returns `int`. |
-| GS0124 | Error | Expression must have a value. | A void call used in a value position (e.g. `x = fmt.Println()`). |
+| GS0124 | Error | Expression must have a value. | A void call used in a value position (e.g. `x = fmt.Println()`), or an untyped local whose initializer never produces a value (`let a = throw e`, `let a = if c { return 1 } else { return 2 }`). |
 | GS0125 | Error | Variable not defined. | `x` referenced before being declared. |
 | GS0126 | Error | Name is not a variable. | `len = 5` — `len` is a function, not a variable. |
 | GS0127 | Error | Variable is read-only. | Assignment to a `const` or `let`-bound name. |
@@ -716,7 +716,7 @@ Cause/fix:
 | Code | Severity | Message | Example trigger |
 |------|----------|--------------------------|-----------------|
 | GS0276 | Error | An if-expression in value position must have an `else` branch so that all code paths produce a value. | `let x = if cond { 1 }` — the if has no `else`, so when `cond` is false there is no value to bind. Add a terminal `else { … }`, or use the statement form (`if cond { x = 1 }`). Applies to chained `else if` shapes too: every chain must end in a terminal `else`. |
-| GS0277 | Error | A block expression in value position must end with a value-producing expression. | `let x = { let y = 1 }` or `let x = if cond { } else { 1 }`. Add a trailing value (`{ let y = 1 y }`). Also fires when the last item is a non-expression form (`for`, `while`, etc.). |
+| GS0277 | Error | A block expression in value position must end with a value-producing expression. | `let x = { let y = 1 }` or `let x = if cond { } else { 1 }`. Add a trailing value (`{ let y = 1 y }`). Also fires when the last item is a non-expression form (`for`, `while`, etc.). Does not fire when the block ends in `return`, `throw`, `rethrow`, `break`, `continue` or `goto` (its type is then `never`), or where the value is discarded (a void lambda or arrow body). |
 
 Cause/fix examples:
 

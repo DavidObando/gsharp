@@ -1,6 +1,6 @@
 # ADR-0151: `if let` expressions
 
-- **Status**: Accepted
+- **Status**: Accepted; amended by [ADR-0202](0202-one-rule-for-block-tails-and-arrow-bodies.md) (2026-10-17)
 - **Date**: 2026-07-26
 - **Phase**: Phase 8 — language ergonomics / expression surface
 - **Related**: ADR-0064 (if-expression and block-with-trailing-expression), ADR-0071 (`if let` / `guard let` bindings), ADR-0069 (smart-cast flow narrowing), ADR-0115 (cs2gs canonical forms), ADR-0150 (source decomposition conventions)
@@ -103,26 +103,36 @@ if let first = GetFirst(), let second = GetSecond(first) && second.IsValid {
 9. **Statement forms are unchanged.** A statement-leading `if let` still parses
    as the ADR-0071 statement, and `guard let` is untouched. Source that
    compiled before continues to compile identically.
+   **Amended by ADR-0202:** the *last* item of every value-capable block,
+   arrow-lambda bodies included, follows one rule, so a trailing
+   `if let … else …` is the expression form there too (the parser used to keep
+   the statement form in a lambda body). A lambda body ending in
+   `if let x = y { return … } else { return … }` keeps its meaning — the
+   exiting branches have the `never` type — and one whose branches are void is
+   the void if-let.
 
 ### The `&&` delimiter rule
 
 `&&` is both grammar and an ordinary operator, so the boundary has to be
 stated explicitly:
 
-> Inside an `if let` **expression**, a binding initializer is parsed at the
-> logical-and precedence tier. The first `&&` (or `||`) that would be a
-> *top-level* operator of the final initializer instead terminates the binding
-> list and starts the guard. A logical operator that genuinely belongs to an
-> initializer must be parenthesized.
+> Inside an `if let` **expression**, a binding initializer uses the ordinary
+> expression grammar, with an unparenthesized `&&` reserved as the guard
+> delimiter. Nested expression contexts, such as parentheses and call
+> arguments, reset that restriction. A logical-and that genuinely belongs to
+> the initializer at the delimiter position must be parenthesized.
 
 ```gsharp
 if let ok = (a && b) && ok { … } else { … }   // initializer `(a && b)`, guard `ok`
 ```
 
-A right-associative `??` tail is still accepted unparenthesized in an
-initializer (`if let v = a ?? b && v.IsValid { … }` binds `a ?? b` and guards on
-`v.IsValid`), because `??` is the one realistic nullable-initializer operator
-below the logical-and tier.
+Assignment, right-associative `??` and ternary initializers use that same
+expression grammar rather than a separate precedence-limited parser.
+`if let v = a ?? b && v.IsValid { … }` binds `a ?? b` and guards on
+`v.IsValid`. Likewise `if let v = c ? a : b && v.IsValid { … }` binds the
+ternary and guards on `v.IsValid`. A ternary's middle arm is a nested
+expression context ending at `:`, while its final arm retains the outer
+guard delimiter.
 
 The **statement** form keeps parsing initializers with the full expression
 grammar (`if let x = a && b { … }` still binds `a && b`); the statement form has

@@ -462,6 +462,12 @@ open partial class Parser {
     private func ParseSwitchExpression() ExpressionSyntax {
         let switchKeyword = MatchToken(SyntaxKind.SwitchKeyword)
         let expression = ParseExpressionInBodyHeader()
+        return ParseSwitchExpressionBody(switchKeyword, expression)
+    }
+
+    // Issue #4963: the arms of a switch expression whose header has already
+    // been parsed (ParseStatement parses the header once, then decides the form).
+    private func ParseSwitchExpressionBody(switchKeyword SyntaxToken, expression ExpressionSyntax) ExpressionSyntax {
         let openBrace = MatchToken(SyntaxKind.OpenBraceToken)
         let arms = ImmutableArray.CreateBuilder[SwitchExpressionArmSyntax]()
         while Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken {
@@ -473,6 +479,142 @@ open partial class Parser {
         }
         let closeBrace = MatchToken(SyntaxKind.CloseBraceToken)
         return SwitchExpressionSyntax(syntaxTree, switchKeyword, expression, openBrace, arms.ToImmutable(), closeBrace)
+    }
+
+    // Issue #4963 (ADR-0202): with the current token at the `{` that opens a
+    // switch body, decides whether the arms have the expression shape
+    // (`case P:` / `default:`, or the deprecated `->`) or the statement shape
+    // (`case P { … }` / `default { … }`); an empty body is a statement. It is a
+    // linear, non-consuming token scan of the first arm only — parenthesized,
+    // bracketed and braced groups are skipped whole, so neither the header nor
+    // any nested switch is parsed twice. A braced group followed by the next
+    // arm or the end of the body was the statement arm's body; any other
+    // braced group belongs to the pattern (a property pattern) or the guard.
+    // A first arm that contains `->` (the deprecated separator, or a
+    // function-type pattern) or `?` (a nullable type, or a `? :` conditional)
+    // is decided by parsing that arm; see FirstArmPatternEndsInExpressionSeparator.
+    private func SwitchBodyHasExpressionArms() bool {
+        if Current.Kind != SyntaxKind.OpenBraceToken {
+            return false
+        }
+        if Peek(1).Kind == SyntaxKind.DefaultKeyword {
+            let separator = Peek(2).Kind
+            return separator == SyntaxKind.ColonToken || separator == SyntaxKind.RightArrowToken
+        }
+        if Peek(1).Kind != SyntaxKind.CaseKeyword {
+            return false
+        }
+        var offset = 2
+        while true {
+            let token = Peek(offset)
+            switch token.Kind {
+                case SyntaxKind.EndOfFileToken, SyntaxKind.CloseBraceToken {
+                    return false
+                }
+                case SyntaxKind.OpenParenthesisToken,
+                SyntaxKind.OpenSquareBracketToken,
+                SyntaxKind.QuestionOpenBracketToken {
+                    offset = SkipBalancedGroup(offset)
+                }
+                case SyntaxKind.OpenBraceToken {
+                    offset = SkipBalancedGroup(offset)
+                    let next = Peek(offset).Kind
+                    if next == SyntaxKind.CaseKeyword ||
+                        next == SyntaxKind.DefaultKeyword ||
+                        next == SyntaxKind.CloseBraceToken ||
+                        next == SyntaxKind.EndOfFileToken {
+                        return false
+                    }
+                }
+                case SyntaxKind.ColonToken {
+                    return true
+                }
+                case SyntaxKind.RightArrowToken, SyntaxKind.QuestionToken {
+                    // `->` is either the deprecated arm separator or the arrow
+                    // of a function-type pattern (`case f is (int32) -> string
+                    // { … }`), and `?` either a nullable type (`int32?`) or a
+                    // `? :` conditional whose `:` is not the separator. Only the
+                    // grammar can tell, so parse this one arm's pattern and
+                    // guard.
+                    return FirstArmPatternEndsInExpressionSeparator()
+                }
+                default {
+                    offset++
+                }
+            }
+        }
+    }
+
+    // The precise fallback of SwitchBodyHasExpressionArms for a first arm that
+    // contains `->` or `?`: parses that arm's pattern list and guard with the
+    // switch-expression rules and checks the separator that follows. Only the
+    // first arm is parsed (the header was already consumed), and position, the
+    // token list (which type parsing may split) and diagnostics are restored.
+    private func FirstArmPatternEndsInExpressionSeparator() bool {
+        let savedPosition = position
+        let savedTokens = tokens
+        let savedDiagnosticCount = Diagnostics.Count
+        skimBraceBodies++
+        try {
+            let _ = MatchToken(SyntaxKind.OpenBraceToken)
+            let _ = MatchToken(SyntaxKind.CaseKeyword)
+            let _ = ParseSwitchArmPattern(PatternParseContext.SwitchExpression)
+            let _ = ParseOptionalWhenGuard()
+            return Current.Kind == SyntaxKind.ColonToken || Current.Kind == SyntaxKind.RightArrowToken
+        } finally {
+            skimBraceBodies--
+            position = savedPosition
+            tokens = savedTokens
+            Diagnostics.TruncateTo(savedDiagnosticCount)
+        }
+    }
+
+    // Issue #4963 (ADR-0202): consumes a whole brace body, from the current `{`
+    // to its matching `}`, without parsing it (see skimBraceBodies).
+    private func SkimBraceBody()(OpenBrace SyntaxToken, CloseBrace SyntaxToken) {
+        let openBrace = MatchToken(SyntaxKind.OpenBraceToken)
+        var depth = 1
+        while Current.Kind != SyntaxKind.EndOfFileToken {
+            if Current.Kind == SyntaxKind.OpenBraceToken {
+                depth++
+            } else if Current.Kind == SyntaxKind.CloseBraceToken {
+                depth--
+                if depth == 0 {
+                    break
+                }
+            }
+            let _ = NextToken()
+        }
+        let closeBrace = MatchToken(SyntaxKind.CloseBraceToken)
+        return (openBrace, closeBrace)
+    }
+
+    // Returns the offset just past the group that opens at [`offset`](paramref)
+    // (a `(`, `[`, `?[` or `{`), counting all bracket kinds together, or the
+    // end-of-file offset when the group is unclosed.
+    private func SkipBalancedGroup(offset int32) int32 {
+        var depth = 0
+        var current = offset
+        while true {
+            let kind = Peek(current).Kind
+            if kind == SyntaxKind.EndOfFileToken {
+                return current
+            }
+            if kind == SyntaxKind.OpenParenthesisToken ||
+                kind == SyntaxKind.OpenSquareBracketToken ||
+                kind == SyntaxKind.QuestionOpenBracketToken ||
+                kind == SyntaxKind.OpenBraceToken {
+                depth++
+            } else if kind == SyntaxKind.CloseParenthesisToken ||
+                kind == SyntaxKind.CloseSquareBracketToken ||
+                kind == SyntaxKind.CloseBraceToken {
+                depth--
+                if depth == 0 {
+                    return current + 1
+                }
+            }
+            current++
+        }
     }
 
     private func ParseSwitchExpressionArm() SwitchExpressionArmSyntax {
@@ -491,7 +633,7 @@ open partial class Parser {
             )
         }
         let caseKeyword = MatchToken(SyntaxKind.CaseKeyword)
-        let value = ParsePattern(PatternParseContext.SwitchExpression)
+        let value = ParseSwitchArmPattern(PatternParseContext.SwitchExpression)
         let (whenKeyword, guard_) = ParseOptionalWhenGuard()
         let arrow = MatchSwitchExpressionArmSeparator()
         let result = ParseExpression()
