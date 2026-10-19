@@ -215,7 +215,7 @@ internal shared class ClrOperatorResolution {
     ) ||
         TryResolveConversion(sourceType?.ClrType, targetType?.ClrType, allowExplicit, out method, out isExplicit)
 
-    private func CollectOperators(type Type?, name string, sink List[MethodInfo]) {
+    internal func CollectOperators(type Type?, name string, sink List[MethodInfo]) {
         if type == nil {
             return
         }

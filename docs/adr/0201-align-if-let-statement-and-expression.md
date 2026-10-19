@@ -134,7 +134,7 @@ both forms: the narrowing a `true` guard implies (`&& other != nil`,
 `&& value is Name`) and the guard's when-true pattern variables
 (`&& o is string text`) are in scope there. Each form uses its existing
 `if`-condition classifier (`ClassifyIfConditionNarrowing` for the statement,
-`ClassifyIfExpressionNarrowing` for the expression), so the guard narrows
+`ClassifyConditionalNarrowing` for the expression), so the guard narrows
 exactly as the same condition would after `if`.
 
 For name uses in these regions, the language server uses the compiler semantic

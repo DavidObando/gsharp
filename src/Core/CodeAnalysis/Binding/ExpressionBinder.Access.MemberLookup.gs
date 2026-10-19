@@ -56,6 +56,208 @@ internal partial class ExpressionBinder {
         receiverSyntax ExpressionSyntax? = nil,
         receiverStart int32? = nil
     ) BoundExpression {
+        // Issue #4986: a smart cast narrows `n int32?` to `int32`, but C# code
+        // and G# code written before `?:` narrowed (#4964) reads the guarded
+        // value through `Nullable<T>`'s own members: `n.Value`,
+        // `n.HasValue`, `n.GetValueOrDefault()`. When the narrowed type has
+        // no member of that name, bind the member against the original
+        // `Nullable<T>` storage instead. This is the one place that decides it
+        // for every narrowing region (if-statement, if-expression, `?:`,
+        // early exit), because they all build the receiver with
+        // `BuildNarrowedRead`. The decision looks the name up without
+        // binding anything, so the member and its arguments are bound once:
+        // any member of that name the narrowed type has (a struct's own
+        // `Value`, an overload that turns out inapplicable, an applicable
+        // extension) keeps the narrowed binding and its diagnostics.
+        let narrowingUnwrap = receiver as BoundUnaryExpression
+        let headToken = AccessorHeadToken(rightPart, out var callSyntax)
+        if narrowingUnwrap != nil &&
+            narrowingUnwrap.IsNarrowingUnwrap &&
+            headToken != nil &&
+            NullableOnlyMemberNames.Contains(headToken.ValueText) &&
+            !NarrowedTypeMayHaveMember(narrowingUnwrap.Type, headToken.ValueText, callSyntax) {
+            return BindAccessorStepOnReceiver(
+                narrowingUnwrap.Operand,
+                classSymbol,
+                rightPart,
+                receiverSyntax,
+                receiverStart
+            )
+        }
+        return BindAccessorStepOnReceiver(receiver, classSymbol, rightPart, receiverSyntax, receiverStart)
+    }
+
+    /// Issue #4986: whether [`type`](paramref), the narrowed type of a
+    /// value-type nullable read, may have a member named
+    /// [`name`](paramref) that a member access would bind to: an instance or
+    /// static member of the type, its interfaces or constraints, or an
+    /// extension (source or imported) whose receiver can take it. Nothing is
+    /// bound. When the shape is not known well enough to rule a member out,
+    /// the answer is `true`, which keeps the narrowed binding.
+    /// @param type The narrowed type.
+    /// @param name The member name.
+    /// @param callSyntax The unbound call, or `nil` for a method group.
+    /// @returns `false` only when no member of that name can apply.
+    private func NarrowedTypeMayHaveMember(type TypeSymbol, name string, callSyntax CallExpressionSyntax?) bool {
+        if !$scope.TryLookupExtensionFunctions(type, name).IsDefaultOrEmpty {
+            return true
+        }
+        if ImportedExtensionMayApply(type, name, callSyntax) {
+            return true
+        }
+        switch type {
+            case tupleType is TupleTypeSymbol when TryGetTupleElementIndex(name, tupleType, out _) {
+                return true
+            }
+            case structType is StructSymbol {
+                return StructMayHaveMember(structType, name)
+            }
+            case _ is EnumSymbol {
+                return ClrTypeMayHaveMember(typeof(System.Enum), name)
+            }
+            case typeParameter is TypeParameterSymbol {
+                return TypeParameterMayHaveMember(typeParameter, name)
+            }
+        }
+        let clrType = type.ClrType
+        if clrType == nil {
+            return true
+        }
+        return ClrTypeMayHaveMember(clrType, name)
+    }
+
+    private func StructMayHaveMember(structType StructSymbol, name string) bool {
+        if structType.Fields.Any((field FieldSymbol) -> field.Name == name) || structType.StaticFields.Any(
+            (field FieldSymbol) -> field.Name == name
+        ) ||
+            structType
+            .ConstFields
+            .Any((field FieldSymbol) -> field.Name == name) || structType.Properties.Any(
+            (property PropertySymbol) -> property.Name == name
+        ) ||
+            structType
+            .StaticProperties
+            .Any((property PropertySymbol) -> property.Name == name) || structType.Methods.Any(
+            (method FunctionSymbol) -> method.Name == name
+        ) ||
+            structType
+            .StaticMethods
+            .Any((method FunctionSymbol) -> method.Name == name) || structType.Events.Any(
+            (event_ EventSymbol) -> event_.Name == name
+        ) ||
+            structType
+            .StaticEvents
+            .Any((event_ EventSymbol) -> event_.Name == name) {
+            return true
+        }
+        for interfaceType in structType.Interfaces {
+            if InterfaceMayHaveMember(interfaceType, name) {
+                return true
+            }
+        }
+        for clrInterface in structType.ImplementedClrInterfaces {
+            let clrInterfaceType = clrInterface.ClrType
+            if clrInterfaceType == nil || ClrTypeMayHaveMember(clrInterfaceType, name) {
+                return true
+            }
+        }
+        return ClrTypeMayHaveMember(typeof(System.ValueType), name)
+    }
+
+    private func InterfaceMayHaveMember(interfaceType InterfaceSymbol, name string) bool {
+        if interfaceType.Methods.Any((method FunctionSymbol) -> method.Name == name) || interfaceType.StaticMethods.Any(
+            (method FunctionSymbol) -> method.Name == name
+        ) ||
+            interfaceType
+            .Properties
+            .Any((property PropertySymbol) -> property.Name == name) || interfaceType.Events.Any(
+            (event_ EventSymbol) -> event_.Name == name
+        ) {
+            return true
+        }
+        for baseInterface in interfaceType.BaseInterfaces {
+            if InterfaceMayHaveMember(baseInterface, name) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func TypeParameterMayHaveMember(typeParameter TypeParameterSymbol, name string) bool {
+        if typeParameter.InterfaceConstraint is InterfaceSymbol interfaceConstraint &&
+            InterfaceMayHaveMember(interfaceConstraint, name) {
+            return true
+        }
+        for constraint in[]TypeSymbol? {typeParameter.ClrInterfaceConstraint, typeParameter.ClassConstraint} {
+            if constraint != nil {
+                let constraintClr = constraint.ClrType
+                if constraintClr == nil || ClrTypeMayHaveMember(constraintClr, name) {
+                    return true
+                }
+            }
+        }
+        if typeParameter.TypeParameterBound is TypeParameterSymbol bound && TypeParameterMayHaveMember(bound, name) {
+            return true
+        }
+        return ClrTypeMayHaveMember(typeof(System.ValueType), name)
+    }
+
+    private func ClrTypeMayHaveMember(clrType Type, name string) bool {
+        try {
+            var lookupType = clrType
+            let references = $scope.References
+            if references != nil && references.TryGetMemberLookupType(clrType, out var targetLookupType) {
+                lookupType = targetLookupType
+            }
+            let flags = BindingFlags.Public |
+            BindingFlags.NonPublic |
+            BindingFlags.Instance |
+            BindingFlags.Static |
+            BindingFlags.FlattenHierarchy
+            if lookupType.GetMember(name, flags).Length > 0 {
+                return true
+            }
+            for interfaceType in lookupType.GetInterfaces() {
+                if interfaceType.GetMember(name, flags).Length > 0 {
+                    return true
+                }
+            }
+            return false
+        } catch (ex Exception) when !(ex is OutOfMemoryException) {
+            return true
+        }
+    }
+
+    private func ImportedExtensionMayApply(type TypeSymbol, name string, callSyntax CallExpressionSyntax?) bool {
+        let argumentNames = if callSyntax != nil {
+            BuildDeferredArgumentNames(callSyntax, 1)
+        } else {
+            default(IReadOnlyList[string?]?)
+        }
+        for candidate in this.memberLookup.CollectImportedExtensionMethods(name) {
+            try {
+                if ClrOverloadResolution.MayAcceptExtensionReceiver(
+                    candidate,
+                    type,
+                    callSyntax?.Arguments.Count,
+                    argumentNames
+                ) {
+                    return true
+                }
+            } catch (ex Exception) when !(ex is OutOfMemoryException) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func BindAccessorStepOnReceiver(
+        receiver BoundExpression?,
+        classSymbol ImportedClassSymbol?,
+        rightPart ExpressionSyntax,
+        receiverSyntax ExpressionSyntax?,
+        receiverStart int32?
+    ) BoundExpression {
         var receiver = receiver
         var result = BindAccessorStepAfterPlatformReceiverCheck(
             CheckPlatformReceiver(receiver, receiverSyntax?.Location ?? rightPart.Location),
@@ -1115,7 +1317,14 @@ internal partial class ExpressionBinder {
             return true
         }
         let openTypeParameter = nullableType.UnderlyingType as TypeParameterSymbol
-        if openTypeParameter?.HasValueTypeConstraint != true {
+        // Issue #4986: a user value-kind struct or enum has no ClrType while
+        // binding either. Admit only its properties here: open method groups
+        // do not yet emit a constructed `Nullable<T>` method reference.
+        if openTypeParameter?.HasValueTypeConstraint != true &&
+            (
+            !NullableLifting.IsUserValueTypeNullable(nullableType) ||
+                (memberName != "Value" && memberName != "HasValue")
+        ) {
             return false
         }
         let openNullable = typeof(System.Nullable[_])
@@ -1126,7 +1335,7 @@ internal partial class ExpressionBinder {
         )
         if openProperty != nil && openProperty.GetIndexParameters().Length == 0 && openProperty.CanRead {
             let propertyType = if openProperty.PropertyType.IsGenericParameter {
-                cast[TypeSymbol](openTypeParameter!!)
+                nullableType.UnderlyingType
             } else {
                 ClrNullability.GetPropertyTypeSymbol(openProperty)
             }
@@ -4438,6 +4647,61 @@ internal partial class ExpressionBinder {
     }
 
     shared {
+        /// Issue #4986: the names of the members `Nullable<T>` itself
+        /// declares (`HasValue`, `Value`, `GetValueOrDefault`). Overrides of
+        /// `object` members and accessor methods are left out, since every
+        /// narrowed `T` has those already.
+        private let NullableOnlyMemberNames HashSet[string] = HashSet[string](
+            typeof(System.Nullable[_])
+                .GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                .Where(
+                (member MemberInfo) -> switch member {
+                    case method is MethodInfo: !method.IsSpecialName && method.GetBaseDefinition()
+                        .DeclaringType == method.DeclaringType
+                    case _ is PropertyInfo: true
+                    default: false
+                }
+            )
+                .Select((member MemberInfo) -> member.Name),
+            StringComparer.Ordinal
+        )
+
+        /// Issue #4986: the identifier token that names the first member an
+        /// accessor step looks up: `Value` in `n.Value.X`,
+        /// `GetValueOrDefault` in `n.GetValueOrDefault(7)`.
+        /// @param rightPart The syntax after the receiver's `.`.
+        /// @param callSyntax The unbound head call, or `nil` for a method group.
+        /// @returns The head identifier token, or `nil` without a member name
+        /// or for explicit generic calls (`Nullable<T>` has no generic methods).
+        private func AccessorHeadToken(rightPart ExpressionSyntax?, out callSyntax CallExpressionSyntax?) SyntaxToken? {
+            callSyntax = nil
+            switch rightPart {
+                case name is NameExpressionSyntax {
+                    return name.IdentifierToken
+                }
+                case call is CallExpressionSyntax when call.TypeArgumentList == nil {
+                    callSyntax = call
+                    return call.Identifier
+                }
+                case accessor is AccessorExpressionSyntax {
+                    return AccessorHeadToken(accessor.LeftPart, out callSyntax)
+                }
+                case index is IndexExpressionSyntax {
+                    return AccessorHeadToken(index.Target, out callSyntax)
+                }
+                case creation is ObjectCreationExpressionSyntax {
+                    return AccessorHeadToken(creation.Target, out callSyntax)
+                }
+                case collection is CollectionInitializerExpressionSyntax {
+                    return AccessorHeadToken(collection.Target, out callSyntax)
+                }
+                case unary is UnaryExpressionSyntax when unary.OperatorToken.Kind == SyntaxKind.BangBangToken {
+                    return AccessorHeadToken(unary.Operand, out callSyntax)
+                }
+            }
+            return nil
+        }
+
         private func TryGetTupleElementIndex(memberName string, tupleType TupleTypeSymbol, out zeroBased int32) bool {
             if string.IsNullOrEmpty(memberName) {
                 zeroBased = -1

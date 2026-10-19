@@ -6,8 +6,9 @@
 - **Finalized**: 2026-06-11 (issue [#711](https://github.com/DavidObando/gsharp/issues/711))
 - **Amended**: 2026-10-17 (issue [#4962](https://github.com/DavidObando/gsharp/issues/4962)): the if-expression accepts the if-statement's `SimpleStmt ';'` header initializer, with the same scoping. See the addendum at the end.
 - **Phase**: Phase 8 — language ergonomics / expression surface
-- **Related**: ADR-0062 (generalized ternary), ADR-0009 (switch semantics), issues #669, #706, #711, #3355
+- **Related**: ADR-0062 (generalized ternary), ADR-0009 (switch semantics), ADR-0069 (smart casts), issues #669, #706, #711, #3355, #4964
 - **Amended by**: [ADR-0202](0202-one-rule-for-block-tails-and-arrow-bodies.md) (2026-10-17): a block whose end is unreachable has the `never` type instead of reporting GS0277; a switch expression can be a block's trailing value; the `throw` addendum below is superseded
+- **Amended**: 2026-10-17 (issue [#4964](https://github.com/DavidObando/gsharp/issues/4964)): the ternary narrows its branches exactly as the if-expression does
 
 ## Context
 
@@ -266,3 +267,315 @@ repository does. No migration path is needed.
 - Every value-capable block — including arrow-lambda and arrow-member bodies —
   parses its last item by the same rule, so a final nested `{ … }` is the value
   everywhere. See ADR-0202 for the full rule and the compatibility measurement.
+
+## Addendum (issue #4964, 2026-10-17): one narrowing rule for both conditional forms
+
+The Finalized addendum says the if-expression keeps the smart-cast narrowing of
+variables tested in its condition inside both branches. Issue #2640 implemented
+that for the if-expression only. The ternary, which binds to the same
+`BoundConditionalExpression`, bound its branches with pattern variables
+(ADR-0166) but without narrowing, so `s != nil ? s.Length : 0` reported GS0158
+while `if s != nil { s.Length } else { 0 }` compiled.
+
+**Rule.** `c ? a : b` and `if c { a } else { b }` bind `a` under the narrowing
+`c` implies when true and `b` under the narrowing it implies when false. One
+helper, `ExpressionBinder.ClassifyConditionalNarrowing`, computes both frames
+for both binders: a top-level nil guard (`x != nil`, `x == nil`, `nil != x`,
+value-type nullables and ADR-0186 platform values included), merged with the
+type-test and short-circuit frames (`x is T`, `x !is T`, `!`, `&&`, `||`).
+Narrowing ends with the branch; nothing is lifted past the conditional in
+either form. A narrowed value-type nullable read goes through
+`ExpressionBinder.BuildNarrowedRead`, as in every other narrowing region.
+
+The remaining syntax differences are structural: an if-expression's branches
+are blocks, while a ternary's branches are single expressions. An if-expression
+in a value-required position needs `else`; the discarded void forms can omit it
+under ADR-0202.
+
+**Compatibility.** A narrowed branch has its narrowed type, so a ternary
+whose branch reads the guarded variable can now have a narrower result type,
+exactly as the matching if-expression already had. With `n int32?`,
+`n != nil ? n : 0` is now `int32` (it was `int32?`), which can change the
+inferred type of a `let`/`var` and the overload chosen for an argument.
+
+**`Nullable<T>` members on a narrowed value (issue #4986).** C# reads a
+guarded value-type nullable through `Nullable<T>`'s own members, and
+`n != nil ? n.Value : 0`, `n.HasValue` and `n.GetValueOrDefault()` compiled in
+0.4.1270 and 0.5.7 because the ternary did not narrow. Narrowing alone would
+have broken them, since `int32` has none of those members. The rule, for
+every narrowing region (if-statement, if-expression, `?:`, early exit): a
+member access on a variable or stable path narrowed from value-type
+`Nullable<T>` to `T` binds against the original `Nullable<T>` storage when
+`T` has no member of that name. A member `T` does have keeps binding to `T`
+(a struct with its own `Value` field reads that field). The decision is made
+in one place, `ExpressionBinder.BindAccessorStep`: the narrowed read that
+`BuildNarrowedRead` builds is marked (`BoundUnaryExpression.IsNarrowingUnwrap`),
+and when the accessed name is one `Nullable<T>` itself declares, a lookup that
+binds nothing (`NarrowedTypeMayHaveMember`) asks whether `T` could have a
+member of that name: its own instance or static members (including named
+tuple elements), its interfaces or type-parameter constraints, or an
+applicable source or imported extension.
+Imported extension receivers use the CLR overload resolver's existing input
+inference, constraint checks and implicit conversions, including generic
+struct receivers and numeric widening. Unknown symbolic receivers and bounds
+that supplied arguments can complete or widen remain conservative. Possible
+bounds are recovered from the receiver, its hierarchy and implicit operators;
+each closed possibility is checked by the method constraint checker and the
+ordinary conversion classifier against its closed imported receiver parameter. Only bounds
+mentioned by supplied argument slots may change. This preserves fixed generic
+arguments and variance, and lets structural conversions such as tuple-element
+widening use the inferred substitutions rather than an open CLR signature.
+An incomplete receiver bound is not evidence of impossibility: supplied
+arguments can close a generic conversion target, or refine a contravariant
+upper bound to a subtype that is not enumerable from the receiver. The probe
+validates partial bounds symbolically and retains compatible unknown subtypes,
+checking every independent constraint without enumerating arbitrary completions.
+Sealed or disjoint class bounds and invariant receiver positions cannot use
+that escape hatch. A target-declared
+conversion with an input independent of its type parameter can leave that
+parameter free for later arguments, including value-type/interface or enum
+constraints for which no representative type is available. Unknown subtype
+bounds retain their dependent obligations: known arguments are substituted
+before testing upper bounds, and fixed arguments that constrain an unknown
+bound from below or above are checked rather than erased with the open
+parameter. Operator input bounds are substituted first; freedom is tracked
+per output parameter, so an input that fixes `U` does not also fix unrelated
+`T`. Fixed input bounds keep their constraint checks.
+Constraints crossing fixed and free parameters are substituted and retained,
+not rejected wholesale. A closed contravariant receiver bound can still be
+refined by later arguments: only fixed or explicitly pinned arguments impose
+dependent lower/upper obligations on another parameter. Provisional bounds
+may refine together, retaining their original receiver bounds.
+Open class constraints retain their relationship to those bounds: disjoint
+class hierarchies cannot refine together, and matching constructed class
+bases contribute exact invariant arguments. Those arguments are pinned only
+after checking their original receiver bounds, so joint refinement does not
+erase an incompatible dependent bound.
+Invariant argument shapes are compared recursively; an unresolved leaf does
+not make a mismatching enclosing generic or array shape possible. A
+type-parameter upper bound also contributes its inherited constraints,
+transitively, so reopening `T : U` does not discard `U`'s class bounds.
+Open arguments must pass this symbolic validation even when the ordinary
+constraint checker defers them without reporting a failure. Receiver-shape
+checks recursively reject impossible standard conversions and implicit-operator
+inputs, including fixed invariant arguments. Ordinary receiver paths do not
+discard an operator's input bounds and retry an unrelated completion.
+Missing bounds never trigger Cartesian receiver completion. A fixed argument's
+open generic constraint must have a compatible actual interface or base shape;
+ambiguous interfaces are retained as real alternative domains. Compatibility
+requires joint support, not merely pairwise support: an odd cycle can satisfy
+every pair without admitting any complete choice. Domains connected through
+open parameters and their declared constraints are checked together;
+independent components are never multiplied. Within a component, symbolic
+validation propagates forced alternatives before branching on a smallest
+remaining actual-interface domain, with rejected assignments memoized.
+These choices are actual metadata alternatives, not invented receiver-type
+completions, and each check retains the other conversion obligations.
+Every parameter's lower/upper domain is checked for impossibility before any
+recursive candidate pinning, including domains late in the parameter list.
+The original receiver conversion supplies structural lower, upper and exact
+bounds, not just contravariant upper bounds. This includes closed covariant
+bounds and both the input and output of an implicit operator. Invariant bounds
+remain exact even when the bound is an unsealed class. Reopening a provisional
+argument never discards these conversion obligations.
+Only an exact domain or invariant structural inference pins a candidate; finding a
+single enumerated witness is not proof of uniqueness. Other viable domains
+remain symbolic for later argument inference, not recursively multiplied
+with the other parameters' domains. There is no recursive widening fallback.
+Closed upper bounds are also candidate witnesses: reflected supertypes of a
+lower bound do not enumerate covariance-derived common types such as
+`IEnumerable<object>`. Exhausting those witnesses proves impossibility only
+for a finite domain, not for an open reference-variance domain.
+Variance contributes individual bounds even when repeated leaves cannot unify
+to one type; reversing variance preserves which side contains an inferable
+leaf. Each actual receiver-interface alternative keeps its own constraint
+checks; a nonmatching carrier such as `object` cannot reopen an erased
+receiver bound and bypass those alternatives. Unknown relationships remain
+conservative for later argument inference.
+Reference-variance refinement cannot introduce a value-type argument by
+boxing. CLR sealing alone does not make a reference bound exact: variant
+generic delegates can have narrower constructions.
+Refinement follows the slot's variance direction; for example,
+`Action<object>` can refine an upper bound of `Action<string>`, whereas
+`Action<object>` itself has no stricter construction. Such sealed families
+still retain their constructor and implemented-interface capabilities.
+Bound promotion also recognizes genuine same-family CLR delegate return
+covariance when the overload classifier ranks it separately from a reference
+conversion; delegate shape adapters remain excluded.
+The preliminary domain pass, symbolic validation and declared-bound check use
+one effective-upper-bound compatibility query. Transitive interface bounds
+remain in that query, so an indirect `IDisposable` obligation cannot be
+discarded while refining a sealed delegate family. Incomparable constructions
+are not disjoint nominal classes: `Action<object>` can refine both
+`Action<string>` and `Action<Exception>`, and `Func<Both>` can refine
+`Func<IFoo>` and `Func<IBar>` when `Both` implements both interfaces.
+The query sends all bounds of a delegate family back through the same
+symbolic solver as obligations on its generic slots, including their declared
+constraints. It does not pin an arbitrary common construction or multiply
+receiver completions. Value-only variance, different sealed families and
+genuinely disjoint class bounds remain impossible.
+Closed-family queries share a cache scoped to the enclosing member probe,
+including recursive symbolic checks. Repeated passes therefore do not
+multiply the same obligations in deeply nested variant constructions.
+Reference lower bounds also propagate through open declared constraints.
+For example, `IList<string> -> T -> IList<U>` contributes the invariant
+`U = string` obligation to the same solver; a temporary shape-match dictionary
+is not sufficient. Covariant and contravariant slots retain their respective
+bound directions. Multiple actual interface constructions remain alternatives,
+not conjunctive equalities or arbitrary receiver completions. Their domain
+keys include the actual source and constraint; selecting an alternative can
+reveal dependent actual domains, which must also have joint support.
+Propagation follows finite parameter dependency paths rather than unfolding
+recursive metadata indefinitely. Numeric and tuple promotions do not acquire
+implemented-interface obligations from this reference-conversion rule.
+Fixed identity/boxing lower bounds retain their provenance, including value
+types: `V = Token` and `V : T : IView<U>` preserve the interfaces of `Token`.
+Constraint conversion terms remain strict and contribute fixed bounds before
+the receiver's promotable numeric/tuple bounds; a boxed struct is not discarded
+merely because a different kind of value-type bound can widen.
+Receiver-origin structs that have only standard identity/boxing conversions
+preserve those interfaces too. Numeric lower bounds use a finite actual
+promotion domain from the existing widening lattice and boxing carriers,
+whether or not the parameter has a `struct` constraint. Value-only constraints
+exclude reference carriers rather than enabling the propagation itself.
+The same joint-domain validator checks each selected type's dependent
+constraints; deferring an open interface obligation is not proof of support.
+Selecting a numeric alternative contributes an exact bound while retaining the
+original receiver conversion. Strict identity/boxing constraints retain boxing
+but cannot become numeric promotions, and independent parameter domains remain
+factored rather than forming a Cartesian receiver completion.
+Tuple element promotion retains the tuple constructor's actual interface
+capabilities. Type-identity-keyed equations relate invariant interface positions,
+constructor slots and method parameters, including partially open constructions.
+The probe projects the original receiver and every declared conversion obligation
+through those equations into the same joint lower/upper-bound validator.
+Recovered constructions therefore retain fixed lower bounds and aliases retain
+their value/reference/constructor constraints. Only genuinely unconstrained
+constructor slots use the original element as a witness; constrained slots retain
+their inferred parameter or required type. Constructor validation uses the same
+parameter/constraint components as actual-interface alternatives, retaining
+conversion obligations without multiplying independent tuple families. Ambiguous
+metadata shapes and open-source obligations join the affected components.
+There is no Cartesian element completion or independent recursive
+constructor-constraint checker.
+The shared bound collector separately records upper bounds imposed by CLR
+reference variance. Projecting a declared conversion such as `U : struct` to
+`U -> System.ValueType` retains the obligation without incorrectly requiring
+`U` itself to be a reference type.
+Imported writable-ref receivers use the existing ref-kind reader and require
+receiver identity, including fixed generic receiver arguments; another argument
+cannot widen their storage type. Readonly `in` receivers retain ordinary
+conversion handling. Original receiver terms retain G# argument conversions,
+including invariant standalone arrays and elementwise native-tuple conversions.
+Actual CLR variance slots and declared constraints instead retain CLR reference
+conversions, recursively through arrays and delegates. Both lower/upper
+validation and shared refinement checks use that constraint-domain conversion
+query; the original receiver term remains a separate fail-safe against changing
+G# argument rules. Nominal sealing does not make a variance-compatible array or
+delegate bound exact. Array/interface obligations are projected jointly through
+an array shape over an existing metadata type-parameter slot; the ordinary shared
+bound solver checks its element bounds and actual implemented-interface shapes.
+This retains correlations between array bounds and interface arguments without
+inventing generic parameters or enumerating array refinement vectors. Array rank,
+SZ shape and fixed interface capabilities remain obligations of that shape.
+Nested refinement queries retain the enclosing parameter/constraint component,
+including receiver obligations and selected metadata alternatives. The same
+conversion collector preserves invariant open-parameter equations through the
+existing type-identity-keyed unifier; dependent declared bounds are not lost
+when a constructor slot aliases a method parameter. Refinement memoization keys
+use actual type identities and distinguish conversion terms from parameter
+assignments, selected alternatives and the refined owner, rather than conflating
+parameters that happen to share a name. Bare generic upper bounds retain their
+dependent bounds; they are not nominal class shapes.
+Re-entering a constructor family alpha-renames its new slots onto unused
+same-context metadata parameters, preserving nonvariance attributes and rebinding
+declared constraints. Only the new source scope is renamed; enclosing target
+variables and their equations retain their identities. These parameters are
+symbolic names, not receiver completions or newly emitted CLR parameters.
+Open array bounds likewise bypass nominal class inference and participate in
+the joint structural variance query, including nested element obligations.
+The shared constructor unifier binds the refined owner to that construction,
+so enclosing constraints refer to the same array or delegate witness rather
+than repeatedly introducing unrelated shapes. CLR array upper bounds also
+reject a parameter recurring through only array elements: no finite CLR type
+is a subtype of an array nested over itself.
+Closed shape queries remain independently memoized when their enclosing
+component has no fixed assignments or constructed open constraints; nominal
+parameter attributes are checked before that factoring.
+A nullable value-type lower bound cannot satisfy a nonnullable `struct`
+constraint; the probe uses the same nullable-value reader as declared-constraint
+validation, without excluding nullable arguments from `new()` constraints.
+Inferring an element type cannot turn an `int32` receiver into a collection.
+Object- and collection-initializer suffixes are transparent to this name lookup:
+the original unbound head call still supplies the probe's argument shape.
+Explicit generic
+calls keep the narrowed binding (`Nullable<T>` declares no generic methods).
+Only when none can is the member bound against the storage read. The member
+and its arguments are bound once either way, so a member `T` declares keeps
+its own overload diagnostics even when no overload applies, and an imported
+extension of the same name that cannot take `T`
+(`CollectionExtensions.GetValueOrDefault` on a dictionary) does not block the
+fallback. An unknown shape answers "may have", which keeps the narrowed
+binding. The read is an ordinary `Nullable<T>`
+property or method access, so `n.Value` after a guard emits
+`call Nullable<int32>::get_Value` on the storage, which the guard already
+proved non-nil. The if-statement gains this too; it had rejected `n.Value`
+after a guard in every release.
+
+Same-compilation value types are included for `Value` and `HasValue`: their
+`Nullable<T>` properties bind against the open `Nullable<>` and the emitter
+parents the getter at the constructed `Nullable<T>`, guarded or not (they
+reported GS0158 even unguarded before). This newly admitted path does not
+bind method groups: their emitter does not yet construct the symbolic
+`Nullable<T>` method reference, so accepting them would produce invalid IL.
+`GetValueOrDefault` on a
+same-compilation struct or enum still does not bind in any position (issue
+#5001).
+
+No diagnostic accompanies the fallback. A warning would break builds that
+treat warnings as errors, an Info diagnostic is printed by `gsc` on every
+build, and a Hidden one is dropped by both `gsc` and the language server, so
+none of the available severities gives a fix hint (`write n`, `write true`)
+without either breaking builds or reaching nobody.
+
+Code that compiled cleanly in 0.4.1270 and 0.5.7 now warns or stops compiling in
+these cases:
+
+- **A `!!` the condition makes redundant (maintainer decision, kept).** A user
+  `!!` on the narrowed variable in the proven branch
+  (`s != nil ? s!!.Length : 0`) now reports the GS0536 redundant-assertion
+  warning, exactly as in an if-statement or if-expression branch; `?:` does
+  not suppress it. It stops the build only where warnings are errors.
+  Migration: remove the `!!`.
+- **The narrower type no longer fits.** A later `nil` assignment to an
+  inferred local, or a call to overloads that differ only in reference
+  nullability (`f(string)` / `f(string?)`), which are ambiguous for any
+  non-null argument (issue #4971). Migration: state the type
+  (`let r int32? = …`).
+- **Expression-tree lambdas.** `(v int32?) -> v != nil ? v + 1 : 0` converted to
+  `Expression[Func[int32?, int32]]` compiled, then threw `ArgumentException`
+  when the tree was built (the body had type `Nullable<int32>`). It now reports
+  GS0473, as the if-expression form already did, because the expression-tree
+  lowerer does not yet lower a narrowed value-type read. Migration:
+  `(v ?? -1) + 1`. A type-test narrowed read in an expression-tree lambda
+  compiles and then throws at tree construction in every form (if-expression,
+  `&&`, and now `?:`). Both gaps are issue #4974.
+
+At the time of the change the repository held no nil-guard or type-test
+ternary that reads its guarded variable in compiler, tool or sample source
+(cs2gs lowers a C# `?:` to an if-expression, so its output was already
+narrowed); the cases in test sources are listed in the PR.
+
+**Known gap, shared by both forms.** A nil guard on a value-type nullable
+under `!`, `&&` or `||` (`!(n == nil)`, `a != nil && b != nil` with `int32?`)
+does not narrow in either form, because the short-circuit classifier accepts
+reference nullables only. The if-statement does narrow these. That
+statement/expression difference, and the if-statement's `[NotNullWhen]` call
+narrowing, are tracked in issue #4969.
+
+**Known gap, shared by every narrowing region.** An assignment inside the
+narrowed expression does not end the narrowing for the rest of that
+expression: `s != nil ? consume((s = nil), s.Length) : 0` compiles and
+dereferences nil, as the if-expression, if-statement and `&&` forms already
+did. Invalidation runs at statement granularity; issue #4985 tracks moving it
+to the assignment.

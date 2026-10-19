@@ -1007,6 +1007,30 @@ internal partial class MethodBodyEmitter {
                 // real user-type tokens instead of the type-erased
                 // List<object>. Static getters and CLR receivers fall back
                 // to the plain MemberRef path inside the overload.
+                // Issue #4986: `Value` / `HasValue` on a same-compilation
+                // struct's or enum's `Nullable<T>` bind against the open
+                // `Nullable<>` (the underlying has no ClrType while binding).
+                // Its getter MemberRef must be parented at the constructed
+                // `Nullable<T>` TypeSpec, as the `!!` unwrap's is.
+                let symbolicNullable = receiver?.Type as NullableTypeSymbol
+                let propertyOwner = property.DeclaringType
+                if symbolicNullable != nil && NullableLifting.RequiresSymbolicNullableGetValue(symbolicNullable) &&
+                    propertyOwner != nil &&
+                    propertyOwner.IsGenericType &&
+                    propertyOwner
+                    .GetGenericTypeDefinition()
+                    .FullName == "System.Nullable`1" &&
+                    (property.Name == "Value" || property.Name == "HasValue") {
+                    this.il.OpCode(ILOpCode.Call)
+                    this.il.Token(
+                        if property.Name == "Value" {
+                            this.GetNullableValueRef(symbolicNullable)
+                        } else {
+                            this.GetNullableHasValueRef(symbolicNullable)
+                        }
+                    )
+                    break
+                }
                 let getterRef = if isStatic {
                     (
                         if access.StaticContainerType != nil {
