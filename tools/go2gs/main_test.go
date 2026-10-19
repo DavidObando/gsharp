@@ -530,6 +530,212 @@ func TestOversizedProfileFailsBeforeOutputBootstrap(t *testing.T) {
 	}
 }
 
+func TestProfileParentWorkerHandoffPreservesBoundedInput(t *testing.T) {
+	const childProfileEnvironment = "GO2GS_PROFILE_HANDOFF_CHILD"
+	const childSourceEnvironment = "GO2GS_PROFILE_HANDOFF_SOURCE"
+	if profilePath := os.Getenv(childProfileEnvironment); profilePath != "" {
+		profile, err := readProfile(profilePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, complete, err := analyze(
+			t.Context(), os.Getenv(childSourceEnvironment), t.TempDir(), profile)
+		if err != nil || !complete {
+			t.Fatalf("worker profile analysis failed: complete=%v err=%v", complete, err)
+		}
+		return
+	}
+
+	source := copyFixture(t, "complete")
+	nearProfile, nearInput := nearLimitProfileInput(t, maxProfileBytes)
+	normalizedNearProfile, err := decodeProfile(nearInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicateTags := 0
+	for _, tag := range normalizedNearProfile.BuildTags {
+		if tag == "z_tag" {
+			duplicateTags++
+		}
+	}
+	if !sort.StringsAreSorted(normalizedNearProfile.BuildTags) ||
+		len(normalizedNearProfile.BuildTags) != len(nearProfile.BuildTags) ||
+		duplicateTags < 2 {
+		t.Fatal("near-limit profile did not preserve sorted duplicate build tags")
+	}
+	indented, err := marshalCanonical(normalizedNearProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(len(nearInput)) != maxProfileBytes || int64(len(indented)) <= maxProfileBytes {
+		t.Fatalf("profile sizes do not exercise handoff expansion: input=%d indented=%d limit=%d",
+			len(nearInput), len(indented), maxProfileBytes)
+	}
+	normalProfile := testProfile()
+	normalInput, err := json.Marshal(normalProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name  string
+		input []byte
+	}{
+		{"normal", normalInput},
+		{"exact-bound", nearInput},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			profilePath := filepath.Join(t.TempDir(), "profile.json")
+			if err := os.WriteFile(profilePath, test.input, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			expected, err := decodeProfile(test.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			publicAnalysisBindingSupportedTestHook = func() error { return nil }
+			t.Cleanup(func() { publicAnalysisBindingSupportedTestHook = nil })
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			workerCalled := false
+			workerRoot := ""
+			runAnalysisWorkerProcessTestHook = func(
+				_ context.Context,
+				_ time.Duration,
+				_ int,
+				_ string,
+				_ string,
+				args []string,
+				_ []string,
+			) (processResult, error) {
+				workerCalled = true
+				workerSource, workerProfile, _, parseErr := parseAnalyzeArgs(args[1:])
+				if parseErr != nil {
+					return processResult{}, parseErr
+				}
+				workerRoot = filepath.Dir(workerProfile)
+				data, readErr := os.ReadFile(workerProfile)
+				if readErr != nil {
+					return processResult{}, readErr
+				}
+				loaded, readErr := readProfile(workerProfile)
+				if readErr != nil {
+					return processResult{}, readErr
+				}
+				if !bytes.Equal(data, test.input) {
+					return processResult{}, errors.New("worker profile bytes differ from validated input")
+				}
+				if !reflect.DeepEqual(loaded, expected) {
+					return processResult{}, errors.New("worker profile normalization changed")
+				}
+				command := exec.Command(
+					os.Args[0], "-test.run=^TestProfileParentWorkerHandoffPreservesBoundedInput$")
+				command.Env = append(os.Environ(),
+					childProfileEnvironment+"="+workerProfile,
+					childSourceEnvironment+"="+workerSource,
+				)
+				if output, commandErr := command.CombinedOutput(); commandErr != nil {
+					return processResult{}, fmt.Errorf(
+						"profile worker subprocess: %w\n%s", commandErr, output)
+				}
+				cancel()
+				return processResult{}, context.Canceled
+			}
+			t.Cleanup(func() { runAnalysisWorkerProcessTestHook = nil })
+			out := filepath.Join(t.TempDir(), "out")
+			err = runAnalyze(ctx, []string{
+				"--source", source, "--profile", profilePath, "--out", out,
+			})
+			if !workerCalled || !errors.Is(err, context.Canceled) {
+				t.Fatalf("parent-to-worker handoff = called=%v err=%v", workerCalled, err)
+			}
+			if workerRoot == "" {
+				t.Fatal("worker profile root was not observed")
+			}
+			if _, statErr := os.Lstat(workerRoot); !os.IsNotExist(statErr) {
+				t.Fatalf("worker directory survived cancellation: %v", statErr)
+			}
+			for _, name := range []string{"analysis.json", "run.json"} {
+				if _, statErr := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(statErr) {
+					t.Fatalf("partial %s survived cancellation: %v", name, statErr)
+				}
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name  string
+		input []byte
+	}{
+		{"one-byte-over", append(append([]byte{}, nearInput...), ' ')},
+		{"trailing-value", append(append([]byte{}, normalInput...), []byte("\n{}")...)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			profilePath := filepath.Join(t.TempDir(), "profile.json")
+			if err := os.WriteFile(profilePath, test.input, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			workerCalled := false
+			runAnalysisWorkerProcessTestHook = func(
+				context.Context, time.Duration, int, string, string, []string, []string,
+			) (processResult, error) {
+				workerCalled = true
+				return processResult{}, nil
+			}
+			t.Cleanup(func() { runAnalysisWorkerProcessTestHook = nil })
+			out := filepath.Join(t.TempDir(), "out")
+			err := runAnalyze(t.Context(), []string{
+				"--source", source, "--profile", profilePath, "--out", out,
+			})
+			var exitErr *exitError
+			if !errors.As(err, &exitErr) || exitErr.code != 2 || workerCalled {
+				t.Fatalf("invalid external profile = called=%v err=%v", workerCalled, err)
+			}
+			if _, statErr := os.Lstat(out); !os.IsNotExist(statErr) {
+				t.Fatalf("invalid external profile created output: %v", statErr)
+			}
+		})
+	}
+}
+
+func nearLimitProfileInput(t *testing.T, size int64) (Profile, []byte) {
+	t.Helper()
+	profileWithTags := func(tagCount int) Profile {
+		profile := testProfile()
+		profile.BuildTags = make([]string, tagCount)
+		for index := range profile.BuildTags {
+			if index%3 == 1 {
+				profile.BuildTags[index] = "a_tag"
+			} else {
+				profile.BuildTags[index] = "z_tag"
+			}
+		}
+		return profile
+	}
+	low, high := 0, int(size)
+	for low < high {
+		middle := low + (high-low+1)/2
+		data, err := json.Marshal(profileWithTags(middle))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if int64(len(data)) < size {
+			low = middle
+		} else {
+			high = middle - 1
+		}
+	}
+	profile := profileWithTags(low)
+	data, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(len(data)) >= size {
+		t.Fatalf("compact near-limit profile has size %d, want less than %d", len(data), size)
+	}
+	return profile, append(data, bytes.Repeat([]byte{' '}, int(size)-len(data))...)
+}
+
 func writeSizedTestProfile(t *testing.T, size int64) string {
 	t.Helper()
 	data, err := json.Marshal(testProfile())

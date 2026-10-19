@@ -28,11 +28,25 @@ const (
 var analysisValidationLimitTestHook func() int64
 
 func readProfile(path string) (Profile, error) {
+	profile, _, err := readProfileWithBytes(path)
+	return profile, err
+}
+
+func readProfileWithBytes(path string) (Profile, []byte, error) {
 	var profile Profile
 	data, err := readBoundedRegularFile(path, maxProfileBytes)
 	if err != nil {
-		return profile, fmt.Errorf("read profile: %w", err)
+		return profile, nil, fmt.Errorf("read profile: %w", err)
 	}
+	profile, err = decodeProfile(data)
+	if err != nil {
+		return profile, nil, err
+	}
+	return profile, data, nil
+}
+
+func decodeProfile(data []byte) (Profile, error) {
+	var profile Profile
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&profile); err != nil {

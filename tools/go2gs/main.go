@@ -96,7 +96,7 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	if err != nil {
 		return &exitError{2, err}
 	}
-	profile, err := readProfile(profilePath)
+	profile, profileBytes, err := readProfileWithBytes(profilePath)
 	if err != nil {
 		return &exitError{2, err}
 	}
@@ -128,7 +128,7 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 		}
 	}()
 
-	if err := publicAnalysisBindingSupported(); err != nil {
+	if err := analysisBindingSupported(); err != nil {
 		analysis, complete, analyzeErr := analyzePreload(ctx, sourceRoot, outRoot, profile)
 		if analyzeErr != nil {
 			return &exitError{2, analyzeErr}
@@ -202,10 +202,6 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 		}
 	}()
 	workerRoot := workerDirectory.path
-	profileBytes, err := marshalCanonical(profile)
-	if err != nil {
-		return &exitError{2, err}
-	}
 	workerProfile := filepath.Join(workerRoot, "profile.json")
 	if err := atomicWrite(workerProfile, profileBytes, 0o600); err != nil {
 		return &exitError{2, err}
@@ -241,6 +237,15 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 		return &exitError{1, errors.New("inventory incomplete; see analysis.json diagnostics and blockers")}
 	}
 	return nil
+}
+
+var publicAnalysisBindingSupportedTestHook func() error
+
+func analysisBindingSupported() error {
+	if publicAnalysisBindingSupportedTestHook != nil {
+		return publicAnalysisBindingSupportedTestHook()
+	}
+	return publicAnalysisBindingSupported()
 }
 
 var runAnalysisWorkerProcessTestHook func(
