@@ -484,9 +484,24 @@ conversion collector preserves invariant open-parameter equations through the
 existing type-identity-keyed unifier; dependent declared bounds are not lost
 when a constructor slot aliases a method parameter. Refinement memoization keys
 use actual type identities and distinguish conversion terms from parameter
-assignments and selected alternatives, rather than conflating parameters that
-happen to share a name. Bare generic upper bounds retain their dependent bounds;
-they are not nominal class shapes.
+assignments, selected alternatives and the refined owner, rather than conflating
+parameters that happen to share a name. Bare generic upper bounds retain their
+dependent bounds; they are not nominal class shapes.
+Re-entering a constructor family alpha-renames its new slots onto unused
+same-context metadata parameters, preserving nonvariance attributes and rebinding
+declared constraints. Only the new source scope is renamed; enclosing target
+variables and their equations retain their identities. These parameters are
+symbolic names, not receiver completions or newly emitted CLR parameters.
+Open array bounds likewise bypass nominal class inference and participate in
+the joint structural variance query, including nested element obligations.
+The shared constructor unifier binds the refined owner to that construction,
+so enclosing constraints refer to the same array or delegate witness rather
+than repeatedly introducing unrelated shapes. CLR array upper bounds also
+reject a parameter recurring through only array elements: no finite CLR type
+is a subtype of an array nested over itself.
+Closed shape queries remain independently memoized when their enclosing
+component has no fixed assignments or constructed open constraints; nominal
+parameter attributes are checked before that factoring.
 A nullable value-type lower bound cannot satisfy a nonnullable `struct`
 constraint; the probe uses the same nullable-value reader as declared-constraint
 validation, without excluding nullable arguments from `new()` constraints.

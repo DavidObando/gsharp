@@ -2634,6 +2634,128 @@ Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Prob
         )
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Jagged_Refinement_Slots_Keep_Separate_Element_Equations(compatible bool) {
+        using let fixture = CSharpFixture((`namespace Fixture4986 {
+    public interface IProbe<in T,in U,in V> {}
+    public interface IBounds<in T,in U,in V> {}
+    public struct Probe : IProbe<ELEMENT[][],object,object>, IBounds<System.IO.Stream[][],System.IO.Stream[],System.IO.Stream> {
+        public int V; public Probe(int v) { V = v; }
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<T,U,V>(this IProbe<T,U,V> value, IBounds<T,U,V> fallback)
+            where T : System.Collections.Generic.IList<U>
+            where U : System.Collections.Generic.IList<V>
+            where V : System.IO.Stream => new Probe(99);
+    }
+}`).Replace(
+                "ELEMENT",
+                if compatible {
+                    "System.IO.Stream"
+                } else {
+                    "System.Exception"
+                }
+            ))
+        let direct = if compatible {
+            "Console.WriteLine(Probe(7).GetValueOrDefault(Probe()).V)"
+        } else {
+            ""
+        }
+        let result = CompileAndRun((`import System
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Probe()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+DIRECT
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`).Replace("DIRECT", direct), fixture.AssemblyPath, compileInSeparateProcess: true)
+        Assert.Equal(
+            if compatible {
+                "99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine
+            } else {
+                "7 7 7 0 0 0" + Environment.NewLine
+            },
+            result.Output
+        )
+    }
+
+    @Fact
+    func Open_Array_Upper_Bounds_Use_Structural_Refinement() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public interface IProbe<in T,in U> {}
+    public interface IBounds<T,U> {}
+    public struct Bounds : IBounds<System.IO.Stream[][],System.IO.Stream> {}
+    public struct Probe : IProbe<object[][],object> {
+        public int V; public Probe(int v) { V = v; }
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<T,U>(this IProbe<T,U> value, IBounds<T,U> fallback)
+            where T : System.Collections.Generic.IEnumerable<U[]>
+            where U : System.IO.Stream => new Probe(99);
+    }
+}`)
+        // An invalid argument must not hide an admissible extension's name.
+        let direct = Compile(`import Fixture4986
+func direct(n Probe) int32 -> n.GetValueOrDefault(Probe()).V
+`, fixture.AssemblyPath)
+        Assert.NotEqual(0, direct.ExitCode)
+        Assert.Contains(": error GS0159:", direct.Output, StringComparison.Ordinal)
+        let narrowed = Compile(`import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Probe()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+`, fixture.AssemblyPath)
+        Assert.NotEqual(0, narrowed.ExitCode)
+        Assert.Equal(3, Regex.Matches(narrowed.Output, ": error GS0159:").Count)
+        let result = CompileAndRun(`import System
+import System.IO
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault[[][]Stream,Stream](Bounds()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault[[][]Stream,Stream](Bounds()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault[[][]Stream,Stream](Bounds()).V }
+    return 0
+}
+Console.WriteLine(Probe(7).GetValueOrDefault[[][]Stream,Stream](Bounds()).V)
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath, compileInSeparateProcess: true)
+        Assert.Equal("99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
+    func Recursive_Array_Upper_Bound_Keeps_Nullable_Storage_Fallback() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public interface IProbe<in T> {}
+    public interface IBounds<in T> {}
+    public struct Probe : IProbe<object[][]>, IBounds<object> {
+        public int V; public Probe(int v) { V = v; }
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<T>(this IProbe<T> value, IBounds<T> fallback)
+            where T : System.Collections.Generic.IEnumerable<T[]> => new Probe(99);
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Probe()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath, compileInSeparateProcess: true)
+        Assert.Equal("7 7 7 0 0 0" + Environment.NewLine, result.Output)
+    }
+
     shared {
         /// Compiles a library with an optional extra reference and returns the
         /// driver's exit code and output, without running anything.

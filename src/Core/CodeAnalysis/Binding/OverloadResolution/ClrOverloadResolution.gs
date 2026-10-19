@@ -2056,7 +2056,7 @@ internal shared class ClrOverloadResolution {
                     return false
                 }
             }
-            if !InferenceUpperBoundsMayRefineTogether(upperBounds, refinements, refine) {
+            if !InferenceUpperBoundsMayRefineTogether(parameter, upperBounds, refinements, refine) {
                 return false
             }
         }
@@ -2269,6 +2269,21 @@ internal shared class ClrOverloadResolution {
         constraint Type,
         inferred Dictionary[Type, Type]
     ) bool {
+        if upper.IsGenericParameter || constraint.IsGenericParameter {
+            return true
+        }
+        if upper.IsArray || constraint.IsArray {
+            // Array constructions are validated jointly by the variance solver.
+            if upper.IsArray && constraint.IsArray {
+                return upper.IsSZArray == constraint.IsSZArray && upper.GetArrayRank() == constraint.GetArrayRank()
+            }
+            let other = if upper.IsArray {
+                constraint
+            } else {
+                upper
+            }
+            return other.FullName is "System.Object" or "System.Array"
+        }
         let Definition = func (type Type) Type {
             return if type.IsGenericType {
                 type.GetGenericTypeDefinition()
@@ -2399,8 +2414,8 @@ internal shared class ClrOverloadResolution {
         receiverTerms IReadOnlyList[(Type, Type, bool)],
         choices IReadOnlyDictionary[(Type, Type), Type],
         refinements Dictionary[HashSet[(int32, Type, Type, Type, bool)], bool]
-    ) Func[[]Type, IReadOnlyList[(Type, Type, bool)], bool] {
-        return func (slots[]Type, terms IReadOnlyList[(Type, Type, bool)]) bool {
+    ) Func[Type, []Type, IReadOnlyList[(Type, Type, bool)], bool] {
+        return func (owner Type, prototypeSlots[]Type, terms IReadOnlyList[(Type, Type, bool)]) bool {
             let parents = ExtensionReceiverConstraintParameterParents(parameters, arguments)
             for term in receiverTerms {
                 ConnectExtensionReceiverTermParameters(
@@ -2413,7 +2428,9 @@ internal shared class ClrOverloadResolution {
             let roots = Enumerable
                 .Range(0, parameters.Length)
                 .Where(
-                (i int32) -> terms.Any((term(Type, Type, bool)) -> MentionsGenericParameter(term.Item2, parameters[i]))
+                (i int32) -> parameters[i] == owner || terms.Any(
+                    (term(Type, Type, bool)) -> MentionsGenericParameter(term.Item2, parameters[i])
+                )
             )
                 .Select((i int32) -> ExtensionReceiverConstraintRoot(parents, i))
                 .ToHashSet()
@@ -2421,13 +2438,110 @@ internal shared class ClrOverloadResolution {
                 .Range(0, parameters.Length)
                 .Where((i int32) -> roots.Contains(ExtensionReceiverConstraintRoot(parents, i)))
                 .ToArray()
+            let attributes = ExtensionReceiverParameterAttributes(
+                parameters,
+                arguments,
+                Array.IndexOf(parameters, owner)
+            )
+            if (attributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 ||
+                (
+                (attributes & GenericParameterAttributes.DefaultConstructorConstraint) != 0 &&
+                    terms[0]
+                    .Item1
+                    .GetConstructor(Type.EmptyTypes) == nil
+            ) {
+                return false
+            }
+            if choices.Values.All((selected Type) -> !selected.ContainsGenericParameters) && terms.All(
+                (term(Type, Type, bool)) -> !term.Item2.ContainsGenericParameters
+            ) &&
+                component
+                .All(
+                (i int32) -> parameters[i] == arguments[i] && parameters[i].GetGenericParameterConstraints().All(
+                    (constraint Type) -> !constraint.ContainsGenericParameters || constraint.IsGenericParameter
+                )
+            ) {
+                let key = HashSet[(int32, Type, Type, Type, bool)](
+                    terms.Select((term(Type, Type, bool)) -> (0, term.Item1, term.Item2, term.Item2, term.Item3))
+                )
+                if refinements.TryGetValue(key, out var cached) {
+                    return cached
+                }
+                refinements[key] = true
+                let possible = ArgumentDependentBoundsMaySatisfyConstraints(
+                    prototypeSlots,
+                    prototypeSlots,
+                    terms,
+                    HashSet[string](StringComparer.Ordinal),
+                    nil,
+                    refinements: refinements
+                )
+                refinements[key] = possible
+                return possible
+            }
+            var slots = prototypeSlots
             if component.Any((i int32) -> slots.Contains(parameters[i])) {
-                // A reused metadata slot cannot identify two independent scopes.
-                return true
+                slots = prototypeSlots.ToArray()
+                let contextObject = ResolveObjectInSameContext(prototypeSlots[0]) ?? typeof(object)
+                let available = contextObject
+                    .Assembly
+                    .GetTypes()
+                    .Where((type Type) -> type.IsGenericTypeDefinition)
+                    .OrderBy((type Type) -> type.FullName ?? type.Name, StringComparer.Ordinal)
+                    .SelectMany((type Type) -> type.GetGenericArguments())
+                    .Distinct()
+                    .ToArray()
+                for var i = 0; i < slots.Length; i++ {
+                    if !component.Any((index int32) -> parameters[index] == prototypeSlots[i]) {
+                        continue
+                    }
+                    let slotAttributes = prototypeSlots[i].GenericParameterAttributes &
+                    ~GenericParameterAttributes.VarianceMask
+                    let replacement = available.FirstOrDefault(
+                        (candidate Type) ->
+                        (candidate.GenericParameterAttributes & ~GenericParameterAttributes.VarianceMask) ==
+                        slotAttributes && candidate.GetGenericParameterConstraints().All(
+                            (constraint Type) ->
+                            (slotAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 &&
+                                constraint.FullName == "System.ValueType"
+                        ) &&
+                            !parameters.Contains(candidate) && !slots.Contains(candidate) && !arguments.Any(
+                            (argument Type) -> MentionsGenericParameter(argument, candidate)
+                        ) &&
+                            !receiverTerms
+                            .Any(
+                            (term(Type, Type, bool)) ->
+                            MentionsGenericParameter(term.Item1, candidate) ||
+                                MentionsGenericParameter(term.Item2, candidate)
+                        ) &&
+                            !terms.Any((term(Type, Type, bool)) -> MentionsGenericParameter(term.Item2, candidate))
+                    )
+                    if replacement == nil {
+                        return true
+                    }
+                    // Alpha-rename only the new scope, never enclosing target variables.
+                    slots[i] = replacement
+                }
             }
             let projectedParameters = component.Select((i int32) -> parameters[i]).Concat(slots).ToArray()
             let projectedArguments = component.Select((i int32) -> arguments[i]).Concat(slots).ToArray()
-            let projectedTerms = terms.ToList()
+            let projectedTerms = terms.Select(
+                (term(Type, Type, bool)) -> (
+                    SubstituteExtensionReceiverTerm(term.Item1, prototypeSlots, slots),
+                    term.Item2,
+                    term.Item3
+                )
+            )
+                .ToList()
+            for var i = 0; i < slots.Length; i++ {
+                if slots[i] != prototypeSlots[i] {
+                    for constraint in prototypeSlots[i].GetGenericParameterConstraints() {
+                        projectedTerms.Add(
+                            (slots[i], SubstituteExtensionReceiverTerm(constraint, prototypeSlots, slots), false)
+                        )
+                    }
+                }
+            }
             if component.Length > 0 {
                 projectedTerms.AddRange(
                     receiverTerms.Select(
@@ -2454,6 +2568,7 @@ internal shared class ClrOverloadResolution {
             let state = HashSet[(int32, Type, Type, Type, bool)](
                 projectedTerms.Select((term(Type, Type, bool)) -> (0, term.Item1, term.Item2, term.Item2, term.Item3))
             )
+            state.Add((3, owner, owner, owner, false))
             for var i = 0; i < projectedParameters.Length; i++ {
                 state.Add((1, projectedParameters[i], projectedArguments[i], projectedArguments[i], false))
             }
@@ -2471,6 +2586,15 @@ internal shared class ClrOverloadResolution {
                 if projectedParameters[i] != projectedArguments[i] {
                     equations[projectedParameters[i]] = projectedArguments[i]
                 }
+            }
+            if !UnifyExtensionReceiverConstructorEquation(
+                ResolveExtensionReceiverEquations(owner, equations),
+                projectedTerms[0].Item1,
+                slots,
+                equations
+            ) {
+                refinements[state] = false
+                return false
             }
             for term in projectedTerms {
                 var source = ResolveExtensionReceiverEquations(term.Item1, equations)
@@ -2528,9 +2652,10 @@ internal shared class ClrOverloadResolution {
     }
 
     private func InferenceUpperBoundsMayRefineTogether(
+        owner Type,
         bounds IReadOnlyList[Type],
         refinements Dictionary[HashSet[(int32, Type, Type, Type, bool)], bool],
-        refine Func[[]Type, IReadOnlyList[(Type, Type, bool)], bool]? = nil
+        refine Func[Type, []Type, IReadOnlyList[(Type, Type, bool)], bool]? = nil
     ) bool {
         for var i = 0; i < bounds.Count; i++ {
             let bound = bounds[i]
@@ -2639,7 +2764,9 @@ internal shared class ClrOverloadResolution {
             let key = HashSet[(int32, Type, Type, Type, bool)](
                 terms.Select((term(Type, Type, bool)) -> (0, term.Item1, term.Item2, term.Item2, term.Item3))
             )
-            let cacheable = terms.All((term(Type, Type, bool)) -> !term.Item2.ContainsGenericParameters)
+            let cacheable = refine == nil && terms.All(
+                (term(Type, Type, bool)) -> !term.Item2.ContainsGenericParameters
+            )
             if cacheable && refinements.TryGetValue(key, out var cached) {
                 if !cached {
                     return false
@@ -2658,7 +2785,7 @@ internal shared class ClrOverloadResolution {
                 refinements[key] = true
             }
             let possible = if refine != nil {
-                refine(parameters, terms)
+                refine(owner, parameters, terms)
             } else {
                 ArgumentDependentBoundsMaySatisfyConstraints(
                     parameters,
@@ -2743,6 +2870,15 @@ internal shared class ClrOverloadResolution {
             return true
         }
         if source.IsGenericParameter || target.IsGenericParameter {
+            if source.IsGenericParameter && !tupleElementConversions && equations != nil {
+                var nested = target
+                while nested.IsArray && nested.GetElementType() is {} element {
+                    if element == source {
+                        return false
+                    }
+                    nested = element
+                }
+            }
             if exact &&
                 source.ContainsGenericParameters &&
                 target.ContainsGenericParameters &&
@@ -3193,7 +3329,11 @@ internal shared class ClrOverloadResolution {
                 }
             }
             if !InferenceUpperBoundsMayRefineTogether(
-                upperBounds.Where((upper Type) -> !upper.ContainsGenericParameters || upper.IsInterface).ToList(),
+                parameter,
+                upperBounds.Where(
+                    (upper Type) -> !upper.ContainsGenericParameters || upper.IsInterface || upper.IsArray
+                )
+                    .ToList(),
                 refinements,
                 refine
             ) {
@@ -3645,7 +3785,7 @@ internal shared class ClrOverloadResolution {
         parameters[]Type,
         arguments[]Type,
         refinements Dictionary[HashSet[(int32, Type, Type, Type, bool)], bool],
-        refine Func[[]Type, IReadOnlyList[(Type, Type, bool)], bool]
+        refine Func[Type, []Type, IReadOnlyList[(Type, Type, bool)], bool]
     ) bool {
         if !InferenceBoundMayRefine(bound) ||
             (
@@ -3666,7 +3806,7 @@ internal shared class ClrOverloadResolution {
             let constraint = SubstituteExtensionReceiverTerm(rawConstraint, parameters, arguments)
             if constraint.ContainsGenericParameters {
                 if constraint.IsInterface &&
-                    !InferenceUpperBoundsMayRefineTogether([]Type{bound, constraint}, refinements, refine) {
+                    !InferenceUpperBoundsMayRefineTogether(parameter, []Type{bound, constraint}, refinements, refine) {
                     return false
                 }
                 continue
@@ -3674,7 +3814,7 @@ internal shared class ClrOverloadResolution {
             if constraint.IsValueType {
                 return false
             }
-            if !InferenceUpperBoundsMayRefineTogether([]Type{bound, constraint}, refinements, refine) {
+            if !InferenceUpperBoundsMayRefineTogether(parameter, []Type{bound, constraint}, refinements, refine) {
                 return false
             }
         }
