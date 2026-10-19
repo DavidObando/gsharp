@@ -99,10 +99,6 @@ open partial class Parser {
     // speculative classification from parsing nested bodies twice per level.
     private var skimBraceBodies int32
 
-    // The expression-form if-let header reserves an unparenthesized && for
-    // its guard. Nested expression contexts reset this through ParseExpression.
-    private var stopAtIfLetGuard bool
-
     /// Initializes a new instance of the (cref:Parser) class.
     /// @param syntaxTree The source syntax tree object.
     convenience init(syntaxTree SyntaxTree) {

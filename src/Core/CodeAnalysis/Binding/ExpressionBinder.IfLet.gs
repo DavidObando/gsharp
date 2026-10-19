@@ -7,9 +7,6 @@ package GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
-import System.Collections.Generic
-import System.Collections.Immutable
-import System.Linq
 
 /// ```xmldoc
 /// <content>
@@ -81,17 +78,11 @@ internal partial class ExpressionBinder {
             () -> BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
         )
         var whenTrue = whenTrueBound
-        let bound = ImmutableArray
-            .CreateBuilder[(Syntax IfLetBindingClauseSyntax, Variable VariableSymbol, Initializer BoundExpression)](
-            clauses.Length
-        )
         var anyInvalid = false
         for clause in clauses {
             if !clause.Binding.IsValid {
                 anyInvalid = true
-                continue
             }
-            bound.Add((clause.Syntax, clause.Binding.Variable, clause.Binding.Initializer))
         }
         // Bound AFTER the binding scope/frame is popped: the else branch never
         // sees the bindings.
@@ -103,15 +94,12 @@ internal partial class ExpressionBinder {
             whenFalse is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }
+        let condition = IfLetBindingSupport.BuildShortCircuitCondition(clauses, 0, guard_)
         if IsVoidInDiscardedPosition(canBeVoid, []BoundExpression{whenTrue, whenFalse}) {
             // ADR-0202: the void if-let, as for the plain if-expression.
             return BoundConditionalExpression(
                 nil,
-                Invariant.Required(
-                    BuildIfLetCondition(bound.ToImmutable(), 0, guard_),
-                    "a valid if-let expression has at least one binding",
-                    expression: "BuildIfLetCondition(bound.ToImmutable(), 0, guard)"
-                ),
+                condition,
                 DiscardValue(whenTrue),
                 DiscardValue(whenFalse),
                 TypeSymbol.Void
@@ -140,7 +128,6 @@ internal partial class ExpressionBinder {
             }
             return BoundErrorExpression(nil)
         }
-        let condition = IfLetBindingSupport.BuildShortCircuitCondition(clauses, 0, guard_)
         return BoundConditionalExpression(nil, condition, convertedTrue, convertedFalse, resultType)
     }
 

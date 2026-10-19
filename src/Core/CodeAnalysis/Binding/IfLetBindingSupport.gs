@@ -301,15 +301,19 @@ internal shared class IfLetBindingSupport {
     }
 
     private func HasAmbiguousBooleanContinuation(expression BoundExpression, initializer ExpressionSyntax) bool {
-        // Only assignment values and ternary false arms can absorb a following
-        // logical operator. Bound conditionals also represent closed if/if-let
-        // expressions, and parentheses need not survive in the bound tree.
+        // Assignment values, coalescing tails and ternary false arms retain
+        // the parser's logical boundary. Closed nested expressions do not.
         var hasContinuation = false
         var source = initializer
         while true {
             var nextSource ExpressionSyntax? = nil
             if source is ConditionalExpressionSyntax conditional {
                 nextSource = conditional.WhenFalse
+            } else if source is BinaryExpressionSyntax binary &&
+                binary
+                .OperatorToken
+                .Kind == SyntaxKind.QuestionQuestionToken {
+                nextSource = binary.Right
             } else {
                 var isAssignment = false
                 for child in source.GetChildren() {
@@ -339,9 +343,12 @@ internal shared class IfLetBindingSupport {
             return false
         }
         // Find the original value even when assignment lowering captures it in
-        // a temporary. Unwrap parentheses only for lookup, not to resume the
-        // source continuation walk inside a closed expression.
+        // a temporary. Grouping/overflow wrappers are removed only for lookup,
+        // not to resume the source continuation inside a closed expression.
         source = AssignmentTargetSyntaxFacts.UnwrapParentheses(source)
+        while source is CheckedExpressionSyntax checkedExpression {
+            source = AssignmentTargetSyntaxFacts.UnwrapParentheses(checkedExpression.Expression)
+        }
         for node in expression.DescendantsAndSelf() {
             if node is BoundExpression value && object.ReferenceEquals(value.Syntax, source) {
                 return HasBooleanValueBeforeContextualConversion(value)
@@ -351,8 +358,9 @@ internal shared class IfLetBindingSupport {
     }
 
     private func HasBooleanValueBeforeContextualConversion(expression BoundExpression) bool {
-        // Target typing can convert every value arm of a closed expression.
-        // Inspect the whole result, not just one arm as a continuation.
+        // Cover the result positions of all target-typed branchy expressions:
+        // if/if-let/ternary, block, switch and coalescing. Conditions, switch
+        // discriminants and guards are not result values.
         let pending = Stack[BoundExpression]()
         pending.Push(expression)
         while pending.Count > 0 {
@@ -361,6 +369,13 @@ internal shared class IfLetBindingSupport {
                 continue
             }
             switch value {
+                case defaultValue is BoundDefaultExpression when defaultValue.Syntax is DefaultExpressionSyntax{
+                    TypeClause: nil
+                } {
+                    // A bare default has no intrinsic nullable type: its
+                    // contextual target cannot rule out a Boolean value.
+                    continue
+                }
                 case conversion is BoundConversionExpression when conversion.Syntax == nil || object.ReferenceEquals(
                     conversion.Syntax,
                     conversion.Expression.Syntax
@@ -373,6 +388,23 @@ internal shared class IfLetBindingSupport {
                 }
                 case block is BoundBlockExpression {
                     pending.Push(block.Expression)
+                }
+                case selection is BoundSwitchExpression {
+                    if selection.Arms.IsDefaultOrEmpty {
+                        return false
+                    }
+                    for arm in selection.Arms {
+                        pending.Push(arm.Result)
+                    }
+                }
+                case coalesce is BoundBinaryExpression when coalesce.Op.Kind == BoundBinaryOperatorKind.NullCoalesce {
+                    // Reuse the operator's own rules for the present left
+                    // value, rather than computing nullable unwrapping here.
+                    if BoundBinaryOperator.Bind(SyntaxKind.QuestionQuestionToken, coalesce.Left.Type, TypeSymbol.Bool)
+                        ?.Type != TypeSymbol.Bool {
+                        return false
+                    }
+                    pending.Push(coalesce.Right)
                 }
                 default {
                     return false

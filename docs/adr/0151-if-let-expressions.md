@@ -106,7 +106,6 @@ if let first = GetFirst(), let second = GetSecond(first) && second.IsValid {
 9. **Statement forms are unchanged.** A statement-leading `if let` still parses
    as the ADR-0071 statement, and `guard let` is untouched. Source that
    compiled before continues to compile identically.
-<<<<<<< HEAD
    **Amended by ADR-0202:** the *last* item of every value-capable block,
    arrow-lambda bodies included, follows one rule, so a trailing
    `if let … else …` is the expression form there too (the parser used to keep
@@ -114,10 +113,7 @@ if let first = GetFirst(), let second = GetSecond(first) && second.IsValid {
    `if let x = y { return … } else { return … }` keeps its meaning — the
    exiting branches have the `never` type — and one whose branches are void is
    the void if-let.
-   *Superseded by [ADR-0200](0200-align-if-let-statement-and-expression.md):
-=======
    *Superseded by [ADR-0201](0201-align-if-let-statement-and-expression.md):
->>>>>>> 7eb04f7d5 (Reconcile if-let baselines and ADR numbering with main)
    the statement form now shares this form's header (initializer rule, guard,
    short circuit, progressive narrowing).*
 

@@ -175,14 +175,16 @@ Derived().Run(true, false)`)
         Assert.Equal([]string{"GS0624@7:20", "GS0624@8:27"}, Ids(result))
     }
 
-    @Fact
-    func ExplicitNullableConversionBeforeGuard_IsNotAnAmbiguousBooleanContinuation() {
+    @Theory
+    @InlineData("cast[bool?](false)")
+    @InlineData("default(bool?)")
+    func ExplicitNullableValueBeforeGuard_IsNotAnAmbiguousBooleanContinuation(initializer string) {
         let result = EmittedOracle.Evaluate(`func Run(b bool) bool {
     var cached bool? = nil
-    if let v = cached = cast[bool?](false) && b { }
-    return if let w = cached = cast[bool?](false) && b { w } else { false }
+    if let v = cached = VALUE && b { }
+    return if let w = cached = VALUE && b { w } else { false }
 }
-Run(false)`)
+Run(false)`.Replace("VALUE", initializer))
         Assert.Empty(result.Diagnostics)
     }
 
@@ -215,6 +217,74 @@ Run(false, nil, true)`.Replace("INITIALIZER", initializer)
         let result = EmittedOracle.Evaluate(source)
         Assert.Empty(result.Diagnostics)
         Assert.Equal(false, result.Value)
+    }
+
+    @Fact
+    func Compatibility_TargetTypedSwitchBeforeGuard_ChecksEveryResultArm() {
+        const source = `func Run(n int32, fallback bool?, b bool) bool {
+    var cached bool? = nil
+    if let v = cached = switch n { case 0: ARM default: false } && b { return v }
+    return if let w = cached = switch n { case 0: ARM default: false } && b { w } else { false }
+}
+Run(0, true, false)`
+        let nullable = EmittedOracle.Evaluate(source.Replace("ARM", "fallback"))
+        Assert.Empty(nullable.Diagnostics)
+        Assert.Equal(false, nullable.Value)
+        let boolean = EmittedOracle.Evaluate(source.Replace("ARM", "true"))
+        Assert.Equal([]string{"GS0624@3:16", "GS0624@4:23"}, Ids(boolean))
+    }
+
+    @Theory
+    @InlineData("left ?? ARM")
+    @InlineData("(left ?? ARM)")
+    @InlineData("(left != nil ? default : ARM)")
+    func Compatibility_TargetTypedIndexerValueBeforeGuard_ChecksItsResultValues(initializer string) {
+        const source = `class Box {
+    var stored bool? = nil
+    prop this[index int32] bool? {
+        get -> stored
+        set { stored = value }
+    }
+    func Run(left bool?, fallback bool?, b bool) bool {
+        if let v = this[0] = INITIALIZER && b { return v }
+        return if let w = this[0] = INITIALIZER && b { w } else { false }
+    }
+}
+Box().Run(nil, true, false)`
+        let nullable = EmittedOracle.Evaluate(source.Replace("INITIALIZER", initializer.Replace("ARM", "fallback")))
+        Assert.Empty(nullable.Diagnostics)
+        Assert.Equal(false, nullable.Value)
+        let boolean = EmittedOracle.Evaluate(source.Replace("INITIALIZER", initializer.Replace("ARM", "false")))
+        Assert.Equal([]string{"GS0624@8:20", "GS0624@9:27"}, Ids(boolean))
+    }
+
+    @Fact
+    func Compatibility_BoxedAssignmentCoalescingTailBeforeGuard_ReportsGS0624() {
+        let result = EmittedOracle.Evaluate(`func Run(value object?, b bool) string {
+    var cached object? = nil
+    if let v = cached = value ?? false && b { return "body" }
+    return if let w = cached = value ?? false && b { "body" } else { "skip" }
+}
+Run("present", false)`)
+        Assert.Equal([]string{"GS0624@3:16", "GS0624@4:23"}, Ids(result))
+    }
+
+    @Theory
+    @InlineData("checked")
+    @InlineData("unchecked")
+    func Compatibility_CheckedValueBeforeGuard_PreservesItsOriginalType(wrapper string) {
+        const source = `func Run(a bool, fallback bool?, b bool) bool {
+    var cached bool? = nil
+    if let v = cached = WRAPPER(VALUE) && b { return v }
+    return if let w = cached = WRAPPER(VALUE) && b { w } else { false }
+}
+Run(true, nil, false)`
+        let wrapped = source.Replace("WRAPPER", wrapper)
+        let nullable = EmittedOracle.Evaluate(wrapped.Replace("VALUE", "fallback"))
+        Assert.Empty(nullable.Diagnostics)
+        Assert.Equal(false, nullable.Value)
+        let boolean = EmittedOracle.Evaluate(wrapped.Replace("VALUE", "a"))
+        Assert.Equal([]string{"GS0624@3:16", "GS0624@4:23"}, Ids(boolean))
     }
 
     @Theory

@@ -3,6 +3,9 @@
 - **Status**: Accepted (maintainer decision on issue #4961, 2026-10-17)
 - **Date**: 2026-10-17
 - **Phase**: Phase 8 — language ergonomics / expression surface
+- **Amended by**: [ADR-0202](0202-one-rule-for-block-tails-and-arrow-bodies.md)
+  for block-tail types and discarded/void expression contexts; the shared
+  header rules here are unchanged.
 - **Supersedes**: in [ADR-0151](0151-if-let-expressions.md), semantics item 9
   and the last paragraph of "The `&&` delimiter rule" (the statement form
   keeping the full expression grammar). In
@@ -67,11 +70,14 @@ differences that follow from statement versus value position remain.
 ```ebnf
 IfLetStmt        = "if" LetBindingHeader Statement ( "else" Statement )? .
 IfLetExpression  = "if" LetBindingHeader BlockExpression
-                   "else" ( IfExpression | IfLetExpression | BlockExpression ) .
+                   ( "else" ( IfExpression | IfLetExpression | BlockExpression ) )? .
 LetBindingHeader = LetBindingList ( "&&" Expression )? .
 LetBindingList   = LetBindingClause ( "," LetBindingClause )* .
 LetBindingClause = "let" identifier TypeClause? "=" LetInitializer .
 ```
+
+An expression that must produce a value requires `else`; ADR-0202 permits its
+omission when the expression is discarded and its result is `void`.
 
 ### 1. Initializer rule (both forms, every `let`-binding header)
 
@@ -158,7 +164,7 @@ mistyped initializer that the author believed could be `nil`.
 | Code | When |
 | --- | --- |
 | GS0296 | An initializer is not nullable (unchanged). |
-| **GS0624** | A guard leaves a non-nullable `bool` initializer, or an unparenthesized assignment/conditional continuation hides that boolean behind a nullable conversion. Parenthesize the entire initializer to make its boundary explicit. |
+| **GS0624** | A guard leaves a non-nullable `bool` initializer, or an unparenthesized assignment/coalescing/conditional continuation hides that boolean behind a nullable conversion. Parenthesize the entire initializer to make its boundary explicit. |
 | **GS0625** | `guard let` or `while let` has a `&& guard`; only `if let` supports one (follow-up #4968). Reported by the parser, so the `&&` never leaks into the initializer and no GS0157 follows. |
 | **GS0626** | A top-level `\|\|` follows a binding list. Only `&&` introduces a guard. |
 | GS0155 | The guard does not convert to `bool` (unchanged; now also for the statement form). |
@@ -167,9 +173,9 @@ mistyped initializer that the author believed could be `nil`.
 
 | Aspect | Statement form | Expression form | Reason |
 | --- | --- | --- | --- |
-| `else` | Optional; any statement | Mandatory (GS0276); block, `if` or `if let` | A value position needs a value on every path |
-| Branch bodies | Statements | Blocks ending in a value (GS0277), unified (GS0263) | Same |
-| Lowering | Nested `BoundIfStatement`s, or forward conditional gotos to one else label | `BoundConditionalExpression` over a short-circuit condition | A statement then-block can `return`, `break`, `continue`, `goto`, `yield`, `await` and capture; without an `else` it stays in plain statement nodes |
+| `else` | Optional; any statement | Required for a value (GS0276); optional when discarded (ADR-0202) | A value position needs a value on every path |
+| Branch bodies | Statements | Value or terminal `never` tails; `void` when discarded (ADR-0202), unified (GS0263) | Context determines whether a value is required |
+| Lowering | Nested `BoundIfStatement`s, or forward conditional gotos to one else label | `BoundConditionalExpression` for a value; statement nodes for `void`, both over the shared short-circuit condition | A statement then-block can `return`, `break`, `continue`, `goto`, `yield`, `await` and capture; without an `else` it stays in plain statement nodes |
 
 Without an `else` branch, or with a single test, the statement lowers to nested
 statements:
@@ -247,17 +253,29 @@ top level contains `&&` or `||`.
   operation outside them. Use `(cached = a && b)` or
   `(flag ? fallback : false && b)` to keep the original meaning, or parenthesize
   only the prefix assignment/conditional to make the new guard explicit.
-  The check follows genuine source assignment/ternary continuations, then
+  The check follows the parser's source assignment/coalescing/ternary
+  continuations, then
   locates their final value by its bound syntax anchor, including inside
   synthesized assignment-result temporary initializers. It strips implicit
   conversions, but does not look through an explicit nullable cast or an
   ordinary source call. Nested `if`/`if let` expressions and parentheses close
   the source continuation even when their bound representation is another
-  conditional or has no parenthesized node; parentheses are unwrapped only to
-  locate that whole value, never to resume the continuation. When target typing
-  has converted a closed conditional or block result, every value arm must be
-  boolean before implicit conversion; inspecting only the false arm would
-  mistake an intrinsically nullable expression for a boolean one.
+  conditional or has no parenthesized node. Parentheses and `checked`/`unchecked`
+  wrappers are unwrapped only to locate that whole value, never to resume the
+  continuation. The contextual conversion funnel anchors the original branchy
+  value before wrapping it, so binding-time queries do not depend on the later
+  syntax-anchoring walk to recognize an implicit conversion. When target typing
+  has converted a closed expression, the check covers every target-typed
+  branchy result: `if`/`if let`/ternary, blocks, switch arms and coalescing.
+  Every value arm must be boolean before implicit conversion; inspecting only
+  one arm would mistake an intrinsically nullable expression for a boolean one.
+  An untyped `default` arm has no intrinsic nullable type and cannot establish
+  that the old continuation was non-Boolean; an explicitly nullable typed
+  `default(T?)`, like an explicitly nullable cast, remains opaque.
+  Coalescing reuses the ordinary operator binder to classify its present left
+  value. An open coalescing tail is a source continuation even when its overall
+  result is not boolean: with `cached object?`, `cached = value ?? false && b`
+  can box the boolean tail before storing it.
 - An assignment initializer (`if let v = cached = Next() { … }`) keeps
   working in every form; a guard may follow it.
 - A `?:` initializer without a top-level logical operator
