@@ -23,6 +23,69 @@ import Xunit
 /// and serves every other file's bodies from the (cref:BoundBodyCache)
 /// — while remaining bit-for-bit identical to a full rebuild.
 open class IncrementalGlobalScopeReuseTests {
+    @Theory
+    @InlineData("StringBuilder", "MemoryStream")
+    @InlineData("api.StringBuilder", "api.MemoryStream")
+    func BodyOnlyEdit_PreservesPerFileImportsAndAliases(textType string, streamType string) {
+        var fileA = Parse("A.gs", `package P
+import System.Text
+import api = System.Text
+func A() int32 {
+    let value = %TYPE%()
+    return value.Length
+}`.Replace("%TYPE%", textType))
+        var fileB = Parse("B.gs", `package P
+import System.IO
+import api = System.IO
+func B() int32 {
+    let value = %TYPE%()
+    return value.Capacity
+}`.Replace("%TYPE%", streamType))
+        let scope_ = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(fileA, fileB))
+        let cache = BoundBodyCache()
+        var program = Binder.BindProgram(scope_, references: nil, cache)
+        AssertImportedLocals(program)
+        for fileName in[]string{"A.gs", "B.gs", "A.gs"} {
+            let previous = if fileName == "A.gs" {
+                fileA
+            } else {
+                fileB
+            }
+            let edited = Parse(fileName, previous.Text.ToString().Replace("    return", "\n    return"))
+            let unchanged = if fileName == "A.gs" {
+                fileB
+            } else {
+                fileA
+            }
+            let unchangedFunction = scope_.Functions.Single(
+                (f FunctionSymbol) -> f.Name == if fileName == "A.gs" {
+                    "B"
+                } else {
+                    "A"
+                }
+            )
+            let unchangedBody = program.Functions[unchangedFunction]
+            Assert.True(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope_, previous, edited))
+            program = Binder.BindProgram(scope_, references: nil, cache, ImmutableHashSet.Create(edited))
+            AssertImportedLocals(program)
+            Assert.Same(unchangedBody, program.Functions[unchangedFunction])
+            Assert.Equal(2, scope_.Imports.Count((i ImportSymbol) -> i.Declaration?.SyntaxTree == edited))
+            Assert.Equal(2, scope_.Imports.Count((i ImportSymbol) -> i.Declaration?.SyntaxTree == unchanged))
+            let fullScope = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(edited, unchanged))
+            let full = Binder.BindProgram(fullScope, references: nil)
+            AssertImportedLocals(full)
+            for function in program.Functions.Keys {
+                let fullFunction = full.Functions.Keys.Single((f FunctionSymbol) -> f.Name == function.Name)
+                Assert.Equal(Print(full.Functions[fullFunction]), Print(program.Functions[function]))
+            }
+            if fileName == "A.gs" {
+                fileA = edited
+            } else {
+                fileB = edited
+            }
+        }
+    }
+
     @Fact
     func BodyOnlyEdit_RepointsFieldLocation() {
         let original = Parse("A.gs", `package P
@@ -548,6 +611,22 @@ var x = Helper()`)
     }
 
     shared {
+        private func AssertImportedLocals(program BoundProgram) {
+            Assert.Empty(program.Diagnostics)
+            for name in[]string{"A", "B"} {
+                let function = program.Functions.Keys.Single((f FunctionSymbol) -> f.Name == name)
+                let local = Assert.Single(program.Functions[function].Statements.OfType[BoundVariableDeclaration]())
+                Assert.Equal(
+                    if name == "A" {
+                        typeof(System.Text.StringBuilder)
+                    } else {
+                        typeof(MemoryStream)
+                    },
+                    local.Variable.Type.ClrType
+                )
+            }
+        }
+
         private func Parse(fileName string, source string) SyntaxTree -> SyntaxTree.Parse(
             SourceText.From(source, fileName)
         )

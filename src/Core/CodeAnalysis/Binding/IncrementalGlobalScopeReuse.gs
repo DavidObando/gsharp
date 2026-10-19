@@ -47,6 +47,8 @@ import System
 /// System.Collections.Immutable.ImmutableHashSet{SyntaxTree}));
 /// because each body's backing syntax now belongs to the dirty tree, the
 /// per-body cache read is bypassed and the body binds fresh.
+/// Explicit imports and aliases are also re-pointed, so the binder's per-file
+/// import filter sees the edited tree ((cref:ImportSymbol.RepointDeclaration)).
 ///
 /// Structural identity is proven by a <em>skeleton diff</em>: blanking the body
 /// blocks of <em>every</em> body-bearing member and requiring the remaining text
@@ -122,7 +124,8 @@ shared class IncrementalGlobalScopeReuse {
         // Skeleton equality guarantees identical structure, hence identical
         // per-kind declaration counts and ordering. Build a positional map for
         // each declaration kind; defensively assert matching counts.
-        if !TryBuildPositionalMap[FunctionDeclarationSyntax](previousTree, updatedTree, out var functionMap) ||
+        if !TryBuildPositionalMap[ImportSyntax](previousTree, updatedTree, out var importMap) ||
+            !TryBuildPositionalMap[FunctionDeclarationSyntax](previousTree, updatedTree, out var functionMap) ||
             !TryBuildPositionalMap[StructDeclarationSyntax](previousTree, updatedTree, out var structMap) ||
             !TryBuildPositionalMap[InterfaceDeclarationSyntax](previousTree, updatedTree, out var interfaceMap) ||
             !TryBuildPositionalMap[ConstructorDeclarationSyntax](previousTree, updatedTree, out var constructorMap) ||
@@ -148,6 +151,17 @@ shared class IncrementalGlobalScopeReuse {
         // ---- Phase 1: gather every reused member whose backing syntax belongs
         // to the edited file, validating that each maps to a positional
         // counterpart. Nothing is mutated yet; on any unmapped member we bail.
+        let importsToRepoint = List[(Symbol ImportSymbol, Updated ImportSyntax)]()
+        for import_ in $scope.Imports {
+            let declaration = import_.Declaration
+            if declaration == nil || declaration.SyntaxTree != previousTree {
+                continue
+            }
+            if !importMap.TryGetValue(declaration, out var updated) {
+                return false
+            }
+            importsToRepoint.Add((import_, updated))
+        }
         let functionsToRepoint = List[(Symbol FunctionSymbol, Updated FunctionDeclarationSyntax)]()
         for function in EnumerateFunctionSymbols($scope) {
             let declaration FunctionDeclarationSyntax? = function.Declaration
@@ -304,6 +318,9 @@ shared class IncrementalGlobalScopeReuse {
         // ---- Phase 2: all validation passed — apply the re-point. This is the
         // only mutation, and it only swaps backing syntax (signatures and
         // accessor shapes are byte-identical).
+        for (symbol, updated) in importsToRepoint {
+            symbol.RepointDeclaration(updated)
+        }
         for (symbol, updated) in functionsToRepoint {
             symbol.RepointDeclaration(updated)
         }

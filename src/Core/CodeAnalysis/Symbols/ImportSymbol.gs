@@ -64,5 +64,12 @@ class ImportSymbol : Symbol {
     /// Gets the declaration of the import, or `null` for compiler-synthesized imports.
     prop Declaration ImportSyntax? {
         get;
+        private set;
+    }
+
+    /// Re-points this reused import at the matching declaration in the edited tree, preserving per-file visibility.
+    /// @param declaration The corresponding declaration in the re-parsed tree.
+    internal func RepointDeclaration(declaration ImportSyntax) {
+        Declaration = declaration
     }
 }
