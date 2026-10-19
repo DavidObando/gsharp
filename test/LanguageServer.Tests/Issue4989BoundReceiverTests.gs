@@ -4,6 +4,7 @@
 
 package GSharp.LanguageServer.Tests
 
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
@@ -516,6 +517,68 @@ func Run() {
             DefinitionComputer.ComputeDefinition(DocumentUri.From("file:///issue5035.gs")!!, content, position)
         )
         AssertPosition(LanguageServerTestHelpers.PositionOf(source, "Values(value int32)"), location.Range.Start)
+    }
+
+    @Theory
+    @InlineData("Memory[int32]", typeof(Memory[int32]), "System.Memory[int32].Span System.Span[int32] { get; }")
+    @InlineData(
+        "ReadOnlyMemory[int32]",
+        typeof(ReadOnlyMemory[int32]),
+        "System.ReadOnlyMemory[int32].Span System.ReadOnlySpan[int32] { get; }"
+    )
+    func Issue5035_RefReturningClrIndexer_PreservesTheBoundProperty(
+        container string,
+        declaringType Type,
+        signature string
+    ) {
+        let source = `package Repro
+import System
+func Run(memory MEMORY_TYPE) string {
+    let value = memory.Span[0]
+    return memory.Span[0].ToString()
+}
+`.Replace("MEMORY_TYPE", container)
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let first = TokenAt(content, source, "Span[0]", 0)
+        let indexSyntax = Assert.IsType[IndexExpressionSyntax](first.Parent?.Parent)
+        let accessor = Assert.IsType[AccessorExpressionSyntax](indexSyntax.Parent)
+        let dereference = Assert.IsType[BoundDereferenceExpression](
+            compilation.GetSemanticModel(content.SyntaxTree).GetBoundNode(accessor)
+        )
+        let index = Assert.IsType[BoundClrIndexExpression](dereference.Operand)
+        Assert.IsType[ByRefTypeSymbol](index.Type)
+        Assert.Equal(TypeSymbol.Int32, dereference.Type)
+        for var occurrence = 0; occurrence < 2; occurrence++ {
+            let token = TokenAt(content, source, "Span[0]", occurrence)
+            let property = Assert.IsAssignableFrom[System.Reflection.PropertyInfo](
+                BoundSemantics.GetImportedMember(compilation, token)
+            )
+            Assert.Equal(declaringType.GetProperty("Span"), property)
+            AssertIndexedHover(
+                content,
+                LanguageServerTestHelpers.PositionOf(source, "Span[0]", occurrence),
+                "Span",
+                signature
+            )
+            Assert.True(
+                ImportedClrMemberResolver.TryResolveClrMember(
+                    content.SyntaxTree,
+                    compilation,
+                    token,
+                    out var navigation
+                )
+            )
+            Assert.Equal(property, navigation)
+        }
+        let call = TokenAt(content, source, "ToString()", 0)
+        let method = Assert.IsAssignableFrom[System.Reflection.MethodInfo](
+            BoundSemantics.GetImportedMember(compilation, call)
+        )
+        Assert.Equal(typeof(int32), method.DeclaringType)
+        Assert.Equal(typeof(int32), BoundSemantics.GetExpressionType(compilation, indexSyntax)?.ClrType)
     }
 
     shared {

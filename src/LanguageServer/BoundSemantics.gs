@@ -269,9 +269,15 @@ shared class BoundSemantics {
         return current
     }
 
+    // AutoDereferenceRefReturn adds no syntax step. Follow only its wrapped
+    // CLR index here, not an explicit dereference or an arbitrary operand.
     private func IndexTargetOf(node BoundExpression) BoundExpression? -> switch node {
         case index is BoundIndexExpression: index.Target
         case index is BoundClrIndexExpression: index.Target
+        case BoundDereferenceExpression{
+            Operand: BoundClrIndexExpression index
+        } dereference when index.Type is ByRefTypeSymbol &&
+            IsSynthesizedWrapper(dereference, index): index.Target
         case block is BoundBlockExpression: CapturedIndexTarget(block)
         default: ReceiverOf(node)
     }
