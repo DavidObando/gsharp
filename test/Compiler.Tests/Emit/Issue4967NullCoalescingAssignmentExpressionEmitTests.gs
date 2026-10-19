@@ -20,6 +20,44 @@ import Xunit
 /// when the target is nil.
 open class Issue4967NullCoalescingAssignmentExpressionEmitTests {
     @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func StructReceivers_ConstrainedGenericIndexer_PreservesDispatch(valuePosition bool, refTarget bool) {
+        let source = `package Test
+import System
+import System.Collections.Generic
+func Fill[T IList[string?]](input T) string? {
+    var items = input
+    var ref alias = items
+    ASSIGN
+}
+let values = []string?{nil}
+let segment = ArraySegment[string?](values)
+Console.WriteLine(Fill(segment))
+Console.WriteLine(Fill(segment))
+Console.WriteLine(values[0])`.Replace(
+            "ASSIGN",
+            if valuePosition {
+                `return TARGET[0] ??= "v"`
+            } else {
+                `TARGET[0] ??= "v"
+    return items[0]`
+            }
+        )
+            .Replace(
+            "TARGET",
+            if refTarget {
+                "alias"
+            } else {
+                "items"
+            }
+        )
+        Assert.Equal("v${Environment.NewLine}v${Environment.NewLine}v${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func StructReceivers_ProjectedGenericClrField_UsesSymbolicStorage(constrainedReceiver bool) {

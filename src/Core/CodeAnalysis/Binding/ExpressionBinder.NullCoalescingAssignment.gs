@@ -638,7 +638,15 @@ internal partial class ExpressionBinder {
                         )
                     }
                     let args = argsBuilder.ToImmutable()
-                    let read = BoundClrIndexExpression(readAnchor, target, clrIdx.Indexer, args, clrIdx.Type)
+                    let read = BoundClrIndexExpression(
+                        readAnchor,
+                        target,
+                        clrIdx.Indexer,
+                        args,
+                        clrIdx.Type,
+                        clrIdx.ConstrainedReceiverTypeParameter,
+                        clrIdx.ConstrainedInterfaceType
+                    )
                     let write = if target is BoundVariableExpression variable &&
                         variable.Variable is not LocalVariableSymbol{RefKind: not RefKind.None} {
                         BoundClrIndexAssignmentExpression(
@@ -647,7 +655,9 @@ internal partial class ExpressionBinder {
                             clrIdx.Indexer,
                             args,
                             boundRhs,
-                            clrIdx.Type
+                            clrIdx.Type,
+                            clrIdx.ConstrainedReceiverTypeParameter,
+                            clrIdx.ConstrainedInterfaceType
                         )
                     } else {
                         BoundClrIndexAssignmentExpression.WithExpressionTarget(
@@ -656,7 +666,9 @@ internal partial class ExpressionBinder {
                             clrIdx.Indexer,
                             args,
                             boundRhs,
-                            clrIdx.Type
+                            clrIdx.Type,
+                            clrIdx.ConstrainedReceiverTypeParameter,
+                            clrIdx.ConstrainedInterfaceType
                         )
                     }
                     return (read, write)

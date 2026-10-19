@@ -261,6 +261,8 @@ address. Null and array-bounds checks therefore precede argument side effects,
 without retaining a managed pointer across suspension. CLR field chains retain
 their addressability after a reference owner is captured, including across REPL
 submissions; receiver emission and spill planning share that decision.
+Rebuilt CLR indexer reads and writes retain their constrained receiver and
+interface types, including writes through native ref aliases.
 
 For a storage receiver, a suspending right side is computed into a value
 local inside the statement's nil branch before the write. This prevents
