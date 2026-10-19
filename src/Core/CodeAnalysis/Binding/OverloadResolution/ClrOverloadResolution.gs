@@ -1564,6 +1564,12 @@ internal shared class ClrOverloadResolution {
         let inferenceBounds = originalArguments ?? arguments
         // Receiver upper bounds are provisional, not fixed dependent arguments.
         for var index = 0; index < parameters.Length; index++ {
+            if pinnedParameters?.Contains(index) == true &&
+                !inferenceBounds[index].ContainsGenericParameters &&
+                freeBounds?.ContainsKey(parameters[index].Name) != true &&
+                (arguments[index].IsValueType || !IsInferenceBoundPromotion(inferenceBounds[index], arguments[index])) {
+                return false
+            }
             if ExtensionReceiverArgumentMayRefine(
                 parameters,
                 arguments,
@@ -1602,6 +1608,7 @@ internal shared class ClrOverloadResolution {
                 parameter.GenericParameterAttributes &
                 GenericParameterAttributes.NotNullableValueTypeConstraint
             ) != 0
+            let openClassBounds = List[Type]()
             for rawConstraint in parameter.GetGenericParameterConstraints() {
                 var constraint = rawConstraint
                 for var i = 0; i < parameters.Length; i++ {
@@ -1613,7 +1620,13 @@ internal shared class ClrOverloadResolution {
                         constraint = inferenceBounds[i]
                     }
                 }
-                if constraint.ContainsGenericParameters || constraint.IsInterface {
+                if constraint.IsInterface {
+                    continue
+                }
+                if constraint.ContainsGenericParameters {
+                    if !constraint.IsGenericParameter {
+                        openClassBounds.Add(constraint)
+                    }
                     continue
                 }
                 if !InferenceBoundMayRefine(constraint) {
@@ -1626,6 +1639,41 @@ internal shared class ClrOverloadResolution {
                 } else {
                     upperBounds.Add(constraint)
                 }
+            }
+            let inferred = Dictionary[string, Type](StringComparer.Ordinal)
+            for constraint in openClassBounds {
+                for upper in upperBounds.Concat(exactBounds) {
+                    if !upper.IsInterface &&
+                        !InferCompatibleExtensionReceiverClassBounds(upper, constraint, parameters, inferred) {
+                        return false
+                    }
+                }
+            }
+            for var i = 0; i < parameters.Length; i++ {
+                if !possibleArguments[i].IsGenericParameter || !inferred.TryGetValue(
+                    parameters[i].Name,
+                    out var candidate
+                ) ||
+                    candidate.ContainsGenericParameters {
+                    continue
+                }
+                let candidateArguments = cast[[]Type](possibleArguments.Clone())
+                candidateArguments[i] = candidate
+                let pinned = if pinnedParameters != nil {
+                    HashSet[int32](pinnedParameters)
+                } else {
+                    HashSet[int32]()
+                }
+                pinned.Add(i)
+                return ArgumentDependentBoundsMaySatisfyConstraints(
+                    parameters,
+                    candidateArguments,
+                    receiverType,
+                    argumentDependent,
+                    freeBounds,
+                    pinned,
+                    inferenceBounds
+                )
             }
             if exactBounds.Count > 0 || lowerBounds.Count > 0 {
                 let candidates = List[Type]()
@@ -1682,6 +1730,46 @@ internal shared class ClrOverloadResolution {
             }
         }
         return SatisfiesDeclaredConstraints(parameters, possibleArguments, default, out _, out _)
+    }
+
+    private func InferCompatibleExtensionReceiverClassBounds(
+        upper Type,
+        constraint Type,
+        parameters[]Type,
+        inferred Dictionary[string, Type]
+    ) bool {
+        let Definition = func (type Type) Type {
+            return if type.IsGenericType {
+                type.GetGenericTypeDefinition()
+            } else {
+                type
+            }
+        }
+        let Match = func (type Type, definition Type) Type? {
+            for var current Type? = type; current != nil; current = current!!.BaseType {
+                if ClrTypeUtilities.AreSame(Definition(current), definition) {
+                    return current
+                }
+            }
+            return nil
+        }
+        var pattern Type? = constraint
+        var actual = Match(upper, Definition(constraint))
+        if actual == nil {
+            pattern = Match(constraint, Definition(upper))
+            actual = upper
+        }
+        if pattern == nil || !UnifyForInference(pattern, actual, inferred) {
+            return false
+        }
+        var closedPattern = pattern
+        for parameter in parameters {
+            if inferred.TryGetValue(parameter.Name, out var argument) && !argument.ContainsGenericParameters {
+                closedPattern = SubstituteClrType(closedPattern, parameter, argument)
+            }
+        }
+        // Class arguments are invariant; inference alone is not equality proof.
+        return closedPattern.ContainsGenericParameters || ClrTypeUtilities.AreSame(closedPattern, actual)
     }
 
     private func ExtensionReceiverArgumentMayRefine(

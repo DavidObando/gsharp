@@ -345,6 +345,11 @@ not rejected wholesale. A closed contravariant receiver bound can still be
 refined by later arguments: only fixed or explicitly pinned arguments impose
 dependent lower/upper obligations on another parameter. Provisional bounds
 may refine together, retaining their original receiver bounds.
+Open class constraints retain their relationship to those bounds: disjoint
+class hierarchies cannot refine together, and matching constructed class
+bases contribute exact invariant arguments. Those arguments are pinned only
+after checking their original receiver bounds, so joint refinement does not
+erase an incompatible dependent bound.
 Reference-variance refinement cannot introduce a value-type argument by
 boxing.
 Inferring an element type cannot turn an `int32` receiver into a collection.

@@ -681,6 +681,18 @@ Console.WriteLine("${ternary(Input[string](7))} ${expression(Input[string](7))} 
         "System.Collections.Generic.List<string>,string",
         "where T : System.Collections.Generic.List<U>"
     )
+    @InlineData(
+        "in T,in U",
+        "object,object",
+        "System.Collections.Generic.List<string>,string",
+        "where T : System.Collections.Generic.List<U>"
+    )
+    @InlineData(
+        "in T,in U",
+        "System.Collections.Generic.List<string>,object",
+        "DerivedList<string>,string",
+        "where T : DerivedList<U>"
+    )
     func Dependent_Receiver_Bounds_Can_Refine_Together(
         variance string,
         receiverArguments string,
@@ -688,6 +700,7 @@ Console.WriteLine("${ternary(Input[string](7))} ${expression(Input[string](7))} 
         constraints string
     ) {
         using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public class DerivedList<T> : System.Collections.Generic.List<T> {}
     public interface IProbe<` + variance + `> {}
     public interface IBounds<in T,in U> {}
     public struct Probe : IProbe<` + receiverArguments + `>, IBounds<` + fallbackArguments + `> {
@@ -710,6 +723,36 @@ func statement(n Probe?) int32 {
 Console.WriteLine("${direct(Probe(7))} ${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
 `, fixture.AssemblyPath)
         Assert.Equal("99 99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData("System.Exception,object")
+    @InlineData("System.Collections.Generic.List<string>,System.IO.Stream")
+    @InlineData("DerivedList<string>,System.IO.Stream")
+    func Impossible_Joint_Receiver_Bounds_Preserve_Nullable_Storage(receiverArguments string) {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public class DerivedList<T> : System.Collections.Generic.List<T> {}
+    public interface IProbe<in T,in U> {}
+    public interface IBounds<in T,in U> {}
+    public struct Probe : IProbe<` + receiverArguments + `>, IBounds<object,object> {
+        public int V; public Probe(int v) { V = v; }
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<T,U>(this IProbe<T,U> value, IBounds<T,U> fallback)
+            where T : System.Collections.Generic.List<U> => new Probe(99);
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Probe()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("7 7 7 0 0 0" + Environment.NewLine, result.Output)
     }
 
     @Theory
