@@ -794,6 +794,124 @@ Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Prob
     }
 
     @Theory
+    @InlineData(
+        "System.Collections.Generic.IList<string>",
+        "System.IO.Stream",
+        "System.Collections.Generic.IList<U>",
+        false
+    )
+    @InlineData("System.Collections.Generic.IList<string>", "string", "System.Collections.Generic.IList<U>", true)
+    @InlineData(
+        "System.Collections.Generic.IEnumerable<string>",
+        "System.IO.Stream",
+        "System.Collections.Generic.IEnumerable<U>",
+        false
+    )
+    @InlineData(
+        "System.Collections.Generic.IComparer<System.IO.Stream>",
+        "System.Exception",
+        "System.Collections.Generic.IComparer<U>",
+        false
+    )
+    @InlineData(
+        "System.Collections.Generic.IComparer<object>",
+        "System.IO.Stream",
+        "System.Collections.Generic.IComparer<U>",
+        true
+    )
+    @InlineData("Multiple", "System.IO.Stream", "IView<U>", false)
+    @InlineData("MultipleCompatible", "System.IO.Stream", "IView<U>", true)
+    func Open_Interface_Constraints_Preserve_Lower_Bound_Obligations(
+        lower string,
+        upper string,
+        constraint string,
+        compatible bool
+    ) {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public interface IView<T> {}
+    public class Multiple : IView<string>, IView<System.Exception> {}
+    public class MultipleCompatible : IView<System.IO.Stream>, IView<System.IO.MemoryStream> {}
+    public interface IProbe<out T,in U> {}
+    public interface IBounds<in T,in U> {}
+    public struct Probe : IProbe<` + lower + `,` + upper + `>, IBounds<object,object> {
+        public int V; public Probe(int v) { V = v; }
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<T,U>(this IProbe<T,U> value, IBounds<T,U> fallback)
+            where T : ` + constraint + ` => new Probe(99);
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Probe()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        let expected = if compatible {
+            "99 99 99 0 0 0"
+        } else {
+            "7 7 7 0 0 0"
+        }
+        Assert.Equal(expected + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Open_Interface_Alternatives_Keep_Dependent_Obligations(compatible bool) {
+        let alternatives = if compatible {
+            "IView<System.IO.Stream>, IView<System.IO.MemoryStream>"
+        } else {
+            "IView<string>, IView<System.Exception>"
+        }
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public interface IView<T> {}
+    public class First : ` + alternatives + ` {}
+    public class Second : ` + alternatives + ` {}
+    public class Outer : IView<First>, IView<Second> {}
+    public interface IProbe<out T,in U,in V> {}
+    public interface IBounds<in T,in U,in V> {}
+    public struct Probe : IProbe<Outer,object,System.IO.Stream>, IBounds<object,object,object> {
+        public int V; public Probe(int v) { V = v; }
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<T,U,V>(this IProbe<T,U,V> value, IBounds<T,U,V> fallback)
+            where T : IView<U> where U : IView<V> => new Probe(99);
+    }
+}`)
+        let source = `import System
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Probe()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+`
+        if compatible {
+            // Ordinary inference still rejects this valid candidate (#5021).
+            // The name probe must retain it and preserve those diagnostics.
+            let direct = Compile(`import Fixture4986
+func direct(n Probe) int32 -> n.GetValueOrDefault(Probe()).V
+`, fixture.AssemblyPath)
+            let guarded = Compile(source, fixture.AssemblyPath)
+            Assert.NotEqual(0, direct.ExitCode)
+            Assert.Equal(1, Regex.Matches(direct.Output, "error GS0159:").Count)
+            Assert.NotEqual(0, guarded.ExitCode)
+            Assert.Equal(3, Regex.Matches(guarded.Output, "error GS0159:").Count)
+            return
+        }
+        let result = CompileAndRun(source + `
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath, compileInSeparateProcess: true)
+        Assert.Equal("7 7 7 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
     @InlineData("System.Exception", "string", "where T : System.Collections.Generic.List<U>")
     @InlineData("object", "string", "where T : System.IDisposable where U : T")
     @InlineData("object", "int", "where T : U")

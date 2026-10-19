@@ -378,7 +378,7 @@ bounds, not just contravariant upper bounds. This includes closed covariant
 bounds and both the input and output of an implicit operator. Invariant bounds
 remain exact even when the bound is an unsealed class. Reopening a provisional
 argument never discards these conversion obligations.
-Only an exact domain or invariant class inference pins a candidate; finding a
+Only an exact domain or invariant structural inference pins a candidate; finding a
 single enumerated witness is not proof of uniqueness. Other viable domains
 remain symbolic for later argument inference, not recursively multiplied
 with the other parameters' domains. There is no recursive widening fallback.
@@ -417,6 +417,17 @@ genuinely disjoint class bounds remain impossible.
 Closed-family queries share a cache scoped to the enclosing member probe,
 including recursive symbolic checks. Repeated passes therefore do not
 multiply the same obligations in deeply nested variant constructions.
+Reference lower bounds also propagate through open declared constraints.
+For example, `IList<string> -> T -> IList<U>` contributes the invariant
+`U = string` obligation to the same solver; a temporary shape-match dictionary
+is not sufficient. Covariant and contravariant slots retain their respective
+bound directions. Multiple actual interface constructions remain alternatives,
+not conjunctive equalities or arbitrary receiver completions. Their domain
+keys include the actual source and constraint; selecting an alternative can
+reveal dependent actual domains, which must also have joint support.
+Propagation follows finite parameter dependency paths rather than unfolding
+recursive metadata indefinitely. Numeric and tuple promotions do not acquire
+implemented-interface obligations from this reference-conversion rule.
 Inferring an element type cannot turn an `int32` receiver into a collection.
 Explicit generic
 calls keep the narrowed binding (`Nullable<T>` declares no generic methods).

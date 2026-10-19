@@ -1691,9 +1691,10 @@ internal shared class ClrOverloadResolution {
         argumentDependent HashSet[string],
         freeBounds IReadOnlyDictionary[string, Type]?,
         pinnedParameters HashSet[int32]? = nil,
-        constraintAlternatives IReadOnlyDictionary[(int32, Type), Type]? = nil,
+        constraintAlternatives IReadOnlyDictionary[(Type, Type), Type]? = nil,
         validateAlternatives bool = true,
-        refinements Dictionary[string, bool]? = nil
+        refinements Dictionary[string, bool]? = nil,
+        discoveredDomains Dictionary[(Type, Type), List[Type]]? = nil
     ) bool {
         let refinements = refinements ?? Dictionary[string, bool](StringComparer.Ordinal)
         let possibleArguments = cast[[]Type](arguments.Clone())
@@ -1711,11 +1712,18 @@ internal shared class ClrOverloadResolution {
             }
         }
         let choices = if constraintAlternatives != nil {
-            Dictionary[(int32, Type), Type](constraintAlternatives)
+            Dictionary[(Type, Type), Type](constraintAlternatives)
         } else {
-            Dictionary[(int32, Type), Type]()
+            Dictionary[(Type, Type), Type]()
         }
-        let domains = Dictionary[(int32, Type), List[Type]]()
+        let receiverTerms = ExpandExtensionReceiverConstraintTerms(
+            parameters,
+            possibleArguments,
+            receiverTerms,
+            choices
+        )
+        let domains = Dictionary[(Type, Type), List[Type]]()
+        let constraintTerms = List[(Type, Type)](receiverTerms)
         for var i = 0; i < parameters.Length; i++ {
             if possibleArguments[i].ContainsGenericParameters {
                 continue
@@ -1727,38 +1735,49 @@ internal shared class ClrOverloadResolution {
                         constraint = SubstituteClrType(constraint, parameters[j], possibleArguments[j])
                     }
                 }
-                let key = (i, rawConstraint)
-                if !constraint.ContainsGenericParameters || choices.ContainsKey(key) {
-                    continue
-                }
-                let candidates = if constraint.IsGenericType {
-                    GetExtensionReceiverGenericShapes(possibleArguments[i], constraint.GetGenericTypeDefinition())
-                } else {
-                    List[Type](){possibleArguments[i]}
-                }
-                let matches = candidates.Where(
-                    (candidate Type) -> OpenExtensionReceiverStandardShapeMayApply(
-                        candidate,
-                        constraint,
-                        tupleElementConversions: false
-                    )
+                constraintTerms.Add((possibleArguments[i], constraint))
+            }
+        }
+        for term in constraintTerms {
+            let source = SubstituteExtensionReceiverTerm(term.Item1, parameters, possibleArguments)
+            let constraint = SubstituteExtensionReceiverTerm(term.Item2, parameters, possibleArguments)
+            let key = (source, constraint)
+            if source.ContainsGenericParameters ||
+                !constraint.ContainsGenericParameters ||
+                !constraint.IsGenericType ||
+                choices.ContainsKey(key) {
+                continue
+            }
+            let matches = GetExtensionReceiverGenericShapes(source, constraint.GetGenericTypeDefinition()).Where(
+                (candidate Type) -> OpenExtensionReceiverStandardShapeMayApply(
+                    candidate,
+                    constraint,
+                    tupleElementConversions: false
                 )
-                    .ToList()
-                if matches.Count == 0 {
+            )
+                .ToList()
+            if matches.Count == 0 {
+                if !OpenExtensionReceiverStandardShapeMayApply(source, constraint) {
                     return false
                 }
-                if matches.Count == 1 {
-                    choices[key] = matches[0]
-                    continue
-                }
-                domains[key] = matches
+                continue
+            }
+            if matches.Count == 1 {
+                choices[key] = matches[0]
+                continue
+            }
+            domains[key] = matches
+            if discoveredDomains != nil {
+                discoveredDomains[key] = matches
             }
         }
         if !ExtensionReceiverBoundDomainsMayApply(parameters, possibleArguments, choices, receiverTerms, refinements) {
             return false
         }
         if validateAlternatives {
-            let validate = func (selected IReadOnlyDictionary[(int32, Type), Type]) bool {
+            let discovered = Dictionary[(Type, Type), List[Type]]()
+            let validate = func (selected IReadOnlyDictionary[(Type, Type), Type]) bool {
+                discovered.Clear()
                 return ArgumentDependentBoundsMaySatisfyConstraints(
                     parameters,
                     possibleArguments,
@@ -1768,10 +1787,18 @@ internal shared class ClrOverloadResolution {
                     pinnedParameters,
                     selected,
                     validateAlternatives: false,
-                    refinements: refinements
+                    refinements: refinements,
+                    discoveredDomains: discovered
                 )
             }
-            if !ExtensionReceiverConstraintDomainsMayApply(parameters, possibleArguments, domains, choices, validate) {
+            if !ExtensionReceiverConstraintDomainsMayApply(
+                parameters,
+                possibleArguments,
+                domains,
+                choices,
+                validate,
+                discovered
+            ) {
                 return false
             }
         }
@@ -1796,7 +1823,8 @@ internal shared class ClrOverloadResolution {
                 index,
                 receiverTerms,
                 lowerBounds,
-                upperBounds
+                upperBounds,
+                choices
             )
             let inferredUpperCount = upperBounds.Count
             let exactBounds = upperBounds.Where((bound Type) -> !InferenceBoundMayRefine(bound)).ToList()
@@ -1890,7 +1918,8 @@ internal shared class ClrOverloadResolution {
                     pinned,
                     choices,
                     validateAlternatives,
-                    refinements
+                    refinements,
+                    discoveredDomains
                 )
             }
             if exactBounds.Count > 0 {
@@ -1920,7 +1949,8 @@ internal shared class ClrOverloadResolution {
                     pinned,
                     choices,
                     validateAlternatives,
-                    refinements
+                    refinements,
+                    discoveredDomains
                 )
             }
             if requiresValue && inferredUpperCount > 0 {
@@ -1956,9 +1986,10 @@ internal shared class ClrOverloadResolution {
     private func ExtensionReceiverConstraintDomainsMayApply(
         parameters[]Type,
         arguments[]Type,
-        domains IReadOnlyDictionary[(int32, Type), List[Type]],
-        choices IReadOnlyDictionary[(int32, Type), Type],
-        validate Func[IReadOnlyDictionary[(int32, Type), Type], bool]
+        domains IReadOnlyDictionary[(Type, Type), List[Type]],
+        choices IReadOnlyDictionary[(Type, Type), Type],
+        validate Func[IReadOnlyDictionary[(Type, Type), Type], bool],
+        discovered IReadOnlyDictionary[(Type, Type), List[Type]]
     ) bool {
         if domains.Count == 0 {
             return true
@@ -1996,11 +2027,11 @@ internal shared class ClrOverloadResolution {
                 }
             }
         }
-        let components = Dictionary[int32, List[(int32, Type)]]()
+        let components = Dictionary[int32, List[(Type, Type)]]()
         for var i = 0; i < keys.Count; i++ {
             let root = ExtensionReceiverConstraintRoot(parents, i)
             if !components.TryGetValue(root, out var component) {
-                component = List[(int32, Type)]()
+                component = List[(Type, Type)]()
                 components[root] = component
             }
             component.Add(keys[i])
@@ -2011,6 +2042,7 @@ internal shared class ClrOverloadResolution {
                 domains,
                 choices,
                 validate,
+                discovered,
                 HashSet[string](StringComparer.Ordinal)
             ) {
                 return false
@@ -2020,16 +2052,17 @@ internal shared class ClrOverloadResolution {
     }
 
     private func ExtensionReceiverConstraintComponentMayApply(
-        component IReadOnlyList[(int32, Type)],
-        domains IReadOnlyDictionary[(int32, Type), List[Type]],
-        selected IReadOnlyDictionary[(int32, Type), Type],
-        validate Func[IReadOnlyDictionary[(int32, Type), Type], bool],
+        component IReadOnlyList[(Type, Type)],
+        domains IReadOnlyDictionary[(Type, Type), List[Type]],
+        selected IReadOnlyDictionary[(Type, Type), Type],
+        validate Func[IReadOnlyDictionary[(Type, Type), Type], bool],
+        discovered IReadOnlyDictionary[(Type, Type), List[Type]],
         failed HashSet[string]
     ) bool {
         let state = string.Join(
             ",",
             component.Select(
-                (key(int32, Type)) ->
+                (key(Type, Type)) ->
                 if selected.TryGetValue(key, out var choice) {
                     domains[key].FindIndex((candidate Type) -> ClrTypeUtilities.AreSame(choice, candidate))
                 } else {
@@ -2044,8 +2077,8 @@ internal shared class ClrOverloadResolution {
             failed.Add(state)
             return false
         }
-        let choices = Dictionary[(int32, Type), Type](selected)
-        let remaining = Dictionary[(int32, Type), List[Type]]()
+        let choices = Dictionary[(Type, Type), Type](selected)
+        let remaining = Dictionary[(Type, Type), List[Type]]()
         for key in component {
             remaining[key] = domains[key].ToList()
         }
@@ -2058,7 +2091,7 @@ internal shared class ClrOverloadResolution {
                 }
                 let alternatives = remaining[key]
                 for var i = alternatives.Count - 1; i >= 0; i-- {
-                    let candidate = Dictionary[(int32, Type), Type](choices)
+                    let candidate = Dictionary[(Type, Type), Type](choices)
                     candidate[key] = alternatives[i]
                     if !validate(candidate) {
                         alternatives.RemoveAt(i)
@@ -2083,12 +2116,38 @@ internal shared class ClrOverloadResolution {
             }
         }
         if smallest == int32.MaxValue {
-            return validate(choices)
+            if !validate(choices) {
+                return false
+            }
+            let extended = component.ToList()
+            let expandedDomains = Dictionary[(Type, Type), List[Type]](domains)
+            for domain in discovered {
+                if !expandedDomains.ContainsKey(domain.Key) && !choices.ContainsKey(domain.Key) {
+                    extended.Add(domain.Key)
+                    expandedDomains[domain.Key] = domain.Value
+                }
+            }
+            return extended.Count == component.Count ||
+                ExtensionReceiverConstraintComponentMayApply(
+                extended,
+                expandedDomains,
+                choices,
+                validate,
+                discovered,
+                failed
+            )
         }
         for alternative in remaining[branch] {
-            let candidate = Dictionary[(int32, Type), Type](choices)
+            let candidate = Dictionary[(Type, Type), Type](choices)
             candidate[branch] = alternative
-            if ExtensionReceiverConstraintComponentMayApply(component, domains, candidate, validate, failed) {
+            if ExtensionReceiverConstraintComponentMayApply(
+                component,
+                domains,
+                candidate,
+                validate,
+                discovered,
+                failed
+            ) {
                 return true
             }
         }
@@ -2327,7 +2386,7 @@ internal shared class ClrOverloadResolution {
         index int32,
         lowerBounds List[Type],
         upperBounds List[Type],
-        constraintAlternatives IReadOnlyDictionary[(int32, Type), Type]
+        constraintAlternatives IReadOnlyDictionary[(Type, Type), Type]
     ) {
         let parameter = parameters[index]
         for var i = 0; i < parameters.Length; i++ {
@@ -2338,10 +2397,12 @@ internal shared class ClrOverloadResolution {
                 if !MentionsGenericParameter(constraint, parameter) {
                     continue
                 }
-                let argument = if constraintAlternatives.TryGetValue((i, constraint), out var selected) {
+                let target = SubstituteExtensionReceiverTerm(constraint, parameters, arguments)
+                let source = SubstituteExtensionReceiverTerm(arguments[i], parameters, arguments)
+                let argument = if constraintAlternatives.TryGetValue((source, target), out var selected) {
                     selected
                 } else {
-                    arguments[i]
+                    source
                 }
                 CollectExtensionReceiverConversionBounds(argument, constraint, parameter, lowerBounds, upperBounds)
             }
@@ -2479,12 +2540,18 @@ internal shared class ClrOverloadResolution {
         index int32,
         receiverTerms IReadOnlyList[(Type, Type)],
         lowerBounds List[Type],
-        upperBounds List[Type]
+        upperBounds List[Type],
+        choices IReadOnlyDictionary[(Type, Type), Type]
     ) {
         for term in receiverTerms {
+            var source = SubstituteExtensionReceiverTerm(term.Item1, parameters, arguments)
+            let target = SubstituteExtensionReceiverTerm(term.Item2, parameters, arguments)
+            if choices.TryGetValue((source, target), out var selected) {
+                source = selected
+            }
             CollectExtensionReceiverConversionBounds(
-                SubstituteExtensionReceiverTerm(term.Item1, parameters, arguments),
-                SubstituteExtensionReceiverTerm(term.Item2, parameters, arguments),
+                source,
+                target,
                 parameters[index],
                 lowerBounds,
                 upperBounds,
@@ -2493,11 +2560,56 @@ internal shared class ClrOverloadResolution {
         }
     }
 
+    private func ExpandExtensionReceiverConstraintTerms(
+        parameters[]Type,
+        arguments[]Type,
+        receiverTerms IReadOnlyList[(Type, Type)],
+        choices IReadOnlyDictionary[(Type, Type), Type]
+    ) List[(Type, Type)] {
+        let terms = receiverTerms.ToList()
+        let known = HashSet[(Type, Type)](terms)
+        // A simple dependency path visits at most every method parameter.
+        // Recursive metadata relationships remain symbolic instead of
+        // unfolding an unbounded sequence of constructed types.
+        for var pass = 0; pass < parameters.Length; pass++ {
+            var changed = false
+            for var i = 0; i < parameters.Length; i++ {
+                if !arguments[i].IsGenericParameter {
+                    continue
+                }
+                let lower = List[Type]()
+                let upper = List[Type]()
+                CollectFixedExtensionReceiverConstraintBounds(parameters, arguments, i, lower, upper, choices)
+                CollectExtensionReceiverTermBounds(parameters, arguments, i, terms, lower, upper, choices)
+                for source in lower {
+                    // Reference conversions are transitive through an unknown
+                    // parameter; numeric/tuple promotions need not preserve its
+                    // implemented interfaces.
+                    if source.IsValueType || source.ContainsGenericParameters {
+                        continue
+                    }
+                    for rawConstraint in parameters[i].GetGenericParameterConstraints() {
+                        let constraint = SubstituteExtensionReceiverTerm(rawConstraint, parameters, arguments)
+                        let term = (source, constraint)
+                        if known.Add(term) {
+                            terms.Add(term)
+                            changed = true
+                        }
+                    }
+                }
+            }
+            if !changed {
+                break
+            }
+        }
+        return terms
+    }
+
     private func EnqueueExtensionReceiverUpperBounds(
         parameter Type,
         parameters[]Type,
         arguments[]Type,
-        choices IReadOnlyDictionary[(int32, Type), Type],
+        choices IReadOnlyDictionary[(Type, Type), Type],
         receiverTerms IReadOnlyList[(Type, Type)],
         pending Queue[Type]
     ) {
@@ -2508,7 +2620,7 @@ internal shared class ClrOverloadResolution {
             let lower = List[Type]()
             let upper = List[Type]()
             CollectFixedExtensionReceiverConstraintBounds(parameters, arguments, i, lower, upper, choices)
-            CollectExtensionReceiverTermBounds(parameters, arguments, i, receiverTerms, lower, upper)
+            CollectExtensionReceiverTermBounds(parameters, arguments, i, receiverTerms, lower, upper, choices)
             for bound in upper {
                 pending.Enqueue(bound)
             }
@@ -2530,7 +2642,7 @@ internal shared class ClrOverloadResolution {
     private func ExtensionReceiverBoundDomainsMayApply(
         parameters[]Type,
         arguments[]Type,
-        choices IReadOnlyDictionary[(int32, Type), Type],
+        choices IReadOnlyDictionary[(Type, Type), Type],
         receiverTerms IReadOnlyList[(Type, Type)],
         refinements Dictionary[string, bool]
     ) bool {
@@ -2562,7 +2674,15 @@ internal shared class ClrOverloadResolution {
                 choices
             )
             let fixedLowerCount = lowerBounds.Count
-            CollectExtensionReceiverTermBounds(parameters, arguments, index, receiverTerms, lowerBounds, upperBounds)
+            CollectExtensionReceiverTermBounds(
+                parameters,
+                arguments,
+                index,
+                receiverTerms,
+                lowerBounds,
+                upperBounds,
+                choices
+            )
             let pending = Queue[Type](parameter.GetGenericParameterConstraints())
             let visited = HashSet[Type]()
             while pending.Count > 0 {
