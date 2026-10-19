@@ -540,7 +540,8 @@ internal shared class RefCapabilities {
     /// `in` parameter passes its own storage's address (as C# does) —
     /// a variable (not a smart-cast narrowed read, whose storage has another
     /// type; not a compile-time constant; not a reference-type `this`),
-    /// an addressable field, an array element, a dereference, or a native
+    /// an addressable field (not an imported static initonly field), an array
+    /// element, a dereference, or a native
     /// ref-returning call. Every other shape is an rvalue and is spilled to a
     /// readonly temp.
     /// @param value The converted argument.
@@ -557,10 +558,8 @@ internal shared class RefCapabilities {
         case boundFieldAccessExpression is BoundFieldAccessExpression when boundFieldAccessExpression
             .Field
             .IsConst == true: false
-        case boundClrPropertyAccessExpression is BoundClrPropertyAccessExpression when boundClrPropertyAccessExpression.Member is FieldInfo &&
-            boundClrPropertyAccessExpression
-            .Member
-            .IsLiteral == true: false
+        case BoundClrPropertyAccessExpression{Member: FieldInfo field} when field.IsLiteral ||
+            (field.IsStatic && field.IsInitOnly): false
         case _ is BoundBlockExpression or _ is BoundConditionalExpression: false
         default: ExpressionBinder.IsLvalue(value)
     }

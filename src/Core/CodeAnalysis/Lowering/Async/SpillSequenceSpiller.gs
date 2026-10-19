@@ -2213,7 +2213,15 @@ shared class SpillSequenceSpiller {
                 index.Target,
                 index.Arguments,
                 func (target BoundExpression, arguments ImmutableArray[BoundExpression]) BoundExpression {
-                    return BoundClrIndexExpression(nil, target, index.Indexer, arguments, index.Type)
+                    return BoundClrIndexExpression(
+                        nil,
+                        target,
+                        index.Indexer,
+                        arguments,
+                        index.Type,
+                        index.ConstrainedReceiverTypeParameter,
+                        index.ConstrainedInterfaceType
+                    )
                 }
             )
         }

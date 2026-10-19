@@ -946,15 +946,10 @@ open partial class Parser {
     }
 
     private func ParseExpressionStatement() StatementSyntax {
+        // ADR-0072 / issue #4967: `target ??= value` is an expression, so a
+        // `??=` statement (including one in a for-header or other
+        // simple-statement context) is an ordinary expression statement.
         let expression = ParseExpression()
-        if Current.Kind == SyntaxKind.QuestionQuestionEqualsToken {
-            // ADR-0072 / issue #709: `target ??= value` is also valid as a
-            // simple statement inside for-headers and other simple-statement
-            // contexts.
-            let opToken = NextToken()
-            let rhs = ParseExpression()
-            return NullCoalescingAssignmentStatementSyntax(syntaxTree, expression, opToken, rhs)
-        }
         return ExpressionStatementSyntax(syntaxTree, expression)
     }
 
@@ -965,14 +960,6 @@ open partial class Parser {
             let arrow = NextToken()
             let value = ParseExpression()
             return ChannelSendStatementSyntax(syntaxTree, expression, arrow, value)
-        }
-        if Current.Kind == SyntaxKind.QuestionQuestionEqualsToken {
-            // ADR-0072 / issue #709: `target ??= value`. The target must be a
-            // nullable lvalue. We don't desugar here — the binder validates
-            // assignability + nullability and emits a lowered if/assign form.
-            let opToken = NextToken()
-            let rhs = ParseExpression()
-            return NullCoalescingAssignmentStatementSyntax(syntaxTree, expression, opToken, rhs)
         }
         return ExpressionStatementSyntax(syntaxTree, expression)
     }

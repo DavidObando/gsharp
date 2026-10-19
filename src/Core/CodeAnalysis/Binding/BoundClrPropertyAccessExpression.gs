@@ -106,17 +106,11 @@ class BoundClrPropertyAccessExpression : BoundPropertyReferenceOperationExpressi
     override prop Kind BoundNodeKind -> BoundNodeKind.ClrPropertyAccessExpression
 
     shared {
-        /// ADR-0156 Phase 2 (issue #3185): whether [`expression`](paramref)
-        /// is a pure, re-evaluable CLR field chain rooted at an addressable
-        /// submission global — the root's static-field read plus zero or more
-        /// (cref:FieldInfo) links. Such a receiver must NOT be spilled to
-        /// a temp by duplicating-context lowering: writes through it must reach
-        /// the stored global's address, and re-reading a static field / field
-        /// chain has no observable side effect. Never true outside the
-        /// interactive submission gate (only the submission binder fallbacks set
-        /// (cref:IsAddressableStaticField)).
+        /// Reports whether a CLR field chain is rooted at an addressable submission global.
+        /// Retained for public API compatibility; lowering separately captures unstable
+        /// components before reconstructing storage.
         /// @param expression The candidate receiver expression.
-        /// @returns `true` for an addressable submission field chain.
+        /// @returns `true` for a submission field chain.
         func IsAddressableSubmissionFieldChain(expression BoundExpression) bool {
             var expression = expression
             while expression is BoundClrPropertyAccessExpression access {

@@ -4503,6 +4503,12 @@ internal class ReflectionMetadataEmitter {
         ) {
             return false
         }
+        // The constrained emitter still needs a spill for CLR type-parameter fields.
+        if receiver.Type is not TypeParameterSymbol &&
+            receiver is BoundClrPropertyAccessExpression clrField &&
+            IsAddressableClrFieldChain(clrField) {
+            return false
+        }
         return true
     }
 
@@ -4696,6 +4702,13 @@ internal class ReflectionMetadataEmitter {
     }
 
     shared {
+        /// CLR field storage remains addressable after a reference owner is
+        /// captured into a local. Share this decision with receiver emission so
+        /// neither path replaces a stored struct with a spilled copy.
+        internal func IsAddressableClrFieldChain(access BoundClrPropertyAccessExpression) bool {
+            return access.Member is FieldInfo && RefCapabilities.IsDirectlyAddressableForImplicitIn(access)
+        }
+
         private const ModuleInitializerAttributeName string = "System.Runtime.CompilerServices.ModuleInitializerAttribute"
 
         // Portable PDB metadata format version expected by all current readers

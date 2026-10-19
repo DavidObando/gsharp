@@ -257,6 +257,18 @@ open partial class Parser {
                 value
             )
         }
+        // ADR-0072 / issue #4967: `target ??= value` is an assignment
+        // expression like every other assignment operator, so it is parsed
+        // here rather than only after a whole statement-level expression. The
+        // target is everything parsed so far (the same extent the statement
+        // form used); the value recurses through ParseAssignmentExpression, so
+        // `a ??= b ??= c` is right-associative (`a ??= (b ??= c)`) and
+        // `a ??= b ?? c` reads as `a ??= (b ?? c)`, as in C#.
+        if Current.Kind == SyntaxKind.QuestionQuestionEqualsToken {
+            let coalesceOpToken = NextToken()
+            let coalesceValue = ParseAssignmentExpression()
+            return NullCoalescingAssignmentExpressionSyntax(syntaxTree, expression, coalesceOpToken, coalesceValue)
+        }
         return expression
     }
 

@@ -83,6 +83,8 @@ before RHS values, then writes run left-to-right; one matching tuple-valued RHS
 is evaluated once. Tuple and named declarations use `let` forms. The
 null-coalescing compound assignment `a ??= b` writes `b` into `a` only when `a`
 currently reads as `nil` — the right-hand side is short-circuited otherwise.
+Like every other assignment it is an expression: its value is `a`'s final
+value, typed `T` (not `T?`) when `b` is non-nullable.
 Prefix and postfix `++` / `--` are value-producing expressions on assignable
 numeric lvalues: `++i` yields the new value, `i++` yields the old value.
 Classes and structs may define in-place compound-assignment operators such as
@@ -102,6 +104,8 @@ let after = ++count
 var greeting string? = nil
 greeting ??= "hello"   // greeting is now "hello"
 greeting ??= "ignored" // no-op — RHS not evaluated
+var cached string? = nil
+let name = (cached ??= "computed") // name is a string: "computed"
 ```
 
 ## If and switch

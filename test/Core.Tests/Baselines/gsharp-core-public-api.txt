@@ -1049,7 +1049,7 @@ type enum GSharp.Core.CodeAnalysis.Syntax.SyntaxKind : Int32
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind NamedTupleElement = 224
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind NilKeyword = 97
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind NotPattern = 200
-  field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind NullCoalescingAssignmentStatement = 271
+  field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind NullCoalescingAssignmentExpression = 271
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind NumberToken = 66
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind ObjectCreationExpression = 264
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind OpenBraceToken = 21
@@ -6880,7 +6880,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.NotPatternSyntax : GSharp.Core
   property public GSharp.Core.CodeAnalysis.Syntax.PatternSyntax Pattern { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken NotKeyword { get; }
-type sealed class GSharp.Core.CodeAnalysis.Syntax.NullCoalescingAssignmentStatementSyntax : GSharp.Core.CodeAnalysis.Syntax.StatementSyntax
+type sealed class GSharp.Core.CodeAnalysis.Syntax.NullCoalescingAssignmentExpressionSyntax : GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Target()
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Value()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_OperatorToken()

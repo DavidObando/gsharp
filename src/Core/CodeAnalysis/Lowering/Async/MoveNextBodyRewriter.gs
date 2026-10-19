@@ -70,7 +70,7 @@ shared class MoveNextBodyRewriter {
             this.plan = plan
             this.structType = plan.FieldMap.StructType
             // MoveNext's `this` is arg0 (managed pointer to the struct).
-            this.thisParameter = ParameterSymbol("<>sm_this", plan.FieldMap.StructType)
+            this.thisParameter = ParameterSymbol("<>sm_this", plan.FieldMap.StructType){IsReceiverParameter = true}
             this.awaitResumeMap = Dictionary[BoundAwaitExpression, AwaitResumePoint]()
             for rp in plan.MoveNextPlan.AwaitResumePoints {
                 this.awaitResumeMap[rp.AwaitExpression] = rp
@@ -534,7 +534,9 @@ shared class MoveNextBodyRewriter {
                         node.Indexer,
                         rewrittenArgs,
                         rewrittenValue,
-                        node.Type
+                        node.Type,
+                        node.ConstrainedReceiverTypeParameter,
+                        node.ConstrainedInterfaceType
                     )
                 }
                 if node.TargetExpression != nil {
@@ -546,7 +548,9 @@ shared class MoveNextBodyRewriter {
                             node.Indexer,
                             rewrittenArgs,
                             rewrittenValue,
-                            node.Type
+                            node.Type,
+                            node.ConstrainedReceiverTypeParameter,
+                            node.ConstrainedInterfaceType
                         )
                     }
                     return node

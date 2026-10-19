@@ -8,8 +8,8 @@ import GSharp.Core.CodeAnalysis.Syntax
 import System.Linq
 import Xunit
 
-/// Issue #709 / ADR-0072: parser-level coverage for the new
-/// `??=` null-coalescing compound assignment statement.
+/// Issue #709 / ADR-0072: parser-level coverage for the `??=`
+/// null-coalescing compound assignment in statement position.
 open class Issue709NullCoalescingAssignmentParserTests {
     @Fact
     func Parses_LocalVariable_LHS() {
@@ -42,7 +42,12 @@ main()`
             .OfType[FunctionDeclarationSyntax]()
             .Single((f FunctionDeclarationSyntax) -> f.Identifier.Text == "main")
             .Body
-        let stmt = fnBody!!.Statements.OfType[NullCoalescingAssignmentStatementSyntax]().Single()
+        let stmt = fnBody!!
+            .Statements
+            .OfType[ExpressionStatementSyntax]()
+            .Select((e ExpressionStatementSyntax) -> e.Expression)
+            .OfType[NullCoalescingAssignmentExpressionSyntax]()
+            .Single()
         Assert.Equal(SyntaxKind.QuestionQuestionEqualsToken, stmt.OperatorToken.Kind)
         Assert.IsType[AccessorExpressionSyntax](stmt.Target)
     }
@@ -64,7 +69,12 @@ main()`
             .OfType[FunctionDeclarationSyntax]()
             .Single((f FunctionDeclarationSyntax) -> f.Identifier.Text == "main")
             .Body
-        let stmt = fnBody!!.Statements.OfType[NullCoalescingAssignmentStatementSyntax]().Single()
+        let stmt = fnBody!!
+            .Statements
+            .OfType[ExpressionStatementSyntax]()
+            .Select((e ExpressionStatementSyntax) -> e.Expression)
+            .OfType[NullCoalescingAssignmentExpressionSyntax]()
+            .Single()
         Assert.IsType[IndexExpressionSyntax](stmt.Target)
     }
 
@@ -79,7 +89,8 @@ var y string? = nil
 x ??= y ?? "fallback"`
         let stmt = GetSingleAssignmentInBlock(source)
         Assert.NotNull(stmt.Value)
-        Assert.IsNotType[NullCoalescingAssignmentStatementSyntax](stmt.Value)
+        let value = Assert.IsType[BinaryExpressionSyntax](stmt.Value)
+        Assert.Equal(SyntaxKind.QuestionQuestionToken, value.OperatorToken.Kind)
     }
 
     @Fact
@@ -94,16 +105,20 @@ var y string = x ?? "v"`
     }
 
     shared {
-        private func GetSingleAssignmentInBlock(source string) NullCoalescingAssignmentStatementSyntax {
+        private func GetSingleAssignmentInBlock(source string) NullCoalescingAssignmentExpressionSyntax {
             let tree = SyntaxTree.Parse(source)
             Assert.Empty(tree.Diagnostics)
-            // The parser wraps a top-level `??=` statement in a GlobalStatement.
+            // The parser wraps a top-level `??=` statement in a GlobalStatement;
+            // since issue #4967 the statement is an expression statement over
+            // the `??=` expression.
             let stmt = tree
                 .Root
                 .Members
                 .OfType[GlobalStatementSyntax]()
                 .Select((g GlobalStatementSyntax) -> g.Statement)
-                .OfType[NullCoalescingAssignmentStatementSyntax]()
+                .OfType[ExpressionStatementSyntax]()
+                .Select((e ExpressionStatementSyntax) -> e.Expression)
+                .OfType[NullCoalescingAssignmentExpressionSyntax]()
                 .Single()
             return stmt
         }

@@ -505,14 +505,25 @@ internal partial class ExpressionBinder {
     }
 
     private func IsWritableStructFieldReceiver(receiver BoundExpression) bool {
-        if receiver is BoundVariableExpression {
+        if receiver is BoundVariableExpression variable {
+            // Unboxing a narrowed reference slot yields a controlled-mutability
+            // address, not writable struct storage.
+            if variable.NarrowedType != nil &&
+                ReceiverTypeIsReference(variable.Variable.Type) &&
+                !ReceiverTypeIsReference(variable.Type) {
+                return false
+            }
             return !ReceiverBlocksValueTypeMemberWrite(receiver)
         }
-        // Issue #3185: a prior-cell submission global (or a value-type CLR
-        // field chain rooted at one) is writable storage exactly when the
-        // chain is addressable and its root is not a read-only global.
-        if receiver is BoundClrPropertyAccessExpression submissionReceiver {
-            return ClassifySubmissionGlobalWriteReceiver(submissionReceiver) == SubmissionWriteReceiverKind.Addressable
+        if receiver is BoundClrPropertyAccessExpression access {
+            if access.Member is not FieldInfo field ||
+                field.IsInitOnly ||
+                access.IsReadOnlySubmissionGlobal ||
+                !RefCapabilities.IsDirectlyAddressableForImplicitIn(access) {
+                return false
+            }
+            let owner = access.Receiver
+            return owner == nil || ReceiverTypeIsReference(owner.Type) || IsWritableStructFieldReceiver(owner)
         }
         if receiver is BoundDereferenceExpression dereference {
             return (
@@ -533,6 +544,11 @@ internal partial class ExpressionBinder {
             return indexReceiver.IsArrayBackedElementAccess
         }
         if receiver is not BoundFieldAccessExpression fieldAccess {
+            return false
+        }
+        if fieldAccess.NarrowedType != nil &&
+            ReceiverTypeIsReference(fieldAccess.SubstitutedType ?? fieldAccess.Field.Type) &&
+            !ReceiverTypeIsReference(fieldAccess.Type) {
             return false
         }
         if fieldAccess.Receiver == nil {

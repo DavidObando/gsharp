@@ -167,7 +167,7 @@ The header works exactly like the statement form above: the same bindings, guard
 
 ## `??=` — null-coalescing compound assignment
 
-`a ??= b` is the compound shorthand for *"if `a` is currently `nil`, evaluate `b` and write the result into `a`."* The right-hand side is evaluated only in the nil case.
+`a ??= b` is the compound shorthand for *"if `a` is currently `nil`, evaluate `b` and write the result into `a`."* The right-hand side is evaluated only in the nil case. Like `=` and `+=`, it is an expression: its value is `a`'s final value, so `return cache ??= Load()` both fills the cache and returns it.
 
 ```gsharp title="NullCoalescingAssign.gs"
 package Tour.ControlFlow.NullCoalescingAssign

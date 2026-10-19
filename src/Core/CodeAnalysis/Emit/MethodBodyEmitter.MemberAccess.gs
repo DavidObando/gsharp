@@ -1480,15 +1480,8 @@ internal partial class MethodBodyEmitter {
                 this.EmitFieldAddress(fa)
                 return
             }
-            // ADR-0156 Phase 2 (issue #3185): a prior-cell submission global
-            // (a public static field on that submission's <Program>
-            // container), or a value-type CLR field chain rooted at one, is
-            // real addressable storage. Load its address (`ldsflda` [+
-            // `ldflda`…]) so member writes and mutating instance calls hit
-            // the stored global in place instead of a spilled copy — the
-            // silent-wrong-value class ADR-0156 exists to kill. The flag is
-            // only ever set by the submission-import binder fallbacks, so
-            // non-REPL receiver spilling is unchanged.
+            // CLR field chains, including captured reference owners, retain
+            // their storage. Use the same addressability rule as slot planning.
             if receiver is BoundClrPropertyAccessExpression clrChain && this.TryEmitAddressableClrFieldAddress(
                 clrChain
             ) {
@@ -1633,6 +1626,13 @@ internal partial class MethodBodyEmitter {
             this.EmitFieldAddress(fieldAccess)
             return
         }
+        if receiver is not BoundVariableExpression &&
+            receiver is not BoundFieldAccessExpression &&
+            RefCapabilities
+            .IsDirectlyAddressableForImplicitIn(receiver) {
+            this.EmitAddressOf(BoundAddressOfExpression(nil, receiver))
+            return
+        }
         this.EmitExpression(receiver)
         if !this.receiverSpillSlots.TryGetValue(receiver, out var slot) {
             throw InvalidOperationException(
@@ -1678,7 +1678,7 @@ internal partial class MethodBodyEmitter {
         // Issue #3185: a prior-cell submission global (or a value-type CLR
         // field chain rooted at one) is addressable storage.
         if fa.Receiver is BoundClrPropertyAccessExpression clrReceiver {
-            return this.IsAddressableClrFieldChain(clrReceiver)
+            return ReflectionMetadataEmitter.IsAddressableClrFieldChain(clrReceiver)
         }
         // Issue #3292: an array-backed element is addressable via `ldelema`
         // regardless of how the collection reference itself was produced
@@ -1689,41 +1689,8 @@ internal partial class MethodBodyEmitter {
         return false
     }
 
-    /// ADR-0156 Phase 2 (issue #3185): whether [`access`](paramref) is a
-    /// CLR field chain whose address can be loaded in place — the chain must
-    /// consist of real (cref:FieldInfo) links over value-type
-    /// receivers and bottom out either at a submission global static field
-    /// flagged addressable by the binder, or at a reference-typed link of a
-    /// submission-rooted chain (the object reference is then the storage
-    /// root). Never true outside the interactive submission gate, since only
-    /// the submission binder fallbacks set the flag.
-    /// @param access The candidate CLR member access.
-    /// @returns `true` when the chain's address is loadable.
-    private func IsAddressableClrFieldChain(access BoundClrPropertyAccessExpression) bool {
-        if !(access.Member is FieldInfo) {
-            return false
-        }
-        if access.Receiver == nil {
-            return access.IsAddressableStaticField
-        }
-        // Issue #3292: the value-typed field walk rests on an array-backed
-        // element load (`qs[0].B2.C = v` over an imported element struct) —
-        // the element address (`ldelema`) roots the chain, so the remaining
-        // `ldflda` links reach real storage.
-        if access.Receiver is BoundIndexExpression elementReceiver {
-            return elementReceiver.IsArrayBackedElementAccess
-        }
-        if access.Receiver is not BoundClrPropertyAccessExpression inner {
-            return false
-        }
-        if !ReflectionMetadataEmitter.IsValueTypeSymbol(inner.Type) {
-            return IsSubmissionRootedFieldChain(inner)
-        }
-        return this.IsAddressableClrFieldChain(inner)
-    }
-
     /// Issue #3185: emits the managed-pointer address of an addressable CLR
-    /// field chain (see (cref:IsAddressableClrFieldChain)):
+    /// field chain (see (cref:ReflectionMetadataEmitter.IsAddressableClrFieldChain)):
     /// `ldsflda` for the submission-global root, `ldflda` per
     /// value-type field link, and a plain object-reference load for a
     /// reference-typed link. Returns `false` without emitting
@@ -1731,37 +1698,11 @@ internal partial class MethodBodyEmitter {
     /// @param access The CLR member access whose address to load.
     /// @returns `true` once the address is on the stack.
     private func TryEmitAddressableClrFieldAddress(access BoundClrPropertyAccessExpression) bool {
-        if !this.IsAddressableClrFieldChain(access) {
+        if !ReflectionMetadataEmitter.IsAddressableClrFieldChain(access) {
             return false
         }
-        this.EmitClrFieldAddressCore(access)
+        this.EmitAddressOf(BoundAddressOfExpression(nil, access))
         return true
-    }
-
-    private func EmitClrFieldAddressCore(access BoundClrPropertyAccessExpression) {
-        let field = cast[FieldInfo](access.Member)
-        if access.Receiver == nil {
-            this.il.OpCode(ILOpCode.Ldsflda)
-            this.il.Token(this.outer.memberRefs.GetFieldReference(field))
-            return
-        }
-        if access.Receiver is BoundIndexExpression elementReceiver {
-            // Issue #3292: the chain rests on an array/slice element — its
-            // `ldelema` address is the storage root for the remaining
-            // `ldflda` links.
-            this.EmitElementAddress(elementReceiver)
-        } else {
-            let inner = cast[BoundClrPropertyAccessExpression](access.Receiver!!)
-            if !ReflectionMetadataEmitter.IsValueTypeSymbol(inner.Type) {
-                // Reference-typed link: the loaded object reference is the
-                // storage root for the remaining `ldflda` chain.
-                this.EmitExpression(inner)
-            } else {
-                this.EmitClrFieldAddressCore(inner)
-            }
-        }
-        this.il.OpCode(ILOpCode.Ldflda)
-        this.il.Token(this.outer.memberRefs.GetFieldReference(field))
     }
 
     /// Issue #3292: emits the managed-pointer address of an array-backed
@@ -2134,35 +2075,6 @@ internal partial class MethodBodyEmitter {
                 access.Property.Type
             }
         )
-
-        /// Issue #3185: whether a member-access chain (mixed CLR reflection links
-        /// and imported-aggregate field links) bottoms out at a prior-cell
-        /// submission global flagged addressable by the binder. Used to gate the
-        /// imported-field addressing paths so shapes outside the interactive
-        /// submission gate keep their existing spill behavior.
-        /// @param node The chain's outermost link.
-        /// @returns `true` when the chain root is a flagged submission global.
-        private func IsSubmissionRootedFieldChain(node BoundExpression) bool {
-            var node = node
-            while true {
-                switch node {
-                    case clr is BoundClrPropertyAccessExpression when clr.Receiver == nil {
-                        return clr.IsAddressableStaticField
-                    }
-                    case BoundClrPropertyAccessExpression{Receiver: {} receiver} {
-                        node = receiver
-                        continue
-                    }
-                    case fieldAccess is BoundFieldAccessExpression when fieldAccess.Receiver != nil {
-                        node = fieldAccess.Receiver!!
-                        continue
-                    }
-                    default {
-                        return false
-                    }
-                }
-            }
-        }
 
         // Issue #1254: when an inherited property is accessed through a (non-generic)
         // derived receiver but the property is declared on a generic base type, the

@@ -165,7 +165,9 @@ shared class RefInitializationHoister {
                             target,
                             clrIdx.Indexer,
                             args.MoveToImmutable(),
-                            clrIdx.Type
+                            clrIdx.Type,
+                            clrIdx.ConstrainedReceiverTypeParameter,
+                            clrIdx.ConstrainedInterfaceType
                         )
                     }
                 }
