@@ -492,6 +492,114 @@ Console.WriteLine("${direct(Probe())} ${ternary(Probe())} ${statement(Probe())} 
         Assert.Equal("99 99 99 0 0" + Environment.NewLine, result.Output)
     }
 
+    @Theory
+    @InlineData("", "0")
+    @InlineData("where T : System.IDisposable, new()", "System.IO.MemoryStream()")
+    func Other_Arguments_Complete_Target_Declared_Conversion_Bounds(constraint string, fallback string) {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public struct Box<T> {
+        public static implicit operator Box<T>(int value) => default;
+    }
+    public static class Extensions {
+        public static int GetValueOrDefault<T>(this Box<T> value, T fallback) ` + constraint + ` => 99;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func direct(n int32) int32 -> n.GetValueOrDefault(FALLBACK)
+func ternary(n int32?) int32 -> n != nil ? n.GetValueOrDefault(FALLBACK) : 0
+func expression(n int32?) int32 -> if n != nil { n.GetValueOrDefault(FALLBACK) } else { 0 }
+func statement(n int32?) int32 {
+    if n != nil { return n.GetValueOrDefault(FALLBACK) }
+    return 0
+}
+Console.WriteLine("${direct(7)} ${ternary(7)} ${expression(7)} ${statement(7)} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`.Replace("FALLBACK", fallback), fixture.AssemblyPath)
+        Assert.Equal("99 99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData("string", "System.IDisposable")
+    @InlineData("System.IO.Stream", "System.Exception")
+    func Impossible_Contravariant_Subtypes_Do_Not_Block_Storage(bound string, constraint string) {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public struct Probe : System.Collections.Generic.IComparer<` + bound + `> {
+        public int V;
+        public Probe(int value) { V = value; }
+        public int Compare(` + bound + ` left, ` + bound + ` right) => 0;
+    }
+    public static class Extensions {
+        public static int GetValueOrDefault<T>(this System.Collections.Generic.IComparer<T> value,
+            System.Collections.Generic.IComparer<T> fallback) where T : ` + constraint + ` => 99;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Probe()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("7 7 7 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
+    func Possible_Subtypes_Do_Not_Mask_Other_Unrepairable_Constraints() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public interface IProbe<in T, U> {}
+    public struct Probe : IProbe<object, int> {
+        public int V;
+        public Probe(int value) { V = value; }
+    }
+    public static class Extensions {
+        public static int GetValueOrDefault<T,U>(this IProbe<T,U> value,
+            System.Collections.Generic.IComparer<T> fallback) where T : System.IDisposable where U : class => 99;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+Console.WriteLine("${ternary(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("7 7 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData("")
+    @InlineData(", new()")
+    func Other_Arguments_Refine_Contravariant_Receiver_Bounds(additionalConstraint string) {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public struct Probe : System.Collections.Generic.IComparer<object> {
+        public int Compare(object left, object right) => 0;
+    }
+    public static class Extensions {
+        public static int GetValueOrDefault<T>(this System.Collections.Generic.IComparer<T> value,
+            System.Collections.Generic.IComparer<T> fallback) where T : System.IDisposable` + additionalConstraint + ` => 99;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import System.IO
+import System.Collections.Generic
+import Fixture4986
+func direct(n Probe) int32 -> n.GetValueOrDefault(Comparer[MemoryStream].Default)
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Comparer[MemoryStream].Default) : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Comparer[MemoryStream].Default) } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Comparer[MemoryStream].Default) }
+    return 0
+}
+Console.WriteLine("${direct(Probe())} ${ternary(Probe())} ${expression(Probe())} ${statement(Probe())} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99 99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
     /// A second argument bind hoisted another `out var`, reporting GS0102.
     @Fact
     func Arguments_Are_Bound_Once() {

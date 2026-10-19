@@ -1302,7 +1302,8 @@ internal shared class ClrOverloadResolution {
                     parameterType,
                     carrier,
                     convertedBounds,
-                    argumentDependent
+                    argumentDependent,
+                    independentConversionInput: !conversionParameters[0].ParameterType.ContainsGenericParameters
                 ) {
                     return true
                 }
@@ -1317,12 +1318,29 @@ internal shared class ClrOverloadResolution {
         parameterType Type,
         carrier Type,
         bounds Dictionary[string, Type],
-        argumentDependent HashSet[string]
+        argumentDependent HashSet[string],
+        independentConversionInput bool = false
     ) bool {
         let candidateBounds = Dictionary[string, Type](bounds, StringComparer.Ordinal)
-        if UnifyForInference(parameterType, carrier, candidateBounds) &&
-            ExtensionReceiverBoundsMayApply(method, receiver, parameterType, candidateBounds, argumentDependent) {
-            return true
+        if UnifyForInference(parameterType, carrier, candidateBounds) {
+            let freeBounds = Dictionary[string, Type](StringComparer.Ordinal)
+            if independentConversionInput {
+                for entry in candidateBounds {
+                    if entry.Value.IsGenericParameter && argumentDependent.Contains(entry.Key) {
+                        freeBounds[entry.Key] = entry.Value
+                    }
+                }
+            }
+            if ExtensionReceiverBoundsMayApply(
+                method,
+                receiver,
+                parameterType,
+                candidateBounds,
+                argumentDependent,
+                freeBounds
+            ) {
+                return true
+            }
         }
         let underlying = NullableLifting.GetValueTypeNullableUnderlyingClr(parameterType)
         if underlying == nil {
@@ -1333,23 +1351,59 @@ internal shared class ClrOverloadResolution {
             ExtensionReceiverBoundsMayApply(method, receiver, parameterType, wrappedBounds, argumentDependent)
     }
 
-    /// Every possible bound is checked against the closed signature, never
-    /// accepted merely because an open shape or a failed constraint is unknown.
+    /// Validate receiver witnesses against closed signatures. Upper bounds
+    /// retain compatible but unenumerable subtypes for later argument inference.
     private func ExtensionReceiverBoundsMayApply(
         method MethodInfo,
         receiver TypeSymbol,
         parameterType Type,
         bounds Dictionary[string, Type],
-        argumentDependent HashSet[string]
+        argumentDependent HashSet[string],
+        freeBounds IReadOnlyDictionary[string, Type]? = nil
     ) bool {
+        let receiverClr = receiver.ClrType
+        if receiverClr == nil {
+            return true
+        }
         let receiverBounds = Dictionary[string, Type](StringComparer.Ordinal)
-        if !UnifyForInference(parameterType, receiver.ClrType, receiverBounds) || receiverBounds.Any(
+        if !UnifyForInference(parameterType, receiverClr, receiverBounds) || receiverBounds.Any(
             (entry KeyValuePair[string, Type]) -> !argumentDependent.Contains(entry.Key) &&
                 (!bounds.TryGetValue(entry.Key, out var argument) || !ClrTypeUtilities.AreSame(entry.Value, argument))
         ) {
             return false
         }
         let typeParameters = method.GetGenericArguments()
+        for parameter in typeParameters {
+            if !MentionsGenericParameter(parameterType, parameter) {
+                continue
+            }
+            if bounds.TryGetValue(parameter.Name, out var bound) && !bound.ContainsGenericParameters {
+                continue
+            }
+            if !argumentDependent.Contains(parameter.Name) {
+                return false
+            }
+            let candidates = GetReceiverInferenceCarriers(receiverClr)
+            candidates.AddRange(parameter.GetGenericParameterConstraints())
+            for candidate in candidates {
+                if candidate.ContainsGenericParameters {
+                    continue
+                }
+                let completedBounds = Dictionary[string, Type](bounds, StringComparer.Ordinal)
+                completedBounds[parameter.Name] = candidate
+                if ExtensionReceiverBoundsMayApply(
+                    method,
+                    receiver,
+                    parameterType,
+                    completedBounds,
+                    argumentDependent,
+                    freeBounds
+                ) {
+                    return true
+                }
+            }
+            return false
+        }
         // Close metadata signatures with primitives from their own load context.
         var contextObject = typeParameters[0]
         while contextObject.BaseType is {} baseType {
@@ -1375,6 +1429,15 @@ internal shared class ClrOverloadResolution {
             return false
         }
         if !SatisfiesDeclaredConstraints(typeParameters, typeArguments, default, out var failedIndex, out _) {
+            if ArgumentDependentSubtypesMaySatisfyConstraints(
+                typeParameters,
+                typeArguments,
+                parameterType,
+                argumentDependent,
+                freeBounds
+            ) {
+                return true
+            }
             let failedParameter = typeParameters[failedIndex]
             for parameter in typeParameters {
                 if !argumentDependent.Contains(parameter.Name) || !contextBounds.TryGetValue(
@@ -1401,13 +1464,103 @@ internal shared class ClrOverloadResolution {
                         receiver,
                         parameterType,
                         widenedBounds,
-                        argumentDependent
+                        argumentDependent,
+                        freeBounds
                     ) {
                         return true
                     }
                 }
             }
             return false
+        }
+        return true
+    }
+
+    private func ArgumentDependentSubtypesMaySatisfyConstraints(
+        parameters[]Type,
+        arguments[]Type,
+        receiverType Type,
+        argumentDependent HashSet[string],
+        freeBounds IReadOnlyDictionary[string, Type]?
+    ) bool {
+        let possibleArguments = cast[[]Type](arguments.Clone())
+        while !SatisfiesDeclaredConstraints(parameters, possibleArguments, default, out var failedIndex, out _) {
+            let parameter = parameters[failedIndex]
+            let argument = possibleArguments[failedIndex]
+            if argument.IsGenericParameter || !argumentDependent.Contains(parameter.Name) ||
+                !MentionsGenericParameter(receiverType, parameter) ||
+                !InferenceBoundMayHaveCompatibleSubtype(argument, parameter) {
+                return false
+            }
+            let freelyInferred = freeBounds != nil && freeBounds.TryGetValue(parameter.Name, out var freeParameter) &&
+                InferenceBoundMayHaveCompatibleSubtype(argument, freeParameter)
+            if !freelyInferred && !ReceiverAllowsSubtypeInference(receiverType, parameter) {
+                return false
+            }
+            // This parameter represents an unenumerable subtype. Keep checking
+            // other constraints instead of masking an independently fixed failure.
+            possibleArguments[failedIndex] = parameter
+        }
+        return true
+    }
+
+    private func ReceiverAllowsSubtypeInference(
+        type Type,
+        parameter Type,
+        variance GenericParameterAttributes = GenericParameterAttributes.Covariant
+    ) bool {
+        if !MentionsGenericParameter(type, parameter) {
+            return true
+        }
+        if type.IsGenericParameter {
+            return variance == GenericParameterAttributes.Contravariant
+        }
+        if type.IsArray {
+            let element = type.GetElementType()
+            return element != nil && ReceiverAllowsSubtypeInference(element, parameter, variance)
+        }
+        if !type.IsGenericType || variance == GenericParameterAttributes.None {
+            return false
+        }
+        let arguments = type.GetGenericArguments()
+        let parameters = type.GetGenericTypeDefinition().GetGenericArguments()
+        for var i = 0; i < arguments.Length; i++ {
+            let slotVariance = parameters[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
+            let nestedVariance = if slotVariance == GenericParameterAttributes.None {
+                GenericParameterAttributes.None
+            } else if slotVariance == GenericParameterAttributes.Covariant {
+                variance
+            } else if variance == GenericParameterAttributes.Covariant {
+                GenericParameterAttributes.Contravariant
+            } else {
+                GenericParameterAttributes.Covariant
+            }
+            if !ReceiverAllowsSubtypeInference(arguments[i], parameter, nestedVariance) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func InferenceBoundMayHaveCompatibleSubtype(bound Type, parameter Type) bool {
+        if bound.IsValueType ||
+            bound.IsSealed ||
+            (parameter.GenericParameterAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 {
+            return false
+        }
+        for constraint in parameter.GetGenericParameterConstraints() {
+            if constraint.ContainsGenericParameters {
+                continue
+            }
+            if constraint.IsSealed && !IsInferenceBoundPromotion(bound, constraint) {
+                return false
+            }
+            if !bound.IsInterface &&
+                !constraint.IsInterface &&
+                !IsInferenceBoundPromotion(bound, constraint) &&
+                !IsInferenceBoundPromotion(constraint, bound) {
+                return false
+            }
         }
         return true
     }
@@ -5667,7 +5820,10 @@ internal shared class ClrOverloadResolution {
         }
         try {
             if type.IsGenericParameter {
-                return type.IsSameAs(parameter)
+                return parameter.IsGenericParameter &&
+                    type.GenericParameterPosition == parameter.GenericParameterPosition &&
+                    type.DeclaringMethod == parameter.DeclaringMethod &&
+                    type.DeclaringType == parameter.DeclaringType
             }
             if type.HasElementType {
                 return MentionsGenericParameter(type.GetElementType(), parameter)

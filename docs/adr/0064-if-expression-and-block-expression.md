@@ -324,6 +324,14 @@ conversion classifier against its closed imported receiver parameter. Only bound
 mentioned by supplied argument slots may change. This preserves fixed generic
 arguments and variance, and lets structural conversions such as tuple-element
 widening use the inferred substitutions rather than an open CLR signature.
+An incomplete receiver bound is not evidence of impossibility: supplied
+arguments can close a generic conversion target, or refine a contravariant
+upper bound to a subtype that is not enumerable from the receiver. The probe
+tries representative completed bounds and retains compatible unknown subtypes,
+checking every independent constraint. Sealed or disjoint class bounds and
+invariant receiver positions cannot use that escape hatch. A target-declared
+conversion with an input independent of its type parameter can leave that
+parameter free for later arguments.
 Inferring an element type cannot turn an `int32` receiver into a collection.
 Explicit generic
 calls keep the narrowed binding (`Nullable<T>` declares no generic methods).
