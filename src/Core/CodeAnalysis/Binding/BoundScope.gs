@@ -2041,7 +2041,8 @@ class BoundScope {
             if import_.Target == nil || !byPackage.TryGetValue(import_.Target, out var candidate) {
                 continue
             }
-            if import_.Declaration != nil && import_.Declaration.SyntaxTree != referencingTree {
+            let declaration = import_.Declaration
+            if declaration != nil && declaration.SyntaxTree != referencingTree {
                 // Declared in a different file than the reference.
                 continue
             }
@@ -2476,8 +2477,8 @@ class BoundScope {
         if imports != nil {
             let referencingTree SyntaxTree? = GetCurrentReferencingSyntaxTree()
             for import_ in imports!! {
-                if import_.Declaration == nil ||
-                    (referencingTree != nil && import_.Declaration.SyntaxTree == referencingTree) {
+                let declaration = import_.Declaration
+                if declaration == nil || (referencingTree != nil && declaration.SyntaxTree == referencingTree) {
                     yield import_
                 }
             }
