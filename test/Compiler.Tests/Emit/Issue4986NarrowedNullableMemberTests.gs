@@ -2405,6 +2405,7 @@ Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Prob
     @Theory
     @InlineData("System.Action<string>", "System.Action<object>")
     @InlineData("System.Func<object>", "System.Func<string>")
+    @InlineData("System.Func<object[]>", "System.Func<string[]>")
     @InlineData("object[,]", "string[,]")
     @InlineData("object[,,]", "string[,,]")
     func Variant_Sealed_Reference_Bounds_Keep_The_Underlying_Member(receiver string, candidate string) {
@@ -2417,6 +2418,34 @@ Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Prob
     public static class Extensions {
         public static Probe GetValueOrDefault<T,U>(this IProbe<T,U> value, System.Collections.Generic.IComparer<T> fallback)
             where U : System.Collections.Generic.IComparer<T> => new Probe(99);
+    }
+}`).Replace("RECEIVER", receiver).Replace("CANDIDATE", candidate))
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Probe()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+Console.WriteLine(Probe(7).GetValueOrDefault(Probe()).V)
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData("object[,]", "string[,]")
+    func Fixed_Lower_Bounds_Use_Clr_Reference_Variance(receiver string, candidate string) {
+        using let fixture = CSharpFixture((`namespace Fixture4986 {
+    public interface IProbe<in T,U,V> {}
+    public struct Probe : IProbe<RECEIVER,System.Collections.Generic.Comparer<CANDIDATE>,CANDIDATE>, System.Collections.Generic.IComparer<CANDIDATE> {
+        public int V; public Probe(int value) { V = value; }
+        public int Compare(CANDIDATE x, CANDIDATE y) => 0;
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<T,U,V>(this IProbe<T,U,V> value, System.Collections.Generic.IComparer<T> fallback)
+            where U : System.Collections.Generic.IComparer<T> where V : T => new Probe(99);
     }
 }`).Replace("RECEIVER", receiver).Replace("CANDIDATE", candidate))
         let result = CompileAndRun(`import System

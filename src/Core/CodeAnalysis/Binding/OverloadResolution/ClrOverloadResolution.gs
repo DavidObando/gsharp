@@ -1407,7 +1407,7 @@ internal shared class ClrOverloadResolution {
                 targetElement == nil {
                 return false
             }
-            if source.IsSZArray || sourceElement.IsValueType || targetElement.IsValueType {
+            if tupleElementConversions || sourceElement.IsValueType || targetElement.IsValueType {
                 let exact = Dictionary[string, Type](StringComparer.Ordinal)
                 return if sourceElement.ContainsGenericParameters && !targetElement.ContainsGenericParameters {
                     InferExactExtensionReceiverTypeArguments(sourceElement, targetElement, exact)
@@ -1415,7 +1415,11 @@ internal shared class ClrOverloadResolution {
                     InferExactExtensionReceiverTypeArguments(targetElement, sourceElement, exact)
                 }
             }
-            return OpenExtensionReceiverStandardShapeMayApply(sourceElement, targetElement, tupleElementConversions)
+            return OpenExtensionReceiverStandardShapeMayApply(
+                sourceElement,
+                targetElement,
+                tupleElementConversions: false
+            )
         }
         if !target.IsGenericType {
             let kind = ClassifyImplicit(target, source)
@@ -1459,12 +1463,12 @@ internal shared class ClrOverloadResolution {
                 case GenericParameterAttributes.Covariant: OpenExtensionReceiverStandardShapeMayApply(
                     sources[i],
                     targets[i],
-                    tupleElementConversions
+                    tupleElementConversions: tupleElements
                 )
                 case GenericParameterAttributes.Contravariant: OpenExtensionReceiverStandardShapeMayApply(
                     targets[i],
                     sources[i],
-                    tupleElementConversions
+                    tupleElementConversions: false
                 )
                 default: if sources[i].ContainsGenericParameters && !targets[i].ContainsGenericParameters {
                     InferExactExtensionReceiverTypeArguments(sources[i], targets[i], exact)
@@ -2315,7 +2319,7 @@ internal shared class ClrOverloadResolution {
             return false
         }
         if type.IsArray {
-            return !type.IsSZArray && type.GetElementType() is {} element && InferenceBoundMayRefine(element)
+            return type.GetElementType() is {} element && InferenceBoundMayRefine(element)
         }
         if !type.IsSealed {
             return true
@@ -2373,11 +2377,11 @@ internal shared class ClrOverloadResolution {
                     }
                     continue
                 }
-                if (!InferenceBoundMayRefine(bound) && !IsInferenceUpperBoundPromotion(other, bound)) ||
-                    (!InferenceBoundMayRefine(other) && !IsInferenceUpperBoundPromotion(bound, other)) {
+                if (!InferenceBoundMayRefine(bound) && !IsExtensionReceiverBoundPromotion(other, bound)) ||
+                    (!InferenceBoundMayRefine(other) && !IsExtensionReceiverBoundPromotion(bound, other)) {
                     return false
                 }
-                if IsInferenceUpperBoundPromotion(bound, other) || IsInferenceUpperBoundPromotion(other, bound) {
+                if IsExtensionReceiverBoundPromotion(bound, other) || IsExtensionReceiverBoundPromotion(other, bound) {
                     continue
                 }
                 if bound.IsInterface || other.IsInterface {
@@ -2410,8 +2414,7 @@ internal shared class ClrOverloadResolution {
                 }
                 if bound.IsArray &&
                     other.IsArray &&
-                    !bound.IsSZArray &&
-                    !other.IsSZArray &&
+                    bound.IsSZArray == other.IsSZArray &&
                     bound.GetArrayRank() == other.GetArrayRank() {
                     continue
                 }
@@ -2422,7 +2425,7 @@ internal shared class ClrOverloadResolution {
             }
         }
         let arrayElements = bounds
-            .Where((bound Type) -> bound.IsArray && !bound.IsSZArray)
+            .Where((bound Type) -> bound.IsArray)
             .Select((bound Type) -> bound.GetElementType())
             .OfType[Type]()
             .ToList()
@@ -2484,14 +2487,12 @@ internal shared class ClrOverloadResolution {
         return true
     }
 
-    // CLR variance bounds do not relax standalone G# array argument conversions.
-    private func IsInferenceUpperBoundPromotion(target Type, source Type) bool ->
+    // CLR constraint bounds do not relax standalone G# argument conversions.
+    private func IsExtensionReceiverBoundPromotion(target Type, source Type) bool ->
     IsInferenceBoundPromotion(target, source) ||
         (
-        target.IsArray &&
-            source.IsArray &&
-            !target.IsSZArray &&
-            !source.IsSZArray &&
+        !target.IsValueType &&
+            !source.IsValueType &&
             OpenExtensionReceiverStandardShapeMayApply(source, target, tupleElementConversions: false) &&
             IsVariantAssignable(target, source)
     )
@@ -2591,20 +2592,20 @@ internal shared class ClrOverloadResolution {
             let sourceElement = source.GetElementType()
             let targetElement = target.GetElementType()
             if sourceElement != nil && targetElement != nil {
+                let elementVariance = (referenceVariance || !tupleElementConversions) &&
+                    !exact &&
+                    !sourceElement.IsValueType &&
+                    !targetElement.IsValueType
                 CollectExtensionReceiverConversionBounds(
                     sourceElement,
                     targetElement,
                     parameter,
                     lowerBounds,
                     upperBounds,
-                    exact || source.IsSZArray || sourceElement.IsValueType || targetElement.IsValueType,
+                    exact || !elementVariance,
                     tupleElementConversions,
                     referenceUpperBounds,
-                    referenceVariance ||
-                        !exact &&
-                        !source.IsSZArray &&
-                        !sourceElement.IsValueType &&
-                        !targetElement.IsValueType
+                    elementVariance
                 )
             }
             return
@@ -2939,10 +2940,11 @@ internal shared class ClrOverloadResolution {
                             lower
                         ).Any(
                             (candidate Type) ->
-                            IsInferenceBoundPromotion(candidate, lower) && IsInferenceBoundPromotion(upper, candidate)
+                            IsInferenceBoundPromotion(candidate, lower) &&
+                                IsExtensionReceiverBoundPromotion(upper, candidate)
                         )
                     } else {
-                        !IsInferenceBoundPromotion(upper, lower)
+                        !IsExtensionReceiverBoundPromotion(upper, lower)
                     }
                 ) {
                     return false
@@ -2993,7 +2995,7 @@ internal shared class ClrOverloadResolution {
                     var lowerCompatible = true
                     for var i = 0; i < lowerBounds.Count; i++ {
                         let incompatible = if i < fixedLowerCount {
-                            !IsInferenceBoundPromotion(candidate, lowerBounds[i])
+                            !IsExtensionReceiverBoundPromotion(candidate, lowerBounds[i])
                         } else {
                             !OpenExtensionReceiverStandardShapeMayApply(lowerBounds[i], candidate)
                         }
@@ -3003,7 +3005,7 @@ internal shared class ClrOverloadResolution {
                         }
                     }
                     if !lowerCompatible || closed.Any(
-                        (upper Type) -> !IsInferenceUpperBoundPromotion(upper, candidate)
+                        (upper Type) -> !IsExtensionReceiverBoundPromotion(upper, candidate)
                     ) {
                         continue
                     }

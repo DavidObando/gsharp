@@ -465,14 +465,17 @@ reference variance. Projecting a declared conversion such as `U : struct` to
 Imported writable-ref receivers use the existing ref-kind reader and require
 receiver identity, including fixed generic receiver arguments; another argument
 cannot widen their storage type. Readonly `in` receivers retain ordinary
-conversion handling. SZ-array elements remain invariant, while rectangular
-reference-array and interface variance retain their separate conversion rules.
-Sealing does not make a rectangular reference-array bound exact: its elements
-can still refine covariantly. Joint rectangular-array upper bounds reuse the
-same compatibility query on their element bounds; array interface capabilities
-remain those of the actual array, without inventing generic constructor slots.
-Their upper-bound comparisons retain CLR reference variance without relaxing
-standalone G# array argument conversions.
+conversion handling. Original receiver terms retain G# argument conversions,
+including invariant standalone arrays and elementwise native-tuple conversions.
+Actual CLR variance slots and declared constraints instead retain CLR reference
+conversions, recursively through arrays and delegates. Both lower/upper
+validation and shared refinement checks use that constraint-domain conversion
+query; the original receiver term remains a separate fail-safe against changing
+G# argument rules. Nominal sealing does not make a variance-compatible array or
+delegate bound exact. Joint array upper bounds reuse the same compatibility
+query on their element bounds, retaining the actual array's fixed interface
+capabilities rather than inventing generic constructor slots. No array
+refinement vectors are enumerated.
 A nullable value-type lower bound cannot satisfy a nonnullable `struct`
 constraint; the probe uses the same nullable-value reader as declared-constraint
 validation, without excluding nullable arguments from `new()` constraints.
