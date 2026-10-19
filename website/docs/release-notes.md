@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Inferred-type hints match G# declaration syntax**. Visual Studio and VS Code now show `FakeRunner` rather than `: FakeRunner` after an inferred local's name. Parameter-name hints such as `exitCode:` are unchanged.
+
 - **Indexed member values keep their hover and navigation targets** (issue #5035). Hover and go-to-definition now follow the compiler's bound member through indexing, including source properties and fields, CLR members, and `List[T]`, array and string values. `runner.Calls[0]` and `call.Args[0]` no longer lose their property hovers or source definitions. An indexed method result such as `uri.ToString()[0]` shows the method on its bound receiver instead of an unrelated same-named method. Index arguments still resolve to their own locals.
 
 - **Body-only edits preserve imported types in the language server** (issue #5025). Incremental binding now moves each explicit import and alias to the edited file's current syntax tree along with its member declarations. Repeated edits no longer lose per-file namespace context, degrade inferred local hovers to `?`, or introduce false missing-type/function diagnostics. This also fixes the same failure when VS Code opens unchanged text with a lowercase, encoded Windows drive URI.
