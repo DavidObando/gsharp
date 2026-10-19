@@ -428,6 +428,11 @@ reveal dependent actual domains, which must also have joint support.
 Propagation follows finite parameter dependency paths rather than unfolding
 recursive metadata indefinitely. Numeric and tuple promotions do not acquire
 implemented-interface obligations from this reference-conversion rule.
+Fixed identity/boxing lower bounds retain their provenance, including value
+types: `V = Token` and `V : T : IView<U>` preserve the interfaces of `Token`.
+Constraint conversion terms remain strict and contribute fixed bounds before
+the receiver's promotable numeric/tuple bounds; a boxed struct is not discarded
+merely because a different kind of value-type bound can widen.
 Inferring an element type cannot turn an `int32` receiver into a collection.
 Explicit generic
 calls keep the narrowed binding (`Nullable<T>` declares no generic methods).

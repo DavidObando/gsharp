@@ -912,6 +912,45 @@ Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Prob
     }
 
     @Theory
+    @InlineData("object", "System.IO.Stream", false)
+    @InlineData("IView<string>", "string", true)
+    func Fixed_Boxed_Lower_Bounds_Preserve_Interface_Obligations(
+        receiverBound string,
+        argumentBound string,
+        compatible bool
+    ) {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public interface IView<T> {}
+    public struct Token : IView<string> {}
+    public interface IProbe<in T,in U,V> {}
+    public interface IBounds<in T,in U> {}
+    public struct Probe : IProbe<` + receiverBound + `,` + argumentBound + `,Token>, IBounds<object,object> {
+        public int V; public Probe(int v) { V = v; }
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<T,U,V>(this IProbe<T,U,V> value, IBounds<T,U> fallback)
+            where T : IView<U> where V : T => new Probe(99);
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Probe()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        let expected = if compatible {
+            "99 99 99 0 0 0"
+        } else {
+            "7 7 7 0 0 0"
+        }
+        Assert.Equal(expected + Environment.NewLine, result.Output)
+    }
+
+    @Theory
     @InlineData("System.Exception", "string", "where T : System.Collections.Generic.List<U>")
     @InlineData("object", "string", "where T : System.IDisposable where U : T")
     @InlineData("object", "int", "where T : U")

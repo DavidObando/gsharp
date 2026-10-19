@@ -1528,7 +1528,7 @@ internal shared class ClrOverloadResolution {
                 if ArgumentDependentBoundsMaySatisfyConstraints(
                     parameters,
                     arguments,
-                    List[(Type, Type)](){(receiverClr, conversionInputType ?? inputs[0].ParameterType)},
+                    List[(Type, Type, bool)](){(receiverClr, conversionInputType ?? inputs[0].ParameterType, true)},
                     argumentDependent,
                     freeBounds
                 ) {
@@ -1676,7 +1676,10 @@ internal shared class ClrOverloadResolution {
             return ArgumentDependentBoundsMaySatisfyConstraints(
                 typeParameters,
                 typeArguments,
-                receiverTerms ?? List[(Type, Type)](){(receiverClr, parameterType)},
+                (receiverTerms ?? List[(Type, Type)](){(receiverClr, parameterType)}).Select(
+                    (term(Type, Type)) -> (term.Item1, term.Item2, true)
+                )
+                    .ToList(),
                 argumentDependent,
                 freeBounds
             )
@@ -1687,7 +1690,7 @@ internal shared class ClrOverloadResolution {
     private func ArgumentDependentBoundsMaySatisfyConstraints(
         parameters[]Type,
         arguments[]Type,
-        receiverTerms IReadOnlyList[(Type, Type)],
+        receiverTerms IReadOnlyList[(Type, Type, bool)],
         argumentDependent HashSet[string],
         freeBounds IReadOnlyDictionary[string, Type]?,
         pinnedParameters HashSet[int32]? = nil,
@@ -1704,7 +1707,7 @@ internal shared class ClrOverloadResolution {
                 argumentDependent.Contains(parameter.Name) &&
                 (
                 freeBounds?.ContainsKey(parameter.Name) == true || receiverTerms.Any(
-                    (term(Type, Type)) ->
+                    (term(Type, Type, bool)) ->
                     MentionsGenericParameter(term.Item1, parameter) || MentionsGenericParameter(term.Item2, parameter)
                 )
             ) {
@@ -1723,7 +1726,7 @@ internal shared class ClrOverloadResolution {
             choices
         )
         let domains = Dictionary[(Type, Type), List[Type]]()
-        let constraintTerms = List[(Type, Type)](receiverTerms)
+        let constraintTerms = List[(Type, Type, bool)](receiverTerms)
         for var i = 0; i < parameters.Length; i++ {
             if possibleArguments[i].ContainsGenericParameters {
                 continue
@@ -1735,7 +1738,7 @@ internal shared class ClrOverloadResolution {
                         constraint = SubstituteClrType(constraint, parameters[j], possibleArguments[j])
                     }
                 }
-                constraintTerms.Add((possibleArguments[i], constraint))
+                constraintTerms.Add((possibleArguments[i], constraint, false))
             }
         }
         for term in constraintTerms {
@@ -1757,7 +1760,11 @@ internal shared class ClrOverloadResolution {
             )
                 .ToList()
             if matches.Count == 0 {
-                if !OpenExtensionReceiverStandardShapeMayApply(source, constraint) {
+                if !OpenExtensionReceiverStandardShapeMayApply(
+                    source,
+                    constraint,
+                    tupleElementConversions: term.Item3
+                ) {
                     return false
                 }
                 continue
@@ -2341,7 +2348,7 @@ internal shared class ClrOverloadResolution {
                     other.GetGenericTypeDefinition()
                 )
             )
-                .Select((other Type) -> (definition, other))
+                .Select((other Type) -> (definition, other, false))
                 .ToList()
             if terms.Count < 2 {
                 continue
@@ -2349,7 +2356,7 @@ internal shared class ClrOverloadResolution {
             let key = string.Join(
                 "\0",
                 terms
-                    .Select((term(Type, Type)) -> term.Item2.AssemblyQualifiedName ?? term.Item2.ToString())
+                    .Select((term(Type, Type, bool)) -> term.Item2.AssemblyQualifiedName ?? term.Item2.ToString())
                     .Distinct(StringComparer.Ordinal)
                     .OrderBy((name string) -> name, StringComparer.Ordinal)
             )
@@ -2538,36 +2545,47 @@ internal shared class ClrOverloadResolution {
         parameters[]Type,
         arguments[]Type,
         index int32,
-        receiverTerms IReadOnlyList[(Type, Type)],
+        receiverTerms IReadOnlyList[(Type, Type, bool)],
         lowerBounds List[Type],
         upperBounds List[Type],
         choices IReadOnlyDictionary[(Type, Type), Type]
-    ) {
-        for term in receiverTerms {
-            var source = SubstituteExtensionReceiverTerm(term.Item1, parameters, arguments)
-            let target = SubstituteExtensionReceiverTerm(term.Item2, parameters, arguments)
-            if choices.TryGetValue((source, target), out var selected) {
-                source = selected
+    ) int32 {
+        var fixedLowerCount = lowerBounds.Count
+        for var pass = 0; pass < 2; pass++ {
+            let allowTupleElements = pass == 1
+            for term in receiverTerms {
+                if term.Item3 != allowTupleElements {
+                    continue
+                }
+                var source = SubstituteExtensionReceiverTerm(term.Item1, parameters, arguments)
+                let target = SubstituteExtensionReceiverTerm(term.Item2, parameters, arguments)
+                if choices.TryGetValue((source, target), out var selected) {
+                    source = selected
+                }
+                CollectExtensionReceiverConversionBounds(
+                    source,
+                    target,
+                    parameters[index],
+                    lowerBounds,
+                    upperBounds,
+                    tupleElementConversions: allowTupleElements
+                )
             }
-            CollectExtensionReceiverConversionBounds(
-                source,
-                target,
-                parameters[index],
-                lowerBounds,
-                upperBounds,
-                tupleElementConversions: true
-            )
+            if !allowTupleElements {
+                fixedLowerCount = lowerBounds.Count
+            }
         }
+        return fixedLowerCount
     }
 
     private func ExpandExtensionReceiverConstraintTerms(
         parameters[]Type,
         arguments[]Type,
-        receiverTerms IReadOnlyList[(Type, Type)],
+        receiverTerms IReadOnlyList[(Type, Type, bool)],
         choices IReadOnlyDictionary[(Type, Type), Type]
-    ) List[(Type, Type)] {
+    ) List[(Type, Type, bool)] {
         let terms = receiverTerms.ToList()
-        let known = HashSet[(Type, Type)](terms)
+        let known = HashSet[(Type, Type, bool)](terms)
         // A simple dependency path visits at most every method parameter.
         // Recursive metadata relationships remain symbolic instead of
         // unfolding an unbounded sequence of constructed types.
@@ -2580,17 +2598,30 @@ internal shared class ClrOverloadResolution {
                 let lower = List[Type]()
                 let upper = List[Type]()
                 CollectFixedExtensionReceiverConstraintBounds(parameters, arguments, i, lower, upper, choices)
-                CollectExtensionReceiverTermBounds(parameters, arguments, i, terms, lower, upper, choices)
-                for source in lower {
-                    // Reference conversions are transitive through an unknown
-                    // parameter; numeric/tuple promotions need not preserve its
-                    // implemented interfaces.
-                    if source.IsValueType || source.ContainsGenericParameters {
+                let fixedLowerCount = CollectExtensionReceiverTermBounds(
+                    parameters,
+                    arguments,
+                    i,
+                    terms,
+                    lower,
+                    upper,
+                    choices
+                )
+                for var index = 0; index < lower.Count; index++ {
+                    let source = lower[index]
+                    // Fixed identity/boxing constraints preserve interfaces;
+                    // numeric and tuple promotions do not.
+                    if source.ContainsGenericParameters ||
+                        (
+                        source.IsValueType && index >= fixedLowerCount && !upper.Any(
+                            (bound Type) -> ClrTypeUtilities.AreSame(bound, source)
+                        )
+                    ) {
                         continue
                     }
                     for rawConstraint in parameters[i].GetGenericParameterConstraints() {
                         let constraint = SubstituteExtensionReceiverTerm(rawConstraint, parameters, arguments)
-                        let term = (source, constraint)
+                        let term = (source, constraint, false)
                         if known.Add(term) {
                             terms.Add(term)
                             changed = true
@@ -2610,7 +2641,7 @@ internal shared class ClrOverloadResolution {
         parameters[]Type,
         arguments[]Type,
         choices IReadOnlyDictionary[(Type, Type), Type],
-        receiverTerms IReadOnlyList[(Type, Type)],
+        receiverTerms IReadOnlyList[(Type, Type, bool)],
         pending Queue[Type]
     ) {
         for var i = 0; i < parameters.Length; i++ {
@@ -2643,7 +2674,7 @@ internal shared class ClrOverloadResolution {
         parameters[]Type,
         arguments[]Type,
         choices IReadOnlyDictionary[(Type, Type), Type],
-        receiverTerms IReadOnlyList[(Type, Type)],
+        receiverTerms IReadOnlyList[(Type, Type, bool)],
         refinements Dictionary[string, bool]
     ) bool {
         if !SatisfiesDeclaredConstraints(parameters, arguments, default, out _, out _) {
@@ -2652,7 +2683,8 @@ internal shared class ClrOverloadResolution {
         for term in receiverTerms {
             if !OpenExtensionReceiverStandardShapeMayApply(
                 SubstituteExtensionReceiverTerm(term.Item1, parameters, arguments),
-                SubstituteExtensionReceiverTerm(term.Item2, parameters, arguments)
+                SubstituteExtensionReceiverTerm(term.Item2, parameters, arguments),
+                tupleElementConversions: term.Item3
             ) {
                 return false
             }
@@ -2673,8 +2705,7 @@ internal shared class ClrOverloadResolution {
                 upperBounds,
                 choices
             )
-            let fixedLowerCount = lowerBounds.Count
-            CollectExtensionReceiverTermBounds(
+            let fixedLowerCount = CollectExtensionReceiverTermBounds(
                 parameters,
                 arguments,
                 index,
