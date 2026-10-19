@@ -258,6 +258,9 @@ CLR field storage is writable in compiled programs as well as REPL submissions,
 subject to readonly-field, readonly-root and struct-temporary checks. Before
 spilling a property assignment's right side, probe reconstructed field storage
 so null-owner checks and static initialization still occur first.
+The shared direct-address capability excludes imported static initonly fields:
+receiver reads, readonly getters and implicit `in` arguments use a copy instead
+of emitting unverifiable `ldsflda`.
 Constrained member emission takes an addressable receiver's original address,
 including array elements with an explicit `struct` constraint.
 In value position a reference-type variable is snapshotted too. Statement

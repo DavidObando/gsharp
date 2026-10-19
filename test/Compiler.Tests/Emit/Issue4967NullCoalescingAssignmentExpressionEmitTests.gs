@@ -19,6 +19,31 @@ import Xunit
 /// of the target's receiver and indices, and a right side evaluated only
 /// when the target is nil.
 open class Issue4967NullCoalescingAssignmentExpressionEmitTests {
+    @Theory
+    @InlineData("External.Value.N")
+    @InlineData("External.Value.P")
+    @InlineData("External.Read(External.Value)")
+    func ImportedStaticReadonlyStruct_ReadsUseVerifiableCopies(expression string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace ReadonlyField4980;
+public struct Cell {
+    public int N;
+    public Cell(int value) { N = value; }
+    public readonly int P => N;
+}
+public static class External {
+    public static readonly Cell Value = new Cell(42);
+    public static int Read(in Cell value) => value.N;
+}`, "ReadonlyField4980")
+        let executable = fixture.Compile(`package Consumer
+import System
+import ReadonlyField4980
+Console.WriteLine(EXPRESSION)`.Replace("EXPRESSION", expression), "ReadonlyFieldConsumer4980", true, "/r:" + contract)
+        IlVerifier.Verify(contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal("42\n", fixture.Run(executable))
+    }
+
     @Fact
     func ConditionalStorageProperty_CapturesReadOnlyRefSelectorValue() {
         let source = `package Test
