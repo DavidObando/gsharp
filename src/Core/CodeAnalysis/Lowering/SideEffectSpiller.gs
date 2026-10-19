@@ -467,7 +467,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                 let address = cast[BoundConditionalAddressExpression](dereference.Operand)
                 let condition = this.MaybeSpill(
                     address.Condition,
-                    address.Condition is not BoundVariableExpression{Variable: LocalVariableSymbol{IsReadOnly: true}},
+                    !IsStableLocalRead(address.Condition),
                     "select",
                     statements
                 )
@@ -527,12 +527,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                 {
                     let owner = fieldLink.Receiver!!
                     let inner = if GSharp.Core.CodeAnalysis.Binding.Binder.IsReferenceTypeForConstraint(owner.Type) {
-                        this.MaybeSpill(
-                            owner,
-                            owner is not BoundVariableExpression{Variable: LocalVariableSymbol{IsReadOnly: true}},
-                            "owner",
-                            statements
-                        )
+                        this.MaybeSpill(owner, !IsStableLocalRead(owner), "owner", statements)
                     } else {
                         this.SpillStorageReceiverParts(owner, statements, captureComponents)
                     }
@@ -553,12 +548,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                 {
                     let owner = clrLink.Receiver!!
                     let inner = if GSharp.Core.CodeAnalysis.Binding.Binder.IsReferenceTypeForConstraint(owner.Type) {
-                        this.MaybeSpill(
-                            owner,
-                            owner is not BoundVariableExpression{Variable: LocalVariableSymbol{IsReadOnly: true}},
-                            "owner",
-                            statements
-                        )
+                        this.MaybeSpill(owner, !IsStableLocalRead(owner), "owner", statements)
                     } else {
                         this.SpillStorageReceiverParts(owner, statements, captureComponents)
                     }
@@ -693,6 +683,11 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                 AssemblyAttributes = program.AssemblyAttributes,
                 ModuleAttributes = program.ModuleAttributes
             }
+        }
+
+        // A readonly ref alias can still observe writes through another alias.
+        private func IsStableLocalRead(expression BoundExpression) bool -> expression is BoundVariableExpression{
+            Variable: LocalVariableSymbol{IsReadOnly: true, RefKind: RefKind.None}
         }
 
         /// Whether [`receiver`](paramref) denotes value storage rather than

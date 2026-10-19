@@ -248,6 +248,9 @@ The selector and snapshot may survive suspension, but no managed pointer does.
 Property-assignment lowering preserves this selected storage rather than
 spilling its value. General conditional-reference receivers capture the
 selector once and capture components only on the selected branch, not an address.
+Only non-ref readonly locals are stable component snapshots. A readonly ref
+alias still observes writes through other aliases, so capture its current
+selector or reference-owner value before evaluating the right side.
 Probe the reconstructed address before evaluating a simple assignment's right side.
 A read-only reference owner does not stabilize mutable
 reference-valued fields along the path: capture those owners separately.

@@ -19,6 +19,85 @@ import Xunit
 /// of the target's receiver and indices, and a right side evaluated only
 /// when the target is nil.
 open class Issue4967NullCoalescingAssignmentExpressionEmitTests {
+    @Fact
+    func ConditionalStorageProperty_CapturesReadOnlyRefSelectorValue() {
+        let source = `package Test
+import System
+struct Cell {
+    var Stored int32
+    prop P int32 {
+        get -> Stored
+        set { Stored = value }
+    }
+}
+func Run() {
+    var first = Cell{}
+    var second = Cell{}
+    var flag = true
+    let ref readonly choice = flag
+    (*&(choice ? first : second)).P = {
+        flag = false
+        1
+    }
+    Console.WriteLine("${first.Stored} ${second.Stored}")
+}
+Run()`
+        Assert.Equal("1 0${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func NativeStorageProperty_CapturesReadOnlyRefOwnerValue() {
+        let source = `package Test
+import System
+struct Cell {
+    var Stored int32
+    prop P int32 {
+        get -> Stored
+        set { Stored = value }
+    }
+}
+class Owner { var Cell Cell }
+func Run() {
+    var owner = Owner{}
+    let original = owner
+    let replacement = Owner{}
+    let ref readonly view = owner
+    view.Cell.P = {
+        owner = replacement
+        1
+    }
+    Console.WriteLine("${original.Cell.Stored} ${replacement.Cell.Stored}")
+}
+Run()`
+        Assert.Equal("1 0${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Fact
+    func ClrStorageProperty_CapturesReadOnlyRefOwnerValue() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace RefOwnerStorage4980;
+public struct Cell { public int P { get; set; } }
+public sealed class Owner { public Cell Cell; }`, "RefOwnerStorage4980")
+        let executable = fixture.Compile(`package Consumer
+import System
+import RefOwnerStorage4980
+func Run() {
+    var owner = Owner()
+    let original = owner
+    let replacement = Owner()
+    let ref readonly view = owner
+    view.Cell.P = {
+        owner = replacement
+        1
+    }
+    Console.WriteLine("${original.Cell.P} ${replacement.Cell.P}")
+}
+Run()`, "RefOwnerStorageConsumer4980", true, "/r:" + contract)
+        IlVerifier.Verify(contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal("1 0\n", fixture.Run(executable))
+    }
+
     @Theory
     @InlineData(false, 0)
     @InlineData(true, 0)
