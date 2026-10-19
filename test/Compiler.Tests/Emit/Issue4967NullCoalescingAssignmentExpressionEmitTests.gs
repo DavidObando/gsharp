@@ -20,6 +20,109 @@ import Xunit
 /// when the target is nil.
 open class Issue4967NullCoalescingAssignmentExpressionEmitTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func GenericStaticField_PreservesConstructedType(valuePosition bool) {
+        let source = `package Test
+import System
+class Cache[T class] {
+    shared {
+        var Value T?
+    }
+}
+ASSIGN
+Console.WriteLine(Cache[string].Value)`.Replace(
+            "ASSIGN",
+            if valuePosition {
+                `Console.WriteLine(Cache[string].Value ??= "v")`
+            } else {
+                `Cache[string].Value ??= "v"
+Console.WriteLine(Cache[string].Value)`
+            }
+        )
+        Assert.Equal("v${Environment.NewLine}v${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Theory
+    @InlineData(false, false, false)
+    @InlineData(true, false, false)
+    @InlineData(false, true, false)
+    @InlineData(true, true, false)
+    @InlineData(false, false, true)
+    @InlineData(true, false, true)
+    @InlineData(false, true, true)
+    @InlineData(true, true, true)
+    func StructReceivers_GenericReassignment_PreservesRuntimeStorage(
+        valuePosition bool,
+        structReceiver bool,
+        suspendingRhs bool
+    ) {
+        let rhs = `{
+        SUSPEND
+        items = replacement
+        "v"
+    }`.Replace(
+            "SUSPEND",
+            if suspendingRhs {
+                "await Task.Yield()"
+            } else {
+                ""
+            }
+        )
+        let source = `package Test
+import System
+import System.Collections.Generic
+import System.Threading.Tasks
+ASYNCfunc Fill[T IList[string?]](input T, replacement T) string? {
+    var items = input
+    ASSIGN
+}
+let original = COLLECTION
+let replacement = COLLECTION
+let result = Fill(original, replacement)RESULT
+Console.WriteLine("${result} ${original[0] ?? "nil"} ${replacement[0] ?? "nil"}")`.Replace(
+            "ASYNC",
+            if suspendingRhs {
+                "async "
+            } else {
+                ""
+            }
+        ).Replace(
+            "ASSIGN",
+            if valuePosition {
+                "return items[0] ??= " + rhs
+            } else {
+                "items[0] ??= " + rhs + "\n    return \"v\""
+            }
+        ).Replace(
+            "COLLECTION",
+            if structReceiver {
+                "ArraySegment[string?]([]string?{nil})"
+            } else {
+                "List[string?]{nil}"
+            }
+        ).Replace(
+            "RESULT",
+            if suspendingRhs {
+                ".Result"
+            } else {
+                ""
+            }
+        )
+        Assert.Equal(
+            (
+                if structReceiver {
+                    "v nil v"
+                } else {
+                    "v v nil"
+                }
+            ) +
+                Environment.NewLine,
+            CompileAndRun(source)
+        )
+    }
+
+    @Theory
     @InlineData(false, false)
     @InlineData(true, false)
     @InlineData(false, true)

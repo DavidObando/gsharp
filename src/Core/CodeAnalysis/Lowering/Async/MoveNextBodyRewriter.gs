@@ -534,7 +534,9 @@ shared class MoveNextBodyRewriter {
                         node.Indexer,
                         rewrittenArgs,
                         rewrittenValue,
-                        node.Type
+                        node.Type,
+                        node.ConstrainedReceiverTypeParameter,
+                        node.ConstrainedInterfaceType
                     )
                 }
                 if node.TargetExpression != nil {
@@ -546,7 +548,9 @@ shared class MoveNextBodyRewriter {
                             node.Indexer,
                             rewrittenArgs,
                             rewrittenValue,
-                            node.Type
+                            node.Type,
+                            node.ConstrainedReceiverTypeParameter,
+                            node.ConstrainedInterfaceType
                         )
                     }
                     return node

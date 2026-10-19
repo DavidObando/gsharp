@@ -377,7 +377,8 @@ internal partial class ExpressionBinder {
                             readAnchor,
                             fieldAccess.Field,
                             fieldAccess.InterfaceType!!,
-                            fieldAccess.SubstitutedType
+                            fieldAccess.SubstitutedType,
+                            fieldAccess.NarrowedType
                         )
                         let interfaceWrite = BoundFieldAssignmentExpression(
                             writeAnchor,
@@ -437,7 +438,9 @@ internal partial class ExpressionBinder {
                             "a user field access has a declaring struct type",
                             expression: "fieldAccess.StructType"
                         ),
-                        fieldAccess.Field
+                        fieldAccess.Field,
+                        fieldAccess.SubstitutedType,
+                        fieldAccess.NarrowedType
                     )
                     let declaringType = Invariant.Required(
                         fieldAccess.StructType,
@@ -452,7 +455,8 @@ internal partial class ExpressionBinder {
                             variableReceiver?.Variable,
                             declaringType,
                             fieldAccess.Field,
-                            boundRhs
+                            boundRhs,
+                            fieldAccess.SubstitutedType
                         )
                     } else {
                         BoundFieldAssignmentExpression.WithExpressionReceiver(
@@ -460,7 +464,8 @@ internal partial class ExpressionBinder {
                             receiver,
                             declaringType,
                             fieldAccess.Field,
-                            boundRhs
+                            boundRhs,
+                            fieldAccess.SubstitutedType
                         )
                     }
                     return (read, write)
@@ -814,6 +819,63 @@ internal partial class ExpressionBinder {
         receiver BoundExpression,
         preStatements ImmutableArray[BoundStatement].Builder,
         forceCapture bool = false
+    ) BoundExpression {
+        let storage = CaptureStorageReceiverCore(anchor, receiver, preStatements, forceCapture)
+        if storage.Type is not TypeParameterSymbol parameter ||
+            parameter.HasValueTypeConstraint ||
+            ReceiverTypeIsReference(parameter) {
+            return storage
+        }
+        // An interface constraint permits both shapes. Snapshot references,
+        // but rebuild the original struct address after evaluating the RHS.
+        let systemType = ImportedTypeSymbol.GetWithoutNullability(typeof(Type), NullabilityFreeReason.TypeLiteral)
+        let isValueType = CaptureReceiver(
+            anchor,
+            BoundClrPropertyAccessExpression(
+                anchor,
+                BoundTypeOfExpression(anchor, parameter, systemType),
+                Invariant.Required(typeof(Type).GetProperty("IsValueType"), "System.Type exposes IsValueType"),
+                TypeSymbol.Bool
+            ),
+            preStatements,
+            forceCapture: true
+        )
+        let snapshot = LocalVariableSymbol(
+            "<ncaGeneric${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
+            isReadOnly: false,
+            parameter
+        )
+        $scope.TryDeclareVariable(snapshot)
+        preStatements.Add(
+            BoundVariableDeclaration(
+                anchor,
+                snapshot,
+                BoundConditionalExpression(
+                    anchor,
+                    isValueType,
+                    BoundDefaultExpression(anchor, parameter),
+                    storage,
+                    parameter
+                )
+            )
+        )
+        return BoundDereferenceExpression(
+            receiver.Syntax,
+            BoundConditionalAddressExpression(
+                anchor,
+                isValueType,
+                storage,
+                BoundVariableExpression(anchor, snapshot),
+                parameter
+            )
+        )
+    }
+
+    private func CaptureStorageReceiverCore(
+        anchor SyntaxNode,
+        receiver BoundExpression,
+        preStatements ImmutableArray[BoundStatement].Builder,
+        forceCapture bool
     ) BoundExpression {
         if ReceiverTypeIsReference(receiver.Type) {
             return CaptureReceiver(anchor, receiver, preStatements, forceCapture)

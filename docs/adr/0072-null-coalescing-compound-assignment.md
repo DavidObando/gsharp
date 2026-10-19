@@ -241,9 +241,14 @@ which leaves no value. The `??` form reads the target once, evaluates the
 right side only on nil, and yields the final value.)
 
 A simple value-type variable is already stable storage and needs no spill.
+An interface-constrained type parameter can hold a struct or a reference.
+Capture its reference value only for reference instantiations, and reconstruct
+a conditional address to that snapshot or the original struct storage.
+The selector and snapshot may survive suspension, but no managed pointer does.
 In value position a reference-type variable is snapshotted too. Statement
-position retains its original simple-reference elision; RHS reassignment of
-that variable or a CLR indexer key remains tracked separately in #5000.
+position still elides capture for a simple variable of known reference type.
+RHS reassignment of that variable or a CLR indexer key remains tracked
+separately in #5000.
 
 For `a[i].Inner.F ??= b`, capture `a` and `i` and rebuild the element/field
 address for the read and write. This retains the original element even if
