@@ -270,6 +270,39 @@ Run("present", false)`)
     }
 
     @Theory
+    @InlineData("if flag { a } else { false }")
+    @InlineData("if let inner = optional { a } else { false }")
+    @InlineData("(flag ? a : false)")
+    @InlineData("{ a }")
+    @InlineData("switch flag { case true: a default: false }")
+    @InlineData("(optional ?? a)")
+    func Compatibility_ImplicitUserConversionBeforeGuard_PreservesItsOperand(initializer string) {
+        const source = `struct Box { var Value bool }
+func operator implicit (value bool) Box -> Box{Value: value}
+func Make(value bool) Box -> Box{Value: value}
+func Run(flag bool, optional bool?, a bool, b bool) string {
+    var cached Box? = nil
+    if let v = cached = INITIALIZER && b { return if v.Value { "true" } else { "false" } }
+    return if let w = cached = INITIALIZER && b { if w.Value { "true" } else { "false" } } else { "skip" }
+}
+Run(true, true, true, false)`
+        let boolean = EmittedOracle.Evaluate(source.Replace("INITIALIZER", initializer))
+        Assert.Equal([]string{"GS0624@6:16", "GS0624@7:23"}, Ids(boolean))
+
+        let parenthesized = EmittedOracle.Evaluate(
+            source.Replace("cached = INITIALIZER && b", "(cached = " + initializer + " && b)")
+        )
+        Assert.Empty(parenthesized.Diagnostics)
+        Assert.Equal("false", parenthesized.Value)
+
+        for opaque in[]string{"Make(a)", "cast[Box](a)", "if flag { cached } else { a }"} {
+            let preserved = EmittedOracle.Evaluate(source.Replace("INITIALIZER", opaque))
+            Assert.Empty(preserved.Diagnostics)
+            Assert.Equal("skip", preserved.Value)
+        }
+    }
+
+    @Theory
     @InlineData("checked")
     @InlineData("unchecked")
     func Compatibility_CheckedValueBeforeGuard_PreservesItsOriginalType(wrapper string) {

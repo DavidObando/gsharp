@@ -368,6 +368,10 @@ internal shared class IfLetBindingSupport {
             if value.Type == TypeSymbol.Bool || value.Type == TypeSymbol.Never {
                 continue
             }
+            if value.ImplicitConversionOperand is BoundExpression original {
+                pending.Push(original)
+                continue
+            }
             switch value {
                 case defaultValue is BoundDefaultExpression when defaultValue.Syntax is DefaultExpressionSyntax{
                     TypeClause: nil
@@ -400,7 +404,11 @@ internal shared class IfLetBindingSupport {
                 case coalesce is BoundBinaryExpression when coalesce.Op.Kind == BoundBinaryOperatorKind.NullCoalesce {
                     // Reuse the operator's own rules for the present left
                     // value, rather than computing nullable unwrapping here.
-                    if BoundBinaryOperator.Bind(SyntaxKind.QuestionQuestionToken, coalesce.Left.Type, TypeSymbol.Bool)
+                    var left = coalesce.Left
+                    while left.ImplicitConversionOperand is BoundExpression originalLeft {
+                        left = originalLeft
+                    }
+                    if BoundBinaryOperator.Bind(SyntaxKind.QuestionQuestionToken, left.Type, TypeSymbol.Bool)
                         ?.Type != TypeSymbol.Bool {
                         return false
                     }

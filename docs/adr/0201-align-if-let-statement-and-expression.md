@@ -267,13 +267,21 @@ top level contains `&&` or `||`.
   syntax-anchoring walk to recognize an implicit conversion. When target typing
   has converted a closed expression, the check covers every target-typed
   branchy result: `if`/`if let`/ternary, blocks, switch arms and coalescing.
+  The shared conversion classifier also records the original operand of a
+  bound type-changing implicit conversion as binding-time provenance on
+  its result. This applies regardless of the implementation shape, including
+  user-defined conversions represented by synthesized calls. The reader follows
+  that operand, not a source call's arguments; explicit conversions remain
+  opaque. Error-typed/deferred operands and identity conversions do not acquire
+  provenance. This metadata is not a tree child or a lowering contract.
   Every value arm must be boolean before implicit conversion; inspecting only
   one arm would mistake an intrinsically nullable expression for a boolean one.
   An untyped `default` arm has no intrinsic nullable type and cannot establish
   that the old continuation was non-Boolean; an explicitly nullable typed
   `default(T?)`, like an explicitly nullable cast, remains opaque.
   Coalescing reuses the ordinary operator binder to classify its present left
-  value. An open coalescing tail is a source continuation even when its overall
+  value before implicit conversion. An open coalescing tail is a source
+  continuation even when its overall
   result is not boolean: with `cached object?`, `cached = value ?? false && b`
   can box the boolean tail before storing it.
 - An assignment initializer (`if let v = cached = Next() { … }`) keeps
