@@ -367,9 +367,19 @@ propagates between those domains rather than dropping the other obligations
 while checking one alternative, or multiplying them into a Cartesian product.
 Every parameter's lower/upper domain is checked for impossibility before any
 recursive candidate pinning, including domains late in the parameter list.
-Only a uniquely supported candidate is pinned; a nonunique viable domain
-remains symbolic for later argument inference, not recursively multiplied
-with the other parameters' domains.
+The original receiver conversion supplies structural lower, upper and exact
+bounds, not just contravariant upper bounds. This includes closed covariant
+bounds and both the input and output of an implicit operator. Invariant bounds
+remain exact even when the bound is an unsealed class. Reopening a provisional
+argument never discards these conversion obligations.
+Only an exact domain or invariant class inference pins a candidate; finding a
+single enumerated witness is not proof of uniqueness. Other viable domains
+remain symbolic for later argument inference, not recursively multiplied
+with the other parameters' domains. There is no recursive widening fallback.
+Closed upper bounds are also candidate witnesses: reflected supertypes of a
+lower bound do not enumerate covariance-derived common types such as
+`IEnumerable<object>`. Exhausting those witnesses proves impossibility only
+for a finite domain, not for an open reference-variance domain.
 Variance contributes individual bounds even when repeated leaves cannot unify
 to one type; reversing variance preserves which side contains an inferable
 leaf. Each actual receiver-interface alternative keeps its own constraint

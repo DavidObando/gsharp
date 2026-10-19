@@ -1445,6 +1445,109 @@ Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Prob
         )
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Closed_Covariant_Constructor_Domains_Do_Not_Multiply(applicable bool) {
+        let slots = "A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P".Split(',')
+        let names = String.Join(",", slots)
+        let constraints = String.Join(" ", slots.Take(15).Select((slot string) -> "where " + slot + " : new()"))
+        using let fixture = CSharpFixture((`namespace Fixture4986 {
+    public interface IProbe<COVARIANT> {}
+    public class Base { public Base() {} }
+    public class Mid : Base { public Mid() {} }
+    public class Leaf : Mid { public Leaf(int value) {} }
+    public struct Probe : IProbe<LEAVES> {
+        public int V; public Probe(int v) { V = v; }
+    }
+    public struct Wide : IProbe<MIDS> {}
+    public static class Extensions {
+        public static Probe GetValueOrDefault<NAMES>(this IProbe<NAMES> value, IProbe<NAMES> fallback)
+            CONSTRAINTS where P : LAST => new Probe(99);
+    }
+}`).Replace(
+                "COVARIANT",
+                String.Join(",", slots.Select((slot string) -> "out " + slot))
+            ).Replace(
+                "LEAVES",
+                String.Join(",", slots.Select((slot string) -> "Leaf"))
+            ).Replace(
+                "MIDS",
+                String.Join(",", slots.Select((slot string) -> "Mid"))
+            ).Replace(
+                "NAMES",
+                names
+            ).Replace(
+                "CONSTRAINTS",
+                constraints
+            ).Replace(
+                "LAST",
+                if applicable {
+                    "new()"
+                } else {
+                    "System.IO.Stream, new()"
+                }
+            ))
+        let argument = if applicable {
+            "Wide()"
+        } else {
+            "Probe()"
+        }
+        let direct = if applicable {
+            "func direct(n Probe) int32 -> n.GetValueOrDefault(ARGUMENT).V\nConsole.WriteLine(direct(Probe(7)))"
+        } else {
+            ""
+        }
+        let result = CompileAndRun((`import System
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(ARGUMENT).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(ARGUMENT).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(ARGUMENT).V }
+    return 0
+}
+DIRECT
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`).Replace("DIRECT", direct).Replace("ARGUMENT", argument), fixture.AssemblyPath, compileInSeparateProcess: true)
+        Assert.Equal(
+            if applicable {
+                "99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine
+            } else {
+                "7 7 7 0 0 0" + Environment.NewLine
+            },
+            result.Output
+        )
+    }
+
+    @Fact
+    func Covariance_Derived_Common_Bounds_Keep_The_Underlying_Member() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public interface IProbe<in T,U,V> {}
+    public struct Probe : IProbe<object,System.Collections.Generic.IEnumerable<string>,System.Collections.Generic.IEnumerable<System.Exception>>,
+        System.Collections.Generic.IComparer<System.Collections.Generic.IEnumerable<object>> {
+        public int V; public Probe(int v) { V = v; }
+        public int Compare(System.Collections.Generic.IEnumerable<object> x, System.Collections.Generic.IEnumerable<object> y) => 0;
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<T,U,V>(this IProbe<T,U,V> value, System.Collections.Generic.IComparer<T> fallback)
+            where T : System.Collections.Generic.IEnumerable<object> where U : T where V : T => new Probe(99);
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func direct(n Probe) int32 -> n.GetValueOrDefault(Probe()).V
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Probe()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+Console.WriteLine(direct(Probe(7)))
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
     @Fact
     func Nested_Fallbacks_Have_Linear_Binding_Work() {
         var nested = "0"
