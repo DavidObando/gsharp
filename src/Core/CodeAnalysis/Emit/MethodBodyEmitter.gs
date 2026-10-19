@@ -426,18 +426,27 @@ internal partial class MethodBodyEmitter {
     }
 
     // Phase 4 (ADR-0027 §7.7a): record a sequence point for the current
-    // statement before its first opcode lands in the IL stream. Skipped for
-    // block / label statements (children record their own anchors and a
-    // label statement emits no IL of its own). BoundAwaitSequencePoint and
-    // synthesised statements with no Syntax map to hidden (0xfeefee).
+    // statement before its first opcode lands in the IL stream. Structural
+    // wrappers leave that offset to their first child statement (issue #5014).
+    // BoundAwaitSequencePoint and synthesized statements map to hidden points.
     private func RecordSequencePointFor(statement BoundStatement) {
-        if this.outer.emitCtx.Pdb == nil {
-            return
-        }
         switch statement {
-            case BoundBlockStatement, BoundLabelStatement {
+            case BoundBlockStatement, BoundLabelStatement, BoundTryStatement {
                 return
             }
+        }
+        this.RecordSequencePoint(
+            if statement is BoundAwaitSequencePoint {
+                nil
+            } else {
+                statement.Syntax
+            }
+        )
+    }
+
+    private func RecordSequencePoint(syntax SyntaxNode?) {
+        if this.outer.emitCtx.Pdb == nil {
+            return
         }
         let ilOffset = this.il.Offset
         if ilOffset == this.lastSequencePointIlOffset {
@@ -446,8 +455,7 @@ internal partial class MethodBodyEmitter {
             // for the first record.
             return
         }
-        let syntax SyntaxNode? = statement.Syntax
-        if statement is BoundAwaitSequencePoint || syntax == nil {
+        if syntax == nil {
             this.sequencePoints.Add(SequencePoint.Hidden(ilOffset, document: default(DocumentHandle)))
             this.lastSequencePointIlOffset = ilOffset
             return

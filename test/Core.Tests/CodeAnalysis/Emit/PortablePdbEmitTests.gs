@@ -323,7 +323,133 @@ func main() {
         Assert.True(sawMoveNext, "Expected at least one MoveNext method in the emitted PE.")
     }
 
+    @Theory
+    @InlineData(true)
+    @InlineData(false)
+    func CatchHandler_MapsBodyInsteadOfPreviousStatement(topLevel bool) {
+        let body = `let before = 0
+try {
+    let parsed = Int32.Parse("invalid")
+} catch (error FormatException) {
+    Console.WriteLine(42)
+}
+Console.WriteLine(before)
+`
+        let source = "import System\n" + if topLevel {
+            body
+        } else {
+            "func main() {\n" + body + "}\n"
+        }
+        VerifyProtectedRegionSequencePoints(
+            source,
+            if topLevel {
+                "<Main>$"
+            } else {
+                "main"
+            }
+        )
+    }
+
+    @Theory
+    @InlineData("catch (FormatException)")
+    @InlineData("catch")
+    @InlineData("catch (error FormatException) when error.Message.Length > 0")
+    func CatchAndFinallyPrologues_DoNotInheritTryBodyLocations(catchClause string) {
+        let source = `import System
+func main() {
+    Console.WriteLine(0)
+    try {
+        let parsed = Int32.Parse("invalid")
+    } ` + catchClause + ` {
+        Console.WriteLine(42)
+    } finally {
+        Console.WriteLine(43)
+    }
+}
+`
+        VerifyProtectedRegionSequencePoints(source, "main")
+    }
+
+    @Fact
+    func FinallyHandler_MapsFirstStatementAtEntry() {
+        const source = `import System
+func main() {
+    Console.WriteLine(0)
+    try {
+        let parsed = Int32.Parse("invalid")
+    } finally {
+        Console.WriteLine(43)
+    }
+}
+`
+        VerifyProtectedRegionSequencePoints(source, "main")
+    }
+
     shared {
+        private func VerifyProtectedRegionSequencePoints(source string, methodName string) {
+            let text = SourceText.From(source, "exceptions.gs")
+            let compilation = Compilation(SyntaxTree.Parse(text)){
+                DebugInformation = DebugInformationOptions{Format: DebugInformationFormat.Portable}
+            }
+            using let peStream = MemoryStream()
+            using let pdbStream = MemoryStream()
+            let result = compilation.Emit(peStream, pdbStream, nil)
+            Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select((d Diagnostic) -> d.Message)))
+            peStream.Position = 0
+            using let pe = PEReader(peStream)
+            let metadata = pe.GetMetadataReader()
+            let method = Assert.Single(
+                metadata.MethodDefinitions,
+                (handle MethodDefinitionHandle) -> metadata.GetString(
+                    metadata.GetMethodDefinition(handle).Name
+                ) == methodName
+            )
+            let body = pe.GetMethodBody(metadata.GetMethodDefinition(method).RelativeVirtualAddress)
+            Assert.NotEmpty(body.ExceptionRegions)
+            pdbStream.Position = 0
+            using let provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+            let pdb = provider.GetMetadataReader()
+            let points = pdb
+                .GetMethodDebugInformation(
+                MetadataTokens.MethodDebugInformationHandle(MetadataTokens.GetRowNumber(method))
+            )
+                .GetSequencePoints()
+                .ToArray()
+            Assert.NotEmpty(points)
+            let tryLine = text.GetLineIndex(source.IndexOf("let parsed", StringComparison.Ordinal)) + 1
+            Assert.Contains(points, (point MetadataSequencePoint) -> !point.IsHidden && point.StartLine == tryLine)
+            for region in body.ExceptionRegions {
+                let entry = points.Last((point MetadataSequencePoint) -> point.Offset <= region.HandlerOffset)
+                if region.Kind == ExceptionRegionKind.Finally {
+                    Assert.False(entry.IsHidden)
+                } else {
+                    Assert.True(entry.IsHidden, "Handler entry inherited source line ${entry.StartLine}.")
+                }
+                let firstBodyPoint = Assert.Single(
+                    points.Where(
+                        (point MetadataSequencePoint) -> !point.IsHidden &&
+                            point.Offset >= region.HandlerOffset &&
+                            point.Offset < region.HandlerOffset +
+                            region.HandlerLength
+                    )
+                        .Take(1)
+                )
+                let marker = if region.Kind == ExceptionRegionKind.Finally {
+                    "Console.WriteLine(43)"
+                } else {
+                    "Console.WriteLine(42)"
+                }
+                Assert.Equal(
+                    text.GetLineIndex(source.IndexOf(marker, StringComparison.Ordinal)) + 1,
+                    firstBodyPoint.StartLine
+                )
+                if region.Kind == ExceptionRegionKind.Filter {
+                    let filterEntry = points.Last((point MetadataSequencePoint) -> point.Offset <= region.FilterOffset)
+                    Assert.True(filterEntry.IsHidden, "Filter entry inherited source line ${filterEntry.StartLine}.")
+                }
+            }
+        }
+
         private const SimpleProgram string = `package main
 
 func main() {
