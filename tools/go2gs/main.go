@@ -43,7 +43,7 @@ func main() {
 	case "internal-analyze-worker":
 		err = runAnalyzeWorker(ctx, os.Args[2:])
 	case "validate-analysis":
-		err = runValidate(os.Args[2:])
+		err = runValidateContext(ctx, os.Args[2:])
 	case "version":
 		fmt.Printf("go2gs %s (helper %s, schema %d)\n", toolVersion, helperVersion, schemaVersion)
 		return
@@ -333,6 +333,10 @@ func runAnalyzeWorker(parent context.Context, args []string) (err error) {
 }
 
 func runValidate(args []string) error {
+	return runValidateContext(context.Background(), args)
+}
+
+func runValidateContext(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("validate-analysis", flag.ContinueOnError)
 	path := fs.String("analysis", "", "analysis JSON")
 	if err := fs.Parse(args); err != nil {
@@ -345,7 +349,7 @@ func runValidate(args []string) error {
 	if err != nil {
 		return &exitError{2, err}
 	}
-	if err := validateAnalysis(analysis); err != nil {
+	if err := validateAnalysisContext(ctx, analysis); err != nil {
 		return &exitError{2, err}
 	}
 	return nil

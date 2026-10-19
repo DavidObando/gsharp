@@ -7226,8 +7226,14 @@ func TestEffectiveBuildTagsMergeProfileAndGOFLAGS(t *testing.T) {
 		t.Fatalf("non-tag GOFLAGS = %v, want %v", remaining, want)
 	}
 	for _, flags := range [][]string{{"-tags", "two words"}, {"-tags=x,,y"}, {"-tags="}, {"-tags"}} {
-		if _, _, err := splitGOFLAGS(flags); err == nil {
+		_, _, firstErr := splitGOFLAGS(flags)
+		_, _, secondErr := splitGOFLAGS(flags)
+		if firstErr == nil {
 			t.Fatalf("malformed tag flags accepted: %v", flags)
+		}
+		if secondErr == nil || firstErr.Error() != secondErr.Error() {
+			t.Fatalf("malformed tag flags produced unstable errors: first=%q second=%q",
+				firstErr, secondErr)
 		}
 	}
 }
@@ -7244,27 +7250,62 @@ func TestGOFLAGSTagsSelectPackagesAndInProcessSyntaxConsistently(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	profile := testProfile()
-	profile.BuildTags = []string{"profile_tag"}
-	profile.GOFLAGS = []string{"-tags", "flag_tag,profile_tag"}
-	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
-	if err != nil || !complete {
-		t.Fatalf("tagged analysis failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
-	}
-	for _, name := range []string{"profile.go", "flag.go"} {
-		path := "source://" + name
-		fileIndex := slices.IndexFunc(analysis.Files, func(file FileRecord) bool {
-			return file.Path == path && file.Role == "compiled"
+	for _, test := range []struct {
+		name    string
+		goFlags []string
+	}{
+		{"separate", []string{"-tags", "flag_tag,profile_tag"}},
+		{"equals", []string{"-tags=flag_tag,profile_tag"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			profile := testProfile()
+			profile.BuildTags = []string{"profile_tag"}
+			profile.GOFLAGS = append([]string{}, test.goFlags...)
+			analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+			if err != nil || !complete {
+				t.Fatalf("tagged analysis failed: complete=%v err=%v blockers=%#v",
+					complete, err, analysis.Blockers)
+			}
+			buildTags := append([]string{}, analysis.Profile.BuildTags...)
+			goFlags := append([]string{}, analysis.Profile.GOFLAGS...)
+			if err := validateAnalysis(analysis); err != nil {
+				t.Fatalf("GOFLAGS-selected artifact was rejected: %v", err)
+			}
+			if !slices.Equal(analysis.Profile.BuildTags, buildTags) ||
+				!slices.Equal(analysis.Profile.GOFLAGS, goFlags) {
+				t.Fatalf("validation mutated serialized profile: buildTags=%v goFlags=%v",
+					analysis.Profile.BuildTags, analysis.Profile.GOFLAGS)
+			}
+			for _, name := range []string{"profile.go", "flag.go"} {
+				path := "source://" + name
+				fileIndex := slices.IndexFunc(analysis.Files, func(file FileRecord) bool {
+					return file.Path == path && file.Role == "compiled"
+				})
+				if fileIndex < 0 {
+					t.Fatalf("effective tag did not compile %s: %#v", path, analysis.Files)
+				}
+				fileID := analysis.Files[fileIndex].ID
+				if !slices.ContainsFunc(analysis.Nodes, func(node NodeRecord) bool {
+					return node.FileID == fileID && node.Kind == "*ast.File"
+				}) {
+					t.Fatalf("compiled tagged file %s lacks typed syntax", path)
+				}
+			}
 		})
-		if fileIndex < 0 {
-			t.Fatalf("effective tag did not compile %s: %#v", path, analysis.Files)
+	}
+}
+
+func TestMethodSetAuthorityValidationHonorsCancellation(t *testing.T) {
+	analysis := methodSetAuthorityFixture(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	analysisOperationTestHook = func(operation, point string) {
+		if operation == "type-check-parse" && point == "before" {
+			cancel()
 		}
-		fileID := analysis.Files[fileIndex].ID
-		if !slices.ContainsFunc(analysis.Nodes, func(node NodeRecord) bool {
-			return node.FileID == fileID && node.Kind == "*ast.File"
-		}) {
-			t.Fatalf("compiled tagged file %s lacks typed syntax", path)
-		}
+	}
+	t.Cleanup(func() { analysisOperationTestHook = nil })
+	if err := validateAnalysisContext(ctx, analysis); !errors.Is(err, context.Canceled) {
+		t.Fatalf("method-authority validation ignored caller cancellation: %v", err)
 	}
 }
 

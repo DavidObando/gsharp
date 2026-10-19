@@ -396,7 +396,7 @@ func readWorkerArtifactsContext(ctx context.Context, root string, maxBytes int64
 	if err := ctx.Err(); err != nil {
 		return nil, nil, Analysis{}, err
 	}
-	if err := validateAnalysis(analysis); err != nil {
+	if err := validateAnalysisContext(ctx, analysis); err != nil {
 		return nil, nil, Analysis{}, fmt.Errorf("validate analysis worker result: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
@@ -533,7 +533,7 @@ func encodeAnalysisArtifactsContext(ctx context.Context, analysis Analysis, run 
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	if err := validateAnalysis(analysis); err != nil {
+	if err := validateAnalysisContext(ctx, analysis); err != nil {
 		return nil, nil, fmt.Errorf("internal schema validation failed: %w", err)
 	}
 	if artifactEncodingTestHook != nil {

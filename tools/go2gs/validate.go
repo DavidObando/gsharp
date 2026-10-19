@@ -26,6 +26,13 @@ import (
 )
 
 func validateAnalysis(a Analysis) error {
+	return validateAnalysisContext(context.Background(), a)
+}
+
+func validateAnalysisContext(ctx context.Context, a Analysis) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if a.Schema.Name != schemaName || a.Schema.Version != schemaVersion {
 		return fmt.Errorf("unsupported analysis schema %q version %d", a.Schema.Name, a.Schema.Version)
 	}
@@ -426,7 +433,7 @@ func validateAnalysis(a Analysis) error {
 			return err
 		}
 	}
-	if err := validateOwnership(a, scopes); err != nil {
+	if err := validateOwnership(ctx, a, scopes); err != nil {
 		return err
 	}
 	expectedCounts := RecordCounts{
@@ -941,7 +948,7 @@ func validateSourceSpan(span SourceSpan, owner string) error {
 	return nil
 }
 
-func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
+func validateOwnership(ctx context.Context, a Analysis, scopes map[string]ScopeRecord) error {
 	packages := make(map[string]PackageRecord, len(a.Packages))
 	files := make(map[string]FileRecord, len(a.Files))
 	nodes := make(map[string]NodeRecord, len(a.Nodes))
@@ -1096,7 +1103,7 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 				symbol.ID, membershipReferences[symbol.ID])
 		}
 	}
-	if err := validateRetypedMethodSets(a, files, symbols); err != nil {
+	if err := validateRetypedMethodSets(ctx, a, files, symbols); err != nil {
 		return err
 	}
 	for _, node := range a.Nodes {
@@ -1418,7 +1425,13 @@ func capturedGoFileSelected(
 		ArchitectureFeatures: append([]string{}, a.Profile.ArchitectureFeatures...),
 		BuildTags:            append([]string{}, a.Profile.BuildTags...),
 		CGOEnabled:           a.Profile.CGOEnabled,
+		GOFLAGS:              append([]string{}, a.Profile.GOFLAGS...),
 	}
+	effectiveTags, err := effectiveBuildTags(profile)
+	if err != nil {
+		return false, err
+	}
+	profile.BuildTags = effectiveTags
 	context := profileBuildContext(profile)
 	context.CgoEnabled = profile.CGOEnabled
 	context.OpenFile = func(string) (io.ReadCloser, error) {
@@ -1581,6 +1594,7 @@ type retypedMethodAuthority struct {
 }
 
 func validateRetypedMethodSets(
+	ctx context.Context,
 	a Analysis,
 	files map[string]FileRecord,
 	symbols map[string]SymbolRecord,
@@ -1590,7 +1604,7 @@ func validateRetypedMethodSets(
 	}) {
 		return nil
 	}
-	authority, err := retypeMethodAuthority(a, files, symbols)
+	authority, err := retypeMethodAuthority(ctx, a, files, symbols)
 	if err != nil {
 		return err
 	}
@@ -1646,6 +1660,7 @@ func validateRetypedMethodSets(
 }
 
 func retypeMethodAuthority(
+	ctx context.Context,
 	a Analysis,
 	files map[string]FileRecord,
 	symbols map[string]SymbolRecord,
@@ -1725,7 +1740,7 @@ func retypeMethodAuthority(
 		RequestedGoVersion: strings.TrimPrefix(a.Toolchain.ActualVersion, "go"),
 		GOARCH:             a.Profile.GOARCH,
 	}
-	if err := typeCheckMethodAuthorityPackages(context.Background(), loaded, sources, profile); err != nil {
+	if err := typeCheckMethodAuthorityPackages(ctx, loaded, sources, profile); err != nil {
 		return result, fmt.Errorf("re-type-check captured source: %w", err)
 	}
 	for _, record := range a.Packages {
