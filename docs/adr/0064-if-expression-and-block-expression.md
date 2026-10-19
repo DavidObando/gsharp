@@ -458,6 +458,10 @@ conversion obligations without multiplying independent tuple families. Ambiguous
 metadata shapes and open-source obligations join the affected components.
 There is no Cartesian element completion or independent recursive
 constructor-constraint checker.
+The shared bound collector separately records upper bounds imposed by CLR
+reference variance. Projecting a declared conversion such as `U : struct` to
+`U -> System.ValueType` retains the obligation without incorrectly requiring
+`U` itself to be a reference type.
 Inferring an element type cannot turn an `int32` receiver into a collection.
 Object- and collection-initializer suffixes are transparent to this name lookup:
 the original unbound head call still supplies the probe's argument shape.

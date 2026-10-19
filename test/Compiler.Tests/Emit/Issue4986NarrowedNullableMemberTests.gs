@@ -1270,6 +1270,32 @@ Console.WriteLine("${direct((7,8))} ${ternary((7,8))} ${expression((7,8))} ${sta
         Assert.Equal("99 99 99 99 0 0 0" + Environment.NewLine, result.Output)
     }
 
+    @Theory
+    @InlineData("Guid", "Guid.Empty")
+    @InlineData("DateTime", "DateTime.MinValue")
+    func Declared_Value_Constraints_Are_Not_Receiver_Variance_Bounds(type string, value string) {
+        using let fixture = CSharpFixture(`using System;
+namespace Fixture4986 {
+    public static class Extensions {
+        public static (int,int) GetValueOrDefault<T,U>(this T value, T fallback, U other)
+            where T : struct, IComparable<(U,int)> where U : struct =>
+                typeof(T) == typeof((` + type + `,int)) && typeof(U) == typeof(` + type + `) ? (99,0) : (98,0);
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func direct(n (` + type + `,int32)) int32 -> n.GetValueOrDefault((` + value + `,0), ` + value + `).Item1
+func ternary(n (` + type + `,int32)?) int32 -> n != nil ? n.GetValueOrDefault((` + value + `,0), ` + value + `).Item1 : 0
+func expression(n (` + type + `,int32)?) int32 -> if n != nil { n.GetValueOrDefault((` + value + `,0), ` + value + `).Item1 } else { 0 }
+func statement(n (` + type + `,int32)?) int32 {
+    if n != nil { return n.GetValueOrDefault((` + value + `,0), ` + value + `).Item1 }
+    return 0
+}
+Console.WriteLine("${direct((` + value + `,7))} ${ternary((` + value + `,7))} ${expression((` + value + `,7))} ${statement((` + value + `,7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99 99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
     @Fact
     func Tuple_Slot_Aliases_Retain_Method_Parameter_Constraints() {
         using let fixture = CSharpFixture(`using System;

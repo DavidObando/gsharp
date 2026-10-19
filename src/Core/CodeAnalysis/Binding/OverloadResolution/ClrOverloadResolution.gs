@@ -1852,13 +1852,15 @@ internal shared class ClrOverloadResolution {
             let parameter = parameters[index]
             let lowerBounds = List[Type]()
             let upperBounds = List[Type]()
+            let referenceUpperBounds = List[Type]()
             CollectFixedExtensionReceiverConstraintBounds(
                 parameters,
                 possibleArguments,
                 index,
                 lowerBounds,
                 upperBounds,
-                choices
+                choices,
+                referenceUpperBounds
             )
             CollectExtensionReceiverTermBounds(
                 parameters,
@@ -1867,9 +1869,9 @@ internal shared class ClrOverloadResolution {
                 receiverTerms,
                 lowerBounds,
                 upperBounds,
-                choices
+                choices,
+                referenceUpperBounds
             )
-            let inferredUpperCount = upperBounds.Count
             let exactBounds = upperBounds.Where((bound Type) -> !InferenceBoundMayRefine(bound)).ToList()
             let requiresValue = (
                 ExtensionReceiverParameterAttributes(parameters, possibleArguments, index) &
@@ -1991,7 +1993,7 @@ internal shared class ClrOverloadResolution {
                     discoveredDomains
                 )
             }
-            if requiresValue && inferredUpperCount > 0 {
+            if requiresValue && referenceUpperBounds.Count > 0 {
                 return false
             }
             for upper in upperBounds {
@@ -2445,7 +2447,8 @@ internal shared class ClrOverloadResolution {
         index int32,
         lowerBounds List[Type],
         upperBounds List[Type],
-        constraintAlternatives IReadOnlyDictionary[(Type, Type), Type]
+        constraintAlternatives IReadOnlyDictionary[(Type, Type), Type],
+        referenceUpperBounds List[Type]? = nil
     ) {
         let parameter = parameters[index]
         for var i = 0; i < parameters.Length; i++ {
@@ -2463,7 +2466,14 @@ internal shared class ClrOverloadResolution {
                 } else {
                     source
                 }
-                CollectExtensionReceiverConversionBounds(argument, constraint, parameter, lowerBounds, upperBounds)
+                CollectExtensionReceiverConversionBounds(
+                    argument,
+                    constraint,
+                    parameter,
+                    lowerBounds,
+                    upperBounds,
+                    referenceUpperBounds: referenceUpperBounds
+                )
             }
         }
     }
@@ -2475,13 +2485,19 @@ internal shared class ClrOverloadResolution {
         lowerBounds List[Type],
         upperBounds List[Type],
         exact bool = false,
-        tupleElementConversions bool = false
+        tupleElementConversions bool = false,
+        referenceUpperBounds List[Type]? = nil,
+        referenceVariance bool = false
     ) {
         if source.IsGenericParameter || target.IsGenericParameter {
             if source.IsGenericParameter &&
                 MentionsGenericParameter(source, parameter) &&
-                !target.ContainsGenericParameters {
+                !target
+                .ContainsGenericParameters {
                 upperBounds.Add(target)
+                if !exact && referenceVariance {
+                    referenceUpperBounds?.Add(target)
+                }
                 if exact {
                     lowerBounds.Add(target)
                 }
@@ -2508,7 +2524,9 @@ internal shared class ClrOverloadResolution {
                 parameter,
                 lowerBounds,
                 upperBounds,
-                tupleElementConversions: true
+                tupleElementConversions: true,
+                referenceUpperBounds: referenceUpperBounds,
+                referenceVariance: referenceVariance
             )
             return
         }
@@ -2523,7 +2541,9 @@ internal shared class ClrOverloadResolution {
                     lowerBounds,
                     upperBounds,
                     exact || sourceElement.IsValueType || targetElement.IsValueType,
-                    tupleElementConversions
+                    tupleElementConversions,
+                    referenceUpperBounds,
+                    referenceVariance || !exact && !sourceElement.IsValueType && !targetElement.IsValueType
                 )
             }
             return
@@ -2542,7 +2562,9 @@ internal shared class ClrOverloadResolution {
                         parameter,
                         lowerBounds,
                         upperBounds,
-                        tupleElementConversions: tupleElementConversions
+                        tupleElementConversions: tupleElementConversions,
+                        referenceUpperBounds: referenceUpperBounds,
+                        referenceVariance: referenceVariance
                     )
                 }
             }
@@ -2564,7 +2586,15 @@ internal shared class ClrOverloadResolution {
                 slots[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
             }
             if variance == GenericParameterAttributes.Contravariant {
-                CollectExtensionReceiverConversionBounds(targets[i], sources[i], parameter, lowerBounds, upperBounds)
+                CollectExtensionReceiverConversionBounds(
+                    targets[i],
+                    sources[i],
+                    parameter,
+                    lowerBounds,
+                    upperBounds,
+                    referenceUpperBounds: referenceUpperBounds,
+                    referenceVariance: true
+                )
             } else {
                 CollectExtensionReceiverConversionBounds(
                     sources[i],
@@ -2573,7 +2603,9 @@ internal shared class ClrOverloadResolution {
                     lowerBounds,
                     upperBounds,
                     variance == GenericParameterAttributes.None,
-                    tupleElements
+                    tupleElements,
+                    referenceUpperBounds,
+                    referenceVariance || !tupleElements && variance != GenericParameterAttributes.None
                 )
             }
         }
@@ -2601,7 +2633,8 @@ internal shared class ClrOverloadResolution {
         receiverTerms IReadOnlyList[(Type, Type, bool)],
         lowerBounds List[Type],
         upperBounds List[Type],
-        choices IReadOnlyDictionary[(Type, Type), Type]
+        choices IReadOnlyDictionary[(Type, Type), Type],
+        referenceUpperBounds List[Type]? = nil
     ) int32 {
         var fixedLowerCount = lowerBounds.Count
         for var pass = 0; pass < 2; pass++ {
@@ -2624,7 +2657,8 @@ internal shared class ClrOverloadResolution {
                     lowerBounds,
                     upperBounds,
                     exact: exact,
-                    tupleElementConversions: allowTupleElements
+                    tupleElementConversions: allowTupleElements,
+                    referenceUpperBounds: referenceUpperBounds
                 )
             }
             if !allowTupleElements {
