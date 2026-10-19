@@ -502,6 +502,9 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             return CaptureOpaqueStorageReceiver(receiver, receiver.Syntax, statements, local)
         }
         switch receiver {
+            case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
+                return this.SpillStorageReceiverParts(address.Operand, statements, captureComponents: true)
+            }
             case tuple is BoundTupleElementAccessExpression {
                 // Capture owners and indices before the RHS, without copying tuple storage.
                 let owner = this.SpillStorageReceiverParts(tuple.Receiver, statements, captureComponents: true)
@@ -839,6 +842,10 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     return false
                 }
                 switch receiver {
+                    case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
+                        receiver = address.Operand
+                        continue
+                    }
                     case tuple is BoundTupleElementAccessExpression {
                         receiver = tuple.Receiver
                         continue

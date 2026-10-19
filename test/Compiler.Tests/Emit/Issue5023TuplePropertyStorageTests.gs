@@ -5,6 +5,181 @@ import Xunit
 
 open class Issue5023TuplePropertyStorageTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func AddressPairPropertyWrites_PreserveStoredReceiver(native bool) {
+        let source = `package Test
+import System
+import System.Collections
+struct Cell {
+    var Stored object?
+    prop Value object? {
+        get -> Stored
+        set { Stored = value }
+    }
+}
+let items = [](CELLTYPE, int32){(CELL, 0)}
+var index = 0
+var calls = 0
+func Index() int32 {
+    calls++
+    return index
+}
+(*&items[Index()]).Item1.Value = {
+    index = 1
+    "v"
+}
+Console.WriteLine("${items[0].Item1.Value ?? "nil"} ${calls}")
+var tuple = (CELL, 0)
+(*&tuple).Item1.Value = {
+    if index == 1 { calls++ }
+    "w"
+}
+Console.WriteLine("${tuple.Item1.Value ?? "nil"} ${calls}")`.Replace(
+            "CELLTYPE",
+            if native {
+                "Cell"
+            } else {
+                "DictionaryEntry"
+            }
+        )
+            .Replace(
+            "CELL",
+            if native {
+                "Cell{}"
+            } else {
+                `DictionaryEntry("key", nil)`
+            }
+        )
+        Assert.Equal("v 1\nw 2\n", CompileAndRun(source))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func AddressPairBorrow_ReconstructsSelectedStorageAcrossSuspension(array bool) {
+        let source = `package Test
+import System
+import System.Threading.Tasks
+struct Cell { var Stored int32 }
+var tuple = (Cell{Stored: 1}, 0)
+var items = [](Cell, int32){(Cell{Stored: 1}, 0)}
+let original = items
+var index = 0
+var calls = 0
+func Index() int32 {
+    calls++
+    return index
+}
+let gate = TaskCompletionSource[int32]()
+func Read(in value int32, ignored int32) int32 -> value
+async func Change() int32 {
+    await gate.Task
+    tuple.Item1.Stored = 2
+    original[0].Item1.Stored = 3
+    items = [](Cell, int32){(Cell{Stored: 9}, 0)}
+    index = 1
+    return 0
+}
+async func Run() {
+    Console.WriteLine(Read(RECEIVER.Item1.Stored, await Change()))
+}
+let pending = Run()
+Console.WriteLine(pending.IsCompleted)
+gate.SetResult(0)
+pending.GetAwaiter().GetResult()
+Console.WriteLine(calls)`.Replace(
+            "RECEIVER",
+            if array {
+                "(*&items[Index()])"
+            } else {
+                "(*&tuple)"
+            }
+        )
+        Assert.Equal(
+            if array {
+                "False\n3\n1\n"
+            } else {
+                "False\n2\n0\n"
+            },
+            CompileAndRun(source)
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefReturningArrayOwner_CapturesArrayValueBeforeSuspension(imported bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace RefArray5023;
+public static class Api {
+    public static int[] Slot = new[] { 1 };
+    public static int Calls;
+    public static ref int[] Items() { Calls++; return ref Slot; }
+}`, "RefArray5023")
+        let source = `package Test
+import System
+import System.Threading.Tasks
+DECLARATIONS
+let original = OWNER
+let gate = TaskCompletionSource[int32]()
+var index = 0
+func Read(in value int32, ignored int32) int32 -> value
+async func Change() int32 {
+    await gate.Task
+    original[0] = 2
+    OWNER = []int32{9}
+    index = 1
+    return 0
+}
+async func Run() {
+    Console.WriteLine(Read(PRODUCER[index], await Change()))
+}
+let pending = Run()
+Console.WriteLine(pending.IsCompleted)
+gate.SetResult(0)
+pending.GetAwaiter().GetResult()
+Console.WriteLine(CALLS)`.Replace(
+            "DECLARATIONS",
+            if imported {
+                "import RefArray5023"
+            } else {
+                `
+var items = []int32{1}
+var calls = 0
+func Items() ref []int32 {
+    calls++
+    return ref items
+}`
+            }
+        ).Replace(
+            "OWNER",
+            if imported {
+                "Api.Slot"
+            } else {
+                "items"
+            }
+        ).Replace(
+            "PRODUCER",
+            if imported {
+                "Api.Items()"
+            } else {
+                "Items()"
+            }
+        ).Replace(
+            "CALLS",
+            if imported {
+                "Api.Calls"
+            } else {
+                "calls"
+            }
+        )
+        let executable = fixture.Compile(source, "RefArrayBorrow5023", true, "/r:" + contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal("False\n2\n1\n", fixture.Run(executable))
+    }
+
+    @Theory
     @InlineData(false, false)
     @InlineData(false, true)
     @InlineData(true, false)

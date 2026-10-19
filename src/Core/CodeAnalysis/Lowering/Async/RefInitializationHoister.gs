@@ -133,6 +133,9 @@ shared class RefInitializationHoister {
                 )
             }
             switch operand {
+                case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
+                    return HoistOperand(address.Operand, prelude, captureComponents: true)
+                }
                 case tuple is BoundTupleElementAccessExpression {
                     // Later arguments can replace an owner or index before address reconstruction.
                     return BoundTupleElementAccessExpression(

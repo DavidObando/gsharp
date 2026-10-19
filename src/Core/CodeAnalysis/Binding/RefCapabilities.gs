@@ -53,7 +53,8 @@ internal shared class RefCapabilities {
 
     internal func IsBorrowedLocation(
         expression BoundExpression,
-        knownLocations HashSet[VariableSymbol]? = nil
+        knownLocations HashSet[VariableSymbol]? = nil,
+        captureReferenceOwners bool = true
     ) bool -> IsRefReturningAccess(expression) ||
         switch expression {
         case call is BoundImportedInstanceCallExpression: ManagedReferenceOrigins.IsHandleBorrow(call) ||
@@ -61,7 +62,7 @@ internal shared class RefCapabilities {
         case call is BoundUserInstanceCallExpression: call
             .Method
             .ReturnRefKind != RefKind.None &&
-            IsBorrowedLocation(call.Receiver, knownLocations)
+            IsBorrowedLocation(call.Receiver, knownLocations, captureReferenceOwners)
         case call is BoundBaseInterfaceCallExpression: call.Method.ReturnRefKind != RefKind.None
         case call is BoundBaseClassCallExpression: (
             call.Method?.ReturnRefKind ?? call.Property?.ReturnRefKind
@@ -70,37 +71,56 @@ internal shared class RefCapabilities {
             .Property
             .ReturnRefKind != RefKind.None &&
             property.Receiver != nil &&
-            IsBorrowedLocation(property.Receiver, knownLocations)
-        case block is BoundBlockExpression: IsBorrowedLocation(block.Expression, knownLocations)
-        case address is BoundAddressOfExpression: IsBorrowedLocation(address.Operand, knownLocations)
-        case dereference is BoundDereferenceExpression: IsBorrowedLocation(dereference.Operand, knownLocations)
-        case tuple is BoundTupleElementAccessExpression: IsBorrowedLocation(tuple.Receiver, knownLocations)
+            IsBorrowedLocation(property.Receiver, knownLocations, captureReferenceOwners)
+        case block is BoundBlockExpression: IsBorrowedLocation(block.Expression, knownLocations, captureReferenceOwners)
+        case address is BoundAddressOfExpression: IsBorrowedLocation(
+            address.Operand,
+            knownLocations,
+            captureReferenceOwners
+        )
+        case dereference is BoundDereferenceExpression: IsBorrowedLocation(
+            dereference.Operand,
+            knownLocations,
+            captureReferenceOwners
+        )
+        case tuple is BoundTupleElementAccessExpression: IsBorrowedLocation(
+            tuple.Receiver,
+            knownLocations,
+            captureReferenceOwners
+        )
         case conditional is BoundConditionalAddressExpression: IsBorrowedLocation(
             conditional.WhenTrueOperand,
-            knownLocations
+            knownLocations,
+            captureReferenceOwners
         ) ||
-            IsBorrowedLocation(conditional.WhenFalseOperand, knownLocations)
-        case BoundFieldAccessExpression{Receiver: {} receiver}: IsBorrowedLocation(receiver, knownLocations)
-        case BoundClrPropertyAccessExpression{Receiver: {} receiver, Member: FieldInfo}: IsBorrowedLocation(
-            receiver,
-            knownLocations
-        )
-        case index is BoundIndexExpression when index.IsArrayBackedElementAccess: IsBorrowedLocation(
-            index.Target,
-            knownLocations
-        )
+            IsBorrowedLocation(conditional.WhenFalseOperand, knownLocations, captureReferenceOwners)
+        case BoundFieldAccessExpression{Receiver: {} receiver}: (
+            !captureReferenceOwners || !Binder.IsReferenceTypeForConstraint(receiver.Type)
+        ) &&
+            IsBorrowedLocation(receiver, knownLocations, captureReferenceOwners)
+        case BoundClrPropertyAccessExpression{Receiver: {} receiver, Member: FieldInfo}: (
+            !captureReferenceOwners || !Binder.IsReferenceTypeForConstraint(receiver.Type)
+        ) &&
+            IsBorrowedLocation(receiver, knownLocations, captureReferenceOwners)
+        case index is BoundIndexExpression when index.IsArrayBackedElementAccess: !captureReferenceOwners &&
+            IsBorrowedLocation(index.Target, knownLocations, captureReferenceOwners)
         case index is BoundClrIndexExpression when GetReturnRefKind(index.Indexer) != RefKind.None: IsBorrowedLocation(
             index.Target,
-            knownLocations
+            knownLocations,
+            captureReferenceOwners
         )
         case BoundClrPropertyAccessExpression{
             Receiver: {} receiver,
             Member: PropertyInfo property
-        } when GetReturnRefKind(property) != RefKind.None: IsBorrowedLocation(receiver, knownLocations)
+        } when GetReturnRefKind(property) != RefKind.None: IsBorrowedLocation(
+            receiver,
+            knownLocations,
+            captureReferenceOwners
+        )
         case variable is BoundVariableExpression: knownLocations?.Contains(variable.Variable) == true ||
             (
             variable.Variable is LocalVariableSymbol{RefKind: not RefKind.None, ManagedReferenceOrigin: {} origin} &&
-                IsBorrowedLocation(origin, knownLocations)
+                IsBorrowedLocation(origin, knownLocations, captureReferenceOwners)
         )
         default: expression.Type is ByRefTypeSymbol
     }

@@ -121,11 +121,11 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
             }
             case property is BoundPropertyAssignmentExpression {
                 this.CheckScopedStore(property.Value, property)
-                this.CheckSuspendingLocation(property.Receiver, property.Value)
+                this.CheckSuspendingLocation(property.Receiver, property.Value, captureReferenceOwners: true)
             }
             case property is BoundClrPropertyAssignmentExpression {
                 this.CheckScopedStore(property.Value, property)
-                this.CheckSuspendingLocation(property.Receiver, property.Value)
+                this.CheckSuspendingLocation(property.Receiver, property.Value, captureReferenceOwners: true)
             }
             case index is BoundIndexAssignmentExpression {
                 this.CheckScopedStore(index.Value, index)
@@ -481,8 +481,17 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         }
     }
 
-    private func CheckSuspendingLocation(receiver BoundExpression?, value BoundExpression) {
-        if receiver != nil && !Binder.IsReferenceTypeForConstraint(receiver.Type) && this.IsManagedLocation(receiver) &&
+    private func CheckSuspendingLocation(
+        receiver BoundExpression?,
+        value BoundExpression,
+        captureReferenceOwners bool = false
+    ) {
+        // Method receivers cannot yet use the property/borrow address reconstruction path.
+        if receiver != nil && !Binder.IsReferenceTypeForConstraint(receiver.Type) && RefCapabilities.IsBorrowedLocation(
+            receiver,
+            this.managedLocations,
+            captureReferenceOwners
+        ) &&
             AsyncBoundTreeQueries
             .HasAwait(value) {
             this.Report(
