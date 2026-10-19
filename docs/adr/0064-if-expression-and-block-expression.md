@@ -478,6 +478,15 @@ bound solver checks its element bounds and actual implemented-interface shapes.
 This retains correlations between array bounds and interface arguments without
 inventing generic parameters or enumerating array refinement vectors. Array rank,
 SZ shape and fixed interface capabilities remain obligations of that shape.
+Nested refinement queries retain the enclosing parameter/constraint component,
+including receiver obligations and selected metadata alternatives. The same
+conversion collector preserves invariant open-parameter equations through the
+existing type-identity-keyed unifier; dependent declared bounds are not lost
+when a constructor slot aliases a method parameter. Refinement memoization keys
+use actual type identities and distinguish conversion terms from parameter
+assignments and selected alternatives, rather than conflating parameters that
+happen to share a name. Bare generic upper bounds retain their dependent bounds;
+they are not nominal class shapes.
 A nullable value-type lower bound cannot satisfy a nonnullable `struct`
 constraint; the probe uses the same nullable-value reader as declared-constraint
 validation, without excluding nullable arguments from `new()` constraints.

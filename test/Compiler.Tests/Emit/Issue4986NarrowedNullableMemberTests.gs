@@ -2576,6 +2576,64 @@ Console.WriteLine("${e.Compile()(4)} ${e.Compile()(nil)} ${h.Compile()(1)} ${h.C
         Assert.Equal("5 0 True False" + Environment.NewLine, result.Output)
     }
 
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func Enclosing_Refinement_Bounds_Keep_Parameter_Equations(transitive bool, compatible bool) {
+        using let fixture = CSharpFixture((`namespace Fixture4986 {
+    public interface IProbe<in T,in U,in V> {}
+    public interface IBounds<in T,in U,in V> {}
+    public struct Probe : IProbe<ELEMENT[],System.IO.Stream,System.IO.Stream>, IBounds<object,object,object> {
+        public int V; public Probe(int v) { V = v; }
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<T,U,V>(this IProbe<T,U,V> value, IBounds<T,U,V> fallback)
+            where T : System.Collections.Generic.IList<U> UBOUND where V : System.IO.Stream => new Probe(99);
+    }
+}`).Replace(
+                "ELEMENT",
+                if compatible {
+                    "System.IO.Stream"
+                } else {
+                    "System.Exception"
+                }
+            )
+                .Replace(
+                "UBOUND",
+                if transitive {
+                    "where U : V"
+                } else {
+                    "where U : System.IO.Stream"
+                }
+            ))
+        let direct = if compatible {
+            "Console.WriteLine(Probe(7).GetValueOrDefault(Probe()).V)"
+        } else {
+            ""
+        }
+        let result = CompileAndRun((`import System
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Probe()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+DIRECT
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`).Replace("DIRECT", direct), fixture.AssemblyPath, compileInSeparateProcess: true)
+        Assert.Equal(
+            if compatible {
+                "99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine
+            } else {
+                "7 7 7 0 0 0" + Environment.NewLine
+            },
+            result.Output
+        )
+    }
+
     shared {
         /// Compiles a library with an optional extra reference and returns the
         /// driver's exit code and output, without running anything.
