@@ -1023,9 +1023,11 @@ Console.WriteLine("${ternary(Token(7))} ${expression(Token(7))} ${statement(Toke
     }
 
     @Theory
-    @InlineData(false)
-    @InlineData(true)
-    func Numeric_Promotion_Alternatives_Keep_Dependent_Constraints(compatible bool) {
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func Numeric_Promotion_Alternatives_Keep_Dependent_Constraints(requiresValue bool, compatible bool) {
         let constraint = if compatible {
             "struct, System.IComparable<long>"
         } else {
@@ -1041,11 +1043,16 @@ Console.WriteLine("${ternary(Token(7))} ${expression(Token(7))} ${statement(Toke
         } else {
             "IBounds<T,U> fallback"
         }
+        let receiverConstraint = if requiresValue {
+            "struct, "
+        } else {
+            ""
+        }
         using let fixture = CSharpFixture(`namespace Fixture4986 {
     public interface IBounds<in T,in U> {}
     public static class Extensions {
         public static int GetValueOrDefault<T,U>(this T value, ` + parameters + `)
-            where T : struct, System.IComparable<U> where U : ` + constraint + ` =>
+            where T : ` + receiverConstraint + `System.IComparable<U> where U : ` + constraint + ` =>
                 typeof(T) == typeof(long) && typeof(U) == typeof(long) ? 99 : 98;
     }
 }`)
@@ -1065,6 +1072,66 @@ Console.WriteLine("${ternary(7)} ${expression(7)} ${statement(7)} ${ternary(nil)
             "7 7 7 0 0 0"
         }
         Assert.Equal(expected + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Numeric_Receiver_Preserves_Boxing_Alternatives(requiresReference bool) {
+        let receiverConstraint = if requiresReference {
+            "class, "
+        } else {
+            ""
+        }
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public static class Extensions {
+        public static int GetValueOrDefault<T,U>(this T value, T fallback, U bound)
+            where T : ` + receiverConstraint + `System.IComparable<U> where U : struct =>
+                typeof(T) == typeof(System.IComparable<int>) && typeof(U) == typeof(int) ? 99 : 98;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n int32?, fallback IComparable[int32]) int32 -> n != nil ? n.GetValueOrDefault(fallback, 0) : 0
+func expression(n int32?, fallback IComparable[int32]) int32 -> if n != nil { n.GetValueOrDefault(fallback, 0) } else { 0 }
+func statement(n int32?, fallback IComparable[int32]) int32 {
+    if n != nil { return n.GetValueOrDefault(fallback, 0) }
+    return 0
+}
+let fallback IComparable[int32] = 0
+Console.WriteLine("${ternary(7, fallback)} ${expression(7, fallback)} ${statement(7, fallback)} ${ternary(nil, fallback)} ${expression(nil, fallback)} ${statement(nil, fallback)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Fixed_Numeric_Bounds_Preserve_Boxing_Constraints(requiresReference bool) {
+        let receiverConstraint = if requiresReference {
+            "class, "
+        } else {
+            ""
+        }
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public static class Extensions {
+        public static int GetValueOrDefault<T,U,V>(this V value, T fallback, U bound)
+            where V : struct, T where T : ` + receiverConstraint + `System.IComparable<U> where U : struct =>
+                typeof(V) == typeof(int) && typeof(T) == typeof(System.IComparable<int>) && typeof(U) == typeof(int) ? 99 : 98;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n int32?, fallback IComparable[int32]) int32 -> n != nil ? n.GetValueOrDefault(fallback, 0) : 0
+func expression(n int32?, fallback IComparable[int32]) int32 -> if n != nil { n.GetValueOrDefault(fallback, 0) } else { 0 }
+func statement(n int32?, fallback IComparable[int32]) int32 {
+    if n != nil { return n.GetValueOrDefault(fallback, 0) }
+    return 0
+}
+let fallback IComparable[int32] = 0
+Console.WriteLine("${ternary(7, fallback)} ${expression(7, fallback)} ${statement(7, fallback)} ${ternary(nil, fallback)} ${expression(nil, fallback)} ${statement(nil, fallback)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99 99 99 0 0 0" + Environment.NewLine, result.Output)
     }
 
     @Theory

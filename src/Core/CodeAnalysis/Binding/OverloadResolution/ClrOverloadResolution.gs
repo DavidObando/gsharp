@@ -1756,8 +1756,7 @@ internal shared class ClrOverloadResolution {
             let numericDomain = constraint.IsGenericParameter && parameters.Contains(constraint) &&
                 source.IsValueType &&
                 NumericWideningLattice
-                .WideningTargets(source.FullName).Any() &&
-                (constraint.GenericParameterAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0
+                .WideningTargets(source.FullName).Any()
             if source.ContainsGenericParameters ||
                 !constraint.ContainsGenericParameters ||
                 (!constraint.IsGenericType && !numericDomain) ||
@@ -1768,7 +1767,14 @@ internal shared class ClrOverloadResolution {
                 if strictTerms.Contains(key) {
                     List[Type](){source}
                 } else {
-                    GetReceiverInferenceCarriers(source).Where((candidate Type) -> candidate.IsValueType).ToList()
+                    GetReceiverInferenceCarriers(source).Where(
+                        (candidate Type) -> candidate.IsValueType ||
+                            (
+                            constraint.GenericParameterAttributes &
+                            GenericParameterAttributes.NotNullableValueTypeConstraint
+                        ) == 0
+                    )
+                        .ToList()
                 }
             } else {
                 GetExtensionReceiverGenericShapes(source, constraint.GetGenericTypeDefinition())
@@ -2647,15 +2653,10 @@ internal shared class ClrOverloadResolution {
                             continue
                         }
                         if NumericWideningLattice.WideningTargets(source.FullName).Any() {
-                            if (
-                                parameters[i].GenericParameterAttributes &
-                                GenericParameterAttributes.NotNullableValueTypeConstraint
-                            ) != 0 {
-                                let promotion = (source, parameters[i], true)
-                                if known.Add(promotion) {
-                                    terms.Add(promotion)
-                                    changed = true
-                                }
+                            let promotion = (source, parameters[i], true)
+                            if known.Add(promotion) {
+                                terms.Add(promotion)
+                                changed = true
                             }
                             continue
                         }

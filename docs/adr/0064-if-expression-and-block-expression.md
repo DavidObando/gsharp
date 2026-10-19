@@ -434,14 +434,16 @@ Constraint conversion terms remain strict and contribute fixed bounds before
 the receiver's promotable numeric/tuple bounds; a boxed struct is not discarded
 merely because a different kind of value-type bound can widen.
 Receiver-origin structs that have only standard identity/boxing conversions
-preserve those interfaces too. For non-nullable value-constrained numeric
-parameters, the existing widening lattice supplies a finite actual promotion
-domain. The same joint-domain validator checks each selected type's dependent
+preserve those interfaces too. Numeric lower bounds use a finite actual
+promotion domain from the existing widening lattice and boxing carriers,
+whether or not the parameter has a `struct` constraint. Value-only constraints
+exclude reference carriers rather than enabling the propagation itself.
+The same joint-domain validator checks each selected type's dependent
 constraints; deferring an open interface obligation is not proof of support.
 Selecting a numeric alternative contributes an exact bound while retaining the
-original receiver conversion. Strict identity constraints cannot become numeric
-promotions, and independent parameter domains remain factored rather than
-forming a Cartesian receiver completion.
+original receiver conversion. Strict identity/boxing constraints retain boxing
+but cannot become numeric promotions, and independent parameter domains remain
+factored rather than forming a Cartesian receiver completion.
 Inferring an element type cannot turn an `int32` receiver into a collection.
 Object- and collection-initializer suffixes are transparent to this name lookup:
 the original unbound head call still supplies the probe's argument shape.
