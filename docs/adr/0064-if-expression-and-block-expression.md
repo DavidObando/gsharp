@@ -362,9 +362,19 @@ inputs, including fixed invariant arguments. Ordinary receiver paths do not
 discard an operator's input bounds and retry an unrelated completion.
 Missing bounds never trigger Cartesian receiver completion. A fixed argument's
 open generic constraint must have a compatible actual interface or base shape;
-ambiguous interfaces are retained as real alternatives and checked independently
-against the remaining known constraints, rather than erased by ambiguous
-inference or multiplied into a Cartesian product. Unknown relationships remain
+ambiguous interfaces are retained as real alternative domains. Compatibility
+propagates between those domains rather than dropping the other obligations
+while checking one alternative, or multiplying them into a Cartesian product.
+Every parameter's lower/upper domain is checked for impossibility before any
+recursive candidate pinning, including domains late in the parameter list.
+Only a uniquely supported candidate is pinned; a nonunique viable domain
+remains symbolic for later argument inference, not recursively multiplied
+with the other parameters' domains.
+Variance contributes individual bounds even when repeated leaves cannot unify
+to one type; reversing variance preserves which side contains an inferable
+leaf. Each actual receiver-interface alternative keeps its own constraint
+checks; a nonmatching carrier such as `object` cannot reopen an erased
+receiver bound and bypass those alternatives. Unknown relationships remain
 conservative for later argument inference.
 Reference-variance refinement cannot introduce a value-type argument by
 boxing.
