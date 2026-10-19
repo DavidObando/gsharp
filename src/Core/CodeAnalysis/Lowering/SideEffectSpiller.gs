@@ -64,8 +64,11 @@ import System.Reflection
 /// tree size grows only where duplication risk was real.
 internal class SideEffectSpiller : NestedFunctionBodyRewriter {
     private var counter int32
+    private let tempPrefix string
 
-    private init() { }
+    internal init(tempPrefix string) {
+        this.tempPrefix = tempPrefix
+    }
 
     /// ```xmldoc
     /// <inheritdoc />
@@ -453,20 +456,21 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         return BoundBlockExpression(rewritten.Syntax, statements.ToImmutable(), assignment)
     }
 
-    private func CapturePropertyStorageReceiver(
+    internal func CapturePropertyStorageReceiver(
         receiver BoundExpression,
-        statements ImmutableArray[BoundStatement].Builder
+        statements ImmutableArray[BoundStatement].Builder,
+        captureComponents bool = false
     ) BoundExpression {
         return CaptureRuntimeGenericStorageReceiver(
-            this.SpillStorageReceiverParts(receiver, statements),
+            this.SpillStorageReceiverParts(receiver, statements, captureComponents),
             receiver.Syntax,
             statements,
             (role string, isReadOnly bool, storageType TypeSymbol) ->
-            LocalVariableSymbol("$TempPrefix$role${this.counter++}", isReadOnly, storageType)
+            LocalVariableSymbol("${this.tempPrefix}$role${this.counter++}", isReadOnly, storageType)
         )
     }
 
-    private func ProbeStorageReceiver(receiver BoundExpression?, statements ImmutableArray[BoundStatement].Builder) {
+    internal func ProbeStorageReceiver(receiver BoundExpression?, statements ImmutableArray[BoundStatement].Builder) {
         if receiver != nil && receiver is not BoundVariableExpression && IsInPlaceStorageWriteReceiver(receiver) {
             statements.Add(BoundExpressionStatement(nil, BoundAddressOfExpression(nil, receiver)))
         }
@@ -490,7 +494,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
     ) BoundExpression {
         if IsOpaqueStorageReceiver(receiver) {
             let local = LocalVariableSymbol(
-                "$TempPrefix" + "storage${this.counter++}",
+                "${this.tempPrefix}storage${this.counter++}",
                 isReadOnly: false,
                 receiver.Type,
                 receiver.Syntax
@@ -521,13 +525,13 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                 let whenFalse = this.SpillStorageReceiverParts(address.WhenFalseOperand, falseStatements, true)
                 // Capture only the selected branch's components, never its address.
                 if trueStatements.Count != 0 {
-                    let skip = BoundLabel("$TempPrefix" + "skip${this.counter++}")
+                    let skip = BoundLabel("${this.tempPrefix}skip${this.counter++}")
                     statements.Add(BoundConditionalGotoStatement(nil, skip, condition, jumpIfTrue: false))
                     statements.AddRange(trueStatements)
                     statements.Add(BoundLabelStatement(nil, skip))
                 }
                 if falseStatements.Count != 0 {
-                    let skip = BoundLabel("$TempPrefix" + "skip${this.counter++}")
+                    let skip = BoundLabel("${this.tempPrefix}skip${this.counter++}")
                     statements.Add(BoundConditionalGotoStatement(nil, skip, condition, jumpIfTrue: true))
                     statements.AddRange(falseStatements)
                     statements.Add(BoundLabelStatement(nil, skip))
@@ -638,7 +642,11 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         if !shouldSpill {
             return expression
         }
-        let local = LocalVariableSymbol("$TempPrefix$role${this.counter++}", isReadOnly: true, type: expression.Type)
+        let local = LocalVariableSymbol(
+            "${this.tempPrefix}$role${this.counter++}",
+            isReadOnly: true,
+            type: expression.Type
+        )
         statements.Add(BoundVariableDeclaration(expression.Syntax, local, expression))
         return BoundVariableExpression(expression.Syntax, local)
     }
@@ -680,6 +688,12 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
     }
 
     shared {
+        internal func SubstituteReceiver(
+            tree BoundExpression,
+            receiver BoundExpression,
+            replacement BoundExpression
+        ) BoundExpression -> ReceiverSubstitutionRewriter.Replace(tree, receiver, replacement)
+
         internal func CaptureOpaqueStorageReceiver(
             storage BoundExpression,
             anchor SyntaxNode?,
@@ -753,7 +767,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         /// @param program The bound program to lower.
         /// @returns The lowered program (or the original when nothing changed).
         func Lower(program BoundProgram) BoundProgram {
-            let spiller = SideEffectSpiller()
+            let spiller = SideEffectSpiller(TempPrefix)
             var changed = false
             let functions = ImmutableDictionary.CreateBuilder[FunctionSymbol, BoundBlockStatement]()
             // Issue #4663: deterministic order, never identity-hash order.
@@ -812,7 +826,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         /// (see (cref:SpillStorageReceiverParts)).
         /// @param receiver The candidate receiver expression.
         /// @returns `true` for an addressable element chain.
-        private func IsInPlaceStorageWriteReceiver(receiver BoundExpression?) bool {
+        internal func IsInPlaceStorageWriteReceiver(receiver BoundExpression?) bool {
             var receiver = receiver
             while true {
                 if receiver == nil ||

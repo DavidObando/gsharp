@@ -5,6 +5,87 @@ import Xunit
 
 open class Issue5023TuplePropertyStorageTests {
     @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func TuplePropertyWrites_PreserveStorageBeforeControlFlowRhs(native bool, suspending bool) {
+        let source = `package Test
+import System
+import System.Collections
+import System.Threading.Tasks
+struct Cell {
+    var Stored object?
+    prop Value object? {
+        get -> Stored
+        set { Stored = value }
+    }
+}
+var items = [](CELLTYPE, int32){(CELL, 0)}
+let original = items
+var index = 0
+var log = ""
+func Items() [](CELLTYPE, int32) {
+    log += "a"
+    return items
+}
+func Index() int32 {
+    log += "i"
+    return index
+}
+async func Run(flag bool) {
+    var tuple = (CELL, 0)
+    tuple.Item1.Value = {
+        if flag { log += "l" }
+        SUSPEND
+        "local"
+    }
+    Console.WriteLine(tuple.Item1.Value ?? "nil")
+    let result = (Items()[Index()].Item1.Value = {
+        if flag { log += "b" }
+        SUSPEND
+        items = [](CELLTYPE, int32){(CELL, 0)}
+        index = 1
+        "v"
+    })
+    Console.WriteLine("${result} ${original[0].Item1.Value ?? "nil"} ${items[0].Item1.Value ?? "nil"} ${log}")
+    var calls = 0
+    try {
+        items[2].Item1.Value = {
+            if flag { calls++ }
+            SUSPEND
+            "bad"
+        }
+    } catch (ex IndexOutOfRangeException) {
+        Console.WriteLine(calls)
+    }
+}
+Run(true).GetAwaiter().GetResult()`.Replace(
+            "CELLTYPE",
+            if native {
+                "Cell"
+            } else {
+                "DictionaryEntry"
+            }
+        ).Replace(
+            "CELL",
+            if native {
+                "Cell{}"
+            } else {
+                `DictionaryEntry("key", nil)`
+            }
+        ).Replace(
+            "SUSPEND",
+            if suspending {
+                "await Task.Yield()"
+            } else {
+                ""
+            }
+        )
+        Assert.Equal("local\nv v nil laib\n0\n", CompileAndRun(source))
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func ConditionalTupleBorrow_CapturesOnlySelectedComponentsAcrossSuspension(chooseFirst bool) {
@@ -279,7 +360,7 @@ async func FillBox(original Box, replacement Box) {
     var tuple = (original, 0)
     tuple.Item1.Value = {
         SUSPEND
-        tuple = (replacement, 0)
+        if tuple.Item2 == 0 { tuple = (replacement, 0) }
         "v"
     }
 }
@@ -287,7 +368,7 @@ async func FillStaticClr(original StringBuilder, replacement StringBuilder) {
     var tuple = (original, 0)
     tuple.Item1.Length = {
         SUSPEND
-        tuple = (replacement, 0)
+        if tuple.Item2 == 0 { tuple = (replacement, 0) }
         1
     }
 }
@@ -313,7 +394,7 @@ let newBuilder = StringBuilder()
 FillStaticClr(oldBuilder, newBuilder).GetAwaiter().GetResult()
 Console.WriteLine("${oldBuilder.Length} ${newBuilder.Length}")`.Replace("ASSIGN", `items[0].Item1.Value = {
         SUSPEND
-        items[0] = (replacement, 0)
+        if items.Length > 0 { items[0] = (replacement, 0) }
         "v"
     }`).Replace(
             "SUSPEND",
@@ -441,7 +522,7 @@ Run().GetAwaiter().GetResult()`.Replace(
 
     @Fact
     func TuplePropertyCompoundWrite_UsesStoredReadAndWrite() {
-        Assert.Equal("3 1\n", CompileAndRun(`package Test
+        Assert.Equal("rhs\n3 1\n", CompileAndRun(`package Test
 import System
 struct Cell {
     var Stored int32
@@ -457,7 +538,10 @@ func Index() int32 {
     calls++
     return 0
 }
-items[Index()].Item1.Inner.Value += 2
+items[Index()].Item1.Inner.Value += {
+    if calls == 1 { Console.WriteLine("rhs") }
+    2
+}
 Console.WriteLine("${items[0].Item1.Inner.Stored} ${calls}")`))
     }
 
