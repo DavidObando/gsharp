@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -96,6 +97,48 @@ func validIncompleteAnalysis() Analysis {
 	analysis.Blockers[0].ID = blockerRecordID(analysis.Blockers[0])
 	refreshSourceIdentity(&analysis)
 	return analysis
+}
+
+func largeValidIncompleteAnalysis() Analysis {
+	analysis := validIncompleteAnalysis()
+	analysis.Blockers = make([]BlockerRecord, 50_001)
+	for index := range analysis.Blockers {
+		record := BlockerRecord{
+			Blocks: "inventory", Category: "test",
+			Message:       fmt.Sprintf("incomplete-%05d", index),
+			AffectedUnits: []string{}, DiagnosticIDs: []string{},
+		}
+		record.ID = blockerRecordID(record)
+		analysis.Blockers[index] = record
+	}
+	sort.Slice(analysis.Blockers, func(i, j int) bool {
+		return analysis.Blockers[i].ID < analysis.Blockers[j].ID
+	})
+	analysis.RecordCounts = RecordCounts{
+		Blockers: len(analysis.Blockers),
+		Total:    len(analysis.Blockers),
+	}
+	return analysis
+}
+
+type validationEntryContext struct {
+	context.Context
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (value *validationEntryContext) Err() error {
+	first := false
+	value.once.Do(func() {
+		first = true
+		close(value.entered)
+	})
+	if first {
+		<-value.release
+		return nil
+	}
+	return value.Context.Err()
 }
 
 func TestEntryPatternGrammarIsClosedAndCanonical(t *testing.T) {
@@ -7306,6 +7349,57 @@ func TestMethodSetAuthorityValidationHonorsCancellation(t *testing.T) {
 	t.Cleanup(func() { analysisOperationTestHook = nil })
 	if err := validateAnalysisContext(ctx, analysis); !errors.Is(err, context.Canceled) {
 		t.Fatalf("method-authority validation ignored caller cancellation: %v", err)
+	}
+}
+
+func TestValidationRejectsCancellationAndDeadlineAfterEntry(t *testing.T) {
+	analysis := largeValidIncompleteAnalysis()
+	analysisPath := filepath.Join(t.TempDir(), "analysis.json")
+	data, err := marshalCanonical(analysis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(analysisPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("cancellation", func(t *testing.T) {
+		parent, cancel := context.WithCancel(t.Context())
+		ctx := &validationEntryContext{
+			Context: parent, entered: make(chan struct{}), release: make(chan struct{}),
+		}
+		result := make(chan error, 1)
+		go func() {
+			result <- runValidateContext(ctx, []string{"--analysis", analysisPath})
+		}()
+		<-ctx.entered
+		cancel()
+		close(ctx.release)
+		if err := <-result; !errors.Is(err, context.Canceled) {
+			t.Fatalf("validate-analysis returned success after caller cancellation: %v", err)
+		}
+	})
+
+	t.Run("deadline", func(t *testing.T) {
+		parent, cancel := context.WithTimeout(t.Context(), time.Millisecond)
+		t.Cleanup(cancel)
+		ctx := &validationEntryContext{
+			Context: parent, entered: make(chan struct{}), release: make(chan struct{}),
+		}
+		result := make(chan error, 1)
+		go func() {
+			result <- runValidateContext(ctx, []string{"--analysis", analysisPath})
+		}()
+		<-ctx.entered
+		<-parent.Done()
+		close(ctx.release)
+		if err := <-result; !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("validate-analysis returned success after deadline expiration: %v", err)
+		}
+	})
+
+	if err := runValidate([]string{"--analysis", analysisPath}); err != nil {
+		t.Fatalf("fresh validation context failed after cancellation: %v", err)
 	}
 }
 

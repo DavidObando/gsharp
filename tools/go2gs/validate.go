@@ -454,7 +454,7 @@ func validateAnalysisContext(ctx context.Context, a Analysis) error {
 	if err := validateCompletenessEvidence(a); err != nil {
 		return err
 	}
-	return nil
+	return ctx.Err()
 }
 
 func validateCompletenessEvidence(a Analysis) error {
