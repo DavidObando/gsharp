@@ -164,9 +164,9 @@ shared class BoundSemantics {
         }
     }
 
-    /// Uses the outer receiver context when it has an answer, preserving flow
-    /// narrowing. Retains inner anchors when an outer write target or generated
-    /// index cannot supply the queried expression.
+    /// Keeps the original query as provenance while normalizing receiver steps.
+    /// Prefers reachable outer flow context and retains inner anchors when an
+    /// outer write target or index cannot supply the queried expression.
     private func FindBoundExpression(
         model GSharp.Core.CodeAnalysis.SemanticModel,
         expression ExpressionSyntax
@@ -189,7 +189,7 @@ shared class BoundSemantics {
         while anchors.Count > 0 {
             let (syntax, node) = anchors.Pop()
             if FindFromAnchor(syntax, node, expression) is {} found {
-                return found
+                return PeelConversions(found, expression)
             }
         }
         return nil
@@ -201,7 +201,7 @@ shared class BoundSemantics {
         expression ExpressionSyntax
     ) BoundExpression? {
         if object.ReferenceEquals(root, expression) {
-            return PeelConversions(anchored, expression)
+            return anchored
         }
         let segments = List[ExpressionSyntax]()
         AddReceiverSegments(root, segments)
@@ -216,7 +216,12 @@ shared class BoundSemantics {
         if index < 0 {
             return nil
         }
-        var node BoundExpression? = PeelConversions(anchored, segments[segments.Count - 1])
+        let lastSyntax = if index == segments.Count - 1 {
+            expression
+        } else {
+            segments[segments.Count - 1]
+        }
+        var node BoundExpression? = PeelConversions(anchored, lastSyntax)
         // A `?.` hop binds its access over a synthetic capture of the receiver;
         // the walk maps each capture back to the receiver it stands for.
         let captures = Dictionary[VariableSymbol, BoundExpression]()
@@ -227,15 +232,20 @@ shared class BoundSemantics {
                 member = PeelConversions(hop.WhenNotNull, segments[depth])
             }
             member = Unwrap(member)
+            let receiverSyntax = if depth - 1 == index {
+                expression
+            } else {
+                segments[depth - 1]
+            }
             node = if member == nil {
                 default(BoundExpression?)
             } else if segments[depth] is IndexExpressionSyntax {
-                PeelConversions(IndexTargetOf(member), segments[depth - 1])
+                PeelConversions(IndexTargetOf(member), receiverSyntax)
             } else {
-                PeelConversions(ReceiverOf(member), segments[depth - 1])
+                PeelConversions(ReceiverOf(member), receiverSyntax)
             }
             if node is BoundVariableExpression read && captures.TryGetValue(read.Variable, out var captured) {
-                node = PeelConversions(captured, segments[depth - 1])
+                node = PeelConversions(captured, receiverSyntax)
             }
         }
         return node
@@ -248,15 +258,17 @@ shared class BoundSemantics {
         if model.GetBoundNode(expression) is BoundExpression anchored {
             return anchored
         }
-        // Written slices retain their range anchor, rather than the accessor
-        // anchor, when the binder constructs the generated block.
+        // Index reads may retain the written range as their anchor. Use the
+        // same index-target reachability rule for native and CLR node families.
         if TerminalSegment(expression) is IndexExpressionSyntax index &&
             index
             .Indices
             .Count == 1 &&
-            index.Index is RangeExpressionSyntax rangeSyntax &&
-            model.GetBoundNode(rangeSyntax) is BoundBlockExpression block && CapturedIndexTarget(block) != nil {
-            return block
+            index.Index is RangeExpressionSyntax rangeSyntax {
+            let ranged = model.GetBoundNode(rangeSyntax) as BoundExpression
+            if Unwrap(ranged) is {} read && IndexTargetOf(read) != nil {
+                return ranged
+            }
         }
         return nil
     }

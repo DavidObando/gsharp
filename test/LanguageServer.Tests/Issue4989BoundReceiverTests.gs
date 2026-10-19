@@ -90,7 +90,7 @@ open class Issue4989BoundReceiverTests {
         Directory.CreateDirectory(root)
         try {
             let assemblyPath = Path.Combine(root, "TokenFixture.dll")
-            EmitTokenFixture(assemblyPath)
+            EmitClrFixture(assemblyPath, TokenFixtureSource)
             let gsPath = Path.Combine(root, "Consumer.gs")
             File.WriteAllText(gsPath, ConsumerSource)
             let project = ProjectState(Path.Combine(root, "Consumer.gsproj"))
@@ -581,6 +581,90 @@ func Run(memory MEMORY_TYPE) string {
         Assert.Equal(typeof(int32), BoundSemantics.GetExpressionType(compilation, indexSyntax)?.ClrType)
     }
 
+    @Fact
+    func Issue5035_CompositeReceiver_PreservesOriginalConversionContext() {
+        const source = `package Repro
+func (value object) Tag() int32 -> 0
+func Run(pair (string, int32)) int32 -> pair.0.Tag()
+func Converted(pair (string, int32)) int32 -> cast[object](pair.0).Tag()
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let accessor = Assert.IsType[AccessorExpressionSyntax](TokenAt(content, source, "Tag()", 1).Parent?.Parent)
+        let receiver = Assert.IsType[AccessorExpressionSyntax](accessor.LeftPart)
+        Assert.Equal(typeof(string), BoundSemantics.GetExpressionType(compilation, receiver)?.ClrType)
+        Assert.Contains(
+            CompletionComputer.ComputeCompletions(content, LanguageServerTestHelpers.PositionOf(source, "Tag()", 1)),
+            (item CompletionItem) -> item.Label == "Substring" && item.Kind == CompletionItemKind.Method
+        )
+        let converted = Assert.IsType[AccessorExpressionSyntax](TokenAt(content, source, "Tag()", 2).Parent?.Parent)
+        Assert.Equal(typeof(object), BoundSemantics.GetExpressionType(compilation, converted.LeftPart)?.ClrType)
+        Assert.DoesNotContain(
+            CompletionComputer.ComputeCompletions(content, LanguageServerTestHelpers.PositionOf(source, "Tag()", 2)),
+            (item CompletionItem) -> item.Label == "Substring"
+        )
+    }
+
+    @Fact
+    func Issue5035_DirectClrRangeAnchor_PreservesSourcePropertyAndDefinition() {
+        let root = Path.Combine(
+            Directory.GetCurrentDirectory(),
+            "out",
+            "issue5035-range-" + Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(root)
+        try {
+            let assemblyPath = Path.Combine(root, "RangeFixture.dll")
+            EmitClrFixture(assemblyPath, `#nullable enable
+namespace RangeFixture {
+    public sealed class RangeBag {
+        public string this[System.Range range] => "item";
+    }
+}
+`)
+            const source = `package Repro
+import RangeFixture
+class Holder {
+    prop Items RangeBag -> RangeBag()
+}
+func Run(obj Holder) int32 {
+    let sliced = obj.Items[1..]
+    return obj.Items[1..].Length
+}
+`
+            let path = Path.Combine(root, "Consumer.gs")
+            File.WriteAllText(path, source)
+            let project = ProjectState(Path.Combine(root, "Consumer.gsproj"))
+            project.References = []string{assemblyPath}
+            let tree = project.UpdateFile(path, source)
+            let lines = Enumerable.Range(0, source.Length).Where((i int32) -> source[i] == '\n').ToList()
+            let content = DocumentContent(tree, lines, project, WorkspaceState())
+            let compilation = project.GetCompilation()
+            Assert.Empty(compilation.GlobalScope.Diagnostics)
+            Assert.Empty(compilation.BoundProgram.Diagnostics)
+            let index = Assert.IsType[IndexExpressionSyntax](TokenAt(content, source, "Items[1..]", 0).Parent?.Parent)
+            Assert.IsType[BoundClrIndexExpression](compilation.GetSemanticModel(tree).GetBoundNode(index.Index))
+            let declaration = TokenAt(content, source, "Items RangeBag", 0)
+            let declared = Assert.IsAssignableFrom[PropertySymbol](BoundSemantics.GetSymbol(compilation, declaration))
+            let uri = DocumentUri.FromFileSystemPath(path)!!
+            for var occurrence = 0; occurrence < 2; occurrence++ {
+                let position = LanguageServerTestHelpers.PositionOf(source, "Items[1..]", occurrence)
+                let token = TokenAt(content, source, "Items[1..]", occurrence)
+                Assert.Same(declared, BoundSemantics.GetSymbol(compilation, token))
+                AssertIndexedHover(content, position, "Items", "prop Items RangeFixture.RangeBag { get; }")
+                let location = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
+                let expected = LanguageServerTestHelpers.PositionOf(source, "Items RangeBag")
+                Assert.Equal(uri, location.Uri)
+                AssertPosition(expected, location.Range.Start)
+                AssertPosition(Position(expected.Line, expected.Character + "Items".Length), location.Range.End)
+            }
+        } finally {
+            Directory.Delete(root, recursive: true)
+        }
+    }
+
     shared {
         private const IndexedSource string = `package Repro
 import System.Collections.Generic
@@ -846,11 +930,11 @@ async func Run(mac bool, linux bool) {
 }
 `
 
-        /// Compiles the C# token-store contract into [`assemblyPath`](paramref).
-        private func EmitTokenFixture(assemblyPath string) {
+        /// Compiles a native C# contract into [`assemblyPath`](paramref).
+        private func EmitClrFixture(assemblyPath string, source string) {
             let fixture = CSharpCompilation.Create(
-                "TokenFixture",
-                []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(TokenFixtureSource)},
+                Path.GetFileNameWithoutExtension(assemblyPath),
+                []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(source)},
                 []Microsoft
                     .CodeAnalysis
                     .PortableExecutableReference{
