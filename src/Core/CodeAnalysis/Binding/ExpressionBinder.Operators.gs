@@ -2804,6 +2804,7 @@ internal partial class ExpressionBinder {
         /// (`if c { a } else { b }`) and the conditional operator (`c ? a : b`)
         /// are two spellings of one value form, and both bind their branches
         /// under these frames, so the two cannot narrow differently.
+        /// The `if let` expression's guard shares these frames (ADR-0201).
         ///
         /// Issue #2640 introduced the frames for the if-expression: a top-level
         /// nil guard (`x != nil`, `x == nil`, nullable value types included),

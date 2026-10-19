@@ -354,6 +354,11 @@ Invariant argument shapes are compared recursively; an unresolved leaf does
 not make a mismatching enclosing generic or array shape possible. A
 type-parameter upper bound also contributes its inherited constraints,
 transitively, so reopening `T : U` does not discard `U`'s class bounds.
+Open arguments must pass this symbolic validation even when the ordinary
+constraint checker defers them without reporting a failure. Before trying
+representative completions, receiver-shape checks reject impossible standard
+conversions and implicit-operator paths; missing bounds do not justify a
+Cartesian search for a receiver conversion whose outer shape cannot exist.
 Reference-variance refinement cannot introduce a value-type argument by
 boxing.
 Inferring an element type cannot turn an `int32` receiver into a collection.

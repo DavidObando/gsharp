@@ -946,6 +946,139 @@ Console.WriteLine("${declared(3, "z")} ${declared(nil, "z")}")
         Assert.Equal("3 0" + Environment.NewLine, result.Output)
     }
 
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func Open_Nonreceiver_Parameters_Retain_Dependent_Constraints(constructed bool, applicable bool) {
+        let receiver = if constructed {
+            "System.Collections.Generic.KeyValuePair<T,int>"
+        } else {
+            "T"
+        }
+        let constraints = if constructed {
+            "where T : U where U : System.IO.Stream"
+        } else {
+            "where U : T, System.IDisposable"
+        }
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public struct Token : System.IDisposable {
+        public int V; public Token(int v) { V = v; } public void Dispose() {}
+    }
+    public static class Extensions {
+        public static ` + receiver + ` GetValueOrDefault<T,U>(this ` + receiver + ` value, U fallback)
+            ` + constraints + ` => default;
+    }
+}`)
+        let type = if constructed {
+            if applicable {
+                "KeyValuePair[System.IO.MemoryStream,int32]"
+            } else {
+                "KeyValuePair[string,int32]"
+            }
+        } else {
+            if applicable {
+                "Token"
+            } else {
+                "int32"
+            }
+        }
+        let present = if constructed {
+            type +
+                "(" +
+                (
+                if applicable {
+                    "System.IO.MemoryStream()"
+                } else {
+                    "\"\""
+                }
+            ) +
+                ", 7)"
+        } else {
+            if applicable {
+                "Token(7)"
+            } else {
+                "7"
+            }
+        }
+        let fallback = if constructed {
+            if applicable {
+                "System.IO.MemoryStream()"
+            } else {
+                "default(" + type + ")"
+            }
+        } else {
+            if applicable {
+                "Token()"
+            } else {
+                "0"
+            }
+        }
+        let read = if constructed {
+            ".Value"
+        } else {
+            if applicable {
+                ".V"
+            } else {
+                ""
+            }
+        }
+        let direct = if applicable {
+            "func direct(n RECEIVER) int32 -> n.GetValueOrDefault(FALLBACK)READ\nConsole.WriteLine(direct(PRESENT))"
+        } else {
+            ""
+        }
+        let result = CompileAndRun((`import System
+import System.Collections.Generic
+import Fixture4986
+func ternary(n RECEIVER?) int32 -> n != nil ? n.GetValueOrDefault(FALLBACK)READ : 0
+func expression(n RECEIVER?) int32 -> if n != nil { n.GetValueOrDefault(FALLBACK)READ } else { 0 }
+func statement(n RECEIVER?) int32 {
+    if n != nil { return n.GetValueOrDefault(FALLBACK)READ }
+    return 0
+}
+DIRECT
+Console.WriteLine("${ternary(PRESENT)} ${expression(PRESENT)} ${statement(PRESENT)} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`).Replace(
+                "DIRECT",
+                direct
+            ).Replace(
+                "RECEIVER",
+                type
+            ).Replace("FALLBACK", fallback).Replace("READ", read).Replace("PRESENT", present), fixture.AssemblyPath)
+        Assert.Equal(
+            if applicable {
+                "0" + Environment.NewLine + "0 0 0 0 0 0" + Environment.NewLine
+            } else {
+                "7 7 7 0 0 0" + Environment.NewLine
+            },
+            result.Output
+        )
+    }
+
+    @Fact
+    func Impossible_Open_Receiver_Shapes_Are_Pruned_Before_Completion() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public struct Holder<A,B,C,D,E,F,G,H,I,J> {}
+    public static class Extensions {
+        public static int GetValueOrDefault<A,B,C,D,E,F,G,H,I,J>(
+            this Holder<A,B,C,D,E,F,G,H,I,J> value, Holder<A,B,C,D,E,F,G,H,I,J> fallback) => 99;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n int32?) int32 -> n != nil ? n.GetValueOrDefault(0) : 0
+func expression(n int32?) int32 -> if n != nil { n.GetValueOrDefault(0) } else { 0 }
+func statement(n int32?) int32 {
+    if n != nil { return n.GetValueOrDefault(0) }
+    return 0
+}
+Console.WriteLine("${ternary(7)} ${expression(7)} ${statement(7)} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath, compileInSeparateProcess: true)
+        Assert.Equal("7 7 7 0 0 0" + Environment.NewLine, result.Output)
+    }
+
     @Fact
     func Nested_Fallbacks_Have_Linear_Binding_Work() {
         var nested = "0"
@@ -1050,7 +1183,10 @@ Console.WriteLine("${e.Compile()(4)} ${e.Compile()(nil)} ${h.Compile()(1)} ${h.C
         }
 
         /// Compiles through the real driver, verifies IL, and executes.
-        private func CompileAndRun(source string, reference string? = nil)(Output string, CompilerOutput string) {
+        private func CompileAndRun(source string, reference string? = nil, compileInSeparateProcess bool = false)(
+            Output string,
+            CompilerOutput string
+        ) {
             let outputDirectory = Path.Combine(
                 AppContext.BaseDirectory,
                 "Issue4986NarrowedNullableMemberTests",
@@ -1076,7 +1212,33 @@ Console.WriteLine("${e.Compile()(4)} ${e.Compile()(nil)} ${h.Compile()(1)} ${h.C
                         arguments.Add("/reference:" + reference)
                         File.Copy(reference, Path.Combine(outputDirectory, Path.GetFileName(reference)))
                     }
-                    exitCode = Program.Main(arguments.ToArray())
+                    if compileInSeparateProcess {
+                        let compileInfo = ProcessStartInfo("dotnet"){
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            WorkingDirectory = outputDirectory
+                        }
+                        compileInfo.ArgumentList.Add("exec")
+                        compileInfo.ArgumentList.Add("--runtimeconfig")
+                        compileInfo.ArgumentList.Add(
+                            Path.Combine(AppContext.BaseDirectory, "GSharp.Compiler.Tests.runtimeconfig.json")
+                        )
+                        compileInfo.ArgumentList.Add("--depsfile")
+                        compileInfo.ArgumentList.Add(
+                            Path.Combine(AppContext.BaseDirectory, "GSharp.Compiler.Tests.deps.json")
+                        )
+                        compileInfo.ArgumentList.Add(typeof(Program).Assembly.Location)
+                        for argument in arguments {
+                            compileInfo.ArgumentList.Add(argument)
+                        }
+                        let (code, stdout, stderr) = IlVerifier.RunProcess(compileInfo, outputPath, 30_000)
+                        exitCode = code
+                        Console.Write(stdout)
+                        Console.Error.Write(stderr)
+                    } else {
+                        exitCode = Program.Main(arguments.ToArray())
+                    }
                 } finally {
                     Console.SetOut(previousOut)
                     Console.SetError(previousError)

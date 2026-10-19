@@ -1280,6 +1280,25 @@ internal shared class ClrOverloadResolution {
             "op_Implicit",
             operators
         )
+        if !OpenExtensionReceiverStandardShapeMayApply(receiverClr, parameterType) && !operators.Any(
+            (conversion MethodInfo) -> {
+                let inputs = conversion.GetParameters()
+                return inputs.Length == 1 &&
+                    (
+                    if inputs[0].ParameterType.ContainsGenericParameters {
+                        OpenExtensionReceiverStandardShapeMayApply(receiverClr, inputs[0].ParameterType)
+                    } else {
+                        IsInferenceBoundPromotion(inputs[0].ParameterType, receiverClr) ||
+                            Conversion
+                            .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(inputs[0]))
+                            .IsImplicit
+                    }
+                ) &&
+                    OpenExtensionReceiverStandardShapeMayApply(conversion.ReturnType, parameterType)
+            }
+        ) {
+            return false
+        }
         for conversion in operators {
             let conversionParameters = conversion.GetParameters()
             let convertedBounds = Dictionary[string, Type](bounds, StringComparer.Ordinal)
@@ -1319,6 +1338,26 @@ internal shared class ClrOverloadResolution {
             }
         }
         return false
+    }
+
+    private func OpenExtensionReceiverStandardShapeMayApply(source Type, target Type) bool {
+        if source.IsGenericParameter || target.IsGenericParameter {
+            return true
+        }
+        let underlying = NullableLifting.GetValueTypeNullableUnderlyingClr(target)
+        if underlying != nil {
+            return OpenExtensionReceiverStandardShapeMayApply(
+                NullableLifting.GetValueTypeNullableUnderlyingClr(source) ?? source,
+                underlying
+            )
+        }
+        if target.IsArray {
+            return source.IsArray && source.GetArrayRank() == target.GetArrayRank()
+        }
+        return !target.IsGenericType ||
+            FindClosedGeneric(source, target.GetGenericTypeDefinition()) != nil ||
+            IsStructurallyInferrableDelegate(target, source) ||
+            TryGetChannelViewElement(target.GetGenericTypeDefinition(), source, out _)
     }
 
     private func IndependentExtensionReceiverOutputMayApply(
@@ -1503,7 +1542,14 @@ internal shared class ClrOverloadResolution {
         if !ClosedExtensionReceiverConversionMayApply(method, receiver, typeArguments) {
             return false
         }
-        if !SatisfiesDeclaredConstraints(typeParameters, typeArguments, default, out var failedIndex, out _) {
+        let constraintsSatisfied = SatisfiesDeclaredConstraints(
+            typeParameters,
+            typeArguments,
+            default,
+            out var failedIndex,
+            out _
+        )
+        if typeArguments.Any((argument Type) -> argument.ContainsGenericParameters) || !constraintsSatisfied {
             if ArgumentDependentBoundsMaySatisfyConstraints(
                 typeParameters,
                 typeArguments,
@@ -1512,6 +1558,9 @@ internal shared class ClrOverloadResolution {
                 freeBounds
             ) {
                 return true
+            }
+            if constraintsSatisfied {
+                return false
             }
             let failedParameter = typeParameters[failedIndex]
             for parameter in typeParameters {
