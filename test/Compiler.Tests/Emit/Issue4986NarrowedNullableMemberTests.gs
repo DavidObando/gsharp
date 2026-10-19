@@ -761,6 +761,12 @@ Console.WriteLine("${direct(Probe(7))} ${ternary(Probe(7))} ${expression(Probe(7
     )
     @InlineData("System.Exception,object", "where T : U where U : System.IO.Stream")
     @InlineData("System.Exception,object", "where T : U where U : System.Collections.Generic.List<string>")
+    @InlineData("System.Action<string>,System.IDisposable", "where T : U")
+    @InlineData("System.Action<string>,object", "where T : U where U : System.IDisposable")
+    @InlineData("System.Action<string>,object", "where T : System.Collections.Generic.IComparer<U>")
+    @InlineData("System.Func<System.IO.Stream>,System.Func<System.Exception>", "where T : U")
+    @InlineData("System.Action<int>,System.Action<long>", "where T : U")
+    @InlineData("System.Action<string>,System.Func<object>", "where T : U")
     func Impossible_Joint_Receiver_Bounds_Preserve_Nullable_Storage(receiverArguments string, constraints string) {
         using let fixture = CSharpFixture(`namespace Fixture4986 {
     public class DerivedList<T> : System.Collections.Generic.List<T> {}
@@ -1693,6 +1699,47 @@ func statement(n Probe?) int32 {
 Console.WriteLine(Probe(7).GetValueOrDefault(Probe()).V)
 Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
 `, fixture.AssemblyPath)
+        Assert.Equal("99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData("System.Action<string>", "System.Action<System.Exception>", "System.Action<object>", 0)
+    @InlineData("System.Func<IFoo>", "System.Func<IBar>", "System.Func<Both>", 0)
+    @InlineData("System.Func<IFoo>", "System.Func<IBar>", "System.Func<Both>", 12)
+    func Variant_Delegate_Upper_Bounds_Can_Refine_Together(first string, second string, common string, depth int32) {
+        var first = first
+        var second = second
+        var common = common
+        for var i = 0; i < depth; i++ {
+            first = "System.Func<" + first + ">"
+            second = "System.Func<" + second + ">"
+            common = "System.Func<" + common + ">"
+        }
+        using let fixture = CSharpFixture((`namespace Fixture4986 {
+    public interface IFoo {}
+    public interface IBar {}
+    public sealed class Both : IFoo,IBar {}
+    public interface IProbe<in T,in U> {}
+    public interface IBounds<in T,in U> {}
+    public struct Probe : IProbe<FIRST,SECOND>, IBounds<COMMON,COMMON> {
+        public int V; public Probe(int v) { V = v; }
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<T,U>(this IProbe<T,U> value, IBounds<T,U> fallback)
+            where T : U => new Probe(99);
+    }
+}`).Replace("FIRST", first).Replace("SECOND", second).Replace("COMMON", common))
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Probe()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+Console.WriteLine(Probe(7).GetValueOrDefault(Probe()).V)
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath, compileInSeparateProcess: true)
         Assert.Equal("99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine, result.Output)
     }
 

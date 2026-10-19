@@ -402,6 +402,21 @@ still retain their constructor and implemented-interface capabilities.
 Bound promotion also recognizes genuine same-family CLR delegate return
 covariance when the overload classifier ranks it separately from a reference
 conversion; delegate shape adapters remain excluded.
+The preliminary domain pass, symbolic validation and declared-bound check use
+one effective-upper-bound compatibility query. Transitive interface bounds
+remain in that query, so an indirect `IDisposable` obligation cannot be
+discarded while refining a sealed delegate family. Incomparable constructions
+are not disjoint nominal classes: `Action<object>` can refine both
+`Action<string>` and `Action<Exception>`, and `Func<Both>` can refine
+`Func<IFoo>` and `Func<IBar>` when `Both` implements both interfaces.
+The query sends all bounds of a delegate family back through the same
+symbolic solver as obligations on its generic slots, including their declared
+constraints. It does not pin an arbitrary common construction or multiply
+receiver completions. Value-only variance, different sealed families and
+genuinely disjoint class bounds remain impossible.
+Closed-family queries share a cache scoped to the enclosing member probe,
+including recursive symbolic checks. Repeated passes therefore do not
+multiply the same obligations in deeply nested variant constructions.
 Inferring an element type cannot turn an `int32` receiver into a collection.
 Explicit generic
 calls keep the narrowed binding (`Nullable<T>` declares no generic methods).

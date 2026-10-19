@@ -1692,8 +1692,10 @@ internal shared class ClrOverloadResolution {
         freeBounds IReadOnlyDictionary[string, Type]?,
         pinnedParameters HashSet[int32]? = nil,
         constraintAlternatives IReadOnlyDictionary[(int32, Type), Type]? = nil,
-        validateAlternatives bool = true
+        validateAlternatives bool = true,
+        refinements Dictionary[string, bool]? = nil
     ) bool {
+        let refinements = refinements ?? Dictionary[string, bool](StringComparer.Ordinal)
         let possibleArguments = cast[[]Type](arguments.Clone())
         for var index = 0; index < parameters.Length; index++ {
             let parameter = parameters[index]
@@ -1752,7 +1754,7 @@ internal shared class ClrOverloadResolution {
                 domains[key] = matches
             }
         }
-        if !ExtensionReceiverBoundDomainsMayApply(parameters, possibleArguments, choices, receiverTerms) {
+        if !ExtensionReceiverBoundDomainsMayApply(parameters, possibleArguments, choices, receiverTerms, refinements) {
             return false
         }
         if validateAlternatives {
@@ -1765,7 +1767,8 @@ internal shared class ClrOverloadResolution {
                     freeBounds,
                     pinnedParameters,
                     selected,
-                    validateAlternatives: false
+                    validateAlternatives: false,
+                    refinements: refinements
                 )
             }
             if !ExtensionReceiverConstraintDomainsMayApply(parameters, possibleArguments, domains, choices, validate) {
@@ -1829,6 +1832,7 @@ internal shared class ClrOverloadResolution {
                     }
                 }
                 if constraint.IsInterface {
+                    upperBounds.Add(constraint)
                     continue
                 }
                 if constraint.ContainsGenericParameters {
@@ -1885,13 +1889,20 @@ internal shared class ClrOverloadResolution {
                     freeBounds,
                     pinned,
                     choices,
-                    validateAlternatives
+                    validateAlternatives,
+                    refinements
                 )
             }
             if exactBounds.Count > 0 {
                 let candidateArguments = cast[[]Type](possibleArguments.Clone())
                 candidateArguments[index] = exactBounds[0]
-                if !ExtensionReceiverBoundDomainsMayApply(parameters, candidateArguments, choices, receiverTerms) {
+                if !ExtensionReceiverBoundDomainsMayApply(
+                    parameters,
+                    candidateArguments,
+                    choices,
+                    receiverTerms,
+                    refinements
+                ) {
                     return false
                 }
                 let pinned = if pinnedParameters != nil {
@@ -1908,7 +1919,8 @@ internal shared class ClrOverloadResolution {
                     freeBounds,
                     pinned,
                     choices,
-                    validateAlternatives
+                    validateAlternatives,
+                    refinements
                 )
             }
             if requiresValue && inferredUpperCount > 0 {
@@ -1916,17 +1928,18 @@ internal shared class ClrOverloadResolution {
             }
             for upper in upperBounds {
                 if !requiresValue &&
-                    !InferenceBoundMayHaveCompatibleSubtype(upper, parameter, parameters, possibleArguments) {
-                    return false
-                }
-                if upperBounds.Any(
-                    (other Type) -> !upper.IsInterface &&
-                        !other.IsInterface &&
-                        !IsInferenceBoundPromotion(upper, other) &&
-                        !IsInferenceBoundPromotion(other, upper)
+                    !InferenceBoundMayHaveCompatibleSubtype(
+                    upper,
+                    parameter,
+                    parameters,
+                    possibleArguments,
+                    refinements
                 ) {
                     return false
                 }
+            }
+            if !InferenceUpperBoundsMayRefineTogether(upperBounds, refinements) {
+                return false
             }
         }
         return SatisfiesDeclaredConstraints(parameters, possibleArguments, default, out _, out _)
@@ -2181,6 +2194,133 @@ internal shared class ClrOverloadResolution {
         return false
     }
 
+    private func InferenceUpperBoundsMayRefineTogether(
+        bounds IReadOnlyList[Type],
+        refinements Dictionary[string, bool]
+    ) bool {
+        for var i = 0; i < bounds.Count; i++ {
+            let bound = bounds[i]
+            for var j = 0; j < i; j++ {
+                let other = bounds[j]
+                if bound.ContainsGenericParameters || other.ContainsGenericParameters {
+                    let contract = if bound.ContainsGenericParameters {
+                        bound
+                    } else {
+                        other
+                    }
+                    let family = if bound.ContainsGenericParameters {
+                        other
+                    } else {
+                        bound
+                    }
+                    if contract.IsInterface && !family.ContainsGenericParameters && family.IsSealed {
+                        let source = if InferenceBoundMayRefine(family) {
+                            family.GetGenericTypeDefinition()
+                        } else {
+                            family
+                        }
+                        if !OpenExtensionReceiverStandardShapeMayApply(
+                            source,
+                            contract,
+                            tupleElementConversions: false
+                        ) {
+                            return false
+                        }
+                    }
+                    continue
+                }
+                if (!InferenceBoundMayRefine(bound) && !IsInferenceBoundPromotion(other, bound)) ||
+                    (!InferenceBoundMayRefine(other) && !IsInferenceBoundPromotion(bound, other)) {
+                    return false
+                }
+                if IsInferenceBoundPromotion(bound, other) || IsInferenceBoundPromotion(other, bound) {
+                    continue
+                }
+                if bound.IsInterface || other.IsInterface {
+                    let family = if bound.IsInterface {
+                        other
+                    } else {
+                        bound
+                    }
+                    let contract = if bound.IsInterface {
+                        bound
+                    } else {
+                        other
+                    }
+                    if family.IsSealed &&
+                        (
+                        !InferenceBoundMayRefine(family) ||
+                            !OpenExtensionReceiverStandardShapeMayApply(
+                            family.GetGenericTypeDefinition(),
+                            contract,
+                            tupleElementConversions: false
+                        )
+                    ) {
+                        return false
+                    }
+                    continue
+                }
+                if !bound.IsGenericType || !other.IsGenericType || !ClrTypeUtilities.IsDelegateType(bound) ||
+                    !ClrTypeUtilities.AreSame(bound.GetGenericTypeDefinition(), other.GetGenericTypeDefinition()) {
+                    return false
+                }
+            }
+        }
+        let families = HashSet[Type]()
+        for bound in bounds {
+            if !bound.IsGenericType || !ClrTypeUtilities.IsDelegateType(bound) || !InferenceBoundMayRefine(bound) {
+                continue
+            }
+            let definition = bound.GetGenericTypeDefinition()
+            if !families.Add(definition) {
+                continue
+            }
+            let terms = bounds
+                .Where(
+                (other Type) -> other.IsGenericType && ClrTypeUtilities.AreSame(
+                    definition,
+                    other.GetGenericTypeDefinition()
+                )
+            )
+                .Select((other Type) -> (definition, other))
+                .ToList()
+            if terms.Count < 2 {
+                continue
+            }
+            let key = string.Join(
+                "\0",
+                terms
+                    .Select((term(Type, Type)) -> term.Item2.AssemblyQualifiedName ?? term.Item2.ToString())
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy((name string) -> name, StringComparer.Ordinal)
+            )
+            if refinements.TryGetValue(key, out var cached) {
+                if !cached {
+                    return false
+                }
+                continue
+            }
+            let parameters = definition.GetGenericArguments()
+            // Variance relates constructions, not nominal subclasses. Reuse
+            // the symbolic solver for all of the family's slot obligations.
+            // Active recursive obligations remain unknown, not impossible.
+            refinements[key] = true
+            let possible = ArgumentDependentBoundsMaySatisfyConstraints(
+                parameters,
+                parameters,
+                terms,
+                HashSet[string](parameters.Select((parameter Type) -> parameter.Name), StringComparer.Ordinal),
+                nil,
+                refinements: refinements
+            )
+            refinements[key] = possible
+            if !possible {
+                return false
+            }
+        }
+        return true
+    }
+
     private func CollectFixedExtensionReceiverConstraintBounds(
         parameters[]Type,
         arguments[]Type,
@@ -2391,7 +2531,8 @@ internal shared class ClrOverloadResolution {
         parameters[]Type,
         arguments[]Type,
         choices IReadOnlyDictionary[(int32, Type), Type],
-        receiverTerms IReadOnlyList[(Type, Type)]
+        receiverTerms IReadOnlyList[(Type, Type)],
+        refinements Dictionary[string, bool]
     ) bool {
         if !SatisfiesDeclaredConstraints(parameters, arguments, default, out _, out _) {
             return false
@@ -2501,19 +2642,11 @@ internal shared class ClrOverloadResolution {
                     }
                 }
             }
-            for upper in closed {
-                if closed.Any(
-                    (other Type) -> if !InferenceBoundMayRefine(upper) {
-                        !IsInferenceBoundPromotion(other, upper)
-                    } else {
-                        !upper.IsInterface &&
-                            !other.IsInterface &&
-                            !IsInferenceBoundPromotion(upper, other) &&
-                            !IsInferenceBoundPromotion(other, upper)
-                    }
-                ) {
-                    return false
-                }
+            if !InferenceUpperBoundsMayRefineTogether(
+                upperBounds.Where((upper Type) -> !upper.ContainsGenericParameters || upper.IsInterface).ToList(),
+                refinements
+            ) {
+                return false
             }
             let exact = closed.FirstOrDefault(
                 (upper Type) -> !InferenceBoundMayRefine(upper) || lowerBounds.Any(
@@ -2583,7 +2716,13 @@ internal shared class ClrOverloadResolution {
             refined = true
         }
         if refined {
-            return ExtensionReceiverBoundDomainsMayApply(parameters, refinedArguments, choices, receiverTerms)
+            return ExtensionReceiverBoundDomainsMayApply(
+                parameters,
+                refinedArguments,
+                choices,
+                receiverTerms,
+                refinements
+            )
         }
         return true
     }
@@ -2592,7 +2731,8 @@ internal shared class ClrOverloadResolution {
         bound Type,
         parameter Type,
         parameters[]Type,
-        arguments[]Type
+        arguments[]Type,
+        refinements Dictionary[string, bool]
     ) bool {
         if !InferenceBoundMayRefine(bound) ||
             (parameter.GenericParameterAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 {
@@ -2611,28 +2751,16 @@ internal shared class ClrOverloadResolution {
                 }
             }
             if constraint.ContainsGenericParameters {
-                continue
-            }
-            if bound.IsSealed && constraint.IsInterface {
-                if ClrTypeUtilities.IsDelegateType(bound) &&
-                    !OpenExtensionReceiverStandardShapeMayApply(
-                    bound.GetGenericTypeDefinition(),
-                    constraint,
-                    tupleElementConversions: false
-                ) {
+                if constraint.IsInterface &&
+                    !InferenceUpperBoundsMayRefineTogether([]Type{bound, constraint}, refinements) {
                     return false
                 }
+                continue
             }
             if constraint.IsValueType {
                 return false
             }
-            if !InferenceBoundMayRefine(constraint) && !IsInferenceBoundPromotion(bound, constraint) {
-                return false
-            }
-            if !bound.IsInterface &&
-                !constraint.IsInterface &&
-                !IsInferenceBoundPromotion(bound, constraint) &&
-                !IsInferenceBoundPromotion(constraint, bound) {
+            if !InferenceUpperBoundsMayRefineTogether([]Type{bound, constraint}, refinements) {
                 return false
             }
         }
