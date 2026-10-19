@@ -693,6 +693,24 @@ Console.WriteLine("${ternary(Input[string](7))} ${expression(Input[string](7))} 
         "DerivedList<string>,string",
         "where T : DerivedList<U>"
     )
+    @InlineData(
+        "in T,in U",
+        "System.Collections.Generic.List<System.Collections.Generic.List<string>>,object",
+        "System.Collections.Generic.List<System.Collections.Generic.List<string>>,string",
+        "where T : System.Collections.Generic.List<System.Collections.Generic.List<U>>"
+    )
+    @InlineData(
+        "in T,in U",
+        "System.Collections.Generic.List<string[]>,object",
+        "System.Collections.Generic.List<string[]>,string",
+        "where T : System.Collections.Generic.List<U[]>"
+    )
+    @InlineData(
+        "in T,in U",
+        "System.IO.Stream,object",
+        "System.IO.MemoryStream,System.IO.MemoryStream",
+        "where T : U where U : System.IO.Stream"
+    )
     func Dependent_Receiver_Bounds_Can_Refine_Together(
         variance string,
         receiverArguments string,
@@ -726,10 +744,23 @@ Console.WriteLine("${direct(Probe(7))} ${ternary(Probe(7))} ${expression(Probe(7
     }
 
     @Theory
-    @InlineData("System.Exception,object")
-    @InlineData("System.Collections.Generic.List<string>,System.IO.Stream")
-    @InlineData("DerivedList<string>,System.IO.Stream")
-    func Impossible_Joint_Receiver_Bounds_Preserve_Nullable_Storage(receiverArguments string) {
+    @InlineData("System.Exception,object", "where T : System.Collections.Generic.List<U>")
+    @InlineData(
+        "System.Collections.Generic.List<string>,System.IO.Stream",
+        "where T : System.Collections.Generic.List<U>"
+    )
+    @InlineData("DerivedList<string>,System.IO.Stream", "where T : System.Collections.Generic.List<U>")
+    @InlineData(
+        "System.Collections.Generic.List<System.Exception>,object",
+        "where T : System.Collections.Generic.List<System.Collections.Generic.List<U>>"
+    )
+    @InlineData(
+        "System.Collections.Generic.List<System.Exception>,object",
+        "where T : System.Collections.Generic.List<U[]>"
+    )
+    @InlineData("System.Exception,object", "where T : U where U : System.IO.Stream")
+    @InlineData("System.Exception,object", "where T : U where U : System.Collections.Generic.List<string>")
+    func Impossible_Joint_Receiver_Bounds_Preserve_Nullable_Storage(receiverArguments string, constraints string) {
         using let fixture = CSharpFixture(`namespace Fixture4986 {
     public class DerivedList<T> : System.Collections.Generic.List<T> {}
     public interface IProbe<in T,in U> {}
@@ -739,7 +770,7 @@ Console.WriteLine("${direct(Probe(7))} ${ternary(Probe(7))} ${expression(Probe(7
     }
     public static class Extensions {
         public static Probe GetValueOrDefault<T,U>(this IProbe<T,U> value, IBounds<T,U> fallback)
-            where T : System.Collections.Generic.List<U> => new Probe(99);
+            ` + constraints + ` => new Probe(99);
     }
 }`)
         let result = CompileAndRun(`import System

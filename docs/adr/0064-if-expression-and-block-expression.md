@@ -350,6 +350,10 @@ class hierarchies cannot refine together, and matching constructed class
 bases contribute exact invariant arguments. Those arguments are pinned only
 after checking their original receiver bounds, so joint refinement does not
 erase an incompatible dependent bound.
+Invariant argument shapes are compared recursively; an unresolved leaf does
+not make a mismatching enclosing generic or array shape possible. A
+type-parameter upper bound also contributes its inherited constraints,
+transitively, so reopening `T : U` does not discard `U`'s class bounds.
 Reference-variance refinement cannot introduce a value-type argument by
 boxing.
 Inferring an element type cannot turn an `int32` receiver into a collection.

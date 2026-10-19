@@ -1609,7 +1609,18 @@ internal shared class ClrOverloadResolution {
                 GenericParameterAttributes.NotNullableValueTypeConstraint
             ) != 0
             let openClassBounds = List[Type]()
-            for rawConstraint in parameter.GetGenericParameterConstraints() {
+            let pendingConstraints = Queue[Type](parameter.GetGenericParameterConstraints())
+            let visitedConstraints = HashSet[Type]()
+            while pendingConstraints.Count > 0 {
+                let rawConstraint = pendingConstraints.Dequeue()
+                if !visitedConstraints.Add(rawConstraint) {
+                    continue
+                }
+                if rawConstraint.IsGenericParameter {
+                    for inherited in rawConstraint.GetGenericParameterConstraints() {
+                        pendingConstraints.Enqueue(inherited)
+                    }
+                }
                 var constraint = rawConstraint
                 for var i = 0; i < parameters.Length; i++ {
                     if !possibleArguments[i].ContainsGenericParameters {
@@ -1643,8 +1654,7 @@ internal shared class ClrOverloadResolution {
             let inferred = Dictionary[string, Type](StringComparer.Ordinal)
             for constraint in openClassBounds {
                 for upper in upperBounds.Concat(exactBounds) {
-                    if !upper.IsInterface &&
-                        !InferCompatibleExtensionReceiverClassBounds(upper, constraint, parameters, inferred) {
+                    if !upper.IsInterface && !InferCompatibleExtensionReceiverClassBounds(upper, constraint, inferred) {
                         return false
                     }
                 }
@@ -1735,7 +1745,6 @@ internal shared class ClrOverloadResolution {
     private func InferCompatibleExtensionReceiverClassBounds(
         upper Type,
         constraint Type,
-        parameters[]Type,
         inferred Dictionary[string, Type]
     ) bool {
         let Definition = func (type Type) Type {
@@ -1759,17 +1768,51 @@ internal shared class ClrOverloadResolution {
             pattern = Match(constraint, Definition(upper))
             actual = upper
         }
-        if pattern == nil || !UnifyForInference(pattern, actual, inferred) {
-            return false
-        }
-        var closedPattern = pattern
-        for parameter in parameters {
-            if inferred.TryGetValue(parameter.Name, out var argument) && !argument.ContainsGenericParameters {
-                closedPattern = SubstituteClrType(closedPattern, parameter, argument)
+        return pattern != nil && InferExactExtensionReceiverTypeArguments(pattern, actual, inferred)
+    }
+
+    private func InferExactExtensionReceiverTypeArguments(
+        pattern Type,
+        actual Type,
+        inferred Dictionary[string, Type]
+    ) bool {
+        if pattern.IsGenericParameter {
+            return if inferred.TryGetValue(pattern.Name, out var existing) {
+                ClrTypeUtilities.AreSame(existing, actual)
+            } else {
+                UnifyForInference(pattern, actual, inferred)
             }
         }
-        // Class arguments are invariant; inference alone is not equality proof.
-        return closedPattern.ContainsGenericParameters || ClrTypeUtilities.AreSame(closedPattern, actual)
+        if pattern.HasElementType || actual.HasElementType {
+            if pattern.IsArray != actual.IsArray ||
+                pattern.IsByRef != actual.IsByRef ||
+                pattern.IsPointer != actual.IsPointer ||
+                (
+                pattern.IsArray &&
+                    (pattern.GetArrayRank() != actual.GetArrayRank() || pattern.IsSZArray != actual.IsSZArray)
+            ) {
+                return false
+            }
+            let patternElement = pattern.GetElementType()
+            let actualElement = actual.GetElementType()
+            return patternElement != nil &&
+                actualElement != nil &&
+                InferExactExtensionReceiverTypeArguments(patternElement, actualElement, inferred)
+        }
+        if !pattern.IsGenericType || !actual.IsGenericType {
+            return ClrTypeUtilities.AreSame(pattern, actual)
+        }
+        if !ClrTypeUtilities.AreSame(pattern.GetGenericTypeDefinition(), actual.GetGenericTypeDefinition()) {
+            return false
+        }
+        let patterns = pattern.GetGenericArguments()
+        let arguments = actual.GetGenericArguments()
+        for var i = 0; i < patterns.Length; i++ {
+            if !InferExactExtensionReceiverTypeArguments(patterns[i], arguments[i], inferred) {
+                return false
+            }
+        }
+        return true
     }
 
     private func ExtensionReceiverArgumentMayRefine(
