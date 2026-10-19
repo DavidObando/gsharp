@@ -344,6 +344,9 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 | GS0621 | Error | A property that replaces a positional data member has no getter. | Add a getter so the positional value remains readable. |
 | GS0622 | Error | A positional member follows a braced or content initializer in a composite literal. | Move positional members before composite elements so constructor arguments keep source evaluation order. |
 | GS0623 | Error | A data class or struct declares `PrintMembers(StringBuilder)` with a shape other than an instance, non-generic, synchronous (neither `async` nor `suspend`) method returning `bool` whose accessibility is `private` (a sealed type that starts the slot) or `protected`, marked `override` exactly when the type has an inherited slot. | A compatible `PrintMembers` replaces the synthesized one; remove it to use the synthesized print members, or fix its shape. |
+| GS0624 | Error | A guard leaves a `bool` initializer, or assignment/coalescing/ternary conversion hides the boolean in a nullable result. | Parenthesize the entire initializer to make the boundary explicit: `if let v = (a && b ? x : y)` or `if let v = (cached = a && b)`. |
+| GS0625 | Error | A `guard let` or `while let` has a `&&` guard after its bindings. | Only `if let` accepts a guard. Test the condition in a separate statement, or parenthesize the initializer if the `&&` belongs to it. |
+| GS0626 | Error | A top-level `\|\|` follows the bindings of an `if let`, `guard let` or `while let`. | Only `&&` introduces a guard. Parenthesize the initializer if the `\|\|` belongs to it. |
 | GS9001 | Error | Cannot take the address of a non-lvalue. | `&(1 + 2)` — the operand is a temporary expression. |
 | GS9002 | Error | Argument must be passed by `ref`. | A `ref` parameter called without the `ref` modifier. |
 | GS9003 | Error | Variable not definitely assigned before `ref` use. | `ref x` where `x` has not been assigned. |
@@ -610,10 +613,11 @@ Cause/fix examples:
 - **GS0266** — `Greet("ada")` when both `Greet(string)` and `Greet(name string)` are visible via different paths. Fix: rename one, change one signature, or use a named argument that only one overload accepts.
 - **GS0267** — `Greet(42)` when only `Greet(string)` is declared. Fix: pass a value of the expected type, or add an overload covering the new argument shape.
 
-## `if let`, `guard let`, and `while let` binding diagnostics (GS0296–GS0297)
+## `if let`, `guard let`, and `while let` binding diagnostics (GS0296–GS0297, GS0624–GS0626)
 
 The nullable-binding forms share GS0296. `guard let` additionally requires its
-failure branch to exit.
+failure branch to exit. Every binding initializer ends at a top-level `&&` or
+`||`; GS0624–GS0626 report the shapes where that matters.
 
 | Code | Severity | Message |
 |------|----------|---------|
@@ -624,6 +628,12 @@ Cause/fix examples:
 
 - **GS0296** — `let s = "hi"; while let v = s { ... }`. Fix: either use a plain boolean loop condition or pass a nullable value. Binding only makes sense when the RHS has type `T?`; the same rule applies to `if let` and `guard let`.
 - **GS0297** — `guard let v = s else { var x = 1 }`. Fix: make the else block exit the enclosing scope — `return`, `throw`, `break`, or `continue`. The binding is only in scope after the guard precisely because the else cannot fall through.
+- **GS0624** — `if let v = a && b ? x : y { … }`. The `&&` starts the guard, so the initializer is just `a`. Fix: `if let v = (a && b ? x : y) { … }`.
+- **GS0624** also covers `if let v = cached = a && b` when `cached` is nullable:
+  use `(cached = a && b)` to preserve the old value and body execution, or
+  `(cached = a) && b` to select the new guard explicitly.
+- **GS0625** — `while let line = reader.ReadLine() && line.Length > 0 { … }`. Fix: test the condition at the start of the body (`if line.Length == 0 { break }`).
+- **GS0626** — `if let v = maybe || fallback { … }`. Fix: if you meant a fallback value, write `maybe ?? fallback`; if the `||` belongs to the initializer, parenthesize it.
 
 ## Top-level-statement diagnostics (GS0285–GS0287)
 

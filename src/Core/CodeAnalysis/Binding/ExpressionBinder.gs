@@ -276,7 +276,7 @@ internal partial class ExpressionBinder {
             return BindStackAllocExpression(stackAlloc, targetType)
         }
         if TryBindLambdaExpressionWithTargetType(syntax, targetType, out var targetTypedLambda) {
-            return conversions.BindConversion(syntax.Location, targetTypedLambda!!, targetType)
+            return ConvertTargetTypedValue(syntax, targetTypedLambda!!, targetType)
         }
         // Issue #3355: prefix statements bind normally; the expected type
         // flows into the trailing expression.
@@ -289,7 +289,7 @@ internal partial class ExpressionBinder {
         // the standard conversion to shape/validate the overall result.
         if syntax is SwitchExpressionSyntax switchExpr {
             let boundSwitch = BindSwitchExpression(switchExpr, targetType)
-            return conversions.BindConversion(syntax.Location, boundSwitch, targetType)
+            return ConvertTargetTypedValue(syntax, boundSwitch, targetType)
         }
         // Issue #1158: an if-expression and a ternary conditional likewise honor
         // the target type (C# 9+ target-typed conditional) — bind with the
@@ -297,18 +297,18 @@ internal partial class ExpressionBinder {
         // conversion to shape/validate the overall result.
         if syntax is IfExpressionSyntax ifExpr {
             let boundIf = BindIfExpression(ifExpr, targetType)
-            return conversions.BindConversion(syntax.Location, boundIf, targetType)
+            return ConvertTargetTypedValue(syntax, boundIf, targetType)
         }
         // ADR-0151: the `if let` expression honors the target type on exactly
         // the same terms as the plain if-expression above — its branch tails
         // unify against the target before the standard conversion runs.
         if syntax is IfLetExpressionSyntax ifLetExpr {
             let boundIfLet = BindIfLetExpression(ifLetExpr, targetType)
-            return conversions.BindConversion(syntax.Location, boundIfLet, targetType)
+            return ConvertTargetTypedValue(syntax, boundIfLet, targetType)
         }
         if syntax is ConditionalExpressionSyntax conditionalExpr {
             let boundConditional = BindConditionalExpression(conditionalExpr, targetType)
-            return conversions.BindConversion(syntax.Location, boundConditional, targetType)
+            return ConvertTargetTypedValue(syntax, boundConditional, targetType)
         }
         // Issue #1480: a null-coalescing operator (`a ?? b`) likewise honors the
         // contextual target type. When the operand underlyings share no natural
@@ -321,9 +321,22 @@ internal partial class ExpressionBinder {
             .Kind == SyntaxKind
             .QuestionQuestionToken {
             let boundCoalesce = BindBinaryExpression(binaryExpr, targetType)
-            return conversions.BindConversion(syntax.Location, boundCoalesce, targetType)
+            return ConvertTargetTypedValue(syntax, boundCoalesce, targetType)
         }
         return conversions.BindConversion(syntax, targetType)
+    }
+
+    private func ConvertTargetTypedValue(
+        syntax ExpressionSyntax,
+        value BoundExpression,
+        targetType TypeSymbol
+    ) BoundExpression {
+        // Keep the original value's provenance before the dispatch anchor can
+        // belong to a contextual conversion wrapper instead.
+        if value is not BoundErrorExpression {
+            value.AnchorSyntax(syntax)
+        }
+        return conversions.BindConversion(syntax.Location, value, targetType)
     }
 
     private func TryBindLambdaExpressionWithTargetType(

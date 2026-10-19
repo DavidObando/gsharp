@@ -14,15 +14,21 @@ class WhileLetStatementSyntax : StatementSyntax {
     /// @param syntaxTree The parent syntax tree.
     /// @param whileKeyword The `while` keyword token.
     /// @param bindings The comma-separated `let` bindings.
+    /// @param guardOperatorToken The optional `&&` token introducing the guard (null when absent).
+    /// @param guard The optional guard expression (null when absent).
     /// @param body The loop body.
     init(
         syntaxTree SyntaxTree,
         whileKeyword SyntaxToken,
         bindings SeparatedSyntaxList[IfLetBindingClauseSyntax],
+        guardOperatorToken SyntaxToken?,
+        $guard ExpressionSyntax?,
         body StatementSyntax
     ) : base(syntaxTree) {
         WhileKeyword = whileKeyword
         Bindings = bindings
+        GuardOperatorToken = guardOperatorToken
+        Guard = $guard
         Body = body
     }
 
@@ -38,6 +44,20 @@ class WhileLetStatementSyntax : StatementSyntax {
 
     /// Gets the comma-separated binding list.
     prop Bindings SeparatedSyntaxList[IfLetBindingClauseSyntax] {
+        get;
+    }
+
+    /// Issue #4961 / ADR-0201: gets the optional `&&` token introducing the
+    /// guard; `null` when there is no guard. In erroneous source it may be a
+    /// `||` token (reported as GS0626 by the parser).
+    prop GuardOperatorToken SyntaxToken? {
+        get;
+    }
+
+    /// Issue #4961 / ADR-0201: gets the optional guard expression; `null`
+    /// when absent. `while let` does not support a guard;
+    /// the parser reports GS0625 when one is present and the binder ignores it.
+    prop Guard ExpressionSyntax? {
         get;
     }
 

@@ -1,0 +1,418 @@
+// <copyright file="Issue4961IfLetStatementGuardParserTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Core.Tests.CodeAnalysis.Syntax
+
+import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Syntax
+import System
+import System.Collections.Generic
+import System.Diagnostics
+import System.Linq
+import System.Text
+import Xunit
+
+/// Issue #4961 / ADR-0201 — parser coverage for the binding header shared by
+/// every `let`-binding form: a top-level `&&` after the final binding starts
+/// the guard in the `if let` statement exactly as in the expression, a `?:`
+/// initializer is accepted by both forms, and the unsupported shapes report
+/// diagnostics that name their syntax.
+open class Issue4961IfLetStatementGuardParserTests {
+    @Fact
+    func Statement_IssueRepro_InitializerStopsAtTheGuard() {
+        const source = `package Repro
+func HasText(value string?) bool {
+    if let text = value && text.Length > 0 {
+        return true
+    }
+    return false
+}`
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        let stmt = FindFirst[IfLetStatementSyntax](tree)
+        Assert.Equal("value", Assert.IsType[NameExpressionSyntax](stmt.Bindings[0].Initializer).IdentifierToken.Text)
+        Assert.Equal(SyntaxKind.AmpersandAmpersandToken, stmt.GuardOperatorToken?.Kind)
+        let guard_ = Assert.IsType[BinaryExpressionSyntax](stmt.Guard)
+        Assert.Equal(SyntaxKind.GreaterToken, guard_.OperatorToken.Kind)
+    }
+
+    @Fact
+    func Statement_MultipleBindings_GuardFollowsTheFinalBinding_AndMayUseLogicalOperators() {
+        const source = `package P
+func F(a string?, b string?) {
+    if let x = a, let y = b && x.Length > 0 || y.Length > 0 {
+        Use(x)
+    }
+}`
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        let stmt = FindFirst[IfLetStatementSyntax](tree)
+        Assert.Equal(2, stmt.Bindings.Count)
+        Assert.IsType[NameExpressionSyntax](stmt.Bindings[1].Initializer)
+        Assert.Equal(SyntaxKind.PipePipeToken, Assert.IsType[BinaryExpressionSyntax](stmt.Guard).OperatorToken.Kind)
+    }
+
+    @Fact
+    func Statement_NoGuard_LeavesTheGuardSlotsEmpty() {
+        const source = `package P
+func F(a string?) {
+    if let x = a {
+        Use(x)
+    } else if let y = a && y.Length > 1 {
+        Use(y)
+    }
+}`
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        let statements = Walk(tree.Root).OfType[IfLetStatementSyntax]().ToList()
+        Assert.Equal(2, statements.Count)
+        Assert.Null(statements[0].GuardOperatorToken)
+        Assert.Null(statements[0].Guard)
+        Assert.NotNull(statements[1].Guard)
+    }
+
+    @Fact
+    func Statement_ParenthesizedLogicalAnd_StaysInTheInitializer() {
+        const source = `package P
+func F(a bool, b bool, x string?, y string?) {
+    if let v = (a && b ? x : y) && v.Length > 0 {
+        Use(v)
+    }
+}`
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        let stmt = FindFirst[IfLetStatementSyntax](tree)
+        Assert.IsType[ParenthesizedExpressionSyntax](stmt.Bindings[0].Initializer)
+        Assert.NotNull(stmt.Guard)
+    }
+
+    @Fact
+    func BothForms_ConditionalInitializer_FalseArmStopsAtTheGuard() {
+        const source = `package P
+func F(flag bool, x string?, y string?) string {
+    if let v = flag ? x : y && v.Length > 0 {
+        return v
+    }
+    return if let w = flag ? x : y && w.Length > 0 { w } else { "" }
+}`
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        let stmt = FindFirst[IfLetStatementSyntax](tree)
+        let statementInitializer = Assert.IsType[ConditionalExpressionSyntax](stmt.Bindings[0].Initializer)
+        Assert.IsType[NameExpressionSyntax](statementInitializer.WhenFalse)
+        Assert.NotNull(stmt.Guard)
+        let expr = FindFirst[IfLetExpressionSyntax](tree)
+        let expressionInitializer = Assert.IsType[ConditionalExpressionSyntax](expr.Bindings[0].Initializer)
+        Assert.IsType[NameExpressionSyntax](expressionInitializer.WhenFalse)
+        Assert.NotNull(expr.Guard)
+    }
+
+    @Fact
+    func BothForms_CoalescingInitializer_StopsAtTheGuard() {
+        const source = `package P
+func F(a string?, b string?) string {
+    if let v = a ?? b && v.Length > 0 {
+        return v
+    }
+    return if let w = a ?? b && w.Length > 0 { w } else { "" }
+}`
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        let stmt = FindFirst[IfLetStatementSyntax](tree)
+        Assert.Equal(
+            SyntaxKind.QuestionQuestionToken,
+            Assert.IsType[BinaryExpressionSyntax](stmt.Bindings[0].Initializer).OperatorToken.Kind
+        )
+        Assert.NotNull(stmt.Guard)
+        let expr = FindFirst[IfLetExpressionSyntax](tree)
+        Assert.Equal(
+            SyntaxKind.QuestionQuestionToken,
+            Assert.IsType[BinaryExpressionSyntax](expr.Bindings[0].Initializer).OperatorToken.Kind
+        )
+        Assert.NotNull(expr.Guard)
+    }
+
+    @Fact
+    func AssignmentInitializer_IsKept_AndItsRightHandSideStopsAtTheGuard() {
+        // The guarded initializer is the full grammar, assignments included:
+        // `cached = Next()` was a valid initializer before ADR-0201 and stays
+        // one in every let-binding form.
+        const source = `package P
+var cached string? = nil
+func Next() string? { return "n" }
+func F() int32 {
+    if let a = cached = Next() && a.Length > 0 {
+        return 1
+    }
+    while let b = cached = Next() {
+        break
+    }
+    guard let c = cached = Next() else {
+        return 0
+    }
+    return if let d = cached = Next() && d.Length > 0 { 2 } else { 3 }
+}`
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        let stmt = FindFirst[IfLetStatementSyntax](tree)
+        let assignment = Assert.IsType[AssignmentExpressionSyntax](stmt.Bindings[0].Initializer)
+        Assert.IsType[CallExpressionSyntax](assignment.Expression)
+        Assert.NotNull(stmt.Guard)
+        Assert.IsType[AssignmentExpressionSyntax](FindFirst[WhileLetStatementSyntax](tree).Bindings[0].Initializer)
+        Assert.IsType[AssignmentExpressionSyntax](FindFirst[GuardLetStatementSyntax](tree).Bindings[0].Initializer)
+        let expr = FindFirst[IfLetExpressionSyntax](tree)
+        Assert.IsType[AssignmentExpressionSyntax](expr.Bindings[0].Initializer)
+        Assert.NotNull(expr.Guard)
+    }
+
+    @Fact
+    func RangeInitializer_IsKept_AndItsBoundsStopAtTheGuard() {
+        // The range layer stays in the guarded grammar too: a range is never a
+        // nullable initializer (the binder reports GS0296), but it must still
+        // parse as one rather than fail to parse.
+        const source = `package P
+func F(a int32, b int32, ok bool) {
+    if let r = a..b && ok {
+        Use(r)
+    }
+}`
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        let stmt = FindFirst[IfLetStatementSyntax](tree)
+        Assert.IsType[RangeExpressionSyntax](stmt.Bindings[0].Initializer)
+        Assert.Equal("ok", Assert.IsType[NameExpressionSyntax](stmt.Guard).IdentifierToken.Text)
+    }
+
+    @Fact
+    func WithInitializer_IsKept_InEveryLetBindingForm() {
+        // The initializer is the full grammar, so the `with` continuation
+        // (parsed only at the outermost binary tier) stays in it, here in the
+        // false arm of a nullable `?:`; a guard may still follow.
+        const source = `package P
+data struct Point(X int32, Y int32)
+func F(flag bool, point Point) int32 {
+    if let copy = flag ? default(Point?) : point with { X = 2 } {
+        return copy.X
+    }
+    if let other = flag ? default(Point?) : point with { X = 3 } && other.X > 0 {
+        return other.X
+    }
+    guard let third = flag ? default(Point?) : point with { X = 4 } else {
+        return 0
+    }
+    return third.X
+}`
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        let statements = Walk(tree.Root).OfType[IfLetStatementSyntax]().ToList()
+        Assert.Equal(2, statements.Count)
+        Assert.IsType[WithExpressionSyntax](
+            Assert.IsType[ConditionalExpressionSyntax](statements[0].Bindings[0].Initializer).WhenFalse
+        )
+        Assert.Null(statements[0].Guard)
+        Assert.IsType[WithExpressionSyntax](
+            Assert.IsType[ConditionalExpressionSyntax](statements[1].Bindings[0].Initializer).WhenFalse
+        )
+        Assert.NotNull(statements[1].Guard)
+        Assert.IsType[ConditionalExpressionSyntax](FindFirst[GuardLetStatementSyntax](tree).Bindings[0].Initializer)
+    }
+
+    @Theory
+    @InlineData("s")
+    @InlineData("default([]?[]int32)")
+    func NestedGuardsAndInitializers_ParseInBoundedTime(initializer string) {
+        // Re-parsing each initializer and guard multiplies the work at every
+        // level; the ordinary expression parser must consume each only once.
+        const depth = 24
+        let guardNest = StringBuilder()
+        let initializerNest = StringBuilder()
+        for var i = 0; i < depth; i++ {
+            guardNest.Append("(if let a${i} = $initializer && ")
+            initializerNest.Append("(if let b${i} = ")
+        }
+        guardNest.Append("true")
+        initializerNest.Append(initializer)
+        for var i = 0; i < depth; i++ {
+            guardNest.Append(" { true } else { false })")
+            initializerNest.Append(" && b${depth - 1 - i}.Length > 0 { s } else { s })")
+        }
+        let source = "package P\nfunc F(s string?) bool {\n    let g = ${guardNest}\n    let i = ${initializerNest}\n    return g\n}\n"
+        let watch = Stopwatch.StartNew()
+        let tree = SyntaxTree.Parse(source)
+        watch.Stop()
+        Assert.Empty(tree.Diagnostics)
+        Assert.Equal(2 * depth, Walk(tree.Root).OfType[IfLetExpressionSyntax]().Count())
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), "nested if-let parse took ${watch.Elapsed}")
+    }
+
+    @Theory
+    @InlineData("while let")
+    @InlineData("guard let")
+    func UnsupportedNestedHeaderGuards_ParseInBoundedTime(form string) {
+        const depth = 24
+        let initializer = StringBuilder()
+        for var i = 0; i < depth; i++ {
+            initializer.Append("{ $form value${i} = ")
+        }
+        initializer.Append("s")
+        for var i = 0; i < depth; i++ {
+            initializer.Append(
+                if form == "while let" {
+                    " && true { break } s }"
+                } else {
+                    " && true else { return } s }"
+                }
+            )
+        }
+        let source = "package P\nfunc F(s string?) {\n    let value = $initializer\n}\n"
+        let watch = Stopwatch.StartNew()
+        let tree = SyntaxTree.Parse(source)
+        watch.Stop()
+        Assert.Equal(depth, tree.Diagnostics.Length)
+        Assert.All(tree.Diagnostics, (diagnostic Diagnostic) -> Assert.Equal("GS0625", diagnostic.Id))
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), "nested $form parse took ${watch.Elapsed}")
+    }
+
+    @Fact
+    func NestedInterpolationGuards_ParseInBoundedTime() {
+        const depth = 24
+        let nested = StringBuilder()
+        for var i = 0; i < depth; i++ {
+            nested.Append("(if let value${i} = s && \"")
+            nested.Append(`${`)
+        }
+        nested.Append("true")
+        for var i = 0; i < depth; i++ {
+            nested.Append(`}" == "True" { true } else { false })`)
+        }
+        let source = "package P\nfunc F(s string?) bool { return $nested }\n"
+        let watch = Stopwatch.StartNew()
+        let tree = SyntaxTree.Parse(source)
+        watch.Stop()
+        Assert.Empty(tree.Diagnostics)
+        Assert.Equal(depth, Walk(tree.Root).OfType[IfLetExpressionSyntax]().Count())
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), "nested interpolation parse took ${watch.Elapsed}")
+    }
+
+    @Fact
+    func LongGuardChain_FindsTheDelimiterWithoutDeepRecursion() {
+        // A long left-associated `&&` guard stays in the ordinary iterative
+        // binary parser, with no additional recursive delimiter walk.
+        const length = 20000
+        let chain = StringBuilder()
+        for var i = 0; i < length; i++ {
+            chain.Append(" && ok")
+        }
+        let source = "package P\nfunc F(maybe string?, ok bool) {\n    if let x = maybe${chain} {\n    }\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        Assert.DoesNotContain(tree.Diagnostics, (d Diagnostic) -> d.Id != "GS0417")
+        let stmt = FindFirst[IfLetStatementSyntax](tree)
+        Assert.IsType[NameExpressionSyntax](stmt.Bindings[0].Initializer)
+        Assert.NotNull(stmt.Guard)
+    }
+
+    @Fact
+    func TopLevelLogicalOr_AfterTheBindings_ReportsGS0626_InBothForms() {
+        const source = `package P
+func F(a string?, c bool) bool {
+    if let v = a || c {
+        return true
+    }
+    return if let w = a || c { true } else { false }
+}`
+        let tree = SyntaxTree.Parse(source)
+        Assert.Equal([]string{"GS0626@3:18", "GS0626@6:25"}, Ids(tree))
+        // The `||` and its right operand stay in the tree (guard slot), so the
+        // source round-trips and recovery is local.
+        let stmt = FindFirst[IfLetStatementSyntax](tree)
+        Assert.Equal(SyntaxKind.PipePipeToken, stmt.GuardOperatorToken?.Kind)
+        Assert.Equal(WithoutWhitespace(source), TokenText(tree.Root))
+    }
+
+    @Fact
+    func WhileLetAndGuardLet_Guard_ReportsGS0625_AndStaysOutOfTheInitializer() {
+        const source = `package P
+func F(a string?) int32 {
+    while let v = a && v.Length > 0 {
+        break
+    }
+    guard let w = a && w.Length > 0 else {
+        return 0
+    }
+    return 1
+}`
+        let tree = SyntaxTree.Parse(source)
+        Assert.Equal([]string{"GS0625@3:21", "GS0625@6:21"}, Ids(tree))
+        let whileLet = FindFirst[WhileLetStatementSyntax](tree)
+        Assert.IsType[NameExpressionSyntax](whileLet.Bindings[0].Initializer)
+        Assert.NotNull(whileLet.Guard)
+        let guardLet = FindFirst[GuardLetStatementSyntax](tree)
+        Assert.IsType[NameExpressionSyntax](guardLet.Bindings[0].Initializer)
+        Assert.NotNull(guardLet.Guard)
+    }
+
+    @Fact
+    func Statement_GuardTokens_AreEnumeratedBetweenBindingsAndThenBlock() {
+        const source = `package P
+func F(a string?) {
+    if let v = a && v.Length > 0 {
+    }
+}`
+        let tree = SyntaxTree.Parse(source)
+        let stmt = FindFirst[IfLetStatementSyntax](tree)
+        let kinds = stmt.GetChildren().Select((n SyntaxNode) -> n.Kind).ToList()
+        Assert.Equal(
+            []SyntaxKind{
+                SyntaxKind.IfKeyword,
+                SyntaxKind.IfLetBindingClause,
+                SyntaxKind.AmpersandAmpersandToken,
+                SyntaxKind.BinaryExpression,
+                SyntaxKind.BlockStatement
+            },
+            kinds
+        )
+        Assert.Equal(WithoutWhitespace(source), TokenText(tree.Root))
+    }
+
+    shared {
+        private func Ids(tree SyntaxTree)[]string {
+            return tree
+                .Diagnostics
+                .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+                .ToArray()
+        }
+
+        /// Concatenates every token's text in source order, so a dropped or
+        /// reordered token shows up as a mismatch against the source.
+        private func TokenText(node SyntaxNode) string {
+            // A token can be reachable through more than one child accessor,
+            // so keep one token per source position.
+            return string.Concat(
+                Walk(node)
+                    .OfType[SyntaxToken]()
+                    .Where((t SyntaxToken) -> t.Text.Length > 0)
+                    .GroupBy((t SyntaxToken) -> t.Span.Start)
+                    .OrderBy((g IGrouping[int32, SyntaxToken]) -> g.Key)
+                    .Select((g IGrouping[int32, SyntaxToken]) -> g.First().Text)
+            )
+        }
+
+        private func WithoutWhitespace(text string) string {
+            return string.Concat(text.Where((c char) -> !char.IsWhiteSpace(c)))
+        }
+
+        private func FindFirst[T SyntaxNode](tree SyntaxTree) T {
+            return Walk(tree.Root).OfType[T]().First()
+        }
+
+        private func Walk(node SyntaxNode) sequence[SyntaxNode] {
+            yield node
+            for c in node.GetChildren() {
+                for d in Walk(c) {
+                    yield d
+                }
+            }
+        }
+    }
+}

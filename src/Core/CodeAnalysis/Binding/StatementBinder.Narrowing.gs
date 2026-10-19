@@ -1278,37 +1278,11 @@ internal partial class StatementBinder {
         entry Dictionary[AccessPath, TypeSymbol]?,
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     ) Dictionary[AccessPath, TypeSymbol]? {
-        switch branch {
-            case BoundReturnStatement, BoundThrowStatement, BoundRethrowStatement, BoundGotoStatement {
-                return nil
-            }
-            case nested is BoundIfStatement {
-                return ComputeIfJoinNonNull(nested, entry, callableAliases)
-            }
-            case block is BoundBlockStatement {
-                {
-                    let state = entry ?? Dictionary[AccessPath, TypeSymbol]()
-                    if block.Statements.IsDefaultOrEmpty {
-                        return state
-                    }
-                    for s in block.Statements {
-                        if !ProcessBranchStatement(s, state, callableAliases) {
-                            return nil
-                        }
-                    }
-                    return state
-                }
-            }
-            default {
-                {
-                    let state = entry ?? Dictionary[AccessPath, TypeSymbol]()
-                    return if ProcessBranchStatement(branch, state, callableAliases) {
-                        state
-                    } else {
-                        default(Dictionary[AccessPath, TypeSymbol]?)
-                    }
-                }
-            }
+        let state = entry ?? Dictionary[AccessPath, TypeSymbol]()
+        return if ProcessBranchStatement(branch, state, callableAliases) {
+            state
+        } else {
+            default(Dictionary[AccessPath, TypeSymbol]?)
         }
     }
 
@@ -1368,6 +1342,12 @@ internal partial class StatementBinder {
                 }
             }
             case inner is BoundBlockStatement {
+                if inner.Statements.Any((statement BoundStatement) -> statement is BoundLabelStatement) {
+                    // Internal jumps do not exit the branch. Without a CFG,
+                    // retain only entry facts untouched by the whole block.
+                    ClearAssignedRoots(inner, state, callableAliases)
+                    return true
+                }
                 for s in inner.Statements {
                     if !ProcessBranchStatement(s, state, callableAliases) {
                         return false

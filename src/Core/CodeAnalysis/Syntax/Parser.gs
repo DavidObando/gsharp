@@ -26,6 +26,8 @@ open partial class Parser {
     private var tokens ImmutableArray[SyntaxToken]
     private var position int32
 
+    private var stopAtTopLevelLogical bool
+
     // Issue #3587: declaration return/property types can contain a slice-wrapped
     // tuple immediately before an expression-body arrow. This position marks
     // the one ambiguous tuple that must be parsed as a tuple, not a function type.
@@ -96,10 +98,6 @@ open partial class Parser {
     // need complete header boundaries, not brace-body contents. Skipping keeps
     // speculative classification from parsing nested bodies twice per level.
     private var skimBraceBodies int32
-
-    // The expression-form if-let header reserves an unparenthesized && for
-    // its guard. Nested expression contexts reset this through ParseExpression.
-    private var stopAtIfLetGuard bool
 
     /// Initializes a new instance of the (cref:Parser) class.
     /// @param syntaxTree The source syntax tree object.
@@ -558,7 +556,8 @@ open partial class Parser {
         if index >= tokens.Length {
             return tokens[tokens.Length - 1]
         }
-        return tokens[index]
+        let token = tokens[index]
+        return token
     }
 
     private func NextToken() SyntaxToken {

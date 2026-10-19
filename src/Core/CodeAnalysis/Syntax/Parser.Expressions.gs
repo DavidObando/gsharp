@@ -12,16 +12,16 @@ import System.Linq
 import System.Runtime.CompilerServices
 
 open partial class Parser {
-    private func ParseExpression(stopAtTopLevelLogicalAnd bool = false) ExpressionSyntax {
+    private func ParseExpression(stopAtTopLevelLogical bool = false) ExpressionSyntax {
         // Recursion safety: ParseAssignmentExpression (the immediate delegate)
         // carries the issue #1602 recursion-depth guard for the whole
         // expression pipeline.
-        let savedStopAtIfLetGuard = stopAtIfLetGuard
-        stopAtIfLetGuard = stopAtTopLevelLogicalAnd
+        let outerBoundary = this.stopAtTopLevelLogical
+        this.stopAtTopLevelLogical = stopAtTopLevelLogical
         try {
             return ParseAssignmentExpression()
         } finally {
-            stopAtIfLetGuard = savedStopAtIfLetGuard
+            this.stopAtTopLevelLogical = outerBoundary
         }
     }
 
@@ -447,7 +447,10 @@ open partial class Parser {
             left = ParsePostfixChain(left)
         }
         while true {
-            if stopAtIfLetGuard && Current.Kind == SyntaxKind.AmpersandAmpersandToken {
+            // Nested expression entries reset this boundary; continuations
+            // such as assignment values and ?? tails retain it.
+            if stopAtTopLevelLogical &&
+                (Current.Kind == SyntaxKind.AmpersandAmpersandToken || Current.Kind == SyntaxKind.PipePipeToken) {
                 break
             }
             // ADR-0122 / issue #1014: a `*` that begins a new source line is a

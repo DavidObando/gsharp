@@ -774,6 +774,42 @@ internal partial class ExpressionBinder {
         canBeVoid: false
     )
 
+    /// The narrowing frames an if-expression condition implies for its
+    /// branches. Shared by the if-expression and, for its guard, the `if let`
+    /// expression (issue #4961 / ADR-0201).
+    private func ClassifyIfExpressionNarrowing(condition BoundExpression)(
+        Then Dictionary[AccessPath, TypeSymbol]?,
+        Else Dictionary[AccessPath, TypeSymbol]?
+    ) {
+        // Issue #2640: an if-expression branch observes the same nil-guard
+        // narrowing as an if-statement. Otherwise a nullable hole can poison
+        // the interpolation before handler overload resolution runs.
+        var whenTrueNarrowing Dictionary[AccessPath, TypeSymbol]? = nil
+        var whenFalseNarrowing Dictionary[AccessPath, TypeSymbol]? = nil
+        if SmartCastStability.TryClassifyNilGuardLeaf(
+            condition,
+            restrictBareVariableToLocalsAndParams: false,
+            referenceNullableOnly: false,
+            out var target,
+            out var underlying,
+            out var nonNilWhenTrue
+        ) &&
+            target != nil &&
+            underlying != nil {
+            let frame = Dictionary[AccessPath, TypeSymbol]{[target] = underlying}
+            if nonNilWhenTrue {
+                whenTrueNarrowing = frame
+            } else {
+                whenFalseNarrowing = frame
+            }
+        }
+        let (typeWhenTrue, typeWhenFalse) = ClassifyTypeTestNarrowing(condition)
+        return (
+            MergeIfExpressionNarrowing(whenTrueNarrowing, typeWhenTrue),
+            MergeIfExpressionNarrowing(whenFalseNarrowing, typeWhenFalse)
+        )
+    }
+
     private func BindIfExpression(
         syntax IfExpressionSyntax,
         targetType TypeSymbol?,
@@ -842,31 +878,7 @@ internal partial class ExpressionBinder {
         // position; BindIfExpression rejects it elsewhere (GS0276).
         let elseSyntax = syntax.ElseExpression
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
-        // Issue #2640: an if-expression branch observes the same nil-guard
-        // narrowing as an if-statement. Otherwise a nullable hole can poison
-        // the interpolation before handler overload resolution runs.
-        var whenTrueNarrowing Dictionary[AccessPath, TypeSymbol]? = nil
-        var whenFalseNarrowing Dictionary[AccessPath, TypeSymbol]? = nil
-        if SmartCastStability.TryClassifyNilGuardLeaf(
-            condition,
-            restrictBareVariableToLocalsAndParams: false,
-            referenceNullableOnly: false,
-            out var target,
-            out var underlying,
-            out var nonNilWhenTrue
-        ) &&
-            target != nil &&
-            underlying != nil {
-            let frame = Dictionary[AccessPath, TypeSymbol]{[target] = underlying}
-            if nonNilWhenTrue {
-                whenTrueNarrowing = frame
-            } else {
-                whenFalseNarrowing = frame
-            }
-        }
-        let (typeWhenTrue, typeWhenFalse) = ClassifyTypeTestNarrowing(condition)
-        whenTrueNarrowing = MergeIfExpressionNarrowing(whenTrueNarrowing, typeWhenTrue)
-        whenFalseNarrowing = MergeIfExpressionNarrowing(whenFalseNarrowing, typeWhenFalse)
+        let (whenTrueNarrowing, whenFalseNarrowing) = ClassifyIfExpressionNarrowing(condition)
         // ADR-0166: each arm also sees the pattern variables the condition
         // definitely assigns on that arm.
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)

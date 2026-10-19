@@ -1686,11 +1686,12 @@ The initializer is a `var` declaration, an assignment, an increment or decrement
 and bind a fresh identifier to the underlying non-null view:
 
 ```ebnf
-IfLetStmt        = "if" LetBindingList Statement ( "else" Statement )? .
+IfLetStmt        = "if" LetBindingHeader Statement ( "else" Statement )? .
 GuardLetStmt     = "guard" LetBindingList "else" Block .
 WhileLetStmt     = "while" LetBindingList Statement .
+LetBindingHeader = LetBindingList ( "&&" Expression )? .
 LetBindingList   = LetBindingClause ( "," LetBindingClause )* .
-LetBindingClause = "let" identifier TypeClause? "=" Expression .
+LetBindingClause = "let" identifier TypeClause? "=" LetInitializer .
 ```
 
 The initializer expression of each `let` clause must have a nullable type
@@ -1699,13 +1700,47 @@ The initializer expression of each `let` clause must have a nullable type
 binding is observable at the underlying non-null type `T` via the smart-cast
 machinery of . A `while let` binding has the same non-null view inside
 the loop body and is out of scope after the loop.
-Multiple comma-separated bindings narrow all-or-nothing — the then-block runs
-only when every clause is non-nil. Statement-form `if let` and `while let`
-evaluate all clause initializers left to right before that combined test.
-`while let` performs this evaluation before the first iteration and again
-after every body iteration; `continue` targets that re-evaluation point,
+
+A `LetInitializer` is an ordinary expression except that a **top-level** `&&`
+or `||` ends it, so the delimiter can start the guard. An assignment, a `??`
+tail and a `?:` conditional (whose right-hand side and false arm follow the
+same rule) are accepted; a logical
+operator that belongs to the initializer is parenthesized:
+`if let v = (a && b ? x : y) { … }`. A top-level `||` after the bindings
+reports `GS0626`. When an `if let` has a guard and its final initializer is a
+non-nullable `bool` (for example `if let v = a && b ? x : y`, where the `&&`
+starts the guard), the binder reports `GS0624` instead of `GS0296` and asks for
+parentheses.
+
+GS0624 also diagnoses an unparenthesized assignment, coalescing or ternary
+continuation whose nullable conversion hides the boolean before the guard. For example, with
+`cached bool?`, write `if let v = (cached = a && b)` to preserve the original
+assignment value and body execution, or `(cached = a) && b` to make the new
+guard explicit. The same rule applies when conditional unification hides a
+boolean false arm. Nested `if`/`if let` expressions and parenthesized
+subexpressions close their own boundaries and are not traversed for this
+migration check.
+
+`if let` (statement and expression alike) evaluates its bindings left to right
+and stops at the first `nil`: later initializers and the guard do not run, and
+the else-block (if any) runs instead. A later initializer may use an earlier
+binding at its narrowed non-null type (`if let a = A(), let b = B(a) { … }`).
+Every initializer must still be nullable, including later ones (`GS0296`). An
+optional `bool` guard after the final binding (`if let s = maybe && s.Length >
+0 { … }`) runs only once every binding matched, sees every bound name narrowed,
+and selects the else-block when it is false. The then-block sees the guard as
+an `if` branch sees its condition: `&& other != nil` narrows `other`, and
+`&& o is string text` puts `text` in scope. The bound names are visible in
+later initializers, in the guard, and in the then-block only, never in the
+else-block or after the statement.
+
+`while let` evaluates all clause initializers left to right before one
+combined nil-test. It performs this evaluation before the first iteration and
+again after every body iteration; `continue` targets that re-evaluation point,
 whereas `break` exits directly. Its bindings are never visible outside the
-body or in another initializer in the same header. The else-block of
+body or in another initializer in the same header. `guard let` interleaves
+each initializer with its exiting nil test. Neither `while let` nor `guard let`
+accepts a guard: a `&&` after their bindings reports `GS0625`. The else-block of
 `guard let` MUST exit the enclosing scope (`return`, `throw`, `break`,
 `continue`, or a block whose last statement does); otherwise the binder
 reports `GS0297`. `guard` is a reserved keyword.
@@ -1716,7 +1751,7 @@ reports `GS0297`. `guard` is a reserved keyword.
 binding header above with the branch rules of the if-expression:
 
 ```ebnf
-IfLetExpression = "if" LetBindingList ( "&&" Expression )? BlockExpression
+IfLetExpression = "if" LetBindingHeader BlockExpression
                   "else" ( IfExpression | IfLetExpression | BlockExpression ) .
 ```
 
@@ -1732,21 +1767,14 @@ let first = if let copyright = GetCopyrights() && copyright.Length > 0 {
   block must end in a value-producing expression (`GS0277`), and the branch
   tails must have a common result type (`GS0263`). A contextual target type
   (typed `let`, `return`, assignment, argument) is threaded into both branches.
-- Bindings are evaluated left to right and short-circuit on the first `nil`; a
-  later initializer may reference an earlier binding at its narrowed non-null
-  type (`if let a = A(), let b = B(a) { … }`).
-- A single top-level `&&` **after the final binding** introduces an optional
-  `bool` guard, evaluated only once every binding matched and with all bound
-  names in scope. Because `&&` is also an ordinary operator, a logical-and that
-  belongs to an *initializer* must be parenthesized:
-  `if let ok = (a && b) && ok { … } else { … }`. A `??` tail needs no
-  guard clause and keeps parsing initializers with the full expression grammar.
-- The bound names are visible in later initializers, in the guard, and in the
-  then-block only — never in the `else` branch.
+- The header — initializer rule, guard, left-to-right short circuit, scoping
+  and narrowing — is exactly the statement form's header above. Only the
+  mandatory `else` and the value-producing branches differ, because the form
+  sits in a value position.
 - The `else` branch may chain into another `if`/`if let` expression
   (`else if let name = expr { … } else { … }`).
-- Statement-form `if let`, `guard let`, and `while let` are unaffected:
-  `if let` only parses as an expression in a value position.
+- `if let` only parses as an expression in a value position; a
+  statement-leading `if let` is the statement form.
 
 ### Null-coalescing compound assignment
 

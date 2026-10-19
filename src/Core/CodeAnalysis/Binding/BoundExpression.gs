@@ -19,6 +19,13 @@ abstract class BoundExpression : BoundNode {
         get;
     }
 
+    /// Gets or sets the source operand of a binder-created implicit conversion.
+    /// This binding-time provenance is not a tree child or a lowering contract.
+    internal prop ImplicitConversionOperand BoundExpression? {
+        get;
+        set;
+    }
+
     /// Gets the compile-time constant value of this expression — the Roslyn
     /// `ConstantValue` analogue (ADR-0169). `HasValue` is false
     /// when the expression has no compile-time constant; a constant null

@@ -257,6 +257,27 @@ internal class ConversionClassifier {
         allowExplicit bool = false,
         callParameter ParameterSymbol? = nil
     ) BoundExpression {
+        let result = BindConversionCore(diagnosticLocation, expression, type, allowExplicit, callParameter)
+        if !allowExplicit &&
+            expression.Type != TypeSymbol.Error &&
+            result.Type != TypeSymbol.Error &&
+            expression.Type != result.Type &&
+            !object
+            .ReferenceEquals(result, expression) {
+            // The outer conversion owns the original operand even when its
+            // implementation builds calls or chains through other conversions.
+            result.ImplicitConversionOperand = expression
+        }
+        return result
+    }
+
+    private func BindConversionCore(
+        diagnosticLocation TextLocation,
+        expression BoundExpression,
+        type TypeSymbol?,
+        allowExplicit bool,
+        callParameter ParameterSymbol?
+    ) BoundExpression {
         var expression = expression
         let TryRecoverDeclaredMemberPathConversion = func (
             expression BoundExpression,

@@ -949,6 +949,36 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         actualType TypeSymbol
     ) -> Report(location, DiagnosticDescriptors.IfLetInitializerMustBeNullable, bindingName, actualType, bindingName)
 
+    /// Issue #4961 / ADR-0201: GS0624 — an `if let` has a guard and its final
+    /// binding's initializer, which ends at the guard's `&&`, is a
+    /// non-nullable `bool`. This is the shape `let v = a && b ? x : y`
+    /// takes under the shared initializer rule, so the diagnostic replaces
+    /// GS0296 there and tells the user to parenthesize.
+    /// @param location The source location of the final initializer.
+    /// @param bindingName The name introduced by the final binding.
+    /// @param actualType The initializer's (non-nullable) type.
+    func ReportIfLetGuardSplitsInitializer(location TextLocation, bindingName string, actualType TypeSymbol) -> Report(
+        location,
+        DiagnosticDescriptors.IfLetGuardSplitsInitializer,
+        bindingName,
+        actualType
+    )
+
+    /// Issue #4961 / ADR-0201: GS0625 — a `guard let` or `while let` header
+    /// has a `&&` guard, which only `if let` supports.
+    /// @param location The source location of the `&&` token.
+    /// @param form The form's spelling (`guard let` or `while let`).
+    func ReportLetBindingGuardNotSupported(location TextLocation, form string) -> Report(
+        location,
+        DiagnosticDescriptors.LetBindingGuardNotSupported,
+        form
+    )
+
+    /// Issue #4961 / ADR-0201: GS0626 — a top-level `||` follows a
+    /// `let`-binding list, where only `&&` may introduce a guard.
+    /// @param location The source location of the `||` token.
+    func ReportLetBindingLogicalOr(location TextLocation) -> Report(location, DiagnosticDescriptors.LetBindingLogicalOr)
+
     /// ADR-0071 / issue #708: GS0297 — the else block of a `guard let`
     /// statement must unconditionally exit the enclosing scope. Accepted
     /// terminators are `return`, `throw`, `break`,

@@ -389,11 +389,13 @@ internal partial class ExpressionBinder {
                         implicitProp.Property
                     )
                 } else {
+                    // Preserve the name anchor when this fast path bypasses
+                    // BindExpression, so semantic lookup sees the selected local.
                     let makeNarrowedVariable(TypeSymbol) -> BoundExpression = (
                         narrowedType TypeSymbol
-                    ) -> BoundVariableExpression(nil, variable, narrowedType)
+                    ) -> BoundVariableExpression(leftName, variable, narrowedType)
                     receiver = BuildNarrowedRead(
-                        BoundVariableExpression(nil, variable),
+                        BoundVariableExpression(leftName, variable),
                         variable.Type,
                         TryGetNarrowedType(variable),
                         makeNarrowedVariable

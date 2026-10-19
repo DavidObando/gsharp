@@ -151,6 +151,10 @@ shared class BoundSemantics {
     }
 
     private func FindReferencedNode(model GSharp.Core.CodeAnalysis.SemanticModel, token SyntaxToken) BoundExpression? {
+        // A delegate callee's token names its variable, while its call names Invoke.
+        if model.GetBoundNode(token) is BoundExpression named {
+            return named
+        }
         let expression = ExpressionNamedBy(token)
         return if expression == nil {
             default(BoundExpression?)

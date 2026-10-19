@@ -104,6 +104,13 @@ func Both(left string?, right string?) {
     }
 }
 
+func HasText(value string?) bool {
+    if let text = value && text.Length > 0 {
+        return true
+    }
+    return false
+}
+
 func Drain(reader System.IO.TextReader) {
     while let line = reader.ReadLine() {
         Console.WriteLine(line.Length)
@@ -111,10 +118,22 @@ func Drain(reader System.IO.TextReader) {
 }
 ```
 
-The binding's initializer must have a nullable type (`T?`). The else-block of
-`guard let` must end in `return`, `throw`, `break`, or `continue`. A
-`continue` inside `while let` re-evaluates the initializer; a `break` exits
-without another evaluation.
+The binding's initializer must have a nullable type (`T?`). In `if let`,
+bindings are evaluated left to right and stop at the first `nil`, so
+`let b = B(a)` may use an `a` bound to its left (already narrowed to its
+non-null type). A single top-level `&&` after the *last* binding of an
+`if let` starts an optional boolean guard that only runs once every binding
+matched. Because `&&` is also an ordinary operator, parenthesize one that
+belongs to an initializer:
+`if let ok = (a && b ? x : y) { … }`. Names bound by `if let` are visible in
+later initializers, in the guard, and in the then-branch only — never in the
+`else` branch.
+
+The else-block of `guard let` must end in `return`, `throw`, `break`, or
+`continue`. Bindings from `guard let` remain visible after the statement.
+Neither `guard let` nor `while let` accepts a `&&` guard. A `continue` inside
+`while let` re-evaluates the initializer; a `break` exits without another
+evaluation.
 
 ## `if let` as a value
 
@@ -144,9 +163,7 @@ func Combine(left string?, right string?) string {
 }
 ```
 
-Bindings are evaluated left to right and stop at the first `nil`, so `let b = B(a)` may use an `a` bound to its left (already narrowed to its non-null type). A single top-level `&&` after the *last* binding starts an optional boolean guard that only runs once every binding matched. Because `&&` is also an ordinary operator, parenthesize one that belongs to an initializer: `if let ok = (a && b) && ok { … } else { … }`.
-
-The bound names are visible in later initializers, in the guard, and in the then-branch only — never in the `else` branch. The same `GS0276` / `GS0277` / `GS0263` rules as the plain `if` expression apply, plus `GS0296` when an initializer is not nullable.
+The header works exactly like the statement form above: the same bindings, guard, evaluation order and scoping. The same `GS0276` / `GS0277` / `GS0263` rules as the plain `if` expression apply, plus `GS0296` when an initializer is not nullable.
 
 ## `??=` — null-coalescing compound assignment
 

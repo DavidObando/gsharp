@@ -1451,7 +1451,7 @@ internal partial class OverloadResolver {
         if fpVar != nil && fpSym != nil {
             // Issue #4943: a narrowed `(unmanaged[CC] () -> R)?` callee must be
             // unwrapped from its `Nullable<nint>` storage before `calli`.
-            let pointer = BuildCalleeLoad(fpVar, syntax.Identifier.Location, narrowedCallTargetType)
+            let pointer = BuildCalleeLoad(fpVar, syntax.Identifier, narrowedCallTargetType)
             return BindFunctionPointerInvocation(
                 syntax,
                 pointer,
@@ -1570,7 +1570,7 @@ internal partial class OverloadResolver {
             // Issue #2849: preserve the narrowed receiver type on every load
             // shape so emit can parent Invoke at the reified generic TypeSpec
             // instead of the nullable declaration's erased ClrType.
-            var receiver = BuildCalleeLoad(delegateVar, syntax.Identifier.Location, narrowedCallTargetType)
+            var receiver = BuildCalleeLoad(delegateVar, syntax.Identifier, narrowedCallTargetType)
             // Issue #2796 / #2798: a null-conditional raise `Evt?(args)` of a
             // CLR delegate-typed value — canonically a field-like event's
             // backing delegate, which PR #2792 (fix/2726) now emits as a

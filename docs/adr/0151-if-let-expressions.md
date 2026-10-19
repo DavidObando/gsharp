@@ -1,6 +1,9 @@
 # ADR-0151: `if let` expressions
 
-- **Status**: Accepted; amended by [ADR-0202](0202-one-rule-for-block-tails-and-arrow-bodies.md) (2026-10-17)
+- **Status**: Accepted; partly superseded by
+  [ADR-0201](0201-align-if-let-statement-and-expression.md) (semantics item 9
+  and the statement-form paragraph of "The `&&` delimiter rule"); amended by
+  [ADR-0202](0202-one-rule-for-block-tails-and-arrow-bodies.md) (2026-10-17)
 - **Date**: 2026-07-26
 - **Phase**: Phase 8 — language ergonomics / expression surface
 - **Related**: ADR-0064 (if-expression and block-with-trailing-expression), ADR-0071 (`if let` / `guard let` bindings), ADR-0069 (smart-cast flow narrowing), ADR-0115 (cs2gs canonical forms), ADR-0150 (source decomposition conventions)
@@ -110,6 +113,9 @@ if let first = GetFirst(), let second = GetSecond(first) && second.IsValid {
    `if let x = y { return … } else { return … }` keeps its meaning — the
    exiting branches have the `never` type — and one whose branches are void is
    the void if-let.
+   *Superseded by [ADR-0201](0201-align-if-let-statement-and-expression.md):
+   the statement form now shares this form's header (initializer rule, guard,
+   short circuit, progressive narrowing).*
 
 ### The `&&` delimiter rule
 
@@ -137,6 +143,11 @@ guard delimiter.
 The **statement** form keeps parsing initializers with the full expression
 grammar (`if let x = a && b { … }` still binds `a && b`); the statement form has
 no guard clause, so there is nothing to delimit.
+
+> *Superseded by [ADR-0201](0201-align-if-let-statement-and-expression.md):
+> every `let`-binding header now uses this delimiter rule, and the statement
+> form accepts the same guard. ADR-0201 also accepts a `?:` initializer whose
+> false arm follows the rule, in both forms.*
 
 ### Lowering
 

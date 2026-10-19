@@ -194,11 +194,12 @@ class IfLetStatement : GStatement {
     /// @param bindings The `let` binding clauses.
     /// @param then The then-branch block.
     /// @param elseBranch The optional else branch.
-    /// @remarks Unlike ADR-0151's value-position (cref:IfLetExpression), the
-    /// STATEMENT grammar has no `&& guard` clause — `gsc` swallows a
-    /// trailing `&& …` into the binding's initializer. A C# guard is
-    /// therefore nested inside the then-branch by the translator, and no guard is
-    /// representable here.
+    /// @remarks Issue #4961 / ADR-0201 gave the STATEMENT grammar the same
+    /// optional `&& guard` as ADR-0151's value-position
+    /// (cref:IfLetExpression), but cs2gs output must still compile with the
+    /// pinned previous release, which has no statement guard. A C# guard is
+    /// therefore nested inside the then-branch by the translator, and no guard
+    /// is representable here until a release with ADR-0201 is the pin.
     init(bindings IReadOnlyList[IfLetBinding], then BlockStatement, elseBranch GStatement? = nil) {
         Bindings = bindings
         Then = then
