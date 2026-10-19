@@ -4,11 +4,13 @@
 
 package GSharp.Core.CodeAnalysis.Lowering
 
+import BindingBinder = GSharp.Core.CodeAnalysis.Binding.Binder
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
@@ -273,10 +275,13 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         // the write at the element address (`ldelema`), so only the
         // side-effecting collection/index sub-expressions are spilled (see
         // SpillStorageReceiverParts), never the element value itself.
-        let spillReceiver = rewritten.Receiver != nil && SideEffectAnalyzer.HasObservableSideEffect(
-            rewritten.Receiver
-        ) &&
-            !IsInPlaceStorageWriteReceiver(rewritten.Receiver)
+        let spillReceiver = rewritten.Receiver != nil &&
+            !IsInPlaceStorageWriteReceiver(rewritten.Receiver) &&
+            (
+            SideEffectAnalyzer.HasObservableSideEffect(rewritten.Receiver) ||
+                BindingBinder.IsReferenceTypeForConstraint(rewritten.Receiver.Type) &&
+                SideEffectAnalyzer.HasObservableSideEffect(rewritten.Value)
+        )
         var value = rewritten.Value
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         var receiver = rewritten.Receiver
@@ -316,7 +321,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         } else if rewritten.Receiver != nil && IsInPlaceStorageWriteReceiver(rewritten.Receiver) {
             // Capture the chain's components, never its stored value, and
             // substitute the rebuilt receiver on both sides of a compound write.
-            receiver = this.SpillStorageReceiverParts(
+            receiver = this.CapturePropertyStorageReceiver(
                 Invariant.Required(
                     rewritten.Receiver,
                     "an element write has a receiver",
@@ -363,8 +368,14 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         // BoundClrPropertyAssignmentExpression), so both spill decisions are
         // nested under one null test rather than repeating it.
         let original BoundExpression? = rewritten.Receiver
-        let spillReceiver = original != nil && SideEffectAnalyzer.HasObservableSideEffect(original) &&
-            !IsInPlaceStorageWriteReceiver(original)
+        let spillReceiver = original != nil &&
+            !IsInPlaceStorageWriteReceiver(original) &&
+            (
+            SideEffectAnalyzer.HasObservableSideEffect(original) || BindingBinder.IsReferenceTypeForConstraint(
+                original.Type
+            ) &&
+                SideEffectAnalyzer.HasObservableSideEffect(rewritten.Value)
+        )
         var value = rewritten.Value
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         var receiver = original
@@ -376,7 +387,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         } else if original != nil && IsInPlaceStorageWriteReceiver(original) {
             // Once-only evaluation for the storage chain (see
             // RewritePropertyAssignmentExpression).
-            receiver = this.SpillStorageReceiverParts(original, statements)
+            receiver = this.CapturePropertyStorageReceiver(original, statements)
             if !object.ReferenceEquals(receiver, original) {
                 value = ReceiverSubstitutionRewriter.Replace(value, original, receiver)
             }
@@ -438,6 +449,19 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             rewritten.ResultType
         )
         return BoundBlockExpression(rewritten.Syntax, statements.ToImmutable(), assignment)
+    }
+
+    private func CapturePropertyStorageReceiver(
+        receiver BoundExpression,
+        statements ImmutableArray[BoundStatement].Builder
+    ) BoundExpression {
+        return CaptureRuntimeGenericStorageReceiver(
+            this.SpillStorageReceiverParts(receiver, statements),
+            receiver.Syntax,
+            statements,
+            (role string, isReadOnly bool, storageType TypeSymbol) ->
+            LocalVariableSymbol("$TempPrefix$role${this.counter++}", isReadOnly, storageType)
+        )
     }
 
     private func ProbeStorageReceiver(receiver BoundExpression?, statements ImmutableArray[BoundStatement].Builder) {
@@ -645,6 +669,59 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
     }
 
     shared {
+        internal func CaptureRuntimeGenericStorageReceiver(
+            storage BoundExpression,
+            anchor SyntaxNode?,
+            statements ImmutableArray[BoundStatement].Builder,
+            declareLocal(string, bool, TypeSymbol) -> LocalVariableSymbol
+        ) BoundExpression {
+            if storage.Type is not TypeParameterSymbol parameter ||
+                parameter.HasValueTypeConstraint ||
+                BindingBinder.IsReferenceTypeForConstraint(parameter) {
+                return storage
+            }
+            // Snapshot reference instantiations, but reconstruct value-type storage after the RHS.
+            let systemType = ImportedTypeSymbol.GetWithoutNullability(typeof(Type), NullabilityFreeReason.TypeLiteral)
+            let kind = declareLocal("Recv", true, TypeSymbol.Bool)
+            statements.Add(
+                BoundVariableDeclaration(
+                    anchor,
+                    kind,
+                    BoundClrPropertyAccessExpression(
+                        anchor,
+                        BoundTypeOfExpression(anchor, parameter, systemType),
+                        Invariant.Required(typeof(Type).GetProperty("IsValueType"), "System.Type exposes IsValueType"),
+                        TypeSymbol.Bool
+                    )
+                )
+            )
+            let isValueType = BoundVariableExpression(anchor, kind)
+            let snapshot = declareLocal("Generic", false, parameter)
+            statements.Add(
+                BoundVariableDeclaration(
+                    anchor,
+                    snapshot,
+                    BoundConditionalExpression(
+                        anchor,
+                        isValueType,
+                        BoundDefaultExpression(anchor, parameter),
+                        storage,
+                        parameter
+                    )
+                )
+            )
+            return BoundDereferenceExpression(
+                storage.Syntax,
+                BoundConditionalAddressExpression(
+                    anchor,
+                    isValueType,
+                    storage,
+                    BoundVariableExpression(anchor, snapshot),
+                    parameter
+                )
+            )
+        }
+
         private const TempPrefix string = "<>spill"
 
         /// Produces a copy of [`program`](paramref) with side-effecting

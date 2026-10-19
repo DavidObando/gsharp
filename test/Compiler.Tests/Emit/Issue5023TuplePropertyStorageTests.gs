@@ -7,6 +7,131 @@ open class Issue5023TuplePropertyStorageTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func ReadOnlyTupleBorrow_ObservesLaterArgumentMutation(symbolic bool) {
+        let source = `package Test
+import System
+struct Cell { var Stored int32 }
+func Read(in value TYPE, ignored int32) int32 -> RESULT
+func Run() {
+    var tuple = (FIRST, 0)
+    let ref readonly alias = tuple
+    Console.WriteLine(Read(alias.Item1, {
+        tuple = (SECOND, 0)
+        0
+    }))
+}
+Run()`.Replace(
+            "TYPE",
+            if symbolic {
+                "Cell"
+            } else {
+                "int32"
+            }
+        ).Replace(
+            "RESULT",
+            if symbolic {
+                "value.Stored"
+            } else {
+                "value"
+            }
+        ).Replace(
+            "FIRST",
+            if symbolic {
+                "Cell{Stored: 1}"
+            } else {
+                "1"
+            }
+        ).Replace(
+            "SECOND",
+            if symbolic {
+                "Cell{Stored: 2}"
+            } else {
+                "2"
+            }
+        )
+        Assert.Equal("2\n", CompileAndRun(source))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func PlainPropertyWrite_SelectsRuntimeReferenceBeforeRhs(suspending bool) {
+        let source = `package Test
+import System
+import System.Runtime.CompilerServices
+import System.Text
+import System.Threading.Tasks
+class Box : IStrongBox {
+    var Stored object?
+    prop Value object? {
+        get -> Stored
+        set { Stored = value }
+    }
+}
+struct Cell : IStrongBox {
+    var Stored object?
+    prop Value object? {
+        get -> Stored
+        set { Stored = value }
+    }
+}
+async func Fill[T IStrongBox](items [](T, int32), replacement T) {
+    ASSIGN
+}
+async func FillBox(original Box, replacement Box) {
+    var tuple = (original, 0)
+    tuple.Item1.Value = {
+        SUSPEND
+        tuple = (replacement, 0)
+        "v"
+    }
+}
+async func FillStaticClr(original StringBuilder, replacement StringBuilder) {
+    var tuple = (original, 0)
+    tuple.Item1.Length = {
+        SUSPEND
+        tuple = (replacement, 0)
+        1
+    }
+}
+let oldBox = Box{}
+let newBox = Box{}
+let boxes = [](Box, int32){(oldBox, 0)}
+Fill(boxes, newBox).GetAwaiter().GetResult()
+Console.WriteLine("${oldBox.Stored ?? "nil"} ${newBox.Stored ?? "nil"}")
+let cells = [](Cell, int32){(Cell{}, 0)}
+Fill(cells, Cell{}).GetAwaiter().GetResult()
+Console.WriteLine(cells[0].Item1.Stored ?? "nil")
+let oldClr = StrongBox[object?]()
+let newClr = StrongBox[object?]()
+let clr = [](StrongBox[object?], int32){(oldClr, 0)}
+Fill(clr, newClr).GetAwaiter().GetResult()
+Console.WriteLine("${oldClr.Value ?? "nil"} ${newClr.Value ?? "nil"}")
+let oldStatic = Box{}
+let newStatic = Box{}
+FillBox(oldStatic, newStatic).GetAwaiter().GetResult()
+Console.WriteLine("${oldStatic.Stored ?? "nil"} ${newStatic.Stored ?? "nil"}")
+let oldBuilder = StringBuilder()
+let newBuilder = StringBuilder()
+FillStaticClr(oldBuilder, newBuilder).GetAwaiter().GetResult()
+Console.WriteLine("${oldBuilder.Length} ${newBuilder.Length}")`.Replace("ASSIGN", `items[0].Item1.Value = {
+        SUSPEND
+        items[0] = (replacement, 0)
+        "v"
+    }`).Replace(
+            "SUSPEND",
+            if suspending {
+                "await Task.Yield()"
+            } else {
+                ""
+            }
+        )
+        Assert.Equal("v nil\nv\nv nil\nv nil\n1 0\n", CompileAndRun(source))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func TuplePropertyWrites_UpdateStoredElements(native bool) {
         let source = `package Test
 import System

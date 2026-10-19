@@ -1702,12 +1702,12 @@ internal partial class MethodBodyEmitter {
             this.EmitSymbolicTupleElementAccess(
                 access.TupleType,
                 access.Index,
-                () -> this.EmitInstanceReceiver(access.Receiver),
+                () -> this.EmitInstanceReceiver(access.Receiver, isReadOnlyCall: addressOnly),
                 addressOnly: addressOnly
             )
             return
         }
-        this.EmitInstanceReceiver(access.Receiver)
+        this.EmitInstanceReceiver(access.Receiver, isReadOnlyCall: addressOnly)
         var remainingIndex = access.Index
         while remainingIndex >= 7 {
             this.il.OpCode(ILOpCode.Ldflda)

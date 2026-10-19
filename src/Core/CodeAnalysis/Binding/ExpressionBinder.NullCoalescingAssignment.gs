@@ -821,53 +821,19 @@ internal partial class ExpressionBinder {
         forceCapture bool = false
     ) BoundExpression {
         let storage = CaptureStorageReceiverCore(anchor, receiver, preStatements, forceCapture)
-        if storage.Type is not TypeParameterSymbol parameter ||
-            parameter.HasValueTypeConstraint ||
-            ReceiverTypeIsReference(parameter) {
-            return storage
-        }
-        // An interface constraint permits both shapes. Snapshot references,
-        // but rebuild the original struct address after evaluating the RHS.
-        let systemType = ImportedTypeSymbol.GetWithoutNullability(typeof(Type), NullabilityFreeReason.TypeLiteral)
-        let isValueType = CaptureReceiver(
+        return SideEffectSpiller.CaptureRuntimeGenericStorageReceiver(
+            storage,
             anchor,
-            BoundClrPropertyAccessExpression(
-                anchor,
-                BoundTypeOfExpression(anchor, parameter, systemType),
-                Invariant.Required(typeof(Type).GetProperty("IsValueType"), "System.Type exposes IsValueType"),
-                TypeSymbol.Bool
-            ),
             preStatements,
-            forceCapture: true
-        )
-        let snapshot = LocalVariableSymbol(
-            "<ncaGeneric${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
-            isReadOnly: false,
-            parameter
-        )
-        $scope.TryDeclareVariable(snapshot)
-        preStatements.Add(
-            BoundVariableDeclaration(
-                anchor,
-                snapshot,
-                BoundConditionalExpression(
-                    anchor,
-                    isValueType,
-                    BoundDefaultExpression(anchor, parameter),
-                    storage,
-                    parameter
+            func (role string, isReadOnly bool, storageType TypeSymbol) LocalVariableSymbol {
+                let local = LocalVariableSymbol(
+                    "<nca$role${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
+                    isReadOnly,
+                    storageType
                 )
-            )
-        )
-        return BoundDereferenceExpression(
-            receiver.Syntax,
-            BoundConditionalAddressExpression(
-                anchor,
-                isValueType,
-                storage,
-                BoundVariableExpression(anchor, snapshot),
-                parameter
-            )
+                $scope.TryDeclareVariable(local)
+                return local
+            }
         )
     }
 
