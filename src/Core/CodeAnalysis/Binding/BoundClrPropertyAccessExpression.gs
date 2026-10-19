@@ -104,4 +104,25 @@ class BoundClrPropertyAccessExpression : BoundPropertyReferenceOperationExpressi
     override prop Instance BoundExpression? -> Receiver
 
     override prop Kind BoundNodeKind -> BoundNodeKind.ClrPropertyAccessExpression
+
+    shared {
+        /// Reports whether a CLR field chain is rooted at an addressable submission global.
+        /// Retained for public API compatibility; lowering separately captures unstable
+        /// components before reconstructing storage.
+        /// @param expression The candidate receiver expression.
+        /// @returns `true` for a submission field chain.
+        func IsAddressableSubmissionFieldChain(expression BoundExpression) bool {
+            var expression = expression
+            while expression is BoundClrPropertyAccessExpression access {
+                if access.Receiver == nil {
+                    return access.IsAddressableStaticField
+                }
+                if !(access.Member is FieldInfo) {
+                    return false
+                }
+                expression = access.Receiver
+            }
+            return false
+        }
+    }
 }

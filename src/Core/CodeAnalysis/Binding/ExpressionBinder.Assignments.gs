@@ -515,11 +515,15 @@ internal partial class ExpressionBinder {
             }
             return !ReceiverBlocksValueTypeMemberWrite(receiver)
         }
-        // Issue #3185: a prior-cell submission global (or a value-type CLR
-        // field chain rooted at one) is writable storage exactly when the
-        // chain is addressable and its root is not a read-only global.
-        if receiver is BoundClrPropertyAccessExpression submissionReceiver {
-            return ClassifySubmissionGlobalWriteReceiver(submissionReceiver) == SubmissionWriteReceiverKind.Addressable
+        if receiver is BoundClrPropertyAccessExpression access {
+            if access.Member is not FieldInfo field ||
+                field.IsInitOnly ||
+                access.IsReadOnlySubmissionGlobal ||
+                !RefCapabilities.IsDirectlyAddressableForImplicitIn(access) {
+                return false
+            }
+            let owner = access.Receiver
+            return owner == nil || ReceiverTypeIsReference(owner.Type) || IsWritableStructFieldReceiver(owner)
         }
         if receiver is BoundDereferenceExpression dereference {
             return (

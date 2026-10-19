@@ -4706,19 +4706,7 @@ internal class ReflectionMetadataEmitter {
         /// captured into a local. Share this decision with receiver emission so
         /// neither path replaces a stored struct with a spilled copy.
         internal func IsAddressableClrFieldChain(access BoundClrPropertyAccessExpression) bool {
-            if access.Member is not FieldInfo {
-                return false
-            }
-            if access.Receiver == nil {
-                return access.IsAddressableStaticField
-            }
-            if !IsValueTypeSymbol(access.Receiver.Type) && access.Receiver.Type is not TypeParameterSymbol {
-                return true
-            }
-            if access.Receiver is BoundIndexExpression element {
-                return element.IsArrayBackedElementAccess
-            }
-            return access.Receiver is BoundClrPropertyAccessExpression inner && IsAddressableClrFieldChain(inner)
+            return access.Member is FieldInfo && RefCapabilities.IsDirectlyAddressableForImplicitIn(access)
         }
 
         private const ModuleInitializerAttributeName string = "System.Runtime.CompilerServices.ModuleInitializerAttribute"

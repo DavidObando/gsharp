@@ -20,6 +20,138 @@ import Xunit
 /// when the target is nil.
 open class Issue4967NullCoalescingAssignmentExpressionEmitTests {
     @Theory
+    @InlineData(false, 0)
+    @InlineData(true, 0)
+    @InlineData(false, 1)
+    @InlineData(true, 1)
+    @InlineData(false, 2)
+    @InlineData(true, 2)
+    @InlineData(false, 3)
+    @InlineData(true, 3)
+    func ClrFieldChain_SupportsBothNullCoalescingAssignmentPositions(valuePosition bool, receiverKind int32) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`using System.Collections;
+namespace FieldStorage4980;
+public struct Carrier {
+    public DictionaryEntry Item;
+    public Carrier(DictionaryEntry item) { Item = item; }
+}`, "FieldStorage4980")
+        let source = `package Test
+import System
+import System.Collections
+import System.Runtime.CompilerServices
+import FieldStorage4980
+SETUP
+ASSIGN
+Console.WriteLine(RECEIVER.Value)`.Replace(
+            "SETUP",
+            switch receiverKind {
+                case 0: `var box = StrongBox[DictionaryEntry](DictionaryEntry("key", nil))`
+                case 1: `var carrier = Carrier(DictionaryEntry("key", nil))`
+                case 2: `var carriers = []Carrier{
+    Carrier(DictionaryEntry("key", nil))
+}`
+                default: `struct Holder { var Carrier Carrier }
+var holder = Holder{}
+holder.Carrier = Carrier(DictionaryEntry("key", nil))`
+            }
+        ).Replace(
+            "ASSIGN",
+            if valuePosition {
+                `Console.WriteLine(RECEIVER.Value ??= "v")`
+            } else {
+                `RECEIVER.Value ??= "v"
+Console.WriteLine(RECEIVER.Value)`
+            }
+        ).Replace(
+            "RECEIVER",
+            switch receiverKind {
+                case 0: "box.Value"
+                case 1: "carrier.Item"
+                case 2: "carriers[0].Item"
+                default: "holder.Carrier.Item"
+            }
+        )
+        let executable = fixture.Compile(source, "FieldStorageConsumer4980", true, "/r:" + contract)
+        IlVerifier.Verify(contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal("v\nv\n", fixture.Run(executable))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ClrFieldPropertyAssignment_ValidatesStorageBeforeRhs(staticField bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`#nullable enable
+using System;
+namespace StorageOrder4980;
+public struct Cell { public int P { get; set; } }
+public sealed class Owner { public Cell Cell; }
+public static class Factory { public static Owner Missing = null!; }
+public static class State {
+    public static Cell Cell;
+    static State() { Console.Write("init "); }
+}`, "StorageOrder4980")
+        let source = `package Consumer
+import System
+import StorageOrder4980
+func Rhs() int32 {
+    Console.Write("rhs ")
+    return 1
+}
+ASSIGN`.Replace(
+            "ASSIGN",
+            if staticField {
+                `State.Cell.P = Rhs()
+Console.WriteLine(State.Cell.P)`
+            } else {
+                `try {
+    Factory.Missing.Cell.P = Rhs()
+} catch (ex NullReferenceException) {
+    Console.WriteLine("null")
+}`
+            }
+        )
+        let executable = fixture.Compile(source, "StorageOrderConsumer4980", true, "/r:" + contract)
+        IlVerifier.Verify(contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal(
+            if staticField {
+                "init rhs 1\n"
+            } else {
+                "null\n"
+            },
+            fixture.Run(executable)
+        )
+    }
+
+    @Theory
+    @InlineData("owner.ReadOnly", "GS0127")
+    @InlineData("Owner.StaticReadOnly", "GS0127")
+    @InlineData("owner.Copy", "GS0499")
+    @InlineData("frozen.Cell", "GS0127")
+    func ClrFieldChain_ReadOnlyAndComputedStorage_RemainRejected(receiver string, expectedDiagnostic string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`#nullable enable
+namespace ReadOnlyStorage4980;
+public struct Cell { public object? Value { get; set; } }
+public struct Carrier { public Cell Cell; }
+public sealed class Owner {
+    public readonly Cell ReadOnly;
+    public static readonly Cell StaticReadOnly;
+    public Cell Copy => default;
+}`, "ReadOnlyStorage4980")
+        let (code, output) = fixture.TryCompile(`package Consumer
+import ReadOnlyStorage4980
+var owner = Owner()
+let frozen = Carrier()
+RECEIVER.Value ??= "v"`.Replace("RECEIVER", receiver), "ReadOnlyStorageConsumer4980", true, "/r:" + contract)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains(expectedDiagnostic, StringComparison.Ordinal), output)
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func ConditionalStorageProperty_ChecksAddressBeforeSimpleAssignmentRhs(selectFirst bool) {

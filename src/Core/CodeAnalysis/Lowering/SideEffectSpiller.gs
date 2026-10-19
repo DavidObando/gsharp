@@ -329,6 +329,9 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             }
         }
         let spillValue = SideEffectAnalyzer.HasObservableSideEffect(value)
+        if spillValue && !spillReceiver {
+            this.ProbeStorageReceiver(receiver, statements)
+        }
         if !spillReceiver && !spillValue && object.ReferenceEquals(receiver, rewritten.Receiver) {
             return rewritten
         }
@@ -379,6 +382,9 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             }
         }
         let spillValue = SideEffectAnalyzer.HasObservableSideEffect(value)
+        if spillValue && !spillReceiver {
+            this.ProbeStorageReceiver(receiver, statements)
+        }
         if !spillReceiver && !spillValue && object.ReferenceEquals(receiver, rewritten.Receiver) {
             return rewritten
         }
@@ -434,6 +440,12 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         return BoundBlockExpression(rewritten.Syntax, statements.ToImmutable(), assignment)
     }
 
+    private func ProbeStorageReceiver(receiver BoundExpression?, statements ImmutableArray[BoundStatement].Builder) {
+        if receiver != nil && receiver is not BoundVariableExpression && IsInPlaceStorageWriteReceiver(receiver) {
+            statements.Add(BoundExpressionStatement(nil, BoundAddressOfExpression(nil, receiver)))
+        }
+    }
+
     /// Rewrites an addressable receiver chain (see
     /// (cref:IsInPlaceStorageWriteReceiver)), hoisting each unstable reference
     /// owner or side-effecting collection/index sub-expression into a fresh temp
@@ -483,7 +495,6 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     whenFalse,
                     address.PointeeType
                 )
-                statements.Add(BoundExpressionStatement(nil, captured))
                 return BoundDereferenceExpression(dereference.Syntax, captured)
             }
             case element is BoundIndexExpression {

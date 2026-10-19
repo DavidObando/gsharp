@@ -251,6 +251,10 @@ selector once and capture components only on the selected branch, not an address
 Probe the reconstructed address before evaluating a simple assignment's right side.
 A read-only reference owner does not stabilize mutable
 reference-valued fields along the path: capture those owners separately.
+CLR field storage is writable in compiled programs as well as REPL submissions,
+subject to readonly-field, readonly-root and struct-temporary checks. Before
+spilling a property assignment's right side, probe reconstructed field storage
+so null-owner checks and static initialization still occur first.
 Constrained member emission takes an addressable receiver's original address,
 including array elements with an explicit `struct` constraint.
 In value position a reference-type variable is snapshotted too. Statement
@@ -269,6 +273,8 @@ A smart-cast struct receiver stored in an object or interface slot is
 rejected with `GS0499`, including a narrowed field inside a constructor.
 Its unboxed address has controlled mutability and cannot serve as writable
 struct storage.
+Tuple-element struct receivers remain rejected with `GS0499`; their distinct
+storage-node support is tracked separately in #5023.
 
 Before capturing indexer arguments, evaluate and discard the storage receiver's
 address. Null and array-bounds checks therefore precede argument side effects,
