@@ -4681,6 +4681,12 @@ type Ambiguous struct{ Left; Right }
 type Generic[T any] struct{}
 func (Generic[T]) GenericMethod() {}
 `,
+		"a/ghost.go": `//go:build never
+
+package a
+type Ghost struct{}
+func (Ghost) G() {}
+`,
 		"b/b.go": `package b
 import "example.com/membership/a"
 type B struct{}
@@ -4836,15 +4842,86 @@ type Locked struct{ sync.Mutex }
 	if err := validateAnalysis(analysis); err != nil {
 		t.Fatalf("imported authority artifact was rejected: %v", err)
 	}
-	for _, pkg := range analysis.Packages {
-		if pkg.ImportPath == "sync" {
-			if len(pkg.MethodAuthorityFileIDs) == 0 {
-				t.Fatal("relevant imported package has no captured method-authority source")
+	syncPackageIndex := slices.IndexFunc(analysis.Packages, func(value PackageRecord) bool {
+		return value.ImportPath == "sync"
+	})
+	if syncPackageIndex < 0 {
+		t.Fatal("sync package record is missing")
+	}
+	syncPackage := analysis.Packages[syncPackageIndex]
+	if len(syncPackage.MethodAuthorityFileIDs) == 0 {
+		t.Fatal("relevant imported package has no captured method-authority source")
+	}
+	authorityFileIndex := slices.IndexFunc(analysis.Files, func(value FileRecord) bool {
+		return value.ID == syncPackage.MethodAuthorityFileIDs[0]
+	})
+	if authorityFileIndex < 0 {
+		t.Fatal("sync authority file is missing")
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*Analysis)
+	}{
+		{"role", func(value *Analysis) { value.Files[authorityFileIndex].Role = "active" }},
+		{"reason", func(value *Analysis) { value.Files[authorityFileIndex].Reason += " stale" }},
+		{"provenance", func(value *Analysis) { value.Files[authorityFileIndex].Provenance = "go/packages" }},
+		{"path", func(value *Analysis) { value.Files[authorityFileIndex].Path += ".stale" }},
+		{"content", func(value *Analysis) { value.Files[authorityFileIndex].ContentBase64 += "AA==" }},
+		{"hash", func(value *Analysis) { value.Files[authorityFileIndex].SHA256 = strings.Repeat("0", 64) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := cloneAnalysis(t, analysis)
+			test.mutate(&mutated)
+			if err := validateAnalysis(mutated); err == nil {
+				t.Fatalf("authority %s mutation was accepted", test.name)
 			}
-			return
+		})
+	}
+	t.Run("closure-omission", func(t *testing.T) {
+		mutated := cloneAnalysis(t, analysis)
+		mutated.Packages[syncPackageIndex].MethodAuthorityFileIDs =
+			mutated.Packages[syncPackageIndex].MethodAuthorityFileIDs[1:]
+		if err := validateAnalysis(mutated); err == nil {
+			t.Fatal("imported authority closure omission was accepted")
+		}
+	})
+}
+
+func TestMethodAuthorityPlanRejectsCapturedImportCycle(t *testing.T) {
+	analysis := cloneAnalysis(t, methodSetAuthorityFixture(t))
+	packages, _, ownerIndexes, _ := methodSetFixtureIndexes(t, analysis)
+	ownerA := analysis.Symbols[ownerIndexes["example.com/membership/a.A"]]
+	ownerB := analysis.Symbols[ownerIndexes["example.com/membership/b.B"]]
+	for index := range analysis.Packages {
+		if analysis.Packages[index].ID == ownerA.PackageID {
+			analysis.Packages[index].ImportPackageIDs =
+				append(analysis.Packages[index].ImportPackageIDs, ownerB.PackageID)
+			sort.Strings(analysis.Packages[index].ImportPackageIDs)
 		}
 	}
-	t.Fatal("sync package record is missing")
+	for index := range analysis.Files {
+		file := &analysis.Files[index]
+		if file.PackageID != ownerA.PackageID || !strings.HasSuffix(file.Path, "/a.go") {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(file.ContentBase64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = bytes.Replace(data, []byte("package a\n"), []byte(
+			"package a\nimport \"example.com/membership/b\"\ntype Cycle b.B\n"), 1)
+		file.ContentBase64 = base64.StdEncoding.EncodeToString(data)
+		break
+	}
+	files := map[string]FileRecord{}
+	for _, file := range analysis.Files {
+		files[file.ID] = file
+	}
+	if _, err := deriveMethodAuthorityPlan(analysis, files); err == nil ||
+		!strings.Contains(err.Error(), "import cycle") {
+		t.Fatalf("captured method-authority import cycle was accepted: %v; packages=%v",
+			err, packages)
+	}
 }
 
 func rebindMethodSet(
@@ -4889,7 +4966,7 @@ func assertMethodAuthorityError(t *testing.T, analysis Analysis, contains string
 
 func TestMethodSetAuthorityRejectsCoordinatedMutations(t *testing.T) {
 	baseline := methodSetAuthorityFixture(t)
-	_, baselineSymbols, ownerIndexes, setIndexes := methodSetFixtureIndexes(t, baseline)
+	packages, baselineSymbols, ownerIndexes, setIndexes := methodSetFixtureIndexes(t, baseline)
 	owner := func(name string) SymbolRecord {
 		t.Helper()
 		index, ok := ownerIndexes[name]
@@ -4922,6 +4999,142 @@ func TestMethodSetAuthorityRejectsCoordinatedMutations(t *testing.T) {
 		sort.Slice(mutated.MethodSets, func(i, j int) bool { return mutated.MethodSets[i].ID < mutated.MethodSets[j].ID })
 		assertMethodAuthorityError(t, mutated, "membership differs from re-type-checked captured source")
 	})
+
+	t.Run("owner-flag-cleared-with-complete-artifact-deletion", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		ownerA := owner("example.com/membership/a.A")
+		membershipIDs := map[string]bool{}
+		removedSets := 0
+		for _, methodSet := range mutated.MethodSets {
+			if methodSet.OwnerSymbolID != ownerA.ID {
+				continue
+			}
+			removedSets++
+			for _, methodID := range methodSet.MethodSymbolIDs {
+				membershipIDs[methodID] = true
+			}
+		}
+		for index := range mutated.Symbols {
+			if mutated.Symbols[index].ID == ownerA.ID {
+				mutated.Symbols[index].MethodSetOwner = false
+			}
+		}
+		mutated.MethodSets = slices.DeleteFunc(mutated.MethodSets, func(value MethodSetRecord) bool {
+			return value.OwnerSymbolID == ownerA.ID
+		})
+		mutated.Symbols = slices.DeleteFunc(mutated.Symbols, func(value SymbolRecord) bool {
+			return membershipIDs[value.ID]
+		})
+		mutated.RecordCounts.MethodSets -= removedSets
+		mutated.RecordCounts.Symbols -= len(membershipIDs)
+		mutated.RecordCounts.Total -= removedSets + len(membershipIDs)
+		assertMethodAuthorityError(t, mutated, "ineligible serialized owner")
+	})
+
+	t.Run("compiled-source-omitted-from-authority-closure", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		packageID := owner("example.com/membership/a.A").PackageID
+		for packageIndex := range mutated.Packages {
+			pkg := &mutated.Packages[packageIndex]
+			if pkg.ID != packageID {
+				continue
+			}
+			for fileIndex, fileID := range pkg.MethodAuthorityFileIDs {
+				file := baseline.Files[slices.IndexFunc(baseline.Files, func(value FileRecord) bool {
+					return value.ID == fileID
+				})]
+				if strings.HasSuffix(file.Path, "/a.go") {
+					pkg.MethodAuthorityFileIDs = slices.Delete(
+						pkg.MethodAuthorityFileIDs, fileIndex, fileIndex+1)
+					assertMethodAuthorityError(t, mutated, "compiled-source closure")
+					return
+				}
+			}
+		}
+		t.Fatal("fixture compiled source a/a.go is missing")
+	})
+
+	t.Run("build-ignored-source-promoted-to-authority", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		packageID := owner("example.com/membership/a.A").PackageID
+		ghostID := ""
+		for index := range mutated.Files {
+			file := &mutated.Files[index]
+			if file.PackageID == packageID && strings.HasSuffix(file.Path, "/ghost.go") {
+				if file.Role != "ignored" {
+					t.Fatalf("ghost source role = %q, want ignored", file.Role)
+				}
+				file.Role = "method-authority"
+				file.Reason = "captured compiled Go source required to independently derive method sets"
+				file.Provenance = "go/packages-typed-source"
+				ghostID = file.ID
+				break
+			}
+		}
+		if ghostID == "" {
+			t.Fatal("fixture build-ignored ghost source is missing")
+		}
+		for index := range mutated.Packages {
+			if mutated.Packages[index].ID == packageID {
+				mutated.Packages[index].MethodAuthorityFileIDs =
+					append(mutated.Packages[index].MethodAuthorityFileIDs, ghostID)
+				sort.Strings(mutated.Packages[index].MethodAuthorityFileIDs)
+				assertMethodAuthorityError(t, mutated, "compiled-source closure")
+				return
+			}
+		}
+		t.Fatal("fixture package a is missing")
+	})
+
+	t.Run("owner-source-mapping-missing", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		ownerA := owner("example.com/membership/a.A")
+		for index := range mutated.Symbols {
+			if mutated.Symbols[index].ID == ownerA.ID {
+				mutated.Symbols[index].Declaration = nil
+				assertMethodAuthorityError(t, mutated, "maps to 0 serialized symbols")
+				return
+			}
+		}
+		t.Fatal("fixture owner A is missing")
+	})
+
+	t.Run("owner-source-mapping-duplicated", func(t *testing.T) {
+		mutated := cloneAnalysis(t, baseline)
+		duplicate := owner("example.com/membership/a.A")
+		duplicate.ID = stableID("symbol", "duplicate-method-set-owner")
+		duplicate.MethodSetOwner = false
+		mutated.Symbols = append(mutated.Symbols, duplicate)
+		mutated.RecordCounts.Symbols++
+		mutated.RecordCounts.Total++
+		sort.Slice(mutated.Symbols, func(i, j int) bool { return mutated.Symbols[i].ID < mutated.Symbols[j].ID })
+		assertMethodAuthorityError(t, mutated, "maps to 2 serialized symbols")
+	})
+
+	for _, test := range []struct {
+		name     string
+		mutate   func(*SymbolRecord)
+		contains string
+	}{
+		{"owner-scope-flag", func(value *SymbolRecord) { value.PackageScopeType = false }, "eligibility"},
+		{"owner-kind", func(value *SymbolRecord) { value.Kind = "variable" }, "package-scope type provenance"},
+		{"owner-package", func(value *SymbolRecord) {
+			value.PackageID = packages[owner("example.com/membership/b.B").PackageID].ID
+		}, "does not belong to package"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := cloneAnalysis(t, baseline)
+			ownerA := owner("example.com/membership/a.A")
+			for index := range mutated.Symbols {
+				if mutated.Symbols[index].ID == ownerA.ID {
+					test.mutate(&mutated.Symbols[index])
+					assertMethodAuthorityError(t, mutated, test.contains)
+					return
+				}
+			}
+			t.Fatal("fixture owner A is missing")
+		})
+	}
 
 	t.Run("coordinated-membership-and-symbol-deletion", func(t *testing.T) {
 		mutated := cloneAnalysis(t, baseline)
@@ -5007,7 +5220,7 @@ func TestMethodSetAuthorityRejectsCoordinatedMutations(t *testing.T) {
 		mutated.RecordCounts.Total -= 1 + len(replacedMemberships)
 		sort.Slice(mutated.Symbols, func(i, j int) bool { return mutated.Symbols[i].ID < mutated.Symbols[j].ID })
 		sort.Slice(mutated.MethodSets, func(i, j int) bool { return mutated.MethodSets[i].ID < mutated.MethodSets[j].ID })
-		assertMethodAuthorityError(t, mutated, "membership differs from re-type-checked captured source")
+		assertMethodAuthorityError(t, mutated, "requires complete value and pointer method sets")
 	})
 
 	t.Run("empty-set-owner-type-relation", func(t *testing.T) {

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"io"
 	pathpkg "path"
 	"path/filepath"
 	"slices"
@@ -1245,6 +1247,329 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 	return nil
 }
 
+type methodAuthorityPlan struct {
+	rootPackages    map[string]bool
+	closurePackages map[string]bool
+	selectedFiles   map[string][]string
+}
+
+func deriveMethodAuthorityPlan(
+	a Analysis,
+	files map[string]FileRecord,
+) (methodAuthorityPlan, error) {
+	result := methodAuthorityPlan{
+		rootPackages:    map[string]bool{},
+		closurePackages: map[string]bool{},
+		selectedFiles:   map[string][]string{},
+	}
+	modules := make(map[string]ModuleRecord, len(a.Modules))
+	for _, module := range a.Modules {
+		modules[module.ID] = module
+	}
+	packageRecords := make(map[string]PackageRecord, len(a.Packages))
+	for _, record := range a.Packages {
+		packageRecords[record.ID] = record
+		if methodAuthorityRootPackage(record, modules) {
+			result.rootPackages[record.ID] = true
+		}
+		selected, err := independentlySelectedGoFiles(a, record, files)
+		if err != nil {
+			return result, err
+		}
+		result.selectedFiles[record.ID] = selected
+	}
+
+	state := map[string]uint8{}
+	var visit func(string) error
+	visit = func(packageID string) error {
+		switch state[packageID] {
+		case 1:
+			return fmt.Errorf("method-authority source closure contains an import cycle at package %q", packageID)
+		case 2:
+			return nil
+		}
+		record, ok := packageRecords[packageID]
+		if !ok {
+			return fmt.Errorf("method-authority source closure references unknown package %q", packageID)
+		}
+		state[packageID] = 1
+		result.closurePackages[packageID] = true
+		imports, err := capturedMethodAuthorityImports(
+			record, result.selectedFiles[packageID], files, packageRecords)
+		if err != nil {
+			return err
+		}
+		for _, importedID := range imports {
+			if err := visit(importedID); err != nil {
+				return err
+			}
+		}
+		state[packageID] = 2
+		return nil
+	}
+	var roots []string
+	for packageID := range result.rootPackages {
+		roots = append(roots, packageID)
+	}
+	sort.Strings(roots)
+	for _, packageID := range roots {
+		if err := visit(packageID); err != nil {
+			return result, err
+		}
+	}
+
+	for _, record := range a.Packages {
+		expectedAuthority := []string{}
+		if result.closurePackages[record.ID] {
+			expectedAuthority = append(expectedAuthority, result.selectedFiles[record.ID]...)
+		}
+		sort.Strings(expectedAuthority)
+		actualAuthority := append([]string{}, record.MethodAuthorityFileIDs...)
+		sort.Strings(actualAuthority)
+		if !slices.Equal(actualAuthority, expectedAuthority) {
+			return result, fmt.Errorf(
+				"package %q methodAuthorityFileIds differ from independently derived compiled-source closure: expected %q, got %q",
+				record.ID, expectedAuthority, actualAuthority)
+		}
+
+		expectedCompiled := []string{}
+		if result.rootPackages[record.ID] {
+			expectedCompiled = append(expectedCompiled, result.selectedFiles[record.ID]...)
+		}
+		sort.Strings(expectedCompiled)
+		actualCompiled := append([]string{}, record.CompiledFileIDs...)
+		sort.Strings(actualCompiled)
+		if !slices.Equal(actualCompiled, expectedCompiled) {
+			return result, fmt.Errorf(
+				"package %q compiledFileIds differ from independently selected captured source: expected %q, got %q",
+				record.ID, expectedCompiled, actualCompiled)
+		}
+
+		for _, fileID := range expectedAuthority {
+			file := files[fileID]
+			role, reason, provenance := "method-authority",
+				"captured compiled Go source required to independently derive method sets",
+				"go/packages-typed-source"
+			if result.rootPackages[record.ID] {
+				role, reason, provenance = "compiled", "", "go/packages"
+				if strings.HasSuffix(pathpkg.Base(file.Path), "_test.go") {
+					reason = "selected test source compiled for this package variant"
+				}
+			}
+			if file.Role != role || file.Reason != reason || file.Provenance != provenance {
+				return result, fmt.Errorf(
+					"method-authority file %q metadata differs from independently derived source role: role=%q reason=%q provenance=%q",
+					file.ID, file.Role, file.Reason, file.Provenance)
+			}
+		}
+	}
+	return result, nil
+}
+
+func methodAuthorityRootPackage(record PackageRecord, modules map[string]ModuleRecord) bool {
+	module, ok := modules[record.ModuleID]
+	if !ok {
+		return false
+	}
+	if module.Main || module.LocalContentSHA256 != "" {
+		return true
+	}
+	replacement, ok := modules[module.ReplacementID]
+	return ok && replacement.LocalContentSHA256 != ""
+}
+
+func independentlySelectedGoFiles(
+	a Analysis,
+	record PackageRecord,
+	files map[string]FileRecord,
+) ([]string, error) {
+	var result []string
+	for _, fileID := range record.FileIDs {
+		file := files[fileID]
+		if pathpkg.Ext(file.Path) != ".go" {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(file.ContentBase64)
+		if err != nil {
+			return nil, fmt.Errorf("cannot classify captured Go source file %q", file.ID)
+		}
+		selected, err := capturedGoFileSelected(a, record, file.Path, data)
+		if err != nil {
+			return nil, fmt.Errorf("classify captured Go source file %q: %w", file.ID, err)
+		}
+		if selected {
+			result = append(result, file.ID)
+		}
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func capturedGoFileSelected(
+	a Analysis,
+	record PackageRecord,
+	path string,
+	data []byte,
+) (bool, error) {
+	profile := Profile{
+		RequestedGoVersion:   strings.TrimPrefix(a.Toolchain.RequestedVersion, "go"),
+		GOOS:                 a.Profile.GOOS,
+		GOARCH:               a.Profile.GOARCH,
+		ArchitectureFeatures: append([]string{}, a.Profile.ArchitectureFeatures...),
+		BuildTags:            append([]string{}, a.Profile.BuildTags...),
+		CGOEnabled:           a.Profile.CGOEnabled,
+	}
+	context := profileBuildContext(profile)
+	context.CgoEnabled = profile.CGOEnabled
+	context.OpenFile = func(string) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(data)), nil
+	}
+	matched, err := context.MatchFile("captured", pathpkg.Base(path))
+	if err != nil || !matched {
+		return false, err
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), path, data, parser.PackageClauseOnly)
+	if err != nil || file.Name.Name != record.Name {
+		return false, err
+	}
+	testFile := strings.HasSuffix(pathpkg.Base(path), "_test.go")
+	switch record.Variant {
+	case "ordinary":
+		return !testFile, nil
+	case "in-package-test":
+		return true, nil
+	case "external-test":
+		return testFile, nil
+	case "synthetic-test-main":
+		return false, nil
+	default:
+		return false, fmt.Errorf("unsupported package variant %q", record.Variant)
+	}
+}
+
+func capturedMethodAuthorityImports(
+	record PackageRecord,
+	fileIDs []string,
+	files map[string]FileRecord,
+	packages map[string]PackageRecord,
+) ([]string, error) {
+	importsByPath := map[string]string{}
+	for _, importedID := range record.ImportPackageIDs {
+		imported, ok := packages[importedID]
+		if !ok {
+			return nil, fmt.Errorf("package %q method-authority closure has unknown import %q",
+				record.ID, importedID)
+		}
+		if existing := importsByPath[imported.ImportPath]; existing != "" && existing != importedID {
+			return nil, fmt.Errorf("package %q method-authority closure has ambiguous import path %q",
+				record.ID, imported.ImportPath)
+		}
+		importsByPath[imported.ImportPath] = importedID
+	}
+	selected := map[string]bool{}
+	for _, fileID := range fileIDs {
+		file := files[fileID]
+		data, err := base64.StdEncoding.DecodeString(file.ContentBase64)
+		if err != nil {
+			return nil, fmt.Errorf("cannot decode method-authority source file %q", file.ID)
+		}
+		parsed, err := parser.ParseFile(
+			token.NewFileSet(), file.Path, data, parser.SkipObjectResolution|parser.AllErrors)
+		if err != nil {
+			return nil, fmt.Errorf("cannot parse method-authority source file %q: %w", file.ID, err)
+		}
+		aliases := map[string]string{}
+		var dotImports []string
+		for _, specification := range parsed.Imports {
+			importPath, err := strconv.Unquote(specification.Path.Value)
+			if err != nil || importPath == "unsafe" {
+				continue
+			}
+			importedID := importsByPath[importPath]
+			name := ""
+			if specification.Name != nil {
+				name = specification.Name.Name
+			}
+			switch name {
+			case "_":
+				continue
+			case ".":
+				dotImports = append(dotImports, importedID)
+			case "":
+				if importedID != "" {
+					aliases[packages[importedID].Name] = importedID
+				}
+			default:
+				aliases[name] = importedID
+			}
+		}
+		inspect := func(node ast.Node) error {
+			var missing string
+			ast.Inspect(node, func(candidate ast.Node) bool {
+				selector, ok := candidate.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				identifier, ok := selector.X.(*ast.Ident)
+				if !ok {
+					return true
+				}
+				if importedID, exists := aliases[identifier.Name]; exists {
+					if importedID == "" {
+						missing = identifier.Name
+					} else {
+						selected[importedID] = true
+					}
+				}
+				return true
+			})
+			if missing != "" {
+				return fmt.Errorf("package %q method-authority source uses unavailable import alias %q",
+					record.ID, missing)
+			}
+			for _, importedID := range dotImports {
+				if importedID == "" {
+					return fmt.Errorf("package %q method-authority source uses unavailable dot import", record.ID)
+				}
+				selected[importedID] = true
+			}
+			return nil
+		}
+		for _, declaration := range parsed.Decls {
+			switch value := declaration.(type) {
+			case *ast.GenDecl:
+				if value.Tok == token.TYPE || value.Tok == token.CONST {
+					if err := inspect(value); err != nil {
+						return nil, err
+					}
+				}
+			case *ast.FuncDecl:
+				if value.Recv != nil {
+					if err := inspect(value.Recv); err != nil {
+						return nil, err
+					}
+					if err := inspect(value.Type); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+	}
+	result := make([]string, 0, len(selected))
+	for packageID := range selected {
+		result = append(result, packageID)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+type retypedRootType struct {
+	packageID string
+	name      string
+	symbolID  string
+	typeName  *types.TypeName
+}
+
 type retypedMethodAuthority struct {
 	packages         map[string]*packages.Package
 	typeBySymbol     map[string]*types.TypeName
@@ -1252,6 +1577,7 @@ type retypedMethodAuthority struct {
 	symbolByType     map[*types.TypeName]string
 	declarationOwner map[*types.Func]*types.TypeName
 	declarationIndex map[*types.Func]int
+	rootTypes        []retypedRootType
 }
 
 func validateRetypedMethodSets(
@@ -1259,6 +1585,11 @@ func validateRetypedMethodSets(
 	files map[string]FileRecord,
 	symbols map[string]SymbolRecord,
 ) error {
+	if !a.InventoryComplete || !slices.ContainsFunc(a.Modules, func(value ModuleRecord) bool {
+		return value.Main
+	}) {
+		return nil
+	}
 	authority, err := retypeMethodAuthority(a, files, symbols)
 	if err != nil {
 		return err
@@ -1275,20 +1606,18 @@ func validateRetypedMethodSets(
 		}
 		sets[record.OwnerSymbolID][record.Pointer] = record
 	}
-	for _, symbol := range a.Symbols {
-		if !symbol.MethodSetOwner {
-			continue
-		}
-		typeName := authority.typeBySymbol[symbol.ID]
-		if typeName == nil {
-			return fmt.Errorf("method-set owner symbol %q is absent from re-type-checked source", symbol.ID)
-		}
+	eligibleOwners := make(map[string]bool, len(authority.rootTypes))
+	for _, rootType := range authority.rootTypes {
+		eligibleOwners[rootType.symbolID] = true
 		for _, pointer := range []bool{false, true} {
-			record := sets[symbol.ID][pointer]
+			record := sets[rootType.symbolID][pointer]
 			if record.ID == "" {
-				return fmt.Errorf("package-scope type symbol %q requires complete value and pointer method sets", symbol.ID)
+				return fmt.Errorf(
+					"re-type-checked package-scope type %q.%s requires complete value and pointer method sets",
+					rootType.packageID, rootType.name)
 			}
-			expected, err := retypedMethodSetTuples(typeName, pointer, authority.symbolByMethod)
+			expected, err := retypedMethodSetTuples(
+				rootType.typeName, pointer, authority.symbolByMethod)
 			if err != nil {
 				return fmt.Errorf("method set %q cannot derive captured-source membership: %w", record.ID, err)
 			}
@@ -1304,6 +1633,13 @@ func validateRetypedMethodSets(
 					"method set %q membership differs from re-type-checked captured source: expected %q, got %q",
 					record.ID, expected, actual)
 			}
+		}
+	}
+	for _, symbol := range a.Symbols {
+		if symbol.MethodSetOwner && !eligibleOwners[symbol.ID] {
+			return fmt.Errorf(
+				"method-set owner symbol %q does not match an eligible re-type-checked package-scope type",
+				symbol.ID)
 		}
 	}
 	return nil
@@ -1322,6 +1658,10 @@ func retypeMethodAuthority(
 		declarationOwner: map[*types.Func]*types.TypeName{},
 		declarationIndex: map[*types.Func]int{},
 	}
+	plan, err := deriveMethodAuthorityPlan(a, files)
+	if err != nil {
+		return result, err
+	}
 	loaded := make([]*packages.Package, 0, len(a.Packages))
 	for _, record := range a.Packages {
 		pkg := &packages.Package{
@@ -1338,7 +1678,11 @@ func retypeMethodAuthority(
 	sourceHashes := map[string]string{}
 	for _, record := range a.Packages {
 		pkg := result.packages[record.ID]
-		for _, fileID := range record.MethodAuthorityFileIDs {
+		if !plan.closurePackages[record.ID] {
+			pkg.Types = types.NewPackage(record.ImportPath, record.Name)
+			continue
+		}
+		for _, fileID := range plan.selectedFiles[record.ID] {
 			file := files[fileID]
 			data, err := base64.StdEncoding.DecodeString(file.ContentBase64)
 			if err != nil {
@@ -1398,12 +1742,14 @@ func retypeMethodAuthority(
 		}
 	}
 
-	declarations := map[string]SymbolRecord{}
+	declarations := map[string][]SymbolRecord{}
 	for _, symbol := range symbols {
 		if symbol.Declaration != nil {
-			declarations[sourceDeclarationKey(symbol.PackageID, *symbol.Declaration)] = symbol
+			key := sourceDeclarationKey(symbol.PackageID, *symbol.Declaration)
+			declarations[key] = append(declarations[key], symbol)
 		}
 	}
+	typeDeclarationKeys := map[*types.TypeName]string{}
 	for _, record := range a.Packages {
 		pkg := result.packages[record.ID]
 		if pkg.TypesInfo == nil || pkg.Fset == nil {
@@ -1435,13 +1781,23 @@ func retypeMethodAuthority(
 			return definitions[i].name < definitions[j].name
 		})
 		for _, definition := range definitions {
-			symbol := declarations[definition.key]
+			candidates := declarations[definition.key]
+			if len(candidates) > 1 {
+				return result, fmt.Errorf(
+					"re-type-checked declaration %q maps to %d serialized symbols",
+					definition.key, len(candidates))
+			}
+			var symbol SymbolRecord
+			if len(candidates) == 1 {
+				symbol = candidates[0]
+			}
 			switch object := objectOrigin(definition.obj).(type) {
 			case *types.Func:
 				if symbol.ID != "" {
 					result.symbolByMethod[object] = symbol.ID
 				}
 			case *types.TypeName:
+				typeDeclarationKeys[object] = definition.key
 				if symbol.ID != "" {
 					result.typeBySymbol[symbol.ID] = object
 					result.symbolByType[object] = symbol.ID
@@ -1462,13 +1818,40 @@ func retypeMethodAuthority(
 				continue
 			}
 			symbolID := result.symbolByType[typeName]
-			if symbolID == "" {
-				continue
+			if plan.rootPackages[record.ID] {
+				key := typeDeclarationKeys[typeName]
+				candidates := declarations[key]
+				if key == "" || len(candidates) != 1 {
+					return result, fmt.Errorf(
+						"re-type-checked package-scope type %q.%s maps to %d serialized symbols",
+						record.ID, name, len(candidates))
+				}
+				symbol := candidates[0]
+				if symbol.PackageID != record.ID || symbol.Name != name ||
+					symbol.Kind != "type" || !symbol.PackageScopeType || !symbol.MethodSetOwner {
+					return result, fmt.Errorf(
+						"re-type-checked package-scope type %q.%s has ineligible serialized owner %q",
+						record.ID, name, symbol.ID)
+				}
+				symbolID = symbol.ID
+				result.typeBySymbol[symbolID] = typeName
+				result.symbolByType[typeName] = symbolID
+				result.rootTypes = append(result.rootTypes, retypedRootType{
+					packageID: record.ID, name: name, symbolID: symbolID, typeName: typeName,
+				})
 			}
-			indexRetypedDeclaredMethods(
-				typeName, result.declarationOwner, result.declarationIndex)
+			if symbolID != "" {
+				indexRetypedDeclaredMethods(
+					typeName, result.declarationOwner, result.declarationIndex)
+			}
 		}
 	}
+	sort.Slice(result.rootTypes, func(i, j int) bool {
+		if result.rootTypes[i].packageID != result.rootTypes[j].packageID {
+			return result.rootTypes[i].packageID < result.rootTypes[j].packageID
+		}
+		return result.rootTypes[i].name < result.rootTypes[j].name
+	})
 	type declarationAuthority struct {
 		method   *types.Func
 		methodID string
