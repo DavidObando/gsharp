@@ -542,6 +542,11 @@ internal partial class ExpressionBinder {
         if receiver is not BoundFieldAccessExpression fieldAccess {
             return false
         }
+        if fieldAccess.NarrowedType != nil &&
+            ReceiverTypeIsReference(fieldAccess.SubstitutedType ?? fieldAccess.Field.Type) &&
+            !ReceiverTypeIsReference(fieldAccess.Type) {
+            return false
+        }
         if fieldAccess.Receiver == nil {
             let staticConstructorOwner = if function?.IsStaticInitializer == true {
                 function!!.StaticOwnerType as Symbol

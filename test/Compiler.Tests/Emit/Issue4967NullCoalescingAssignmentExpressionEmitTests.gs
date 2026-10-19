@@ -22,6 +22,254 @@ open class Issue4967NullCoalescingAssignmentExpressionEmitTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func ConditionalStorageProperty_ChecksAddressBeforeSimpleAssignmentRhs(selectFirst bool) {
+        let source = `package Test
+import System
+struct Cell {
+    var Stored int32
+    prop Value int32 {
+        get -> Stored
+        set { Stored = value }
+    }
+}
+var first = []Cell{}
+var second = []Cell{}
+var calls = 0
+func Rhs() int32 {
+    calls++
+    return 1
+}
+try {
+    (*&(SELECT ? first[0] : second[0])).Value = Rhs()
+} catch (ex IndexOutOfRangeException) {
+    Console.WriteLine(calls)
+}`.Replace(
+            "SELECT",
+            if selectFirst {
+                "true"
+            } else {
+                "false"
+            }
+        )
+        Assert.Equal("0${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func ConditionalStorageProperty_CapturesOnlySelectedComponents(selectFirst bool, suspendingRhs bool) {
+        let source = `package Test
+import System
+import System.Threading.Tasks
+struct Cell {
+    var Stored int32
+    prop Value int32 {
+        get -> Stored
+        set { Stored = value }
+    }
+}
+var first = []Cell{Cell{}}
+var second = []Cell{Cell{}}
+var selectFirst = SELECT
+var selects = 0
+var firstIndices = 0
+var secondIndices = 0
+func Choose() bool {
+    selects++
+    return selectFirst
+}
+func FirstIndex() int32 {
+    firstIndices++
+    return 0
+}
+func SecondIndex() int32 {
+    secondIndices++
+    return 0
+}
+ASYNCfunc Fill() int32 {
+    (*&(Choose() ? first[FirstIndex()] : second[SecondIndex()])).Value += {
+        SUSPEND
+        selectFirst = !selectFirst
+        1
+    }
+    return 0
+}
+Console.WriteLine(Fill()RESULT)
+Console.WriteLine("${first[0].Stored} ${second[0].Stored} ${selects} ${firstIndices} ${secondIndices}")`.Replace(
+            "SELECT",
+            if selectFirst {
+                "true"
+            } else {
+                "false"
+            }
+        ).Replace(
+            "ASYNC",
+            if suspendingRhs {
+                "async "
+            } else {
+                ""
+            }
+        ).Replace(
+            "SUSPEND",
+            if suspendingRhs {
+                "await Task.Yield()"
+            } else {
+                ""
+            }
+        ).Replace(
+            "RESULT",
+            if suspendingRhs {
+                ".Result"
+            } else {
+                ""
+            }
+        )
+        Assert.Equal(
+            "0${Environment.NewLine}" +
+                (
+                if selectFirst {
+                    "1 0 1 1 0"
+                } else {
+                    "0 1 1 0 1"
+                }
+            ) +
+                Environment.NewLine,
+            CompileAndRun(source)
+        )
+    }
+
+    @Theory
+    @InlineData(false, false, false)
+    @InlineData(true, false, false)
+    @InlineData(false, true, false)
+    @InlineData(true, true, false)
+    @InlineData(false, false, true)
+    @InlineData(true, false, true)
+    @InlineData(false, true, true)
+    @InlineData(true, true, true)
+    func StructReceivers_GenericArrayProperty_PreservesStorage(
+        valuePosition bool,
+        suspendingRhs bool,
+        structConstraint bool
+    ) {
+        let source = `package Test
+import System
+import System.Runtime.CompilerServices
+import System.Threading.Tasks
+struct Cell : IStrongBox {
+    var Stored object?
+    prop Value object? {
+        get -> Stored
+        set { Stored = value }
+    }
+}
+var indices = 0
+func Index() int32 {
+    indices++
+    return 0
+}
+ASYNCfunc Fill[T IStrongBoxCONSTRAINT](items []T) object? {
+    ASSIGN
+}
+let values = []Cell{Cell{}}
+Console.WriteLine(Fill(values)RESULT)
+Console.WriteLine("${values[0].Stored ?? "nil"} ${indices}")`.Replace(
+            "ASYNC",
+            if suspendingRhs {
+                "async "
+            } else {
+                ""
+            }
+        ).Replace(
+            "CONSTRAINT",
+            if structConstraint {
+                " struct"
+            } else {
+                ""
+            }
+        ).Replace(
+            "ASSIGN",
+            (
+                if valuePosition {
+                    "return "
+                } else {
+                    ""
+                }
+            ) +
+                `items[Index()].Value ??= {
+        SUSPEND
+        "v"
+    }` +
+                (
+                if valuePosition {
+                    ""
+                } else {
+                    "\n    return \"v\""
+                }
+            )
+        ).Replace(
+            "SUSPEND",
+            if suspendingRhs {
+                "await Task.Yield()"
+            } else {
+                ""
+            }
+        ).Replace(
+            "RESULT",
+            if suspendingRhs {
+                ".Result"
+            } else {
+                ""
+            }
+        )
+        Assert.Equal("v${Environment.NewLine}v 1${Environment.NewLine}", CompileAndRun(source))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func OrdinaryClrPropertyAssignment_SnapshotsMutableReferenceLink(structReceiver bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`#nullable enable
+namespace OwnerContract4980;
+public sealed class Holder { public Box Child = new(); }
+public sealed class Box {
+    public string? P { get; set; }
+    public Cell Cell;
+}
+public struct Cell { public string? P { get; set; } }`, "OwnerContract4980")
+        let source = `package Consumer
+import System
+import OwnerContract4980
+func main() {
+    let h Holder = Holder()
+    let first = h.Child
+    let other = Box()
+    h.Child.MEMBER = {
+        h.Child = other
+        "v"
+    }
+    Console.WriteLine("${first.MEMBER ?? "nil"} ${other.MEMBER ?? "nil"}")
+}
+main()`.Replace(
+            "MEMBER",
+            if structReceiver {
+                "Cell.P"
+            } else {
+                "P"
+            }
+        )
+        let executable = fixture.Compile(source, "OwnerConsumer4980", true, "/r:" + contract)
+        IlVerifier.Verify(contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal("v nil\n", fixture.Run(executable))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func GenericStaticField_PreservesConstructedType(valuePosition bool) {
         let source = `package Test
 import System

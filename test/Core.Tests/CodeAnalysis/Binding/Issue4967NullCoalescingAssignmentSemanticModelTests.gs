@@ -76,6 +76,36 @@ func Test() {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func BoxedStructField_InConstructor_IsNotWritableStorage(valuePosition bool) {
+        let source = `package P
+struct S {
+    var F string?
+}
+class Holder {
+    let Box object = S{}
+    init() {
+        if this.Box is S {
+            ASSIGN
+        }
+    }
+}`.Replace(
+            "ASSIGN",
+            if valuePosition {
+                `let _ = (this.Box.F ??= "v")`
+            } else {
+                `this.Box.F ??= "v"`
+            }
+        )
+        let tree = SyntaxTree.Parse(SourceText.From(source, "app.gs"))
+        let error = Assert.Single(Compilation(tree).BoundProgram.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0499", error.Id)
+        Assert.Equal(source.IndexOf("??=", StringComparison.Ordinal), error.Location.Span.Start)
+        Assert.Equal(3, error.Location.Span.Length)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func OpaqueRefReceiver_CannotRemainLiveAcrossAwait(valuePosition bool) {
         let source = `package P
 import System.Threading.Tasks

@@ -1626,6 +1626,13 @@ internal partial class MethodBodyEmitter {
             this.EmitFieldAddress(fieldAccess)
             return
         }
+        if receiver is not BoundVariableExpression &&
+            receiver is not BoundFieldAccessExpression &&
+            RefCapabilities
+            .IsDirectlyAddressableForImplicitIn(receiver) {
+            this.EmitAddressOf(BoundAddressOfExpression(nil, receiver))
+            return
+        }
         this.EmitExpression(receiver)
         if !this.receiverSpillSlots.TryGetValue(receiver, out var slot) {
             throw InvalidOperationException(

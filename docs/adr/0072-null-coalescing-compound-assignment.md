@@ -245,6 +245,14 @@ An interface-constrained type parameter can hold a struct or a reference.
 Capture its reference value only for reference instantiations, and reconstruct
 a conditional address to that snapshot or the original struct storage.
 The selector and snapshot may survive suspension, but no managed pointer does.
+Property-assignment lowering preserves this selected storage rather than
+spilling its value. General conditional-reference receivers capture the
+selector once and capture components only on the selected branch, not an address.
+Probe the reconstructed address before evaluating a simple assignment's right side.
+A read-only reference owner does not stabilize mutable
+reference-valued fields along the path: capture those owners separately.
+Constrained member emission takes an addressable receiver's original address,
+including array elements with an explicit `struct` constraint.
 In value position a reference-type variable is snapshotted too. Statement
 position still elides capture for a simple variable of known reference type.
 RHS reassignment of that variable or a CLR indexer key remains tracked
@@ -258,8 +266,9 @@ captures the class reference, while a nested field rooted in a struct local
 continues to refer to that local's storage.
 
 A smart-cast struct receiver stored in an object or interface slot is
-rejected with `GS0499`. Its unboxed address has controlled mutability and
-cannot serve as writable struct storage.
+rejected with `GS0499`, including a narrowed field inside a constructor.
+Its unboxed address has controlled mutability and cannot serve as writable
+struct storage.
 
 Before capturing indexer arguments, evaluate and discard the storage receiver's
 address. Null and array-bounds checks therefore precede argument side effects,

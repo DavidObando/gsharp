@@ -272,12 +272,11 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         // array/slice element chain (`ps[0]`, `qs[0].B2`): the emitter roots
         // the write at the element address (`ldelema`), so only the
         // side-effecting collection/index sub-expressions are spilled (see
-        // SpillElementChainParts), never the element value itself.
+        // SpillStorageReceiverParts), never the element value itself.
         let spillReceiver = rewritten.Receiver != nil && SideEffectAnalyzer.HasObservableSideEffect(
             rewritten.Receiver
         ) &&
-            !BoundClrPropertyAccessExpression.IsAddressableSubmissionFieldChain(rewritten.Receiver) &&
-            !IsInPlaceElementWriteReceiver(rewritten.Receiver)
+            !IsInPlaceStorageWriteReceiver(rewritten.Receiver)
         var value = rewritten.Value
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         var receiver = rewritten.Receiver
@@ -314,13 +313,10 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     expression: "receiver"
                 )
             )
-        } else if rewritten.Receiver != nil && IsInPlaceElementWriteReceiver(rewritten.Receiver) {
-            // Issue #3292: once-only evaluation for the element chain — the
-            // emitter re-emits the collection/index pair on both the read
-            // and write sides of a compound write, so any side-effecting
-            // sub-expression is hoisted into a temp first and the rebuilt
-            // (pure) chain is substituted into both sides.
-            receiver = this.SpillElementChainParts(
+        } else if rewritten.Receiver != nil && IsInPlaceStorageWriteReceiver(rewritten.Receiver) {
+            // Capture the chain's components, never its stored value, and
+            // substitute the rebuilt receiver on both sides of a compound write.
+            receiver = this.SpillStorageReceiverParts(
                 Invariant.Required(
                     rewritten.Receiver,
                     "an element write has a receiver",
@@ -365,8 +361,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         // nested under one null test rather than repeating it.
         let original BoundExpression? = rewritten.Receiver
         let spillReceiver = original != nil && SideEffectAnalyzer.HasObservableSideEffect(original) &&
-            !BoundClrPropertyAccessExpression.IsAddressableSubmissionFieldChain(original) &&
-            !IsInPlaceElementWriteReceiver(original)
+            !IsInPlaceStorageWriteReceiver(original)
         var value = rewritten.Value
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         var receiver = original
@@ -375,10 +370,10 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             // Issue #1688: same double-eval hazard as the user-property
             // path above, for CLR properties (`obj.ClrProp += x`).
             value = ReceiverSubstitutionRewriter.Replace(value, original, receiver)
-        } else if original != nil && IsInPlaceElementWriteReceiver(original) {
-            // Issue #3292: once-only evaluation for the element chain (see
+        } else if original != nil && IsInPlaceStorageWriteReceiver(original) {
+            // Once-only evaluation for the storage chain (see
             // RewritePropertyAssignmentExpression).
-            receiver = this.SpillElementChainParts(original, statements)
+            receiver = this.SpillStorageReceiverParts(original, statements)
             if !object.ReferenceEquals(receiver, original) {
                 value = ReceiverSubstitutionRewriter.Replace(value, original, receiver)
             }
@@ -419,11 +414,11 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         // rebuilt (pure) chain into both sides so each part is evaluated
         // exactly once. Class receivers and plain variable receivers keep
         // their existing emit-side handling.
-        if rewritten.ReceiverExpression == nil || !IsInPlaceElementWriteReceiver(rewritten.ReceiverExpression) {
+        if rewritten.ReceiverExpression == nil || !IsInPlaceStorageWriteReceiver(rewritten.ReceiverExpression) {
             return rewritten
         }
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-        let receiver = this.SpillElementChainParts(rewritten.ReceiverExpression!!, statements)
+        let receiver = this.SpillStorageReceiverParts(rewritten.ReceiverExpression!!, statements)
         if object.ReferenceEquals(receiver, rewritten.ReceiverExpression) {
             return rewritten
         }
@@ -439,27 +434,63 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         return BoundBlockExpression(rewritten.Syntax, statements.ToImmutable(), assignment)
     }
 
-    /// Issue #3292: rewrites an addressable element receiver chain (see
-    /// (cref:IsInPlaceElementWriteReceiver)), hoisting each
-    /// side-effecting collection or index sub-expression into a fresh temp
+    /// Rewrites an addressable receiver chain (see
+    /// (cref:IsInPlaceStorageWriteReceiver)), hoisting each unstable reference
+    /// owner or side-effecting collection/index sub-expression into a fresh temp
     /// local appended to [`statements`](paramref). The chain SHAPE is
-    /// preserved (field links over an element load) so the emitter still
+    /// preserved so the emitter still
     /// recognises it as addressable; only the leaf value producers are
     /// replaced by pure variable reads. Returns the original instance when
     /// nothing needed spilling.
     /// @param receiver The element receiver chain to rewrite.
     /// @param statements The statement-list builder receiving temp declarations.
     /// @returns The rewritten (or original) receiver.
-    private func SpillElementChainParts(
+    private func SpillStorageReceiverParts(
         receiver BoundExpression,
-        statements ImmutableArray[BoundStatement].Builder
+        statements ImmutableArray[BoundStatement].Builder,
+        captureComponents bool = false
     ) BoundExpression {
         switch receiver {
+            case dereference is BoundDereferenceExpression when dereference.Operand is BoundConditionalAddressExpression {
+                let address = cast[BoundConditionalAddressExpression](dereference.Operand)
+                let condition = this.MaybeSpill(
+                    address.Condition,
+                    address.Condition is not BoundVariableExpression{Variable: LocalVariableSymbol{IsReadOnly: true}},
+                    "select",
+                    statements
+                )
+                let trueStatements = ImmutableArray.CreateBuilder[BoundStatement]()
+                let whenTrue = this.SpillStorageReceiverParts(address.WhenTrueOperand, trueStatements, true)
+                let falseStatements = ImmutableArray.CreateBuilder[BoundStatement]()
+                let whenFalse = this.SpillStorageReceiverParts(address.WhenFalseOperand, falseStatements, true)
+                // Capture only the selected branch's components, never its address.
+                if trueStatements.Count != 0 {
+                    let skip = BoundLabel("$TempPrefix" + "skip${this.counter++}")
+                    statements.Add(BoundConditionalGotoStatement(nil, skip, condition, jumpIfTrue: false))
+                    statements.AddRange(trueStatements)
+                    statements.Add(BoundLabelStatement(nil, skip))
+                }
+                if falseStatements.Count != 0 {
+                    let skip = BoundLabel("$TempPrefix" + "skip${this.counter++}")
+                    statements.Add(BoundConditionalGotoStatement(nil, skip, condition, jumpIfTrue: true))
+                    statements.AddRange(falseStatements)
+                    statements.Add(BoundLabelStatement(nil, skip))
+                }
+                let captured = BoundConditionalAddressExpression(
+                    address.Syntax,
+                    condition,
+                    whenTrue,
+                    whenFalse,
+                    address.PointeeType
+                )
+                statements.Add(BoundExpressionStatement(nil, captured))
+                return BoundDereferenceExpression(dereference.Syntax, captured)
+            }
             case element is BoundIndexExpression {
                 {
                     let target = this.MaybeSpill(
                         element.Target,
-                        SideEffectAnalyzer.HasObservableSideEffect(element.Target),
+                        captureComponents || SideEffectAnalyzer.HasObservableSideEffect(element.Target),
                         "coll",
                         statements
                     )
@@ -468,7 +499,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     for candidate in element.Indices {
                         let index = this.MaybeSpill(
                             candidate,
-                            SideEffectAnalyzer.HasObservableSideEffect(candidate),
+                            captureComponents || SideEffectAnalyzer.HasObservableSideEffect(candidate),
                             "idx",
                             statements
                         )
@@ -483,7 +514,17 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             }
             case fieldLink is BoundFieldAccessExpression when fieldLink.Receiver != nil {
                 {
-                    let inner = this.SpillElementChainParts(fieldLink.Receiver!!, statements)
+                    let owner = fieldLink.Receiver!!
+                    let inner = if GSharp.Core.CodeAnalysis.Binding.Binder.IsReferenceTypeForConstraint(owner.Type) {
+                        this.MaybeSpill(
+                            owner,
+                            owner is not BoundVariableExpression{Variable: LocalVariableSymbol{IsReadOnly: true}},
+                            "owner",
+                            statements
+                        )
+                    } else {
+                        this.SpillStorageReceiverParts(owner, statements, captureComponents)
+                    }
                     if object.ReferenceEquals(inner, fieldLink.Receiver) {
                         return fieldLink
                     }
@@ -499,7 +540,17 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             }
             case clrLink is BoundClrPropertyAccessExpression when clrLink.Receiver != nil {
                 {
-                    let inner = this.SpillElementChainParts(clrLink.Receiver!!, statements)
+                    let owner = clrLink.Receiver!!
+                    let inner = if GSharp.Core.CodeAnalysis.Binding.Binder.IsReferenceTypeForConstraint(owner.Type) {
+                        this.MaybeSpill(
+                            owner,
+                            owner is not BoundVariableExpression{Variable: LocalVariableSymbol{IsReadOnly: true}},
+                            "owner",
+                            statements
+                        )
+                    } else {
+                        this.SpillStorageReceiverParts(owner, statements, captureComponents)
+                    }
                     if object.ReferenceEquals(inner, clrLink.Receiver) {
                         return clrLink
                     }
@@ -633,16 +684,13 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             }
         }
 
-        /// Issue #3292: whether [`receiver`](paramref) is a value-typed
-        /// member-write receiver chain the emitter roots at an array-backed
-        /// element address (`ldelema` + `ldflda`…): zero or more
-        /// value-typed field links over an array/slice element load. Such a
-        /// receiver must NOT be spilled to a temp — the write must reach the
-        /// element's storage — but its collection/index sub-expressions may be
-        /// (see (cref:SpillElementChainParts)).
+        /// Whether [`receiver`](paramref) denotes value storage rather than
+        /// a copy: field/element chains and captured conditional addresses.
+        /// Only reference owners and collection/index components may be spilled
+        /// (see (cref:SpillStorageReceiverParts)).
         /// @param receiver The candidate receiver expression.
         /// @returns `true` for an addressable element chain.
-        private func IsInPlaceElementWriteReceiver(receiver BoundExpression?) bool {
+        private func IsInPlaceStorageWriteReceiver(receiver BoundExpression?) bool {
             var receiver = receiver
             while true {
                 if receiver == nil ||
@@ -658,12 +706,36 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     case element is BoundIndexExpression {
                         return element.IsArrayBackedElementAccess
                     }
+                    case BoundVariableExpression {
+                        return true
+                    }
+                    case BoundDereferenceExpression{
+                        Operand: BoundVariableExpression{Variable: LocalVariableSymbol{IsReadOnly: true}}
+                    } {
+                        return true
+                    }
+                    case BoundDereferenceExpression{Operand: BoundConditionalAddressExpression} conditional {
+                        let address = cast[BoundConditionalAddressExpression](conditional.Operand)
+                        return IsInPlaceStorageWriteReceiver(address.WhenTrueOperand) &&
+                            IsInPlaceStorageWriteReceiver(address.WhenFalseOperand)
+                    }
                     case fieldLink is BoundFieldAccessExpression when fieldLink.Receiver != nil {
-                        receiver = fieldLink.Receiver
+                        let owner = fieldLink.Receiver!!
+                        if GSharp.Core.CodeAnalysis.Binding.Binder.IsReferenceTypeForConstraint(owner.Type) {
+                            return true
+                        }
+                        receiver = owner
                         continue
                     }
-                    case BoundClrPropertyAccessExpression{Member: FieldInfo} clrLink when clrLink.Receiver != nil {
-                        receiver = clrLink.Receiver
+                    case BoundClrPropertyAccessExpression{Member: FieldInfo} clrLink {
+                        if clrLink.Receiver == nil {
+                            return true
+                        }
+                        let owner = clrLink.Receiver
+                        if GSharp.Core.CodeAnalysis.Binding.Binder.IsReferenceTypeForConstraint(owner.Type) {
+                            return true
+                        }
+                        receiver = owner
                         continue
                     }
                     default {
