@@ -467,6 +467,12 @@ receiver identity, including fixed generic receiver arguments; another argument
 cannot widen their storage type. Readonly `in` receivers retain ordinary
 conversion handling. SZ-array elements remain invariant, while rectangular
 reference-array and interface variance retain their separate conversion rules.
+Sealing does not make a rectangular reference-array bound exact: its elements
+can still refine covariantly. Joint rectangular-array upper bounds reuse the
+same compatibility query on their element bounds; array interface capabilities
+remain those of the actual array, without inventing generic constructor slots.
+Their upper-bound comparisons retain CLR reference variance without relaxing
+standalone G# array argument conversions.
 A nullable value-type lower bound cannot satisfy a nonnullable `struct`
 constraint; the probe uses the same nullable-value reader as declared-constraint
 validation, without excluding nullable arguments from `new()` constraints.

@@ -2405,6 +2405,8 @@ Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Prob
     @Theory
     @InlineData("System.Action<string>", "System.Action<object>")
     @InlineData("System.Func<object>", "System.Func<string>")
+    @InlineData("object[,]", "string[,]")
+    @InlineData("object[,,]", "string[,,]")
     func Variant_Sealed_Reference_Bounds_Keep_The_Underlying_Member(receiver string, candidate string) {
         using let fixture = CSharpFixture((`namespace Fixture4986 {
     public interface IProbe<in T,U> {}
@@ -2435,7 +2437,8 @@ Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Prob
     @InlineData("System.Action<string>", "System.Action<System.Exception>", "System.Action<object>", 0)
     @InlineData("System.Func<IFoo>", "System.Func<IBar>", "System.Func<Both>", 0)
     @InlineData("System.Func<IFoo>", "System.Func<IBar>", "System.Func<Both>", 12)
-    func Variant_Delegate_Upper_Bounds_Can_Refine_Together(first string, second string, common string, depth int32) {
+    @InlineData("IFoo[,]", "IBar[,]", "Both[,]", 0)
+    func Variant_Reference_Upper_Bounds_Can_Refine_Together(first string, second string, common string, depth int32) {
         var first = first
         var second = second
         var common = common
