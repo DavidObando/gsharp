@@ -13,6 +13,35 @@ import Xunit
 /// Issue #4967: the REPL evaluates `??=` in value position — the value is
 /// the target's final value and the right side runs only when it is nil.
 open class Issue4967NullCoalescingAssignmentExpressionSessionTests {
+    @Theory
+    @InlineData("=")
+    @InlineData("??=")
+    func TupleElementProperty_CrossSubmissionWritesStoredValue(op string) {
+        using let engine = EmittedSessionEngine()
+        let declaration = engine.Evaluate(`import System.Collections
+var tuple = System.ValueTuple[DictionaryEntry, int32](DictionaryEntry("key", nil), 0)`)
+        Assert.False(declaration.HasError, string.Join("; ", declaration.Diagnostics))
+        let assignment = engine.Evaluate(`tuple.Item1.Value OP "v"`.Replace("OP", op))
+        Assert.False(assignment.HasError, string.Join("; ", assignment.Diagnostics))
+        let probe = engine.Evaluate("tuple.Item1.Value")
+        Assert.False(probe.HasError, string.Join("; ", probe.Diagnostics))
+        Assert.Equal("v", probe.Value)
+    }
+
+    @Fact
+    func ReadOnlyTupleElementProperty_CrossSubmissionWriteIsRejected() {
+        using let engine = EmittedSessionEngine()
+        let declaration = engine.Evaluate(`import System.Collections
+let tuple = System.ValueTuple[DictionaryEntry, int32](DictionaryEntry("key", nil), 0)`)
+        Assert.False(declaration.HasError, string.Join("; ", declaration.Diagnostics))
+        let assignment = engine.Evaluate(`tuple.Item1.Value = "v"`)
+        Assert.True(assignment.HasError)
+        Assert.Contains(
+            assignment.Diagnostics,
+            (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.Id == "GS0127"
+        )
+    }
+
     @Fact
     func ValuePosition_YieldsFinalValue_RhsOnlyWhenNil() {
         let source = `var log = ""

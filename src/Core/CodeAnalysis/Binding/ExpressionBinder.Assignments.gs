@@ -505,6 +505,9 @@ internal partial class ExpressionBinder {
     }
 
     private func IsWritableStructFieldReceiver(receiver BoundExpression) bool {
+        if receiver is BoundTupleElementAccessExpression tuple {
+            return IsWritableStructFieldReceiver(tuple.Receiver)
+        }
         if receiver is BoundVariableExpression variable {
             // Unboxing a narrowed reference slot yields a controlled-mutability
             // address, not writable struct storage.

@@ -4487,6 +4487,11 @@ internal class ReflectionMetadataEmitter {
         if receiver is BoundDereferenceExpression {
             return false
         }
+        if receiver is BoundTupleElementAccessExpression && RefCapabilities.IsDirectlyAddressableForImplicitIn(
+            receiver
+        ) {
+            return false
+        }
         if receiver is BoundVariableExpression bve &&
             bve.NarrowedType == nil &&
             this.CanLoadVariableAddressForReceiverSpill(bve.Variable, function, locals) {
@@ -4574,6 +4579,9 @@ internal class ReflectionMetadataEmitter {
         }
         if fa.Receiver is BoundFieldAccessExpression nested {
             return this.IsAddressableFieldAccessForReceiverSpill(nested, function, locals)
+        }
+        if fa.Receiver is BoundTupleElementAccessExpression tuple {
+            return RefCapabilities.IsDirectlyAddressableForImplicitIn(tuple)
         }
         return false
     }

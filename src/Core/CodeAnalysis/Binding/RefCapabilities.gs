@@ -240,6 +240,7 @@ internal shared class RefCapabilities {
             local.RefKind == RefKind.In
         case _ is BoundVariableExpression: false
         case block is BoundBlockExpression: IsReadOnlyReference(block.Expression)
+        case tuple is BoundTupleElementAccessExpression: IsReadOnlyStorage(tuple) || IsReadOnlyReference(tuple.Receiver)
         case field is BoundFieldAccessExpression: field.Receiver != nil && !Binder.IsReferenceTypeForConstraint(
             field.Receiver.Type
         ) &&
@@ -547,6 +548,7 @@ internal shared class RefCapabilities {
     /// @param value The converted argument.
     /// @returns `true` when its address is taken directly.
     internal func IsDirectlyAddressableForImplicitIn(value BoundExpression) bool -> switch value {
+        case tuple is BoundTupleElementAccessExpression: IsDirectlyAddressableForImplicitIn(tuple.Receiver)
         case BoundVariableExpression{
             Variable: ParameterSymbol{IsReceiverParameter: true}
         } receiver: !Binder.IsReferenceTypeForConstraint(receiver.Type) && receiver.NarrowedType == nil
@@ -560,6 +562,12 @@ internal shared class RefCapabilities {
             .IsConst == true: false
         case BoundClrPropertyAccessExpression{Member: FieldInfo field} when field.IsLiteral ||
             (field.IsStatic && field.IsInitOnly): false
+        case BoundFieldAccessExpression{Receiver: {} receiver}: Binder.IsReferenceTypeForConstraint(receiver.Type) ||
+            IsDirectlyAddressableForImplicitIn(receiver)
+        case BoundClrPropertyAccessExpression{
+            Member: FieldInfo,
+            Receiver: {} receiver
+        }: Binder.IsReferenceTypeForConstraint(receiver.Type) || IsDirectlyAddressableForImplicitIn(receiver)
         case _ is BoundBlockExpression or _ is BoundConditionalExpression: false
         default: ExpressionBinder.IsLvalue(value)
     }
@@ -570,6 +578,7 @@ internal shared class RefCapabilities {
             .IsReadOnly &&
             Binder.IsReferenceTypeForConstraint(receiver.Type)
         case variable is BoundVariableExpression: variable.Variable.IsReadOnly
+        case tuple is BoundTupleElementAccessExpression: IsReadOnlyValueReceiver(tuple.Receiver)
         case block is BoundBlockExpression: IsReadOnlyStorage(block.Expression)
         case conditional is BoundConditionalExpression: IsReadOnlyStorage(conditional.WhenTrue) ||
             IsReadOnlyStorage(conditional.WhenFalse)
@@ -615,6 +624,7 @@ internal shared class RefCapabilities {
         ) == RefKind.RefReadOnly
         case BoundClrPropertyAccessExpression{Member: FieldInfo field} access: field.IsInitOnly ||
             field.IsLiteral ||
+            access.IsReadOnlySubmissionGlobal ||
             IsReadOnlyValueReceiver(access.Receiver)
         default: false
     }

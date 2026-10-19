@@ -1692,13 +1692,9 @@ internal partial class MethodBodyEmitter {
         this.il.Token(this.outer.memberRefs.GetTupleCtorReference(tupleType, start, count))
     }
 
-    private func EmitTupleElementAccess(access BoundTupleElementAccessExpression) {
-        // Phase 4.5 emit parity: `t.ItemN`. ValueTuple<...> exposes the
-        // elements as public *fields* (Item1..Item7), not properties, so
-        // the access is a plain `ldfld`. Both struct-on-stack and
-        // managed-pointer receivers are valid operands for ldfld; the
-        // common cases (locals/params/temps) go through
-        // EmitInstanceReceiver to prefer the address form.
+    private func EmitTupleElementAccess(access BoundTupleElementAccessExpression, addressOnly bool = false) {
+        // Tuple elements are fields. Member writes need ldflda so a setter
+        // updates the stored struct instead of a copy (issue #5023).
         var clrType Type? = access.TupleType.ClrType
         if clrType == nil {
             // Issues #649/#3087: traverse canonical Rest nodes using
@@ -1706,7 +1702,8 @@ internal partial class MethodBodyEmitter {
             this.EmitSymbolicTupleElementAccess(
                 access.TupleType,
                 access.Index,
-                () -> this.EmitInstanceReceiver(access.Receiver)
+                () -> this.EmitInstanceReceiver(access.Receiver),
+                addressOnly: addressOnly
             )
             return
         }
@@ -1719,7 +1716,13 @@ internal partial class MethodBodyEmitter {
             remainingIndex -= 7
         }
         let fieldName = "Item" + (remainingIndex + 1).ToString(CultureInfo.InvariantCulture)
-        this.il.OpCode(ILOpCode.Ldfld)
+        this.il.OpCode(
+            if addressOnly {
+                ILOpCode.Ldflda
+            } else {
+                ILOpCode.Ldfld
+            }
+        )
         if clrType!!.IsConstructedGenericType {
             this.il.Token(this.outer.memberRefs.GetFieldReferenceOnConstructedGeneric(clrType!!, fieldName))
             return
@@ -1733,7 +1736,8 @@ internal partial class MethodBodyEmitter {
         tupleType TupleTypeSymbol,
         index int32,
         emitReceiver() -> void,
-        takeRestAddress bool = true
+        takeRestAddress bool = true,
+        addressOnly bool = false
     ) {
         var index = index
         emitReceiver()
@@ -1753,7 +1757,13 @@ internal partial class MethodBodyEmitter {
             index -= 7
         }
         let fieldName = "Item" + (index + 1).ToString(CultureInfo.InvariantCulture)
-        this.il.OpCode(ILOpCode.Ldfld)
+        this.il.OpCode(
+            if addressOnly {
+                ILOpCode.Ldflda
+            } else {
+                ILOpCode.Ldfld
+            }
+        )
         this.il.Token(this.outer.memberRefs.GetTupleFieldReference(tupleType, start, count, fieldName))
     }
 
@@ -1979,6 +1989,9 @@ internal partial class MethodBodyEmitter {
             }
             case fa is BoundFieldAccessExpression {
                 this.EmitFieldAddress(fa)
+            }
+            case tuple is BoundTupleElementAccessExpression {
+                this.EmitTupleElementAccess(tuple, addressOnly: true)
             }
             case BoundClrPropertyAccessExpression{Member: FieldInfo field} access {
                 if access.Receiver != nil {

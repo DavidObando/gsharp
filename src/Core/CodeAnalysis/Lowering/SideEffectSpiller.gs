@@ -463,6 +463,15 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         captureComponents bool = false
     ) BoundExpression {
         switch receiver {
+            case tuple is BoundTupleElementAccessExpression {
+                // Capture owners and indices before the RHS, without copying tuple storage.
+                let owner = this.SpillStorageReceiverParts(tuple.Receiver, statements, captureComponents: true)
+                return if object.ReferenceEquals(owner, tuple.Receiver) {
+                    tuple
+                } else {
+                    BoundTupleElementAccessExpression(tuple.Syntax, owner, tuple.TupleType, tuple.Index)
+                }
+            }
             case dereference is BoundDereferenceExpression when dereference.Operand is BoundConditionalAddressExpression {
                 let address = cast[BoundConditionalAddressExpression](dereference.Operand)
                 let condition = this.MaybeSpill(
@@ -709,6 +718,10 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     return false
                 }
                 switch receiver {
+                    case tuple is BoundTupleElementAccessExpression {
+                        receiver = tuple.Receiver
+                        continue
+                    }
                     case element is BoundIndexExpression {
                         return element.IsArrayBackedElementAccess
                     }

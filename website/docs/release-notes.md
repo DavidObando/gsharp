@@ -479,6 +479,8 @@ Before moving an application to a different compiler version, pin the intended S
 
 ### Fixed
 
+- **Property writes through tuple elements update the stored struct** (issue #5023). `tuple.Item1.Value = "v"` previously changed a copy and silently lost the update. Tuple-element receivers now keep their storage through nested tuples, field and array chains, compound assignments, and suspension. Receiver components run once, before the right-hand side; read-only storage remains protected.
+
 - **The SDK's assembly-info task and four compiler helpers no longer assert values the C# null-tested** (issue [#4932](https://github.com/DavidObando/gsharp/issues/4932)). The cut-over turned C# code that passed a value on and then checked it for null into a `!!` assertion before the check, so these places threw a NullReferenceException where 0.4 did not:
   - `WriteGsharpAssemblyInfoTask`, when `OutputFile` is a filesystem root and `Path.GetDirectoryName` returns null. The task now skips creating a directory, as the C# did, and fails at the write.
   - `ClrTypeUtilities.SafeGetEventIncludingInterfaces`, `SafeGetPropertyIncludingInterfaces` and `SafeGetMethodsIncludingInterfaces`, given a nil type. They now return nil, nil and an empty array.

@@ -10,6 +10,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
+import System.Reflection
 
 /// Lowering pass that eliminates `ref` locals (managed pointer locals) from
 /// async method bodies so they do not require hoisting into byref fields — which
@@ -56,7 +57,13 @@ shared class RefInitializationHoister {
             if local?.Type is ByRefTypeSymbol && addressOf != nil {
                 let prelude = ImmutableArray.CreateBuilder[BoundStatement]()
                 let template = HoistOperand(addressOf.Operand, prelude)
-                if (template is BoundIndexExpression or BoundFieldAccessExpression and {Receiver: not nil}) {
+                if (
+                    template is BoundTupleElementAccessExpression or
+                        BoundIndexExpression or
+                        BoundFieldAccessExpression and
+                        {Receiver: not nil} or
+                        BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: not nil}
+                ) {
                     prelude.Add(
                         BoundExpressionStatement(node.Syntax, BoundAddressOfExpression(addressOf.Syntax, template))
                     )
@@ -114,15 +121,25 @@ shared class RefInitializationHoister {
         /// [`prelude`](paramref) for any non-trivial sub-expression.
         private func HoistOperand(
             operand BoundExpression,
-            prelude ImmutableArray[BoundStatement].Builder
+            prelude ImmutableArray[BoundStatement].Builder,
+            captureComponents bool = false
         ) BoundExpression {
             switch operand {
+                case tuple is BoundTupleElementAccessExpression {
+                    // Later arguments can replace an owner or index before address reconstruction.
+                    return BoundTupleElementAccessExpression(
+                        tuple.Syntax,
+                        HoistOperand(tuple.Receiver, prelude, captureComponents: true),
+                        tuple.TupleType,
+                        tuple.Index
+                    )
+                }
                 case idx is BoundIndexExpression {
                     {
-                        let target = HoistIfNeeded(idx.Target, prelude)
+                        let target = HoistIfNeeded(idx.Target, prelude, captureComponents)
                         let indices = idx
                             .Indices
-                            .Select((index BoundExpression) -> HoistIfNeeded(index, prelude))
+                            .Select((index BoundExpression) -> HoistIfNeeded(index, prelude, captureComponents))
                             .ToImmutableArray()
                         return BoundIndexExpression(idx.Syntax, target, indices, idx.Type)
                     }
@@ -139,9 +156,9 @@ shared class RefInitializationHoister {
                         }
                         let receiver = if Binder.IsReferenceTypeForConstraint(field.Receiver.Type) ||
                             !IsReconstructableStorage(field.Receiver) {
-                            HoistIfNeeded(field.Receiver, prelude)
+                            HoistIfNeeded(field.Receiver, prelude, captureComponents)
                         } else {
-                            HoistOperand(field.Receiver, prelude)
+                            HoistOperand(field.Receiver, prelude, captureComponents)
                         }
                         return BoundFieldAccessExpression(
                             field.Syntax,
@@ -173,8 +190,26 @@ shared class RefInitializationHoister {
                 }
                 case clrProp is BoundClrPropertyAccessExpression when clrProp.Receiver != nil {
                     {
-                        let receiver = HoistIfNeeded(clrProp.Receiver!!, prelude)
-                        return BoundClrPropertyAccessExpression(clrProp.Syntax, receiver, clrProp.Member, clrProp.Type)
+                        let owner = clrProp.Receiver!!
+                        let receiver = if clrProp.Member is FieldInfo && !Binder.IsReferenceTypeForConstraint(
+                            owner.Type
+                        ) &&
+                            IsReconstructableStorage(owner) {
+                            HoistOperand(owner, prelude, captureComponents)
+                        } else {
+                            HoistIfNeeded(owner, prelude, captureComponents)
+                        }
+                        return BoundClrPropertyAccessExpression(
+                            clrProp.Syntax,
+                            receiver,
+                            clrProp.Member,
+                            clrProp.Type,
+                            clrProp.StaticContainerType,
+                            clrProp.ConstrainedReceiverTypeParameter,
+                            clrProp.ConstrainedInterfaceType,
+                            clrProp.IsAddressableStaticField,
+                            clrProp.IsReadOnlySubmissionGlobal
+                        )
                     }
                 }
                 case dereference is BoundDereferenceExpression {
@@ -194,9 +229,10 @@ shared class RefInitializationHoister {
         /// [`prelude`](paramref) and returns a read of that local.
         private func HoistIfNeeded(
             expression BoundExpression,
-            prelude ImmutableArray[BoundStatement].Builder
+            prelude ImmutableArray[BoundStatement].Builder,
+            forceCapture bool = false
         ) BoundExpression {
-            if RefInitializationHoister.IsTriviallyRepeatable(expression) {
+            if !forceCapture && RefInitializationHoister.IsTriviallyRepeatable(expression) {
                 return expression
             }
             let temp = LocalVariableSymbol("<refTmp>__${tempCounter++}", isReadOnly: false, expression.Type)
@@ -207,6 +243,12 @@ shared class RefInitializationHoister {
         shared {
             private func IsReconstructableStorage(expression BoundExpression) bool {
                 return switch expression {
+                    case tuple is BoundTupleElementAccessExpression: IsReconstructableStorage(tuple.Receiver)
+                    case BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: nil}: true
+                    case BoundClrPropertyAccessExpression{
+                        Member: FieldInfo,
+                        Receiver: {} receiver
+                    }: Binder.IsReferenceTypeForConstraint(receiver.Type) || IsReconstructableStorage(receiver)
                     case _ is BoundVariableExpression: true
                     case _ is BoundDereferenceExpression: true
                     case _ is BoundIndexExpression: true

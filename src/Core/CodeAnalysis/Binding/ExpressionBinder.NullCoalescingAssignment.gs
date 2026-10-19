@@ -881,6 +881,14 @@ internal partial class ExpressionBinder {
             return CaptureReceiver(anchor, receiver, preStatements, forceCapture)
         }
         switch receiver {
+            case tuple is BoundTupleElementAccessExpression {
+                return BoundTupleElementAccessExpression(
+                    tuple.Syntax,
+                    CaptureStorageReceiver(anchor, tuple.Receiver, preStatements, forceCapture),
+                    tuple.TupleType,
+                    tuple.Index
+                )
+            }
             case _ is BoundVariableExpression {
                 return receiver
             }
