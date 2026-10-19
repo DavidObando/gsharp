@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Indexed member values keep their hover and navigation targets** (issue #5035). Hover and go-to-definition now follow the compiler's bound member through indexing, including source properties and fields, CLR members, and `List[T]`, array and string values. `runner.Calls[0]` and `call.Args[0]` no longer lose their property hovers or source definitions. An indexed method result such as `uri.ToString()[0]` shows the method on its bound receiver instead of an unrelated same-named method. Index arguments still resolve to their own locals.
+
 - **Body-only edits preserve imported types in the language server** (issue #5025). Incremental binding now moves each explicit import and alias to the edited file's current syntax tree along with its member declarations. Repeated edits no longer lose per-file namespace context, degrade inferred local hovers to `?`, or introduce false missing-type/function diagnostics. This also fixes the same failure when VS Code opens unchanged text with a lowercase, encoded Windows drive URI.
 
 - **Local hovers work when a file opens before workspace discovery finishes** (issue #5024). The language server now replaces the standalone document tree with its owning project's matching tree after discovery, preserving unsaved buffer text. Local declarations and references resolve without reopening the file or making another edit, including after a server restart with the file open. Watcher refreshes preserve regenerated project source when an older generated document remains open.

@@ -1073,6 +1073,11 @@ shared class SemanticLookup {
                     case call is CallExpressionSyntax {
                         yield call.Identifier
                     }
+                    case index is IndexExpressionSyntax {
+                        for t in EnumerateAccessorMemberTokens(index.Target) {
+                            yield t
+                        }
+                    }
                     case nested is AccessorExpressionSyntax {
                         for t in EnumerateAccessorMemberTokens(nested.LeftPart) {
                             yield t

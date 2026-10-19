@@ -26,8 +26,9 @@ import System.Reflection
 ///
 /// A member-access chain such as `a.B.C()` parses right-nested and the
 /// binder anchors only the outermost accessor, to the bound node of the final
-/// member. The other segments are reached through that node's receiver chain:
-/// segment `k` of `n` segments is `n - 1 - k` receivers down. A receiver read
+/// member. The other segments are reached through that node's receiver chain.
+/// Each index adds a target step, not a member step. Index arguments are
+/// independent expressions and never form part of that chain. A receiver read
 /// carries the variable's flow type, so after `guard let s = store` the
 /// receiver `s` is the declared `IStore`, never the type of a value assigned
 /// on one branch.
@@ -171,20 +172,21 @@ shared class BoundSemantics {
         expression ExpressionSyntax
     ) BoundExpression? {
         var root ExpressionSyntax = expression
-        while root.Parent is AccessorExpressionSyntax accessor &&
-            (object.ReferenceEquals(accessor.LeftPart, root) || object.ReferenceEquals(accessor.RightPart, root)) {
-            root = accessor
+        while true {
+            if root.Parent is AccessorExpressionSyntax accessor &&
+                (object.ReferenceEquals(accessor.LeftPart, root) || object.ReferenceEquals(accessor.RightPart, root)) {
+                root = accessor
+            } else if root.Parent is IndexExpressionSyntax index && object.ReferenceEquals(index.Target, root) {
+                root = index
+            } else {
+                break
+            }
         }
         if object.ReferenceEquals(root, expression) {
             return PeelConversions(model.GetBoundNode(expression) as BoundExpression, expression)
         }
         let segments = List[ExpressionSyntax]()
-        var current ExpressionSyntax = root
-        while current is AccessorExpressionSyntax link {
-            segments.Add(link.LeftPart)
-            current = link.RightPart
-        }
-        segments.Add(current)
+        AddReceiverSegments(root, segments)
         var index = -1
         for var i = 0; i < segments.Count; i++ {
             if object.ReferenceEquals(segments[i], expression) {
@@ -221,9 +223,26 @@ shared class BoundSemantics {
         return node
     }
 
-    /// Gets the receiver of a bound member access or call, or null when it has
-    /// none (a static member, or a node that is not a member access).
+    private func AddReceiverSegments(expression ExpressionSyntax, segments List[ExpressionSyntax]) {
+        switch expression {
+            case accessor is AccessorExpressionSyntax {
+                AddReceiverSegments(accessor.LeftPart, segments)
+                AddReceiverSegments(accessor.RightPart, segments)
+            }
+            case index is IndexExpressionSyntax {
+                AddReceiverSegments(index.Target, segments)
+                segments.Add(index)
+            }
+            default {
+                segments.Add(expression)
+            }
+        }
+    }
+
+    /// Gets a bound member's receiver or an index's target, or null when it has none.
     private func ReceiverOf(node BoundExpression) BoundExpression? -> switch node {
+        case index is BoundIndexExpression: index.Target
+        case index is BoundClrIndexExpression: index.Target
         case userCall is BoundUserInstanceCallExpression: userCall.Receiver
         case importedCall is BoundImportedInstanceCallExpression: importedCall.Receiver
         case property is BoundPropertyReferenceOperationExpression: property.Instance

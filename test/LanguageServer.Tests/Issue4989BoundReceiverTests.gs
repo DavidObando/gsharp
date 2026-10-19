@@ -285,7 +285,178 @@ open class Issue4989BoundReceiverTests {
         Assert.Equal("store", receiver.Name)
     }
 
+    @Theory
+    @InlineData("runner.Calls[Calls]", "Calls", "prop Calls System.Collections.Generic.List[RunnerCall] { get; }")
+    @InlineData("runner.Calls[0].Args[Args]", "Args", "prop Args []string { get; }")
+    @InlineData("runner.Calls[0].FileName[Calls]", "FileName", "prop FileName string { get; }")
+    @InlineData("runner.Calls[0].Fields[Args]", "Fields", "(field) Fields []string")
+    @InlineData(
+        "runner.Calls[0].Args[Args].Length",
+        "Calls",
+        "prop Calls System.Collections.Generic.List[RunnerCall] { get; }"
+    )
+    func Issue5035_IndexedSourceMembers_KeepSymbolsRangesAndDefinitions(
+        expression string,
+        member string,
+        signature string
+    ) {
+        let source = IndexedSource.Replace("EXPRESSION_PLACEHOLDER", expression)
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let position = LanguageServerTestHelpers.PositionOf(source, expression)
+        position.Character += expression.IndexOf("." + member, StringComparison.Ordinal) + 1
+        AssertIndexedHover(content, position, member, signature)
+        let uri = DocumentUri.From("file:///issue5035.gs")!!
+        let location = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
+        let declaration = LanguageServerTestHelpers.PositionOf(
+            source,
+            if member == "Fields" {
+                "var " + member
+            } else {
+                "prop " + member
+            }
+        )
+        declaration.Character += if member == "Fields" {
+            4
+        } else {
+            5
+        }
+        Assert.Equal(uri, location.Uri)
+        AssertPosition(declaration, location.Range.Start)
+        AssertPosition(Position(declaration.Line, declaration.Character + member.Length), location.Range.End)
+        let token = SemanticLookup.FindTokenAt(content.SyntaxTree, SemanticLookup.ToOffset(content, position))!!
+        Assert.Equal(member, BoundSemantics.GetSymbol(compilation, token)?.Name)
+
+        // Index arguments are local reads, even when their names also name members.
+        for name in[]string{"Calls", "Args"} {
+            let argument = LanguageServerTestHelpers.PositionOf(source, "[" + name + "]")
+            argument.Character++
+            let local = SemanticLookup.FindTokenAt(content.SyntaxTree, SemanticLookup.ToOffset(content, argument))!!
+            let resolved = Assert.IsAssignableFrom[VariableSymbol](SemanticLookup.ResolveSymbol(compilation, local))
+            Assert.Equal(TypeSymbol.Int32, resolved.Type)
+            let localDeclaration = LanguageServerTestHelpers.PositionOf(source, "let " + name + " = 0")
+            localDeclaration.Character += 4
+            let declaredToken = SemanticLookup.FindTokenAt(
+                content.SyntaxTree,
+                SemanticLookup.ToOffset(content, localDeclaration)
+            )!!
+            Assert.Same(BoundSemantics.GetSymbol(compilation, declaredToken), resolved)
+            AssertIndexedHover(content, argument, name, "(local variable) " + name + " int32")
+        }
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "FileName.Length"),
+            "FileName",
+            "prop FileName string { get; }"
+        )
+        let plain = LanguageServerTestHelpers.PositionOf(source, "runner.Calls")
+        plain.Character += "runner.".Length
+        AssertIndexedHover(content, plain, "Calls", "prop Calls System.Collections.Generic.List[RunnerCall] { get; }")
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Length"),
+            "Length",
+            "string.Length int32 { get; }"
+        )
+    }
+
+    @Theory
+    @InlineData("uri.Segments[0]", "Segments", "System.Uri.Segments []string { get; }", typeof(Uri))
+    @InlineData("uri.Host[0]", "Host", "System.Uri.Host string { get; }", typeof(Uri))
+    @InlineData("uri.ToString()[0]", "ToString", "func (System.Uri) ToString() string", typeof(Uri))
+    @InlineData("string.Empty[0]", "Empty", "string.Empty string", typeof(string))
+    func Issue5035_IndexedImportedMembers_UseBoundIdentity(
+        expression string,
+        member string,
+        signature string,
+        declaringType Type
+    ) {
+        let source = `package Repro
+import System
+import System.Text
+func Run(uri Uri) {
+    let unrelated = StringBuilder().ToString()
+    let result = EXPRESSION_PLACEHOLDER
+}
+`.Replace("EXPRESSION_PLACEHOLDER", expression)
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let position = LanguageServerTestHelpers.PositionOf(source, expression)
+        position.Character += expression.IndexOf("." + member, StringComparison.Ordinal) + 1
+        AssertIndexedHover(content, position, member, signature)
+        let token = SemanticLookup.FindTokenAt(content.SyntaxTree, SemanticLookup.ToOffset(content, position))!!
+        let imported = Assert.IsAssignableFrom[System.Reflection.MemberInfo](
+            BoundSemantics.GetImportedMember(compilation, token)
+        )
+        Assert.Equal(declaringType, imported.DeclaringType)
+        Assert.True(
+            ImportedClrMemberResolver.TryResolveClrMember(content.SyntaxTree, compilation, token, out var navigation)
+        )
+        Assert.Equal(imported, navigation)
+    }
+
+    @Fact
+    func Issue5035_IndexedCallOnNarrowedInterface_UsesTheInterfaceMember() {
+        const source = `package Repro
+interface IStore { func Read() string; }
+class Store : IStore { func Read() string -> "store" }
+func Run(store IStore?) string {
+    let warm = Store().Read()
+    guard let s = store else { return "" }
+    return s.Read()[0].ToString()
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let position = LanguageServerTestHelpers.PositionOf(source, "Read()[0]")
+        AssertIndexedHover(content, position, "Read", "func (IStore) Read() string")
+        let location = Assert.IsType[Location](
+            DefinitionComputer.ComputeDefinition(DocumentUri.From("file:///issue5035.gs")!!, content, position)
+        )
+        AssertPosition(LanguageServerTestHelpers.PositionOf(source, "Read"), location.Range.Start)
+    }
+
     shared {
+        private const IndexedSource string = `package Repro
+import System.Collections.Generic
+let Args = "global"
+class RunnerCall {
+    prop Args []string -> []string{"arg"}
+    prop FileName string -> "file"
+    var Fields []string = []string{"field"}
+}
+class Runner {
+    prop Calls List[RunnerCall] -> List[RunnerCall]()
+}
+func Run(runner Runner) {
+    let Calls = 0
+    let Args = 0
+    let normal = runner.Calls
+    let ownCalls = runner.Calls[Calls]
+    let ownArgs = runner.Calls[0].Args[Args]
+    let tail = runner.Calls[0].FileName.Length
+    let result = EXPRESSION_PLACEHOLDER
+}
+`
+
+        private func AssertIndexedHover(content DocumentContent, position Position, token string, signature string) {
+            let hover = Assert.IsType[Hover](HoverComputer.ComputeHover(content, position))
+            Assert.Equal(signature, hover.Contents.ToString().Split('\n')[1])
+            AssertPosition(position, hover.Range.Start)
+            AssertPosition(Position(position.Line, position.Character + token.Length), hover.Range.End)
+        }
+
+        private func AssertPosition(expected Position, actual Position) {
+            Assert.Equal(expected.Line, actual.Line)
+            Assert.Equal(expected.Character, actual.Character)
+        }
+
         private const GenericInterfaceSource string = `package Repro
 
 interface IBox[T] {
