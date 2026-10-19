@@ -1327,7 +1327,21 @@ class LspServer {
             } else {
                 default(ProjectState?)
             }
-            let content = DocumentContent(document.Value.SyntaxTree, document.Value.Lines, project, this.workspaceState)
+            // Issue #5024: adopt a matching project tree without changing project source during watcher refreshes.
+            // A regenerated file can differ from the buffer until the client synchronizes it.
+            let syntaxTree = if project != nil && !string.IsNullOrEmpty(filePath) && project.TryGetSyntaxTree(
+                filePath!!,
+                out var projectTree
+            ) &&
+                projectTree != nil &&
+                projectTree
+                .Text
+                .ToString() == document.Value.SyntaxTree.Text.ToString() {
+                projectTree
+            } else {
+                document.Value.SyntaxTree
+            }
+            let content = DocumentContent(syntaxTree, document.Value.Lines, project, this.workspaceState)
             this.documentContentService.AddOrUpdate(document.Key, content)
             if !this.clientSupportsPullDiagnostics {
                 this.SchedulePushDiagnosticsBind(uri, DiagnosticComputationResult(content, Array.Empty[Diagnostic]()))

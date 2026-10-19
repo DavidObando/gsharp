@@ -4,12 +4,14 @@
 
 package GSharp.LanguageServer.Tests
 
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.LanguageServer
 import GSharp.LanguageServer.Protocol
 import GSharp.LanguageServer.Server
 import System
 import System.Collections.Generic
 import System.IO
+import System.Linq
 import System.Threading.Tasks
 import Xunit
 
@@ -59,6 +61,46 @@ open class ResxWatchedFileTests {
             let text = File.ReadAllText(designerPath)
             Assert.Contains("Greeting", text)
             Assert.Contains("Farewell", text)
+        } finally {
+            Directory.Delete(root, recursive: true)
+        }
+    }
+
+    @Fact
+    async func DidChangeWatchedFiles_RegeneratedOpenDesigner_PreservesNewMembers() {
+        let (root, resxPath, designerPath) = await RunAsync(FileChangeType.Created)
+        try {
+            let previous = File.ReadAllText(designerPath)
+            let workspace = WorkspaceState()
+            let project = workspace.AddProject(Path.Combine(root, "Sample.gsproj"))
+            project.RootNamespace = "Sample.App"
+            project.AddFileFromDisk(designerPath)
+            workspace.RegisterFile(designerPath, project)
+            let documents = DocumentContentService()
+            let server = LspServer(documents, workspace)
+            let uri = DocumentUri.FromFileSystemPath(designerPath)!!
+            await server.DidOpenAsync(
+                DidOpenTextDocumentParams{TextDocument: TextDocumentItem{Uri: uri, Text: previous}}
+            )
+            File.WriteAllText(resxPath, SampleResx.Replace("Greeting", "Farewell"))
+            await server.DidChangeWatchedFilesAsync(
+                DidChangeWatchedFilesParams{
+                    Changes: List[FileEvent]{
+                        FileEvent{Uri: DocumentUri.FromFileSystemPath(resxPath)!!, Type: FileChangeType.Changed}
+                    }
+                }
+            )
+            let properties = project
+                .GetCompilation()
+                .GlobalScope
+                .Structs
+                .SelectMany((s StructSymbol) -> s.StaticProperties)
+            Assert.Contains(properties, (p PropertySymbol) -> p.Name == "Farewell")
+            Assert.DoesNotContain(properties, (p PropertySymbol) -> p.Name == "Greeting")
+            Assert.True(project.TryGetSyntaxTree(designerPath, out var tree))
+            Assert.Equal(File.ReadAllText(designerPath), tree.Text.ToString())
+            Assert.True(documents.TryGet(uri.ToString(), out var content))
+            Assert.Equal(previous, content.SyntaxTree.Text.ToString())
         } finally {
             Directory.Delete(root, recursive: true)
         }
