@@ -164,15 +164,19 @@ shared class BoundSemantics {
         }
     }
 
-    /// Finds the bound node for [`expression`](paramref). An expression that
-    /// is a segment of a member-access chain is reached from the chain's
-    /// anchored outermost accessor through the receiver chain.
+    /// Uses the outer receiver context when it has an answer, preserving flow
+    /// narrowing. Retains inner anchors when an outer write target or generated
+    /// index cannot supply the queried expression.
     private func FindBoundExpression(
         model GSharp.Core.CodeAnalysis.SemanticModel,
         expression ExpressionSyntax
     ) BoundExpression? {
         var root ExpressionSyntax = expression
+        let anchors = Stack[(Syntax ExpressionSyntax, Node BoundExpression)]()
         while true {
+            if GetBoundAnchor(model, root) is {} anchored {
+                anchors.Push((root, anchored))
+            }
             if root.Parent is AccessorExpressionSyntax accessor &&
                 (object.ReferenceEquals(accessor.LeftPart, root) || object.ReferenceEquals(accessor.RightPart, root)) {
                 root = accessor
@@ -182,14 +186,29 @@ shared class BoundSemantics {
                 break
             }
         }
+        while anchors.Count > 0 {
+            let (syntax, node) = anchors.Pop()
+            if FindFromAnchor(syntax, node, expression) is {} found {
+                return found
+            }
+        }
+        return nil
+    }
+
+    private func FindFromAnchor(
+        root ExpressionSyntax,
+        anchored BoundExpression,
+        expression ExpressionSyntax
+    ) BoundExpression? {
         if object.ReferenceEquals(root, expression) {
-            return PeelConversions(model.GetBoundNode(expression) as BoundExpression, expression)
+            return PeelConversions(anchored, expression)
         }
         let segments = List[ExpressionSyntax]()
         AddReceiverSegments(root, segments)
+        let terminal = TerminalSegment(expression)
         var index = -1
         for var i = 0; i < segments.Count; i++ {
-            if object.ReferenceEquals(segments[i], expression) {
+            if object.ReferenceEquals(segments[i], terminal) {
                 index = i
                 break
             }
@@ -197,10 +216,7 @@ shared class BoundSemantics {
         if index < 0 {
             return nil
         }
-        var node BoundExpression? = PeelConversions(
-            model.GetBoundNode(root) as BoundExpression,
-            segments[segments.Count - 1]
-        )
+        var node BoundExpression? = PeelConversions(anchored, segments[segments.Count - 1])
         // A `?.` hop binds its access over a synthetic capture of the receiver;
         // the walk maps each capture back to the receiver it stands for.
         let captures = Dictionary[VariableSymbol, BoundExpression]()
@@ -213,6 +229,8 @@ shared class BoundSemantics {
             member = Unwrap(member)
             node = if member == nil {
                 default(BoundExpression?)
+            } else if segments[depth] is IndexExpressionSyntax {
+                PeelConversions(IndexTargetOf(member), segments[depth - 1])
             } else {
                 PeelConversions(ReceiverOf(member), segments[depth - 1])
             }
@@ -221,6 +239,64 @@ shared class BoundSemantics {
             }
         }
         return node
+    }
+
+    private func GetBoundAnchor(
+        model GSharp.Core.CodeAnalysis.SemanticModel,
+        expression ExpressionSyntax
+    ) BoundExpression? {
+        if model.GetBoundNode(expression) is BoundExpression anchored {
+            return anchored
+        }
+        // Written slices retain their range anchor, rather than the accessor
+        // anchor, when the binder constructs the generated block.
+        if TerminalSegment(expression) is IndexExpressionSyntax index &&
+            index
+            .Indices
+            .Count == 1 &&
+            index.Index is RangeExpressionSyntax rangeSyntax &&
+            model.GetBoundNode(rangeSyntax) is BoundBlockExpression block && CapturedIndexTarget(block) != nil {
+            return block
+        }
+        return nil
+    }
+
+    private func TerminalSegment(expression ExpressionSyntax) ExpressionSyntax {
+        var current = expression
+        while current is AccessorExpressionSyntax accessor {
+            current = accessor.RightPart
+        }
+        return current
+    }
+
+    private func IndexTargetOf(node BoundExpression) BoundExpression? -> switch node {
+        case index is BoundIndexExpression: index.Target
+        case index is BoundClrIndexExpression: index.Target
+        case block is BoundBlockExpression: CapturedIndexTarget(block)
+        default: ReceiverOf(node)
+    }
+
+    private func CapturedIndexTarget(block BoundBlockExpression) BoundExpression? {
+        // DeclareRangeTemp emits the source capture first for index/slice
+        // blocks. Its reserved role and absent declaration exclude authored
+        // blocks and other generated capture plans.
+        const sourceCapturePrefix = "$$slice_src"
+        if !block
+            .Statements
+            .IsDefaultOrEmpty &&
+            block.Statements[0] is BoundVariableDeclaration{
+            Variable: LocalVariableSymbol{DeclaringSyntax: nil, IsReadOnly: true} capture,
+            Initializer: {} target
+        } &&
+            capture
+            .Name
+            .StartsWith(sourceCapturePrefix, StringComparison.Ordinal) && int32.TryParse(
+            capture.Name.Substring(sourceCapturePrefix.Length),
+            out _
+        ) {
+            return target
+        }
+        return nil
     }
 
     private func AddReceiverSegments(expression ExpressionSyntax, segments List[ExpressionSyntax]) {
@@ -239,10 +315,8 @@ shared class BoundSemantics {
         }
     }
 
-    /// Gets a bound member's receiver or an index's target, or null when it has none.
+    /// Gets a bound member's receiver, or null when it has none.
     private func ReceiverOf(node BoundExpression) BoundExpression? -> switch node {
-        case index is BoundIndexExpression: index.Target
-        case index is BoundClrIndexExpression: index.Target
         case userCall is BoundUserInstanceCallExpression: userCall.Receiver
         case importedCall is BoundImportedInstanceCallExpression: importedCall.Receiver
         case property is BoundPropertyReferenceOperationExpression: property.Instance

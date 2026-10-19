@@ -291,6 +291,12 @@ open class Issue4989BoundReceiverTests {
     @InlineData("runner.Calls[0].FileName[Calls]", "FileName", "prop FileName string { get; }")
     @InlineData("runner.Calls[0].Fields[Args]", "Fields", "(field) Fields []string")
     @InlineData(
+        "runner.Calls[^1].Args[Args]",
+        "Calls",
+        "prop Calls System.Collections.Generic.List[RunnerCall] { get; }"
+    )
+    @InlineData("runner.Calls[0].Args[..]", "Args", "prop Args []string { get; }")
+    @InlineData(
         "runner.Calls[0].Args[Args].Length",
         "Calls",
         "prop Calls System.Collections.Generic.List[RunnerCall] { get; }"
@@ -366,6 +372,9 @@ open class Issue4989BoundReceiverTests {
     @InlineData("uri.Segments[0]", "Segments", "System.Uri.Segments []string { get; }", typeof(Uri))
     @InlineData("uri.Host[0]", "Host", "System.Uri.Host string { get; }", typeof(Uri))
     @InlineData("uri.ToString()[0]", "ToString", "func (System.Uri) ToString() string", typeof(Uri))
+    @InlineData("uri.ToString()[^1]", "ToString", "func (System.Uri) ToString() string", typeof(Uri))
+    @InlineData("uri.ToString()[..]", "ToString", "func (System.Uri) ToString() string", typeof(Uri))
+    @InlineData("uri.ToString()[1..^1]", "ToString", "func (System.Uri) ToString() string", typeof(Uri))
     @InlineData("string.Empty[0]", "Empty", "string.Empty string", typeof(string))
     func Issue5035_IndexedImportedMembers_UseBoundIdentity(
         expression string,
@@ -420,6 +429,93 @@ func Run(store IStore?) string {
             DefinitionComputer.ComputeDefinition(DocumentUri.From("file:///issue5035.gs")!!, content, position)
         )
         AssertPosition(LanguageServerTestHelpers.PositionOf(source, "Read"), location.Range.Start)
+    }
+
+    @Theory
+    @InlineData("=")
+    @InlineData("+=")
+    func Issue5035_IndexedAssignmentTarget_PreservesTheBoundOverload(operatorText string) {
+        let source = `package Repro
+class Holder {
+    func GetItems(value string) []int32 -> []int32{1}
+    func GetItems(value int32) []int32 -> []int32{2}
+}
+func Run(obj Holder) {
+    obj.GetItems(1)[0] OPERATOR 42
+}
+`.Replace("OPERATOR", operatorText)
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let position = LanguageServerTestHelpers.PositionOf(source, "GetItems(1)")
+        AssertIndexedHover(content, position, "GetItems", "func (Holder) GetItems(value int32) []int32")
+        let token = SemanticLookup.FindTokenAt(content.SyntaxTree, SemanticLookup.ToOffset(content, position))!!
+        let selected = Assert.IsAssignableFrom[FunctionSymbol](BoundSemantics.GetSymbol(compilation, token))
+        Assert.Equal(TypeSymbol.Int32, selected.Parameters[0].Type)
+        let location = Assert.IsType[Location](
+            DefinitionComputer.ComputeDefinition(DocumentUri.From("file:///issue5035.gs")!!, content, position)
+        )
+        AssertPosition(LanguageServerTestHelpers.PositionOf(source, "GetItems(value int32)"), location.Range.Start)
+    }
+
+    @Fact
+    func Issue5035_CompositeBaseReceiver_KeepsItsBoundTypeAndCompletion() {
+        const source = `package Repro
+open class Base {
+    prop Text string -> "base"
+}
+class Derived : Base {
+    func Run() int32 -> base.Text.Length
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let token = TokenAt(content, source, "Length", 0)
+        let outer = Assert.IsType[AccessorExpressionSyntax](token.Parent?.Parent)
+        let receiver = Assert.IsType[AccessorExpressionSyntax](outer.LeftPart)
+        Assert.Equal(typeof(string), BoundSemantics.GetExpressionType(compilation, receiver)?.ClrType)
+        let position = LanguageServerTestHelpers.PositionOf(source, "Length")
+        AssertIndexedHover(content, position, "Length", "string.Length int32 { get; }")
+        let completions = CompletionComputer.ComputeCompletions(content, position)
+        Assert.Contains(
+            completions,
+            (item CompletionItem) -> item.Label == "Substring" && item.Kind == CompletionItemKind.Method
+        )
+    }
+
+    @Theory
+    @InlineData("^1")
+    @InlineData("..")
+    func Issue5035_CapturedIndexTarget_PreservesTheUnqualifiedOverload(index string) {
+        let source = `package Repro
+func Values(value string) []int32 -> []int32{1}
+func Values(value int32) []int32 -> []int32{2}
+func Run() {
+    let authored = {
+        let unrelated = 123
+        "text"
+    }
+    let result = Values(1)[INDEX]
+}
+`.Replace("INDEX", index)
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let authored = Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "authored =", 0).Parent)
+        Assert.Equal(typeof(string), BoundSemantics.GetExpressionType(compilation, authored.Initializer)?.ClrType)
+        let position = LanguageServerTestHelpers.PositionOf(source, "Values(1)")
+        AssertIndexedHover(content, position, "Values", "func Values(value int32) []int32")
+        let token = SemanticLookup.FindTokenAt(content.SyntaxTree, SemanticLookup.ToOffset(content, position))!!
+        let selected = Assert.IsAssignableFrom[FunctionSymbol](BoundSemantics.GetSymbol(compilation, token))
+        Assert.Equal(TypeSymbol.Int32, selected.Parameters[0].Type)
+        let location = Assert.IsType[Location](
+            DefinitionComputer.ComputeDefinition(DocumentUri.From("file:///issue5035.gs")!!, content, position)
+        )
+        AssertPosition(LanguageServerTestHelpers.PositionOf(source, "Values(value int32)"), location.Range.Start)
     }
 
     shared {
