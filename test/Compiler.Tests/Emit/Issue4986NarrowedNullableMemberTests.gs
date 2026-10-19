@@ -1548,6 +1548,154 @@ Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Prob
         Assert.Equal("99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine, result.Output)
     }
 
+    @Theory
+    @InlineData(false, 0)
+    @InlineData(true, 0)
+    @InlineData(false, 12)
+    func Constraint_Alternatives_Require_Joint_Support_Without_Multiplying_Independent_Domains(
+        applicable bool,
+        independent int32
+    ) {
+        let pairs = Enumerable.Range(0, independent).ToArray()
+        let extraParameters = string.Join(",", pairs.Select((index int32) -> "A${index},B${index}"))
+        let extraSlots = string.Join(",", pairs.Select((index int32) -> "in A${index},B${index}"))
+        let extraArguments = string.Join(",", pairs.Select((index int32) -> "object,UnaryChoice"))
+        let variables = string.Join(",", pairs.Select((index int32) -> "A${index}").Append("T").Append("U").Append("V"))
+        let fallback = string.Join(
+            ",",
+            Enumerable.Repeat(
+                if applicable {
+                    "object"
+                } else {
+                    "System.IO.MemoryStream"
+                },
+                independent + 3
+            )
+        )
+        let constraints = string.Join(
+            " ",
+            pairs.Select((index int32) -> "where B${index} : System.Collections.Generic.IComparer<A${index}>")
+        )
+        let prefix = func (text string) string {
+            return if text.Length == 0 {
+                ""
+            } else {
+                text + ","
+            }
+        }
+        using let fixture = CSharpFixture((`namespace Fixture4986 {
+    public interface IChoice<in T,in U> {}
+    public interface IProbe<SLOTS> {}
+    public interface IBounds<VARIABLES> {}
+    public class UnaryChoice : System.Collections.Generic.IComparer<System.IO.Stream>, System.Collections.Generic.IComparer<System.Exception> {
+        public int Compare(System.IO.Stream x, System.IO.Stream y) => 0;
+        public int Compare(System.Exception x, System.Exception y) => 0;
+    }
+    public class ChoiceX : IChoice<S,S>, IChoice<System.Exception,System.Exception> {}
+    public class ChoiceY : IChoice<S,S>, IChoice<System.Exception,System.Exception> {}
+    public class ChoiceZ : ZCHOICES {}
+    public struct Probe : IProbe<ARGUMENTS>, IBounds<FALLBACK> {
+        public int V; public Probe(int v) { V = v; }
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<PARAMETERS>(this IProbe<PARAMETERS> value, IBounds<VARIABLES> fallback)
+            CONSTRAINTS where X : IChoice<T,U> where Y : IChoice<U,V> where Z : IChoice<T,V> => new Probe(99);
+    }
+}`).Replace(
+                "SLOTS",
+                prefix(extraSlots) + "in T,in U,in V,X,Y,Z"
+            ).Replace(
+                "ARGUMENTS",
+                prefix(extraArguments) + "object,object,object,ChoiceX,ChoiceY,ChoiceZ"
+            ).Replace(
+                "PARAMETERS",
+                prefix(extraParameters) + "T,U,V,X,Y,Z"
+            ).Replace(
+                "VARIABLES",
+                variables
+            ).Replace(
+                "FALLBACK",
+                fallback
+            ).Replace(
+                "CONSTRAINTS",
+                constraints
+            ).Replace(
+                "ZCHOICES",
+                if applicable {
+                    "IChoice<S,S>, IChoice<System.Exception,System.Exception>"
+                } else {
+                    "IChoice<S,System.Exception>, IChoice<System.Exception,S>"
+                }
+            ).Replace(
+                "S,",
+                if applicable {
+                    "object,"
+                } else {
+                    "System.IO.Stream,"
+                }
+            ).Replace(
+                ",S>",
+                if applicable {
+                    ",object>"
+                } else {
+                    ",System.IO.Stream>"
+                }
+            ))
+        let direct = if applicable {
+            "Console.WriteLine(Probe(7).GetValueOrDefault(Probe()).V)"
+        } else {
+            ""
+        }
+        let result = CompileAndRun((`import System
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Probe()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+DIRECT
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`).Replace("DIRECT", direct), fixture.AssemblyPath, compileInSeparateProcess: true)
+        Assert.Equal(
+            if applicable {
+                "99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine
+            } else {
+                "7 7 7 0 0 0" + Environment.NewLine
+            },
+            result.Output
+        )
+    }
+
+    @Theory
+    @InlineData("System.Action<string>", "System.Action<object>")
+    @InlineData("System.Func<object>", "System.Func<string>")
+    func Variant_Sealed_Reference_Bounds_Keep_The_Underlying_Member(receiver string, candidate string) {
+        using let fixture = CSharpFixture((`namespace Fixture4986 {
+    public interface IProbe<in T,U> {}
+    public struct Probe : IProbe<RECEIVER,System.Collections.Generic.Comparer<CANDIDATE>>, System.Collections.Generic.IComparer<CANDIDATE> {
+        public int V; public Probe(int v) { V = v; }
+        public int Compare(CANDIDATE x, CANDIDATE y) => 0;
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<T,U>(this IProbe<T,U> value, System.Collections.Generic.IComparer<T> fallback)
+            where U : System.Collections.Generic.IComparer<T> => new Probe(99);
+    }
+}`).Replace("RECEIVER", receiver).Replace("CANDIDATE", candidate))
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Probe()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+Console.WriteLine(Probe(7).GetValueOrDefault(Probe()).V)
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
     @Fact
     func Nested_Fallbacks_Have_Linear_Binding_Work() {
         var nested = "0"

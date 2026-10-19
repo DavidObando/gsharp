@@ -363,8 +363,14 @@ discard an operator's input bounds and retry an unrelated completion.
 Missing bounds never trigger Cartesian receiver completion. A fixed argument's
 open generic constraint must have a compatible actual interface or base shape;
 ambiguous interfaces are retained as real alternative domains. Compatibility
-propagates between those domains rather than dropping the other obligations
-while checking one alternative, or multiplying them into a Cartesian product.
+requires joint support, not merely pairwise support: an odd cycle can satisfy
+every pair without admitting any complete choice. Domains connected through
+open parameters and their declared constraints are checked together;
+independent components are never multiplied. Within a component, symbolic
+validation propagates forced alternatives before branching on a smallest
+remaining actual-interface domain, with rejected assignments memoized.
+These choices are actual metadata alternatives, not invented receiver-type
+completions, and each check retains the other conversion obligations.
 Every parameter's lower/upper domain is checked for impossibility before any
 recursive candidate pinning, including domains late in the parameter list.
 The original receiver conversion supplies structural lower, upper and exact
@@ -387,7 +393,15 @@ checks; a nonmatching carrier such as `object` cannot reopen an erased
 receiver bound and bypass those alternatives. Unknown relationships remain
 conservative for later argument inference.
 Reference-variance refinement cannot introduce a value-type argument by
-boxing.
+boxing. CLR sealing alone does not make a reference bound exact: variant
+generic delegates can have narrower constructions.
+Refinement follows the slot's variance direction; for example,
+`Action<object>` can refine an upper bound of `Action<string>`, whereas
+`Action<object>` itself has no stricter construction. Such sealed families
+still retain their constructor and implemented-interface capabilities.
+Bound promotion also recognizes genuine same-family CLR delegate return
+covariance when the overload classifier ranks it separately from a reference
+conversion; delegate shape adapters remain excluded.
 Inferring an element type cannot turn an `int32` receiver into a collection.
 Explicit generic
 calls keep the narrowed binding (`Nullable<T>` declares no generic methods).
