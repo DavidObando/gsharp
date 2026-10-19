@@ -94,6 +94,48 @@ open class GsgenGeneratedSourceTests {
     }
 
     @Fact
+    async func DidChangeWatchedFiles_RegeneratedOpenPart_PreservesNewMembers() {
+        let tempDir = Path.Combine(Path.GetTempPath(), "gsharp-gsgen-" + Guid.NewGuid().ToString("N"))
+        try {
+            Directory.CreateDirectory(tempDir)
+            let projPath = Path.Combine(tempDir, "Sample.gsproj")
+            File.WriteAllText(projPath, "<Project Sdk=\"Gsharp.NET.Sdk\"></Project>")
+            let userPath = Path.Combine(tempDir, "Program.gs")
+            File.WriteAllText(userPath, UserSource.Replace("Bar", "Baz"))
+            let gsgenDir = Path.Combine(tempDir, "obj", "Debug", "net10.0", "gsgen")
+            Directory.CreateDirectory(gsgenDir)
+            let generatedPath = Path.Combine(gsgenDir, "Foo.g.gs")
+            File.WriteAllText(generatedPath, GeneratedSource)
+            let workspace = WorkspaceState()
+            let project = workspace.AddProject(projPath)
+            project.AddFileFromDisk(userPath)
+            workspace.RegisterFile(userPath, project)
+            project.AddFileFromDisk(generatedPath)
+            workspace.RegisterFile(generatedPath, project)
+            let documents = DocumentContentService()
+            let server = LspServer(documents, workspace)
+            let uri = DocumentUri.FromFileSystemPath(generatedPath)!!
+            await server.DidOpenAsync(
+                DidOpenTextDocumentParams{TextDocument: TextDocumentItem{Uri: uri, Text: GeneratedSource}}
+            )
+            let regenerated = GeneratedSource.Replace("Bar", "Baz")
+            File.WriteAllText(generatedPath, regenerated)
+            await server.DidChangeWatchedFilesAsync(
+                DidChangeWatchedFilesParams{Changes: List[FileEvent]{FileEvent{Uri: uri, Type: FileChangeType.Changed}}}
+            )
+            let compilation = project.GetCompilation()
+            let diagnostics = compilation.GlobalScope.Diagnostics.Concat(compilation.BoundProgram.Diagnostics).ToList()
+            Assert.DoesNotContain(diagnostics, (d GSharp.Core.CodeAnalysis.Diagnostic) -> d.IsError)
+            Assert.True(project.TryGetSyntaxTree(generatedPath, out var tree))
+            Assert.Equal(regenerated, tree.Text.ToString())
+            Assert.True(documents.TryGet(uri.ToString(), out var content))
+            Assert.Equal(GeneratedSource, content.SyntaxTree.Text.ToString())
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
+    @Fact
     async func DidChangeWatchedFiles_DeletedGeneratedPart_RemovesFromProject() {
         let tempDir = Path.Combine(Path.GetTempPath(), "gsharp-gsgen-" + Guid.NewGuid().ToString("N"))
         try {

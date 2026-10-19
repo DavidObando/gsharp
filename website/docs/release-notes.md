@@ -16,7 +16,7 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
-- **Local hovers work when a file opens before workspace discovery finishes** (issue #5024). The language server now replaces the standalone document tree with its owning project's tree after discovery, preserving unsaved buffer text. Local declarations and references resolve without reopening the file or making another edit, including after a server restart with the file open.
+- **Local hovers work when a file opens before workspace discovery finishes** (issue #5024). The language server now replaces the standalone document tree with its owning project's matching tree after discovery, preserving unsaved buffer text. Local declarations and references resolve without reopening the file or making another edit, including after a server restart with the file open. Watcher refreshes preserve regenerated project source when an older generated document remains open.
 
 - **Stepping over a handled exception reaches the catch body instead of an earlier source line** (issue #5014). Structural `try` wrappers no longer replace the first statement's debug location, and catch/filter setup is marked as hidden compiler-generated code. This fixes the jump to the first top-level statement in Visual Studio and VS Code, while preserving source locations in ordinary functions and finally bodies.
 

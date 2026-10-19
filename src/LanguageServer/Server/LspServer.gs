@@ -1327,10 +1327,17 @@ class LspServer {
             } else {
                 default(ProjectState?)
             }
-            // Issue #5024: attach the project's tree, not the standalone parse recorded before discovery.
-            // UpdateFile preserves the current buffer and reuses matching cached trees.
-            let syntaxTree = if project != nil && !string.IsNullOrEmpty(filePath) {
-                project.UpdateFile(filePath!!, document.Value.SyntaxTree.Text.ToString())
+            // Issue #5024: adopt a matching project tree without changing project source during watcher refreshes.
+            // A regenerated file can differ from the buffer until the client synchronizes it.
+            let syntaxTree = if project != nil && !string.IsNullOrEmpty(filePath) && project.TryGetSyntaxTree(
+                filePath!!,
+                out var projectTree
+            ) &&
+                projectTree != nil &&
+                projectTree
+                .Text
+                .ToString() == document.Value.SyntaxTree.Text.ToString() {
+                projectTree
             } else {
                 document.Value.SyntaxTree
             }
