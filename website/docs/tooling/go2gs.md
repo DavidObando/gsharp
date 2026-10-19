@@ -152,11 +152,12 @@ with the canonical Go identity, preserving within-profile cross-package
 deduplication without cross-profile aliasing. Symbol identities still depend on
 canonical type-ownership inputs not duplicated into their records, so validation
 instead enforces their uniqueness, references, and ownership. Schema-v1 file
-roles are limited to `compiled`, `active`, `test`,
-`ignored`, `native`, and `embed`, with exact native/embed flag agreement;
+roles are limited to `compiled`, `active`, `test`, `ignored`, `native`,
+`embed`, and `method-authority`, with exact native/embed flag agreement;
 `compiled` role must exactly match membership in the owning package's
-`compiledFileIds`. Compiled sources selected by `go:embed` retain the
-`compiled` role and are also linked by embed records.
+`compiledFileIds`, and authority-only dependency source must match its owning
+package's `methodAuthorityFileIds`. Compiled sources selected by `go:embed`
+retain the `compiled` role and are also linked by embed records.
 Serialized syntax nodes must belong to compiled files, and each node-bearing
 file must be one parent-linked `*ast.File` tree without detached nodes or
 cycles. Incomplete artifacts may omit trees; complete artifacts require one for

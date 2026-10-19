@@ -244,10 +244,11 @@ are validated without claiming payload recomputation. Deterministic output IDs
 come from canonical declarations/types, not dictionary traversal or absolute
 cache paths.
 Schema-v1 file roles are closed to `compiled`, `active`, `test`, `ignored`,
-`native`, and `embed`; the serialized native/embed flags must agree with the
-role, and `compiled` role must exactly match membership in the owning package's
-`compiledFileIds`. Compiled sources selected by `go:embed` retain the
-`compiled` role and are also linked by embed records.
+`native`, `embed`, and `method-authority`; the serialized native/embed flags
+must agree with the role, `compiled` role must exactly match membership in the
+owning package's `compiledFileIds`, and authority-only dependency source must
+match its owning package's `methodAuthorityFileIds`. Compiled sources selected
+by `go:embed` retain the `compiled` role and are also linked by embed records.
 Every serialized syntax node belongs to a compiled file, and each
 node-bearing file is exactly one `*ast.File`-rooted parent tree with no
 detached nodes or cycles. Incomplete inventories may omit a compiled file's
