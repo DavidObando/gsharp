@@ -7341,14 +7341,26 @@ func TestGOFLAGSTagsSelectPackagesAndInProcessSyntaxConsistently(t *testing.T) {
 func TestMethodSetAuthorityValidationHonorsCancellation(t *testing.T) {
 	analysis := methodSetAuthorityFixture(t)
 	ctx, cancel := context.WithCancel(t.Context())
+	cancelled := false
+	var operationsAfterCancellation []string
 	analysisOperationTestHook = func(operation, point string) {
+		if cancelled {
+			operationsAfterCancellation = append(
+				operationsAfterCancellation, operation+"/"+point)
+			return
+		}
 		if operation == "type-check-parse" && point == "before" {
 			cancel()
+			cancelled = true
 		}
 	}
 	t.Cleanup(func() { analysisOperationTestHook = nil })
 	if err := validateAnalysisContext(ctx, analysis); !errors.Is(err, context.Canceled) {
 		t.Fatalf("method-authority validation ignored caller cancellation: %v", err)
+	}
+	if len(operationsAfterCancellation) != 0 {
+		t.Fatalf("method-authority parsing or type checking continued after cancellation: %v",
+			operationsAfterCancellation)
 	}
 }
 
