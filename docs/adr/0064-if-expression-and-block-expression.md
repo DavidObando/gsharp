@@ -445,12 +445,19 @@ original receiver conversion. Strict identity/boxing constraints retain boxing
 but cannot become numeric promotions, and independent parameter domains remain
 factored rather than forming a Cartesian receiver completion.
 Tuple element promotion retains the tuple constructor's actual interface
-capabilities. The probe checks those capabilities with open constructor slots,
-propagates method-parameter equations recovered from their interfaces, and
-validates dependent constructor, value/reference and interface obligations.
-Closed slot obligations must also admit conversion of the original tuple's
-elements. It neither fixes the original element types nor enumerates their
-Cartesian product; unresolved constructor slots remain unknown.
+capabilities. Type-identity-keyed equations relate invariant interface positions,
+constructor slots and method parameters, including partially open constructions.
+The probe projects the original receiver and every declared conversion obligation
+through those equations into the same joint lower/upper-bound validator.
+Recovered constructions therefore retain fixed lower bounds and aliases retain
+their value/reference/constructor constraints. Only genuinely unconstrained
+constructor slots use the original element as a witness; constrained slots retain
+their inferred parameter or required type. Constructor validation uses the same
+parameter/constraint components as actual-interface alternatives, retaining
+conversion obligations without multiplying independent tuple families. Ambiguous
+metadata shapes and open-source obligations join the affected components.
+There is no Cartesian element completion or independent recursive
+constructor-constraint checker.
 Inferring an element type cannot turn an `int32` receiver into a collection.
 Object- and collection-initializer suffixes are transparent to this name lookup:
 the original unbound head call still supplies the probe's argument shape.

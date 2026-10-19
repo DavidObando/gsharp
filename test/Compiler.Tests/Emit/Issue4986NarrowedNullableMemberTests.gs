@@ -1246,6 +1246,99 @@ Console.WriteLine("${ternary((7,8))} ${expression((7,8))} ${statement((7,8))} ${
         Assert.Equal(expected + Environment.NewLine, result.Output)
     }
 
+    @Fact
+    func Partially_Open_Tuple_Constraints_Preserve_Fixed_And_Inferred_Slots() {
+        using let fixture = CSharpFixture(`using System;
+namespace Fixture4986 {
+    public static class Extensions {
+        public static (int,int) GetValueOrDefault<T,U>(this T value, T fallback, U other)
+            where T : struct, IComparable<(U,long)> =>
+                typeof(T) == typeof((long,long)) && typeof(U) == typeof(long) ? (99,0) : (98,0);
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func direct(n (int32,int32)) int32 -> n.GetValueOrDefault((int64(0),int64(0)), int64(0)).Item1
+func ternary(n (int32,int32)?) int32 -> n != nil ? n.GetValueOrDefault((int64(0),int64(0)), int64(0)).Item1 : 0
+func expression(n (int32,int32)?) int32 -> if n != nil { n.GetValueOrDefault((int64(0),int64(0)), int64(0)).Item1 } else { 0 }
+func statement(n (int32,int32)?) int32 {
+    if n != nil { return n.GetValueOrDefault((int64(0),int64(0)), int64(0)).Item1 }
+    return 0
+}
+Console.WriteLine("${direct((7,8))} ${ternary((7,8))} ${expression((7,8))} ${statement((7,8))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99 99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
+    func Tuple_Slot_Aliases_Retain_Method_Parameter_Constraints() {
+        using let fixture = CSharpFixture(`using System;
+namespace Fixture4986 {
+    public interface IBounds<T,U,V> {}
+    public static class Extensions {
+        public static (int,int) GetValueOrDefault<T,U,V>(this T value, IBounds<T,U,V> fallback)
+            where T : struct, IComparable<(U,V)> where U : System.IO.Stream => (99,0);
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n (int32,int32)?) int32 -> n != nil ? n.GetValueOrDefault((0,0)).Item1 : 0
+func expression(n (int32,int32)?) int32 -> if n != nil { n.GetValueOrDefault((0,0)).Item1 } else { 0 }
+func statement(n (int32,int32)?) int32 {
+    if n != nil { return n.GetValueOrDefault((0,0)).Item1 }
+    return 0
+}
+Console.WriteLine("${ternary((7,8))} ${expression((7,8))} ${statement((7,8))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("7 7 7 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Recovered_Tuple_Constructors_Retain_Fixed_Lower_Bounds(compatible bool) {
+        let type = if compatible {
+            "((int32,int32),(int32,int32))"
+        } else {
+            "((int32,int32),string)"
+        }
+        let value = if compatible {
+            "((7,8),(0,0))"
+        } else {
+            `((7,8),"")`
+        }
+        let fallback = if compatible {
+            "Bounds()"
+        } else {
+            `((0,0),"")`
+        }
+        using let fixture = CSharpFixture(`using System;
+namespace Fixture4986 {
+    public interface IBounds<T,U> {}
+    public sealed class Bounds : IBounds<(int,int),(int,int)> {}
+    public static class Extensions {
+        public static ((int,int),V) GetValueOrDefault<T,U,V>(this (T,V) value, IBounds<T,U> fallback)
+            where T : struct, IComparable<U> where V : U => ((99,0), value.Item2);
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n ` + type + `?) int32 -> n != nil ? n.GetValueOrDefault(` + fallback + `).Item1.Item1 : 0
+func expression(n ` + type + `?) int32 -> if n != nil { n.GetValueOrDefault(` + fallback + `).Item1.Item1 } else { 0 }
+func statement(n ` + type + `?) int32 {
+    if n != nil { return n.GetValueOrDefault(` + fallback + `).Item1.Item1 }
+    return 0
+}
+Console.WriteLine("${ternary(` + value + `)} ${expression(` + value + `)} ${statement(` + value + `)} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        let expected = if compatible {
+            "99 99 99 0 0 0"
+        } else {
+            "7 7 7 0 0 0"
+        }
+        Assert.Equal(expected + Environment.NewLine, result.Output)
+    }
+
     @Theory
     @InlineData("System.Exception", "string", "where T : System.Collections.Generic.List<U>")
     @InlineData("object", "string", "where T : System.IDisposable where U : T")
@@ -2005,6 +2098,41 @@ Console.WriteLine(direct(Probe(7)))
 Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
 `, fixture.AssemblyPath)
         Assert.Equal("99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
+    func Independent_Tuple_Constructor_Components_Do_Not_Form_A_Cartesian_Product() {
+        let indices = Enumerable.Range(0, 17).ToArray()
+        let parameters = string.Join(
+            ",",
+            indices.Select((i int32) -> "T${i}").Concat(Enumerable.Range(0, 16).Select((i int32) -> "U${i}"))
+        )
+        let receiver = "(" + string.Join(",", indices.Select((i int32) -> "T${i}")) + ")"
+        let constraints = string.Join(
+            " ",
+            Enumerable.Range(0, 16).Select((i int32) -> "where T${i} : IComparable<U${i}>")
+        ) +
+            " where T16 : System.IO.Stream"
+        let type = "(" + string.Join(",", Enumerable.Repeat("(int32,int32)", 17)) + ")"
+        let value = "(" + string.Join(",", Enumerable.Repeat("(7,8)", 17)) + ")"
+        using let fixture = CSharpFixture(`using System;
+namespace Fixture4986 {
+    public interface IBounds<` + parameters + `> {}
+    public static class Extensions {
+        public static ` + receiver + ` GetValueOrDefault<` + parameters + `>(this ` + receiver + ` value, IBounds<` + parameters + `> fallback) ` + constraints + ` => value;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n ` + type + `?) int32 -> n != nil ? n.GetValueOrDefault(` + value + `).Item1.Item1 : 0
+func expression(n ` + type + `?) int32 -> if n != nil { n.GetValueOrDefault(` + value + `).Item1.Item1 } else { 0 }
+func statement(n ` + type + `?) int32 {
+    if n != nil { return n.GetValueOrDefault(` + value + `).Item1.Item1 }
+    return 0
+}
+Console.WriteLine("${ternary(` + value + `)} ${expression(` + value + `)} ${statement(` + value + `)} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath, compileInSeparateProcess: true)
+        Assert.Equal("7 7 7 0 0 0" + Environment.NewLine, result.Output)
     }
 
     @Theory

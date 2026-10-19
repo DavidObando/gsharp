@@ -1700,7 +1700,8 @@ internal shared class ClrOverloadResolution {
         discoveredDomains Dictionary[(Type, Type), List[Type]]? = nil
     ) bool {
         let refinements = refinements ?? Dictionary[string, bool](StringComparer.Ordinal)
-        let possibleArguments = cast[[]Type](arguments.Clone())
+        let arguments = NormalizeExtensionReceiverArguments(parameters, arguments)
+        var possibleArguments = cast[[]Type](arguments.Clone())
         for var index = 0; index < parameters.Length; index++ {
             let parameter = parameters[index]
             if !arguments[index].ContainsGenericParameters && pinnedParameters?.Contains(index) != true &&
@@ -1712,6 +1713,14 @@ internal shared class ClrOverloadResolution {
                 )
             ) {
                 possibleArguments[index] = parameter
+            }
+        }
+        possibleArguments = NormalizeExtensionReceiverArguments(parameters, possibleArguments)
+        for var i = 0; i < parameters.Length; i++ {
+            let attributes = ExtensionReceiverParameterAttributes(parameters, possibleArguments, i)
+            if (attributes & GenericParameterAttributes.ReferenceTypeConstraint) != 0 &&
+                (attributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 {
+                return false
             }
         }
         let choices = if constraintAlternatives != nil {
@@ -1732,12 +1741,7 @@ internal shared class ClrOverloadResolution {
                 continue
             }
             for rawConstraint in parameters[i].GetGenericParameterConstraints() {
-                var constraint = rawConstraint
-                for var j = 0; j < parameters.Length; j++ {
-                    if !possibleArguments[j].ContainsGenericParameters {
-                        constraint = SubstituteClrType(constraint, parameters[j], possibleArguments[j])
-                    }
-                }
+                let constraint = SubstituteExtensionReceiverTerm(rawConstraint, parameters, possibleArguments)
                 constraintTerms.Add((possibleArguments[i], constraint, false))
             }
         }
@@ -1770,7 +1774,11 @@ internal shared class ClrOverloadResolution {
                     GetReceiverInferenceCarriers(source).Where(
                         (candidate Type) -> candidate.IsValueType ||
                             (
-                            constraint.GenericParameterAttributes &
+                            ExtensionReceiverParameterAttributes(
+                                parameters,
+                                possibleArguments,
+                                Array.IndexOf(parameters, constraint)
+                            ) &
                             GenericParameterAttributes.NotNullableValueTypeConstraint
                         ) == 0
                     )
@@ -1838,7 +1846,7 @@ internal shared class ClrOverloadResolution {
             }
         }
         for var index = 0; index < parameters.Length; index++ {
-            if !possibleArguments[index].IsGenericParameter {
+            if !ExtensionReceiverParameterIsOpen(parameters, possibleArguments, index) {
                 continue
             }
             let parameter = parameters[index]
@@ -1864,7 +1872,7 @@ internal shared class ClrOverloadResolution {
             let inferredUpperCount = upperBounds.Count
             let exactBounds = upperBounds.Where((bound Type) -> !InferenceBoundMayRefine(bound)).ToList()
             let requiresValue = (
-                parameter.GenericParameterAttributes &
+                ExtensionReceiverParameterAttributes(parameters, possibleArguments, index) &
                 GenericParameterAttributes.NotNullableValueTypeConstraint
             ) != 0
             let openClassBounds = List[Type]()
@@ -1888,12 +1896,7 @@ internal shared class ClrOverloadResolution {
                         pendingConstraints
                     )
                 }
-                var constraint = rawConstraint
-                for var i = 0; i < parameters.Length; i++ {
-                    if !possibleArguments[i].ContainsGenericParameters {
-                        constraint = SubstituteClrType(constraint, parameters[i], possibleArguments[i])
-                    }
-                }
+                let constraint = SubstituteExtensionReceiverTerm(rawConstraint, parameters, possibleArguments)
                 if constraint.IsInterface {
                     upperBounds.Add(constraint)
                     continue
@@ -1929,7 +1932,7 @@ internal shared class ClrOverloadResolution {
                 }
             }
             for var i = 0; i < parameters.Length; i++ {
-                if !possibleArguments[i].IsGenericParameter || !inferred.TryGetValue(
+                if !ExtensionReceiverParameterIsOpen(parameters, possibleArguments, i) || !inferred.TryGetValue(
                     parameters[i].Name,
                     out var candidate
                 ) ||
@@ -2007,7 +2010,13 @@ internal shared class ClrOverloadResolution {
                 return false
             }
         }
-        return SatisfiesDeclaredConstraints(parameters, possibleArguments, default, out _, out _)
+        return SatisfiesDeclaredConstraints(
+            parameters,
+            NormalizeExtensionReceiverArguments(parameters, possibleArguments),
+            default,
+            out _,
+            out _
+        )
     }
 
     private func ExtensionReceiverConstraintRoot(parents[]int32, index int32) int32 {
@@ -2018,18 +2027,18 @@ internal shared class ClrOverloadResolution {
         return root
     }
 
-    private func ExtensionReceiverConstraintDomainsMayApply(
-        parameters[]Type,
-        arguments[]Type,
-        domains IReadOnlyDictionary[(Type, Type), List[Type]],
-        choices IReadOnlyDictionary[(Type, Type), Type],
-        validate Func[IReadOnlyDictionary[(Type, Type), Type], bool],
-        discovered IReadOnlyDictionary[(Type, Type), List[Type]]
-    ) bool {
-        if domains.Count == 0 {
-            return true
-        }
+    private func ExtensionReceiverConstraintParameterParents(parameters[]Type, arguments[]Type)[]int32 {
         let parametersParents = Enumerable.Range(0, parameters.Length).ToArray()
+        for var i = 0; i < parameters.Length; i++ {
+            if arguments[i].ContainsGenericParameters {
+                for var j = 0; j < parameters.Length; j++ {
+                    if MentionsGenericParameter(arguments[i], parameters[j]) {
+                        parametersParents[ExtensionReceiverConstraintRoot(parametersParents, i)] =
+                        ExtensionReceiverConstraintRoot(parametersParents, j)
+                    }
+                }
+            }
+        }
         for var i = 0; i < parameters.Length; i++ {
             if !arguments[i].ContainsGenericParameters {
                 continue
@@ -2043,6 +2052,21 @@ internal shared class ClrOverloadResolution {
                 }
             }
         }
+        return parametersParents
+    }
+
+    private func ExtensionReceiverConstraintDomainsMayApply(
+        parameters[]Type,
+        arguments[]Type,
+        domains IReadOnlyDictionary[(Type, Type), List[Type]],
+        choices IReadOnlyDictionary[(Type, Type), Type],
+        validate Func[IReadOnlyDictionary[(Type, Type), Type], bool],
+        discovered IReadOnlyDictionary[(Type, Type), List[Type]]
+    ) bool {
+        if domains.Count == 0 {
+            return true
+        }
+        let parametersParents = ExtensionReceiverConstraintParameterParents(parameters, arguments)
         let keys = domains.Keys.ToList()
         let roots = List[HashSet[int32]]()
         for key in keys {
@@ -2561,12 +2585,13 @@ internal shared class ClrOverloadResolution {
             contextObject = baseType
         }
         var substituted = ClrTypeUtilities.RemapHostCoreTypeToContext(type, contextObject) ?? type
+        let equations = Dictionary[Type, Type]()
         for var i = 0; i < parameters.Length; i++ {
-            if !arguments[i].ContainsGenericParameters {
-                substituted = SubstituteClrType(substituted, parameters[i], arguments[i])
+            if parameters[i] != arguments[i] {
+                equations[parameters[i]] = arguments[i]
             }
         }
-        return substituted
+        return ResolveExtensionReceiverEquations(substituted, equations)
     }
 
     private func CollectExtensionReceiverTermBounds(
@@ -2623,7 +2648,7 @@ internal shared class ClrOverloadResolution {
         for var pass = 0; pass < parameters.Length; pass++ {
             var changed = false
             for var i = 0; i < parameters.Length; i++ {
-                if !arguments[i].IsGenericParameter {
+                if !ExtensionReceiverParameterIsOpen(parameters, arguments, i) {
                     continue
                 }
                 let lower = List[Type]()
@@ -2719,6 +2744,7 @@ internal shared class ClrOverloadResolution {
         receiverTerms IReadOnlyList[(Type, Type, bool)],
         refinements Dictionary[string, bool]
     ) bool {
+        let arguments = NormalizeExtensionReceiverArguments(parameters, arguments)
         if !SatisfiesDeclaredConstraints(parameters, arguments, default, out _, out _) {
             return false
         }
@@ -2733,7 +2759,7 @@ internal shared class ClrOverloadResolution {
         }
         let inferred = Dictionary[string, Type](StringComparer.Ordinal)
         for var index = 0; index < parameters.Length; index++ {
-            if !arguments[index].IsGenericParameter {
+            if !ExtensionReceiverParameterIsOpen(parameters, arguments, index) {
                 continue
             }
             let parameter = parameters[index]
@@ -2776,18 +2802,13 @@ internal shared class ClrOverloadResolution {
                         pending
                     )
                 }
-                var constraint = rawConstraint
-                for var i = 0; i < parameters.Length; i++ {
-                    if !arguments[i].ContainsGenericParameters {
-                        constraint = SubstituteClrType(constraint, parameters[i], arguments[i])
-                    }
-                }
+                let constraint = SubstituteExtensionReceiverTerm(rawConstraint, parameters, arguments)
                 if !constraint.IsGenericParameter {
                     upperBounds.Add(constraint)
                 }
             }
             let requiresValue = (
-                parameter.GenericParameterAttributes &
+                ExtensionReceiverParameterAttributes(parameters, arguments, index) &
                 GenericParameterAttributes.NotNullableValueTypeConstraint
             ) != 0
             if requiresValue && lowerBounds.Any((lower Type) -> !lower.IsValueType) {
@@ -2798,17 +2819,20 @@ internal shared class ClrOverloadResolution {
                 if lowerIndex >= fixedLowerCount && lower.IsGenericType && lower.FullName?.StartsWith(
                     "System.ValueTuple`",
                     StringComparison.Ordinal
-                ) == true &&
-                    !ExtensionReceiverTupleConstructorMayApply(
-                    lower,
-                    index,
-                    parameters,
-                    arguments,
-                    upperBounds,
-                    receiverTerms,
-                    choices
-                ) {
-                    return false
+                ) == true {
+                    if !ExtensionReceiverTupleConstructorMayApply(
+                        lower,
+                        index,
+                        parameters,
+                        arguments,
+                        upperBounds,
+                        receiverTerms,
+                        choices,
+                        refinements
+                    ) {
+                        return false
+                    }
+                    continue
                 }
                 if upperBounds.Any(
                     (upper Type) -> if upper.ContainsGenericParameters {
@@ -2819,10 +2843,7 @@ internal shared class ClrOverloadResolution {
                         ).Any(
                             (candidate Type) ->
                             IsInferenceBoundPromotion(candidate, lower) && IsInferenceBoundPromotion(upper, candidate)
-                        ) &&
-                            lower
-                            .FullName
-                            ?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) != true
+                        )
                     } else {
                         !IsInferenceBoundPromotion(upper, lower)
                     }
@@ -2889,13 +2910,19 @@ internal shared class ClrOverloadResolution {
                     }
                     let candidateArguments = cast[[]Type](arguments.Clone())
                     candidateArguments[index] = candidate
-                    if SatisfiesDeclaredConstraints(parameters, candidateArguments, default, out _, out _) {
+                    if SatisfiesDeclaredConstraints(
+                        parameters,
+                        NormalizeExtensionReceiverArguments(parameters, candidateArguments),
+                        default,
+                        out _,
+                        out _
+                    ) {
                         supported = true
                         break
                     }
                 }
                 let requiresConstructor = (
-                    parameter.GenericParameterAttributes &
+                    ExtensionReceiverParameterAttributes(parameters, arguments, index) &
                     GenericParameterAttributes.DefaultConstructorConstraint
                 ) != 0
                 let nominalClassDomain = closed.Any(
@@ -2916,7 +2943,10 @@ internal shared class ClrOverloadResolution {
         let refinedArguments = cast[[]Type](arguments.Clone())
         var refined = false
         for var i = 0; i < parameters.Length; i++ {
-            if !arguments[i].IsGenericParameter || !inferred.TryGetValue(parameters[i].Name, out var candidate) ||
+            if !ExtensionReceiverParameterIsOpen(parameters, arguments, i) || !inferred.TryGetValue(
+                parameters[i].Name,
+                out var candidate
+            ) ||
                 candidate.ContainsGenericParameters {
                 continue
             }
@@ -2942,138 +2972,347 @@ internal shared class ClrOverloadResolution {
         arguments[]Type,
         upperBounds IReadOnlyList[Type],
         receiverTerms IReadOnlyList[(Type, Type, bool)],
-        choices IReadOnlyDictionary[(Type, Type), Type]
+        choices IReadOnlyDictionary[(Type, Type), Type],
+        refinements Dictionary[string, bool]
     ) bool {
         let definition = source.GetGenericTypeDefinition()
-        for candidate in GetReceiverInferenceCarriers(definition) {
-            let slots = Dictionary[string, Type](StringComparer.Ordinal)
-            if !ExtensionReceiverConstructorObligationsMayApply(
-                candidate,
-                index,
+        let slots = definition.GetGenericArguments()
+        let sourceArguments = source.GetGenericArguments()
+        let parents = ExtensionReceiverConstraintParameterParents(parameters, arguments)
+        for term in receiverTerms {
+            ConnectExtensionReceiverTermParameters(
+                SubstituteExtensionReceiverTerm(term.Item1, parameters, arguments),
+                SubstituteExtensionReceiverTerm(term.Item2, parameters, arguments),
                 parameters,
-                arguments,
-                upperBounds,
-                receiverTerms,
-                choices,
-                slots,
-                HashSet[(int32, Type)]()
-            ) {
-                continue
+                parents
+            )
+        }
+        let root = ExtensionReceiverConstraintRoot(parents, index)
+        let component = Enumerable
+            .Range(0, parameters.Length)
+            .Where((i int32) -> ExtensionReceiverConstraintRoot(parents, i) == root)
+            .ToArray()
+        // Other components remain symbolic here and are checked by the caller.
+        let componentParameters = component.Select((i int32) -> parameters[i]).ToArray()
+        for candidate in GetReceiverInferenceCarriers(definition) {
+            let equations = Dictionary[Type, Type]()
+            for var i = 0; i < parameters.Length; i++ {
+                if parameters[i] != arguments[i] {
+                    equations[parameters[i]] = arguments[i]
+                }
             }
-            var promoted Type
+            equations[parameters[index]] = candidate
             try {
-                promoted = definition.MakeGenericType(
-                    definition
-                        .GetGenericArguments()
-                        .Select(
-                        (slot Type) -> if slots.TryGetValue(slot.Name, out var bound) {
-                            bound
-                        } else {
-                            slot
-                        }
+                if !CollectExtensionReceiverConstructorEquations(parameters, index, upperBounds, slots, equations) {
+                    continue
+                }
+                for var i = 0; i < slots.Length; i++ {
+                    if ResolveExtensionReceiverEquations(slots[i], equations) == slots[i] {
+                        equations[slots[i]] = sourceArguments[i]
+                    }
+                }
+                let possible = component.Select((i int32) -> ResolveExtensionReceiverEquations(arguments[i], equations))
+                    .ToArray()
+                let terms = receiverTerms.Select(
+                    (term(Type, Type, bool)) -> (
+                        ResolveExtensionReceiverEquations(term.Item1, equations),
+                        ResolveExtensionReceiverEquations(term.Item2, equations),
+                        term.Item3
                     )
-                        .ToArray()
                 )
+                    .ToList()
+                for var i = 0; i < parameters.Length; i++ {
+                    for constraint in parameters[i].GetGenericParameterConstraints() {
+                        terms.Add(
+                            (
+                                ResolveExtensionReceiverEquations(parameters[i], equations),
+                                ResolveExtensionReceiverEquations(constraint, equations),
+                                false
+                            )
+                        )
+                    }
+                }
+                let projectedChoices = Dictionary[(Type, Type), Type]()
+                var consistent = true
+                for choice in choices {
+                    let key = (
+                        ResolveExtensionReceiverEquations(choice.Key.Item1, equations),
+                        ResolveExtensionReceiverEquations(choice.Key.Item2, equations)
+                    )
+                    let selected = ResolveExtensionReceiverEquations(choice.Value, equations)
+                    if projectedChoices.TryGetValue(key, out var existing) && existing != selected {
+                        consistent = false
+                        break
+                    }
+                    projectedChoices[key] = selected
+                }
+                if !consistent {
+                    continue
+                }
+                let pinned = Enumerable
+                    .Range(0, componentParameters.Length)
+                    .Where((i int32) -> componentParameters[i] != possible[i])
+                    .ToHashSet()
+                if ArgumentDependentBoundsMaySatisfyConstraints(
+                    componentParameters,
+                    possible,
+                    terms,
+                    componentParameters.Select((parameter Type) -> parameter.Name).ToHashSet(StringComparer.Ordinal),
+                    nil,
+                    pinned,
+                    projectedChoices,
+                    refinements: refinements
+                ) {
+                    return true
+                }
             } catch (ex ArgumentException) {
                 continue
-            }
-            if OpenExtensionReceiverStandardShapeMayApply(source, promoted) {
-                return true
             }
         }
         return false
     }
 
-    private func ExtensionReceiverConstructorObligationsMayApply(
-        candidate Type,
-        index int32,
+    private func ConnectExtensionReceiverTermParameters(source Type, target Type, parameters[]Type, parents[]int32) {
+        if source.ContainsGenericParameters {
+            let indices = Enumerable
+                .Range(0, parameters.Length)
+                .Where(
+                (i int32) -> MentionsGenericParameter(source, parameters[i]) ||
+                    MentionsGenericParameter(target, parameters[i])
+            )
+                .ToArray()
+            for var i = 1; i < indices.Length; i++ {
+                parents[ExtensionReceiverConstraintRoot(parents, indices[i])] =
+                ExtensionReceiverConstraintRoot(parents, indices[0])
+            }
+            return
+        }
+        if source.HasElementType && target.HasElementType && source.GetElementType() is {} sourceElement &&
+            target.GetElementType() is {} targetElement {
+            ConnectExtensionReceiverTermParameters(sourceElement, targetElement, parameters, parents)
+            return
+        }
+        if !target.IsGenericType {
+            return
+        }
+        let shapes = GetExtensionReceiverGenericShapes(source, target.GetGenericTypeDefinition())
+        if shapes.Count > 1 {
+            let indices = Enumerable
+                .Range(0, parameters.Length)
+                .Where((i int32) -> MentionsGenericParameter(target, parameters[i]))
+                .ToArray()
+            for var i = 1; i < indices.Length; i++ {
+                parents[ExtensionReceiverConstraintRoot(parents, indices[i])] =
+                ExtensionReceiverConstraintRoot(parents, indices[0])
+            }
+        } else if shapes.Count == 1 {
+            let sources = shapes[0].GetGenericArguments()
+            let targets = target.GetGenericArguments()
+            for var i = 0; i < sources.Length; i++ {
+                ConnectExtensionReceiverTermParameters(sources[i], targets[i], parameters, parents)
+            }
+        }
+    }
+
+    private func CollectExtensionReceiverConstructorEquations(
         parameters[]Type,
-        arguments[]Type,
+        index int32,
         upperBounds IReadOnlyList[Type],
-        receiverTerms IReadOnlyList[(Type, Type, bool)],
-        choices IReadOnlyDictionary[(Type, Type), Type],
-        slots Dictionary[string, Type],
-        visited HashSet[(int32, Type)]
+        slots[]Type,
+        equations Dictionary[Type, Type]
     ) bool {
-        if !visited.Add((index, candidate)) {
-            return true
+        let constraints = List[(Type, Type)]()
+        for parameter in parameters {
+            for constraint in parameter.GetGenericParameterConstraints() {
+                constraints.Add((parameter, constraint))
+            }
         }
-        let special = parameters[index].GenericParameterAttributes & GenericParameterAttributes.SpecialConstraintMask
-        if (special & GenericParameterAttributes.ReferenceTypeConstraint) != 0 &&
-            candidate.IsValueType ||
-            (special & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 &&
-            (!candidate.IsValueType || NullableLifting.IsValueTypeNullableClr(candidate)) ||
-            (special & GenericParameterAttributes.DefaultConstructorConstraint) != 0 &&
-            !candidate.IsValueType &&
-            candidate.GetConstructor(Type.EmptyTypes) == nil {
-            return false
-        }
-        let possible = cast[[]Type](arguments.Clone())
-        possible[index] = candidate
-        let pending = Queue[Type](upperBounds.Concat(parameters[index].GetGenericParameterConstraints()))
-        let constraints = HashSet[Type]()
-        while pending.Count > 0 {
-            var constraint = pending.Dequeue()
-            for var i = 0; i < parameters.Length; i++ {
-                if !possible[i].IsGenericParameter {
-                    constraint = SubstituteClrType(constraint, parameters[i], possible[i])
-                }
-            }
-            if !constraints.Add(constraint) {
-                continue
-            }
-            if constraint.IsGenericParameter {
-                for inherited in constraint.GetGenericParameterConstraints() {
-                    pending.Enqueue(inherited)
-                }
-                EnqueueExtensionReceiverUpperBounds(constraint, parameters, possible, choices, receiverTerms, pending)
-                continue
-            }
-            if !OpenExtensionReceiverStandardShapeMayApply(candidate, constraint, tupleElementConversions: false) {
-                return false
-            }
-            if !constraint.IsGenericType {
-                continue
-            }
-            let shapes = GetExtensionReceiverGenericShapes(candidate, constraint.GetGenericTypeDefinition())
-            if shapes.Count != 1 {
-                continue
-            }
-            let shape = shapes[0]
-            if !constraint.ContainsGenericParameters {
-                if !InferExactExtensionReceiverTypeArguments(shape, constraint, slots) {
-                    return false
-                }
-                continue
-            }
-            let inferred = Dictionary[string, Type](StringComparer.Ordinal)
-            // Constructor slots stay unknown, but method-parameter equations
-            // recovered from the actual interface must retain their obligations.
-            InferExactExtensionReceiverTypeArguments(constraint, shape, inferred)
-            for var i = 0; i < parameters.Length; i++ {
-                if !inferred.TryGetValue(parameters[i].Name, out var bound) || bound.IsGenericParameter {
+        constraints.AddRange(upperBounds.Select((upper Type) -> (parameters[index], upper)))
+        let known = HashSet[(Type, Type)](constraints)
+        for var pass = 0; pass <= parameters.Length + slots.Length; pass++ {
+            let count = equations.Count
+            let constraintCount = constraints.Count
+            for var i = 0; i < constraints.Count; i++ {
+                let source = ResolveExtensionReceiverEquations(constraints[i].Item1, equations)
+                let target = ResolveExtensionReceiverEquations(constraints[i].Item2, equations)
+                if source.IsGenericParameter {
                     continue
                 }
-                let lower = List[Type]()
-                let upper = List[Type]()
-                CollectFixedExtensionReceiverConstraintBounds(parameters, possible, i, lower, upper, choices)
-                CollectExtensionReceiverTermBounds(parameters, possible, i, receiverTerms, lower, upper, choices)
-                if !ExtensionReceiverConstructorObligationsMayApply(
-                    bound,
-                    i,
-                    parameters,
-                    possible,
-                    upper,
-                    receiverTerms,
-                    choices,
-                    slots,
-                    visited
-                ) {
+                if target.IsGenericParameter {
+                    for constraint in target.GetGenericParameterConstraints() {
+                        let term = (source, constraint)
+                        if known.Add(term) {
+                            constraints.Add(term)
+                        }
+                    }
+                    continue
+                }
+                if target.IsGenericType {
+                    let shapes = GetExtensionReceiverGenericShapes(source, target.GetGenericTypeDefinition())
+                    if shapes.Count == 1 {
+                        let sources = shapes[0].GetGenericArguments()
+                        let targets = target.GetGenericArguments()
+                        let positions = target.GetGenericTypeDefinition().GetGenericArguments()
+                        for var position = 0; position < sources.Length; position++ {
+                            let invariant = sources[position].IsValueType ||
+                                targets[position].IsValueType ||
+                                (
+                                positions[position].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
+                            ) ==
+                            GenericParameterAttributes.None
+                            if invariant &&
+                                !UnifyExtensionReceiverConstructorEquation(
+                                sources[position],
+                                targets[position],
+                                slots,
+                                equations
+                            ) {
+                                return false
+                            }
+                        }
+                        continue
+                    }
+                }
+                if !OpenExtensionReceiverStandardShapeMayApply(source, target, tupleElementConversions: false) {
                     return false
                 }
+            }
+            if equations.Count == count && constraints.Count == constraintCount {
+                return true
             }
         }
         return true
+    }
+
+    private func UnifyExtensionReceiverConstructorEquation(
+        source Type,
+        target Type,
+        slots[]Type,
+        equations Dictionary[Type, Type]
+    ) bool {
+        let source = ResolveExtensionReceiverEquations(source, equations)
+        let target = ResolveExtensionReceiverEquations(target, equations)
+        if source == target ||
+            !source.ContainsGenericParameters &&
+            !target.ContainsGenericParameters &&
+            ClrTypeUtilities.AreSame(source, target) {
+            return true
+        }
+        if source.IsGenericParameter || target.IsGenericParameter {
+            let parameter = if source.IsGenericParameter &&
+                (slots.Contains(source) || !target.IsGenericParameter || !slots.Contains(target)) {
+                source
+            } else {
+                target
+            }
+            let value = if parameter == source {
+                target
+            } else {
+                source
+            }
+            if MentionsGenericParameter(value, parameter) {
+                return false
+            }
+            equations[parameter] = value
+            return true
+        }
+        if source.HasElementType || target.HasElementType {
+            if source.IsArray != target.IsArray ||
+                source.IsByRef != target.IsByRef ||
+                source.IsPointer != target.IsPointer ||
+                source.IsArray &&
+                (source.GetArrayRank() != target.GetArrayRank() || source.IsSZArray != target.IsSZArray) {
+                return false
+            }
+            let sourceElement = source.GetElementType()
+            let targetElement = target.GetElementType()
+            return sourceElement != nil &&
+                targetElement != nil &&
+                UnifyExtensionReceiverConstructorEquation(sourceElement, targetElement, slots, equations)
+        }
+        if !source.IsGenericType || !target.IsGenericType || !ClrTypeUtilities.AreSame(
+            source.GetGenericTypeDefinition(),
+            target.GetGenericTypeDefinition()
+        ) {
+            return false
+        }
+        let sources = source.GetGenericArguments()
+        let targets = target.GetGenericArguments()
+        for var i = 0; i < sources.Length; i++ {
+            if !UnifyExtensionReceiverConstructorEquation(sources[i], targets[i], slots, equations) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func ResolveExtensionReceiverEquations(type Type, equations IReadOnlyDictionary[Type, Type]) Type {
+        if equations.TryGetValue(type, out var replacement) && type != replacement {
+            return ResolveExtensionReceiverEquations(replacement, equations)
+        }
+        if !type.ContainsGenericParameters {
+            return type
+        }
+        if type.HasElementType && type.GetElementType() is {} element {
+            let resolved = ResolveExtensionReceiverEquations(element, equations)
+            if element != resolved {
+                return if type.IsByRef {
+                    resolved.MakeByRefType()
+                } else if type.IsPointer {
+                    resolved.MakePointerType()
+                } else if type.IsSZArray {
+                    resolved.MakeArrayType()
+                } else {
+                    resolved.MakeArrayType(type.GetArrayRank())
+                }
+            }
+            return type
+        }
+        if type.IsGenericType {
+            let arguments = type.GetGenericArguments()
+            var changed = false
+            for var i = 0; i < arguments.Length; i++ {
+                let resolved = ResolveExtensionReceiverEquations(arguments[i], equations)
+                if arguments[i] != resolved {
+                    arguments[i] = resolved
+                    changed = true
+                }
+            }
+            if changed {
+                return type.GetGenericTypeDefinition().MakeGenericType(arguments)
+            }
+        }
+        return type
+    }
+
+    private func NormalizeExtensionReceiverArguments(parameters[]Type, arguments[]Type)[]Type {
+        let equations = Dictionary[Type, Type]()
+        for var i = 0; i < parameters.Length; i++ {
+            if parameters[i] != arguments[i] {
+                equations[parameters[i]] = arguments[i]
+            }
+        }
+        if equations.Count == 0 {
+            return arguments
+        }
+        return arguments.Select((argument Type) -> ResolveExtensionReceiverEquations(argument, equations)).ToArray()
+    }
+
+    private func ExtensionReceiverParameterIsOpen(parameters[]Type, arguments[]Type, index int32) bool ->
+    arguments[index] == parameters[index]
+
+    private func ExtensionReceiverParameterAttributes(
+        parameters[]Type,
+        arguments[]Type,
+        index int32
+    ) GenericParameterAttributes {
+        var attributes = parameters[index].GenericParameterAttributes
+        for var i = 0; i < parameters.Length; i++ {
+            if arguments[i] == parameters[index] {
+                attributes |= parameters[i].GenericParameterAttributes
+            }
+        }
+        return attributes
     }
 
     private func InferenceBoundMayHaveCompatibleSubtype(
@@ -3084,21 +3323,22 @@ internal shared class ClrOverloadResolution {
         refinements Dictionary[string, bool]
     ) bool {
         if !InferenceBoundMayRefine(bound) ||
-            (parameter.GenericParameterAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 {
+            (
+            ExtensionReceiverParameterAttributes(parameters, arguments, Array.IndexOf(parameters, parameter)) &
+            GenericParameterAttributes.NotNullableValueTypeConstraint
+        ) != 0 {
             return false
         }
         if bound.IsSealed &&
-            (parameter.GenericParameterAttributes & GenericParameterAttributes.DefaultConstructorConstraint) != 0 &&
+            (
+            ExtensionReceiverParameterAttributes(parameters, arguments, Array.IndexOf(parameters, parameter)) &
+            GenericParameterAttributes.DefaultConstructorConstraint
+        ) != 0 &&
             bound.GetConstructor(Type.EmptyTypes) == nil {
             return false
         }
         for rawConstraint in parameter.GetGenericParameterConstraints() {
-            var constraint = rawConstraint
-            for var i = 0; i < parameters.Length; i++ {
-                if parameters[i] != parameter && !arguments[i].ContainsGenericParameters {
-                    constraint = SubstituteClrType(constraint, parameters[i], arguments[i])
-                }
-            }
+            let constraint = SubstituteExtensionReceiverTerm(rawConstraint, parameters, arguments)
             if constraint.ContainsGenericParameters {
                 if constraint.IsInterface &&
                     !InferenceUpperBoundsMayRefineTogether([]Type{bound, constraint}, refinements) {
