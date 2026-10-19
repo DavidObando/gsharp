@@ -331,7 +331,11 @@ tries representative completed bounds and retains compatible unknown subtypes,
 checking every independent constraint. Sealed or disjoint class bounds and
 invariant receiver positions cannot use that escape hatch. A target-declared
 conversion with an input independent of its type parameter can leave that
-parameter free for later arguments.
+parameter free for later arguments, including value-type/interface or enum
+constraints for which no representative type is available. Unknown subtype
+bounds retain their dependent obligations: known arguments are substituted
+before testing upper bounds, and fixed arguments that constrain an unknown
+bound from below are checked rather than erased with the open parameter.
 Inferring an element type cannot turn an `int32` receiver into a collection.
 Explicit generic
 calls keep the narrowed binding (`Nullable<T>` declares no generic methods).

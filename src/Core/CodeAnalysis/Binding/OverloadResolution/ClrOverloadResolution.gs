@@ -1273,11 +1273,6 @@ internal shared class ClrOverloadResolution {
         ) {
             return false
         }
-        for carrier in GetReceiverInferenceCarriers(receiverClr) {
-            if ExtensionReceiverCarrierMayApply(method, receiver, parameterType, carrier, bounds, argumentDependent) {
-                return true
-            }
-        }
         let operators = List[MethodInfo]()
         ClrOperatorResolution.CollectOperators(receiverClr, "op_Implicit", operators)
         ClrOperatorResolution.CollectOperators(
@@ -1285,6 +1280,31 @@ internal shared class ClrOverloadResolution {
             "op_Implicit",
             operators
         )
+        for conversion in operators {
+            let conversionParameters = conversion.GetParameters()
+            if conversionParameters.Length == 1 &&
+                !conversionParameters[0]
+                .ParameterType
+                .ContainsGenericParameters &&
+                conversion.ReturnType == parameterType &&
+                typeParameters.All(
+                (parameter Type) -> !bounds.TryGetValue(parameter.Name, out var bound) ||
+                    bound.ContainsGenericParameters
+            ) &&
+                (
+                IsInferenceBoundPromotion(conversionParameters[0].ParameterType, receiverClr) ||
+                    Conversion
+                    .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(conversionParameters[0]))
+                    .IsImplicit
+            ) {
+                return true
+            }
+        }
+        for carrier in GetReceiverInferenceCarriers(receiverClr) {
+            if ExtensionReceiverCarrierMayApply(method, receiver, parameterType, carrier, bounds, argumentDependent) {
+                return true
+            }
+        }
         for conversion in operators {
             let conversionParameters = conversion.GetParameters()
             let convertedBounds = Dictionary[string, Type](bounds, StringComparer.Ordinal)
@@ -1414,9 +1434,6 @@ internal shared class ClrOverloadResolution {
             contextBounds[entry.Key] = ClrTypeUtilities.RemapHostCoreTypeToContext(entry.Value, contextObject) ??
                 entry.Value
         }
-        if !TryCloseInferredType(parameterType, contextBounds, out var closedReceiver) || closedReceiver == nil {
-            return false
-        }
         let typeArguments = typeParameters.Select(
             (parameter Type) -> if contextBounds.TryGetValue(parameter.Name, out var argument) {
                 argument
@@ -1425,7 +1442,7 @@ internal shared class ClrOverloadResolution {
             }
         )
             .ToArray()
-        if !ClosedExtensionReceiverConversionMayApply(method, receiver, closedReceiver, typeArguments) {
+        if !ClosedExtensionReceiverConversionMayApply(method, receiver, typeArguments) {
             return false
         }
         if !SatisfiesDeclaredConstraints(typeParameters, typeArguments, default, out var failedIndex, out _) {
@@ -1481,20 +1498,70 @@ internal shared class ClrOverloadResolution {
         arguments[]Type,
         receiverType Type,
         argumentDependent HashSet[string],
-        freeBounds IReadOnlyDictionary[string, Type]?
+        freeBounds IReadOnlyDictionary[string, Type]?,
+        pinnedParameters HashSet[int32]? = nil
     ) bool {
         let possibleArguments = cast[[]Type](arguments.Clone())
         while !SatisfiesDeclaredConstraints(parameters, possibleArguments, default, out var failedIndex, out _) {
             let parameter = parameters[failedIndex]
             let argument = possibleArguments[failedIndex]
-            if argument.IsGenericParameter || !argumentDependent.Contains(parameter.Name) ||
+            if argument.IsGenericParameter || pinnedParameters?.Contains(failedIndex) == true ||
+                !argumentDependent.Contains(parameter.Name) ||
                 !MentionsGenericParameter(receiverType, parameter) ||
-                !InferenceBoundMayHaveCompatibleSubtype(argument, parameter) {
+                !InferenceBoundMayHaveCompatibleSubtype(argument, parameter, parameters, possibleArguments) {
                 return false
             }
             let freelyInferred = freeBounds != nil && freeBounds.TryGetValue(parameter.Name, out var freeParameter) &&
-                InferenceBoundMayHaveCompatibleSubtype(argument, freeParameter)
+                InferenceBoundMayHaveCompatibleSubtype(argument, freeParameter, parameters, possibleArguments)
             if !freelyInferred && !ReceiverAllowsSubtypeInference(receiverType, parameter) {
+                return false
+            }
+            let lowerBounds = List[Type]()
+            for var i = 0; i < parameters.Length; i++ {
+                if i == failedIndex || possibleArguments[i].ContainsGenericParameters {
+                    continue
+                }
+                for constraint in parameters[i].GetGenericParameterConstraints() {
+                    if !MentionsGenericParameter(constraint, parameter) ||
+                        ReceiverAllowsSubtypeInference(constraint, parameter) {
+                        continue
+                    }
+                    let inferred = Dictionary[string, Type](StringComparer.Ordinal)
+                    if UnifyForInference(constraint, possibleArguments[i], inferred) && inferred.TryGetValue(
+                        parameter.Name,
+                        out var lower
+                    ) &&
+                        !lower.ContainsGenericParameters {
+                        lowerBounds.Add(lower)
+                    }
+                }
+            }
+            if lowerBounds.Count > 0 {
+                let pinned = if pinnedParameters != nil {
+                    HashSet[int32](pinnedParameters)
+                } else {
+                    HashSet[int32]()
+                }
+                pinned.Add(failedIndex)
+                for candidate in GetReceiverInferenceCarriers(lowerBounds[0]) {
+                    if candidate.IsValueType || !IsInferenceBoundPromotion(argument, candidate) || lowerBounds.Any(
+                        (lower Type) -> !IsInferenceBoundPromotion(candidate, lower)
+                    ) {
+                        continue
+                    }
+                    let candidateArguments = cast[[]Type](possibleArguments.Clone())
+                    candidateArguments[failedIndex] = candidate
+                    if ArgumentDependentSubtypesMaySatisfyConstraints(
+                        parameters,
+                        candidateArguments,
+                        receiverType,
+                        argumentDependent,
+                        freeBounds,
+                        pinned
+                    ) {
+                        return true
+                    }
+                }
                 return false
             }
             // This parameter represents an unenumerable subtype. Keep checking
@@ -1542,15 +1609,29 @@ internal shared class ClrOverloadResolution {
         return true
     }
 
-    private func InferenceBoundMayHaveCompatibleSubtype(bound Type, parameter Type) bool {
+    private func InferenceBoundMayHaveCompatibleSubtype(
+        bound Type,
+        parameter Type,
+        parameters[]Type,
+        arguments[]Type
+    ) bool {
         if bound.IsValueType ||
             bound.IsSealed ||
             (parameter.GenericParameterAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 {
             return false
         }
-        for constraint in parameter.GetGenericParameterConstraints() {
+        for rawConstraint in parameter.GetGenericParameterConstraints() {
+            var constraint = rawConstraint
+            for var i = 0; i < parameters.Length; i++ {
+                if parameters[i] != parameter && !arguments[i].ContainsGenericParameters {
+                    constraint = SubstituteClrType(constraint, parameters[i], arguments[i])
+                }
+            }
             if constraint.ContainsGenericParameters {
                 continue
+            }
+            if constraint.IsValueType {
+                return false
             }
             if constraint.IsSealed && !IsInferenceBoundPromotion(bound, constraint) {
                 return false
@@ -1568,7 +1649,6 @@ internal shared class ClrOverloadResolution {
     private func ClosedExtensionReceiverConversionMayApply(
         method MethodInfo,
         receiver TypeSymbol,
-        closedReceiver Type,
         typeArguments[]Type
     ) bool {
         var closedMethod MethodInfo
@@ -1579,10 +1659,19 @@ internal shared class ClrOverloadResolution {
             // checks those separately, including bounds later arguments can fix.
             return true
         }
-        return ClassifyImplicit(closedReceiver, receiver.ClrType) != ImplicitConversionKind.None ||
-            Conversion
-            .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(closedMethod.GetParameters()[0]))
-            .IsImplicit
+        let parameter = closedMethod.GetParameters()[0]
+        let parameterType = parameter.ParameterType
+        let closedReceiver = if parameterType.IsByRef {
+            parameterType.GetElementType() ?? parameterType
+        } else {
+            parameterType
+        }
+        return !closedReceiver.ContainsGenericParameters &&
+            (
+            ClassifyImplicit(closedReceiver, receiver.ClrType) != ImplicitConversionKind.None ||
+                Conversion
+                .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(parameter)).IsImplicit
+        )
     }
 
     private func GetReceiverInferenceCarriers(type Type) List[Type] {

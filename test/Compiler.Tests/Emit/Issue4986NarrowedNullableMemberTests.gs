@@ -495,10 +495,15 @@ Console.WriteLine("${direct(Probe())} ${ternary(Probe())} ${statement(Probe())} 
     @Theory
     @InlineData("", "0")
     @InlineData("where T : System.IDisposable, new()", "System.IO.MemoryStream()")
+    @InlineData("where T : struct, System.IDisposable", "Token()")
+    @InlineData("where T : struct, System.Enum", "DayOfWeek.Monday")
     func Other_Arguments_Complete_Target_Declared_Conversion_Bounds(constraint string, fallback string) {
         using let fixture = CSharpFixture(`namespace Fixture4986 {
     public struct Box<T> {
         public static implicit operator Box<T>(int value) => default;
+    }
+    public struct Token : System.IDisposable {
+        public void Dispose() {}
     }
     public static class Extensions {
         public static int GetValueOrDefault<T>(this Box<T> value, T fallback) ` + constraint + ` => 99;
@@ -516,6 +521,39 @@ func statement(n int32?) int32 {
 Console.WriteLine("${direct(7)} ${ternary(7)} ${expression(7)} ${statement(7)} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
 `.Replace("FALLBACK", fallback), fixture.AssemblyPath)
         Assert.Equal("99 99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData("System.Exception", "string", "where T : System.Collections.Generic.List<U>")
+    @InlineData("object", "string", "where T : System.IDisposable where U : T")
+    @InlineData("object", "int", "where T : U")
+    func Dependent_Constraints_Preserve_Fixed_Argument_Obligations(
+        bound string,
+        fixedArgument string,
+        constraints string
+    ) {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public interface IProbe<in T, U> {}
+    public struct Probe : IProbe<` + bound + `, ` + fixedArgument + `> {
+        public int V;
+        public Probe(int value) { V = value; }
+    }
+    public static class Extensions {
+        public static int GetValueOrDefault<T,U>(this IProbe<T,U> value,
+            System.Collections.Generic.IComparer<T> fallback) ` + constraints + ` => 99;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Probe()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("7 7 7 0 0 0" + Environment.NewLine, result.Output)
     }
 
     @Theory
