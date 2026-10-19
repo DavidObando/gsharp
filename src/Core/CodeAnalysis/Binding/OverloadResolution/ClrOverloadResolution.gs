@@ -1741,17 +1741,39 @@ internal shared class ClrOverloadResolution {
                 constraintTerms.Add((possibleArguments[i], constraint, false))
             }
         }
+        let strictTerms = HashSet[(Type, Type)](
+            constraintTerms.Where((term(Type, Type, bool)) -> !term.Item3).Select(
+                (term(Type, Type, bool)) -> (
+                    SubstituteExtensionReceiverTerm(term.Item1, parameters, possibleArguments),
+                    SubstituteExtensionReceiverTerm(term.Item2, parameters, possibleArguments)
+                )
+            )
+        )
         for term in constraintTerms {
             let source = SubstituteExtensionReceiverTerm(term.Item1, parameters, possibleArguments)
             let constraint = SubstituteExtensionReceiverTerm(term.Item2, parameters, possibleArguments)
             let key = (source, constraint)
+            let numericDomain = constraint.IsGenericParameter && parameters.Contains(constraint) &&
+                source.IsValueType &&
+                NumericWideningLattice
+                .WideningTargets(source.FullName).Any() &&
+                (constraint.GenericParameterAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0
             if source.ContainsGenericParameters ||
                 !constraint.ContainsGenericParameters ||
-                !constraint.IsGenericType ||
+                (!constraint.IsGenericType && !numericDomain) ||
                 choices.ContainsKey(key) {
                 continue
             }
-            let matches = GetExtensionReceiverGenericShapes(source, constraint.GetGenericTypeDefinition()).Where(
+            let candidates = if numericDomain {
+                if strictTerms.Contains(key) {
+                    List[Type](){source}
+                } else {
+                    GetReceiverInferenceCarriers(source).Where((candidate Type) -> candidate.IsValueType).ToList()
+                }
+            } else {
+                GetExtensionReceiverGenericShapes(source, constraint.GetGenericTypeDefinition())
+            }
+            let matches = candidates.Where(
                 (candidate Type) -> OpenExtensionReceiverStandardShapeMayApply(
                     candidate,
                     constraint,
@@ -2559,8 +2581,10 @@ internal shared class ClrOverloadResolution {
                 }
                 var source = SubstituteExtensionReceiverTerm(term.Item1, parameters, arguments)
                 let target = SubstituteExtensionReceiverTerm(term.Item2, parameters, arguments)
+                var exact = false
                 if choices.TryGetValue((source, target), out var selected) {
                     source = selected
+                    exact = target.IsGenericParameter
                 }
                 CollectExtensionReceiverConversionBounds(
                     source,
@@ -2568,6 +2592,7 @@ internal shared class ClrOverloadResolution {
                     parameters[index],
                     lowerBounds,
                     upperBounds,
+                    exact: exact,
                     tupleElementConversions: allowTupleElements
                 )
             }
@@ -2609,15 +2634,31 @@ internal shared class ClrOverloadResolution {
                 )
                 for var index = 0; index < lower.Count; index++ {
                     let source = lower[index]
-                    // Fixed identity/boxing constraints preserve interfaces;
-                    // numeric and tuple promotions do not.
-                    if source.ContainsGenericParameters ||
-                        (
-                        source.IsValueType && index >= fixedLowerCount && !upper.Any(
-                            (bound Type) -> ClrTypeUtilities.AreSame(bound, source)
-                        )
-                    ) {
+                    if source.ContainsGenericParameters {
                         continue
+                    }
+                    if source.IsValueType && index >= fixedLowerCount && !upper.Any(
+                        (bound Type) -> ClrTypeUtilities.AreSame(bound, source)
+                    ) {
+                        if NullableLifting.GetValueTypeNullableUnderlyingClr(source) != nil ||
+                            source
+                            .FullName
+                            ?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true {
+                            continue
+                        }
+                        if NumericWideningLattice.WideningTargets(source.FullName).Any() {
+                            if (
+                                parameters[i].GenericParameterAttributes &
+                                GenericParameterAttributes.NotNullableValueTypeConstraint
+                            ) != 0 {
+                                let promotion = (source, parameters[i], true)
+                                if known.Add(promotion) {
+                                    terms.Add(promotion)
+                                    changed = true
+                                }
+                            }
+                            continue
+                        }
                     }
                     for rawConstraint in parameters[i].GetGenericParameterConstraints() {
                         let constraint = SubstituteExtensionReceiverTerm(rawConstraint, parameters, arguments)

@@ -4689,6 +4689,12 @@ internal partial class ExpressionBinder {
                 case index is IndexExpressionSyntax {
                     return AccessorHeadToken(index.Target, out callSyntax)
                 }
+                case creation is ObjectCreationExpressionSyntax {
+                    return AccessorHeadToken(creation.Target, out callSyntax)
+                }
+                case collection is CollectionInitializerExpressionSyntax {
+                    return AccessorHeadToken(collection.Target, out callSyntax)
+                }
                 case unary is UnaryExpressionSyntax when unary.OperatorToken.Kind == SyntaxKind.BangBangToken {
                     return AccessorHeadToken(unary.Operand, out callSyntax)
                 }
