@@ -3972,8 +3972,8 @@ func Use() int { return dep.Identity(1) }
 		t.Fatalf("generic identity depends on consumer layout: first=%q %q %q second=%q %q %q",
 			firstID, firstCanonical, firstDeclaration, secondID, secondCanonical, secondDeclaration)
 	}
-	if !strings.Contains(firstCanonical, "source://dep/dep.go") || firstDeclaration != "source://dep/dep.go" {
-		t.Fatalf("generic identity does not use its declaring package: type=%q declaration=%q",
+	if strings.Contains(firstCanonical, "source://dep/dep.go") || firstDeclaration != "source://dep/dep.go" {
+		t.Fatalf("bound parameter leaked its declaration into the signature identity: type=%q declaration=%q",
 			firstCanonical, firstDeclaration)
 	}
 
@@ -4009,6 +4009,44 @@ func Use() int { return dep.Identity(1) }
 	identity := builder.typeIdentity(consumer, parameter)
 	if !strings.Contains(identity, "source://dep.go:26") || strings.Contains(identity, "consumer.go") {
 		t.Fatalf("declaring position was resolved through the wrong FileSet: %q", identity)
+	}
+}
+
+func TestGenericFunctionTypeIdentityAlphaNormalizesBoundParameters(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/alpha\n\ngo 1.27.0\n",
+		"alpha.go": `package alpha
+func Left[T any](value T) T { return value }
+func Right[U any](value U) U { return value }
+func Different[V ~int](value V) V { return value }
+`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("generic alpha fixture failed: complete=%v err=%v blockers=%#v",
+			complete, err, analysis.Blockers)
+	}
+	typeIDs := map[string]string{}
+	for _, symbol := range analysis.Symbols {
+		switch symbol.Name {
+		case "Left", "Right", "Different":
+			typeIDs[symbol.Name] = symbol.TypeID
+		}
+	}
+	if typeIDs["Left"] == "" || typeIDs["Right"] == "" || typeIDs["Different"] == "" {
+		t.Fatalf("generic function symbols were not inventoried: %v", typeIDs)
+	}
+	if typeIDs["Left"] != typeIDs["Right"] {
+		t.Fatalf("alpha-equivalent generic signatures received different TypeIDs: %v", typeIDs)
+	}
+	if typeIDs["Left"] == typeIDs["Different"] {
+		t.Fatalf("different generic constraints received the same TypeID: %v", typeIDs)
 	}
 }
 

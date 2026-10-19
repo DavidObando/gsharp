@@ -5,6 +5,7 @@ package main
 import (
 	"go/token"
 	"go/types"
+	"strings"
 	"testing"
 )
 
@@ -171,5 +172,194 @@ func TestTypeIdentityOmitsSignatureParameterAndResultNames(t *testing.T) {
 				t.Fatal("semantic identity retained signature parameter or result names")
 			}
 		})
+	}
+}
+
+func TestTypeIdentityAlphaNormalizesBoundTypeParameters(t *testing.T) {
+	emptyConstraint := func() types.Type {
+		return types.NewInterfaceType(nil, nil).Complete()
+	}
+	recursiveConstraint := func(parameter *types.TypeParam) types.Type {
+		term := types.NewTerm(true, types.NewSlice(parameter))
+		return types.NewInterfaceType(nil,
+			[]types.Type{types.NewUnion([]*types.Term{term})}).Complete()
+	}
+	signature := func(name string, constraint func(*types.TypeParam) types.Type) *types.Signature {
+		parameter := types.NewTypeParam(types.NewTypeName(token.NoPos, nil, name, nil), nil)
+		parameter.SetConstraint(constraint(parameter))
+		parameters := types.NewTuple(types.NewVar(token.NoPos, nil, "value", parameter))
+		results := types.NewTuple(types.NewVar(token.NoPos, nil, "result", parameter))
+		return types.NewSignatureType(nil, nil, []*types.TypeParam{parameter},
+			parameters, results, false)
+	}
+	receiverPackage := types.NewPackage("example.com/receiver", "receiver")
+	receiverParameter := types.NewTypeParam(
+		types.NewTypeName(token.NoPos, receiverPackage, "R", nil), emptyConstraint())
+	receiverType := types.NewNamed(
+		types.NewTypeName(token.NoPos, receiverPackage, "Box", nil),
+		types.NewStruct(nil, nil), nil)
+	receiverType.SetTypeParams([]*types.TypeParam{receiverParameter})
+	receiverSignature := func(name string) *types.Signature {
+		parameter := types.NewTypeParam(types.NewTypeName(token.NoPos, nil, name, nil), nil)
+		parameter.SetConstraint(recursiveConstraint(parameter))
+		instance, err := types.Instantiate(nil, receiverType, []types.Type{parameter}, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recv := types.NewVar(token.NoPos, nil, "receiver", instance)
+		parameters := types.NewTuple(types.NewVar(token.NoPos, nil, "value", parameter))
+		results := types.NewTuple(types.NewVar(token.NoPos, nil, "result", parameter))
+		return types.NewSignatureType(recv, []*types.TypeParam{parameter}, nil,
+			parameters, results, false)
+	}
+	empty := func(*types.TypeParam) types.Type { return emptyConstraint() }
+	for _, test := range []struct {
+		name          string
+		first, second types.Type
+		goIdentical   bool
+	}{
+		{
+			name:        "direct",
+			first:       signature("T", empty),
+			second:      signature("U", empty),
+			goIdentical: true,
+		},
+		{
+			name: "nested",
+			first: types.NewMap(types.Typ[types.String],
+				types.NewStruct([]*types.Var{
+					types.NewField(token.NoPos, nil, "Handler",
+						signature("T", recursiveConstraint), false),
+				}, nil)),
+			second: types.NewMap(types.Typ[types.String],
+				types.NewStruct([]*types.Var{
+					types.NewField(token.NoPos, nil, "Handler",
+						signature("U", recursiveConstraint), false),
+				}, nil)),
+			goIdentical: true,
+		},
+		{
+			name:   "receiver",
+			first:  receiverSignature("T"),
+			second: receiverSignature("U"),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.goIdentical && !types.Identical(test.first, test.second) {
+				t.Fatal("go/types unexpectedly considers renamed bound parameters distinct")
+			}
+			if canonicalTypeIdentity(test.first) != canonicalTypeIdentity(test.second) {
+				t.Fatalf("bound parameter name changed identity:\nfirst:  %s\nsecond: %s",
+					canonicalTypeIdentity(test.first), canonicalTypeIdentity(test.second))
+			}
+		})
+	}
+}
+
+func TestTypeIdentityPreservesGenericBinderShape(t *testing.T) {
+	parameter := func(name string, constraint types.Type) *types.TypeParam {
+		return types.NewTypeParam(types.NewTypeName(token.NoPos, nil, name, nil), constraint)
+	}
+	signature := func(constraints []types.Type, parameterOrder, resultOrder []int) *types.Signature {
+		parameters := make([]*types.TypeParam, len(constraints))
+		for i, constraint := range constraints {
+			parameters[i] = parameter(string(rune('A'+i)), constraint)
+		}
+		tuple := func(order []int) *types.Tuple {
+			values := make([]*types.Var, len(order))
+			for i, index := range order {
+				values[i] = types.NewVar(token.NoPos, nil, "", parameters[index])
+			}
+			return types.NewTuple(values...)
+		}
+		return types.NewSignatureType(nil, nil, parameters,
+			tuple(parameterOrder), tuple(resultOrder), false)
+	}
+	any := types.NewInterfaceType(nil, nil).Complete()
+	integer := types.NewInterfaceType(nil,
+		[]types.Type{types.NewUnion([]*types.Term{
+			types.NewTerm(true, types.Typ[types.Int]),
+		})}).Complete()
+	baseline := signature([]types.Type{any, any}, []int{0}, []int{1})
+	if canonicalTypeIdentity(baseline) == canonicalTypeIdentity(
+		signature([]types.Type{any, any}, []int{1}, []int{0})) {
+		t.Fatal("type identity omitted bound parameter positions")
+	}
+	if canonicalTypeIdentity(baseline) == canonicalTypeIdentity(
+		signature([]types.Type{any, integer}, []int{0}, []int{1})) {
+		t.Fatal("type identity omitted positional constraints")
+	}
+}
+
+func TestTypeIdentityRetainsFreeTypeParameterDeclaration(t *testing.T) {
+	constraint := types.NewInterfaceType(nil, nil).Complete()
+	first := types.NewTypeParam(types.NewTypeName(token.NoPos, nil, "T", nil), constraint)
+	second := types.NewTypeParam(types.NewTypeName(token.NoPos, nil, "U", nil), constraint)
+	if canonicalTypeIdentity(first) == canonicalTypeIdentity(second) {
+		t.Fatal("free type parameter declarations collapsed")
+	}
+}
+
+func TestTypeIdentityMemoizesCompletedDAGNodes(t *testing.T) {
+	build := func(depth int) types.Type {
+		var current types.Type = types.Typ[types.Int]
+		for i := 0; i < depth; i++ {
+			current = types.NewStruct([]*types.Var{
+				types.NewField(token.NoPos, nil, "Left", current, false),
+				types.NewField(token.NoPos, nil, "Right", current, false),
+			}, nil)
+		}
+		return current
+	}
+	depth13 := canonicalTypeIdentity(build(13))
+	depth14 := canonicalTypeIdentity(build(14))
+	if len(depth14) >= testProfile().Limits.MaxStringBytes {
+		t.Fatalf("shared type DAG expanded beyond the record limit: %d bytes", len(depth14))
+	}
+	if growth := len(depth14) - len(depth13); growth >= 1024 {
+		t.Fatalf("shared type DAG grew non-linearly: depth13=%d depth14=%d growth=%d",
+			len(depth13), len(depth14), growth)
+	}
+	if nodes := strings.Count(depth14, ";@"); nodes != 15 {
+		t.Fatalf("shared type DAG emitted %d nodes, want 15", nodes)
+	}
+}
+
+func TestTypeIdentityDistinguishesRecursiveReferenceTargets(t *testing.T) {
+	graph := func(backToRoot bool) (types.Type, func(*types.TypeName) string) {
+		root := types.NewNamed(types.NewTypeName(token.NoPos, nil, "A", nil), nil, nil)
+		child := types.NewNamed(types.NewTypeName(token.NoPos, nil, "B", nil), nil, nil)
+		root.SetUnderlying(types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, nil, "Next", types.NewPointer(child), false),
+		}, nil))
+		target := types.Type(child)
+		if backToRoot {
+			target = root
+		}
+		child.SetUnderlying(types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, nil, "Next", types.NewPointer(target), false),
+		}, nil))
+		identify := func(object *types.TypeName) string {
+			if object == root.Obj() {
+				return "A"
+			}
+			if object == child.Obj() {
+				return "B"
+			}
+			return typeObjectIdentity(object)
+		}
+		return root, identify
+	}
+	first, identifyFirst := graph(true)
+	second, identifySecond := graph(false)
+	firstIdentity := canonicalTypeIdentityWith(first, identifyFirst)
+	secondIdentity := canonicalTypeIdentityWith(second, identifySecond)
+	if firstIdentity == secondIdentity {
+		t.Fatal("type identity collapsed distinct recursive reference targets")
+	}
+	if !strings.Contains(firstIdentity, "element=@0") ||
+		!strings.Contains(secondIdentity, "element=@3") {
+		t.Fatalf("recursive references did not target the exact ancestor:\nfirst:  %s\nsecond: %s",
+			firstIdentity, secondIdentity)
 	}
 }

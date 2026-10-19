@@ -27,364 +27,222 @@ func canonicalTypeIdentity(t types.Type) string {
 }
 
 func canonicalTypeIdentityWith(t types.Type, identify func(*types.TypeName) string) string {
-	display := canonicalTypeIdentityText(t)
 	if t == nil {
-		return display
+		return ""
 	}
-	active := map[types.Type]string{}
-	var declarations []string
-	var walk func(types.Type, string)
-	walk = func(current types.Type, position string) {
-		if current == nil {
-			return
-		}
-		if ancestor, ok := active[current]; ok {
-			declarations = append(declarations, position+"=cycle:"+ancestor)
-			return
-		}
-		active[current] = position
-		defer delete(active, current)
-		switch value := current.(type) {
-		case *types.TypeParam:
-			declarations = append(declarations, position+"=typeparam:"+strconv.Quote(identify(value.Obj())))
-			walk(value.Constraint(), position+".constraint")
-		case *types.Named:
-			declarations = append(declarations, position+"=named:"+strconv.Quote(identify(value.Obj())))
-			if arguments := value.TypeArgs(); arguments != nil {
-				for i := 0; i < arguments.Len(); i++ {
-					walk(arguments.At(i), position+".argument["+strconv.Itoa(i)+"]")
-				}
-			}
-			walk(value.Underlying(), position+".underlying")
-		case *types.Alias:
-			declarations = append(declarations, position+"=alias:"+strconv.Quote(identify(value.Obj())))
-			if arguments := value.TypeArgs(); arguments != nil {
-				for i := 0; i < arguments.Len(); i++ {
-					walk(arguments.At(i), position+".argument["+strconv.Itoa(i)+"]")
-				}
-			}
-			walk(value.Underlying(), position+".underlying")
-		case *types.Array:
-			walk(value.Elem(), position+".element")
-		case *types.Slice:
-			walk(value.Elem(), position+".element")
-		case *types.Pointer:
-			walk(value.Elem(), position+".element")
-		case *types.Map:
-			walk(value.Key(), position+".key")
-			walk(value.Elem(), position+".element")
-		case *types.Chan:
-			walk(value.Elem(), position+".element")
-		case *types.Struct:
-			for i := 0; i < value.NumFields(); i++ {
-				walk(value.Field(i).Type(), position+".field["+strconv.Itoa(i)+"].type")
-			}
-		case *types.Tuple:
-			for i := 0; i < value.Len(); i++ {
-				walk(value.At(i).Type(), position+".tuple["+strconv.Itoa(i)+"]")
-			}
-		case *types.Signature:
-			if value.Recv() != nil {
-				walk(value.Recv().Type(), position+".receiver")
-			}
-			if parameters := value.RecvTypeParams(); parameters != nil {
-				for i := 0; i < parameters.Len(); i++ {
-					walk(parameters.At(i), position+".receiverTypeParameter["+strconv.Itoa(i)+"]")
-				}
-			}
-			if parameters := value.TypeParams(); parameters != nil {
-				for i := 0; i < parameters.Len(); i++ {
-					walk(parameters.At(i), position+".typeParameter["+strconv.Itoa(i)+"]")
-				}
-			}
-			walk(value.Params(), position+".parameters")
-			walk(value.Results(), position+".results")
-		case *types.Interface:
-			value.Complete()
-			for i := 0; i < value.NumMethods(); i++ {
-				walk(value.Method(i).Type(), position+".method["+strconv.Itoa(i)+"].type")
-			}
-			for i := 0; i < value.NumEmbeddeds(); i++ {
-				walk(value.EmbeddedType(i), position+".embedded["+strconv.Itoa(i)+"]")
-			}
-		case *types.Union:
-			for i := 0; i < value.Len(); i++ {
-				walk(value.Term(i).Type(), position+".term["+strconv.Itoa(i)+"]")
-			}
-		}
+	if _, basic := t.(*types.Basic); basic {
+		return canonicalType(t)
 	}
-	walk(t, "root")
-	structuralOwners := structuralTypeOwners(t)
-	if len(declarations) == 0 {
-		if len(structuralOwners) == 0 {
-			return display
-		}
-		return display + "\x00structuralOwners=" + strings.Join(structuralOwners, ",")
+	serializer := typeIdentitySerializer{
+		identify:  identify,
+		active:    map[types.Type]int{},
+		completed: map[typeIdentityKey]int{},
 	}
-	result := display + "\x00declarations=" + strings.Join(declarations, ",")
-	if len(structuralOwners) != 0 {
-		result += "\x00structuralOwners=" + strings.Join(structuralOwners, ",")
-	}
-	return result
-}
-
-func canonicalTypeIdentityText(t types.Type) string {
+	root := serializer.reference(t, nil)
 	var result strings.Builder
-	writeCanonicalTypeIdentity(&result, t)
+	result.WriteString("root=")
+	result.WriteString(root)
+	for id, definition := range serializer.nodes {
+		result.WriteString(";@")
+		result.WriteString(strconv.Itoa(id))
+		result.WriteByte('=')
+		result.WriteString(definition)
+	}
 	return result.String()
 }
 
-func writeCanonicalTypeIdentity(result *strings.Builder, t types.Type) {
-	switch value := t.(type) {
-	case nil:
-	case *types.Alias:
-		writeTypeName(result, value.Obj())
-		writeTypeArguments(result, value.TypeArgs())
-	case *types.Array:
-		result.WriteByte('[')
-		result.WriteString(strconv.FormatInt(value.Len(), 10))
-		result.WriteByte(']')
-		writeCanonicalTypeIdentity(result, value.Elem())
-	case *types.Basic:
-		result.WriteString(canonicalType(value))
-	case *types.Chan:
-		switch value.Dir() {
-		case types.SendOnly:
-			result.WriteString("chan<- ")
-		case types.RecvOnly:
-			result.WriteString("<-chan ")
-		default:
-			result.WriteString("chan ")
+type typeIdentityKey struct {
+	t     types.Type
+	scope *typeIdentityBinderScope
+}
+
+type typeIdentityBinderScope struct {
+	parent   *typeIdentityBinderScope
+	bindings map[*types.TypeParam]string
+}
+
+func (s *typeIdentityBinderScope) lookup(parameter *types.TypeParam) (string, bool) {
+	for current := s; current != nil; current = current.parent {
+		if binding, ok := current.bindings[parameter]; ok {
+			return binding, true
 		}
-		writeCanonicalTypeIdentity(result, value.Elem())
+	}
+	return "", false
+}
+
+type typeIdentitySerializer struct {
+	identify  func(*types.TypeName) string
+	active    map[types.Type]int
+	completed map[typeIdentityKey]int
+	nodes     []string
+}
+
+func (s *typeIdentitySerializer) reference(t types.Type, scope *typeIdentityBinderScope) string {
+	if t == nil {
+		return "nil"
+	}
+	if parameter, ok := t.(*types.TypeParam); ok {
+		if binding, bound := scope.lookup(parameter); bound {
+			return binding
+		}
+	}
+	if id, ok := s.active[t]; ok {
+		return typeIdentityNodeReference(id)
+	}
+	key := typeIdentityKey{t: t, scope: scope}
+	if id, ok := s.completed[key]; ok {
+		return typeIdentityNodeReference(id)
+	}
+	id := len(s.nodes)
+	s.nodes = append(s.nodes, "")
+	s.active[t] = id
+	s.nodes[id] = s.definition(id, t, scope)
+	delete(s.active, t)
+	s.completed[key] = id
+	return typeIdentityNodeReference(id)
+}
+
+func typeIdentityNodeReference(id int) string {
+	return "@" + strconv.Itoa(id)
+}
+
+func (s *typeIdentitySerializer) definition(id int, t types.Type, scope *typeIdentityBinderScope) string {
+	switch value := t.(type) {
+	case *types.Alias:
+		return "alias(declaration=" + strconv.Quote(s.identify(value.Obj())) +
+			",arguments=" + s.typeList(value.TypeArgs(), scope) +
+			",underlying=" + s.reference(value.Underlying(), scope) + ")"
+	case *types.Array:
+		return "array(length=" + strconv.FormatInt(value.Len(), 10) +
+			",element=" + s.reference(value.Elem(), scope) + ")"
+	case *types.Basic:
+		return "basic(" + strconv.Quote(canonicalType(value)) + ")"
+	case *types.Chan:
+		return "channel(direction=" + strconv.Itoa(int(value.Dir())) +
+			",element=" + s.reference(value.Elem(), scope) + ")"
 	case *types.Interface:
 		value.Complete()
-		result.WriteString("interface{")
-		separator := ""
+		var methods []string
 		for i := 0; i < value.NumMethods(); i++ {
-			result.WriteString(separator)
-			result.WriteString(value.Method(i).Name())
-			writeCanonicalSignature(result, value.Method(i).Type().(*types.Signature), false)
-			separator = "; "
+			method := value.Method(i)
+			owner := ""
+			if !method.Exported() && method.Pkg() != nil {
+				owner = method.Pkg().Path()
+			}
+			methods = append(methods, "method(name="+strconv.Quote(method.Name())+
+				",owner="+strconv.Quote(owner)+",type="+s.reference(method.Type(), scope)+")")
 		}
+		var embedded []string
 		for i := 0; i < value.NumEmbeddeds(); i++ {
-			result.WriteString(separator)
-			writeCanonicalTypeIdentity(result, value.EmbeddedType(i))
-			separator = "; "
+			embedded = append(embedded, s.reference(value.EmbeddedType(i), scope))
 		}
-		result.WriteByte('}')
+		return "interface(methods=[" + strings.Join(methods, ",") +
+			"],embedded=[" + strings.Join(embedded, ",") + "])"
 	case *types.Map:
-		result.WriteString("map[")
-		writeCanonicalTypeIdentity(result, value.Key())
-		result.WriteByte(']')
-		writeCanonicalTypeIdentity(result, value.Elem())
+		return "map(key=" + s.reference(value.Key(), scope) +
+			",element=" + s.reference(value.Elem(), scope) + ")"
 	case *types.Named:
-		writeTypeName(result, value.Obj())
-		writeTypeArguments(result, value.TypeArgs())
+		return "named(declaration=" + strconv.Quote(s.identify(value.Obj())) +
+			",arguments=" + s.typeList(value.TypeArgs(), scope) +
+			",underlying=" + s.reference(value.Underlying(), scope) + ")"
 	case *types.Pointer:
-		result.WriteByte('*')
-		writeCanonicalTypeIdentity(result, value.Elem())
+		return "pointer(element=" + s.reference(value.Elem(), scope) + ")"
 	case *types.Signature:
-		writeCanonicalSignature(result, value, true)
+		signatureScope := s.signatureScope(id, value, scope)
+		receiver := "nil"
+		if value.Recv() != nil {
+			receiver = s.reference(value.Recv().Type(), signatureScope)
+		}
+		return "signature(receiver=" + receiver +
+			",receiverTypeParameters=" + s.typeParameterConstraints(value.RecvTypeParams(), signatureScope) +
+			",typeParameters=" + s.typeParameterConstraints(value.TypeParams(), signatureScope) +
+			",parameters=" + s.reference(value.Params(), signatureScope) +
+			",results=" + s.reference(value.Results(), signatureScope) +
+			",variadic=" + strconv.FormatBool(value.Variadic()) + ")"
 	case *types.Slice:
-		result.WriteString("[]")
-		writeCanonicalTypeIdentity(result, value.Elem())
+		return "slice(element=" + s.reference(value.Elem(), scope) + ")"
 	case *types.Struct:
-		result.WriteString("struct{")
+		var fields []string
 		for i := 0; i < value.NumFields(); i++ {
-			if i != 0 {
-				result.WriteString("; ")
-			}
 			field := value.Field(i)
-			if !field.Embedded() {
-				result.WriteString(field.Name())
-				result.WriteByte(' ')
+			owner := ""
+			if !field.Exported() && field.Pkg() != nil {
+				owner = field.Pkg().Path()
 			}
-			writeCanonicalTypeIdentity(result, field.Type())
-			if tag := value.Tag(i); tag != "" {
-				result.WriteByte(' ')
-				result.WriteString(strconv.Quote(tag))
-			}
+			fields = append(fields, "field(name="+strconv.Quote(field.Name())+
+				",owner="+strconv.Quote(owner)+
+				",embedded="+strconv.FormatBool(field.Embedded())+
+				",tag="+strconv.Quote(value.Tag(i))+
+				",type="+s.reference(field.Type(), scope)+")")
 		}
-		result.WriteByte('}')
+		return "struct(fields=[" + strings.Join(fields, ",") + "])"
 	case *types.Tuple:
-		writeCanonicalTuple(result, value, false)
-	case *types.TypeParam:
-		result.WriteString(value.Obj().Name())
-	case *types.Union:
+		var elements []string
 		for i := 0; i < value.Len(); i++ {
-			if i != 0 {
-				result.WriteString(" | ")
-			}
+			elements = append(elements, s.reference(value.At(i).Type(), scope))
+		}
+		return "tuple(elements=[" + strings.Join(elements, ",") + "])"
+	case *types.TypeParam:
+		return "freeTypeParameter(declaration=" + strconv.Quote(s.identify(value.Obj())) +
+			",constraint=" + s.reference(value.Constraint(), scope) + ")"
+	case *types.Union:
+		var terms []string
+		for i := 0; i < value.Len(); i++ {
 			term := value.Term(i)
-			if term.Tilde() {
-				result.WriteByte('~')
-			}
-			writeCanonicalTypeIdentity(result, term.Type())
+			terms = append(terms, "term(tilde="+strconv.FormatBool(term.Tilde())+
+				",type="+s.reference(term.Type(), scope)+")")
 		}
+		return "union(terms=[" + strings.Join(terms, ",") + "])"
 	default:
-		result.WriteString(canonicalType(t))
+		return "unknown(display=" + strconv.Quote(canonicalType(t)) + ")"
 	}
 }
 
-func writeCanonicalSignature(result *strings.Builder, signature *types.Signature, keyword bool) {
-	if keyword {
-		result.WriteString("func")
-	}
-	if parameters := signature.TypeParams(); parameters != nil && parameters.Len() != 0 {
-		result.WriteByte('[')
+func (s *typeIdentitySerializer) signatureScope(
+	id int,
+	signature *types.Signature,
+	parent *typeIdentityBinderScope,
+) *typeIdentityBinderScope {
+	scope := &typeIdentityBinderScope{parent: parent, bindings: map[*types.TypeParam]string{}}
+	if parameters := signature.RecvTypeParams(); parameters != nil {
 		for i := 0; i < parameters.Len(); i++ {
-			if i != 0 {
-				result.WriteString(", ")
-			}
-			parameter := parameters.At(i)
-			result.WriteString(parameter.Obj().Name())
-			result.WriteByte(' ')
-			writeCanonicalTypeIdentity(result, parameter.Constraint())
+			scope.bindings[parameters.At(i)] = "$" + strconv.Itoa(id) + ".receiver[" + strconv.Itoa(i) + "]"
 		}
-		result.WriteByte(']')
 	}
-	writeCanonicalTuple(result, signature.Params(), signature.Variadic())
-	results := signature.Results()
-	if results == nil || results.Len() == 0 {
-		return
+	if parameters := signature.TypeParams(); parameters != nil {
+		for i := 0; i < parameters.Len(); i++ {
+			scope.bindings[parameters.At(i)] = "$" + strconv.Itoa(id) + ".type[" + strconv.Itoa(i) + "]"
+		}
 	}
-	result.WriteByte(' ')
-	if results.Len() == 1 {
-		writeCanonicalTypeIdentity(result, results.At(0).Type())
-		return
-	}
-	writeCanonicalTuple(result, results, false)
+	return scope
 }
 
-func writeCanonicalTuple(result *strings.Builder, tuple *types.Tuple, variadic bool) {
-	result.WriteByte('(')
-	if tuple != nil {
-		for i := 0; i < tuple.Len(); i++ {
-			if i != 0 {
-				result.WriteString(", ")
-			}
-			t := tuple.At(i).Type()
-			if variadic && i == tuple.Len()-1 {
-				if slice, ok := t.(*types.Slice); ok {
-					result.WriteString("...")
-					t = slice.Elem()
-				}
-			}
-			writeCanonicalTypeIdentity(result, t)
-		}
+func (s *typeIdentitySerializer) typeList(
+	types *types.TypeList,
+	scope *typeIdentityBinderScope,
+) string {
+	if types == nil {
+		return "[]"
 	}
-	result.WriteByte(')')
+	values := make([]string, types.Len())
+	for i := 0; i < types.Len(); i++ {
+		values[i] = s.reference(types.At(i), scope)
+	}
+	return "[" + strings.Join(values, ",") + "]"
 }
 
-func writeTypeName(result *strings.Builder, object *types.TypeName) {
-	if object.Pkg() != nil {
-		result.WriteString(object.Pkg().Path())
-		result.WriteByte('.')
+func (s *typeIdentitySerializer) typeParameterConstraints(
+	parameters *types.TypeParamList,
+	scope *typeIdentityBinderScope,
+) string {
+	if parameters == nil {
+		return "[]"
 	}
-	result.WriteString(object.Name())
-}
-
-func writeTypeArguments(result *strings.Builder, arguments *types.TypeList) {
-	if arguments == nil || arguments.Len() == 0 {
-		return
+	values := make([]string, parameters.Len())
+	for i := 0; i < parameters.Len(); i++ {
+		values[i] = s.reference(parameters.At(i).Constraint(), scope)
 	}
-	result.WriteByte('[')
-	for i := 0; i < arguments.Len(); i++ {
-		if i != 0 {
-			result.WriteString(", ")
-		}
-		writeCanonicalTypeIdentity(result, arguments.At(i))
-	}
-	result.WriteByte(']')
-}
-
-func structuralTypeOwners(t types.Type) []string {
-	var result []string
-	active := map[types.Type]bool{}
-	var walk func(types.Type, string)
-	walk = func(current types.Type, position string) {
-		if current == nil || active[current] {
-			return
-		}
-		active[current] = true
-		defer delete(active, current)
-		switch value := current.(type) {
-		case *types.Named:
-			if arguments := value.TypeArgs(); arguments != nil {
-				for i := 0; i < arguments.Len(); i++ {
-					walk(arguments.At(i), position+".argument["+strconv.Itoa(i)+"]")
-				}
-			}
-		case *types.Alias:
-			if arguments := value.TypeArgs(); arguments != nil {
-				for i := 0; i < arguments.Len(); i++ {
-					walk(arguments.At(i), position+".argument["+strconv.Itoa(i)+"]")
-				}
-			}
-		case *types.Array:
-			walk(value.Elem(), position+".element")
-		case *types.Slice:
-			walk(value.Elem(), position+".element")
-		case *types.Pointer:
-			walk(value.Elem(), position+".element")
-		case *types.Map:
-			walk(value.Key(), position+".key")
-			walk(value.Elem(), position+".element")
-		case *types.Chan:
-			walk(value.Elem(), position+".element")
-		case *types.Struct:
-			for i := 0; i < value.NumFields(); i++ {
-				field := value.Field(i)
-				fieldPosition := position + ".field[" + strconv.Itoa(i) + "]"
-				if !field.Exported() && field.Pkg() != nil {
-					result = append(result, fieldPosition+"="+strconv.Quote(field.Pkg().Path()))
-				}
-				walk(field.Type(), fieldPosition+".type")
-			}
-		case *types.Tuple:
-			for i := 0; i < value.Len(); i++ {
-				walk(value.At(i).Type(), position+".tuple["+strconv.Itoa(i)+"]")
-			}
-		case *types.Signature:
-			if value.Recv() != nil {
-				walk(value.Recv().Type(), position+".receiver")
-			}
-			if parameters := value.RecvTypeParams(); parameters != nil {
-				for i := 0; i < parameters.Len(); i++ {
-					walk(parameters.At(i), position+".receiverTypeParameter["+strconv.Itoa(i)+"]")
-				}
-			}
-			if parameters := value.TypeParams(); parameters != nil {
-				for i := 0; i < parameters.Len(); i++ {
-					walk(parameters.At(i), position+".typeParameter["+strconv.Itoa(i)+"]")
-				}
-			}
-			walk(value.Params(), position+".parameters")
-			walk(value.Results(), position+".results")
-		case *types.TypeParam:
-			walk(value.Constraint(), position+".constraint")
-		case *types.Interface:
-			value.Complete()
-			for i := 0; i < value.NumMethods(); i++ {
-				method := value.Method(i)
-				methodPosition := position + ".method[" + strconv.Itoa(i) + "]"
-				if !method.Exported() && method.Pkg() != nil {
-					result = append(result, methodPosition+"="+strconv.Quote(method.Pkg().Path()))
-				}
-				walk(method.Type(), methodPosition+".type")
-			}
-			for i := 0; i < value.NumEmbeddeds(); i++ {
-				walk(value.EmbeddedType(i), position+".embedded["+strconv.Itoa(i)+"]")
-			}
-		case *types.Union:
-			for i := 0; i < value.Len(); i++ {
-				walk(value.Term(i).Type(), position+".term["+strconv.Itoa(i)+"]")
-			}
-		}
-	}
-	walk(t, "root")
-	return result
+	return "[" + strings.Join(values, ",") + "]"
 }
 
 func typeObjectIdentity(object *types.TypeName) string {
