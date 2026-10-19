@@ -5,12 +5,131 @@ import Xunit
 
 open class Issue5023TuplePropertyStorageTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConditionalTupleBorrow_CapturesOnlySelectedComponentsAcrossSuspension(chooseFirst bool) {
+        let source = `package Test
+import System
+import System.Threading.Tasks
+struct Cell { var Stored int32 }
+var first = [](Cell, int32){(Cell{Stored: 1}, 0)}
+var second = [](Cell, int32){(Cell{Stored: 4}, 0)}
+let originalFirst = first
+let originalSecond = second
+var choose = CHOICE
+var index = 0
+var log = ""
+let gate = TaskCompletionSource[int32]()
+func Choose() bool {
+    log += "c"
+    return choose
+}
+func First() [](Cell, int32) {
+    log += "a"
+    return first
+}
+func Second() [](Cell, int32) {
+    log += "b"
+    return second
+}
+func Index() int32 {
+    log += "i"
+    return index
+}
+func Read(in value Cell, ignored int32) int32 -> value.Stored
+async func Change() int32 {
+    log += "r"
+    await gate.Task
+    originalFirst[0] = (Cell{Stored: 2}, 0)
+    originalSecond[0] = (Cell{Stored: 5}, 0)
+    first = [](Cell, int32){(Cell{Stored: 9}, 0)}
+    second = [](Cell, int32){(Cell{Stored: 8}, 0)}
+    choose = !choose
+    index = 1
+    return 0
+}
+async func Run() {
+    Console.WriteLine(Read((*&(Choose() ? First()[Index()] : Second()[Index()])).Item1, await Change()))
+}
+let pending = Run()
+Console.WriteLine(pending.IsCompleted)
+gate.SetResult(0)
+pending.GetAwaiter().GetResult()
+Console.WriteLine(log)`.Replace(
+            "CHOICE",
+            if chooseFirst {
+                "true"
+            } else {
+                "false"
+            }
+        )
+        Assert.Equal(
+            if chooseFirst {
+                "False\n2\ncair\n"
+            } else {
+                "False\n5\ncbir\n"
+            },
+            CompileAndRun(source)
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func FieldChainBorrow_CapturesReferenceOwnerAcrossSuspension(native bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace FieldOwner5023;
+public struct Cell { public int N; }
+public sealed class Owner {
+    public Cell Cell;
+    public Owner(int n) { Cell.N = n; }
+}`, "FieldOwner5023")
+        let source = `package Test
+import System
+import System.Threading.Tasks
+DECLARATIONS
+var owner = Owner(1)
+let original = owner
+let gate = TaskCompletionSource[int32]()
+func Read(in value int32, ignored int32) int32 -> value
+async func Change() int32 {
+    await gate.Task
+    original.Cell.N = 2
+    owner = Owner(9)
+    return 0
+}
+async func Run() {
+    Console.WriteLine(Read(owner.Cell.N, await Change()))
+}
+let pending = Run()
+Console.WriteLine(pending.IsCompleted)
+gate.SetResult(0)
+pending.GetAwaiter().GetResult()`.Replace(
+            "DECLARATIONS",
+            if native {
+                `
+struct Cell { var N int32 }
+class Owner {
+    var Cell Cell
+    init(n int32) { this.Cell = Cell{N: n} }
+}`
+            } else {
+                "import FieldOwner5023"
+            }
+        )
+        let executable = fixture.Compile(source, "FieldOwnerBorrow5023", true, "/r:" + contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal("False\n2\n", fixture.Run(executable))
+    }
+
+    @Theory
     @InlineData("Pick()", false)
     @InlineData("owner.Pick()", false)
     @InlineData("owner.Slot", false)
     @InlineData("TupleOpaque5023.External.Pick()", true)
     @InlineData("owner.Pick()", true)
     @InlineData("owner.Slot", true)
+    @InlineData("owner[0]", true)
     func OpaqueTupleBorrow_RejectsSuspensionButPreservesSingleSelection(receiver string, imported bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let contract = fixture.CompileCSharp(`namespace TupleOpaque5023 {
@@ -21,6 +140,7 @@ open class Issue5023TuplePropertyStorageTests {
     public struct Cell {
         public int Stored;
         public int Value { get => Stored; set => Stored = value; }
+        public int? MaybeValue { get => null; set => Stored = value ?? 0; }
     }
     public sealed class Owner {
         public int Selected;
@@ -30,6 +150,7 @@ open class Issue5023TuplePropertyStorageTests {
         };
         public ref (Cell, int) Pick() { Calls++; return ref Items[Selected]; }
         public ref (Cell, int) Slot => ref Pick();
+        public ref (Cell, int) this[int ignored] => ref Pick();
     }
     public static class External {
         public static Owner Current = new Owner();
@@ -65,13 +186,19 @@ RECEIVER.Item1.Value = {
     owner.Selected = 1
     9
 }
+Console.WriteLine("${owner.Items[0].Item1.Stored} ${owner.Items[1].Item1.Stored} ${owner.Calls}")
+owner.Selected = 0
+RECEIVER.Item1.MaybeValue ??= {
+    owner.Selected = 1
+    11
+}
 Console.WriteLine("${owner.Items[0].Item1.Stored} ${owner.Items[1].Item1.Stored} ${owner.Calls}")`.Replace(
                 "RECEIVER",
                 receiver
             ), imported)
         let executable = fixture.Compile(ordered, "OpaqueTupleOrdered5023", true, "/r:" + contract)
         IlVerifier.Verify(executable, []string{contract})
-        Assert.Equal("1\n1\n2\n2\n2 3\n9 2 4\n", fixture.Run(executable))
+        Assert.Equal("1\n1\n2\n2\n2 3\n9 2 4\n11 2 5\n", fixture.Run(executable))
     }
 
     @Theory
@@ -504,6 +631,10 @@ struct Cell {
     prop Value int32 {
         get -> Stored
         set { Stored = value }
+    }
+    prop MaybeValue int32? {
+        get -> nil
+        set { Stored = value ?? 0 }
     }
 }
 class Owner {

@@ -56,13 +56,14 @@ shared class RefInitializationHoister {
             let addressOf BoundAddressOfExpression? = node.Initializer as BoundAddressOfExpression
             if local?.Type is ByRefTypeSymbol && addressOf != nil {
                 let prelude = ImmutableArray.CreateBuilder[BoundStatement]()
-                let template = HoistOperand(addressOf.Operand, prelude)
+                let template = HoistOperand(addressOf.Operand, prelude, captureComponents: true)
                 if (
                     template is BoundTupleElementAccessExpression or
                         BoundIndexExpression or
                         BoundFieldAccessExpression and
                         {Receiver: not nil} or
-                        BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: not nil}
+                        BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: not nil} or
+                        BoundDereferenceExpression{Operand: BoundConditionalAddressExpression}
                 ) {
                     prelude.Add(
                         BoundExpressionStatement(node.Syntax, BoundAddressOfExpression(addressOf.Syntax, template))
@@ -124,6 +125,11 @@ shared class RefInitializationHoister {
             prelude ImmutableArray[BoundStatement].Builder,
             captureComponents bool = false
         ) BoundExpression {
+            if RefCapabilities.IsRefReturningAccess(operand) {
+                throw System.InvalidOperationException(
+                    "Opaque ref-returning storage must be rejected before async address reconstruction."
+                )
+            }
             switch operand {
                 case tuple is BoundTupleElementAccessExpression {
                     // Later arguments can replace an owner or index before address reconstruction.
@@ -212,13 +218,40 @@ shared class RefInitializationHoister {
                         )
                     }
                 }
+                case BoundDereferenceExpression{Operand: BoundConditionalAddressExpression address} dereference {
+                    let condition = HoistIfNeeded(address.Condition, prelude, forceCapture: true)
+                    let truePrelude = ImmutableArray.CreateBuilder[BoundStatement]()
+                    let whenTrue = HoistOperand(address.WhenTrueOperand, truePrelude, captureComponents: true)
+                    let falsePrelude = ImmutableArray.CreateBuilder[BoundStatement]()
+                    let whenFalse = HoistOperand(address.WhenFalseOperand, falsePrelude, captureComponents: true)
+                    if truePrelude.Count != 0 {
+                        let skip = BoundLabel("<refSkip>__${tempCounter++}")
+                        prelude.Add(BoundConditionalGotoStatement(nil, skip, condition, jumpIfTrue: false))
+                        prelude.AddRange(truePrelude)
+                        prelude.Add(BoundLabelStatement(nil, skip))
+                    }
+                    if falsePrelude.Count != 0 {
+                        let skip = BoundLabel("<refSkip>__${tempCounter++}")
+                        prelude.Add(BoundConditionalGotoStatement(nil, skip, condition, jumpIfTrue: true))
+                        prelude.AddRange(falsePrelude)
+                        prelude.Add(BoundLabelStatement(nil, skip))
+                    }
+                    return BoundDereferenceExpression(
+                        dereference.Syntax,
+                        BoundConditionalAddressExpression(
+                            address.Syntax,
+                            condition,
+                            whenTrue,
+                            whenFalse,
+                            address.PointeeType
+                        )
+                    )
+                }
                 case dereference is BoundDereferenceExpression {
                     return BoundDereferenceExpression(dereference.Syntax, HoistIfNeeded(dereference.Operand, prelude))
                 }
                 default {
-                    if RefCapabilities.IsNativeRefReturningCall(operand) ||
-                        operand.Type is ByRefTypeSymbol &&
-                        operand is not BoundVariableExpression {
+                    if operand.Type is ByRefTypeSymbol && operand is not BoundVariableExpression {
                         throw System.InvalidOperationException(
                             "Opaque ref-returning storage must be rejected before async address reconstruction."
                         )

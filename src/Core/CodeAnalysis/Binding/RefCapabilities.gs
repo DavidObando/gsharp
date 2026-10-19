@@ -39,6 +39,18 @@ internal shared class RefCapabilities {
         default: false
     }
 
+    // CLR getters can retain ref-returning storage even when their bound type is the element type.
+    internal func IsRefReturningAccess(expression BoundExpression) bool -> IsNativeRefReturningCall(expression) ||
+        switch expression {
+        case call is BoundImportedCallExpression: GetReturnRefKind(call.Function.Method) != RefKind.None
+        case call is BoundImportedInstanceCallExpression: GetReturnRefKind(call.Method) != RefKind.None
+        case call is BoundClrStaticCallExpression: GetReturnRefKind(call.Method) != RefKind.None
+        case BoundBaseClassCallExpression{Property: {} property}: property.ReturnRefKind != RefKind.None
+        case index is BoundClrIndexExpression: GetReturnRefKind(index.Indexer) != RefKind.None
+        case BoundClrPropertyAccessExpression{Member: PropertyInfo property}: GetReturnRefKind(property) != RefKind.None
+        default: false
+    }
+
     /// Issue #4224 (root cause #4) / #4265: decomposes a native ref-returning
     /// call or property read into the pieces the caller-side ref-safe-scope
     /// computation (`HasFunctionLocalRefScope`) needs — its instance

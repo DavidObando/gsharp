@@ -508,6 +508,9 @@ internal partial class ExpressionBinder {
         if receiver is BoundTupleElementAccessExpression tuple {
             return IsWritableStructFieldReceiver(tuple.Receiver)
         }
+        if RefCapabilities.IsRefReturningAccess(receiver) {
+            return !RefCapabilities.IsReadOnlyReference(receiver)
+        }
         if receiver is BoundVariableExpression variable {
             // Unboxing a narrowed reference slot yields a controlled-mutability
             // address, not writable struct storage.

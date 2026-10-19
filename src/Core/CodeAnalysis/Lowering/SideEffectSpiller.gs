@@ -488,6 +488,15 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         statements ImmutableArray[BoundStatement].Builder,
         captureComponents bool = false
     ) BoundExpression {
+        if IsOpaqueStorageReceiver(receiver) {
+            let local = LocalVariableSymbol(
+                "$TempPrefix" + "storage${this.counter++}",
+                isReadOnly: false,
+                receiver.Type,
+                receiver.Syntax
+            )
+            return CaptureOpaqueStorageReceiver(receiver, receiver.Syntax, statements, local)
+        }
         switch receiver {
             case tuple is BoundTupleElementAccessExpression {
                 // Capture owners and indices before the RHS, without copying tuple storage.
@@ -604,15 +613,6 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                 }
             }
             default {
-                if IsOpaqueStorageReceiver(receiver) {
-                    let local = LocalVariableSymbol(
-                        "$TempPrefix" + "storage${this.counter++}",
-                        isReadOnly: false,
-                        receiver.Type,
-                        receiver.Syntax
-                    )
-                    return CaptureOpaqueStorageReceiver(receiver, receiver.Syntax, statements, local)
-                }
                 return receiver
             }
         }
@@ -801,10 +801,9 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
 
         private func IsOpaqueStorageReceiver(expression BoundExpression?) bool -> expression != nil &&
             (
-            RefCapabilities.IsNativeRefReturningCall(expression) ||
-                expression is BoundDereferenceExpression{
-                Operand: not BoundVariableExpression and {Type: ByRefTypeSymbol}
-            }
+            RefCapabilities.IsRefReturningAccess(expression) ||
+                expression is BoundDereferenceExpression dereference &&
+                RefCapabilities.IsRefReturningAccess(dereference.Operand)
         )
 
         /// Whether [`receiver`](paramref) denotes value storage rather than

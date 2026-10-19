@@ -492,7 +492,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         }
     }
 
-    private func IsManagedLocation(expression BoundExpression) bool -> RefCapabilities.IsNativeRefReturningCall(
+    private func IsManagedLocation(expression BoundExpression) bool -> RefCapabilities.IsRefReturningAccess(
         expression
     ) ||
         switch expression {
