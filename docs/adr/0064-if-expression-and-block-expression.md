@@ -320,17 +320,18 @@ inference, constraint checks and implicit conversions, including generic
 struct receivers and numeric widening. Unknown symbolic receivers and bounds
 that supplied arguments can complete or widen remain conservative. Possible
 bounds are recovered from the receiver, its hierarchy and implicit operators;
-each possibility is checked by the method constraint checker and the ordinary
-conversion classifier against its closed imported receiver parameter. Only bounds
+each closed possibility is checked by the method constraint checker and the
+ordinary conversion classifier against its closed imported receiver parameter. Only bounds
 mentioned by supplied argument slots may change. This preserves fixed generic
 arguments and variance, and lets structural conversions such as tuple-element
 widening use the inferred substitutions rather than an open CLR signature.
 An incomplete receiver bound is not evidence of impossibility: supplied
 arguments can close a generic conversion target, or refine a contravariant
 upper bound to a subtype that is not enumerable from the receiver. The probe
-tries representative completed bounds and retains compatible unknown subtypes,
-checking every independent constraint. Sealed or disjoint class bounds and
-invariant receiver positions cannot use that escape hatch. A target-declared
+validates partial bounds symbolically and retains compatible unknown subtypes,
+checking every independent constraint without enumerating arbitrary completions.
+Sealed or disjoint class bounds and invariant receiver positions cannot use
+that escape hatch. A target-declared
 conversion with an input independent of its type parameter can leave that
 parameter free for later arguments, including value-type/interface or enum
 constraints for which no representative type is available. Unknown subtype
@@ -355,10 +356,16 @@ not make a mismatching enclosing generic or array shape possible. A
 type-parameter upper bound also contributes its inherited constraints,
 transitively, so reopening `T : U` does not discard `U`'s class bounds.
 Open arguments must pass this symbolic validation even when the ordinary
-constraint checker defers them without reporting a failure. Before trying
-representative completions, receiver-shape checks reject impossible standard
-conversions and implicit-operator paths; missing bounds do not justify a
-Cartesian search for a receiver conversion whose outer shape cannot exist.
+constraint checker defers them without reporting a failure. Receiver-shape
+checks recursively reject impossible standard conversions and implicit-operator
+inputs, including fixed invariant arguments. Ordinary receiver paths do not
+discard an operator's input bounds and retry an unrelated completion.
+Missing bounds never trigger Cartesian receiver completion. A fixed argument's
+open generic constraint must have a compatible actual interface or base shape;
+ambiguous interfaces are retained as real alternatives and checked independently
+against the remaining known constraints, rather than erased by ambiguous
+inference or multiplied into a Cartesian product. Unknown relationships remain
+conservative for later argument inference.
 Reference-variance refinement cannot introduce a value-type argument by
 boxing.
 Inferring an element type cannot turn an `int32` receiver into a collection.

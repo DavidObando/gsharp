@@ -1057,26 +1057,140 @@ Console.WriteLine("${ternary(PRESENT)} ${expression(PRESENT)} ${statement(PRESEN
         )
     }
 
-    @Fact
-    func Impossible_Open_Receiver_Shapes_Are_Pruned_Before_Completion() {
-        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    @Theory
+    @InlineData("none")
+    @InlineData("fixed-input")
+    @InlineData("dependent")
+    func Impossible_Open_Receiver_Shapes_Are_Pruned_Before_Completion(mode string) {
+        let (declaration, receiver, fallback, present, read) = switch mode {
+            case "fixed-input": (`public struct Holder<A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P> {
+    public static implicit operator Holder<A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P>(
+        System.Collections.Generic.KeyValuePair<int,A> value) => default;
+}
+public static class Extensions {
+    public static System.Collections.Generic.KeyValuePair<string,int> GetValueOrDefault<A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P>(
+        this Holder<A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P> value,
+        Holder<A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P> fallback) => new("",99);
+}`, "System.Collections.Generic.KeyValuePair[string,int32]", "default(System.Collections.Generic.KeyValuePair[string,int32])", "System.Collections.Generic.KeyValuePair[string,int32](\"\",7)", ".Value")
+            case "dependent": (`public struct Input<U> { public int V; public Input(int v) { V = v; } }
+public struct Box<A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,U> {
+    public static implicit operator Box<A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,U>(Input<U> value) => default;
+}
+public static class Extensions {
+    public static Input<U> GetValueOrDefault<A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,U>(
+        this Box<A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,U> value,
+        Box<A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,U> fallback)
+        where A : U, System.IDisposable => new Input<U>(99);
+}`, "Input[string]", "Input[string]()", "Input[string](7)", ".V")
+            default: (`
     public struct Holder<A,B,C,D,E,F,G,H,I,J> {}
     public static class Extensions {
         public static int GetValueOrDefault<A,B,C,D,E,F,G,H,I,J>(
             this Holder<A,B,C,D,E,F,G,H,I,J> value, Holder<A,B,C,D,E,F,G,H,I,J> fallback) => 99;
     }
+`, "int32", "0", "7", "")
+        }
+        using let fixture = CSharpFixture("namespace Fixture4986 {" + declaration + "}")
+        let result = CompileAndRun((`import System
+import Fixture4986
+func ternary(n RECEIVER?) int32 -> n != nil ? n.GetValueOrDefault(FALLBACK)READ : 0
+func expression(n RECEIVER?) int32 -> if n != nil { n.GetValueOrDefault(FALLBACK)READ } else { 0 }
+func statement(n RECEIVER?) int32 {
+    if n != nil { return n.GetValueOrDefault(FALLBACK)READ }
+    return 0
+}
+Console.WriteLine("${ternary(PRESENT)} ${expression(PRESENT)} ${statement(PRESENT)} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`).Replace(
+                "RECEIVER",
+                receiver
+            ).Replace(
+                "FALLBACK",
+                fallback
+            ).Replace("PRESENT", present).Replace("READ", read), fixture.AssemblyPath, compileInSeparateProcess: true)
+        Assert.Equal("7 7 7 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData("string", false)
+    @InlineData("DualBad", false)
+    @InlineData("DualGood", true)
+    func Fixed_Argument_Constraint_Shapes_Retain_All_Interface_Alternatives(fixedArgument string, applicable bool) {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public interface IProbe<in T,U> {}
+    public class DualBad : System.Collections.Generic.IComparer<string>, System.Collections.Generic.IComparer<int> {
+        int System.Collections.Generic.IComparer<string>.Compare(string x, string y) => 0;
+        int System.Collections.Generic.IComparer<int>.Compare(int x, int y) => 0;
+    }
+    public class DualGood : System.Collections.Generic.IComparer<string>, System.Collections.Generic.IComparer<System.IO.MemoryStream> {
+        int System.Collections.Generic.IComparer<string>.Compare(string x, string y) => 0;
+        int System.Collections.Generic.IComparer<System.IO.MemoryStream>.Compare(System.IO.MemoryStream x, System.IO.MemoryStream y) => 0;
+    }
+    public struct Probe : IProbe<object,` + fixedArgument + `> {
+        public int V; public Probe(int v) { V = v; }
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<T,U>(this IProbe<T,U> value,
+            System.Collections.Generic.IComparer<T> fallback)
+            where T : System.IDisposable where U : System.Collections.Generic.IComparer<T> => new Probe(99);
+    }
+}`)
+        let argument = if applicable {
+            "Comparer[System.IO.MemoryStream].Default"
+        } else {
+            "Probe()"
+        }
+        let direct = if applicable {
+            "func direct(n Probe) int32 -> n.GetValueOrDefault(ARGUMENT).V\nConsole.WriteLine(direct(Probe(7)))"
+        } else {
+            ""
+        }
+        let result = CompileAndRun((`import System
+import System.Collections.Generic
+import Fixture4986
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(ARGUMENT).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(ARGUMENT).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(ARGUMENT).V }
+    return 0
+}
+DIRECT
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`).Replace("DIRECT", direct).Replace("ARGUMENT", argument), fixture.AssemblyPath)
+        Assert.Equal(
+            if applicable {
+                "99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine
+            } else {
+                "7 7 7 0 0 0" + Environment.NewLine
+            },
+            result.Output
+        )
+    }
+
+    @Fact
+    func Receiver_Interface_Alternatives_Remain_Available_To_Argument_Inference() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public interface IProbe<T> {}
+    public struct Probe : IProbe<string>, IProbe<System.IO.MemoryStream> {
+        public int V; public Probe(int v) { V = v; }
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<T>(this IProbe<T> value, T fallback)
+            where T : System.IDisposable => new Probe(99);
+    }
 }`)
         let result = CompileAndRun(`import System
 import Fixture4986
-func ternary(n int32?) int32 -> n != nil ? n.GetValueOrDefault(0) : 0
-func expression(n int32?) int32 -> if n != nil { n.GetValueOrDefault(0) } else { 0 }
-func statement(n int32?) int32 {
-    if n != nil { return n.GetValueOrDefault(0) }
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(System.IO.MemoryStream()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(System.IO.MemoryStream()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(System.IO.MemoryStream()).V }
     return 0
 }
-Console.WriteLine("${ternary(7)} ${expression(7)} ${statement(7)} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
-`, fixture.AssemblyPath, compileInSeparateProcess: true)
-        Assert.Equal("7 7 7 0 0 0" + Environment.NewLine, result.Output)
+func direct(n Probe) int32 -> n.GetValueOrDefault(System.IO.MemoryStream()).V
+Console.WriteLine(direct(Probe(7)))
+Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine, result.Output)
     }
 
     @Fact
