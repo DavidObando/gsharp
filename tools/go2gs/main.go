@@ -165,7 +165,7 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	}
 	defer func() {
 		if cleanupErr := ownedTempCleanupError(bootstrapDirectory, "bootstrap"); cleanupErr != nil {
-			err = errors.Join(err, &exitError{2, cleanupErr})
+			err = joinCleanupError(err, cleanupErr)
 		}
 	}()
 	bootstrapRoot := bootstrapDirectory.path
@@ -181,7 +181,7 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	}
 	defer func() {
 		if cleanupErr := bootstrapCapsule.close(); cleanupErr != nil {
-			err = errors.Join(err, &exitError{2, cleanupErr})
+			err = joinCleanupError(err, cleanupErr)
 		}
 	}()
 	if err := ctx.Err(); err != nil {
@@ -198,7 +198,7 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	}
 	defer func() {
 		if cleanupErr := ownedTempCleanupError(workerDirectory, "worker"); cleanupErr != nil {
-			err = errors.Join(err, &exitError{2, cleanupErr})
+			err = joinCleanupError(err, cleanupErr)
 		}
 	}()
 	workerRoot := workerDirectory.path
@@ -367,4 +367,8 @@ func joinOutputReleaseError(commandErr, releaseErr error) error {
 		&exitError{2, fmt.Errorf("release output lock: %w", releaseErr)},
 		commandErr,
 	)
+}
+
+func joinCleanupError(commandErr, cleanupErr error) error {
+	return errors.Join(&exitError{2, cleanupErr}, commandErr)
 }

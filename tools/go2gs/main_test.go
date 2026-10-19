@@ -2764,6 +2764,33 @@ func TestOutputReleaseFailureOverridesIncompleteExit(t *testing.T) {
 	}
 }
 
+func TestCleanupFailuresOverrideIncompleteExit(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		message string
+	}{
+		{"bootstrap-directory", "cleanup bootstrap directory"},
+		{"bootstrap-capsule", "cleanup bootstrap capsule"},
+		{"worker-directory", "cleanup worker directory"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := joinCleanupError(
+				&exitError{1, errors.New("inventory incomplete")},
+				errors.New(test.message),
+			)
+			var exitErr *exitError
+			if !errors.As(err, &exitErr) || exitErr.code != 2 {
+				t.Fatalf("cleanup failure did not take exit-code precedence: %v", err)
+			}
+			for _, message := range []string{"inventory incomplete", test.message} {
+				if !strings.Contains(err.Error(), message) {
+					t.Fatalf("joined cleanup error omitted %q: %v", message, err)
+				}
+			}
+		})
+	}
+}
+
 func TestOwnedTemporaryDirectoryCleanupIsIdentitySafe(t *testing.T) {
 	if !secureTempCleanupSupported() {
 		parent := t.TempDir()
@@ -6887,6 +6914,14 @@ func TestSourcePositionMapAcceptsAtInModuleFilename(t *testing.T) {
 }
 
 func TestSourcePositionMapHandlesLineDirectiveGrammar(t *testing.T) {
+	opaque := func(value string) string {
+		return "line://opaque/" + base64.RawURLEncoding.EncodeToString([]byte(value))
+	}
+	for _, path := range []string{"/work/generated.go", "../generated.go"} {
+		if portableLinePath(path) {
+			t.Fatalf("host-foreign path classified as portable: %q", path)
+		}
+	}
 	tests := []struct {
 		name      string
 		source    string
@@ -6912,6 +6947,30 @@ func TestSourcePositionMapHandlesLineDirectiveGrammar(t *testing.T) {
 			name: "module-relative", source: "package p\n//line logical/generated.go:12\nvar X int\n",
 			marker: "var X", path: "line://dir/logical/generated.go", line: 12, column: 0, directive: true,
 		},
+		{
+			name: "windows-drive", source: "package p\n//line C:\\work\\generated.go:21\nvar X int\n",
+			marker: "var X", path: opaque("C:/work/generated.go"), line: 21, column: 0, directive: true,
+		},
+		{
+			name: "windows-unc", source: "package p\n//line \\\\server\\share\\generated.go:22\nvar X int\n",
+			marker: "var X", path: opaque("//server/share/generated.go"), line: 22, column: 0, directive: true,
+		},
+		{
+			name: "unix-root", source: "package p\n//line /:23\nvar X int\n",
+			marker: "var X", path: opaque("/"), line: 23, column: 0, directive: true,
+		},
+		{
+			name: "unix-absolute", source: "package p\n//line /work/generated.go:24\nvar X int\n",
+			marker: "var X", path: opaque("/work/generated.go"), line: 24, column: 0, directive: true,
+		},
+		{
+			name: "unicode-reserved", source: "package p\n//line 名:?#%.go:25\nvar X int\n",
+			marker: "var X", path: opaque("名:?#%.go"), line: 25, column: 0, directive: true,
+		},
+		{
+			name: "dot-segments", source: "package p\n//line logical/../generated.go:26\nvar X int\n",
+			marker: "var X", path: opaque("generated.go"), line: 26, column: 0, directive: true,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -6931,7 +6990,37 @@ func TestSourcePositionMapHandlesLineDirectiveGrammar(t *testing.T) {
 			if path != test.path || line != test.line || column != test.column || directive != test.directive {
 				t.Fatalf("display position = %s:%d:%d directive=%v", path, line, column, directive)
 			}
+			if !validPortableLocation(path) {
+				t.Fatalf("display position is not portable: %q", path)
+			}
 		})
+	}
+}
+
+func TestAnalysisPublishesOpaqueLineDirectiveFilename(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":  "module example.com/opaque-line\n\ngo 1.27\n",
+		"main.go": "package opaque\n//line C:\\work\\generated.go:41\nvar Value = 1\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("opaque line analysis failed: complete=%v err=%v blockers=%#v",
+			complete, err, analysis.Blockers)
+	}
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatalf("opaque line artifact was rejected: %v", err)
+	}
+	want := "line://opaque/" +
+		base64.RawURLEncoding.EncodeToString([]byte("C:/work/generated.go"))
+	if !slices.ContainsFunc(analysis.Nodes, func(node NodeRecord) bool {
+		return node.Span.LineDirective && node.Span.DisplayPath == want
+	}) {
+		t.Fatalf("opaque line display path %q is missing", want)
 	}
 }
 
@@ -7217,6 +7306,7 @@ func TestGOFLAGSAllowlistRejectsExecutionAndPathOverrides(t *testing.T) {
 		{"-toolexec=payload"}, {"-toolexec", "payload"}, {"-overlay=overlay.json"},
 		{"-overlay", "overlay.json"}, {"-modfile=other.mod"}, {"-modfile", "other.mod"},
 		{"-tags=-toolexec=payload"}, {"-ldflags=-extld=payload"}, {"-buildvcs=true"},
+		{"-buildvcs", "true"}, {"-buildvcs"}, {"-buildvcs="},
 	}
 	for _, flags := range rejected {
 		if err := validateGOFLAGS(flags); err == nil {
@@ -7247,6 +7337,48 @@ func TestGOFLAGSAllowlistRejectsExecutionAndPathOverrides(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("toolexec payload ran or marker check failed: %v", err)
+	}
+}
+
+func TestGOFLAGSBuildVCSFormsLoadPackagesAndSerializeFaithfully(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		flags []string
+	}{
+		{"equals", []string{"-trimpath", "-buildvcs=false", "-tags=buildvcs_test"}},
+		{"split", []string{"-trimpath", "-buildvcs", "false", "-tags", "buildvcs_test"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			profile := testProfile()
+			profile.GOFLAGS = append([]string{}, test.flags...)
+			before := append([]string{}, profile.GOFLAGS...)
+			env, err := sanitizedEnvironment(
+				profile, t.TempDir(), runtime.GOROOT(), filepath.Dir(runtime.GOROOT()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			values := map[string]string{}
+			for _, entry := range env {
+				key, value, _ := strings.Cut(entry, "=")
+				values[key] = value
+			}
+			if want := "-trimpath -buildvcs=false -mod=readonly"; values["GOFLAGS"] != want {
+				t.Fatalf("GOFLAGS=%q, want %q", values["GOFLAGS"], want)
+			}
+			if !slices.Equal(profile.GOFLAGS, before) {
+				t.Fatalf("environment construction mutated GOFLAGS: got %v, want %v",
+					profile.GOFLAGS, before)
+			}
+			analysis, complete, err := analyze(
+				t.Context(), copyFixture(t, "complete"), t.TempDir(), profile)
+			if err != nil || !complete {
+				t.Fatalf("package loading failed: complete=%v err=%v blockers=%#v",
+					complete, err, analysis.Blockers)
+			}
+			if !slices.Equal(analysis.Profile.GOFLAGS, before) {
+				t.Fatalf("serialized GOFLAGS=%v, want %v", analysis.Profile.GOFLAGS, before)
+			}
+		})
 	}
 }
 

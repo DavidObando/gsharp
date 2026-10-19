@@ -275,11 +275,7 @@ func splitGOFLAGS(flags []string) (remaining, tags []string, err error) {
 			if value != "false" {
 				return nil, nil, errors.New("goFlags permits only -buildvcs=false")
 			}
-			if hasValue {
-				remaining = append(remaining, token)
-			} else {
-				remaining = append(remaining, name, value)
-			}
+			remaining = append(remaining, name+"="+value)
 		default:
 			return nil, nil, fmt.Errorf("goFlags option %q is not allowed in M0", name)
 		}
