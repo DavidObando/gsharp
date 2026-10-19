@@ -340,6 +340,13 @@ bound from below or above are checked rather than erased with the open
 parameter. Operator input bounds are substituted first; freedom is tracked
 per output parameter, so an input that fixes `U` does not also fix unrelated
 `T`. Fixed input bounds keep their constraint checks.
+Constraints crossing fixed and free parameters are substituted and retained,
+not rejected wholesale. A closed contravariant receiver bound can still be
+refined by later arguments: only fixed or explicitly pinned arguments impose
+dependent lower/upper obligations on another parameter. Provisional bounds
+may refine together, retaining their original receiver bounds.
+Reference-variance refinement cannot introduce a value-type argument by
+boxing.
 Inferring an element type cannot turn an `int32` receiver into a collection.
 Explicit generic
 calls keep the narrowed binding (`Nullable<T>` declares no generic methods).

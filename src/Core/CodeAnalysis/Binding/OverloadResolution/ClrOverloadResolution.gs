@@ -1285,7 +1285,7 @@ internal shared class ClrOverloadResolution {
             let convertedBounds = Dictionary[string, Type](bounds, StringComparer.Ordinal)
             if conversionParameters.Length == 1 &&
                 UnifyForInference(conversionParameters[0].ParameterType, receiverClr, convertedBounds) &&
-                IndependentExtensionReceiverOutputMayApply(method, receiver, convertedBounds) {
+                IndependentExtensionReceiverOutputMayApply(method, receiver, convertedBounds, argumentDependent) {
                 return true
             }
         }
@@ -1324,7 +1324,8 @@ internal shared class ClrOverloadResolution {
     private func IndependentExtensionReceiverOutputMayApply(
         method MethodInfo,
         receiver TypeSymbol,
-        bounds IReadOnlyDictionary[string, Type]
+        bounds IReadOnlyDictionary[string, Type],
+        argumentDependent HashSet[string]
     ) bool {
         let receiverClr = receiver.ClrType
         if receiverClr == nil {
@@ -1344,19 +1345,13 @@ internal shared class ClrOverloadResolution {
             }
         )
             .ToArray()
-        if arguments.All((argument Type) -> !argument.ContainsGenericParameters) ||
-            !SatisfiesDeclaredConstraints(parameters, arguments, default, out _, out _) {
+        if arguments.All((argument Type) -> !argument.ContainsGenericParameters) {
             return false
         }
-        for parameter in parameters {
-            let isFree = arguments[parameter.GenericParameterPosition].ContainsGenericParameters
-            for constraint in parameter.GetGenericParameterConstraints() {
-                if parameters.Any(
-                    (dependency Type) -> arguments[dependency.GenericParameterPosition].ContainsGenericParameters !=
-                    isFree && MentionsGenericParameter(constraint, dependency)
-                ) {
-                    return false
-                }
+        let freeBounds = Dictionary[string, Type](StringComparer.Ordinal)
+        for var i = 0; i < parameters.Length; i++ {
+            if arguments[i].ContainsGenericParameters {
+                freeBounds[parameters[i].Name] = parameters[i]
             }
         }
         var partiallyClosedMethod MethodInfo
@@ -1382,7 +1377,13 @@ internal shared class ClrOverloadResolution {
                 )
                     .IsImplicit
             ) {
-                return true
+                return ArgumentDependentBoundsMaySatisfyConstraints(
+                    parameters,
+                    arguments,
+                    receiverType,
+                    argumentDependent,
+                    freeBounds
+                )
             }
         }
         return false
@@ -1503,7 +1504,7 @@ internal shared class ClrOverloadResolution {
             return false
         }
         if !SatisfiesDeclaredConstraints(typeParameters, typeArguments, default, out var failedIndex, out _) {
-            if ArgumentDependentSubtypesMaySatisfyConstraints(
+            if ArgumentDependentBoundsMaySatisfyConstraints(
                 typeParameters,
                 typeArguments,
                 parameterType,
@@ -1550,115 +1551,199 @@ internal shared class ClrOverloadResolution {
         return true
     }
 
-    private func ArgumentDependentSubtypesMaySatisfyConstraints(
+    private func ArgumentDependentBoundsMaySatisfyConstraints(
         parameters[]Type,
         arguments[]Type,
         receiverType Type,
         argumentDependent HashSet[string],
         freeBounds IReadOnlyDictionary[string, Type]?,
-        pinnedParameters HashSet[int32]? = nil
+        pinnedParameters HashSet[int32]? = nil,
+        originalArguments IReadOnlyList[Type]? = nil
     ) bool {
         let possibleArguments = cast[[]Type](arguments.Clone())
-        while !SatisfiesDeclaredConstraints(parameters, possibleArguments, default, out var failedIndex, out _) {
-            let parameter = parameters[failedIndex]
-            let argument = possibleArguments[failedIndex]
-            if argument.IsGenericParameter || pinnedParameters?.Contains(failedIndex) == true ||
-                !argumentDependent.Contains(parameter.Name) ||
-                !MentionsGenericParameter(receiverType, parameter) ||
-                !InferenceBoundMayHaveCompatibleSubtype(argument, parameter, parameters, possibleArguments) {
-                return false
+        let inferenceBounds = originalArguments ?? arguments
+        // Receiver upper bounds are provisional, not fixed dependent arguments.
+        for var index = 0; index < parameters.Length; index++ {
+            if ExtensionReceiverArgumentMayRefine(
+                parameters,
+                arguments,
+                receiverType,
+                argumentDependent,
+                freeBounds,
+                pinnedParameters,
+                index
+            ) {
+                possibleArguments[index] = parameters[index]
             }
-            let freelyInferred = freeBounds != nil && freeBounds.TryGetValue(parameter.Name, out var freeParameter) &&
-                InferenceBoundMayHaveCompatibleSubtype(argument, freeParameter, parameters, possibleArguments)
-            if !freelyInferred && !ReceiverAllowsSubtypeInference(receiverType, parameter) {
-                return false
+        }
+        for var index = 0; index < parameters.Length; index++ {
+            if !possibleArguments[index].IsGenericParameter {
+                continue
             }
+            let parameter = parameters[index]
             let lowerBounds = List[Type]()
             let upperBounds = List[Type]()
-            for var i = 0; i < parameters.Length; i++ {
-                if i == failedIndex || possibleArguments[i].ContainsGenericParameters {
+            CollectFixedExtensionReceiverConstraintBounds(
+                parameters,
+                possibleArguments,
+                index,
+                lowerBounds,
+                upperBounds
+            )
+            let inferredUpperCount = upperBounds.Count
+            let hasReceiverUpperBound = !inferenceBounds[index].ContainsGenericParameters && freeBounds?.ContainsKey(
+                parameter.Name
+            ) != true
+            if hasReceiverUpperBound {
+                upperBounds.Add(inferenceBounds[index])
+            }
+            let exactBounds = upperBounds.Where((bound Type) -> !InferenceBoundMayRefine(bound)).ToList()
+            let requiresValue = (
+                parameter.GenericParameterAttributes &
+                GenericParameterAttributes.NotNullableValueTypeConstraint
+            ) != 0
+            for rawConstraint in parameter.GetGenericParameterConstraints() {
+                var constraint = rawConstraint
+                for var i = 0; i < parameters.Length; i++ {
+                    if !possibleArguments[i].ContainsGenericParameters {
+                        constraint = SubstituteClrType(constraint, parameters[i], possibleArguments[i])
+                    } else if constraint == parameters[i] &&
+                        !inferenceBounds[i].ContainsGenericParameters &&
+                        freeBounds?.ContainsKey(parameters[i].Name) != true {
+                        constraint = inferenceBounds[i]
+                    }
+                }
+                if constraint.ContainsGenericParameters || constraint.IsInterface {
                     continue
                 }
-                for constraint in parameters[i].GetGenericParameterConstraints() {
-                    if !MentionsGenericParameter(constraint, parameter) {
-                        continue
-                    }
-                    let inferred = Dictionary[string, Type](StringComparer.Ordinal)
-                    if UnifyForInference(constraint, possibleArguments[i], inferred) && inferred.TryGetValue(
-                        parameter.Name,
-                        out var inferredBound
-                    ) &&
-                        !inferredBound
-                        .ContainsGenericParameters {
-                        if ReceiverAllowsSubtypeInference(constraint, parameter) {
-                            upperBounds.Add(inferredBound)
-                        } else {
-                            lowerBounds.Add(inferredBound)
-                        }
-                    }
+                if !InferenceBoundMayRefine(constraint) {
+                    exactBounds.Add(constraint)
+                } else if requiresValue &&
+                    constraint.FullName != "System.Object" &&
+                    constraint.FullName != "System.ValueType" &&
+                    constraint.FullName != "System.Enum" {
+                    return false
+                } else {
+                    upperBounds.Add(constraint)
                 }
             }
-            for upper in upperBounds {
-                if upper.IsValueType {
-                    return false
+            if exactBounds.Count > 0 || lowerBounds.Count > 0 {
+                let candidates = List[Type]()
+                if exactBounds.Count > 0 {
+                    candidates.Add(exactBounds[0])
+                } else {
+                    candidates.AddRange(GetReceiverInferenceCarriers(lowerBounds[0]))
                 }
-                if ClrTypeUtilities.AreSame(upper, argument) {
-                    continue
-                }
-                if IsInferenceBoundPromotion(argument, upper) {
-                    let candidateArguments = cast[[]Type](possibleArguments.Clone())
-                    candidateArguments[failedIndex] = upper
-                    return ArgumentDependentSubtypesMaySatisfyConstraints(
-                        parameters,
-                        candidateArguments,
-                        receiverType,
-                        argumentDependent,
-                        freeBounds,
-                        pinnedParameters
-                    )
-                }
-                if !IsInferenceBoundPromotion(upper, argument) &&
-                    (
-                    (!upper.IsInterface && !argument.IsInterface) ||
-                        upper.IsSealed ||
-                        !InferenceBoundMayHaveCompatibleSubtype(upper, parameter, parameters, possibleArguments)
-                ) {
-                    return false
-                }
-            }
-            if lowerBounds.Count > 0 {
                 let pinned = if pinnedParameters != nil {
                     HashSet[int32](pinnedParameters)
                 } else {
                     HashSet[int32]()
                 }
-                pinned.Add(failedIndex)
-                for candidate in GetReceiverInferenceCarriers(lowerBounds[0]) {
-                    if candidate.IsValueType || !IsInferenceBoundPromotion(argument, candidate) || lowerBounds.Any(
+                pinned.Add(index)
+                for candidate in candidates {
+                    if (hasReceiverUpperBound && candidate.IsValueType) || lowerBounds.Any(
                         (lower Type) -> !IsInferenceBoundPromotion(candidate, lower)
-                    ) {
+                    ) ||
+                        upperBounds.Any((upper Type) -> !IsInferenceBoundPromotion(upper, candidate)) {
                         continue
                     }
                     let candidateArguments = cast[[]Type](possibleArguments.Clone())
-                    candidateArguments[failedIndex] = candidate
-                    if ArgumentDependentSubtypesMaySatisfyConstraints(
+                    candidateArguments[index] = candidate
+                    if ArgumentDependentBoundsMaySatisfyConstraints(
                         parameters,
                         candidateArguments,
                         receiverType,
                         argumentDependent,
                         freeBounds,
-                        pinned
+                        pinned,
+                        inferenceBounds
                     ) {
                         return true
                     }
                 }
                 return false
             }
-            // This parameter represents an unenumerable subtype. Keep checking
-            // other constraints instead of masking an independently fixed failure.
-            possibleArguments[failedIndex] = parameter
+            if requiresValue && inferredUpperCount > 0 {
+                return false
+            }
+            for upper in upperBounds {
+                if !requiresValue &&
+                    !InferenceBoundMayHaveCompatibleSubtype(upper, parameter, parameters, possibleArguments) {
+                    return false
+                }
+                if upperBounds.Any(
+                    (other Type) -> !upper.IsInterface &&
+                        !other.IsInterface &&
+                        !IsInferenceBoundPromotion(upper, other) &&
+                        !IsInferenceBoundPromotion(other, upper)
+                ) {
+                    return false
+                }
+            }
         }
-        return true
+        return SatisfiesDeclaredConstraints(parameters, possibleArguments, default, out _, out _)
+    }
+
+    private func ExtensionReceiverArgumentMayRefine(
+        parameters[]Type,
+        arguments[]Type,
+        receiverType Type,
+        argumentDependent HashSet[string],
+        freeBounds IReadOnlyDictionary[string, Type]?,
+        pinnedParameters HashSet[int32]?,
+        index int32
+    ) bool {
+        let parameter = parameters[index]
+        let argument = arguments[index]
+        let freelyInferred = freeBounds?.ContainsKey(parameter.Name) == true
+        return !argument.ContainsGenericParameters && pinnedParameters?.Contains(index) != true &&
+            argumentDependent.Contains(parameter.Name) &&
+            MentionsGenericParameter(receiverType, parameter) &&
+            (
+            freelyInferred ||
+                (
+                InferenceBoundMayRefine(argument) &&
+                    (
+                    parameter.GenericParameterAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint
+                ) == 0 &&
+                    ReceiverAllowsSubtypeInference(receiverType, parameter)
+            )
+        )
+    }
+
+    private func InferenceBoundMayRefine(type Type) bool -> !type.IsValueType && !type.IsSealed
+
+    private func CollectFixedExtensionReceiverConstraintBounds(
+        parameters[]Type,
+        arguments[]Type,
+        index int32,
+        lowerBounds List[Type],
+        upperBounds List[Type]
+    ) {
+        let parameter = parameters[index]
+        for var i = 0; i < parameters.Length; i++ {
+            if i == index || arguments[i].ContainsGenericParameters {
+                continue
+            }
+            for constraint in parameters[i].GetGenericParameterConstraints() {
+                if !MentionsGenericParameter(constraint, parameter) {
+                    continue
+                }
+                let inferred = Dictionary[string, Type](StringComparer.Ordinal)
+                if UnifyForInference(constraint, arguments[i], inferred) && inferred.TryGetValue(
+                    parameter.Name,
+                    out var bound
+                ) &&
+                    !bound
+                    .ContainsGenericParameters {
+                    if ReceiverAllowsSubtypeInference(constraint, parameter) {
+                        upperBounds.Add(bound)
+                    } else {
+                        lowerBounds.Add(bound)
+                    }
+                }
+            }
+        }
     }
 
     private func ReceiverAllowsSubtypeInference(
@@ -1705,8 +1790,7 @@ internal shared class ClrOverloadResolution {
         parameters[]Type,
         arguments[]Type
     ) bool {
-        if bound.IsValueType ||
-            bound.IsSealed ||
+        if !InferenceBoundMayRefine(bound) ||
             (parameter.GenericParameterAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 {
             return false
         }
@@ -1723,7 +1807,7 @@ internal shared class ClrOverloadResolution {
             if constraint.IsValueType {
                 return false
             }
-            if constraint.IsSealed && !IsInferenceBoundPromotion(bound, constraint) {
+            if !InferenceBoundMayRefine(constraint) && !IsInferenceBoundPromotion(bound, constraint) {
                 return false
             }
             if !bound.IsInterface &&

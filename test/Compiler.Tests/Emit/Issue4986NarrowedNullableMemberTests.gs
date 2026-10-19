@@ -566,6 +566,152 @@ Console.WriteLine("${direct(7)} ${ternary(7)} ${expression(7)} ${statement(7)} $
         Assert.Equal("99 99 99 99 0 0 0" + Environment.NewLine, result.Output)
     }
 
+    @Fact
+    func Free_Operator_Output_Constraints_Substitute_Known_Input_Bounds() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public struct Input<U> {}
+    public struct Box<T,U> {
+        public static implicit operator Box<T,U>(Input<U> value) => default;
+    }
+    public static class Extensions {
+        public static int GetValueOrDefault<T,U>(this Box<T,U> value, T fallback, U other)
+            where T : struct, System.IComparable<U> => 99;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func direct(n Input[int32]) int32 -> n.GetValueOrDefault(0, 0)
+func ternary(n Input[int32]?) int32 -> n != nil ? n.GetValueOrDefault(0, 0) : 0
+func expression(n Input[int32]?) int32 -> if n != nil { n.GetValueOrDefault(0, 0) } else { 0 }
+func statement(n Input[int32]?) int32 {
+    if n != nil { return n.GetValueOrDefault(0, 0) }
+    return 0
+}
+Console.WriteLine("${direct(Input[int32]())} ${ternary(Input[int32]())} ${expression(Input[int32]())} ${statement(Input[int32]())} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99 99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData("Token", true)
+    @InlineData("string", false)
+    func Fixed_Operator_Input_Bounds_Preserve_Free_Output_Obligations(element string, applicable bool) {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public interface IBounds<T,U> {}
+    public struct Token : System.IDisposable { public void Dispose() {} }
+    public struct Input<U> : IBounds<Token,U> { public int V; public Input(int v) { V = v; } }
+    public struct Box<T,U> {
+        public static implicit operator Box<T,U>(Input<U> value) => default;
+    }
+    public static class Extensions {
+        public static Input<U> GetValueOrDefault<T,U>(this Box<T,U> value, IBounds<T,U> fallback)
+            where T : struct, System.IDisposable where U : System.Collections.Generic.IComparer<T> => new Input<U>(99);
+    }
+}`)
+        let direct = if applicable {
+            "func direct(n Receiver) int32 -> n.GetValueOrDefault(Receiver()).V\nConsole.WriteLine(direct(Receiver(7)))"
+        } else {
+            ""
+        }
+        let result = CompileAndRun((`import System
+import System.Collections.Generic
+import Fixture4986
+func ternary(n Receiver?) int32 -> n != nil ? n.GetValueOrDefault(Receiver()).V : 0
+func expression(n Receiver?) int32 -> if n != nil { n.GetValueOrDefault(Receiver()).V } else { 0 }
+func statement(n Receiver?) int32 {
+    if n != nil { return n.GetValueOrDefault(Receiver()).V }
+    return 0
+}
+DIRECT
+Console.WriteLine("${ternary(Receiver(7))} ${expression(Receiver(7))} ${statement(Receiver(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`).Replace("DIRECT", direct).Replace("Receiver", "Input[Comparer[" + element + "]]"), fixture.AssemblyPath)
+        Assert.Equal(
+            if applicable {
+                "99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine
+            } else {
+                "7 7 7 0 0 0" + Environment.NewLine
+            },
+            result.Output
+        )
+    }
+
+    @Fact
+    func Impossible_Free_Output_Constraint_Does_Not_Block_Storage() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public interface IBounds<T,U> {}
+    public struct Token : System.IDisposable { public void Dispose() {} }
+    public struct Input<U> : IBounds<Token,U> { public int V; public Input(int v) { V = v; } }
+    public struct Box<T,U> {
+        public static implicit operator Box<T,U>(Input<U> value) => default;
+    }
+    public static class Extensions {
+        public static int GetValueOrDefault<T,U>(this Box<T,U> value, IBounds<T,U> fallback)
+            where T : U, System.IDisposable => 99;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n Input[string]?) int32 -> n != nil ? n.GetValueOrDefault(Input[string]()).V : 0
+func expression(n Input[string]?) int32 -> if n != nil { n.GetValueOrDefault(Input[string]()).V } else { 0 }
+func statement(n Input[string]?) int32 {
+    if n != nil { return n.GetValueOrDefault(Input[string]()).V }
+    return 0
+}
+Console.WriteLine("${ternary(Input[string](7))} ${expression(Input[string](7))} ${statement(Input[string](7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("7 7 7 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData(
+        "in T,in U",
+        "object,object",
+        "System.IO.MemoryStream,System.IO.MemoryStream",
+        "where T : U where U : System.IDisposable"
+    )
+    @InlineData(
+        "in T,in U",
+        "System.Collections.Generic.List<string>,object",
+        "System.Collections.Generic.List<string>,string",
+        "where T : System.Collections.Generic.List<U>"
+    )
+    @InlineData(
+        "T,in U",
+        "System.Collections.Generic.List<string>,object",
+        "System.Collections.Generic.List<string>,string",
+        "where T : System.Collections.Generic.List<U>"
+    )
+    func Dependent_Receiver_Bounds_Can_Refine_Together(
+        variance string,
+        receiverArguments string,
+        fallbackArguments string,
+        constraints string
+    ) {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public interface IProbe<` + variance + `> {}
+    public interface IBounds<in T,in U> {}
+    public struct Probe : IProbe<` + receiverArguments + `>, IBounds<` + fallbackArguments + `> {
+        public int V; public Probe(int v) { V = v; }
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<T,U>(this IProbe<T,U> value, IBounds<T,U> fallback)
+            ` + constraints + ` => new Probe(99);
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func direct(n Probe) int32 -> n.GetValueOrDefault(Probe()).V
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Probe()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Probe()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Probe()).V }
+    return 0
+}
+Console.WriteLine("${direct(Probe(7))} ${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99 99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
     @Theory
     @InlineData("System.Exception", "string", "where T : System.Collections.Generic.List<U>")
     @InlineData("object", "string", "where T : System.IDisposable where U : T")
