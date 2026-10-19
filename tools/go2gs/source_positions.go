@@ -13,6 +13,7 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -79,8 +80,12 @@ func newSourcePositionMapContext(ctx context.Context, portable string, data []by
 	if parsed != nil {
 		for _, group := range parsed.Comments {
 			for _, comment := range group.List {
-				directiveFilename, ok := lineDirectiveFilename(comment.Text)
+				directiveFilename, offset, ok := recognizedLineDirective(
+					file, filename, comment.Text, comment.Pos(), data)
 				if !ok {
+					continue
+				}
+				if directiveFilename == "" {
 					continue
 				}
 				displayPath := "line://" + opaqueLinePath(directiveFilename)
@@ -88,8 +93,7 @@ func newSourcePositionMapContext(ctx context.Context, portable string, data []by
 					displayPath = "line://" + pathpkg.Join(sourceDirectory, directiveFilename)
 				}
 				lineDirectives = append(lineDirectives, sourceLineDirective{
-					offset: lineDirectiveActivationOffset(
-						file, comment.Pos(), strings.HasPrefix(comment.Text, "//line "), data),
+					offset:      offset,
 					displayPath: displayPath,
 				})
 			}
@@ -140,6 +144,40 @@ func lineDirectiveActivationOffset(file *token.File, start token.Pos, line bool,
 	return len(data)
 }
 
+func recognizedLineDirective(
+	file *token.File,
+	filename string,
+	comment string,
+	start token.Pos,
+	data []byte,
+) (string, int, bool) {
+	directiveFilename, line, column, lineComment, ok := parseLineDirective(comment)
+	if !ok || lineComment && file.PositionFor(start, false).Column != 1 {
+		return "", 0, false
+	}
+	offset := lineDirectiveActivationOffset(file, start, lineComment, data)
+	if offset >= file.Size() {
+		return "", 0, false
+	}
+	expectedFilename := directiveFilename
+	if expectedFilename == "" && column > 0 {
+		directiveOffset := file.Offset(start) + len("//line ")
+		expectedFilename = file.PositionFor(file.Pos(directiveOffset), true).Filename
+	} else if expectedFilename != "" {
+		expectedFilename = filepath.Clean(expectedFilename)
+		if !filepath.IsAbs(expectedFilename) {
+			expectedFilename = filepath.Join(filepath.Dir(filename), expectedFilename)
+		}
+	}
+	adjusted := file.PositionFor(file.Pos(offset), true)
+	if adjusted.Filename != expectedFilename ||
+		adjusted.Line != line ||
+		adjusted.Column != column {
+		return "", 0, false
+	}
+	return directiveFilename, offset, true
+}
+
 func logicalLinePath(root, rawFilename, displayFilename string) string {
 	relative, withinRoot := relativeLinePath(root, displayFilename)
 	if withinRoot && portableLinePath(relative) {
@@ -164,37 +202,44 @@ func opaqueLinePath(value string) string {
 	return "opaque/" + base64.RawURLEncoding.EncodeToString([]byte(opaque))
 }
 
-func lineDirectiveFilename(comment string) (string, bool) {
+func parseLineDirective(comment string) (filename string, line, column int, lineComment, ok bool) {
 	switch {
 	case strings.HasPrefix(comment, "//line "):
-		comment = strings.TrimSpace(strings.TrimPrefix(comment, "//line "))
+		lineComment = true
 	case strings.HasPrefix(comment, "/*line ") && strings.HasSuffix(comment, "*/"):
-		comment = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(comment, "/*line "), "*/"))
+		comment = strings.TrimSuffix(comment, "*/")
 	default:
-		return "", false
+		return "", 0, 0, false, false
 	}
-	lastColon := strings.LastIndexByte(comment, ':')
-	if lastColon <= 0 || !decimalDigits(comment[lastColon+1:]) {
-		return "", false
+	comment = comment[len("//line "):]
+	index, number, valid := trailingDirectiveDigits(comment)
+	if index == 0 || !valid {
+		return "", 0, 0, false, false
 	}
-	filename := comment[:lastColon]
-	if columnColon := strings.LastIndexByte(filename, ':'); columnColon > 0 &&
-		decimalDigits(filename[columnColon+1:]) {
-		filename = filename[:columnColon]
+	filename = comment[:index-1]
+	line = number
+	hasColumn := false
+	if lineIndex, lineNumber, columnOK := trailingDirectiveDigits(filename); columnOK {
+		hasColumn = true
+		filename = filename[:lineIndex-1]
+		line = lineNumber
+		column = number
 	}
-	return filename, filename != ""
+	const maxLineColumn = 1 << 30
+	if line == 0 || line > maxLineColumn ||
+		hasColumn && (column == 0 || column > maxLineColumn) {
+		return "", 0, 0, false, false
+	}
+	return filename, line, column, lineComment, true
 }
 
-func decimalDigits(value string) bool {
-	if value == "" {
-		return false
+func trailingDirectiveDigits(value string) (int, int, bool) {
+	index := strings.LastIndexByte(value, ':')
+	if index < 0 {
+		return 0, 0, false
 	}
-	for _, character := range value {
-		if character < '0' || character > '9' {
-			return false
-		}
-	}
-	return true
+	number, err := strconv.ParseUint(value[index+1:], 10, 0)
+	return index + 1, int(number), err == nil
 }
 
 func relativeLinePath(root, filename string) (string, bool) {

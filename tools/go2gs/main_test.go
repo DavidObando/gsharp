@@ -7097,6 +7097,156 @@ func TestSourcePositionMapLineDirectiveBoundariesAndIsolation(t *testing.T) {
 	}
 }
 
+func TestSourcePositionMapMatchesScannerLineDirectiveRecognition(t *testing.T) {
+	opaque := "line://opaque/" +
+		base64.RawURLEncoding.EncodeToString([]byte("generated.go"))
+	portable := "line://dir/generated.go"
+	for _, test := range []struct {
+		name   string
+		source string
+		path   string
+	}{
+		{
+			name: "trailing-line-comment",
+			source: "package p\n//line generated.go:10\n" +
+				"var A int //line logical/../generated.go:20\nvar B int\n",
+			path: portable,
+		},
+		{
+			name: "indented-line-comment",
+			source: "package p\n//line generated.go:10\nvar A int\n" +
+				"  //line logical/../generated.go:20\nvar B int\n",
+			path: portable,
+		},
+		{
+			name: "tab-indented-line-comment",
+			source: "package p\n//line generated.go:10\nvar A int\n" +
+				"\t//line logical/../generated.go:20\nvar B int\n",
+			path: portable,
+		},
+		{
+			name: "zero-line",
+			source: "package p\n//line generated.go:10\nvar A int\n" +
+				"//line logical/../generated.go:0\nvar B int\n",
+			path: portable,
+		},
+		{
+			name: "overflow-line",
+			source: "package p\n//line generated.go:10\nvar A int\n" +
+				"//line logical/../generated.go:1073741825\nvar B int\n",
+			path: portable,
+		},
+		{
+			name: "zero-column",
+			source: "package p\n//line generated.go:10\nvar A int\n" +
+				"//line logical/../generated.go:20:0\nvar B int\n",
+			path: portable,
+		},
+		{
+			name: "overflow-column",
+			source: "package p\n//line generated.go:10\nvar A int\n" +
+				"//line logical/../generated.go:20:1073741825\nvar B int\n",
+			path: portable,
+		},
+		{
+			name: "missing-separator",
+			source: "package p\n//line generated.go:10\nvar A int\n" +
+				"//line logical/../generated.go\nvar B int\n",
+			path: portable,
+		},
+		{
+			name: "malformed-suffix",
+			source: "package p\n//line generated.go:10\nvar A int\n" +
+				"//line logical/../generated.go:20:bad\nvar B int\n",
+			path: portable,
+		},
+		{
+			name: "ordinary-block-comment",
+			source: "package p\n//line generated.go:10\nvar A int\n" +
+				"var _ = /*line logical/../generated.go:20:3 */ 0\nvar B int\n",
+			path: portable,
+		},
+		{
+			name: "line-column-one",
+			source: "package p\n//line generated.go:10\nvar A int\n" +
+				"//line logical/../generated.go:20:3\nvar B int\n",
+			path: opaque,
+		},
+		{
+			name: "block-mid-line",
+			source: "package p\n//line generated.go:10\nvar A int\n" +
+				"var _ = /*line logical/../generated.go:20:3*/ 0\nvar B int\n",
+			path: opaque,
+		},
+		{
+			name: "crlf",
+			source: "package p\r\n//line generated.go:10\r\nvar A int\r\n" +
+				"//line logical/../generated.go:20\r\nvar B int\r\n",
+			path: opaque,
+		},
+		{
+			name: "inside-function",
+			source: "package p\n//line generated.go:10\nfunc f() {\n" +
+				"\tvar A int //line logical/../generated.go:20\n\tvar B int\n}\n",
+			path: portable,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			positions, err := newSourcePositionMap("source://dir/main.go", []byte(test.source))
+			if err != nil {
+				t.Fatal(err)
+			}
+			offset := strings.Index(test.source, "var B")
+			if offset < 0 {
+				t.Fatal("var B marker not found")
+			}
+			_, _, path, _, _, directive := positions.span(offset, offset)
+			if path != test.path || !directive {
+				t.Fatalf("var B display path = %q directive=%v, want %q",
+					path, directive, test.path)
+			}
+		})
+	}
+}
+
+func TestSourcePositionMapIgnoresBOMDirectiveAndEOFDirective(t *testing.T) {
+	bomSource := "\ufeff//line logical/../generated.go:20\npackage p\nvar B int\n"
+	positions, err := newSourcePositionMap("source://dir/bom.go", []byte(bomSource))
+	if err != nil {
+		t.Fatal(err)
+	}
+	offset := strings.Index(bomSource, "var B")
+	_, _, path, _, _, directive := positions.span(offset, offset)
+	if path != "source://dir/bom.go" || directive {
+		t.Fatalf("BOM-prefixed directive applied: path=%q directive=%v", path, directive)
+	}
+
+	eofSource := "package p\n//line generated.go:10\nvar A int\n" +
+		"//line logical/../generated.go:20"
+	positions, err = newSourcePositionMap("source://dir/eof.go", []byte(eofSource))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, path, _, _, directive = positions.span(len(eofSource), len(eofSource))
+	if path != "line://dir/generated.go" || !directive {
+		t.Fatalf("directive at EOF changed identity: path=%q directive=%v", path, directive)
+	}
+}
+
+func TestSourcePositionMapRejectsShebangBeforeDirective(t *testing.T) {
+	source := "#!not-go\npackage p\n//line logical/../generated.go:20\nvar B int\n"
+	positions, err := newSourcePositionMap("source://dir/main.go", []byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	offset := strings.Index(source, "var B")
+	_, _, path, _, _, directive := positions.span(offset, offset)
+	if path != "source://dir/main.go" || directive {
+		t.Fatalf("directive after rejected shebang applied: path=%q directive=%v",
+			path, directive)
+	}
+}
+
 func TestAnalysisPublishesOpaqueLineDirectiveFilename(t *testing.T) {
 	root := t.TempDir()
 	for name, content := range map[string]string{
@@ -7122,6 +7272,39 @@ func TestAnalysisPublishesOpaqueLineDirectiveFilename(t *testing.T) {
 	}) {
 		t.Fatalf("opaque line display path %q is missing", want)
 	}
+}
+
+func TestIncompleteAnalysisPreservesScannerLineDirectiveParity(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod": "module example.com/incomplete-line\n\ngo 1.27\n",
+		"main.go": "package broken\n//line generated.go:10\n" +
+			"var A int //line logical/../generated.go:20\nvar Broken =\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || analysis.InventoryComplete {
+		t.Fatal("invalid source unexpectedly produced a complete inventory")
+	}
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatalf("incomplete line-directive artifact was rejected: %v", err)
+	}
+	for _, symbol := range analysis.Symbols {
+		if symbol.Name == "A" && symbol.Declaration != nil {
+			if symbol.Declaration.DisplayPath != "line://generated.go" {
+				t.Fatalf("ignored trailing directive changed A path: %q",
+					symbol.Declaration.DisplayPath)
+			}
+			return
+		}
+	}
+	t.Fatal("missing declaration for A")
 }
 
 func TestAnalysisPreservesLineDirectiveIdentityByOffset(t *testing.T) {
