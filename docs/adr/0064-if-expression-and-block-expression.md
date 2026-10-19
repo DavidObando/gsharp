@@ -462,6 +462,14 @@ The shared bound collector separately records upper bounds imposed by CLR
 reference variance. Projecting a declared conversion such as `U : struct` to
 `U -> System.ValueType` retains the obligation without incorrectly requiring
 `U` itself to be a reference type.
+Imported writable-ref receivers use the existing ref-kind reader and require
+receiver identity, including fixed generic receiver arguments; another argument
+cannot widen their storage type. Readonly `in` receivers retain ordinary
+conversion handling. SZ-array elements remain invariant, while rectangular
+reference-array and interface variance retain their separate conversion rules.
+A nullable value-type lower bound cannot satisfy a nonnullable `struct`
+constraint; the probe uses the same nullable-value reader as declared-constraint
+validation, without excluding nullable arguments from `new()` constraints.
 Inferring an element type cannot turn an `int32` receiver into a collection.
 Object- and collection-initializer suffixes are transparent to this name lookup:
 the original unbound head call still supplies the probe's argument shape.

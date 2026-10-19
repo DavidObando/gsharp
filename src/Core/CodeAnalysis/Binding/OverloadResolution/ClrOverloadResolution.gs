@@ -1229,17 +1229,27 @@ internal shared class ClrOverloadResolution {
         if parameters.Length == 0 {
             return false
         }
+        let receiverRefKind = RefCapabilities.GetParameterRefKind(parameters[0])
+        let requiresIdentity = receiverRefKind is RefKind.Ref or RefKind.Out
         var parameterType = parameters[0].ParameterType
         if parameterType.IsByRef {
             parameterType = parameterType.GetElementType() ?? parameterType
         }
         if !parameterType.ContainsGenericParameters {
+            if requiresIdentity {
+                return ClrTypeUtilities.AreSame(parameterType, receiverClr)
+            }
             return ClassifyImplicit(parameterType, receiverClr) != ImplicitConversionKind.None ||
                 Conversion
                 .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(parameters[0])).IsImplicit
         }
         let bounds = Dictionary[string, Type](StringComparer.Ordinal)
-        if !UnifyForInference(parameterType, receiverClr, bounds) {
+        let receiverMatches = if requiresIdentity {
+            InferExactExtensionReceiverTypeArguments(parameterType, receiverClr, bounds)
+        } else {
+            UnifyForInference(parameterType, receiverClr, bounds)
+        }
+        if !receiverMatches {
             return false
         }
         let typeParameters = method.GetGenericArguments()
@@ -1272,6 +1282,16 @@ internal shared class ClrOverloadResolution {
             )
         ) {
             return false
+        }
+        if requiresIdentity {
+            let independent = typeParameters
+                .Where(
+                (parameter Type) -> argumentDependent.Contains(parameter.Name) &&
+                    !MentionsGenericParameter(parameterType, parameter)
+            )
+                .Select((parameter Type) -> parameter.Name)
+                .ToHashSet(StringComparer.Ordinal)
+            return ExtensionReceiverBoundsMayApply(method, receiver, parameterType, bounds, independent)
         }
         let operators = List[MethodInfo]()
         ClrOperatorResolution.CollectOperators(receiverClr, "op_Implicit", operators)
@@ -1382,11 +1402,12 @@ internal shared class ClrOverloadResolution {
             let sourceElement = source.GetElementType()
             let targetElement = target.GetElementType()
             if !source.IsArray || source.GetArrayRank() != target.GetArrayRank() ||
+                source.IsSZArray != target.IsSZArray ||
                 sourceElement == nil ||
                 targetElement == nil {
                 return false
             }
-            if sourceElement.IsValueType || targetElement.IsValueType {
+            if source.IsSZArray || sourceElement.IsValueType || targetElement.IsValueType {
                 let exact = Dictionary[string, Type](StringComparer.Ordinal)
                 return if sourceElement.ContainsGenericParameters && !targetElement.ContainsGenericParameters {
                     InferExactExtensionReceiverTypeArguments(sourceElement, targetElement, exact)
@@ -2530,7 +2551,9 @@ internal shared class ClrOverloadResolution {
             )
             return
         }
-        if source.IsArray && target.IsArray && source.GetArrayRank() == target.GetArrayRank() {
+        if source.IsArray && target.IsArray && source.GetArrayRank() == target.GetArrayRank() &&
+            source.IsSZArray == target
+            .IsSZArray {
             let sourceElement = source.GetElementType()
             let targetElement = target.GetElementType()
             if sourceElement != nil && targetElement != nil {
@@ -2540,10 +2563,14 @@ internal shared class ClrOverloadResolution {
                     parameter,
                     lowerBounds,
                     upperBounds,
-                    exact || sourceElement.IsValueType || targetElement.IsValueType,
+                    exact || source.IsSZArray || sourceElement.IsValueType || targetElement.IsValueType,
                     tupleElementConversions,
                     referenceUpperBounds,
-                    referenceVariance || !exact && !sourceElement.IsValueType && !targetElement.IsValueType
+                    referenceVariance ||
+                        !exact &&
+                        !source.IsSZArray &&
+                        !sourceElement.IsValueType &&
+                        !targetElement.IsValueType
                 )
             }
             return
@@ -2845,7 +2872,9 @@ internal shared class ClrOverloadResolution {
                 ExtensionReceiverParameterAttributes(parameters, arguments, index) &
                 GenericParameterAttributes.NotNullableValueTypeConstraint
             ) != 0
-            if requiresValue && lowerBounds.Any((lower Type) -> !lower.IsValueType) {
+            if requiresValue && lowerBounds.Any(
+                (lower Type) -> !lower.IsValueType || NullableLifting.IsValueTypeNullableClr(lower)
+            ) {
                 return false
             }
             for var lowerIndex = 0; lowerIndex < lowerBounds.Count; lowerIndex++ {

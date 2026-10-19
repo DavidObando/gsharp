@@ -1271,6 +1271,128 @@ Console.WriteLine("${direct((7,8))} ${ternary((7,8))} ${expression((7,8))} ${sta
     }
 
     @Theory
+    @InlineData("closed-ref")
+    @InlineData("generic-ref")
+    @InlineData("readonly-in")
+    func Extension_Receiver_Ref_Kinds_Preserve_Identity(kind string) {
+        let declaration = if kind == "generic-ref" {
+            "public static int GetValueOrDefault<T>(this ref T value, T fallback) where T : struct, IComparable<long> => 99;"
+        } else if kind == "readonly-in" {
+            "public static int GetValueOrDefault(this in int value) => 99;"
+        } else {
+            "public static int GetValueOrDefault(this ref long value) => 99;"
+        }
+        let argument = if kind == "generic-ref" {
+            "0"
+        } else {
+            ""
+        }
+        using let fixture = CSharpFixture(`using System;
+namespace Fixture4986 { public static class Extensions { ` + declaration + ` } }`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n int32?) int32 -> n != nil ? n.GetValueOrDefault(` + argument + `) : 0
+func expression(n int32?) int32 -> if n != nil { n.GetValueOrDefault(` + argument + `) } else { 0 }
+func statement(n int32?) int32 {
+    if n != nil { return n.GetValueOrDefault(` + argument + `) }
+    return 0
+}
+Console.WriteLine("${ternary(7)} ${expression(7)} ${statement(7)} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        let expected = if kind == "readonly-in" {
+            "99 99 99 0 0 0"
+        } else {
+            "7 7 7 0 0 0"
+        }
+        Assert.Equal(expected + Environment.NewLine, result.Output)
+    }
+
+    @Fact
+    func Tuple_Receiver_Array_Elements_Remain_Invariant() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public static class Extensions {
+        public static (string[],int) GetValueOrDefault<T>(this (T[],int) value, T fallback)
+            where T : new() => (System.Array.Empty<string>(),99);
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n ([]string,int32)?) int32 -> n != nil ? n.GetValueOrDefault(([]string{"x"},0)).Item2 : 0
+func expression(n ([]string,int32)?) int32 -> if n != nil { n.GetValueOrDefault(([]string{"x"},0)).Item2 } else { 0 }
+func statement(n ([]string,int32)?) int32 {
+    if n != nil { return n.GetValueOrDefault(([]string{"x"},0)).Item2 }
+    return 0
+}
+Console.WriteLine("${ternary(([]string{"x"},7))} ${expression(([]string{"x"},7))} ${statement(([]string{"x"},7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("7 7 7 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
+    func Rectangular_Array_And_Interface_Receiver_Variance_Remains_Available() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public interface IProbe<out T> {}
+    public struct Probe : IProbe<string[,]> {
+        public int V; public Probe(int value) { V = value; }
+    }
+    public static class Extensions {
+        public static Probe GetValueOrDefault<T>(this IProbe<T[,]> value, T fallback)
+            where T : new() => new Probe(99);
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func direct(n Probe) int32 -> n.GetValueOrDefault(Object()).V
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Object()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Object()).V } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Object()).V }
+    return 0
+}
+Console.WriteLine("${direct(Probe(7))} ${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("99 99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Theory
+    @InlineData(true)
+    @InlineData(false)
+    func Nullable_Tuple_Lower_Bounds_Respect_Nonnullable_Value_Constraints(requiresValue bool) {
+        let constraint = if requiresValue {
+            "struct"
+        } else {
+            "new()"
+        }
+        let fallback = if requiresValue {
+            "default((int32?,int32))"
+        } else {
+            "default(int32?)"
+        }
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public static class Extensions {
+        public static (int,int) GetValueOrDefault<T>(this (T,int) value, T fallback)
+            where T : ` + constraint + ` => (0,99);
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ternary(n (int32?,int32)?) int32 -> n != nil ? n.GetValueOrDefault(` + fallback + `).Item2 : 0
+func expression(n (int32?,int32)?) int32 -> if n != nil { n.GetValueOrDefault(` + fallback + `).Item2 } else { 0 }
+func statement(n (int32?,int32)?) int32 {
+    if n != nil { return n.GetValueOrDefault(` + fallback + `).Item2 }
+    return 0
+}
+Console.WriteLine("${ternary((default(int32?),7))} ${expression((default(int32?),7))} ${statement((default(int32?),7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
+        let expected = if requiresValue {
+            "7 7 7 0 0 0"
+        } else {
+            "99 99 99 0 0 0"
+        }
+        Assert.Equal(expected + Environment.NewLine, result.Output)
+    }
+
+    @Theory
     @InlineData("Guid", "Guid.Empty")
     @InlineData("DateTime", "DateTime.MinValue")
     func Declared_Value_Constraints_Are_Not_Receiver_Variance_Bounds(type string, value string) {
