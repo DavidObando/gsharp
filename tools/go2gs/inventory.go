@@ -2464,8 +2464,8 @@ func (b *inventoryBuilder) addMethodSets(pkg *packages.Package) {
 			}
 			b.seenMethodSets[id] = true
 			for _, method := range methodSetObjects(candidate.t) {
-				fallback := "method-set\x00" + typeID + "\x00" + method.Name()
-				record.MethodSymbolIDs = append(record.MethodSymbolIDs, b.addObjectWithFallback(pkg, method, SourceSpan{}, fallback))
+				record.MethodSymbolIDs = append(record.MethodSymbolIDs,
+					b.addMethodSetObject(pkg, method, ownerSymbolID, candidate.pointer))
 			}
 			if !appendInventoryRecord(b, &b.analysis.MethodSets, record) {
 				return
@@ -2669,6 +2669,30 @@ func (b *inventoryBuilder) typeIdentity(_ *packages.Package, t types.Type) strin
 
 func (b *inventoryBuilder) addObject(pkg *packages.Package, object types.Object, declaration SourceSpan) string {
 	return b.addObjectWithFallback(pkg, object, declaration, "")
+}
+
+func (b *inventoryBuilder) addMethodSetObject(
+	pkg *packages.Package,
+	object types.Object,
+	ownerSymbolID string,
+	pointer bool,
+) string {
+	object = objectOrigin(object)
+	pkgID := b.packageIDs[pkg]
+	declarationKey := "method-set\x00" + ownerSymbolID + "\x00" +
+		strconv.FormatBool(pointer) + "\x00" + object.Name() + "\x00" +
+		b.typeIdentity(pkg, object.Type())
+	id := stableID("symbol", objectCanonical(pkgID, object, declarationKey))
+	if b.seenSymbols[id] {
+		return id
+	}
+	b.seenSymbols[id] = true
+	appendInventoryRecord(b, &b.analysis.Symbols, SymbolRecord{
+		ID: id, PackageID: pkgID, Name: object.Name(), Kind: objectKind(object),
+		TypeID: b.addType(pkg, object.Type()), Exported: object.Exported(),
+		MethodSetOwnerSymbolID: ownerSymbolID, MethodSetPointer: pointer,
+	})
+	return id
 }
 
 func (b *inventoryBuilder) addObjectWithFallback(pkg *packages.Package, object types.Object, declaration SourceSpan, fallback string) string {

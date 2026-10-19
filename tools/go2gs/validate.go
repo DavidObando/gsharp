@@ -980,11 +980,31 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 		}
 		symbols[symbol.ID] = symbol
 	}
+	for _, symbol := range a.Symbols {
+		if symbol.MethodSetOwnerSymbolID == "" {
+			continue
+		}
+		owner, ok := symbols[symbol.MethodSetOwnerSymbolID]
+		if !ok || symbol.Kind != "function" || owner.Kind != "type" ||
+			symbol.PackageID != owner.PackageID {
+			return fmt.Errorf("method-set symbol %q owner relationship is inconsistent", symbol.ID)
+		}
+	}
 	for _, methodSet := range a.MethodSets {
 		owner, ok := symbols[methodSet.OwnerSymbolID]
 		if !ok || owner.PackageID != methodSet.PackageID ||
 			owner.Kind != "type" || owner.TypeID != methodSet.TypeID {
 			return fmt.Errorf("method set %q owner symbol relationship is inconsistent", methodSet.ID)
+		}
+		for _, methodSymbolID := range methodSet.MethodSymbolIDs {
+			method, ok := symbols[methodSymbolID]
+			if !ok || method.PackageID != methodSet.PackageID ||
+				method.Kind != "function" || method.TypeID == "" ||
+				method.MethodSetOwnerSymbolID != methodSet.OwnerSymbolID ||
+				method.MethodSetPointer != methodSet.Pointer {
+				return fmt.Errorf("method set %q method symbol %q membership is inconsistent",
+					methodSet.ID, methodSymbolID)
+			}
 		}
 	}
 	for _, node := range a.Nodes {

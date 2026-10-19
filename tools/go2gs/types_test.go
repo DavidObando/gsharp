@@ -344,6 +344,60 @@ func TestTypeIdentityAlphaNormalizesBoundTypeParameters(t *testing.T) {
 	}
 }
 
+func TestTypeIdentityPreservesReceiverBinderConstraints(t *testing.T) {
+	constraint := func(parameter *types.TypeParam, element types.Type) types.Type {
+		if element == parameter {
+			element = types.NewSlice(parameter)
+		}
+		return types.NewInterfaceType(nil, []types.Type{
+			types.NewUnion([]*types.Term{types.NewTerm(true, element)}),
+		}).Complete()
+	}
+	signature := func(name string, element func(*types.TypeParam) types.Type) *types.Signature {
+		parameter := types.NewTypeParam(types.NewTypeName(token.NoPos, nil, name, nil), nil)
+		parameter.SetConstraint(constraint(parameter, element(parameter)))
+		receiver := types.NewVar(token.NoPos, nil, "receiver", types.Typ[types.Int])
+		values := types.NewTuple(types.NewVar(token.NoPos, nil, "value", parameter))
+		return types.NewSignatureType(receiver, []*types.TypeParam{parameter}, nil, values, values, false)
+	}
+	direct := func(typ types.Type) func(*types.TypeParam) types.Type {
+		return func(*types.TypeParam) types.Type { return typ }
+	}
+	recursiveSlice := func(parameter *types.TypeParam) types.Type { return parameter }
+	recursivePointer := func(parameter *types.TypeParam) types.Type {
+		return types.NewPointer(parameter)
+	}
+	for _, test := range []struct {
+		name                  string
+		first, renamed, other types.Type
+	}{
+		{
+			name:    "direct",
+			first:   signature("T", direct(types.Typ[types.Int])),
+			renamed: signature("U", direct(types.Typ[types.Int])),
+			other:   signature("V", direct(types.Typ[types.String])),
+		},
+		{
+			name:    "recursive",
+			first:   signature("T", recursiveSlice),
+			renamed: signature("U", recursiveSlice),
+			other:   signature("V", recursivePointer),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if types.Identical(test.first, test.other) {
+				t.Fatal("go/types unexpectedly ignored unequal receiver binder constraints")
+			}
+			if canonicalTypeIdentity(test.first) != canonicalTypeIdentity(test.renamed) {
+				t.Fatal("receiver binder names changed identity")
+			}
+			if canonicalTypeIdentity(test.first) == canonicalTypeIdentity(test.other) {
+				t.Fatal("receiver binder constraints were omitted from identity")
+			}
+		})
+	}
+}
+
 func TestTypeIdentityPreservesGenericBinderShape(t *testing.T) {
 	parameter := func(name string, constraint types.Type) *types.TypeParam {
 		return types.NewTypeParam(types.NewTypeName(token.NoPos, nil, name, nil), constraint)
@@ -388,6 +442,47 @@ func TestTypeIdentityRetainsFreeTypeParameterDeclaration(t *testing.T) {
 	}
 }
 
+func TestTypeIdentityUsesCompletedInterfaceTypeSet(t *testing.T) {
+	method := func(name string, parameter types.Type) *types.Func {
+		return types.NewFunc(token.NoPos, nil, name,
+			types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, nil, "value", parameter)),
+				nil, false))
+	}
+	direct := types.NewInterfaceType([]*types.Func{method("M", types.Typ[types.Int])}, nil).Complete()
+	embedded := types.NewInterfaceType(nil, []types.Type{direct}).Complete()
+	nested := types.NewInterfaceType(nil, []types.Type{embedded}).Complete()
+	differentMethod := types.NewInterfaceType(
+		[]*types.Func{method("M", types.Typ[types.String])}, nil).Complete()
+	if !types.Identical(direct, embedded) || !types.Identical(direct, nested) {
+		t.Fatal("go/types unexpectedly retained equivalent interface embed topology")
+	}
+	if canonicalTypeIdentity(direct) != canonicalTypeIdentity(embedded) ||
+		canonicalTypeIdentity(direct) != canonicalTypeIdentity(nested) {
+		t.Fatalf("equivalent completed interface type sets differ:\ndirect:   %s\nembedded: %s\nnested:   %s",
+			canonicalTypeIdentity(direct), canonicalTypeIdentity(embedded), canonicalTypeIdentity(nested))
+	}
+	if types.Identical(direct, differentMethod) ||
+		canonicalTypeIdentity(direct) == canonicalTypeIdentity(differentMethod) {
+		t.Fatal("different completed method signatures collapsed")
+	}
+
+	restricted := func(typ types.Type) types.Type {
+		return types.NewInterfaceType(nil, []types.Type{
+			types.NewUnion([]*types.Term{types.NewTerm(true, typ)}),
+		}).Complete()
+	}
+	ints, strings := restricted(types.Typ[types.Int]), restricted(types.Typ[types.String])
+	if types.Identical(ints, strings) || canonicalTypeIdentity(ints) == canonicalTypeIdentity(strings) {
+		t.Fatal("different interface type terms collapsed")
+	}
+	empty := types.NewInterfaceType(nil, nil).Complete()
+	comparable := types.Universe.Lookup("comparable").Type()
+	if types.Identical(empty, comparable) || canonicalTypeIdentity(empty) == canonicalTypeIdentity(comparable) {
+		t.Fatal("interface comparability restriction was omitted")
+	}
+}
+
 func TestTypeIdentityMemoizesCompletedDAGNodes(t *testing.T) {
 	build := func(depth int) types.Type {
 		var current types.Type = types.Typ[types.Int]
@@ -399,8 +494,8 @@ func TestTypeIdentityMemoizesCompletedDAGNodes(t *testing.T) {
 		}
 		return current
 	}
-	depth13 := canonicalTypeIdentity(build(13))
-	depth14 := canonicalTypeIdentity(build(14))
+	depth13, nodes13 := canonicalTypeIdentityWithStats(build(13), typeObjectIdentity)
+	depth14, nodes14 := canonicalTypeIdentityWithStats(build(14), typeObjectIdentity)
 	if len(depth14) >= testProfile().Limits.MaxStringBytes {
 		t.Fatalf("shared type DAG expanded beyond the record limit: %d bytes", len(depth14))
 	}
@@ -410,6 +505,9 @@ func TestTypeIdentityMemoizesCompletedDAGNodes(t *testing.T) {
 	}
 	if nodes := strings.Count(depth14, ";@"); nodes != 15 {
 		t.Fatalf("shared type DAG emitted %d nodes, want 15", nodes)
+	}
+	if nodes13 != 14 || nodes14 != 15 {
+		t.Fatalf("graph builder revisited completed DAG nodes: depth13=%d depth14=%d", nodes13, nodes14)
 	}
 }
 

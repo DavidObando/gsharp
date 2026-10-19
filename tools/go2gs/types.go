@@ -27,17 +27,27 @@ func canonicalTypeIdentity(t types.Type) string {
 }
 
 func canonicalTypeIdentityWith(t types.Type, identify func(*types.TypeName) string) string {
+	identity, _ := canonicalTypeIdentityWithStats(t, identify)
+	return identity
+}
+
+func canonicalTypeIdentityWithStats(
+	t types.Type,
+	identify func(*types.TypeName) string,
+) (string, int) {
 	if t == nil {
-		return ""
+		return "", 0
 	}
 	if _, basic := t.(*types.Basic); basic {
-		return canonicalType(t)
+		return canonicalType(t), 1
 	}
 	builder := typeIdentityGraphBuilder{
-		identify: identify,
-		nodes:    []typeIdentityNode{},
-		nodeIDs:  map[typeIdentityKey]int{},
-		active:   map[types.Type]int{},
+		identify:      identify,
+		nodes:         []typeIdentityNode{},
+		nodeIDs:       map[typeIdentityKey]int{},
+		active:        map[types.Type]int{},
+		interfaceSets: map[*types.Interface]typeIdentityInterfaceSet{},
+		unionSets:     map[*types.Union]typeIdentityTermList{},
 	}
 	root := builder.reference(t, nil)
 	classes, classKeys, representatives := canonicalTypeIdentityClasses(builder.nodes)
@@ -55,7 +65,7 @@ func canonicalTypeIdentityWith(t types.Type, identify func(*types.TypeName) stri
 		result.WriteByte('=')
 		result.WriteString(definition)
 	}
-	return result.String()
+	return result.String(), len(builder.nodes)
 }
 
 type typeIdentityKey struct {
@@ -64,11 +74,13 @@ type typeIdentityKey struct {
 }
 
 type typeIdentityBinderBinding struct {
-	owner   int
-	kind    string
-	index   int
-	node    int
-	hasNode bool
+	owner      int
+	kind       string
+	index      int
+	constraint types.Type
+	scope      *typeIdentityBinderScope
+	node       int
+	hasNode    bool
 }
 
 type typeIdentityBinderScope struct {
@@ -104,11 +116,132 @@ type typeIdentityNode struct {
 	groups []typeIdentityGroup
 }
 
+type typeIdentityTerm struct {
+	tilde bool
+	typ   types.Type
+}
+
+type typeIdentityTermList []*typeIdentityTerm
+
+type typeIdentityInterfaceSet struct {
+	terms      typeIdentityTermList
+	comparable bool
+}
+
+func allTypeIdentityTerms() typeIdentityTermList {
+	return typeIdentityTermList{&typeIdentityTerm{}}
+}
+
+func (terms typeIdentityTermList) isAll() bool {
+	for _, term := range terms {
+		if term != nil && term.typ == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (terms typeIdentityTermList) normalized() typeIdentityTermList {
+	used := make([]bool, len(terms))
+	var result typeIdentityTermList
+	for i, left := range terms {
+		if left == nil || used[i] {
+			continue
+		}
+		for j := i + 1; j < len(terms); j++ {
+			right := terms[j]
+			if right == nil || used[j] {
+				continue
+			}
+			if first, second := typeIdentityTermUnion(left, right); second == nil {
+				if first.typ == nil {
+					return allTypeIdentityTerms()
+				}
+				left = first
+				used[j] = true
+			}
+		}
+		result = append(result, left)
+	}
+	return result
+}
+
+func (terms typeIdentityTermList) union(other typeIdentityTermList) typeIdentityTermList {
+	return append(append(typeIdentityTermList{}, terms...), other...).normalized()
+}
+
+func (terms typeIdentityTermList) intersect(other typeIdentityTermList) typeIdentityTermList {
+	if len(terms) == 0 || len(other) == 0 {
+		return nil
+	}
+	var result typeIdentityTermList
+	for _, left := range terms {
+		for _, right := range other {
+			if term := typeIdentityTermIntersection(left, right); term != nil {
+				result = append(result, term)
+			}
+		}
+	}
+	return result.normalized()
+}
+
+func typeIdentityTermUnion(left, right *typeIdentityTerm) (*typeIdentityTerm, *typeIdentityTerm) {
+	switch {
+	case left == nil && right == nil:
+		return nil, nil
+	case left == nil:
+		return right, nil
+	case right == nil:
+		return left, nil
+	case left.typ == nil:
+		return left, nil
+	case right.typ == nil:
+		return right, nil
+	case typeIdentityTermsDisjoint(left, right):
+		return left, right
+	case left.tilde || !right.tilde:
+		return left, nil
+	default:
+		return right, nil
+	}
+}
+
+func typeIdentityTermIntersection(left, right *typeIdentityTerm) *typeIdentityTerm {
+	switch {
+	case left == nil || right == nil:
+		return nil
+	case left.typ == nil:
+		return right
+	case right.typ == nil:
+		return left
+	case typeIdentityTermsDisjoint(left, right):
+		return nil
+	case !left.tilde || right.tilde:
+		return left
+	default:
+		return right
+	}
+}
+
+func typeIdentityTermsDisjoint(left, right *typeIdentityTerm) bool {
+	leftType := left.typ
+	if right.tilde {
+		leftType = leftType.Underlying()
+	}
+	rightType := right.typ
+	if left.tilde {
+		rightType = rightType.Underlying()
+	}
+	return !types.Identical(leftType, rightType)
+}
+
 type typeIdentityGraphBuilder struct {
-	identify func(*types.TypeName) string
-	nodes    []typeIdentityNode
-	nodeIDs  map[typeIdentityKey]int
-	active   map[types.Type]int
+	identify      func(*types.TypeName) string
+	nodes         []typeIdentityNode
+	nodeIDs       map[typeIdentityKey]int
+	active        map[types.Type]int
+	interfaceSets map[*types.Interface]typeIdentityInterfaceSet
+	unionSets     map[*types.Union]typeIdentityTermList
 }
 
 func (b *typeIdentityGraphBuilder) reference(t types.Type, scope *typeIdentityBinderScope) int {
@@ -142,14 +275,18 @@ func (b *typeIdentityGraphBuilder) boundReference(binding *typeIdentityBinderBin
 	}
 	binding.node = len(b.nodes)
 	binding.hasNode = true
-	b.nodes = append(b.nodes, typeIdentityNode{
+	b.nodes = append(b.nodes, typeIdentityNode{})
+	b.nodes[binding.node] = typeIdentityNode{
 		kind: "boundTypeParameter",
 		values: []string{
 			"kind=" + binding.kind,
 			"index=" + strconv.Itoa(binding.index),
 		},
-		groups: []typeIdentityGroup{typeIdentitySingle("owner", binding.owner)},
-	})
+		groups: []typeIdentityGroup{
+			typeIdentitySingle("owner", binding.owner),
+			typeIdentitySingle("constraint", b.reference(binding.constraint, binding.scope)),
+		},
+	}
 	return binding.node
 }
 
@@ -192,6 +329,7 @@ func (b *typeIdentityGraphBuilder) definition(
 		}
 	case *types.Interface:
 		value.Complete()
+		typeSet := b.interfaceTypeSet(value)
 		var methods []typeIdentityMember
 		for i := 0; i < value.NumMethods(); i++ {
 			method := value.Method(i)
@@ -206,17 +344,16 @@ func (b *typeIdentityGraphBuilder) definition(
 				target: b.reference(method.Type(), scope),
 			})
 		}
-		var embedded []typeIdentityMember
-		for i := 0; i < value.NumEmbeddeds(); i++ {
-			embedded = append(embedded, typeIdentityMember{
-				target: b.reference(value.EmbeddedType(i), scope),
-			})
-		}
+		termKind, terms := b.typeSetIdentity(typeSet.terms, scope)
 		return typeIdentityNode{
 			kind: "interface",
+			values: []string{
+				"comparable=" + strconv.FormatBool(typeSet.comparable),
+				"terms=" + termKind,
+			},
 			groups: []typeIdentityGroup{
 				typeIdentityList("methods", true, methods),
-				typeIdentityList("embedded", true, embedded),
+				typeIdentityList("terms", true, terms),
 			},
 		}
 	case *types.Map:
@@ -301,17 +438,10 @@ func (b *typeIdentityGraphBuilder) definition(
 			},
 		}
 	case *types.Union:
-		var terms []typeIdentityMember
-		for i := 0; i < value.Len(); i++ {
-			term := value.Term(i)
-			terms = append(terms, typeIdentityMember{
-				prefix: "term(tilde=" + strconv.FormatBool(term.Tilde()) + ",type=",
-				suffix: ")",
-				target: b.reference(term.Type(), scope),
-			})
-		}
+		termKind, terms := b.typeSetIdentity(b.unionTypeSet(value), scope)
 		return typeIdentityNode{
 			kind:   "union",
+			values: []string{"terms=" + termKind},
 			groups: []typeIdentityGroup{typeIdentityList("terms", true, terms)},
 		}
 	default:
@@ -335,6 +465,7 @@ func (b *typeIdentityGraphBuilder) signatureScope(
 		for i := 0; i < parameters.Len(); i++ {
 			scope.bindings[parameters.At(i)] = &typeIdentityBinderBinding{
 				owner: id, kind: "receiver", index: i,
+				constraint: parameters.At(i).Constraint(), scope: scope,
 			}
 		}
 	}
@@ -342,6 +473,7 @@ func (b *typeIdentityGraphBuilder) signatureScope(
 		for i := 0; i < parameters.Len(); i++ {
 			scope.bindings[parameters.At(i)] = &typeIdentityBinderBinding{
 				owner: id, kind: "type", index: i,
+				constraint: parameters.At(i).Constraint(), scope: scope,
 			}
 		}
 	}
@@ -374,6 +506,101 @@ func (b *typeIdentityGraphBuilder) typeParameterConstraints(
 		values[i].target = b.reference(parameters.At(i).Constraint(), scope)
 	}
 	return values
+}
+
+func (b *typeIdentityGraphBuilder) interfaceTypeSet(value *types.Interface) typeIdentityInterfaceSet {
+	if cached, ok := b.interfaceSets[value]; ok {
+		return cached
+	}
+	value.Complete()
+	result := typeIdentityInterfaceSet{
+		terms:      allTypeIdentityTerms(),
+		comparable: value.NumMethods() == 0 && value.NumEmbeddeds() == 0 && value.IsComparable(),
+	}
+	b.interfaceSets[value] = result
+	for i := 0; i < value.NumEmbeddeds(); i++ {
+		embedded := value.EmbeddedType(i)
+		var terms typeIdentityTermList
+		comparable := false
+		switch underlying := embedded.Underlying().(type) {
+		case *types.Interface:
+			embeddedSet := b.interfaceTypeSet(underlying)
+			terms, comparable = embeddedSet.terms, embeddedSet.comparable
+		case *types.Union:
+			terms = b.unionTypeSet(underlying)
+		default:
+			terms = typeIdentityTermList{&typeIdentityTerm{typ: embedded}}
+		}
+		result.terms, result.comparable = intersectTypeIdentityTermLists(
+			result.terms, result.comparable, terms, comparable)
+	}
+	b.interfaceSets[value] = result
+	return result
+}
+
+func (b *typeIdentityGraphBuilder) unionTypeSet(value *types.Union) typeIdentityTermList {
+	if cached, ok := b.unionSets[value]; ok {
+		return cached
+	}
+	b.unionSets[value] = nil
+	var result typeIdentityTermList
+	for i := 0; i < value.Len(); i++ {
+		term := value.Term(i)
+		typ := term.Type()
+		var terms typeIdentityTermList
+		if embedded, ok := typ.Underlying().(*types.Interface); ok {
+			terms = b.interfaceTypeSet(embedded).terms
+		} else if term.Tilde() && !types.Identical(typ, typ.Underlying()) {
+			continue
+		} else {
+			terms = typeIdentityTermList{&typeIdentityTerm{tilde: term.Tilde(), typ: typ}}
+		}
+		result = result.union(terms)
+	}
+	b.unionSets[value] = result
+	return result
+}
+
+func intersectTypeIdentityTermLists(
+	left typeIdentityTermList,
+	leftComparable bool,
+	right typeIdentityTermList,
+	rightComparable bool,
+) (typeIdentityTermList, bool) {
+	terms := left.intersect(right)
+	comparable := leftComparable || rightComparable
+	if comparable && !terms.isAll() {
+		filtered := terms[:0]
+		for _, term := range terms {
+			if term != nil && term.typ != nil && types.Comparable(term.typ) {
+				filtered = append(filtered, term)
+			}
+		}
+		terms = filtered
+		comparable = false
+	}
+	return terms, comparable
+}
+
+func (b *typeIdentityGraphBuilder) typeSetIdentity(
+	terms typeIdentityTermList,
+	scope *typeIdentityBinderScope,
+) (string, []typeIdentityMember) {
+	switch {
+	case terms.isAll():
+		return "all", nil
+	case len(terms) == 0:
+		return "empty", nil
+	}
+	members := make([]typeIdentityMember, len(terms))
+	for i, term := range terms {
+		members[i] = typeIdentityMember{
+			prefix: "term(tilde=" + strconv.FormatBool(term.tilde) + ",type=",
+			suffix: ")",
+			target: b.reference(term.typ, scope),
+		}
+	}
+	return "restricted", members
 }
 
 func canonicalTypeIdentityClasses(

@@ -224,13 +224,15 @@ type StructFieldRecord struct {
 }
 
 type SymbolRecord struct {
-	ID          string      `json:"id"`
-	PackageID   string      `json:"packageId"`
-	Name        string      `json:"name"`
-	Kind        string      `json:"kind"`
-	TypeID      string      `json:"typeId,omitempty"`
-	Exported    bool        `json:"exported"`
-	Declaration *SourceSpan `json:"declaration,omitempty"`
+	ID                     string      `json:"id"`
+	PackageID              string      `json:"packageId"`
+	Name                   string      `json:"name"`
+	Kind                   string      `json:"kind"`
+	TypeID                 string      `json:"typeId,omitempty"`
+	Exported               bool        `json:"exported"`
+	Declaration            *SourceSpan `json:"declaration,omitempty"`
+	MethodSetOwnerSymbolID string      `json:"methodSetOwnerSymbolId,omitempty"`
+	MethodSetPointer       bool        `json:"methodSetPointer"`
 }
 
 type NodeRecord struct {
