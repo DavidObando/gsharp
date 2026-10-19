@@ -6997,6 +6997,106 @@ func TestSourcePositionMapHandlesLineDirectiveGrammar(t *testing.T) {
 	}
 }
 
+func TestSourcePositionMapScopesLineDirectiveIdentityByOffset(t *testing.T) {
+	opaque := "line://opaque/" +
+		base64.RawURLEncoding.EncodeToString([]byte("generated.go"))
+	for _, test := range []struct {
+		name    string
+		source  string
+		markers []string
+		paths   []string
+	}{
+		{
+			name: "portable-then-opaque",
+			source: "package p\n//line generated.go:10\nvar Before int\n" +
+				"//line logical/../generated.go:20\nvar After int\n",
+			markers: []string{"var Before", "var After"},
+			paths:   []string{"line://dir/generated.go", opaque},
+		},
+		{
+			name: "opaque-then-portable",
+			source: "package p\n//line logical/../generated.go:10\nvar Before int\n" +
+				"//line generated.go:20\nvar After int\n",
+			markers: []string{"var Before", "var After"},
+			paths:   []string{opaque, "line://dir/generated.go"},
+		},
+		{
+			name: "repeated-toggle",
+			source: "package p\n//line generated.go:10\nvar PortableBefore int\n" +
+				"//line logical/../generated.go:20\nvar Opaque int\n" +
+				"//line generated.go:30\nvar PortableAfter int\n",
+			markers: []string{"var PortableBefore", "var Opaque", "var PortableAfter"},
+			paths:   []string{"line://dir/generated.go", opaque, "line://dir/generated.go"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			positions, err := newSourcePositionMap("source://dir/main.go", []byte(test.source))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for index, marker := range test.markers {
+				offset := strings.Index(test.source, marker)
+				_, _, path, _, _, directive := positions.span(offset, offset)
+				if path != test.paths[index] || !directive {
+					t.Fatalf("%s display path = %q directive=%v, want %q",
+						marker, path, directive, test.paths[index])
+				}
+			}
+		})
+	}
+}
+
+func TestSourcePositionMapLineDirectiveBoundariesAndIsolation(t *testing.T) {
+	opaque := "line://opaque/" +
+		base64.RawURLEncoding.EncodeToString([]byte("generated.go"))
+	adjacent := "package p\n//line generated.go:10\n" +
+		"//line logical/../generated.go:20\nvar Value int\n"
+	positions, err := newSourcePositionMap("source://dir/main.go", []byte(adjacent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct {
+		marker    string
+		path      string
+		directive bool
+	}{
+		{"//line generated.go", "source://dir/main.go", false},
+		{"//line logical", "line://dir/generated.go", true},
+		{"var Value", opaque, true},
+	} {
+		offset := strings.Index(adjacent, check.marker)
+		_, _, path, _, _, directive := positions.span(offset, offset)
+		if path != check.path || directive != check.directive {
+			t.Fatalf("%s boundary = %q directive=%v, want %q directive=%v",
+				check.marker, path, directive, check.path, check.directive)
+		}
+	}
+
+	portableSource := "package p\n//line generated.go:10\nvar Portable int\n"
+	opaqueSource := "package p\n//line logical/../generated.go:10\nvar Opaque int\n"
+	for iteration := 0; iteration < 2; iteration++ {
+		sources := []string{portableSource, opaqueSource}
+		wants := []string{"line://dir/generated.go", opaque}
+		if iteration == 1 {
+			slices.Reverse(sources)
+			slices.Reverse(wants)
+		}
+		for index, source := range sources {
+			positions, err := newSourcePositionMap(
+				fmt.Sprintf("source://dir/file-%d-%d.go", iteration, index), []byte(source))
+			if err != nil {
+				t.Fatal(err)
+			}
+			offset := strings.Index(source, "var ")
+			_, _, path, _, _, _ := positions.span(offset, offset)
+			if path != wants[index] {
+				t.Fatalf("iteration %d file %d display path = %q, want %q",
+					iteration, index, path, wants[index])
+			}
+		}
+	}
+}
+
 func TestAnalysisPublishesOpaqueLineDirectiveFilename(t *testing.T) {
 	root := t.TempDir()
 	for name, content := range map[string]string{
@@ -7021,6 +7121,67 @@ func TestAnalysisPublishesOpaqueLineDirectiveFilename(t *testing.T) {
 		return node.Span.LineDirective && node.Span.DisplayPath == want
 	}) {
 		t.Fatalf("opaque line display path %q is missing", want)
+	}
+}
+
+func TestAnalysisPreservesLineDirectiveIdentityByOffset(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "other"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"go.mod": "module example.com/line-identity\n\ngo 1.27\n",
+		"one.go": "package identity\n//line generated.go:10\nvar Portable int\n",
+		"two.go": "package identity\n//line logical/../generated.go:20\nvar Opaque int\n",
+		"other/other.go": "package other\n//line logical/../generated.go:30\nvar Before int\n" +
+			"//line generated.go:40\nvar After int\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("line identity analysis failed: complete=%v err=%v blockers=%#v",
+			complete, err, analysis.Blockers)
+	}
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatalf("line identity artifact was rejected: %v", err)
+	}
+	opaque := "line://opaque/" +
+		base64.RawURLEncoding.EncodeToString([]byte("generated.go"))
+	packagePaths := map[string]string{}
+	for _, pkg := range analysis.Packages {
+		packagePaths[pkg.ID] = pkg.ImportPath
+	}
+	findSymbol := func(importPath, name, wantPath string) int {
+		t.Helper()
+		for index, symbol := range analysis.Symbols {
+			if packagePaths[symbol.PackageID] == importPath && symbol.Name == name &&
+				symbol.Declaration != nil {
+				if symbol.Declaration.DisplayPath != wantPath {
+					t.Fatalf("%s.%s display path = %q, want %q",
+						importPath, name, symbol.Declaration.DisplayPath, wantPath)
+				}
+				return index
+			}
+		}
+		t.Fatalf("missing declaration for %s.%s", importPath, name)
+		return -1
+	}
+	portableIndex := findSymbol("example.com/line-identity", "Portable", "line://generated.go")
+	findSymbol("example.com/line-identity", "Opaque", opaque)
+	findSymbol("example.com/line-identity/other", "Before", opaque)
+	findSymbol("example.com/line-identity/other", "After", "line://other/generated.go")
+
+	mutated := analysis
+	mutated.Symbols = append([]SymbolRecord{}, analysis.Symbols...)
+	declaration := *mutated.Symbols[portableIndex].Declaration
+	declaration.DisplayPath = opaque
+	mutated.Symbols[portableIndex].Declaration = &declaration
+	if err := validateAnalysis(mutated); err == nil ||
+		!strings.Contains(err.Error(), "display coordinates do not match") {
+		t.Fatalf("coordinated display path mutation was accepted: %v", err)
 	}
 }
 

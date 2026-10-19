@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -11,14 +12,20 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
+type sourceLineDirective struct {
+	offset      int
+	displayPath string
+}
+
 type sourcePositionMap struct {
-	file            *token.File
-	logicalRoot     string
-	portable        string
-	opaqueFilenames map[string]string
+	file           *token.File
+	logicalRoot    string
+	portable       string
+	lineDirectives []sourceLineDirective
 }
 
 func newSourcePositionMap(portable string, data []byte) (*sourcePositionMap, error) {
@@ -64,25 +71,36 @@ func newSourcePositionMapContext(ctx context.Context, portable string, data []by
 	if file == nil || file.Size() != len(data) {
 		return nil, errors.New("parser did not record source positions")
 	}
-	opaqueFilenames := map[string]string{}
+	sourceDirectory, ok := relativeLinePath(logicalRoot, filepath.Dir(filename))
+	if !ok {
+		return nil, errors.New("source position path escaped its portable root")
+	}
+	lineDirectives := []sourceLineDirective{}
 	if parsed != nil {
 		for _, group := range parsed.Comments {
 			for _, comment := range group.List {
 				directiveFilename, ok := lineDirectiveFilename(comment.Text)
-				if !ok || portableLinePath(directiveFilename) {
+				if !ok {
 					continue
 				}
-				resolved := directiveFilename
-				if !filepath.IsAbs(resolved) {
-					resolved = filepath.Join(filepath.Dir(filename), resolved)
+				displayPath := "line://" + opaqueLinePath(directiveFilename)
+				if portableLinePath(directiveFilename) {
+					displayPath = "line://" + pathpkg.Join(sourceDirectory, directiveFilename)
 				}
-				opaqueFilenames[filepath.Clean(resolved)] = directiveFilename
+				lineDirectives = append(lineDirectives, sourceLineDirective{
+					offset: lineDirectiveActivationOffset(
+						file, comment.Pos(), strings.HasPrefix(comment.Text, "//line "), data),
+					displayPath: displayPath,
+				})
 			}
 		}
 	}
+	sort.Slice(lineDirectives, func(i, j int) bool {
+		return lineDirectives[i].offset < lineDirectives[j].offset
+	})
 	return &sourcePositionMap{
 		file: file, logicalRoot: logicalRoot, portable: portable,
-		opaqueFilenames: opaqueFilenames,
+		lineDirectives: lineDirectives,
 	}, nil
 }
 
@@ -95,19 +113,34 @@ func (positions *sourcePositionMap) span(start, end int) (rawStart, rawEnd token
 		display.Column != rawStart.Column
 	displayPath = positions.portable
 	if lineDirective {
-		displayPath = "line://" + logicalLinePath(
-			positions.logicalRoot, rawStart.Filename, display.Filename, positions.opaqueFilenames)
+		index := sort.Search(len(positions.lineDirectives), func(index int) bool {
+			return positions.lineDirectives[index].offset > rawStart.Offset
+		})
+		if index > 0 {
+			displayPath = positions.lineDirectives[index-1].displayPath
+		} else {
+			displayPath = "line://" + logicalLinePath(
+				positions.logicalRoot, rawStart.Filename, display.Filename)
+		}
 	}
 	return rawStart, rawEnd, displayPath, display.Line, display.Column, lineDirective
 }
 
-func logicalLinePath(
-	root, rawFilename, displayFilename string,
-	opaqueFilenames map[string]string,
-) string {
-	if opaque := opaqueFilenames[filepath.Clean(displayFilename)]; opaque != "" {
-		return opaqueLinePath(opaque)
+func lineDirectiveActivationOffset(file *token.File, start token.Pos, line bool, data []byte) int {
+	offset := file.Offset(start)
+	if line {
+		if newline := bytes.IndexByte(data[offset:], '\n'); newline >= 0 {
+			return offset + newline + 1
+		}
+		return len(data)
 	}
+	if end := bytes.Index(data[offset:], []byte("*/")); end >= 0 {
+		return offset + end + len("*/")
+	}
+	return len(data)
+}
+
+func logicalLinePath(root, rawFilename, displayFilename string) string {
 	relative, withinRoot := relativeLinePath(root, displayFilename)
 	if withinRoot && portableLinePath(relative) {
 		return relative
