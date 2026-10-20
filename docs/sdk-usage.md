@@ -91,6 +91,10 @@ An owner-input reader stays active during compilation. Closing the owner
 pipe terminates the worker and its ordinary descendants through an owned
 Unix process group or Windows job. If containment cannot be established,
 the handshake fails and the SDK logs its standalone fallback.
+Normal retirement also terminates that containment after flushing the result.
+Live descendants force retirement rather than entering another request.
+Windows jobs terminate children when the worker's job handle closes; on Unix
+the SDK also cleans the verified worker group if the root has already exited.
 
 The SDK logs unavailable transport or an incompatible handshake before
 falling back to standalone compilation. Transport loss after sending a
@@ -99,15 +103,20 @@ nonzero compiler exit never triggers fallback. MSBuild hosts without
 build-lifetime task objects or process-tree cancellation use the standalone
 path and log that decision.
 
-`gsc --compiler-worker` is a private, versioned SDK transport, not an
-interactive compiler command. Worker requests require output mode (`/out`);
+`gsc --compiler-worker <private-pipe>` is a private, versioned SDK transport,
+not an interactive compiler command. Protocol responses use a separate
+current-user pipe, never OS stdout or stderr. Both OS streams remain
+diagnostics, including inherited helper output. Per-request fences drain
+both streams before reporting completion without changing their logical lines.
+Worker requests require output mode (`/out`);
 in-process evaluation always uses the standalone driver. Requests also require
 explicit references, as normal SDK builds supply. The standalone driver's
 implicit host-reference mode is not reused: its reference surface depends on
 which assemblies the host has loaded.
 
-The private transport limits request frames to 16 MiB and diagnostic lines
-to 16,777,216 UTF-16 code units. Exceeding a transport limit fails the request
+The private transport limits request frames to 16 MiB and each request's
+diagnostic stream, including its completion fence, to 16,777,216 UTF-16 code
+units. Exceeding a transport limit fails the request
 explicitly; it does not truncate diagnostics or return successful fallback output.
 
 ## `dotnet watch` and hot reload
