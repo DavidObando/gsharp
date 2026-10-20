@@ -852,7 +852,7 @@ open class CompilerWorkerTests : IDisposable {
             "File.WriteAllText(\"${escaped}.new\", Environment.ProcessId.ToString())\n" +
                 "File.Move(\"${escaped}.new\", \"$escaped\")\nThread.Sleep(Timeout.Infinite)"
         } else {
-            "Console.Out.Write(\"helper-\")\nConsole.Out.Flush()\n" +
+            "Console.OutputEncoding = System.Text.Encoding.UTF8\nConsole.Out.Write(\"helper-\")\nConsole.Out.Flush()\n" +
                 "Console.Out.WriteLine(\"stdout 😀\")\nConsole.Error.WriteLine(\"helper-stderr\")"
         }
         File.WriteAllText(
