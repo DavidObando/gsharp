@@ -821,53 +821,19 @@ internal partial class ExpressionBinder {
         forceCapture bool = false
     ) BoundExpression {
         let storage = CaptureStorageReceiverCore(anchor, receiver, preStatements, forceCapture)
-        if storage.Type is not TypeParameterSymbol parameter ||
-            parameter.HasValueTypeConstraint ||
-            ReceiverTypeIsReference(parameter) {
-            return storage
-        }
-        // An interface constraint permits both shapes. Snapshot references,
-        // but rebuild the original struct address after evaluating the RHS.
-        let systemType = ImportedTypeSymbol.GetWithoutNullability(typeof(Type), NullabilityFreeReason.TypeLiteral)
-        let isValueType = CaptureReceiver(
+        return SideEffectSpiller.CaptureRuntimeGenericStorageReceiver(
+            storage,
             anchor,
-            BoundClrPropertyAccessExpression(
-                anchor,
-                BoundTypeOfExpression(anchor, parameter, systemType),
-                Invariant.Required(typeof(Type).GetProperty("IsValueType"), "System.Type exposes IsValueType"),
-                TypeSymbol.Bool
-            ),
             preStatements,
-            forceCapture: true
-        )
-        let snapshot = LocalVariableSymbol(
-            "<ncaGeneric${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
-            isReadOnly: false,
-            parameter
-        )
-        $scope.TryDeclareVariable(snapshot)
-        preStatements.Add(
-            BoundVariableDeclaration(
-                anchor,
-                snapshot,
-                BoundConditionalExpression(
-                    anchor,
-                    isValueType,
-                    BoundDefaultExpression(anchor, parameter),
-                    storage,
-                    parameter
+            func (role string, isReadOnly bool, storageType TypeSymbol) LocalVariableSymbol {
+                let local = LocalVariableSymbol(
+                    "<nca$role${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
+                    isReadOnly,
+                    storageType
                 )
-            )
-        )
-        return BoundDereferenceExpression(
-            receiver.Syntax,
-            BoundConditionalAddressExpression(
-                anchor,
-                isValueType,
-                storage,
-                BoundVariableExpression(anchor, snapshot),
-                parameter
-            )
+                $scope.TryDeclareVariable(local)
+                return local
+            }
         )
     }
 
@@ -881,6 +847,14 @@ internal partial class ExpressionBinder {
             return CaptureReceiver(anchor, receiver, preStatements, forceCapture)
         }
         switch receiver {
+            case tuple is BoundTupleElementAccessExpression {
+                return BoundTupleElementAccessExpression(
+                    tuple.Syntax,
+                    CaptureStorageReceiver(anchor, tuple.Receiver, preStatements, forceCapture),
+                    tuple.TupleType,
+                    tuple.Index
+                )
+            }
             case _ is BoundVariableExpression {
                 return receiver
             }
@@ -931,13 +905,10 @@ internal partial class ExpressionBinder {
                 // suspension. A native ref alias preserves them once and lets
                 // the existing liveness analyzer reject that case (GS0258).
                 let name = "<ncaStorage${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
-                let local = LocalVariableSymbol(name, isReadOnly: false, receiver.Type, anchor){
-                    RefKind = RefKind.Ref,
-                    ManagedReferenceOrigin = receiver
-                }
+                let local = LocalVariableSymbol(name, isReadOnly: false, receiver.Type, anchor)
+                let captured = SideEffectSpiller.CaptureOpaqueStorageReceiver(receiver, anchor, preStatements, local)
                 $scope.TryDeclareVariable(local)
-                preStatements.Add(BoundVariableDeclaration(anchor, local, BoundAddressOfExpression(anchor, receiver)))
-                return BoundVariableExpression(receiver.Syntax, local)
+                return captured
             }
         }
     }

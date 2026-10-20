@@ -39,6 +39,92 @@ internal shared class RefCapabilities {
         default: false
     }
 
+    // CLR getters can retain ref-returning storage even when their bound type is the element type.
+    internal func IsRefReturningAccess(expression BoundExpression) bool -> IsNativeRefReturningCall(expression) ||
+        switch expression {
+        case call is BoundImportedCallExpression: GetReturnRefKind(call.Function.Method) != RefKind.None
+        case call is BoundImportedInstanceCallExpression: GetReturnRefKind(call.Method) != RefKind.None
+        case call is BoundClrStaticCallExpression: GetReturnRefKind(call.Method) != RefKind.None
+        case BoundBaseClassCallExpression{Property: {} property}: property.ReturnRefKind != RefKind.None
+        case index is BoundClrIndexExpression: GetReturnRefKind(index.Indexer) != RefKind.None
+        case BoundClrPropertyAccessExpression{Member: PropertyInfo property}: GetReturnRefKind(property) != RefKind.None
+        default: false
+    }
+
+    internal func IsBorrowedLocation(
+        expression BoundExpression,
+        knownLocations HashSet[VariableSymbol]? = nil,
+        captureReferenceOwners bool = true
+    ) bool -> IsRefReturningAccess(expression) ||
+        switch expression {
+        case call is BoundImportedInstanceCallExpression: ManagedReferenceOrigins.IsHandleBorrow(call) ||
+            call.Type is ByRefTypeSymbol
+        case call is BoundUserInstanceCallExpression: call
+            .Method
+            .ReturnRefKind != RefKind.None &&
+            IsBorrowedLocation(call.Receiver, knownLocations, captureReferenceOwners)
+        case call is BoundBaseInterfaceCallExpression: call.Method.ReturnRefKind != RefKind.None
+        case call is BoundBaseClassCallExpression: (
+            call.Method?.ReturnRefKind ?? call.Property?.ReturnRefKind
+        ) != RefKind.None
+        case property is BoundPropertyAccessExpression: property
+            .Property
+            .ReturnRefKind != RefKind.None &&
+            property.Receiver != nil &&
+            IsBorrowedLocation(property.Receiver, knownLocations, captureReferenceOwners)
+        case block is BoundBlockExpression: IsBorrowedLocation(block.Expression, knownLocations, captureReferenceOwners)
+        case address is BoundAddressOfExpression: IsBorrowedLocation(
+            address.Operand,
+            knownLocations,
+            captureReferenceOwners
+        )
+        case dereference is BoundDereferenceExpression: IsBorrowedLocation(
+            dereference.Operand,
+            knownLocations,
+            captureReferenceOwners
+        )
+        case tuple is BoundTupleElementAccessExpression: IsBorrowedLocation(
+            tuple.Receiver,
+            knownLocations,
+            captureReferenceOwners
+        )
+        case conditional is BoundConditionalAddressExpression: IsBorrowedLocation(
+            conditional.WhenTrueOperand,
+            knownLocations,
+            captureReferenceOwners
+        ) ||
+            IsBorrowedLocation(conditional.WhenFalseOperand, knownLocations, captureReferenceOwners)
+        case BoundFieldAccessExpression{Receiver: {} receiver}: (
+            !captureReferenceOwners || !Binder.IsReferenceTypeForConstraint(receiver.Type)
+        ) &&
+            IsBorrowedLocation(receiver, knownLocations, captureReferenceOwners)
+        case BoundClrPropertyAccessExpression{Receiver: {} receiver, Member: FieldInfo}: (
+            !captureReferenceOwners || !Binder.IsReferenceTypeForConstraint(receiver.Type)
+        ) &&
+            IsBorrowedLocation(receiver, knownLocations, captureReferenceOwners)
+        case index is BoundIndexExpression when index.IsArrayBackedElementAccess: !captureReferenceOwners &&
+            IsBorrowedLocation(index.Target, knownLocations, captureReferenceOwners)
+        case index is BoundClrIndexExpression when GetReturnRefKind(index.Indexer) != RefKind.None: IsBorrowedLocation(
+            index.Target,
+            knownLocations,
+            captureReferenceOwners
+        )
+        case BoundClrPropertyAccessExpression{
+            Receiver: {} receiver,
+            Member: PropertyInfo property
+        } when GetReturnRefKind(property) != RefKind.None: IsBorrowedLocation(
+            receiver,
+            knownLocations,
+            captureReferenceOwners
+        )
+        case variable is BoundVariableExpression: knownLocations?.Contains(variable.Variable) == true ||
+            (
+            variable.Variable is LocalVariableSymbol{RefKind: not RefKind.None, ManagedReferenceOrigin: {} origin} &&
+                IsBorrowedLocation(origin, knownLocations, captureReferenceOwners)
+        )
+        default: expression.Type is ByRefTypeSymbol
+    }
+
     /// Issue #4224 (root cause #4) / #4265: decomposes a native ref-returning
     /// call or property read into the pieces the caller-side ref-safe-scope
     /// computation (`HasFunctionLocalRefScope`) needs — its instance
@@ -240,6 +326,7 @@ internal shared class RefCapabilities {
             local.RefKind == RefKind.In
         case _ is BoundVariableExpression: false
         case block is BoundBlockExpression: IsReadOnlyReference(block.Expression)
+        case tuple is BoundTupleElementAccessExpression: IsReadOnlyStorage(tuple) || IsReadOnlyReference(tuple.Receiver)
         case field is BoundFieldAccessExpression: field.Receiver != nil && !Binder.IsReferenceTypeForConstraint(
             field.Receiver.Type
         ) &&
@@ -547,6 +634,7 @@ internal shared class RefCapabilities {
     /// @param value The converted argument.
     /// @returns `true` when its address is taken directly.
     internal func IsDirectlyAddressableForImplicitIn(value BoundExpression) bool -> switch value {
+        case tuple is BoundTupleElementAccessExpression: IsDirectlyAddressableForImplicitIn(tuple.Receiver)
         case BoundVariableExpression{
             Variable: ParameterSymbol{IsReceiverParameter: true}
         } receiver: !Binder.IsReferenceTypeForConstraint(receiver.Type) && receiver.NarrowedType == nil
@@ -560,6 +648,12 @@ internal shared class RefCapabilities {
             .IsConst == true: false
         case BoundClrPropertyAccessExpression{Member: FieldInfo field} when field.IsLiteral ||
             (field.IsStatic && field.IsInitOnly): false
+        case BoundFieldAccessExpression{Receiver: {} receiver}: Binder.IsReferenceTypeForConstraint(receiver.Type) ||
+            IsDirectlyAddressableForImplicitIn(receiver)
+        case BoundClrPropertyAccessExpression{
+            Member: FieldInfo,
+            Receiver: {} receiver
+        }: Binder.IsReferenceTypeForConstraint(receiver.Type) || IsDirectlyAddressableForImplicitIn(receiver)
         case _ is BoundBlockExpression or _ is BoundConditionalExpression: false
         default: ExpressionBinder.IsLvalue(value)
     }
@@ -570,6 +664,7 @@ internal shared class RefCapabilities {
             .IsReadOnly &&
             Binder.IsReferenceTypeForConstraint(receiver.Type)
         case variable is BoundVariableExpression: variable.Variable.IsReadOnly
+        case tuple is BoundTupleElementAccessExpression: IsReadOnlyValueReceiver(tuple.Receiver)
         case block is BoundBlockExpression: IsReadOnlyStorage(block.Expression)
         case conditional is BoundConditionalExpression: IsReadOnlyStorage(conditional.WhenTrue) ||
             IsReadOnlyStorage(conditional.WhenFalse)
@@ -615,6 +710,7 @@ internal shared class RefCapabilities {
         ) == RefKind.RefReadOnly
         case BoundClrPropertyAccessExpression{Member: FieldInfo field} access: field.IsInitOnly ||
             field.IsLiteral ||
+            access.IsReadOnlySubmissionGlobal ||
             IsReadOnlyValueReceiver(access.Receiver)
         default: false
     }

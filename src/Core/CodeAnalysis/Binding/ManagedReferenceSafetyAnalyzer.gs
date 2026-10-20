@@ -121,11 +121,11 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
             }
             case property is BoundPropertyAssignmentExpression {
                 this.CheckScopedStore(property.Value, property)
-                this.CheckSuspendingLocation(property.Receiver, property.Value)
+                this.CheckSuspendingLocation(property.Receiver, property.Value, captureReferenceOwners: true)
             }
             case property is BoundClrPropertyAssignmentExpression {
                 this.CheckScopedStore(property.Value, property)
-                this.CheckSuspendingLocation(property.Receiver, property.Value)
+                this.CheckSuspendingLocation(property.Receiver, property.Value, captureReferenceOwners: true)
             }
             case index is BoundIndexAssignmentExpression {
                 this.CheckScopedStore(index.Value, index)
@@ -318,6 +318,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         for argument in arguments {
             this.CheckScopedStore(argument)
         }
+        this.CheckArguments(arguments, constructor?.Function)
     }
 
     private func CheckPrimaryConstructorParameters(type StructSymbol) {
@@ -480,8 +481,17 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         }
     }
 
-    private func CheckSuspendingLocation(receiver BoundExpression?, value BoundExpression) {
-        if receiver != nil && !Binder.IsReferenceTypeForConstraint(receiver.Type) && this.IsManagedLocation(receiver) &&
+    private func CheckSuspendingLocation(
+        receiver BoundExpression?,
+        value BoundExpression,
+        captureReferenceOwners bool = false
+    ) {
+        // Method receivers cannot yet use the property/borrow address reconstruction path.
+        if receiver != nil && !Binder.IsReferenceTypeForConstraint(receiver.Type) && RefCapabilities.IsBorrowedLocation(
+            receiver,
+            this.managedLocations,
+            captureReferenceOwners
+        ) &&
             AsyncBoundTreeQueries
             .HasAwait(value) {
             this.Report(
@@ -491,44 +501,10 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         }
     }
 
-    private func IsManagedLocation(expression BoundExpression) bool -> switch expression {
-        case call is BoundImportedInstanceCallExpression: ManagedReferenceOrigins.IsHandleBorrow(call) ||
-            (call.Type is ByRefTypeSymbol && this.IsManagedLocation(call.Receiver))
-        case call is BoundUserInstanceCallExpression: call
-            .Method
-            .ReturnRefKind != RefKind.None &&
-            this.IsManagedLocation(call.Receiver)
-        case call is BoundBaseInterfaceCallExpression: call.Method.ReturnRefKind != RefKind.None
-        case call is BoundBaseClassCallExpression: (
-            call.Method?.ReturnRefKind ?? call.Property?.ReturnRefKind
-        ) != RefKind.None
-        case property is BoundPropertyAccessExpression: property
-            .Property
-            .ReturnRefKind != RefKind.None &&
-            property.Receiver != nil &&
-            this.IsManagedLocation(property.Receiver)
-        case block is BoundBlockExpression: this.IsManagedLocation(block.Expression)
-        case address is BoundAddressOfExpression: this.IsManagedLocation(address.Operand)
-        case dereference is BoundDereferenceExpression: this.IsManagedLocation(dereference.Operand)
-        case BoundFieldAccessExpression{Receiver: {} receiver}: this.IsManagedLocation(receiver)
-        case BoundClrPropertyAccessExpression{Receiver: {} receiver, Member: FieldInfo}: this.IsManagedLocation(
-            receiver
-        )
-        case index is BoundIndexExpression when index.IsArrayBackedElementAccess: this.IsManagedLocation(index.Target)
-        case index is BoundClrIndexExpression when RefCapabilities.GetReturnRefKind(
-            index.Indexer
-        ) != RefKind.None: this.IsManagedLocation(index.Target)
-        case BoundClrPropertyAccessExpression{
-            Receiver: {} receiver,
-            Member: PropertyInfo property
-        } when RefCapabilities.GetReturnRefKind(property) != RefKind.None: this.IsManagedLocation(receiver)
-        case variable is BoundVariableExpression: this.managedLocations.Contains(variable.Variable) ||
-            (
-            variable.Variable is LocalVariableSymbol{RefKind: not RefKind.None, ManagedReferenceOrigin: {} origin} &&
-                this.IsManagedLocation(origin)
-        )
-        default: false
-    }
+    private func IsManagedLocation(expression BoundExpression) bool -> RefCapabilities.IsBorrowedLocation(
+        expression,
+        this.managedLocations
+    )
 
     private func CheckConstruction(
         type StructSymbol,

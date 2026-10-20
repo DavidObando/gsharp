@@ -4,11 +4,13 @@
 
 package GSharp.Core.CodeAnalysis.Lowering
 
+import BindingBinder = GSharp.Core.CodeAnalysis.Binding.Binder
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
@@ -62,8 +64,11 @@ import System.Reflection
 /// tree size grows only where duplication risk was real.
 internal class SideEffectSpiller : NestedFunctionBodyRewriter {
     private var counter int32
+    private let tempPrefix string
 
-    private init() { }
+    internal init(tempPrefix string) {
+        this.tempPrefix = tempPrefix
+    }
 
     /// ```xmldoc
     /// <inheritdoc />
@@ -273,10 +278,14 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         // the write at the element address (`ldelema`), so only the
         // side-effecting collection/index sub-expressions are spilled (see
         // SpillStorageReceiverParts), never the element value itself.
-        let spillReceiver = rewritten.Receiver != nil && SideEffectAnalyzer.HasObservableSideEffect(
-            rewritten.Receiver
-        ) &&
-            !IsInPlaceStorageWriteReceiver(rewritten.Receiver)
+        let spillReceiver = rewritten.Receiver != nil &&
+            !IsInPlaceStorageWriteReceiver(rewritten.Receiver) &&
+            (
+            SideEffectAnalyzer.HasObservableSideEffect(rewritten.Receiver) ||
+                BindingBinder.IsReferenceTypeForConstraint(rewritten.Receiver.Type) &&
+                !IsStableLocalRead(rewritten.Receiver) &&
+                SideEffectAnalyzer.HasObservableSideEffect(rewritten.Value)
+        )
         var value = rewritten.Value
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         var receiver = rewritten.Receiver
@@ -316,7 +325,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         } else if rewritten.Receiver != nil && IsInPlaceStorageWriteReceiver(rewritten.Receiver) {
             // Capture the chain's components, never its stored value, and
             // substitute the rebuilt receiver on both sides of a compound write.
-            receiver = this.SpillStorageReceiverParts(
+            receiver = this.CapturePropertyStorageReceiver(
                 Invariant.Required(
                     rewritten.Receiver,
                     "an element write has a receiver",
@@ -363,8 +372,15 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         // BoundClrPropertyAssignmentExpression), so both spill decisions are
         // nested under one null test rather than repeating it.
         let original BoundExpression? = rewritten.Receiver
-        let spillReceiver = original != nil && SideEffectAnalyzer.HasObservableSideEffect(original) &&
-            !IsInPlaceStorageWriteReceiver(original)
+        let spillReceiver = original != nil &&
+            !IsInPlaceStorageWriteReceiver(original) &&
+            (
+            SideEffectAnalyzer.HasObservableSideEffect(original) || BindingBinder.IsReferenceTypeForConstraint(
+                original.Type
+            ) &&
+                !IsStableLocalRead(original) &&
+                SideEffectAnalyzer.HasObservableSideEffect(rewritten.Value)
+        )
         var value = rewritten.Value
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         var receiver = original
@@ -376,7 +392,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         } else if original != nil && IsInPlaceStorageWriteReceiver(original) {
             // Once-only evaluation for the storage chain (see
             // RewritePropertyAssignmentExpression).
-            receiver = this.SpillStorageReceiverParts(original, statements)
+            receiver = this.CapturePropertyStorageReceiver(original, statements)
             if !object.ReferenceEquals(receiver, original) {
                 value = ReceiverSubstitutionRewriter.Replace(value, original, receiver)
             }
@@ -440,7 +456,21 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         return BoundBlockExpression(rewritten.Syntax, statements.ToImmutable(), assignment)
     }
 
-    private func ProbeStorageReceiver(receiver BoundExpression?, statements ImmutableArray[BoundStatement].Builder) {
+    internal func CapturePropertyStorageReceiver(
+        receiver BoundExpression,
+        statements ImmutableArray[BoundStatement].Builder,
+        captureComponents bool = false
+    ) BoundExpression {
+        return CaptureRuntimeGenericStorageReceiver(
+            this.SpillStorageReceiverParts(receiver, statements, captureComponents),
+            receiver.Syntax,
+            statements,
+            (role string, isReadOnly bool, storageType TypeSymbol) ->
+            LocalVariableSymbol("${this.tempPrefix}$role${this.counter++}", isReadOnly, storageType)
+        )
+    }
+
+    internal func ProbeStorageReceiver(receiver BoundExpression?, statements ImmutableArray[BoundStatement].Builder) {
         if receiver != nil && receiver is not BoundVariableExpression && IsInPlaceStorageWriteReceiver(receiver) {
             statements.Add(BoundExpressionStatement(nil, BoundAddressOfExpression(nil, receiver)))
         }
@@ -462,7 +492,28 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         statements ImmutableArray[BoundStatement].Builder,
         captureComponents bool = false
     ) BoundExpression {
+        if IsOpaqueStorageReceiver(receiver) {
+            let local = LocalVariableSymbol(
+                "${this.tempPrefix}storage${this.counter++}",
+                isReadOnly: false,
+                receiver.Type,
+                receiver.Syntax
+            )
+            return CaptureOpaqueStorageReceiver(receiver, receiver.Syntax, statements, local)
+        }
         switch receiver {
+            case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
+                return this.SpillStorageReceiverParts(address.Operand, statements, captureComponents: true)
+            }
+            case tuple is BoundTupleElementAccessExpression {
+                // Capture owners and indices before the RHS, without copying tuple storage.
+                let owner = this.SpillStorageReceiverParts(tuple.Receiver, statements, captureComponents: true)
+                return if object.ReferenceEquals(owner, tuple.Receiver) {
+                    tuple
+                } else {
+                    BoundTupleElementAccessExpression(tuple.Syntax, owner, tuple.TupleType, tuple.Index)
+                }
+            }
             case dereference is BoundDereferenceExpression when dereference.Operand is BoundConditionalAddressExpression {
                 let address = cast[BoundConditionalAddressExpression](dereference.Operand)
                 let condition = this.MaybeSpill(
@@ -477,13 +528,13 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                 let whenFalse = this.SpillStorageReceiverParts(address.WhenFalseOperand, falseStatements, true)
                 // Capture only the selected branch's components, never its address.
                 if trueStatements.Count != 0 {
-                    let skip = BoundLabel("$TempPrefix" + "skip${this.counter++}")
+                    let skip = BoundLabel("${this.tempPrefix}skip${this.counter++}")
                     statements.Add(BoundConditionalGotoStatement(nil, skip, condition, jumpIfTrue: false))
                     statements.AddRange(trueStatements)
                     statements.Add(BoundLabelStatement(nil, skip))
                 }
                 if falseStatements.Count != 0 {
-                    let skip = BoundLabel("$TempPrefix" + "skip${this.counter++}")
+                    let skip = BoundLabel("${this.tempPrefix}skip${this.counter++}")
                     statements.Add(BoundConditionalGotoStatement(nil, skip, condition, jumpIfTrue: true))
                     statements.AddRange(falseStatements)
                     statements.Add(BoundLabelStatement(nil, skip))
@@ -594,7 +645,11 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         if !shouldSpill {
             return expression
         }
-        let local = LocalVariableSymbol("$TempPrefix$role${this.counter++}", isReadOnly: true, type: expression.Type)
+        let local = LocalVariableSymbol(
+            "${this.tempPrefix}$role${this.counter++}",
+            isReadOnly: true,
+            type: expression.Type
+        )
         statements.Add(BoundVariableDeclaration(expression.Syntax, local, expression))
         return BoundVariableExpression(expression.Syntax, local)
     }
@@ -636,6 +691,77 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
     }
 
     shared {
+        internal func SubstituteReceiver(
+            tree BoundExpression,
+            receiver BoundExpression,
+            replacement BoundExpression
+        ) BoundExpression -> ReceiverSubstitutionRewriter.Replace(tree, receiver, replacement)
+
+        internal func CaptureOpaqueStorageReceiver(
+            storage BoundExpression,
+            anchor SyntaxNode?,
+            statements ImmutableArray[BoundStatement].Builder,
+            local LocalVariableSymbol
+        ) BoundExpression {
+            local.RefKind = RefKind.Ref
+            local.ManagedReferenceOrigin = storage
+            statements.Add(BoundVariableDeclaration(anchor, local, BoundAddressOfExpression(anchor, storage)))
+            return BoundVariableExpression(storage.Syntax, local)
+        }
+
+        internal func CaptureRuntimeGenericStorageReceiver(
+            storage BoundExpression,
+            anchor SyntaxNode?,
+            statements ImmutableArray[BoundStatement].Builder,
+            declareLocal(string, bool, TypeSymbol) -> LocalVariableSymbol
+        ) BoundExpression {
+            if storage.Type is not TypeParameterSymbol parameter ||
+                parameter.HasValueTypeConstraint ||
+                BindingBinder.IsReferenceTypeForConstraint(parameter) {
+                return storage
+            }
+            // Snapshot reference instantiations, but reconstruct value-type storage after the RHS.
+            let systemType = ImportedTypeSymbol.GetWithoutNullability(typeof(Type), NullabilityFreeReason.TypeLiteral)
+            let kind = declareLocal("Recv", true, TypeSymbol.Bool)
+            statements.Add(
+                BoundVariableDeclaration(
+                    anchor,
+                    kind,
+                    BoundClrPropertyAccessExpression(
+                        anchor,
+                        BoundTypeOfExpression(anchor, parameter, systemType),
+                        Invariant.Required(typeof(Type).GetProperty("IsValueType"), "System.Type exposes IsValueType"),
+                        TypeSymbol.Bool
+                    )
+                )
+            )
+            let isValueType = BoundVariableExpression(anchor, kind)
+            let snapshot = declareLocal("Generic", false, parameter)
+            statements.Add(
+                BoundVariableDeclaration(
+                    anchor,
+                    snapshot,
+                    BoundConditionalExpression(
+                        anchor,
+                        isValueType,
+                        BoundDefaultExpression(anchor, parameter),
+                        storage,
+                        parameter
+                    )
+                )
+            )
+            return BoundDereferenceExpression(
+                storage.Syntax,
+                BoundConditionalAddressExpression(
+                    anchor,
+                    isValueType,
+                    storage,
+                    BoundVariableExpression(anchor, snapshot),
+                    parameter
+                )
+            )
+        }
+
         private const TempPrefix string = "<>spill"
 
         /// Produces a copy of [`program`](paramref) with side-effecting
@@ -644,7 +770,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         /// @param program The bound program to lower.
         /// @returns The lowered program (or the original when nothing changed).
         func Lower(program BoundProgram) BoundProgram {
-            let spiller = SideEffectSpiller()
+            let spiller = SideEffectSpiller(TempPrefix)
             var changed = false
             let functions = ImmutableDictionary.CreateBuilder[FunctionSymbol, BoundBlockStatement]()
             // Issue #4663: deterministic order, never identity-hash order.
@@ -690,13 +816,20 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             Variable: LocalVariableSymbol{IsReadOnly: true, RefKind: RefKind.None}
         }
 
+        private func IsOpaqueStorageReceiver(expression BoundExpression?) bool -> expression != nil &&
+            (
+            RefCapabilities.IsRefReturningAccess(expression) ||
+                expression is BoundDereferenceExpression dereference &&
+                RefCapabilities.IsRefReturningAccess(dereference.Operand)
+        )
+
         /// Whether [`receiver`](paramref) denotes value storage rather than
         /// a copy: field/element chains and captured conditional addresses.
         /// Only reference owners and collection/index components may be spilled
         /// (see (cref:SpillStorageReceiverParts)).
         /// @param receiver The candidate receiver expression.
         /// @returns `true` for an addressable element chain.
-        private func IsInPlaceStorageWriteReceiver(receiver BoundExpression?) bool {
+        internal func IsInPlaceStorageWriteReceiver(receiver BoundExpression?) bool {
             var receiver = receiver
             while true {
                 if receiver == nil ||
@@ -709,6 +842,14 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     return false
                 }
                 switch receiver {
+                    case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
+                        receiver = address.Operand
+                        continue
+                    }
+                    case tuple is BoundTupleElementAccessExpression {
+                        receiver = tuple.Receiver
+                        continue
+                    }
                     case element is BoundIndexExpression {
                         return element.IsArrayBackedElementAccess
                     }
@@ -745,7 +886,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                         continue
                     }
                     default {
-                        return false
+                        return IsOpaqueStorageReceiver(receiver)
                     }
                 }
             }

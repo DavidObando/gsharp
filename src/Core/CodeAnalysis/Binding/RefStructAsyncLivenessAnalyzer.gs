@@ -64,6 +64,20 @@ import System.Collections.Immutable
 /// *through* an alias (`alias = 42`) is a use of the alias, not a kill
 /// of it, unlike overwriting a by-ref-like value local outright.
 internal shared class RefStructAsyncLivenessAnalyzer {
+    private class ReportingContext {
+        init(diagnostics DiagnosticBag?) {
+            Diagnostics = diagnostics
+            Crossing = HashSet[VariableSymbol]()
+        }
+
+        prop Diagnostics DiagnosticBag? {
+            get;
+        }
+        prop Crossing HashSet[VariableSymbol] {
+            get;
+        }
+    }
+
     /// Collects every local declared directly within a scope that this
     /// analyzer must track: always a native ref-alias local (issue #4222),
     /// and — only when (cref:collectByRefLikeLocals) says the
@@ -236,8 +250,22 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             liveOutOfRegion: HashSet[VariableSymbol](),
             ambientLive: HashSet[VariableSymbol](),
             collector.Locals,
-            diagnostics
+            ReportingContext(diagnostics)
         )
+    }
+
+    internal func FindLocalsLiveAcrossSuspension(body BoundBlockStatement, locals IEnumerable[VariableSymbol]) HashSet[
+        VariableSymbol
+    ] {
+        let reporting = ReportingContext(nil)
+        AnalyzeRegion(
+            body,
+            HashSet[VariableSymbol](),
+            HashSet[VariableSymbol](),
+            HashSet[VariableSymbol](locals),
+            reporting
+        )
+        return reporting.Crossing
     }
 
     /// Runs the backward "may be live" fixpoint over the CFG of
@@ -255,9 +283,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         liveOutOfRegion HashSet[VariableSymbol],
         ambientLive HashSet[VariableSymbol],
         interesting HashSet[VariableSymbol],
-        diagnostics DiagnosticBag?
+        diagnostics ReportingContext?
     ) HashSet[VariableSymbol] {
-        let graph = ControlFlowGraph.Create(AsBlock(regionBody))
+        let graph = ControlFlowGraph.Create(Lowerer.Flatten(regionBody))
         let liveIn = Dictionary[ControlFlowGraph.BasicBlock, HashSet[VariableSymbol]]()
         for b in graph.Blocks {
             liveIn[b] = HashSet[VariableSymbol]()
@@ -296,6 +324,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 }
             }
         }
+        if changed && diagnostics != nil {
+            diagnostics.Crossing.UnionWith(interesting)
+        }
         // Final reporting pass: sets are now stable, so every violation is
         // detected exactly once, using fully-converged data.
         if diagnostics != nil {
@@ -309,18 +340,6 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             }
         }
         return ComputeLiveOut(graph.Start)
-    }
-
-    private func AsBlock(statement BoundStatement?) BoundBlockStatement {
-        if statement is BoundBlockStatement block {
-            return block
-        }
-        let statements = if statement == nil {
-            ImmutableArray[BoundStatement].Empty
-        } else {
-            ImmutableArray.Create(statement)
-        }
-        return BoundBlockStatement(statement?.Syntax, statements)
     }
 
     private func SetsEqual(a HashSet[VariableSymbol], b HashSet[VariableSymbol]) bool {
@@ -339,7 +358,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         block ControlFlowGraph.BasicBlock,
         liveOut HashSet[VariableSymbol],
         interesting HashSet[VariableSymbol],
-        diagnostics DiagnosticBag?
+        diagnostics ReportingContext?
     ) HashSet[VariableSymbol] {
         let live = HashSet[VariableSymbol](liveOut)
         for var i = block.Statements.Count - 1; i >= 0; i-- {
@@ -352,7 +371,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         statement BoundStatement,
         live HashSet[VariableSymbol],
         interesting HashSet[VariableSymbol],
-        diagnostics DiagnosticBag?
+        diagnostics ReportingContext?
     ) {
         switch statement {
             case es is BoundExpressionStatement {
@@ -427,7 +446,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         tryStmt BoundTryStatement,
         live HashSet[VariableSymbol],
         interesting HashSet[VariableSymbol],
-        diagnostics DiagnosticBag?
+        diagnostics ReportingContext?
     ) {
         let afterTry = HashSet[VariableSymbol](live)
         let exceptionalEscapeLive = HashSet[VariableSymbol]()
@@ -481,7 +500,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         fixedStmt BoundFixedStatement,
         live HashSet[VariableSymbol],
         interesting HashSet[VariableSymbol],
-        diagnostics DiagnosticBag?
+        diagnostics ReportingContext?
     ) {
         let bodyLiveIn = AnalyzeRegion(fixedStmt.Body, live, HashSet[VariableSymbol](), interesting, diagnostics)
         bodyLiveIn.Remove(fixedStmt.PinnedVariable)
@@ -502,7 +521,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         switchStmt BoundPatternSwitchStatement,
         live HashSet[VariableSymbol],
         interesting HashSet[VariableSymbol],
-        diagnostics DiagnosticBag?
+        diagnostics ReportingContext?
     ) {
         let afterSwitch = HashSet[VariableSymbol](live)
         let union = HashSet[VariableSymbol]()
@@ -543,7 +562,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         expression BoundExpression?,
         live HashSet[VariableSymbol],
         interesting HashSet[VariableSymbol],
-        diagnostics DiagnosticBag?,
+        diagnostics ReportingContext?,
         owningStatement BoundStatement?
     ) {
         if expression == nil {
@@ -602,7 +621,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     private func ReportIfUnsafe(
         live HashSet[VariableSymbol],
         excludedSelfKill VariableSymbol?,
-        diagnostics DiagnosticBag?,
+        diagnostics ReportingContext?,
         owningStatement BoundStatement?,
         suspensionKeyword string
     ) {
@@ -611,6 +630,11 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
         for v in live {
             if object.ReferenceEquals(v, excludedSelfKill) {
+                continue
+            }
+            diagnostics.Crossing.Add(v)
+            let bag = diagnostics.Diagnostics
+            if bag == nil {
                 continue
             }
             let location = v.DeclaringSyntax?.Location ?? owningStatement?.Syntax?.Location ?? default(TextLocation)
@@ -630,13 +654,13 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 // old blanket declaration-site rejection used to cover
                 // wholesale: an alias proven to need its address across a
                 // suspension the CLR cannot represent as a state-machine field.
-                diagnostics.ReportRefLocalCannotBeDeclaredHere(
+                bag.ReportRefLocalCannotBeDeclaredHere(
                     location,
                     v.Name,
                     "a local live across $article '$suspensionKeyword' suspension point in $suspensionContext (it would require hoisting a managed pointer into the state machine)"
                 )
             } else {
-                diagnostics.ReportByRefLikeEscape(
+                bag.ReportByRefLikeEscape(
                     location,
                     v.Type,
                     "be declared as a local in $suspensionContext and remain live across $article '$suspensionKeyword' suspension point (variable '${v.Name}'); restructure the code so its value is no longer needed after the '$suspensionKeyword'"

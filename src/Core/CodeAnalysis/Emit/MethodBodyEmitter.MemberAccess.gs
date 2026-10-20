@@ -1483,6 +1483,11 @@ internal partial class MethodBodyEmitter {
             if receiver is BoundVariableExpression bve && this.TryLoadStructVariableAddress(bve) {
                 return
             }
+            if receiver is BoundTupleElementAccessExpression tuple &&
+                RefCapabilities.IsDirectlyAddressableForImplicitIn(tuple) {
+                this.EmitTupleElementAccess(tuple, addressOnly: true)
+                return
+            }
             // ADR-0056 §4 (#375): a value-type *field* used as an instance
             // receiver (e.g. `w.data.Length` where `data` is a closed
             // constructed generic value type like `ReadOnlySpan[int32]`)
@@ -1698,6 +1703,9 @@ internal partial class MethodBodyEmitter {
         }
         if fa.Receiver is BoundFieldAccessExpression nested {
             return this.IsAddressableFieldAccess(nested)
+        }
+        if fa.Receiver is BoundTupleElementAccessExpression tuple {
+            return RefCapabilities.IsDirectlyAddressableForImplicitIn(tuple)
         }
         // Issue #3185: a prior-cell submission global (or a value-type CLR
         // field chain rooted at one) is addressable storage.

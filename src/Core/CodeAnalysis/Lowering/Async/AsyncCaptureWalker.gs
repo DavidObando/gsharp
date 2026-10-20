@@ -209,8 +209,8 @@ shared class AsyncCaptureWalker {
                 continue
             }
             // Skip ref locals (ByRef-typed) — they cannot be hoisted into fields.
-            // The RefInitializationHoister eliminates them before this walker runs;
-            // this check is a safety net.
+            // RefInitializationHoister reconstructs their storage, or proves that
+            // an opaque address has no lifetime crossing a suspension.
             if local.Type is ByRefTypeSymbol {
                 continue
             }
