@@ -617,6 +617,62 @@ nullable/context decodes. Entries distinguish reflection views and are not a
 count of unique logical members across contexts. These counters describe work,
 not a measured build-speed gain.
 
+The October 20 comparison rebuilt baseline `68acf272c` and candidate `7a38e2e69`
+with published SDK `0.5.179` and .NET SDK `10.0.400`. It does not compare the
+candidate against the older `4e1a4430` private SDK. Separate owned copies replayed
+the fixed Core `c7b82dcb` and Oahu.Core `9db7f232` inputs through explicit compiler
+paths. Missing captured AssemblyInfo, resource and analyzer inputs were rebuilt
+with the published SDK in those copies. Oahu dependency references were rebuilt
+with the current-source baseline and shared by both variants. Source Link maps
+the owned paths to the pinned repository commits. The manifest hashes source,
+reference, resource, Source Link, analyzer and toolchain files.
+
+The twenty successful fresh-process requests comprise two excluded warmups,
+three alternating measured pairs and two separate profiles per workload.
+Timed requests disable measurements. Options retain four workers, a 1024 MiB
+budget, optimization, deterministic output, portable PDB, reference output and
+XML documentation. These are direct compiler requests, not solution rebuilds.
+One earlier excluded warmup failed on the missing captured analyzer image.
+Its log and original manifest are retained; no successful sample was discarded.
+
+| Direct compiler wall time, seconds | Baseline median (range) | Candidate median (range) |
+| --- | ---: | ---: |
+| Core | 40.952 (40.390–41.855) | 41.940 (40.431–42.308) |
+| Oahu.Core | 4.385 (4.175–4.400) | 3.950 (3.931–4.319) |
+
+Core's candidate median is 2.4% slower: this does not demonstrate a Core
+throughput gain. Oahu.Core's candidate median is 9.9% lower in these three
+pairs, not a general compiler or solution-build speedup. Both ranges overlap.
+The shared-desktop samples do not establish confidence intervals.
+
+Separate untimed profiles record the actual metadata work:
+
+| Counter | Core baseline → candidate | Oahu.Core baseline → candidate |
+| --- | ---: | ---: |
+| Definition requests | 47,484 → 47,484 | 3,724 → 3,724 |
+| Distinct successful reflection-view keys / entries | 389 → 389 | 96 → 96 |
+| Member-array scans | 47,484 → 389 | 3,724 → 96 |
+| Members inspected | 361,857 → 8,355 | 10,353 → 1,514 |
+| Contract requests | 99,687 → 99,687 | 10,088 → 10,088 |
+| Raw attribute reads | 244,939 → 10,140 | 21,693 → 2,670 |
+| Nullable decodes | 99,687 → 6,532 | 10,088 → 1,804 |
+| NullableContext decodes | 132,507 → 3,288 | 10,750 → 857 |
+
+The instrumented compilation allocation observations were 15,305.9 → 15,098.3
+MiB for Core and 1,028.2 → 1,006.4 MiB for Oahu.Core. Their nested body phases
+were 9,447.9 → 9,282.0 MiB and 592.4 → 571.8 MiB respectively.
+These are single process-inclusive observations, not retained memory.
+Counter overhead is included and counter frequencies differ; the baseline
+overlay also records distinct keys. They are not exact uninstrumented
+production-allocation savings. Do not add nested phases.
+
+Every successful request produced nonempty implementation DLL, reference DLL,
+portable PDB and XML output. All four matched byte-for-byte across variants,
+warmups, samples and profiles for each workload. Exact diagnostics also matched,
+including the captured Core closure's existing GS9100 warning without suppression.
+No output normalization or byte masking was needed. This establishes metadata
+work reuse with unchanged output, not a general throughput improvement.
+
 ### Local declaration discovery reduction (#5055)
 
 The generator projection and compiler keep separate declaration scopes.

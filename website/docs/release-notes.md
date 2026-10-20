@@ -16,7 +16,7 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
-- **Imported metadata readers reuse raw declaration facts** (issue #5070, ADR-0203). Open-member token lookups and raw nullable/context attribute decoding share weak, actual-reflection-object caches. Receiver-specific nullability, module identity and direct versus signature-filtered load behavior remain unchanged. Failed attribute reads remain retryable, and host generic definitions do not retain private reference contexts. Opt-in measurements report requests, scans and decodes; this is not a build-speed claim.
+- **Imported metadata readers reuse raw declaration facts** (issue #5070, ADR-0203). Open-member token lookups and raw nullable/context attribute decoding share weak, actual-reflection-object caches. Receiver-specific nullability, module identity and direct versus signature-filtered load behavior remain unchanged. Failed attribute reads remain retryable, and host generic definitions do not retain private reference contexts. Fixed Core/Oahu.Core profiles reduced definition scans from 47,484/3,724 to 389/96 with identical emitted bytes and diagnostics. Direct compiler median times were 40.952 → 41.940 seconds for Core and 4.385 → 3.950 seconds for Oahu.Core, with overlapping ranges; no general throughput improvement is claimed.
 
 - **The compiler now builds with the published G# SDK 0.5.179** (issue #2189). The bootstrap pin moves from 0.5.7 to the release containing the measured compiler lookup, generator setup and bounded-worker improvements. The analyzer-testing package follows the same pin. This separate pin update builds the repository with that released compiler; its CI provides stage-2 verification under the N-1 rule.
 
