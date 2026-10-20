@@ -8,12 +8,14 @@ import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Reflection
 import System.Reflection.Metadata
 import System.Reflection.PortableExecutable
 import System.Runtime.CompilerServices
 import System.Security
 import System.Text
 import System.Threading
+import System.Threading.Tasks
 import Xunit
 
 /// Exercises the real compiler process, not a simulated compilation callback.
@@ -37,6 +39,138 @@ open class CompilerWorkerTests : IDisposable {
     }
 
     @Fact
+    func FlushKeepsLogicalLinesAndSurrogatePairsUntilCompletion() {
+        using let stream = MemoryStream()
+        using let binary = BinaryWriter(stream, Encoding.UTF8, leaveOpen: true)
+        let type = typeof(Program).Assembly.GetType("GSharp.Workers.WorkerServer+WorkerOutput") ??
+            throw InvalidOperationException("The real worker output writer is required.")
+        using let output = Activator.CreateInstance(
+            type,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: nil,
+            args: []object{binary, uint8(2)},
+            culture: nil
+        ) as TextWriter ??
+            throw InvalidOperationException("Cannot create the worker output writer.")
+        output.Write("error GS1234: ")
+        output.Flush()
+        output.Write('\uD83D')
+        output.Flush()
+        output.Write('\uDE00')
+        output.WriteLine(" message")
+        output.Write("tail")
+        output.Flush()
+        let complete = type.GetMethod("Complete", BindingFlags.Instance | BindingFlags.NonPublic) ??
+            throw InvalidOperationException("The request-end completion method is required.")
+        complete.Invoke(output, nil)
+        stream.Position = 0
+        using let reader = BinaryReader(stream, Encoding.UTF8, leaveOpen: true)
+        let lines = List[string]()
+        let partial = StringBuilder()
+        while stream.Position < stream.Length {
+            Assert.Equal(uint8(2), reader.ReadByte())
+            let final = reader.ReadBoolean()
+            partial.Append(reader.ReadString())
+            if final {
+                lines.Add(partial.ToString())
+                partial.Clear()
+            }
+        }
+        Assert.Equal[string]([]string{"error GS1234: 😀 message", "tail"}, lines)
+        Assert.Equal(0, partial.Length)
+    }
+
+    @Fact
+    func IdleRetirementCannotInterruptDispatchOrAnActiveRequest() {
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { }")
+        let arguments = []string{"/out:result.dll", "/target:library", "input.gs"}
+        Assert.True(Run(directory, arguments, List[string](), List[string](), out var first))
+        Assert.Equal(0, first)
+        let previousProcess = messages.Last().Split(',')[0]
+        let activity = typeof(WorkerProcessClient).GetField(
+            "lastActivity",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        ) ??
+            throw InvalidOperationException("The worker idle timestamp is required.")
+        let expire = typeof(WorkerProcessClient).GetMethod(
+            "RetireIdleWorker",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        ) ??
+            throw InvalidOperationException("The actual idle callback is required.")
+        using let accepted = ManualResetEventSlim()
+        using let release = ManualResetEventSlim()
+        using let expiryAttempted = ManualResetEventSlim()
+        let request = Task.Run(
+            () -> {
+                let handled = client.TryRun(
+                    CompilerPath(),
+                    "--compiler-worker",
+                    directory,
+                    WithReferences(arguments),
+                    1,
+                    CancellationToken.None,
+                    (_line string) -> { },
+                    (_line string) -> { },
+                    (line string) -> {
+                        messages.Add(line)
+                        if line.Contains("accepted request") {
+                            activity.SetValue(client, Stopwatch.GetTimestamp() - 61 * Stopwatch.Frequency)
+                            accepted.Set()
+                            if !release.Wait(5000) {
+                                throw TimeoutException("The test did not release the active request.")
+                            }
+                        }
+                    },
+                    out var exit
+                )
+                Assert.True(handled)
+                Assert.Equal(0, exit)
+            }
+        )
+        try {
+            Assert.True(accepted.Wait(5000))
+            let retirement = Task.Run(
+                () -> {
+                    expiryAttempted.Set()
+                    expire.Invoke(client, nil)
+                }
+            )
+            try {
+                Assert.True(expiryAttempted.Wait(5000))
+                Assert.False(retirement.Wait(100))
+            } finally {
+                release.Set()
+            }
+            Assert.True(request.Wait(5000))
+            Assert.True(retirement.Wait(5000))
+            Assert.True(Run(directory, arguments, List[string](), List[string](), out var after))
+            Assert.Equal(0, after)
+            Assert.Equal(previousProcess, messages.Last().Split(',')[0])
+        } finally {
+            release.Set()
+        }
+    }
+
+    @Fact
+    func SubprocessDeadlineDoesNotWaitForOutputEof() {
+        let start = ProcessStartInfo("dotnet"){
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }
+        start.ArgumentList.Add(CompilerPath())
+        start.ArgumentList.Add("--compiler-worker")
+        let elapsed = Stopwatch.StartNew()
+        Assert.Throws[TimeoutException](
+            () -> {
+                RunProcess(start, 100)
+            }
+        )
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(5))
+    }
+
+    @Fact
     func SharedGenericDefinitionDoesNotKeepPrivateReferenceContextAlive() {
         let assembly = CacheSharedGenericOverPrivateType()
         for var i = 0; i < 5 && assembly.IsAlive; i++ {
@@ -49,7 +183,7 @@ open class CompilerWorkerTests : IDisposable {
 
     @Fact
     func LiveImportedSymbolsKeepContextSensitiveCanonicalIdentity() {
-        let paths = Directory.GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location) ?? ".", "*.dll")
+        let paths = RuntimeReferences()
         using let firstContext = ReferenceResolver.WithReferences(paths)
         using let secondContext = ReferenceResolver.WithReferences(paths)
         Assert.True(firstContext.TryResolveType("System.Text.StringBuilder", out var firstType))
@@ -265,12 +399,15 @@ open class CompilerWorkerTests : IDisposable {
         File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { func Get() int32 -> 42 }")
         let compiler = SecurityElement.Escape(CompilerPath())
         let taskAssembly = SecurityElement.Escape(typeof(BuildTask).Assembly.Location)
-        let runtime = SecurityElement.Escape(Path.GetDirectoryName(typeof(object).Assembly.Location) ?? ".")
+        let references = string.Join(
+            "",
+            RuntimeReferences().Select((path string) -> "<Refs Include=\"${SecurityElement.Escape(path)}\"/>")
+        )
         let basePath = SecurityElement.Escape(directory)
         let project = Path.Combine(directory, "worker.proj")
         let prefix =
         "<Project><UsingTask AssemblyFile=\"$taskAssembly\" TaskName=\"Gsharp.NET.Sdk.Tools.BuildTask\"/>" +
-            "<ItemGroup><Sources Include=\"input.gs\"/><Refs Include=\"$runtime/*.dll\"/></ItemGroup>" +
+            "<ItemGroup><Sources Include=\"input.gs\"/>$references</ItemGroup>" +
             "<Target Name=\"Build\">"
         for name in[]string{"first", "second"} {
             let xml = prefix +
@@ -343,10 +480,10 @@ open class CompilerWorkerTests : IDisposable {
         Assert.True(Directory.Exists(netstandard), netstandard)
         File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { func Get() string -> \"value\" }")
         for var i = 0; i < 3; i++ {
-            let referenceDirectory = if i == 1 {
+            let referenceDirectory string? = if i == 1 {
                 netstandard
             } else {
-                Path.GetDirectoryName(typeof(object).Assembly.Location) ?? "."
+                nil
             }
             let arguments = []string{
                 "/out:result.dll",
@@ -488,16 +625,13 @@ open class CompilerWorkerTests : IDisposable {
             for argument in[]string{"msbuild", project, "-t:Build", "-m:2", "-nr:false", "-v:normal", "-nologo"} {
                 start.ArgumentList.Add(argument)
             }
-            using let child = Process.Start(start) ?? throw InvalidOperationException("Cannot start MSBuild.")
-            let stdout = child.StandardOutput.ReadToEnd()
-            let stderr = child.StandardError.ReadToEnd()
-            Assert.True(child.WaitForExit(30000))
-            return (child.ExitCode, stdout + stderr)
+            let (exit, stdout, stderr) = RunProcess(start)
+            return (exit, stdout + stderr)
         }
 
         @MethodImpl(MethodImplOptions.NoInlining)
         private func CacheSharedGenericOverPrivateType() WeakReference {
-            let references = Directory.GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location) ?? ".", "*.dll")
+            let references = RuntimeReferences()
             Assert.NotEmpty(references)
             using let resolver = ReferenceResolver.WithReferences(references)
             Assert.True(resolver.TryResolveType("System.Text.StringBuilder", out var type))
@@ -510,12 +644,28 @@ open class CompilerWorkerTests : IDisposable {
         }
 
         private func WithReferences(arguments[]string, directory string? = nil)[]string -> arguments.Concat(
-            Directory
-                .GetFiles(directory ?? Path.GetDirectoryName(typeof(object).Assembly.Location) ?? ".", "*.dll")
-                .OrderBy((path string) -> path, StringComparer.Ordinal)
-                .Select((path string) -> "/r:" + path)
+            (
+                if directory == nil {
+                    RuntimeReferences()
+                } else {
+                    Directory.GetFiles(directory, "*.dll")
+                }
+            )
+                .OrderBy((path string) -> path, StringComparer.Ordinal).Select((path string) -> "/r:" + path)
         )
             .ToArray()
+
+        private func RuntimeReferences()[]string {
+            let runtime = Path.GetDirectoryName(typeof(object).Assembly.Location)
+            let paths = ReferenceResolver
+                .HostTrustedPlatformAssemblyPaths()
+                .Where(
+                (path string) -> string.Equals(Path.GetDirectoryName(path), runtime, StringComparison.OrdinalIgnoreCase)
+            )
+                .ToArray()
+            Assert.NotEmpty(paths)
+            return paths
+        }
 
         private func CompilerPath() string {
             let configuration = Directory.GetParent(Path.GetDirectoryName(typeof(Program).Assembly.Location) ?? ".")
@@ -538,12 +688,30 @@ open class CompilerWorkerTests : IDisposable {
             for argument in WithReferences(arguments, referenceDirectory) {
                 start.ArgumentList.Add(argument)
             }
-            using let child = Process.Start(start) ?? throw InvalidOperationException("Cannot start compiler.")
-            let stdout = child.StandardOutput.ReadToEnd()
-            let stderr = child.StandardError.ReadToEnd()
-            Assert.True(child.WaitForExit(30000))
+            let (exit, stdout, stderr) = RunProcess(start)
             let lines = (stdout + stderr).Replace("\r\n", "\n").TrimEnd('\n')
-            return (child.ExitCode, lines)
+            return (exit, lines)
+        }
+
+        private func RunProcess(start ProcessStartInfo, timeoutMilliseconds int32 = 30000)(
+            Exit int32,
+            Stdout string,
+            Stderr string
+        ) {
+            using let child = Process.Start(start) ?? throw InvalidOperationException("Cannot start subprocess.")
+            let stdout = child.StandardOutput.ReadToEndAsync()
+            let stderr = child.StandardError.ReadToEndAsync()
+            if !child.WaitForExit(timeoutMilliseconds) {
+                try {
+                    child.Kill(entireProcessTree: true)
+                } catch (ex InvalidOperationException) {
+                    // The subprocess exited after the timed wait.
+
+                }
+                child.WaitForExit()
+                throw TimeoutException("Subprocess ${child.Id} exceeded its $timeoutMilliseconds ms deadline.")
+            }
+            return (child.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult())
         }
     }
 }
