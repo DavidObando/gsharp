@@ -14,6 +14,7 @@ import System.Reflection.PortableExecutable
 import System.Runtime.CompilerServices
 import System.Security
 import System.Text
+import System.Text.Json
 import System.Threading
 import System.Threading.Tasks
 import Xunit
@@ -36,6 +37,55 @@ open class CompilerWorkerTests : IDisposable {
         client.Dispose()
         Directory.Delete(directory, recursive: true)
         GC.SuppressFinalize(this)
+    }
+
+    @Fact
+    func ReusedCompilerCreatesOneIsolatedMeasurementSessionPerRequest() {
+        let previous = Environment.GetEnvironmentVariable("GSHARP_MEASURE_PHASES")
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { }")
+        let arguments = WithReferences([]string{"/out:result.dll", "/target:library", "input.gs"})
+        try {
+            Environment.SetEnvironmentVariable(
+                "GSHARP_MEASURE_PHASES",
+                Path.Combine(directory, "measure-{pid}-{id}.json")
+            )
+            for grant in[]int32{2, 1} {
+                Assert.True(
+                    client.TryRun(
+                        CompilerPath(),
+                        "--compiler-worker",
+                        directory,
+                        arguments,
+                        grant,
+                        CancellationToken.None,
+                        (_line string) -> { },
+                        (_line string) -> { },
+                        (line string) -> messages.Add(line),
+                        out var exit
+                    )
+                )
+                Assert.Equal(0, exit)
+            }
+        } finally {
+            Environment.SetEnvironmentVariable("GSHARP_MEASURE_PHASES", previous)
+        }
+        let reports = Directory.GetFiles(directory, "measure-*.json")
+        Assert.Equal(2, reports.Length)
+        let processes = HashSet[int32]()
+        let grants = List[int64]()
+        for path in reports {
+            using let report = JsonDocument.Parse(File.ReadAllText(path))
+            let root = report.RootElement
+            Assert.Equal("gsc", root.GetProperty("Tool").GetString())
+            processes.Add(root.GetProperty("ProcessId").GetInt32())
+            let counters = root.GetProperty("Counters")
+            Assert.Equal(int64(1), counters.GetProperty("input.sources").GetInt64())
+            Assert.Equal(int64(1), counters.GetProperty("workers.active").GetInt64())
+            grants.Add(counters.GetProperty("workers.granted").GetInt64())
+            Assert.True(root.GetProperty("Phases").GetArrayLength() > 0)
+        }
+        Assert.Single(processes)
+        Assert.Equal[int64]([]int64{1, 2}, grants.OrderBy((value int64) -> value))
     }
 
     @Fact
