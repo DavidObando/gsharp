@@ -4,6 +4,7 @@ import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import MetadataReference = Microsoft.CodeAnalysis.MetadataReference
 import System.Collections.Immutable
 import System.Linq
 import Xunit
@@ -106,12 +107,33 @@ namespace ExtensionsB { public static class Empty {} }`)
         Assert.Empty(lookup.CollectImportedExtensionMethods("NoSuchExtension5040"))
         Assert.Empty(lookup.CollectImportedExtensionMethods("NoSuchExtension5040"))
         Assert.Equal(visited, measurements.GetCounter("extensions.method-visits"))
+        let holders = lookup.GetImportedExtensionClasses()
+        context.RootScope = BoundScope(context.RootScope)
+        Assert.Same(holders, lookup.GetImportedExtensionClasses())
         let second = BoundScope(nil, resolver)
         Assert.True(second.TryImport(ImportSymbol("ExtensionsB", "ExtensionsB", nil)))
         context.RootScope = second
         Assert.Empty(lookup.CollectImportedExtensionMethods("Select"))
         context.RootScope = first
         Assert.NotEmpty(lookup.CollectImportedExtensionMethods("Select"))
+    }
+
+    @Fact
+    func ImportedExtensionIndex_UnresolvableSiblingSignature_DoesNotPoisonUsableCandidates() {
+        using let dependency = CSharpFixture("namespace Missing5040 { public class Value {} }")
+        using let fixture = CSharpFixture(`using Missing5040;
+namespace Poison5040 {
+    public static class Methods {
+        public static int Good(this string value) => value.Length;
+        public static int Broken(this Value value) => 0;
+    }
+}`, additionalReferences: []MetadataReference{MetadataReference.CreateFromFile(dependency.AssemblyPath)})
+        using let resolver = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        let scope_ = BoundScope(nil, resolver)
+        Assert.True(scope_.TryImport(ImportSymbol("Poison5040", "Poison5040", nil)))
+        let candidates = MemberLookup(BinderContext(scope_)).CollectImportedExtensionMethods("Good")
+        Assert.Single(candidates)
+        Assert.Equal("Good", candidates[0].Name)
     }
 
     @Fact

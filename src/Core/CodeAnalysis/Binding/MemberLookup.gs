@@ -305,37 +305,28 @@ internal class MemberLookup {
     /// @returns The list of candidate (cref:MethodInfo) overloads.
     func CollectImportedExtensionMethods(methodName string) List[MethodInfo] {
         let classes = this.GetImportedExtensionClasses()
-        if binderCtx.CachedImportedExtensionMethods is {} cached {
+        let cache = binderCtx.CachedImportedExtensionMethods ??
+            Dictionary[string, ImmutableArray[MethodInfo]](StringComparer.Ordinal)
+        binderCtx.CachedImportedExtensionMethods = cache
+        if cache.TryGetValue(methodName, out var cached) {
             CompilationMeasurements.Count("extensions.name-index-hits")
-            return if cached.TryGetValue(methodName, out var bucket) {
-                bucket.ToList()
-            } else {
-                List[MethodInfo]()
-            }
+            return cached.ToList()
         }
         using let measurement = CompilationMeasurements.BeginPhase("references.extension-name-index")
-        let byName = Dictionary[string, List[MethodInfo]](StringComparer.Ordinal)
+        let result = List[MethodInfo]()
         for type in classes {
             let metadata = importedExtensionIndexes.GetValue(type, BuildImportedExtensionIndex)
-            for pair in metadata.Methods {
-                for method in pair.Value {
-                    if IsVisibleImportedMethod(method) {
-                        AddImportedExtensionCandidate(byName, pair.Key, method)
-                    }
+            if !metadata.Methods.TryGetValue(methodName, out var candidates) {
+                continue
+            }
+            for method in candidates {
+                if IsVisibleImportedMethod(method) && method.GetParameters().Length > 0 {
+                    result.Add(method)
                 }
             }
         }
-        let index = byName.ToImmutableDictionary(
-            (pair KeyValuePair[string, List[MethodInfo]]) -> pair.Key,
-            (pair KeyValuePair[string, List[MethodInfo]]) -> pair.Value.ToImmutableArray(),
-            StringComparer.Ordinal
-        )
-        binderCtx.CachedImportedExtensionMethods = index
-        return if index.TryGetValue(methodName, out var candidates) {
-            candidates.ToList()
-        } else {
-            List[MethodInfo]()
-        }
+        cache[methodName] = result.ToImmutableArray()
+        return result
     }
 
     private data class ImportedExtensionIndex(Methods ImmutableDictionary[string, ImmutableArray[MethodInfo]]) { }
@@ -343,12 +334,10 @@ internal class MemberLookup {
     private func BuildImportedExtensionIndex(type Type) ImportedExtensionIndex {
         using let measurement = CompilationMeasurements.BeginPhase("references.extension-metadata-index")
         let byName = Dictionary[string, List[MethodInfo]](StringComparer.Ordinal)
-        var methods[]MethodInfo
-        try {
-            methods = type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
-        } catch {
-            return ImportedExtensionIndex(ImmutableDictionary[string, ImmutableArray[MethodInfo]].Empty)
-        }
+        let methods = ClrTypeUtilities.SafeGetMethods(
+            type,
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static
+        )
         const allMembers = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance
         let scopeNames = ClrTypeUtilities
             .SafeGetProperties(type, allMembers)
@@ -360,9 +349,6 @@ internal class MemberLookup {
         for method in methods {
             CompilationMeasurements.Count("extensions.method-visits")
             if !HasExtensionAttribute(method) {
-                continue
-            }
-            if method.GetParameters().Length == 0 {
                 continue
             }
             AddImportedExtensionCandidate(byName, method.Name, method)
@@ -395,8 +381,8 @@ internal class MemberLookup {
     /// Issue #294: enumerates static classes declared in the currently
     /// imported namespaces that carry `[Extension]` (i.e. host
     /// extension methods). The result is cached on the
-    /// (cref:BinderContext) — the import count acts as a cheap
-    /// invalidation key because imports only grow during binding.
+    /// (cref:BinderContext). Reference, import, file, and consumer identities
+    /// invalidate the cache; an equivalent lexical child scope does not.
     /// @returns The imported static extension-holding classes.
     func GetImportedExtensionClasses() List[Type] {
         let imports = this.binderCtx.RootScope.GetDeclaredImports()
@@ -411,7 +397,7 @@ internal class MemberLookup {
             this
             .binderCtx
             .CachedImportedExtensionImportCount == importCount &&
-            object.ReferenceEquals(binderCtx.CachedImportedExtensionScope, binderCtx.RootScope) &&
+            object.ReferenceEquals(binderCtx.CachedImportedExtensionReferences, binderCtx.References) &&
             binderCtx.CachedImportedExtensionAssemblyName == binderCtx
             .References
             .CurrentAssemblyName &&
@@ -472,7 +458,7 @@ internal class MemberLookup {
         this.binderCtx.CachedImportedExtensionClasses = classes
         this.binderCtx.CachedImportedExtensionImportCount = importCount
         binderCtx.CachedImportedExtensionImports = imports
-        binderCtx.CachedImportedExtensionScope = binderCtx.RootScope
+        binderCtx.CachedImportedExtensionReferences = binderCtx.References
         binderCtx.CachedImportedExtensionAssemblyName = binderCtx.References.CurrentAssemblyName
         this
             .binderCtx
