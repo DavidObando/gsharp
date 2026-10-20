@@ -6,7 +6,6 @@ import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Text
-import System.Threading.Tasks
 
 /// Serial compiler host. Process isolation is the cancellation boundary.
 internal shared class WorkerServer {
@@ -18,11 +17,7 @@ internal shared class WorkerServer {
         output.Write(identity)
         output.Flush()
         for var request = 1; request <= WorkerProtocol.MaxRequests; request++ {
-            let read = Task.Run(() -> WorkerProtocol.ReadFrame(input))
-            if !read.Wait(WorkerProtocol.IdleMilliseconds) {
-                return 0
-            }
-            using let stream = MemoryStream(read.Result)
+            using let stream = MemoryStream(WorkerProtocol.ReadFrame(input))
             using let payload = BinaryReader(stream, Encoding.UTF8)
             let version = payload.ReadInt32()
             let requestedIdentity = payload.ReadString()
@@ -109,8 +104,8 @@ internal shared class WorkerServer {
             Console.SetError(stderr)
             return compile(arguments)
         } finally {
-            stdout.Flush()
-            stderr.Flush()
+            stdout.Complete()
+            stderr.Complete()
             Console.SetOut(oldOut)
             Console.SetError(oldError)
             Environment.CurrentDirectory = oldDirectory
@@ -149,12 +144,8 @@ internal shared class WorkerServer {
                     carriageReturn = false
                 } else {
                     carriageReturn = false
-                    // Keep a surrogate pair inside one UTF-8 string fragment.
-                    if line.Length >= 16384 && !char.IsLowSurrogate(value) {
-                        Emit(completeLine: false)
-                    }
                     line.Append(value)
-                    if line.Length >= 16384 && !char.IsHighSurrogate(value) {
+                    if line.Length >= 16384 {
                         Emit(completeLine: false)
                     }
                 }
@@ -163,6 +154,15 @@ internal shared class WorkerServer {
 
         override func Flush() {
             lock output {
+                if line.Length > 0 {
+                    Emit(completeLine: false)
+                }
+                output.Flush()
+            }
+        }
+
+        internal func Complete() {
+            lock output {
                 if line.Length > 0 || hasFragment {
                     Emit(completeLine: true)
                 }
@@ -170,11 +170,19 @@ internal shared class WorkerServer {
         }
 
         private func Emit(completeLine bool) {
+            var pending char? = nil
+            if !completeLine && line.Length > 0 && char.IsHighSurrogate(line[line.Length - 1]) {
+                pending = line[line.Length - 1]
+                line.Length--
+            }
             output.Write(kind)
             output.Write(completeLine)
             output.Write(line.ToString())
             output.Flush()
             line.Clear()
+            if pending is {} high {
+                line.Append(high)
+            }
             hasFragment = !completeLine
         }
     }

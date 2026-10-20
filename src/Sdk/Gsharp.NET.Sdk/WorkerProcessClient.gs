@@ -21,6 +21,8 @@ internal class WorkerProcessClient : IDisposable {
     private var identity string?
     private var toolPath string?
     private var workerEnvironment Dictionary[string, string]?
+    private var idleTimer Timer?
+    private var lastActivity int64
 
     internal func TryRun(
         path string,
@@ -36,92 +38,120 @@ internal class WorkerProcessClient : IDisposable {
     ) bool {
         lock gate {
             exitCode = 1
-            cancellation.ThrowIfCancellationRequested()
-            let requestedIdentity = WorkerProtocol.ToolIdentity(path)
-            let environment = Dictionary[string, string](StringComparer.Ordinal)
-            for entry DictionaryEntry in Environment.GetEnvironmentVariables() {
-                environment.Add(cast[string](entry.Key), cast[string](entry.Value))
-            }
-            if process?.HasExited != false ||
-                identity != requestedIdentity ||
-                toolPath != path ||
-                !SameEnvironment(environment, workerEnvironment) {
-                Dispose()
-                try {
-                    Start(path, workerFlag, requestedIdentity, environment, cancellation)
-                } catch (ex Exception) when ex is IOException ||
-                    ex is System
-                    .ComponentModel
-                    .Win32Exception ||
-                    ex is InvalidOperationException ||
-                    ex is TimeoutException {
-                    Dispose()
-                    cancellation.ThrowIfCancellationRequested()
-                    transportMessage("G# worker unavailable; using standalone tool: ${ex.Message}")
-                    return false
-                }
-            }
-            let activeProcess = process ?? throw InvalidOperationException("Worker was not started.")
-            using let registration = cancellation.Register(() -> Kill(activeProcess))
-            // Once a request is sent, transport loss is a failure, not a retry.
+            idleTimer?.Change(Timeout.Infinite, Timeout.Infinite)
             try {
-                WorkerProtocol.WriteRequest(
-                    writer ?? throw InvalidOperationException("Worker input is unavailable."),
-                    requestedIdentity,
-                    directory,
-                    arguments,
-                    environment,
-                    workerGrant
-                )
-                let input = reader ?? throw InvalidOperationException("Worker output is unavailable.")
-                let status = input.ReadByte()
-                if status == WorkerProtocol.Rejected {
-                    transportMessage("G# worker rejected request; using standalone tool: ${input.ReadString()}")
+                cancellation.ThrowIfCancellationRequested()
+                let requestedIdentity = WorkerProtocol.ToolIdentity(path)
+                let environment = Dictionary[string, string](StringComparer.Ordinal)
+                for entry DictionaryEntry in Environment.GetEnvironmentVariables() {
+                    environment.Add(cast[string](entry.Key), cast[string](entry.Value))
+                }
+                if process?.HasExited != false ||
+                    identity != requestedIdentity ||
+                    toolPath != path ||
+                    IdleExpired() ||
+                    !SameEnvironment(environment, workerEnvironment) {
                     Dispose()
-                    return false
-                }
-                if status != WorkerProtocol.Accepted {
-                    throw InvalidDataException("Worker did not acknowledge the request.")
-                }
-                transportMessage("G# worker accepted request: pid=${activeProcess.Id}.")
-                let stdoutLine = StringBuilder()
-                let stderrLine = StringBuilder()
-                while true {
-                    let kind = input.ReadByte()
-                    switch kind {
-                        case WorkerProtocol.Stdout {
-                            ReadOutput(input, stdoutLine, stdout)
-                        }
-                        case WorkerProtocol.Stderr {
-                            ReadOutput(input, stderrLine, stderr)
-                        }
-                        case WorkerProtocol.Completed {
-                            exitCode = input.ReadInt32()
-                            let retire = input.ReadBoolean()
-                            let retained = input.ReadInt64()
-                            let workingSet = input.ReadInt64()
-                            cancellation.ThrowIfCancellationRequested()
-                            transportMessage(
-                                "G# worker completed: pid=${activeProcess.Id}, retained=$retained bytes, workingSet=$workingSet bytes, retire=$retire."
-                            )
-                            if retire {
-                                Dispose()
-                            }
-                            return true
-                        }
-                        default {
-                            throw InvalidDataException("Unexpected worker response.")
-                        }
+                    try {
+                        Start(path, workerFlag, requestedIdentity, environment, cancellation)
+                    } catch (ex Exception) when ex is IOException ||
+                        ex is System
+                        .ComponentModel
+                        .Win32Exception ||
+                        ex is InvalidOperationException ||
+                        ex is TimeoutException {
+                        Dispose()
+                        cancellation.ThrowIfCancellationRequested()
+                        transportMessage("G# worker unavailable; using standalone tool: ${ex.Message}")
+                        return false
                     }
                 }
-            } catch (ex Exception) when ex is IOException ||
-                ex is InvalidOperationException ||
-                ex is System
-                .ComponentModel
-                .Win32Exception {
+                let activeProcess = process ?? throw InvalidOperationException("Worker was not started.")
+                using let registration = cancellation.Register(() -> Kill(activeProcess))
+                // Once a request is sent, transport loss is a failure, not a retry.
+                try {
+                    WorkerProtocol.WriteRequest(
+                        writer ?? throw InvalidOperationException("Worker input is unavailable."),
+                        requestedIdentity,
+                        directory,
+                        arguments,
+                        environment,
+                        workerGrant
+                    )
+                    let input = reader ?? throw InvalidOperationException("Worker output is unavailable.")
+                    let status = input.ReadByte()
+                    if status == WorkerProtocol.Rejected {
+                        transportMessage("G# worker rejected request; using standalone tool: ${input.ReadString()}")
+                        Dispose()
+                        return false
+                    }
+                    if status != WorkerProtocol.Accepted {
+                        throw InvalidDataException("Worker did not acknowledge the request.")
+                    }
+                    transportMessage("G# worker accepted request: pid=${activeProcess.Id}.")
+                    let stdoutLine = StringBuilder()
+                    let stderrLine = StringBuilder()
+                    while true {
+                        let kind = input.ReadByte()
+                        switch kind {
+                            case WorkerProtocol.Stdout {
+                                ReadOutput(input, stdoutLine, stdout)
+                            }
+                            case WorkerProtocol.Stderr {
+                                ReadOutput(input, stderrLine, stderr)
+                            }
+                            case WorkerProtocol.Completed {
+                                exitCode = input.ReadInt32()
+                                let retire = input.ReadBoolean()
+                                let retained = input.ReadInt64()
+                                let workingSet = input.ReadInt64()
+                                cancellation.ThrowIfCancellationRequested()
+                                transportMessage(
+                                    "G# worker completed: pid=${activeProcess.Id}, retained=$retained bytes, workingSet=$workingSet bytes, retire=$retire."
+                                )
+                                if retire {
+                                    Dispose()
+                                }
+                                return true
+                            }
+                            default {
+                                throw InvalidDataException("Unexpected worker response.")
+                            }
+                        }
+                    }
+                } catch (ex Exception) when ex is IOException ||
+                    ex is InvalidOperationException ||
+                    ex is System
+                    .ComponentModel
+                    .Win32Exception {
+                    Dispose()
+                    cancellation.ThrowIfCancellationRequested()
+                    throw IOException("Worker request transport failed.", ex)
+                }
+            } finally {
+                if process?.HasExited == false {
+                    lastActivity = Stopwatch.GetTimestamp()
+                    idleTimer?.Dispose()
+                    idleTimer = Timer(
+                        (_state object?) -> RetireIdleWorker(),
+                        nil,
+                        WorkerProtocol.IdleMilliseconds,
+                        Timeout.Infinite
+                    )
+                } else {
+                    Dispose()
+                }
+            }
+        }
+    }
+
+    private func IdleExpired() bool -> lastActivity != 0 && Stopwatch.GetTimestamp() - lastActivity >=
+    int64(WorkerProtocol.IdleMilliseconds) * Stopwatch.Frequency / 1000
+
+    private func RetireIdleWorker() {
+        lock gate {
+            if IdleExpired() {
                 Dispose()
-                cancellation.ThrowIfCancellationRequested()
-                throw IOException("Worker request transport failed.", ex)
             }
         }
     }
@@ -177,20 +207,25 @@ internal class WorkerProcessClient : IDisposable {
     }
 
     func Dispose() {
-        let child = process
-        process = nil
-        identity = nil
-        toolPath = nil
-        workerEnvironment = nil
-        if child != nil {
-            Kill(child)
-            child.WaitForExit()
-            child.Dispose()
+        lock gate {
+            idleTimer?.Dispose()
+            idleTimer = nil
+            lastActivity = 0
+            let child = process
+            process = nil
+            identity = nil
+            toolPath = nil
+            workerEnvironment = nil
+            if child != nil {
+                Kill(child)
+                child.WaitForExit()
+                child.Dispose()
+            }
+            reader?.Dispose()
+            writer?.Dispose()
+            reader = nil
+            writer = nil
         }
-        reader?.Dispose()
-        writer?.Dispose()
-        reader = nil
-        writer = nil
     }
 
     shared {
