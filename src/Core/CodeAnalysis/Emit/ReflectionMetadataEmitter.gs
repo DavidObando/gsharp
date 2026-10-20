@@ -4289,6 +4289,15 @@ internal class ReflectionMetadataEmitter {
             )
         }
 
+        /// Plans the proven primitive body without accessing the coordinator or metadata.
+        func PlanIndependent(body BoundBlockStatement) -> MethodBodyPlanner.CollectIndependentLocalsAndLabels(
+            body,
+            this.locals,
+            this.localTypes,
+            this.labels,
+            this.Il
+        )
+
         /// Encodes the collected locals into a standalone signature (default when there are none).
         /// @returns The locals signature handle, or `default` when no locals were collected.
         func BuildLocalsSignature() StandaloneSignatureHandle {

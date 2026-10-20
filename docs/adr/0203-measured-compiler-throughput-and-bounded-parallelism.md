@@ -654,6 +654,9 @@ and method handles before scheduling eligible method bodies. Workers use the
 existing instruction emitter with method-owned labels, locals, IL buffers and
 unresolved sequence points. An isolated emitter has no coordinator reference:
 an attempt to use metadata, token caches or mutable generic remaps fails.
+Primitive local-slot and label allocation also runs in the owned workspace.
+It uses the normal planner's allocation helpers, without shared metadata or
+by-ref type construction.
 The coordinator commits local signatures, body offsets, document handles and
 debug records in the existing method order. Metadata and PDB serialization
 remain sequential. Reference emission never schedules instruction generation.

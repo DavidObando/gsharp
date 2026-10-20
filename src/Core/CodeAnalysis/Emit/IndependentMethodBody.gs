@@ -21,8 +21,6 @@ internal class IndependentMethodBody {
         this.function = function
         Il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
         Session = ReflectionMetadataEmitter.MethodBodyEmitSession(outer, Il)
-        Session.CollectConstValues(body)
-        Session.Plan(body, function)
         let parameters = Dictionary[ParameterSymbol, int32]()
         var next = 0
         if function.IsInstanceMethod {
@@ -53,6 +51,8 @@ internal class IndependentMethodBody {
 
     func Emit() {
         try {
+            Session.CollectConstValues(this.body)
+            Session.PlanIndependent(this.body)
             this.emitter.EmitMethodBody(this.body, alwaysAppendRet: this.function.Type == TypeSymbol.Void)
             MaxStack = MaxStackTracker.ComputeMaxStack(Il)
         } catch (ex Exception) when !(ex is EmitDiagnosticException) &&
