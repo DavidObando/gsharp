@@ -60,6 +60,84 @@ The SDK supports any modern .NET target framework. The end-to-end test sweep in 
 
 The SDK's MSBuild task DLL is published as `netstandard2.0` so it loads in any MSBuild host (full-framework MSBuild, `dotnet build`, IDEs). The bundled `gsc.dll` compiler is `net10.0` and is invoked via `dotnet gsc.dll`, so it runs on any host that has the .NET 10 runtime installed.
 
+## Opt-in compiler reuse
+
+Set `<GSharpUseSharedCompilation>true</GSharpUseSharedCompilation>` or pass
+`-p:GSharpUseSharedCompilation=true` to reuse the compiler within one MSBuild
+node and build. The default remains `false`. Standalone `dotnet gsc.dll`
+compilation is unchanged. Workers do not load Roslyn or retain compilation
+results.
+
+Each node owns at most one compiler worker, with one active request. MSBuild
+still schedules projects. `GSharpWorkerGrant` supplies the per-request CPU
+grant (default `1`); the initial worker compiles serially even with a larger
+grant. The request carries the working directory, arguments, and environment.
+Reference contexts remain request-local. Requests still run every configured
+G# diagnostic analyzer, then retire the worker. Analyzer code can retain
+threads or process events; compiler reuse does not yet assume those contexts
+unload safely. Roslyn source generators continue to run in the separate
+generator tool.
+
+Workers retire after 16 requests, after 60 idle seconds, or when a full
+collection reports at least 256 MiB of retained managed memory, or the
+post-request working set reaches 1 GiB. These are
+retained-memory and request-count bounds, not limits on a compilation's
+peak memory or native working set. The build disposes its workers on exit.
+Cancellation kills the worker process tree; the next request starts a new
+worker. Replacing the tool payload also starts a new worker.
+The SDK serializes idle retirement with request dispatch. The server does
+not independently expire while a request is being submitted.
+An owner-input reader stays active during compilation. Closing the owner
+pipe terminates the worker and its ordinary descendants through an owned
+Unix process group or Windows job. If containment cannot be established,
+the handshake fails and the SDK logs its standalone fallback.
+Normal retirement also terminates that containment after flushing the result.
+Live descendants force retirement rather than entering another request.
+Changing `Console.In`, `Console.Out`, `Console.Error`, `Console.InputEncoding`
+or `Console.OutputEncoding` also forces retirement, even when the replacement
+is framework-owned and generator load contexts unload. Eligibility is checked
+after collection, finalizers and unload probes. Saved encodings are restored
+before completion/cleanup, but changed writers/readers are not reset in an
+attempt to continue reuse: public setters also change private console state.
+Reusable tools must leave these process-wide console channels unchanged.
+This is a serial reuse boundary, not a sandbox for arbitrary process globals.
+Windows jobs terminate children when the worker's job handle closes; on Unix
+the SDK also cleans the verified worker group if the root has already exited.
+
+The SDK logs unavailable transport or an incompatible handshake before
+falling back to standalone compilation. Transport loss after sending a
+request fails the build without retrying it. A compiler diagnostic or
+nonzero compiler exit never triggers fallback. One finalization path terminates
+the owned worker tree and performs a bounded drain of captured stdout/stderr,
+including unterminated diagnostic tails, before disposal. Accepted-request
+failures retain their original exception even if diagnostic logging fails.
+Pre-acceptance output is logged as startup information, not compiler errors,
+so an explicitly permitted standalone fallback remains distinguishable.
+This preserves crash messages without treating a failed request as success.
+Worker startup passes the tool,
+switch and pipe name as typed process arguments, preserving spaces, Unicode
+and valid filename quotes without reparsing a command line. Its Windows console
+creation flags match standalone compilation; it does not force a new encoding.
+MSBuild hosts
+without build-lifetime task objects, typed process arguments or process-tree
+cancellation use the standalone path and log that decision.
+
+`gsc --compiler-worker <private-pipe>` is a private, versioned SDK transport,
+not an interactive compiler command. Protocol responses use a separate
+current-user pipe, never OS stdout or stderr. Both OS streams remain
+diagnostics, including inherited helper output. Per-request fences drain
+both streams before reporting completion without changing their logical lines.
+Worker requests require output mode (`/out`);
+in-process evaluation always uses the standalone driver. Requests also require
+explicit references, as normal SDK builds supply. The standalone driver's
+implicit host-reference mode is not reused: its reference surface depends on
+which assemblies the host has loaded.
+
+The private transport limits request frames to 16 MiB and each request's
+diagnostic stream, including its completion fence, to 16,777,216 UTF-16 code
+units. Exceeding a transport limit fails the request
+explicitly; it does not truncate diagnostics or return successful fallback output.
+
 ## `dotnet watch` and hot reload
 
 `net10.0` projects launched by `dotnet watch` enable G# hot reload:

@@ -23,6 +23,7 @@ import GSharp.Core.IO
 import GSharp.Core.CodeAnalysis.Analyzers
 import System.ComponentModel
 import System.Reflection.PortableExecutable
+import GSharp.Workers
 
 /// Entry point to gsc, the GSharp command-line compiler.
 open class Program {
@@ -242,11 +243,26 @@ open class Program {
     shared {
         private const Success int32 = 0
         private const Error int32 = 1
+        private var workerCanReuse bool = true
 
         /// Entry point to the GSharp compiler.
         /// @param args Command line arguments.
         /// @returns Exit code.
         func Main(args[]string) int32 {
+            if args.Length == 2 && args[0] == "--compiler-worker" {
+                return WorkerServer.Run(
+                    typeof(Program).Assembly.Location,
+                    RunWorkerRequest,
+                    () -> workerCanReuse,
+                    args[1]
+                )
+            }
+            return Compile(args, requireOutput: false)
+        }
+
+        internal func RunWorkerRequest(args[]string) int32 -> Compile(args, requireOutput: true)
+
+        private func Compile(args[]string, requireOutput bool) int32 {
             if args.Length == 0 {
                 Console.Error.WriteLine("Must specify path to a file via arguments.")
                 return Error
@@ -261,6 +277,19 @@ open class Program {
                 return ReportFatalIOError(ex)
             } catch (ex UnauthorizedAccessException) {
                 return ReportFatalIOError(ex)
+            }
+            if requireOutput && parsed.OutputPath == nil {
+                Console.Error.WriteLine("Compiler workers require /out; evaluation must use the standalone driver.")
+                return Error
+            }
+            if requireOutput && parsed.References.Count == 0 {
+                Console.Error.WriteLine("Compiler workers require explicit /reference inputs.")
+                return Error
+            }
+            if requireOutput {
+                // Analyzer code may retain threads or process events. Do not run
+                // another request in that process until unload isolation is proven.
+                workerCanReuse = parsed.GsAnalyzerPaths.Count == 0
             }
             if parsed.ShowHelp {
                 PrintHelp()

@@ -163,6 +163,17 @@ open class BuildTask : Task, ICancelableTask {
     /// Gets or sets whether the task should expose the generated compiler arguments.
     prop ProvideCommandLineArgs string?
 
+    /// Gets or sets whether to reuse a bounded compiler worker. Defaults to false.
+    prop UseSharedCompilation bool
+
+    /// Gets or sets the per-request CPU grant supplied by the build scheduler.
+    private var _workerGrant int32 = 1
+
+    prop WorkerGrant int32 {
+        get -> _workerGrant
+        set -> _workerGrant = value
+    }
+
     /// Gets the generated gsc command-line arguments for design-time builds.
     private var _commandLineArgs[]ITaskItem = Array.Empty[ITaskItem]()!!
 
@@ -320,6 +331,64 @@ open class BuildTask : Task, ICancelableTask {
             Directory.CreateDirectory(Path.GetDirectoryName(this.ResponseFilePath) ?? ".")
             File.WriteAllLines(this.ResponseFilePath, args, Encoding.UTF8)
         }
+        if this.UseSharedCompilation && this.References.Length == 0 {
+            this.Log.LogMessage(
+                MessageImportance.High,
+                "G# worker requires explicit references; using standalone compiler."
+            )
+        } else if this.UseSharedCompilation {
+            if this.WorkerGrant < 1 {
+                this.Log.LogError("WorkerGrant must be at least one.")
+                return false
+            }
+            if this.BuildEngine is IBuildEngine4 engine {
+                try {
+                    let client = WorkerProcessClient.Get(engine, "GSharp.CompilerWorker")
+                    if client.TryRun(
+                        Path.GetFullPath(gsharpCompilerFullPath),
+                        "--compiler-worker",
+                        Path.GetFullPath(this.BasePath ?? Environment.CurrentDirectory),
+                        []string{"@" + this.ResponseFilePath},
+                        this.WorkerGrant,
+                        this.cts.Token,
+                        this.LogCompilerLine,
+                        (line string) -> {
+                            if line.Trim() == "Failed." {
+                                this.Log.LogMessage(MessageImportance.Low, line)
+                            } else {
+                                this.Log.LogError(line)
+                            }
+                        },
+                        (message string) -> this.Log.LogMessage(
+                            if message.Contains("using standalone") {
+                                MessageImportance.High
+                            } else {
+                                MessageImportance.Normal
+                            },
+                            message
+                        ),
+                        out var exitCode
+                    ) {
+                        if exitCode != 0 && !this.Log.HasLoggedErrors {
+                            this.LogFailure(
+                                "compiler worker exited with code $exitCode without emitting a structured diagnostic."
+                            )
+                        }
+                        return exitCode == 0 && !this.Log.HasLoggedErrors
+                    }
+                } catch (ex OperationCanceledException) {
+                    return false
+                } catch (ex IOException) {
+                    this.LogFailure("compiler worker transport failed; request was not retried: ${ex.Message}")
+                    return false
+                }
+            } else {
+                this.Log.LogMessage(
+                    MessageImportance.High,
+                    "G# worker unavailable in this MSBuild host; using standalone compiler."
+                )
+            }
+        }
         let psi = ProcessStartInfo("dotnet", "\"$gsharpCompilerFullPath\" @\"${this.ResponseFilePath}\""){
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -337,10 +406,7 @@ open class BuildTask : Task, ICancelableTask {
             .Register(
             () -> {
                 try {
-                    // netstandard2.0 (this task's TFM) lacks Process.Kill(bool);
-                    // gsc.dll doesn't spawn grandchildren, so killing it directly
-                    // is sufficient to stop the compile.
-                    proc!!.Kill()
+                    WorkerProcessClient.Kill(proc!!)
                 } catch (InvalidOperationException) {
                     // Process already exited.
 
@@ -384,30 +450,26 @@ open class BuildTask : Task, ICancelableTask {
         // pane navigates to a source file, not gsc.dll). Include the last
         // captured output as a breadcrumb.
         if proc!!.ExitCode != 0 && !this.Log.HasLoggedErrors {
-            let anchorFile = if this.Compile?.Length > 0 {
-                this.Compile!![0].ItemSpec!!
-            } else {
-                gsharpCompilerFullPath
-            }
             let lastOutput = lastStderrLine ?? lastStdoutLine
             let breadcrumb = if string.IsNullOrWhiteSpace(lastOutput) {
                 string.Empty!!
             } else {
                 " Last compiler output: $lastOutput"
             }
-            this.Log.LogError(
-                subcategory: nil,
-                errorCode: "GS9998",
-                helpKeyword: nil,
-                file: anchorFile,
-                lineNumber: 1,
-                columnNumber: 1,
-                endLineNumber: 1,
-                endColumnNumber: 1,
-                message: "gsc exited with code ${proc!!.ExitCode} without emitting a structured diagnostic.$breadcrumb"
+            this.LogFailure(
+                "gsc exited with code ${proc!!.ExitCode} without emitting a structured diagnostic.$breadcrumb"
             )
         }
         return proc!!.ExitCode == 0 && !this.Log.HasLoggedErrors
+    }
+
+    private func LogFailure(message string) {
+        let anchor = if this.Compile?.Length > 0 {
+            this.Compile!![0].ItemSpec
+        } else {
+            this.GsharpCompilerFullPath
+        }
+        this.Log.LogError(nil, "GS9998", nil, anchor, 1, 1, 1, 1, message)
     }
 
     /// Routes a single line of gsc stdout to the MSBuild logger. Diagnostic
