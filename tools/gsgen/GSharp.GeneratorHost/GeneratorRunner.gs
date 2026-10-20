@@ -150,7 +150,13 @@ shared class GeneratorRunner {
         let failures = List[GeneratorFailure]()
         let generators = List[ISourceGenerator]()
         let contexts = List[IDisposable]()
-        let loaders = Dictionary[string, GeneratorRunner.AnalyzerAssemblyLoader](StringComparer.Ordinal)
+        let loaders = Dictionary[string, GeneratorRunner.AnalyzerAssemblyLoader](
+            if OperatingSystem.IsWindows() {
+                StringComparer.OrdinalIgnoreCase
+            } else {
+                StringComparer.Ordinal
+            }
+        )
         let analyzerHashes = HashSet[string](StringComparer.Ordinal)
         for path in analyzerAssemblyPaths {
             try {

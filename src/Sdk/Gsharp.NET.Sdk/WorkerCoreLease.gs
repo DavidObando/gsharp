@@ -1,8 +1,8 @@
 package Gsharp.NET.Sdk.Tools
 
+import Microsoft.Build.Framework
 import System
 import System.Threading
-import Microsoft.Build.Framework
 
 /// Owns one task's resource grant. Compiler and generator requests must not acquire nested grants.
 internal class WorkerCoreLease : IDisposable {
@@ -16,10 +16,14 @@ internal class WorkerCoreLease : IDisposable {
     }
 
     /// Gets the total grant, including the task's implicit core.
-    internal prop Grant int32 { get; }
+    internal prop Grant int32 {
+        get;
+    }
 
     /// Gets the limit for concurrent compiler workspaces, not the compilation's total heap.
-    internal prop MemoryBudgetMiB int32 { get; }
+    internal prop MemoryBudgetMiB int32 {
+        get;
+    }
 
     func Dispose() {
         if Interlocked.Exchange(&released, 1) == 0 {
@@ -39,7 +43,10 @@ internal class WorkerCoreLease : IDisposable {
                 throw ArgumentOutOfRangeException("requestedWorkers", "Worker count must be between 1 and 32.")
             }
             if memoryBudgetMiB < 256 {
-                throw ArgumentOutOfRangeException("memoryBudgetMiB", "Workspace memory budget must be at least 256 MiB.")
+                throw ArgumentOutOfRangeException(
+                    "memoryBudgetMiB",
+                    "Workspace memory budget must be at least 256 MiB."
+                )
             }
             cancellationToken.ThrowIfCancellationRequested()
             let requested = Math.Min(

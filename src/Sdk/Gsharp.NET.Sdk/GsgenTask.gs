@@ -168,6 +168,14 @@ open class GsgenTask : Task, ICancelableTask {
             this.Log.LogError("GsgenTask requires GsgenToolFullPath, OutputDir, ManifestPath, and ResponseFilePath.")
             return false
         }
+        var resourceGrant WorkerCoreLease
+        try {
+            resourceGrant = WorkerCoreLease.Acquire(this.BuildEngine, 1, 1024, this.cts.Token)
+        } catch (ex OperationCanceledException) {
+            return false
+        }
+        using let grantLifetime = resourceGrant
+        this.WorkerGrant = resourceGrant.Grant
         let args = List[string]()
         for s in this.Compile!! {
             args.Add(BuildTask.QuoteIfNeeded("/gs:${s.ItemSpec}"))
@@ -248,6 +256,7 @@ open class GsgenTask : Task, ICancelableTask {
             RedirectStandardError = true,
             WorkingDirectory = this.BasePath ?? Environment.CurrentDirectory
         }
+        psi.EnvironmentVariables["GSHARP_WORKER_GRANT"] = resourceGrant.Grant.ToString()
         var proc Process
         try {
             proc = Process.Start(psi)

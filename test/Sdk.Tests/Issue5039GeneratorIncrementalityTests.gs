@@ -16,6 +16,7 @@ import Xunit
 
 /// Exercises production generator targets with a real framework generator and host.
 class Issue5039GeneratorIncrementalityTests : IDisposable {
+    private var lastOutput string = string.Empty
     private let directory string = Path.Combine(
         RepoRoot.Path,
         "out",
@@ -90,11 +91,38 @@ partial class P {
 
     private func ReportCount() int32 -> Directory.GetFiles(directory, "phase-*.json").Length
 
+    @Fact
+    func RemovedGeneratedPart_ForcesFinalCompilation_InsteadOfLeavingThePreviousAssembly() {
+        WriteProject(fullCompilation: true)
+        File.WriteAllText(
+            Path.Combine(directory, "Input.gs"),
+            "package App\npublic class Consumer { public func Use() string -> Generated.Value }"
+        )
+        File.WriteAllText(
+            Path.Combine(directory, "Foreign.cs"),
+            "namespace App { public static class Generated { public static string Value => \"present\"; } }"
+        )
+        Build("App", "First", additional: false, generators: false)
+        Assert.True(
+            File.Exists(Path.Combine(directory, "obj", "Probe.dll")),
+            lastOutput + "\n" + string.Join("\n", Directory.GetFiles(directory, "*", SearchOption.AllDirectories))
+        )
+        let manifest = Path.Combine(directory, "obj", "gsgen", "gsgen.manifest")
+        let generated = Path.GetFullPath(
+            Path.Combine(directory, Assert.Single(File.ReadAllLines(manifest).Where((line string) -> line.Length > 0)))
+        )
+        Assert.True(File.Exists(generated))
+        Build("App", "First", additional: false, generators: false, foreign: false, error: "Generated")
+        Assert.False(File.Exists(generated))
+        Assert.Equal(string.Empty, File.ReadAllText(manifest))
+    }
+
     private func Build(
         rootNamespace string,
         group string,
         additional bool = true,
         generators bool = true,
+        foreign bool = true,
         error string? = nil
     ) {
         let start = ProcessStartInfo("dotnet"){
@@ -113,7 +141,8 @@ partial class P {
             "-p:RootNamespace=$rootNamespace",
             "-p:AdditionalGroup=$group",
             "-p:UseAdditional=${additional.ToString()}",
-            "-p:UseGenerators=${generators.ToString()}"
+            "-p:UseGenerators=${generators.ToString()}",
+            "-p:UseForeign=${foreign.ToString()}"
         } {
             start.ArgumentList.Add(argument)
         }
@@ -129,6 +158,7 @@ partial class P {
         }
         Task.WaitAll(stdout, stderr)
         let output = stdout.Result + stderr.Result
+        lastOutput = output
         if error == nil {
             Assert.True(process.ExitCode == 0, output)
         } else {
@@ -138,7 +168,7 @@ partial class P {
         }
     }
 
-    private func WriteProject() {
+    private func WriteProject(fullCompilation bool = false) {
         let configuration = DirectoryInfo(AppContext.BaseDirectory).Parent?.Name ?? "Release"
         let gsgen = Path.Combine(RepoRoot.Path, "out", "bin", configuration, "Gsgen.Cli", "gsgen.dll")
         Assert.True(File.Exists(gsgen), gsgen)
@@ -162,6 +192,21 @@ partial class P {
             .Elements("Import")
             .Single()
             .SetAttributeValue("Project", Path.Combine(RepoRoot.SdkSourceDir, "build", "Gsharp.NET.Core.Sdk.targets"))
+        if fullCompilation {
+            root.SetAttributeValue("DefaultTargets", "CoreCompile")
+            properties.SetElementValue(
+                "GsharpCompilerFullPath",
+                Path.Combine(RepoRoot.Path, "out", "bin", configuration, "Compiler", "gsc.dll")
+            )
+            properties.SetElementValue("TargetFramework", "net10.0")
+            properties.SetElementValue("OutputType", "Library")
+            root.Add(
+                XElement.Parse(
+                    "<ItemGroup><IntermediateAssembly Include=\"obj/Probe.dll\" /><Compile Include=\"Foreign.cs\" Condition=\"'$(UseForeign)' != 'False'\" /></ItemGroup>"
+                )
+            )
+            root.Add(XElement.Parse("<Target Name=\"_ComputeNonExistentFileProperty\" />"))
+        }
         document.Save(Path.Combine(directory, "Generators.proj"))
     }
 

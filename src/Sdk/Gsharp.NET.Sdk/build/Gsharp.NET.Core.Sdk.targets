@@ -600,6 +600,9 @@
           BeforeTargets="CoreCompile"
           DependsOnTargets="_GsharpRunSourceGenerators"
           Condition=" '$(GsharpRunSourceGenerators)' != 'false' and Exists('$(IntermediateOutputPath)gsgen\gsgen.manifest') ">
+    <ItemGroup>
+      <_GsharpGeneratedManifest Include="$(IntermediateOutputPath)gsgen/gsgen.manifest" />
+    </ItemGroup>
     <ReadLinesFromFile File="$(IntermediateOutputPath)gsgen\gsgen.manifest">
       <Output TaskParameter="Lines" ItemName="_GsharpGeneratedGsFile" />
     </ReadLinesFromFile>
@@ -630,6 +633,7 @@
                   @(ReferencePathWithRefAssemblies);
                   @(_CoreCompileResourceInputs);
                   @(CompiledLicenseFile);
+                  @(_GsharpGeneratedManifest);
                   $(IntermediateOutputPath)$(TargetName).CoreCompileInputs.cache"
           Outputs="@(IntermediateAssembly);
                    $(DocumentationFile);

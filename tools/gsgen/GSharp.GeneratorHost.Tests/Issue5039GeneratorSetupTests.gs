@@ -266,17 +266,35 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         Assert.Contains("v1|||on", File.ReadAllText(Assert.Single(GeneratedFiles())))
     }
 
-    @Fact
-    func AnalyzersInOneDirectory_ShareTheirDependencyClosure() {
-        let dependency = Path.Combine(directory, "Dependency.dll")
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func AnalyzersInOneDirectory_ShareTheirDependencyClosure(varyDirectoryCasing bool) {
+        let firstDirectory = if varyDirectoryCasing {
+            Path.Combine(directory, "package")
+        } else {
+            directory
+        }
+        let secondDirectory = if varyDirectoryCasing {
+            Path.Combine(directory, "PACKAGE")
+        } else {
+            directory
+        }
+        Directory.CreateDirectory(firstDirectory)
+        Directory.CreateDirectory(secondDirectory)
+        let dependency = Path.Combine(firstDirectory, "Dependency.dll")
         CompileDll(
             "namespace Dependency { public static class Marker { private static int value; public static int Next() => ++value; } }",
             dependency,
             "Dependency"
         )
         let source = GeneratorSource.Replace("\"__VERSION__|\"", "Dependency.Marker.Next().ToString() + \"|\"")
-        let first = Path.Combine(directory, "First.dll")
-        let second = Path.Combine(directory, "Second.dll")
+        let secondDependency = Path.Combine(secondDirectory, "Dependency.dll")
+        if varyDirectoryCasing && !OperatingSystem.IsWindows() {
+            File.Copy(dependency, secondDependency)
+        }
+        let first = Path.Combine(firstDirectory, "First.dll")
+        let second = Path.Combine(secondDirectory, "Second.dll")
         CompileDll(
             source.Replace("\"Foo.g.cs\"", "\"First.g.cs\"").Replace("Greeting =>", "First =>"),
             first,
@@ -287,7 +305,7 @@ open class Issue5039GeneratorSetupTests : IDisposable {
             source.Replace("\"Foo.g.cs\"", "\"Second.g.cs\"").Replace("Greeting =>", "Second =>"),
             second,
             "Second",
-            dependency
+            secondDependency
         )
         let gs = Write("Input.gs", "package App\n@Obsolete\npartial class Foo {}")
         let args = Arguments(gs, first)
@@ -296,7 +314,18 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         let generated = GeneratedFiles().Select(File.ReadAllText).ToArray()
         Assert.Equal(2, generated.Length)
         Assert.Contains(generated, (text string) -> text.Contains("1|||on", StringComparison.Ordinal))
-        Assert.Contains(generated, (text string) -> text.Contains("2|||on", StringComparison.Ordinal))
+        let secondValue = if varyDirectoryCasing && !OperatingSystem.IsWindows() {
+            "1|||on"
+        } else {
+            "2|||on"
+        }
+        Assert.Contains(
+            generated,
+            (text string) -> text.Contains("prop Second ", StringComparison.Ordinal) && text.Contains(
+                secondValue,
+                StringComparison.Ordinal
+            )
+        )
     }
 
     @Fact
@@ -377,6 +406,25 @@ open class Issue5039GeneratorSetupTests : IDisposable {
     }
 
     @Fact
+    func Worker_FinalizerOutput_StaysFramed_InTheRequestEnvironmentAndDirectory() {
+        let generator = Path.Combine(directory, "Generator.dll")
+        CompileDll(
+            GeneratorSource.Replace("__VERSION__", "cleanup").Replace(
+                "public void Initialize",
+                "~ProbeGenerator() { System.Console.WriteLine(\"cleanup|\" + System.Environment.CurrentDirectory + \"|\" + System.Environment.GetEnvironmentVariable(\"GSHARP_TEST_SCOPE_5039\")); System.Console.Error.WriteLine(\"cleanup-error\"); } public void Initialize"
+            ),
+            generator,
+            "Generator"
+        )
+        let gs = Write("Input.gs", "package App\n@Obsolete\npartial class Foo {}")
+        using let worker = GeneratorWorker(directory, Environment.CurrentDirectory)
+        let result = worker.Run(Arguments(gs, generator).ToArray(), allowStderr: true)
+        Assert.Equal(0, result.ExitCode)
+        Assert.Contains("cleanup|$directory|request-scope", result.Stdout)
+        Assert.Contains("cleanup-error", result.Stderr)
+    }
+
+    @Fact
     func Worker_CancellationDuringGeneratorExecution_AllowsAFreshHostToRestart() {
         let generator = Path.Combine(directory, "Generator.dll")
         CompileDll(
@@ -414,14 +462,14 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         private let timeout CancellationTokenSource = CancellationTokenSource(TimeSpan.FromMinutes(2))
         private let cancel CancellationTokenRegistration
 
-        init(directory string) {
+        init(directory string, startupDirectory string? = nil) {
             this.directory = directory
             let start = ProcessStartInfo("dotnet"){
                 UseShellExecute = false,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-                WorkingDirectory = directory
+                WorkingDirectory = startupDirectory ?? directory
             }
             start.ArgumentList.Add(typeof(GsgenProgram).Assembly.Location)
             start.ArgumentList.Add("--generator-worker")
@@ -444,13 +492,20 @@ open class Issue5039GeneratorSetupTests : IDisposable {
             for entry DictionaryEntry in Environment.GetEnvironmentVariables() {
                 environment.Add(cast[string](entry.Key), cast[string](entry.Value))
             }
+            environment["GSHARP_TEST_SCOPE_5039"] = "request-scope"
             WorkerProtocol.WriteRequest(writer, identity, directory, arguments, environment, workerGrant: 1)
             Assert.Equal(WorkerProtocol.Accepted, Reader.ReadByte())
         }
 
-        func Run(arguments[]string)(ExitCode int32, Stdout string, Retire bool) {
+        func Run(arguments[]string, allowStderr bool = false)(
+            ExitCode int32,
+            Stdout string,
+            Retire bool,
+            Stderr string
+        ) {
             Begin(arguments)
             let stdout = StringBuilder()
+            let stderr = StringBuilder()
             while true {
                 let kind = Reader.ReadByte()
                 if kind == WorkerProtocol.Stdout {
@@ -460,15 +515,20 @@ open class Issue5039GeneratorSetupTests : IDisposable {
                         stdout.AppendLine()
                     }
                 } else if kind == WorkerProtocol.Stderr {
-                    Reader.ReadBoolean()
-                    Assert.Fail("Unexpected worker stderr: " + Reader.ReadString())
+                    let complete = Reader.ReadBoolean()
+                    let text = Reader.ReadString()
+                    Assert.True(allowStderr, "Unexpected worker stderr: " + text)
+                    stderr.Append(text)
+                    if complete {
+                        stderr.AppendLine()
+                    }
                 } else {
                     Assert.Equal(WorkerProtocol.Completed, kind)
                     let exitCode = Reader.ReadInt32()
                     let retire = Reader.ReadBoolean()
                     Reader.ReadInt64()
                     Reader.ReadInt64()
-                    return (exitCode, stdout.ToString(), retire)
+                    return (exitCode, stdout.ToString(), retire, stderr.ToString())
                 }
             }
         }
