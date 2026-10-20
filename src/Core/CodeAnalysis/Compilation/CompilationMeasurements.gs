@@ -174,6 +174,9 @@ class CompilationMeasurements : IDisposable {
         /// Enables driver measurements only when GSHARP_MEASURE_PHASES names an output file.
         /// The optional {pid} and {id} tokens avoid collisions between processes and repeated requests.
         func StartFromEnvironment(tool string) IDisposable {
+            if current.Value != nil {
+                return disabled
+            }
             let path = Environment.GetEnvironmentVariable("GSHARP_MEASURE_PHASES")
             if path is not{} output || string.IsNullOrWhiteSpace(output) {
                 return disabled
