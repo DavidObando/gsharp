@@ -1,12 +1,104 @@
 package GSharp.Compiler.Tests
 
+import GSharp.Compiler
 import System
+import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Text.Json
 import Xunit
 
 class Issue5041BoundedDriverTests {
+    @Fact
+    func FreshStandaloneProcessesFreezeImplicitReferencesBeforeWorkers() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let first = Path.Combine(fixture.Directory, "first.gs")
+        let second = Path.Combine(fixture.Directory, "second.gs")
+        let output = Path.Combine(fixture.Directory, "implicit.dll")
+        File.WriteAllText(first, "package Implicit\nfunc First(x int32) int32 -> x + 1")
+        File.WriteAllText(second, "package Implicit\nfunc Second(x int32) int32 -> x + 2")
+        var baseline[]uint8 = Array.Empty[uint8]()
+        var baselinePdb[]uint8 = Array.Empty[uint8]()
+        for workers in[]int32{1, 2, 4, 8} {
+            let start = ProcessStartInfo("dotnet"){
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = fixture.Directory
+            }
+            for argument in[]string{
+                typeof(Program).Assembly.Location,
+                "/target:library",
+                "/deterministic+",
+                "/debug:portable",
+                "/out:" + output,
+                "--workers:$workers",
+                first,
+                second
+            } {
+                start.ArgumentList.Add(argument)
+            }
+            start.Environment.Remove("GSHARP_WORKER_GRANT")
+            using let process = Process.Start(start)!!
+            let stdout = process.StandardOutput.ReadToEndAsync()
+            let stderr = process.StandardError.ReadToEndAsync()
+            if !process.WaitForExit(30000) {
+                process.Kill(entireProcessTree: true)
+                process.WaitForExit()
+                Assert.Fail("Standalone compiler exceeded its deadline.")
+            }
+            Assert.True(process.ExitCode == 0, stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult())
+            if workers == 1 {
+                baseline = File.ReadAllBytes(output)
+                baselinePdb = File.ReadAllBytes(Path.ChangeExtension(output, ".pdb"))
+            } else {
+                Assert.Equal(baseline, File.ReadAllBytes(output))
+                Assert.Equal(baselinePdb, File.ReadAllBytes(Path.ChangeExtension(output, ".pdb")))
+            }
+        }
+    }
+
+    @Fact
+    func ExplicitReferenceNullabilityContextAndDiagnosticsSurviveWorkers() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`#nullable disable
+namespace Foreign { public static class Api { public static string Read() => "ok"; } }`, "Foreign")
+        let primitiveBodies = string.Concat(
+            Enumerable.Range(0, 32).Select((i int32) -> "func Independent$i(x int32) int32 -> x + $i\n")
+        )
+        let source = "package NullableWorkers\nimport Foreign\nfunc Value() int32 -> Api.Read().Length\n" +
+            primitiveBodies
+        for mode in[]string{"platform-types", "enabled"} {
+            var expected string? = nil
+            var image[]uint8 = Array.Empty[uint8]()
+            for workers in[]int32{1, 2, 4, 8} {
+                let (code, diagnostics) = fixture.TryCompile(
+                    source,
+                    "nullable",
+                    false,
+                    "/r:" + library,
+                    "/deterministic+",
+                    "--nullability:$mode",
+                    "--workers:$workers"
+                )
+                if mode == "platform-types" {
+                    Assert.True(code == 0, diagnostics)
+                    let bytes = File.ReadAllBytes(Path.Combine(fixture.Directory, "nullable.dll"))
+                    if workers == 1 {
+                        image = bytes
+                    } else {
+                        Assert.Equal(image, bytes)
+                    }
+                } else {
+                    Assert.NotEqual(0, code)
+                    Assert.Contains("GS0158", diagnostics)
+                }
+                expected ??= diagnostics
+                Assert.Equal(expected, diagnostics)
+            }
+        }
+    }
+
     @Fact
     func RealDriverWorkersPreserveImplementationReferencePdbAndExecution() {
         using let fixture = NativeSliceLanguageTests.Fixture()
@@ -44,7 +136,10 @@ partial class State {
         const program = `package Parallel
 import System
 import System.Threading.Tasks
-partial class State { func Pure(x int32) int32 -> x + 1 }
+partial class State {
+    shared { init { Count *= 2 } }
+    func Pure(x int32) int32 -> x + 1
+}
 interface Reader { func Read() int32; }
 func Identity[T](value T) T -> value
 private func Make() -> object { func Read() int32 -> 4 }
@@ -76,6 +171,12 @@ async func Main() {
 }`
         let report = Path.Combine(fixture.Directory, "phases.json")
         let reference = Path.Combine(fixture.Directory, "parallel.ref.dll")
+        let runtime = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
+        let references = []string{
+            "/r:" + typeof(object).Assembly.Location,
+            "/r:" + typeof(Console).Assembly.Location,
+            "/r:" + Path.Combine(runtime, "System.Runtime.dll")
+        }
         let previous = Environment.GetEnvironmentVariable("GSHARP_MEASURE_PHASES")
         let previousGrant = Environment.GetEnvironmentVariable("GSHARP_WORKER_GRANT")
         try {
@@ -92,9 +193,11 @@ async func Main() {
                     "--workers:$workers",
                     partial
                 }
-                    .Concat(sources).ToArray()
+                    .Concat(sources)
+                    .Concat(references)
+                    .ToArray()
                 let dll = fixture.Compile(program, "parallel", true, options)
-                Assert.Equal("13\n43\n4\n6\n2\n2\n2\n3\n6\n", fixture.Run(dll))
+                Assert.Equal("20\n43\n4\n6\n2\n2\n2\n3\n6\n", fixture.Run(dll))
                 if workers == 1 {
                     implementation = File.ReadAllBytes(dll)
                     referenceImage = File.ReadAllBytes(reference)
@@ -109,6 +212,8 @@ async func Main() {
                     Assert.True(counters.GetProperty("workers.parallel-items").GetInt32() >= 528)
                     if Environment.ProcessorCount > 1 {
                         Assert.True(counters.GetProperty("workers.active").GetInt32() > 1)
+                        Assert.True(counters.GetProperty("parse.workers.active").GetInt32() > 1)
+                        Assert.True(counters.GetProperty("bodies.workers.active").GetInt32() > 1)
                     }
                 }
             }

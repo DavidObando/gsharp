@@ -10,6 +10,7 @@ class CompilationWorkBudget {
     private var running int32
     private var active int32
     private var peak int32 = 1
+    private var lastPeak int32 = 1
 
     /// Creates an opt-in worker budget. Memory bounds concurrent workspaces, not the retained syntax or symbol graph.
     init(
@@ -49,6 +50,9 @@ class CompilationWorkBudget {
     /// Gets the largest observed number of simultaneous operations.
     prop MaxObservedWorkers int32 -> Volatile.Read(&peak)
 
+    /// Gets the observed concurrency of the most recently joined batch.
+    prop LastObservedWorkers int32 -> Volatile.Read(&lastPeak)
+
     /// Executes indexed work and joins all workers. Failures are rethrown in input order.
     /// The action owns its output slot and must not publish mutable state to other actions.
     internal func Run(count int32, action(int32) -> void, workspaceBytes int64 = 100663296) {
@@ -57,6 +61,7 @@ class CompilationWorkBudget {
             throw InvalidOperationException("Compilation phases cannot nest or overlap worker budgets.")
         }
         try {
+            Volatile.Write(&lastPeak, 1)
             let available = cast[int64](MemoryBudgetMiB - 256) * 1048576
             let workers = Math.Min(
                 count,
@@ -86,6 +91,14 @@ class CompilationWorkBudget {
                         try {
                             let current = Interlocked.Increment(&active)
                             try {
+                                var batchPeak = Volatile.Read(&lastPeak)
+                                while current > batchPeak {
+                                    let previous = Interlocked.CompareExchange(&lastPeak, current, batchPeak)
+                                    if previous == batchPeak {
+                                        break
+                                    }
+                                    batchPeak = previous
+                                }
                                 var observed = Volatile.Read(&peak)
                                 while current > observed {
                                     let previous = Interlocked.CompareExchange(&peak, current, observed)

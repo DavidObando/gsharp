@@ -8648,6 +8648,7 @@ class Binder {
                 },
                 workspaceBytes: Math.Max(100663296, largestBody * 128)
             )
+            CompilationMeasurements.Count("bodies.workers.active", budget.LastObservedWorkers)
             for var index = 0; index < jobs.Count; index++ {
                 results.Add(jobs[index].Function, outputs[index])
             }

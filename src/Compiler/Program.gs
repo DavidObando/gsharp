@@ -354,7 +354,6 @@ open class Program {
                     CompilationMeasurements.Count("workers.granted", supplied)
                     CompilationMeasurements.Count("workers.active", 1)
                 }
-                using let parsePhase = CompilationMeasurements.BeginPhase("parse")
                 let fullPaths = [allSourceFiles.Count]string
                 var largestSource int64 = 0
                 for var index = 0; index < allSourceFiles.Count; index++ {
@@ -376,6 +375,18 @@ open class Program {
                         CompilationMeasurements.Count("input.source-bytes", sourceBytes)
                     }
                 }
+                let usesRuntimeReferences = parsed.OutputPath == nil || parsed.References.Count == 0
+                using let snapshotPhase = CompilationMeasurements.BeginPhase(
+                    "references.runtime-snapshot",
+                    usesRuntimeReferences
+                )
+                let hostSnapshot = if usesRuntimeReferences {
+                    ReferenceResolver.CaptureHostAssemblies()
+                } else {
+                    default(ImmutableArray[System.Reflection.Assembly])
+                }
+                snapshotPhase?.Dispose()
+                using let parsePhase = CompilationMeasurements.BeginPhase("parse")
                 workBudget.Run(
                     fullPaths.Length,
                     (index int32) -> {
@@ -383,6 +394,7 @@ open class Program {
                     },
                     Math.Max(16777216, largestSource * 16)
                 )
+                CompilationMeasurements.Count("parse.workers.active", workBudget.LastObservedWorkers)
                 parsePhase?.Dispose()
                 using let referencePhase = CompilationMeasurements.BeginPhase("references.setup")
                 if !ReferenceResolver.TryValidateDriverReferencePaths(parsed.References, out var referenceError) {
@@ -391,23 +403,23 @@ open class Program {
                 }
                 let referencePaths = ReferenceResolver.ResolveDriverReferencePaths(parsed.References)
                 CompilationMeasurements.Count("input.references", referencePaths.Count)
-                let references = if parsed.OutputPath == nil {
-                    ReferenceResolver.WithRuntimeReferences(referencePaths)
+                using let references = if parsed.OutputPath == nil {
+                    ReferenceResolver.WithRuntimeReferences(referencePaths, hostSnapshot)
                 } else {
                     (
                         if parsed.References.Count > 0 {
                             ReferenceResolver.WithReferences(referencePaths)
                         } else {
-                            ReferenceResolver.WithRuntimeReferences(referencePaths)
+                            ReferenceResolver.WithRuntimeReferences(referencePaths, hostSnapshot)
                         }
                     )
                 }
+                referencePhase?.Dispose()
                 let logger ILogger = if parsed.LogPath != nil {
                     cast[ILogger](FileLogger(parsed.LogPath!!))
                 } else {
                     cast[ILogger](NullLogger.Instance)
                 }
-                referencePhase?.Dispose()
                 try {
                     logger.LogInfo(
                         "Starting compiler. Sources: ${parsed.SourceFiles.Count}; Output: ${parsed.OutputPath ?? "<none>"}"
@@ -450,7 +462,6 @@ open class Program {
                     return Emit(compilation, parsed, outputPath)
                 } finally {
                     (logger as IDisposable)?.Dispose()
-                    references?.Dispose()
                 }
             } catch (ex IOException) {
                 // I/O failures during source loading, directory creation, output

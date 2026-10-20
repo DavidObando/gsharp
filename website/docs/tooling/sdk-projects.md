@@ -84,6 +84,8 @@ The concurrency calculation reserves 256 MiB and 96 MiB per worker, with
 larger source/body workspaces reducing concurrency further. This bounds the
 workspace concurrency estimate, **not** the entire process heap or retained
 syntax/symbol graph. Processor count and the MSBuild grant also cap workers.
+An input that exceeds the workspace estimate still runs sequentially; the
+budget does not reject a compilation that needs its existing implicit core.
 Generators use the same lease contract, but their host remains serial;
 third-party generators can create their own threads.
 
