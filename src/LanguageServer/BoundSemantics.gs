@@ -441,7 +441,12 @@ shared class BoundSemantics {
                 )
             }
         }
-        let clrType = sourceType?.ClrType
+        let clrType = if sourceType is StructSymbol inherited &&
+            read is (BoundImportedCallExpression or BoundClrPropertyAccessExpression) {
+            TypeMemberModel.GetNearestImportedBase(inherited)?.ClrType
+        } else {
+            sourceType?.ClrType
+        }
         if read is BoundLiteralExpression literal && clrType != nil {
             // Folded CLR fields retain the selected read/qualifier record, not FieldInfo.
             return object.ReferenceEquals(literal.StaticQualifierType, sourceType) && object.ReferenceEquals(
@@ -471,9 +476,25 @@ shared class BoundSemantics {
                 clrType,
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.FlattenHierarchy
             )
-                .Any((candidate MethodInfo) -> candidate.Equals(definition))
+                .Any((candidate MethodInfo) -> SameClrMethod(candidate, definition))
         }
         return false
+    }
+
+    private func SameClrMethod(candidate MethodInfo, selected MethodInfo) bool {
+        if candidate.Equals(selected) {
+            return true
+        }
+        try {
+            // Inherited methods differ in ReflectedType, not their closed declaration.
+            let declaringType = candidate.DeclaringType
+            return declaringType != nil && declaringType.Equals(selected.DeclaringType) && candidate.Module.Equals(
+                selected.Module
+            ) &&
+                candidate.MetadataToken == selected.MetadataToken
+        } catch (Exception) {
+            return false
+        }
     }
 
     private func CapturedIndexArgument(anchored BoundExpression) BoundExpression? {
@@ -588,6 +609,7 @@ shared class BoundSemantics {
         case importedCall is BoundImportedInstanceCallExpression: importedCall.Receiver
         case property is BoundPropertyReferenceOperationExpression: property.Instance
         case field is BoundFieldAccessExpression: field.Receiver
+        case tuple is BoundTupleElementAccessExpression: tuple.Receiver
         case call is BoundCallExpression when call.Function.IsExtension && call.Arguments.Length > 0: call.Arguments[0]
         case call is BoundImportedCallExpression when call
             .Arguments

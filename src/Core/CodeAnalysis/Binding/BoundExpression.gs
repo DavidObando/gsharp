@@ -67,6 +67,43 @@ abstract class BoundExpression : BoundNode {
         }
     }
 
+    // Only the rewriter's fresh, same-selected-call copy boundary invokes this.
+    // Arbitrary virtual replacements do not inherit another read's authority.
+    internal func CopyStaticQualifierTo(copy BoundExpression) {
+        if StaticQualifierType == nil || copy.StaticQualifierType != nil {
+            return
+        }
+        let sameRead = switch this {
+            case call is BoundCallExpression when copy is BoundCallExpression replacement:
+            object.ReferenceEquals(call.Function, replacement.Function) && object.ReferenceEquals(
+                call.StaticGenericOwnerType,
+                replacement.StaticGenericOwnerType
+            ) &&
+                object.ReferenceEquals(
+                call.StaticGenericInterfaceOwnerType,
+                replacement.StaticGenericInterfaceOwnerType
+            ) &&
+                call
+                .MethodTypeArguments
+                .Equals(replacement.MethodTypeArguments)
+            case call is BoundImportedCallExpression when copy is BoundImportedCallExpression replacement:
+            object.ReferenceEquals(call.Function, replacement.Function) && object.ReferenceEquals(
+                call.StaticContainerType,
+                replacement.StaticContainerType
+            ) &&
+                call
+                .TypeArgumentSymbols
+                .Equals(replacement.TypeArgumentSymbols)
+            default: false
+        }
+        if !sameRead || !object.ReferenceEquals(Syntax, copy.Syntax) {
+            return
+        }
+        copy.StaticQualifierType = StaticQualifierType
+        copy.StaticQualifierSyntax = StaticQualifierSyntax
+        copy.StaticMemberSyntax = StaticMemberSyntax
+    }
+
     /// Gets the compile-time constant value of this expression — the Roslyn
     /// `ConstantValue` analogue (ADR-0169). `HasValue` is false
     /// when the expression has no compile-time constant; a constant null

@@ -26,6 +26,116 @@ import Xunit
 /// a same-named member of one implementation.
 open class Issue4989BoundReceiverTests {
     @Fact
+    func Issue5035_LoweredCallArgument_PreservesStaticOverload() {
+        const source = `package Repro
+class Holder {
+    prop Value int32 { get; set; }
+    shared {
+        func Values(value string) []string -> []string{"wrong"}
+        func Values(value int32) []string -> []string{"right"}
+    }
+    func Run() {
+        let unrelated = Holder.Values("wrong")
+        let result = Holder.Values(this.Value)[^1]
+    }
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let root = Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "result =", 0).Parent).Initializer
+        let block = Assert.IsType[BoundBlockExpression](
+            compilation.GetSemanticModel(content.SyntaxTree).GetBoundNode(root!!)
+        )
+        let call = Assert.IsType[BoundCallExpression](
+            Assert.IsType[BoundVariableDeclaration](block.Statements[0]).Initializer
+        )
+        Assert.Same(TypeSymbol.Int32, call.Function.Parameters[0].Type)
+        Assert.IsType[BoundFieldAccessExpression](Assert.Single(call.Arguments))
+        let token = TokenAt(content, source, "Values(this.Value)", 0)
+        Assert.Same(call.Function, BoundSemantics.GetSymbol(compilation, token))
+        Assert.Same(call.Function, SemanticLookup.ResolveSymbol(compilation, token))
+        let position = LanguageServerTestHelpers.PositionOf(source, "Values(this.Value)")
+        AssertIndexedHover(content, position, "Values", "static func Values(value int32) []string")
+        let uri = DocumentUri.From("file:///issue5035-lowered-argument.gs")!!
+        let location = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
+        let declaration = LanguageServerTestHelpers.PositionOf(source, "Values(value int32)")
+        Assert.Equal(uri, location.Uri)
+        AssertPosition(declaration, location.Range.Start)
+        AssertPosition(Position(declaration.Line, declaration.Character + "Values".Length), location.Range.End)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5035_ImportedBaseAndTuple_PreserveExactMethod(tuple bool) {
+        let source = if tuple {
+            `package Repro
+func Run(pair (System.Uri, int32)) {
+    let unrelated = System.Text.StringBuilder().ToString()
+    let result = pair.0.ToString()[^1]
+}
+`
+        } else {
+            `package Repro
+class Derived : System.Exception { }
+func Run() {
+    let unrelated = System.Text.StringBuilder().ToString()
+    let result = Derived.ReferenceEquals(nil, nil).ToString()[^1]
+}
+`
+        }
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let root = Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "result =", 0).Parent).Initializer
+        let block = Assert.IsType[BoundBlockExpression](
+            compilation.GetSemanticModel(content.SyntaxTree).GetBoundNode(root!!)
+        )
+        let capture = Assert.IsType[BoundVariableDeclaration](block.Statements[0])
+        let selected = Assert.IsType[BoundImportedInstanceCallExpression](capture.Initializer)
+        if tuple {
+            let element = Assert.IsType[BoundTupleElementAccessExpression](selected.Receiver)
+            Assert.Equal(0, element.Index)
+            Assert.Same(
+                SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "pair.0", 0)),
+                Assert.IsType[BoundVariableExpression](element.Receiver).Variable
+            )
+        } else {
+            let inherited = Assert.IsType[BoundImportedCallExpression](selected.Receiver)
+            Assert.Equal(
+                typeof(object).GetMethod("ReferenceEquals", []Type{typeof(object), typeof(object)}),
+                inherited.Function.Method
+            )
+        }
+        let method = (
+            if tuple {
+                typeof(Uri)
+            } else {
+                typeof(bool)
+            }
+        ).GetMethod("ToString", Type.EmptyTypes)
+        let token = TokenAt(content, source, "ToString()[^1]", 0)
+        Assert.Equal(method, BoundSemantics.GetImportedMember(compilation, token))
+        Assert.True(
+            ImportedClrMemberResolver.TryResolveClrMember(content.SyntaxTree, compilation, token, out var actual)
+        )
+        Assert.Equal(method, actual)
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]"),
+            "ToString",
+            if tuple {
+                "func (System.Uri) ToString() string"
+            } else {
+                "func (bool) ToString() string"
+            }
+        )
+    }
+
+    @Fact
     func Hover_GuardLetReceiver_ShowsTheInterfaceMember() {
         let content = LanguageServerTestHelpers.Content(IssueSource)
         let hover = HoverText(content, IssueSource, "LoadAsync", 3)

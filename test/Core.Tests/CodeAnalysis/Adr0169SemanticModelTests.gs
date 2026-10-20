@@ -20,6 +20,129 @@ import Xunit
 /// syntax→bound-node, syntax→type queries), (cref:Symbol.DeclaringSyntaxNodes),
 /// and (cref:GSharpSyntaxWalker).
 open class Adr0169SemanticModelTests {
+    @Theory
+    @InlineData(false, true, true)
+    @InlineData(true, true, true)
+    @InlineData(false, false, true)
+    @InlineData(false, true, false)
+    func StaticQualifierRewrite_PreservesOnlyTheSameSelectedRead(imported bool, sameMember bool, sameSyntax bool) {
+        let source = `package Query
+import M = System.Math
+class Box[T] {
+    shared {
+        func Pick[U](value U) string -> "first"
+        func Other(value int32) string -> "second"
+    }
+}
+func Run() {
+    let first = FIRST
+    let second = SECOND
+}
+`.Replace(
+            "FIRST",
+            if imported {
+                "M.Abs(1)"
+            } else {
+                "Box[int32?].Pick[int32](1)"
+            }
+        )
+            .Replace(
+            "SECOND",
+            if imported {
+                "M.Sign(1)"
+            } else {
+                "Box[int32?].Other(1)"
+            }
+        )
+        let (_, model, tree) = CreateQualifierModel(source)
+        let (_, qualifier, read) = QueryQualifier(model, QualifierInitializer(tree, "first"))
+        let (_, _, other) = QueryQualifier(model, QualifierInitializer(tree, "second"))
+        let syntax = if sameSyntax {
+            read.Syntax
+        } else {
+            other.Syntax
+        }
+        var replacement BoundExpression
+        if read is BoundCallExpression call {
+            Assert.Same(TypeSymbol.Int32, Assert.Single(call.MethodTypeArguments))
+            Assert.Same(
+                TypeSymbol.Int32,
+                Assert.IsType[NullableTypeSymbol](Assert.Single(call.StaticGenericOwnerType!!.TypeArguments))
+                    .UnderlyingType
+            )
+            replacement = BoundCallExpression(
+                syntax,
+                if sameMember {
+                    call.Function
+                } else {
+                    Assert.IsType[BoundCallExpression](other).Function
+                },
+                call.Arguments,
+                call.ReturnType,
+                call.IsConditionalElided
+            ){
+                StaticGenericOwnerType = call.StaticGenericOwnerType,
+                StaticGenericInterfaceOwnerType = call.StaticGenericInterfaceOwnerType,
+                MethodTypeArguments = call.MethodTypeArguments
+            }
+        } else {
+            let call = Assert.IsType[BoundImportedCallExpression](read)
+            replacement = BoundImportedCallExpression(
+                syntax,
+                if sameMember {
+                    call.Function
+                } else {
+                    Assert.IsType[BoundImportedCallExpression](other).Function
+                },
+                call.Arguments,
+                call.ArgumentRefKinds,
+                call.TypeArgumentSymbols,
+                call.StaticContainerType
+            )
+        }
+        let result = if sameMember && sameSyntax {
+            QualifierChildRewriter().Apply(read)
+        } else {
+            QualifierReplacementRewriter(replacement).Apply(read)
+        }
+        if sameMember && sameSyntax {
+            Assert.NotSame(read, result)
+            Assert.Same(read.StaticQualifierType, result.StaticQualifierType)
+            Assert.Same(qualifier, result.StaticQualifierSyntax)
+            Assert.Same(read.StaticMemberSyntax, result.StaticMemberSyntax)
+        } else {
+            Assert.Same(replacement, result)
+            Assert.Null(result.StaticQualifierType)
+            Assert.Null(result.StaticMemberSyntax)
+        }
+        Assert.Same(qualifier, read.StaticQualifierSyntax)
+        let (_, _, unchanged) = QueryQualifier(model, QualifierInitializer(tree, "first"))
+        Assert.Same(read, unchanged)
+    }
+
+    private class QualifierChildRewriter : BoundTreeRewriter {
+        func Apply(node BoundExpression) BoundExpression -> RewriteExpression(node)
+
+        protected override func RewriteLiteralExpression(node BoundLiteralExpression) BoundExpression ->
+        BoundLiteralExpression(node.Syntax, node.Value, node.Type)
+    }
+
+    private class QualifierReplacementRewriter : BoundTreeRewriter {
+        private let replacement BoundExpression
+
+        init(replacement BoundExpression) {
+            this.replacement = replacement
+        }
+
+        func Apply(node BoundExpression) BoundExpression -> RewriteExpression(node)
+
+        protected override func RewriteCallExpression(node BoundCallExpression) BoundExpression -> replacement
+
+        protected override func RewriteImportedCallExpression(
+            node BoundImportedCallExpression
+        ) BoundExpression -> replacement
+    }
+
     @Fact
     func StaticQualifierQuery_UsesCanonicalPrimitiveAliasAndClosedOwner() {
         const source = `package Query

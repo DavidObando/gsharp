@@ -196,6 +196,13 @@ or reselect the member. Consumers retain the actual callable, closed owner
 and method type arguments; an open generic definition is not a substitute
 for its construction.
 
+Pre-publication child rewriting may replace a selected call. The common
+same-selected-call copy boundary retains its original provenance on the fresh
+copy, including the exact callable, closed owner and method arguments.
+Arbitrary virtual replacements, changed members and unrelated authored nodes
+do not inherit that authority. Original nodes and published snapshots are not
+repaired or mutated by copying or querying.
+
 The existing per-tree lazy semantic index harvests these binding-time
 decisions. They are fixed before the bound program is published; a query
 does not modify project, compilation, bound or syntax state, including
