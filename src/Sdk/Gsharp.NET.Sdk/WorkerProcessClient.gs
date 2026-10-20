@@ -188,13 +188,7 @@ internal class WorkerProcessClient : IDisposable {
             PipeOptions.Asynchronous | cast[PipeOptions](0x20000000)
         )
         protocol = pipe
-        let start = ProcessStartInfo("dotnet", "\"$path\" $flag $pipeName"){
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        }
+        let start = CreateStartInfo(path, flag, pipeName)
         start.EnvironmentVariables.Clear()
         for entry in environment {
             start.EnvironmentVariables.Add(entry.Key, entry.Value)
@@ -276,6 +270,22 @@ internal class WorkerProcessClient : IDisposable {
         @DllImport("libc", EntryPoint: "kill", SetLastError: true)
         private func KillOwnedGroup(group int32, signal int32) int32;
         private let RegistrationGate object = SystemObject()
+
+        internal func CreateStartInfo(path string, flag string, pipeName string) ProcessStartInfo {
+            let start = ProcessStartInfo("dotnet"){
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            }
+            let arguments = typeof(ProcessStartInfo).GetProperty("ArgumentList")?.GetValue(start) as IList[string] ??
+                throw InvalidOperationException("This MSBuild runtime cannot pass worker arguments safely.")
+            for argument in[]string{path, flag, pipeName} {
+                arguments.Add(argument)
+            }
+            return start
+        }
 
         internal func CreateProtocolPipeName() string {
             let random = Convert

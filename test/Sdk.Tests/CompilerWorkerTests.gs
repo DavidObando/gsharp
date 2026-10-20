@@ -779,6 +779,110 @@ open class CompilerWorkerTests : IDisposable {
         }
     }
 
+    @Theory
+    @InlineData("sp ace", "pipe with spaces")
+    @InlineData("λ😀", "管道-😀")
+    @InlineData("trailing\\", "space and trailing\\")
+    @InlineData("quo\"te", "pipe \"quoted\"\\")
+    func WorkerArgumentsRoundTripThroughRealChild(toolDirectoryName string, pipeName string) {
+        if Path.DirectorySeparatorChar == '\\' && toolDirectoryName.Contains("\"") {
+            return
+        }
+        File.WriteAllText(
+            Path.Combine(directory, "arguments.gs"),
+            "import System\nimport System.Text\nfunc Main(args[]string) {\n" +
+                "Console.WriteLine(Environment.ProcessId.ToString())\n" +
+                "for argument in args { Console.WriteLine(Convert.ToBase64String(Encoding.UTF8.GetBytes(argument))) }\n}"
+        )
+        let (toolExit, diagnostics) = Standalone(
+            directory,
+            []string{"/out:arguments.dll", "/target:exe", "/targetframework:net10.0", "arguments.gs"}
+        )
+        Assert.True(toolExit == 0, diagnostics)
+        let toolDirectory = Path.Combine(directory, toolDirectoryName)
+        Directory.CreateDirectory(toolDirectory)
+        for path in Directory.GetFiles(directory, "arguments.*") {
+            File.Copy(path, Path.Combine(toolDirectory, Path.GetFileName(path)))
+        }
+        let flag = "--roundtrip"
+        let start = WorkerProcessClient.CreateStartInfo(Path.Combine(toolDirectory, "arguments.dll"), flag, pipeName)
+        using let child = Process.Start(start) ?? throw InvalidOperationException("Cannot start argument probe.")
+        let stdout = child.StandardOutput.ReadToEndAsync()
+        let stderr = child.StandardError.ReadToEndAsync()
+        try {
+            Assert.True(child.WaitForExit(10000), "The argument probe did not exit.")
+            Assert.True(child.ExitCode == 0, stderr.GetAwaiter().GetResult())
+            let lines = stdout.GetAwaiter().GetResult().Split([]char{'\r', '\n'}, StringSplitOptions.RemoveEmptyEntries)
+            Assert.Equal(child.Id.ToString(), lines[0])
+            Assert.Equal(
+                []string{flag, pipeName},
+                lines.Skip(1).Select((line string) -> Encoding.UTF8.GetString(Convert.FromBase64String(line)))
+            )
+        } finally {
+            if !child.HasExited {
+                child.Kill(entireProcessTree: true)
+                child.WaitForExit()
+            }
+        }
+    }
+
+    @Theory
+    @InlineData("s x")
+    @InlineData("u λ")
+    @InlineData("q\"x")
+    func TemporaryPathWithSpecialCharactersPreservesWorkerReuse(segment string) {
+        if Path.DirectorySeparatorChar == '\\' {
+            return
+        }
+        let previous = Environment.GetEnvironmentVariable("TMPDIR")
+        let temporaryDirectory = Path.Combine(
+            Path.GetTempPath(),
+            segment + Guid.NewGuid().ToString("N").Substring(0, 3)
+        )
+        Directory.CreateDirectory(temporaryDirectory)
+        let toolDirectory = Path.Combine(directory, "tool-" + segment)
+        Directory.CreateDirectory(toolDirectory)
+        for path in Directory.GetFiles(Path.GetDirectoryName(CompilerPath()) ?? ".") {
+            File.Copy(path, Path.Combine(toolDirectory, Path.GetFileName(path)))
+        }
+        let tool = Path.Combine(toolDirectory, "gsc.dll")
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { }")
+        try {
+            Environment.SetEnvironmentVariable("TMPDIR", temporaryDirectory + Path.DirectorySeparatorChar)
+            for var i = 0; i < 2; i++ {
+                Assert.True(
+                    Run(
+                        directory,
+                        []string{"/out:result${i}.dll", "/target:library", "input.gs"},
+                        List[string](),
+                        List[string](),
+                        out var exit,
+                        tool
+                    ),
+                    string.Join("\n", messages)
+                )
+                Assert.Equal(0, exit)
+                Assert.True(File.Exists(Path.Combine(directory, "result${i}.dll")))
+            }
+            let completed = messages.Where((m string) -> m.Contains("worker completed:")).ToArray()
+            Assert.Equal(2, completed.Length)
+            Assert.Equal(completed[0].Split(',')[0], completed[1].Split(',')[0])
+            let processField = typeof(WorkerProcessClient).GetField(
+                "process",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            ) ??
+                throw InvalidOperationException("The actual worker process is required.")
+            let worker = processField.GetValue(client) as Process ??
+                throw InvalidOperationException("Successful requests must retain their actual worker.")
+            Assert.Equal("G# worker completed: pid=${worker.Id}", completed[0].Split(',')[0])
+            Assert.Equal(2, messages.Count((m string) -> m == "G# worker accepted request: pid=${worker.Id}."))
+        } finally {
+            client.Dispose()
+            Environment.SetEnvironmentVariable("TMPDIR", previous)
+            Directory.Delete(temporaryDirectory, recursive: true)
+        }
+    }
+
     @Fact
     func EnvironmentChangesRestartTheWorker() {
         let name = "GSHARP_WORKER_TEST_" + Guid.NewGuid().ToString("N")

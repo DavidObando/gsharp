@@ -99,9 +99,11 @@ the SDK also cleans the verified worker group if the root has already exited.
 The SDK logs unavailable transport or an incompatible handshake before
 falling back to standalone compilation. Transport loss after sending a
 request fails the build without retrying it. A compiler diagnostic or
-nonzero compiler exit never triggers fallback. MSBuild hosts without
-build-lifetime task objects or process-tree cancellation use the standalone
-path and log that decision.
+nonzero compiler exit never triggers fallback. Worker startup passes the tool,
+switch and pipe name as typed process arguments, preserving spaces, Unicode
+and valid filename quotes without reparsing a command line. MSBuild hosts
+without build-lifetime task objects, typed process arguments or process-tree
+cancellation use the standalone path and log that decision.
 
 `gsc --compiler-worker <private-pipe>` is a private, versioned SDK transport,
 not an interactive compiler command. Protocol responses use a separate
