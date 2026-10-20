@@ -735,6 +735,117 @@ func Run(h Holder, Items int32) string {
     }
 
     @Theory
+    @InlineData("^1")
+    @InlineData("..")
+    func Issue5035_NullConditionalIndex_PreservesSourceProperty(indexText string) {
+        let source = `package Repro
+class Holder {
+    prop Items []string -> []string{"one"}
+}
+func Run(h Holder?) {
+    let result = h?.Items[INDEX]
+}
+`.Replace("INDEX", indexText)
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let declared = Assert.IsAssignableFrom[PropertySymbol](
+            BoundSemantics.GetSymbol(compilation, TokenAt(content, source, "Items []string", 0))
+        )
+        let position = LanguageServerTestHelpers.PositionOf(source, "Items[")
+        let token = TokenAt(content, source, "Items[", 0)
+        Assert.Same(declared, BoundSemantics.GetSymbol(compilation, token))
+        Assert.Same(declared, SemanticLookup.ResolveSymbol(compilation, token))
+        Assert.Same(declared.Type, BoundSemantics.GetExpressionType(compilation, token.Parent as ExpressionSyntax))
+        AssertIndexedHover(content, position, "Items", "prop Items []string { get; }")
+        let uri = DocumentUri.From("file:///issue5035-null-index.gs")!!
+        let definition = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
+        let expected = LanguageServerTestHelpers.PositionOf(source, "Items []string")
+        Assert.Equal(uri, definition.Uri)
+        AssertPosition(expected, definition.Range.Start)
+        AssertPosition(Position(expected.Line, expected.Character + "Items".Length), definition.Range.End)
+    }
+
+    @Theory
+    @InlineData("prop Items []string -> []string{\"one\"}", "Items", "prop Items []string { get; }")
+    @InlineData("var Fields []string = []string{\"one\"}", "Fields", "(field) Fields []string")
+    func Issue5035_StaticSourceIndex_PreservesMember(declaration string, member string, signature string) {
+        let source = `package Repro
+class Holder {
+    shared {
+        DECLARATION
+    }
+}
+func Run() {
+    let result = Holder.MEMBER[^1]
+}
+`.Replace("DECLARATION", declaration).Replace("MEMBER", member)
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let declared = BoundSemantics.GetSymbol(compilation, TokenAt(content, source, member + " []string", 0))
+        Assert.True(declared is PropertySymbol{IsStatic: true} or FieldSymbol{IsStatic: true})
+        let position = LanguageServerTestHelpers.PositionOf(source, member + "[")
+        let token = TokenAt(content, source, member + "[", 0)
+        Assert.Same(declared, BoundSemantics.GetSymbol(compilation, token))
+        Assert.Same(declared, SemanticLookup.ResolveSymbol(compilation, token))
+        Assert.Equal(
+            typeof([]string),
+            BoundSemantics.GetExpressionType(compilation, token.Parent as ExpressionSyntax)?.ClrType
+        )
+        AssertIndexedHover(content, position, member, signature)
+        if declared is FieldSymbol {
+            // Plain shared-field navigation already fails independently (#5043).
+            return
+        }
+        let uri = DocumentUri.From("file:///issue5035-static-index.gs")!!
+        let definition = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
+        let expected = LanguageServerTestHelpers.PositionOf(source, member + " []string")
+        Assert.Equal(uri, definition.Uri)
+        AssertPosition(expected, definition.Range.Start)
+        AssertPosition(Position(expected.Line, expected.Character + member.Length), definition.Range.End)
+    }
+
+    @Theory
+    @InlineData("string.Empty[..]", "Empty", typeof(string), "string.Empty string")
+    @InlineData(
+        "System.Environment.NewLine[^1]",
+        "NewLine",
+        typeof(Environment),
+        "System.Environment.NewLine string { get; }"
+    )
+    func Issue5035_StaticClrIndex_PreservesMetadata(
+        expression string,
+        memberName string,
+        owner Type,
+        signature string
+    ) {
+        let source = "package Repro\nfunc Run() { let result = " + expression + " }\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let token = TokenAt(content, source, memberName + "[", 0)
+        let expected = cast[System.Reflection.MemberInfo?](owner.GetProperty(memberName)) ?? owner.GetField(memberName)
+        Assert.NotNull(expected)
+        let actual = BoundSemantics.GetImportedMember(compilation, token)
+        Assert.Equal(expected, actual)
+        Assert.Equal(owner, actual?.DeclaringType)
+        Assert.True(
+            ImportedClrMemberResolver.TryResolveClrMember(content.SyntaxTree, compilation, token, out var navigation)
+        )
+        Assert.Equal(expected, navigation)
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, memberName + "["),
+            memberName,
+            signature
+        )
+    }
+
+    @Theory
     @InlineData("int32", typeof([]int32))
     @InlineData("System.Range", typeof([]System.Range))
     func Issue5035_NestedArrayArgument_PreservesInnerSourceProperty(elementType string, arrayType Type) {
