@@ -51,13 +51,22 @@ internal shared class WorkerServer {
             let exitCode = Compile(output, directory, arguments, environment, grant, compile)
             GC.Collect()
             GC.WaitForPendingFinalizers()
-            let retained = GC.GetTotalMemory(forceFullCollection: true)
+            var retained = GC.GetTotalMemory(forceFullCollection: true)
+            var reusable = canReuse?.Invoke() ?? true
+            if !reusable {
+                // Collectible load contexts can require a second finalizer cycle.
+                // Retry once; persistent analyzer roots still retire the worker.
+                GC.WaitForPendingFinalizers()
+                GC.Collect()
+                retained = GC.GetTotalMemory(forceFullCollection: false)
+                reusable = canReuse?.Invoke() ?? true
+            }
             using let process = Process.GetCurrentProcess()
             let workingSet = process.WorkingSet64
             let retire = request == WorkerProtocol.MaxRequests ||
                 retained >= WorkerProtocol.MaxRetainedBytes ||
                 workingSet >= WorkerProtocol.MaxWorkingSetBytes ||
-                !(canReuse?.Invoke() ?? true)
+                !reusable
             lock output {
                 output.Write(WorkerProtocol.Completed)
                 output.Write(exitCode)
