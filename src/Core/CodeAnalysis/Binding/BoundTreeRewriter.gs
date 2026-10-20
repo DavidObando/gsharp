@@ -764,9 +764,7 @@ abstract class BoundTreeRewriter {
             return node
         }
         let copy = BoundAwaitExpression(node.Syntax, expression, node.Type, node.AwaiterTypeSymbol)
-        if object.ReferenceEquals(node.ImplicitCompletionOperand, node.Expression) {
-            copy.RecordImplicitCompletion(expression)
-        }
+        node.CopyImplicitCompletionTo(copy)
         return copy
     }
 

@@ -210,6 +210,12 @@ identity; ownership traversal may cross only those marked wrappers without a
 receiver step. Authored awaits remain opaque. Logical type queries retain the
 completion's source result type rather than exposing its physical ValueTask.
 
+Bind-time known-suspending calls, inference-time completions, and implicit
+channel-operation completions use the same internal marked-await factory.
+Verified base/spill copies preserve an existing exact-operand marker. Ordinary
+authored awaits and synthesized control-flow/disposal awaits are not marked
+merely because they have no syntax or contain a call.
+
 Representation-changing constant folding retains the actual selected source
 field read (its `FieldSymbol` and effective closed owner), not just a literal
 value or member name. A verified fold carries that semantic association to

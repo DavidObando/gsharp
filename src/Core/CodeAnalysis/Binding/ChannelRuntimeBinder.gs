@@ -1310,7 +1310,8 @@ internal class ChannelRuntimeBinder {
             syntax SyntaxNode?,
             call BoundExpression,
             resultType TypeSymbol
-        ) BoundExpression -> BoundAwaitExpression(
+        ) BoundExpression -> BoundAwaitExpression
+            .CreateImplicitCompletion(
             syntax,
             call,
             resultType,

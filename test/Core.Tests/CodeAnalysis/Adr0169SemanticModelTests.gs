@@ -23,6 +23,51 @@ open class Adr0169SemanticModelTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func StaticQualifierQuery_DeclaredSuspension_MarksOnlyImplicitCompletion(asyncCaller bool) {
+        let source = `package Query
+class Box {
+    shared {
+        suspend func Values(ch in chan[string]) string { return <-ch }
+    }
+}
+CALLER func Run(ch chan[string]) {
+    let first = Box.Values(ch)
+    let authored = await System.Threading.Tasks.Task.FromResult("authored")
+}
+`.Replace(
+            "CALLER",
+            if asyncCaller {
+                "async"
+            } else {
+                "suspend"
+            }
+        )
+        let (_, model, tree) = CreateQualifierModel(source)
+        let root = QualifierInitializer(tree, "first")
+        let (_, _, selected) = QueryQualifier(model, root)
+        let call = Assert.IsType[BoundCallExpression](selected)
+        Assert.True(call.Function.IsSuspending)
+        let completion = Assert.IsType[BoundAwaitExpression](model.GetBoundNode(root))
+        Assert.Same(call, completion.Expression)
+        Assert.Same(call, completion.ImplicitCompletionOperand)
+        Assert.Same(TypeSymbol.String, completion.Type)
+        Assert.NotSame(completion.Type, call.Type)
+        let authoredSyntax = tree
+            .Root
+            .DescendantNodes()
+            .OfType[VariableDeclarationSyntax]()
+            .Single((v VariableDeclarationSyntax) -> v.Identifier.Text == "authored")
+            .Initializer
+        let authored = Assert.IsType[BoundAwaitExpression](model.GetBoundNode(authoredSyntax!!))
+        Assert.Null(authored.ImplicitCompletionOperand)
+        let copied = Assert.IsType[BoundAwaitExpression](QualifierChildRewriter().Apply(completion))
+        Assert.Same(copied.Expression, copied.ImplicitCompletionOperand)
+        Assert.Same(call, completion.ImplicitCompletionOperand)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func StaticQualifierQuery_ImplicitCompletionAndSharedProperty_KeepSemanticSelection(property bool) {
         let source = if property {
             `package Query

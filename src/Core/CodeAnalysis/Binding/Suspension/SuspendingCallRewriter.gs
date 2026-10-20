@@ -490,14 +490,12 @@ internal class SuspendingCallRewriter : BoundTreeRewriter {
         operand BoundExpression,
         logicalType TypeSymbol
     ) BoundAwaitExpression {
-        let completed = BoundAwaitExpression(
+        return BoundAwaitExpression.CreateImplicitCompletion(
             syntax,
             operand,
             logicalType,
             ExpressionBinder.TryGetAwaiterTypeSymbol(operand.Type)
         )
-        completed.RecordImplicitCompletion(operand)
-        return completed
     }
 
     private func ReportResidualBridge(syntax SyntaxNode?, inner BoundExpression, calleeName string? = nil) {

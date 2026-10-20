@@ -29,23 +29,57 @@ open class Issue4989BoundReceiverTests {
     @InlineData(false)
     @InlineData(true)
     func Issue5035_InferredCallee_PreservesSelectedMemberAndLogicalType(chained bool) {
+        VerifySuspendingCallee(chained, "inferred")
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func Issue5035_DeclaredCallee_PreservesCompletionAndLogicalType(chained bool, asyncCaller bool) {
+        VerifySuspendingCallee(
+            chained,
+            if asyncCaller {
+                "async"
+            } else {
+                "suspend"
+            }
+        )
+    }
+
+    private func VerifySuspendingCallee(chained bool, caller string) {
         let source = `package Repro
 class Holder {
     shared {
         func Values(value int32) RESULT_TYPE -> DECOY
-        func Values(ch in chan[string]) RESULT_TYPE {
+        CALLEE_MODIFIERfunc Values(ch in chan[string]) RESULT_TYPE {
             let value = <-ch
             return RESULT
         }
     }
 }
-func Run(ch chan[string]) {
+CALLER_MODIFIERfunc Run(ch chan[string]) {
     let competing = System.Text.StringBuilder().ToString()
     let wrong = Holder.Values(1)
     let authored = await System.Threading.Tasks.Task.FromResult("authored")
     let indexed = Holder.Values(ch)SUFFIX
 }
 `.Replace(
+            "CALLEE_MODIFIER",
+            if caller == "inferred" {
+                ""
+            } else {
+                "suspend "
+            }
+        ).Replace(
+            "CALLER_MODIFIER",
+            if caller == "inferred" {
+                ""
+            } else {
+                caller + " "
+            }
+        ).Replace(
             "RESULT_TYPE",
             if chained {
                 "string"
