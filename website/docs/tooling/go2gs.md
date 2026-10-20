@@ -166,8 +166,27 @@ content.
 
 Typed nil/interface values, byte strings, maps, panic/defer/recover, fixed
 value arrays, and concurrency are inventoried as typed syntax sites with
-migration blockers. Their G# lowering and runtime representations are explicit
-M1 prerequisites and are not selected by M0.
+migration blockers. M0 does not select their G# lowering or runtime representations.
+
+### Proposed direction: stronger G# and maintainable output
+
+Semantic fidelity and readable, maintainable G# are joint requirements. There is no deadline for first runnable M1. Existing native facilities remain the starting point, but reusable additive language, type-system and runtime design is a first-class route when it improves the result. A passing translation should not leave applications with a Go-prefixed wrapper ecosystem, visible dispatch tables or manual boxing/checking protocols at ordinary operations. Hidden compiler machinery is different from application code; narrow Go-specific policies may still need compatibility support.
+
+The proposed general-purpose `bytestring` type holds immutable arbitrary bytes, including invalid UTF-8 and embedded zeros. It is not a shipped built-in, a UTF-8-validity promise or an alias for a readonly slice. Its dedicated design will compare library-only delivery with language spelling, literals and iteration support; none of that syntax is accepted here. G# `string` remains CLR `System.String`, even when Go bytes happen to be valid UTF-8. Mutable inputs must be copied or privately transferred with proven exclusive ownership. Byte-content equality, byte offsets and non-null default empty differ from native slice descriptors.
+
+Encoding policies remain explicit: Go decoding advances one byte for invalid UTF-8, and encoding invalid Go rune values produces replacement characters. Go `rune` stays unrestricted `int32`, not `System.Text.Rune`; decoded `slice[int32]` is algorithm data. Concrete integers, native `slice[T]`/`slice[T]?` and existing factories such as `slice[T].Create` remain the intended building blocks, not public integer/index/slice wrappers or a revived `make` builtin. Source-width checks, nil/empty distinctions and evaluation order still need proof. Repeated scaffolding is a reason to evaluate a reusable capability, not to weaken those semantics.
+
+**A public `GoInterface` is not the selected output contract.** The earlier envelope sketch recorded observations that ordinary CLR interfaces and `adapt` do not automatically supply: nil versus typed nil, original dynamic type across views, dynamic method-set assertions, insertion snapshots and copies on each value-receiver call. The new design track compares opt-in interface-value facilities, compiler-supported type evidence and hidden boxing/forwarding. It must justify useful handwritten G# operations, not rename a Go runtime. Ordinary interfaces, `adapt` wrapper identity, struct mutation and BCL interop keep their existing behavior. Type spelling, representation, conversions and metadata require separate decisions.
+
+Fixed value arrays likewise need a reusable design, not permanent shape-specific helpers. Existing G# `[N]T` remains CLR-array-backed. Stereo and ten-element Go arrays are useful proofs for copying, equality, checked indexing and nested writes; they do not settle new syntax or layout. Views and escaping element locations stay blocked until their storage/lifetime contracts are proved.
+
+**G# already supports goroutines, channels and `select`.** Their separate go2gs admission is a mapping/evidence decision, not missing native concurrency. Remaining obligations include caller-side launch evaluation, free versus structured-scope lifetime/join behavior, per-goroutine panic/recovery isolation, suspension through callable/callback boundaries, and channel/select/publication witnesses. The design reuses native concurrency; it does not propose a new scheduler. Maps, defer/recover and iterator control effects also need explicit designs, separating reusable facilities from Go-specific rules.
+
+Capability tracks may precede and determine migration milestones. Each language change needs its own accepted design, implementation and release; repository source waits for the separate N-1 SDK-pin update. A small text/value corpus remains a useful proving ground after its chosen capabilities are available, not a schedule forcing helper-heavy architecture. Interfaces/locations/captures, arrays and concurrency are independently admitted families; unused features are not prerequisites for that corpus. The first full package target remains pinned cliamp's `internal/fuzzy`, followed by `internal/tomlutil` and `internal/deeplink`; none is claimed as migrated.
+
+Every admitted family still requires deterministic source/maps, translate-and-reparse, compilation, IL verification and independent unchanged-Go versus generated JIT/NativeAOT witnesses. Unsupported or unavailable stages are not green; semantic completion, verification and performance readiness remain separate. Later capability contracts will be versioned separately from M0 schema/profile v1 and will not change its `migrationReady: false`.
+
+### Implemented boundary
 
 Schema v1 preserves compiled-file and package-initialization order and rejects
 missing fields, null collections, count mismatches, stale payload-derived IDs,
