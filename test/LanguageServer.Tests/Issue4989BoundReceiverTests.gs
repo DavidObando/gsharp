@@ -735,24 +735,46 @@ func Run(h Holder, Items int32) string {
     }
 
     @Theory
-    @InlineData("slice[string]", "int32", typeof([]int32))
-    @InlineData("readonly slice[string]", "int32", typeof([]int32))
-    @InlineData("slice[string]", "System.Range", typeof([]System.Range))
-    @InlineData("readonly slice[string]", "System.Range", typeof([]System.Range))
+    @InlineData("slice[string]", "int32", typeof([]int32), false)
+    @InlineData("readonly slice[string]", "int32", typeof([]int32), false)
+    @InlineData("slice[string]", "System.Range", typeof([]System.Range), false)
+    @InlineData("readonly slice[string]", "System.Range", typeof([]System.Range), false)
+    @InlineData("slice[string]", "int32", typeof([]int32), true)
+    @InlineData("readonly slice[string]", "int32", typeof([]int32), true)
+    @InlineData("slice[string]", "System.Range", typeof([]System.Range), true)
+    @InlineData("readonly slice[string]", "System.Range", typeof([]System.Range), true)
     func Issue5035_NestedNativeSliceArgument_KeepsParameterOwnership(
         nativeType string,
         elementType string,
-        parameterType Type
+        parameterType Type,
+        propertyArgument bool
     ) {
         let source = `package Repro
 class Holder {
     prop Items NATIVE_TYPE
 }
-func Run(h Holder, Items []ELEMENT_TYPE) {
-    let first = h.Items[Items[0]]
-    let second = h.Items[Items[0]].ToString()
+class Other {
+    prop Values []ELEMENT_TYPE
 }
-`.Replace("NATIVE_TYPE", nativeType).Replace("ELEMENT_TYPE", elementType)
+func Run(h Holder, Items []ELEMENT_TYPE, other Other) {
+    let parameterControl = Items[0]
+    let first = h.Items[ARGUMENT]
+    let second = h.Items[ARGUMENT].ToString()
+}
+`.Replace(
+            "NATIVE_TYPE",
+            nativeType
+        ).Replace(
+            "ELEMENT_TYPE",
+            elementType
+        ).Replace(
+            "ARGUMENT",
+            if propertyArgument {
+                "other.Values[0]"
+            } else {
+                "Items[0]"
+            }
+        )
         let root = Path.Combine(
             Directory.GetCurrentDirectory(),
             "out",
@@ -776,23 +798,65 @@ func Run(h Holder, Items []ELEMENT_TYPE) {
             let property = Assert.IsAssignableFrom[PropertySymbol](
                 BoundSemantics.GetSymbol(compilation, TokenAt(content, source, "Items " + nativeType, 0))
             )
+            let values = Assert.IsAssignableFrom[PropertySymbol](
+                BoundSemantics.GetSymbol(compilation, TokenAt(content, source, "Values []" + elementType, 0))
+            )
+            let expectedSymbol Symbol = if propertyArgument {
+                cast[Symbol](values)
+            } else {
+                cast[Symbol](parameter)
+            }
+            let expectedType = if propertyArgument {
+                values.Type
+            } else {
+                parameter.Type
+            }
+            let name = if propertyArgument {
+                "Values"
+            } else {
+                "Items"
+            }
+            let declarationText = name + " []" + elementType
+            let outerText = if propertyArgument {
+                "Items[other.Values[0]]"
+            } else {
+                "Items[Items[0]]"
+            }
             let uri = DocumentUri.FromFileSystemPath(path)!!
+            Assert.Same(parameter, SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "Items[0]", 0)))
             for var occurrence = 0; occurrence < 2; occurrence++ {
-                let position = LanguageServerTestHelpers.PositionOf(source, "Items[0]", occurrence)
-                let argument = TokenAt(content, source, "Items[0]", occurrence)
-                Assert.Same(parameter, SemanticLookup.ResolveSymbol(compilation, argument))
-                if BoundSemantics.GetSymbol(compilation, argument) is {} bound {
-                    Assert.Same(parameter, bound)
+                let use = if propertyArgument {
+                    occurrence
+                } else {
+                    occurrence + 1
                 }
-                Assert.Equal(parameterType.FullName, parameter.Type.ClrType?.FullName)
-                Assert.Equal(parameterType.Assembly.FullName, parameter.Type.ClrType?.Assembly.FullName)
-                AssertIndexedHover(content, position, "Items", "(parameter) Items []" + elementType)
+                let position = LanguageServerTestHelpers.PositionOf(source, name + "[0]", use)
+                let argument = TokenAt(content, source, name + "[0]", use)
+                Assert.Same(expectedSymbol, SemanticLookup.ResolveSymbol(compilation, argument))
+                if propertyArgument {
+                    Assert.Same(values, BoundSemantics.GetSymbol(compilation, argument))
+                }
+                if BoundSemantics.GetSymbol(compilation, argument) is {} bound {
+                    Assert.Same(expectedSymbol, bound)
+                }
+                Assert.Equal(parameterType.FullName, expectedType.ClrType?.FullName)
+                Assert.Equal(parameterType.Assembly.FullName, expectedType.ClrType?.Assembly.FullName)
+                AssertIndexedHover(
+                    content,
+                    position,
+                    name,
+                    if propertyArgument {
+                        "prop Values []" + elementType + " { get; set; }"
+                    } else {
+                        "(parameter) Items []" + elementType
+                    }
+                )
                 let location = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
-                let expected = LanguageServerTestHelpers.PositionOf(source, "Items []" + elementType)
+                let expected = LanguageServerTestHelpers.PositionOf(source, declarationText)
                 Assert.Equal(uri, location.Uri)
                 AssertPosition(expected, location.Range.Start)
-                AssertPosition(Position(expected.Line, expected.Character + "Items".Length), location.Range.End)
-                let outer = TokenAt(content, source, "Items[Items[0]]", occurrence)
+                AssertPosition(Position(expected.Line, expected.Character + name.Length), location.Range.End)
+                let outer = TokenAt(content, source, outerText, occurrence)
                 Assert.Same(property, BoundSemantics.GetSymbol(compilation, outer))
             }
         } finally {

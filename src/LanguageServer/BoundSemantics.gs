@@ -255,21 +255,77 @@ shared class BoundSemantics {
         model GSharp.Core.CodeAnalysis.SemanticModel,
         expression ExpressionSyntax
     ) BoundExpression? {
-        if model.GetBoundNode(expression) is BoundExpression anchored && OwnsIndexAnchor(expression, anchored) {
-            return anchored
+        if model.GetBoundNode(expression) is BoundExpression anchored &&
+            OwnedIndexAnchor(expression, anchored) is {} owned {
+            return owned
         }
         // Generated index plans can retain the written argument as their anchor.
         // An ordinary argument requires capture provenance, unlike a range that
         // can directly anchor a CLR index read.
         if TerminalSegment(expression) is IndexExpressionSyntax index && index.Indices.Count == 1 {
             let argumentAnchor = model.GetBoundNode(index.Index) as BoundExpression
-            if Unwrap(argumentAnchor) is {} read &&
+            if argumentAnchor != nil &&
+                Unwrap(argumentAnchor) is {} read &&
                 IndexTargetOf(read, capturedOnly: index.Index is not RangeExpressionSyntax) != nil &&
-                OwnsIndexAnchor(expression, read) {
-                return argumentAnchor
+                OwnedIndexAnchor(expression, argumentAnchor) is {} recovered {
+                return recovered
             }
         }
         return nil
+    }
+
+    private func OwnedIndexAnchor(expression ExpressionSyntax, anchored BoundExpression) BoundExpression? {
+        var current = anchored
+        while !OwnsIndexAnchor(expression, current) {
+            let argument = CapturedIndexArgument(current)
+            if argument == nil || object.ReferenceEquals(argument, current) {
+                return nil
+            }
+            current = argument
+        }
+        return current
+    }
+
+    private func CapturedIndexArgument(anchored BoundExpression) BoundExpression? {
+        var read = Unwrap(anchored)
+        if read is BoundDereferenceExpression dereference &&
+            dereference
+            .Operand
+            .Type is ByRefTypeSymbol &&
+            IsSynthesizedWrapper(dereference, dereference.Operand) {
+            read = Unwrap(dereference.Operand)
+        }
+        // The native index plan stores its written argument in one known
+        // operation over the first source capture. Do not scan block children.
+        if read is not BoundBlockExpression block ||
+            block
+            .Statements
+            .Length != 1 ||
+            CapturedIndexTarget(block) == nil ||
+            block.Statements[0] is not BoundVariableDeclaration capture {
+            return nil
+        }
+        let argument BoundExpression? = switch block.Expression {
+            case BoundClrIndexExpression{Target: BoundVariableExpression receiver} index when object.ReferenceEquals(
+                receiver.Variable,
+                capture.Variable
+            ) &&
+                index
+                .Arguments
+                .Length == 1: index.Arguments[0]
+            case BoundImportedInstanceCallExpression{
+                Receiver: BoundVariableExpression receiver
+            } call when object.ReferenceEquals(receiver.Variable, capture.Variable) &&
+                call
+                .Arguments
+                .Length == 1: call.Arguments[0]
+            default: default(BoundExpression?)
+        }
+        return if argument != nil && object.ReferenceEquals(argument.Syntax, block.Syntax) {
+            argument
+        } else {
+            default(BoundExpression?)
+        }
     }
 
     private func OwnsIndexAnchor(expression ExpressionSyntax, anchored BoundExpression) bool {
