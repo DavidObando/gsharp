@@ -592,6 +592,9 @@ does not authorize CLR string emission, since byte length/index/order differ
 from UTF-16 operations. Proof-based representation optimization is deferred.
 
 The selected direction is a general-purpose immutable byte-string type.
+The dedicated [ADR-0204](0204-immutable-bytestring-values.md) proposes its
+handwritten examples, library/language comparison, ownership, encoding and
+cost contracts. It remains Proposed and does not make the facility available.
 Its dedicated ADR must compare an ordinary library type with integrated
 language spelling, byte literals and byte/code-point iteration. Library-only
 is not preselected for speed; language integration should earn its complexity
