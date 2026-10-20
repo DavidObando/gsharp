@@ -394,7 +394,8 @@ open class Program {
                 workBudget.Run(
                     fullPaths.Length,
                     (index int32) -> {
-                        syntaxTrees[index] = SyntaxTree.Load(fullPaths[index])
+                        let fullPath = fullPaths[index]
+                        syntaxTrees[index] = SyntaxTree.Load(fullPath)
                     },
                     Math.Max(16777216, largestSource * 16),
                     allowParallel: fullPaths.Length >= 4 || totalSourceBytes >= 65536

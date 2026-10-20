@@ -850,6 +850,127 @@ open class CompilerWorkerTests : IDisposable {
     }
 
     @Fact
+    func RealBuildTaskUsesEachLeaseInsteadOfAStaleReusableGrant() {
+        let source = "package LeaseRequests\nimport System\nfunc Main() { Console.WriteLine(Value0(0)) }\n" +
+            string
+            .Concat(
+            Enumerable.Range(0, 16).Select(
+                (method int32) -> "func Value$method(x int32) int32 {\nlet n0 = x + 1\n" + string.Concat(
+                    Enumerable.Range(1, 64).Select((n int32) -> "let n$n = n${n - 1} + $n\n")
+                ) +
+                    "return n63\n}\n"
+            )
+        )
+        File.WriteAllText(Path.Combine(directory, "input.gs"), source)
+        let compiler = SecurityElement.Escape(CompilerPath())
+        let taskAssembly = SecurityElement.Escape(typeof(BuildTask).Assembly.Location)
+        let basePath = SecurityElement.Escape(directory)
+        let references = string.Join(
+            "",
+            RuntimeReferences().Select((path string) -> "<Refs Include=\"${SecurityElement.Escape(path)}\"/>")
+        )
+        let xml = StringBuilder(
+            "<Project><UsingTask AssemblyFile=\"$taskAssembly\" TaskName=\"Gsharp.NET.Sdk.Tools.BuildTask\"/>" +
+                "<ItemGroup><Sources Include=\"input.gs\"/>$references</ItemGroup><Target Name=\"Build\">"
+        )
+        for label in[]string{"standalone", "two", "one"} {
+            let shared = if label == "standalone" {
+                "false"
+            } else {
+                "true"
+            }
+            let workers = if label == "two" {
+                2
+            } else {
+                32
+            }
+            let memory = if label == "two" {
+                1024
+            } else {
+                256
+            }
+            xml.Append(
+                "<BuildTask GsharpCompilerFullPath=\"$compiler\" OutputPath=\".\" OutputName=\"Budget\" " +
+                    "TempOutputPath=\".\" TargetFramework=\"net10.0\" BasePath=\"$basePath\" OutputType=\"Exe\" " +
+                    "Compile=\"@(Sources)\" References=\"@(Refs)\" ResponseFilePath=\"./$label.rsp\" " +
+                    "UseSharedCompilation=\"$shared\" WorkerGrant=\"7\" MaxWorkers=\"$workers\" " +
+                    "WorkerMemoryBudgetMiB=\"$memory\" Deterministic=\"true\" DebugType=\"portable\" RefAssembly=\"Budget.ref.dll\"/>"
+            )
+            for suffix in[]string{".dll", ".pdb", ".ref.dll", ".runtimeconfig.json"} {
+                xml.Append("<Copy SourceFiles=\"Budget$suffix\" DestinationFiles=\"$label$suffix\"/>")
+            }
+        }
+        xml.Append("</Target></Project>")
+        let project = Path.Combine(directory, "lease-requests.proj")
+        File.WriteAllText(project, xml.ToString())
+        let start = ProcessStartInfo("dotnet"){
+            WorkingDirectory = directory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }
+        for argument in[]string{"msbuild", project, "-t:Build", "-m:1", "-nr:false", "-v:normal", "-nologo"} {
+            start.ArgumentList.Add(argument)
+        }
+        start.Environment["DOTNET_PROCESSOR_COUNT"] = "2"
+        start.Environment["GSHARP_MEASURE_PHASES"] = Path.Combine(directory, "budget-{pid}-{id}.json")
+        start.Environment.Remove("GSHARP_WORKER_GRANT")
+        let (exit, stdout, stderr, _pid) = RunProcess(start, 60000)
+        Assert.True(exit == 0, stdout + stderr)
+        let completed = stdout.Split('\n').Where((line string) -> line.Contains("worker completed:")).ToArray()
+        Assert.Equal(2, completed.Length)
+        Assert.Equal(completed[0].Split(',')[0], completed[1].Split(',')[0])
+        let byProcess = Dictionary[int32, List[int32]]()
+        let reports = Directory.GetFiles(directory, "budget-*.json")
+        Assert.Equal(3, reports.Length)
+        for path in reports {
+            using let report = JsonDocument.Parse(File.ReadAllText(path))
+            let root = report.RootElement
+            let process = root.GetProperty("ProcessId").GetInt32()
+            if !byProcess.ContainsKey(process) {
+                byProcess[process] = List[int32]()
+            }
+            let counters = root.GetProperty("Counters")
+            let grant = counters.GetProperty("workers.granted").GetInt32()
+            byProcess[process].Add(grant)
+            Assert.InRange(counters.GetProperty("workers.active").GetInt32(), 1, grant)
+            if grant == 2 {
+                Assert.True(counters.GetProperty("bodies.workers.active").GetInt32() > 1)
+            }
+        }
+        Assert.Equal(
+            []int32{1, 2},
+            byProcess.Values.Select((grants List[int32]) -> grants.Count).OrderBy((count int32) -> count)
+        )
+        let reused = Assert.Single(byProcess.Values, (grants List[int32]) -> grants.Count == 2)
+        Assert.Equal([]int32{1, 2}, reused.OrderBy((grant int32) -> grant))
+        for label in[]string{"standalone", "two", "one"} {
+            let expectedGrant = if label == "two" {
+                2
+            } else {
+                1
+            }
+            Assert.Contains("--workers:$expectedGrant", File.ReadAllLines(Path.Combine(directory, "$label.rsp")))
+            for suffix in[]string{".dll", ".pdb", ".ref.dll"} {
+                Assert.Equal(
+                    File.ReadAllBytes(Path.Combine(directory, "standalone$suffix")),
+                    File.ReadAllBytes(Path.Combine(directory, "$label$suffix"))
+                )
+            }
+            let run = ProcessStartInfo("dotnet"){
+                WorkingDirectory = directory,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            }
+            run.ArgumentList.Add(Path.Combine(directory, "$label.dll"))
+            let (runtimeExit, output, errors, _runtimePid) = RunProcess(run)
+            Assert.True(runtimeExit == 0, errors)
+            Assert.Equal("2017\n", output.ReplaceLineEndings("\n"))
+        }
+    }
+
+    @Fact
     func RealBuildTaskReusesItsBuildLifetimeWorkerAndPreservesFailure() {
         File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { func Get() int32 -> 42 }")
         let compiler = SecurityElement.Escape(CompilerPath())

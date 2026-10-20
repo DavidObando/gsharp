@@ -30,10 +30,20 @@ internal shared class IndependentBodyClassifier {
         return VisitStatement(body, locals, function.Type)
     }
 
-    private func IsPrimitive(type TypeSymbol) bool -> type.GetType() == typeof(TypeSymbol) &&
-        type
-        .ClrType
-        ?.IsPrimitive == true
+    private func IsPrimitive(type TypeSymbol) bool -> type == TypeSymbol.Bool ||
+        type == TypeSymbol.Char ||
+        type == TypeSymbol.Int8 ||
+        type == TypeSymbol.UInt8 ||
+        type == TypeSymbol.Int16 ||
+        type == TypeSymbol.UInt16 ||
+        type == TypeSymbol.Int32 ||
+        type == TypeSymbol.UInt32 ||
+        type == TypeSymbol.Int64 ||
+        type == TypeSymbol.UInt64 ||
+        type == TypeSymbol.NInt ||
+        type == TypeSymbol.NUInt ||
+        type == TypeSymbol.Float32 ||
+        type == TypeSymbol.Float64
 
     private func VisitStatement(
         statement StatementSyntax,

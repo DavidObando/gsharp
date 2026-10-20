@@ -362,6 +362,7 @@ open class BuildTask : Task, ICancelableTask {
             return false
         }
         using let coreLease = acquired
+        this.WorkerGrant = coreLease.Grant
         args[1] = "--workers:${coreLease.Grant}"
         if !string.IsNullOrEmpty(this.ResponseFilePath) {
             Directory.CreateDirectory(Path.GetDirectoryName(this.ResponseFilePath) ?? ".")
