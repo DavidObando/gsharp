@@ -70,25 +70,75 @@ open class CompilerWorkerTests : IDisposable {
         Assert.Equal(0, next)
     }
 
-    @Fact
-    func WorkerCrashPreservesBothDiagnosticStreamsAndTheirTails() {
-        let (analyzer, _marker) = CreateHelperAnalyzer(background: false, crash: true)
+    @Theory
+    @InlineData("crash")
+    @InlineData("cancel")
+    @InlineData("ownerloss")
+    @InlineData("loggerfailure")
+    func InterruptedWorkerPreservesBothDiagnosticStreamsAndTheirTails(mode string) {
+        let (analyzer, _marker) = CreateHelperAnalyzer(background: false, failureMode: mode)
         File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { }")
         let output = List[string]()
         let errors = List[string]()
-        Assert.Throws[IOException](
-            () -> Run(
-                directory,
-                []string{"/out:result.dll", "/target:library", "/gsanalyzer:" + analyzer, "input.gs"},
-                output,
-                errors,
-                out var _exit
-            )
+        using let cancellation = CancellationTokenSource()
+        var failure Exception? = nil
+        let request = Task.Run(
+            () -> {
+                try {
+                    client.TryRun(
+                        CompilerPath(),
+                        "--compiler-worker",
+                        directory,
+                        WithReferences(
+                            []string{"/out:result.dll", "/target:library", "/gsanalyzer:" + analyzer, "input.gs"}
+                        ),
+                        1,
+                        cancellation.Token,
+                        (line string) -> {
+                            if mode == "loggerfailure" {
+                                throw ApplicationException("A secondary diagnostic logger failed.")
+                            }
+                            output.Add(line)
+                        },
+                        (line string) -> errors.Add(line),
+                        (line string) -> messages.Add(line),
+                        out var _exit
+                    )
+                } catch (ex Exception) {
+                    failure = ex
+                }
+            }
         )
-        Assert.Contains("crash stdout", output)
-        Assert.Contains("stdout tail", output)
-        Assert.Contains("crash stderr", errors)
-        Assert.Contains("stderr tail", errors)
+        try {
+            Assert.True(SpinWait.SpinUntil(() -> File.Exists(Path.Combine(directory, "failure.ready")), 5000))
+            if mode == "cancel" {
+                cancellation.Cancel()
+            } else if mode == "ownerloss" {
+                let processField = typeof(WorkerProcessClient).GetField(
+                    "process",
+                    BindingFlags.Instance | BindingFlags.NonPublic
+                ) ??
+                    throw InvalidOperationException("The accepted worker process is required.")
+                let worker = processField.GetValue(client) as Process ??
+                    throw InvalidOperationException("The accepted request must own its worker.")
+                worker.StandardInput.Close()
+            }
+            Assert.True(request.Wait(5000))
+        } finally {
+            cancellation.Cancel()
+            request.Wait(5000)
+        }
+        if mode == "cancel" {
+            Assert.IsType[OperationCanceledException](failure)
+        } else {
+            Assert.IsType[IOException](failure)
+        }
+        if mode != "loggerfailure" {
+            Assert.Contains("crash stdout 😀", output)
+            Assert.Contains("stdout tail 😀", output)
+        }
+        Assert.Contains("crash stderr 😀", errors)
+        Assert.Contains("stderr tail 😀", errors)
         Assert.DoesNotContain(messages, (line string) -> line.Contains("worker completed"))
         Assert.True(
             Run(
@@ -103,6 +153,45 @@ open class CompilerWorkerTests : IDisposable {
         let accepted = messages.Where((m string) -> m.Contains("accepted request")).ToArray()
         Assert.Equal(2, accepted.Length)
         Assert.NotEqual(accepted[0], accepted[1])
+    }
+
+    @Fact
+    func StartupFailurePreservesDiagnosticsWithoutReportingACompilationOrHidingFallback() {
+        File.WriteAllText(
+            Path.Combine(directory, "startup.gs"),
+            "import System\nfunc Main() {\nConsole.OutputEncoding = System.Text.Encoding.UTF8\n" +
+                "Console.WriteLine(\"startup stdout 😀\")\nConsole.Write(\"stdout tail 😀\")\n" +
+                "Console.Error.WriteLine(\"startup stderr 😀\")\nConsole.Error.Write(\"stderr tail 😀\")\n" +
+                "Console.Out.Flush()\nConsole.Error.Flush()\nEnvironment.Exit(42)\n}"
+        )
+        let (toolExit, diagnostics) = Standalone(
+            directory,
+            []string{"/out:startup.dll", "/target:exe", "/targetframework:net10.0", "startup.gs"}
+        )
+        Assert.True(toolExit == 0, diagnostics)
+        let output = List[string]()
+        let errors = List[string]()
+        Assert.False(
+            Run(
+                directory,
+                []string{"/out:result.dll", "/target:library", "unused.gs"},
+                output,
+                errors,
+                out var exit,
+                Path.Combine(directory, "startup.dll")
+            )
+        )
+        Assert.Equal(1, exit)
+        Assert.Empty(output)
+        Assert.Empty(errors)
+        Assert.Contains(messages, (line string) -> line.Contains("unavailable; using standalone"))
+        Assert.Contains("G# worker startup stdout: startup stdout 😀", messages)
+        Assert.Contains("G# worker startup stdout: stdout tail 😀", messages)
+        Assert.Contains("G# worker startup stderr: startup stderr 😀", messages)
+        Assert.Contains("G# worker startup stderr: stderr tail 😀", messages)
+        Assert.DoesNotContain(messages, (line string) -> line.Contains("accepted request"))
+        Assert.DoesNotContain(messages, (line string) -> line.Contains("worker completed"))
+        Assert.False(File.Exists(Path.Combine(directory, "result.dll")))
     }
 
     @Fact
@@ -1051,7 +1140,7 @@ open class CompilerWorkerTests : IDisposable {
         Assert.Equal(0, restarted)
     }
 
-    private func CreateHelperAnalyzer(background bool, crash bool = false)(Analyzer string, Marker string) {
+    private func CreateHelperAnalyzer(background bool, failureMode string = "")(Analyzer string, Marker string) {
         let marker = Path.Combine(directory, "helper.pid")
         let escaped = EscapeSource(marker)
         let helperBody = if background {
@@ -1076,10 +1165,17 @@ open class CompilerWorkerTests : IDisposable {
         } else {
             "process.WaitForExit()"
         }
-        let crashAction = if crash {
-            "Console.WriteLine(\"crash stdout\")\nConsole.Write(\"stdout tail\")\n" +
-                "Console.Error.WriteLine(\"crash stderr\")\nConsole.Error.Write(\"stderr tail\")\n" +
-                "Console.Out.Flush()\nConsole.Error.Flush()\nEnvironment.Exit(73)\n"
+        let termination = if failureMode == "crash" || failureMode == "loggerfailure" {
+            "Environment.Exit(73)"
+        } else {
+            "Thread.Sleep(Timeout.Infinite)"
+        }
+        let crashAction = if failureMode.Length > 0 {
+            "Console.OutputEncoding = System.Text.Encoding.UTF8\n" +
+                "Console.WriteLine(\"crash stdout 😀\")\nConsole.Write(\"stdout tail 😀\")\n" +
+                "Console.Error.WriteLine(\"crash stderr 😀\")\nConsole.Error.Write(\"stderr tail 😀\")\n" +
+                "Console.Out.Flush()\nConsole.Error.Flush()\n" +
+                "File.WriteAllText(\"${EscapeSource(Path.Combine(directory, "failure.ready"))}\", \"ready\")\n$termination\n"
         } else {
             ""
         }

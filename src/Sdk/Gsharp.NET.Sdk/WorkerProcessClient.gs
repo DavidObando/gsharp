@@ -45,7 +45,9 @@ internal class WorkerProcessClient : IDisposable {
         lock gate {
             exitCode = 1
             var completedExchange = false
-            var requestStarted = false
+            var acceptedRequest = false
+            var retireWorker = false
+            var requestFailure Exception? = nil
             idleTimer?.Change(Timeout.Infinite, Timeout.Infinite)
             try {
                 cancellation.ThrowIfCancellationRequested()
@@ -70,7 +72,6 @@ internal class WorkerProcessClient : IDisposable {
                         ex is ArgumentException ||
                         ex is NotSupportedException ||
                         ex is TimeoutException {
-                        Dispose()
                         cancellation.ThrowIfCancellationRequested()
                         transportMessage("G# worker unavailable; using standalone tool: ${ex.Message}")
                         return false
@@ -83,7 +84,6 @@ internal class WorkerProcessClient : IDisposable {
                     let fence = "\u001egsharp-" + Guid.NewGuid().ToString("N") + "\u001f"
                     nativeOut?.Begin(fence)
                     nativeError?.Begin(fence)
-                    requestStarted = true
                     WorkerProtocol.WriteRequest(
                         writer ?? throw InvalidOperationException("Worker input is unavailable."),
                         requestedIdentity,
@@ -97,12 +97,12 @@ internal class WorkerProcessClient : IDisposable {
                     let status = input.ReadByte()
                     if status == WorkerProtocol.Rejected {
                         transportMessage("G# worker rejected request; using standalone tool: ${input.ReadString()}")
-                        Dispose()
                         return false
                     }
                     if status != WorkerProtocol.Accepted {
                         throw InvalidDataException("Worker did not acknowledge the request.")
                     }
+                    acceptedRequest = true
                     transportMessage("G# worker accepted request: pid=${activeProcess.Id}.")
                     while true {
                         let kind = input.ReadByte()
@@ -114,14 +114,11 @@ internal class WorkerProcessClient : IDisposable {
                                 let workingSet = input.ReadInt64()
                                 let _out = nativeOut?.Complete(cancellation, stdout)
                                 let _error = nativeError?.Complete(cancellation, stderr)
-                                let retire = serverRetire
+                                retireWorker = serverRetire
                                 cancellation.ThrowIfCancellationRequested()
                                 transportMessage(
-                                    "G# worker completed: pid=${activeProcess.Id}, retained=$retained bytes, workingSet=$workingSet bytes, retire=$retire."
+                                    "G# worker completed: pid=${activeProcess.Id}, retained=$retained bytes, workingSet=$workingSet bytes, retire=$retireWorker."
                                 )
-                                if retire {
-                                    Dispose()
-                                }
                                 completedExchange = true
                                 return true
                             }
@@ -142,8 +139,11 @@ internal class WorkerProcessClient : IDisposable {
                     cancellation.ThrowIfCancellationRequested()
                     throw IOException("Worker request transport failed: $detail", ex)
                 }
+            } catch (ex Exception) {
+                requestFailure = ex
+                rethrow
             } finally {
-                if completedExchange && process?.HasExited == false {
+                if completedExchange && !retireWorker && process?.HasExited == false {
                     lastActivity = Stopwatch.GetTimestamp()
                     idleTimer?.Dispose()
                     idleTimer = Timer(
@@ -154,16 +154,10 @@ internal class WorkerProcessClient : IDisposable {
                     )
                 } else {
                     try {
-                        if requestStarted {
-                            StopProcess()
-                            try {
-                                nativeOut?.DrainFailure(stdout)
-                            } finally {
-                                nativeError?.DrainFailure(stderr)
-                            }
-                        }
-                    } finally {
-                        Dispose()
+                        FinishProcess(acceptedRequest, stdout, stderr, transportMessage)
+                    } catch (ex Exception) when requestFailure != nil {
+                        // Cleanup and logger failures cannot replace the original request failure.
+
                     }
                 }
             }
@@ -244,6 +238,32 @@ internal class WorkerProcessClient : IDisposable {
         toolPath = path
         workerEnvironment = environment
         containedProcess = child.Id
+    }
+
+    private func FinishProcess(
+        accepted bool,
+        stdout(string) -> void,
+        stderr(string) -> void,
+        transportMessage(string) -> void
+    ) {
+        try {
+            StopProcess()
+            try {
+                if accepted {
+                    nativeOut?.DrainFailure(stdout)
+                } else {
+                    nativeOut?.DrainFailure((line string) -> transportMessage("G# worker startup stdout: $line"))
+                }
+            } finally {
+                if accepted {
+                    nativeError?.DrainFailure(stderr)
+                } else {
+                    nativeError?.DrainFailure((line string) -> transportMessage("G# worker startup stderr: $line"))
+                }
+            }
+        } finally {
+            Dispose()
+        }
     }
 
     private func StopProcess() {

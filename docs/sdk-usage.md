@@ -99,10 +99,13 @@ the SDK also cleans the verified worker group if the root has already exited.
 The SDK logs unavailable transport or an incompatible handshake before
 falling back to standalone compilation. Transport loss after sending a
 request fails the build without retrying it. A compiler diagnostic or
-nonzero compiler exit never triggers fallback. Before disposing a failed
-request, the SDK terminates its owned worker tree and performs a bounded
-drain of captured stdout/stderr, including unterminated diagnostic tails.
-This preserves crash messages without treating the failed request as success.
+nonzero compiler exit never triggers fallback. One finalization path terminates
+the owned worker tree and performs a bounded drain of captured stdout/stderr,
+including unterminated diagnostic tails, before disposal. Accepted-request
+failures retain their original exception even if diagnostic logging fails.
+Pre-acceptance output is logged as startup information, not compiler errors,
+so an explicitly permitted standalone fallback remains distinguishable.
+This preserves crash messages without treating a failed request as success.
 Worker startup passes the tool,
 switch and pipe name as typed process arguments, preserving spaces, Unicode
 and valid filename quotes without reparsing a command line. MSBuild hosts
