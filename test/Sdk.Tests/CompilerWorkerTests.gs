@@ -75,8 +75,9 @@ open class CompilerWorkerTests : IDisposable {
             )
             Directory.CreateDirectory(project)
             let source = Path.Combine(project, "input.gs")
+            // The diagnostic snippet prefixes four spaces before this source line.
             let body = if i == 3 {
-                "open class Sample { func Value() int32 -> " + "".PadLeft(40000) + "missingName }"
+                "open class Sample { func Value() int32 -> missingName } //".PadRight(16379) + "😀" + "".PadRight(20000)
             } else {
                 "open class Sample { func Value() int32 -> $i }"
             }
