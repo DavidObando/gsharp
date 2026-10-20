@@ -150,9 +150,13 @@ using Microsoft.CodeAnalysis;
 public sealed class RawDiagnosticGenerator : IIncrementalGenerator {
     public void Initialize(IncrementalGeneratorInitializationContext context) {
         context.RegisterSourceOutput(context.AdditionalTextsProvider.Collect(), (spc, files) => {
-            if (files.Any(file => file.GetText().ToString() == "error"))
+            var broken = files.Any(file => file.GetText().ToString() == "error");
+            var recovered = files.Any(file => file.GetText().ToString() == "fixed");
+            if (broken)
                 __WRITER__.WriteLine("gsgen(1,1): error RAW5039: raw generator failure");
-            spc.AddSource("Foo.g.cs", "namespace App { partial class Foo { public int Value => 1; } }");
+            spc.AddSource("Foo.g.cs", "namespace App { partial class Foo { public int Value => " + (broken ? "2" : recovered ? "3" : "1") + "; } }");
+            spc.AddSource(broken ? "FailedOnly.g.cs" : recovered ? "Recovered.g.cs" : "Previous.g.cs",
+                broken ? "namespace App { class FailedOnly {} }" : recovered ? "namespace App { class Recovered {} }" : "namespace App { class Previous {} }");
         });
     }
 }`.Replace(
@@ -169,14 +173,49 @@ public sealed class RawDiagnosticGenerator : IIncrementalGenerator {
         project.Save(projectFile)
         Build("App", "First", reuse: reuse)
         Assert.Equal(1, ReportCount())
+        let manifest = Path.Combine(directory, "obj", "gsgen", "gsgen.manifest")
+        let manifestContent = File.ReadAllText(manifest)
+        let manifestTime = File.GetLastWriteTimeUtc(manifest)
+        let generated = File
+            .ReadAllLines(manifest)
+            .Where((path string) -> path.Length > 0)
+            .Select((path string) -> Path.GetFullPath(Path.Combine(directory, path)))
+            .ToArray()
+        let contents = generated.Select(File.ReadAllText).ToArray()
+        let timestamps = generated.Select(File.GetLastWriteTimeUtc).ToArray()
+        let assertLastGood = () -> {
+            Assert.Equal(manifestContent, File.ReadAllText(manifest))
+            Assert.Equal(manifestTime, File.GetLastWriteTimeUtc(manifest))
+            Assert.Equal(
+                generated.OrderBy((path string) -> path, StringComparer.Ordinal),
+                Directory.GetFiles(Path.Combine(directory, "obj", "gsgen"), "*.g.gs").OrderBy(
+                    (path string) -> path,
+                    StringComparer.Ordinal
+                )
+            )
+            for var index = 0; index < generated.Length; index++ {
+                Assert.True(File.Exists(generated[index]))
+                Assert.Equal(contents[index], File.ReadAllText(generated[index]))
+                Assert.Equal(timestamps[index], File.GetLastWriteTimeUtc(generated[index]))
+            }
+        }
         File.WriteAllText(additional, "error")
         Build("App", "First", error: "RAW5039", reuse: reuse)
         Assert.Equal(2, ReportCount())
+        assertLastGood()
         Build("App", "First", error: "RAW5039", reuse: reuse)
         Assert.Equal(3, ReportCount())
-        File.WriteAllText(additional, "ok")
+        assertLastGood()
+        File.WriteAllText(additional, "fixed")
         Build("App", "First", reuse: reuse)
         Assert.Equal(4, ReportCount())
+        Assert.Contains("Recovered.g.gs", File.ReadAllText(manifest))
+        Assert.DoesNotContain("Previous.g.gs", File.ReadAllText(manifest))
+        Assert.False(File.Exists(Path.Combine(directory, "obj", "gsgen", "FailedOnly.g.gs")))
+        Assert.False(File.Exists(Path.Combine(directory, "obj", "gsgen", "Previous.g.gs")))
+        let foo = Array.FindIndex(generated, (path string) -> Path.GetFileName(path) == "Foo.g.gs")
+        Assert.True(foo >= 0)
+        Assert.NotEqual(contents[foo], File.ReadAllText(generated[foo]))
         Build("App", "First", reuse: reuse)
         Assert.Equal(4, ReportCount())
     }

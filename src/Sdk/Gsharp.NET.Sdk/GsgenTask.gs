@@ -169,17 +169,95 @@ open class GsgenTask : Task, ICancelableTask {
             return false
         }
         let successStamp = manifestPath + ".success"
+        let stagingDirectory = Path.Combine(Path.GetFullPath(outputDir), ".staging-" + Guid.NewGuid().ToString("N"))
         try {
             File.Delete(successStamp)
-            if !RunGenerator(compile, gsgenToolFullPath, outputDir, manifestPath, responseFilePath) {
+            Directory.CreateDirectory(stagingDirectory)
+            let stagedManifest = Path.Combine(stagingDirectory, "gsgen.manifest")
+            if File.Exists(manifestPath) {
+                File.Copy(manifestPath, stagedManifest)
+            }
+            if !RunGenerator(compile, gsgenToolFullPath, stagingDirectory, stagedManifest, responseFilePath) {
                 return false
             }
+            PublishGeneratedFiles(stagingDirectory, stagedManifest, outputDir, manifestPath)
             File.WriteAllText(successStamp, string.Empty)
             return true
         } catch (ex Exception) when ex is IOException || ex is UnauthorizedAccessException {
             this.Log.LogError("Generator execution or success-stamp commit failed: ${ex.Message}")
             return false
+        } finally {
+            try {
+                if Directory.Exists(stagingDirectory) {
+                    Directory.Delete(stagingDirectory, recursive: true)
+                }
+            } catch (ex Exception) when ex is IOException || ex is UnauthorizedAccessException {
+                this.Log.LogMessage(
+                    MessageImportance.Low,
+                    "Could not remove generator staging directory: ${ex.Message}"
+                )
+            }
         }
+    }
+
+    private func PublishGeneratedFiles(
+        stagingDirectory string,
+        stagedManifest string,
+        outputDir string,
+        manifestPath string
+    ) {
+        let comparer = if Path.DirectorySeparatorChar == '\\' {
+            StringComparer.OrdinalIgnoreCase
+        } else {
+            StringComparer.Ordinal
+        }
+        let staged = List[string]()
+        let written = List[string]()
+        let keep = HashSet[string](comparer)
+        for path in File.ReadAllLines(stagedManifest) {
+            if string.IsNullOrWhiteSpace(path) {
+                continue
+            }
+            let full = Path.GetFullPath(path)
+            let destination = Path.Combine(outputDir, Path.GetFileName(full))
+            if !comparer.Equals(Path.GetDirectoryName(full), stagingDirectory) || !full.EndsWith(
+                ".g.gs",
+                StringComparison.Ordinal
+            ) ||
+                !keep.Add(Path.GetFullPath(destination)) {
+                throw IOException("Invalid generated-file entry in staged manifest: '$path'.")
+            }
+            staged.Add(full)
+            written.Add(destination)
+        }
+        for var index = 0; index < staged.Count; index++ {
+            let content = File.ReadAllText(staged[index])
+            let destination = written[index]
+            if !File.Exists(destination) || !string.Equals(
+                File.ReadAllText(destination),
+                content,
+                StringComparison.Ordinal
+            ) {
+                File.WriteAllText(destination, content)
+            }
+        }
+        for existing in Directory.GetFiles(outputDir, "*.g.gs", SearchOption.TopDirectoryOnly) {
+            if !keep.Contains(Path.GetFullPath(existing)) {
+                File.Delete(existing)
+            }
+        }
+        let manifestDirectory = Path.GetDirectoryName(Path.GetFullPath(manifestPath))
+        if !string.IsNullOrEmpty(manifestDirectory) {
+            Directory.CreateDirectory(manifestDirectory)
+        }
+        File.WriteAllText(
+            manifestPath,
+            if written.Count == 0 {
+                string.Empty
+            } else {
+                string.Join(Environment.NewLine, written) + Environment.NewLine
+            }
+        )
     }
 
     private func RunGenerator(

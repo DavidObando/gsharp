@@ -345,8 +345,8 @@ shared class GsgenProgram {
         } else {
             string.Join(Environment.NewLine, written) + Environment.NewLine
         }
-        // The manifest is also the successful-run stamp for MSBuild. Its
-        // timestamp must advance even when the owned file list does not change.
+        // The SDK stages this owned-file list until diagnostics are accepted;
+        // its separate task success stamp controls incremental execution.
         File.WriteAllText(manifestPath, content)
     }
 
