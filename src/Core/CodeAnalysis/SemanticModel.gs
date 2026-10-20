@@ -74,6 +74,18 @@ class SemanticModel {
             .TryGetValue(accessor, out var qualified) {
             return qualified
         }
+        // Source-call producers anchor the genuine call before lowering. Keep
+        // the established qualified-expression query as the same call-shape
+        // alias, without replacing an existing outer conversion/flow anchor.
+        if node is AccessorExpressionSyntax qualifiedSyntax {
+            var terminal ExpressionSyntax = qualifiedSyntax.RightPart
+            while terminal is AccessorExpressionSyntax segment {
+                terminal = segment.RightPart
+            }
+            if terminal is CallExpressionSyntax && index.Value.BoundBySyntax.TryGetValue(terminal, out var namedCall) {
+                return namedCall
+            }
+        }
         return nil
     }
 

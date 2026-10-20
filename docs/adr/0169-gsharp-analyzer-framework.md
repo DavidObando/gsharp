@@ -240,6 +240,17 @@ the exact value returned by spilling the recorded operand, alongside that result
 own locals/effects; generic copies never scan blocks or follow arbitrary variables.
 Constant folding preserves the field read's syntax even without static qualifiers.
 
+Source-call factories assign the genuine member call syntax before completion
+creation and per-member lowering, including qualified/generic static, extension
+and instance call routes. Late inherited syntax anchoring is not a substitute:
+same-operation completion copies continue to reject nil-syntax replacements.
+The existing semantic-model qualified/call-shape alias remains bidirectional on
+exact syntax nodes, miss-only, so retaining the genuine early call anchor does not
+erase an established outer expression/conversion query.
+Receiver type normalization recognizes the binder's exact implicit-conversion
+operand receipt with the original queried syntax; early call anchors must not
+turn an argument conversion into the receiver's logical type or peel authored casts.
+
 Representation-changing constant folding retains the actual selected source
 field read (its `FieldSymbol` and effective closed owner), not just a literal
 value or member name. A verified fold carries that semantic association to

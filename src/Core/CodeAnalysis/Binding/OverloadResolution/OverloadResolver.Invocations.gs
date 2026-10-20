@@ -1483,20 +1483,21 @@ internal partial class OverloadResolver {
             extensionParameterNameAt,
             parameterOffset: 1
         )
+        let MakeExtensionCall = func (returnType TypeSymbol?) BoundCallExpression {
+            return BoundCallExpression(ce, extension, finalArguments, returnType){
+                MethodTypeArguments = extensionMethodTypeArguments
+            }
+        }
         if substitution != nil {
             var returnType = substituteType(extension.Type, substitution)
             if extension.IsAsync && !extension.IsAsyncVoid && !isAsyncIteratorReturnType(extension.Type) {
                 returnType = wrapAsTask(returnType, extension.AsyncReturnsValueTask)
             }
             if extension.IsSuspending {
-                let suspendingCall = BoundCallExpression(nil, extension, finalArguments, wrapAsTask(returnType, true)){
-                    MethodTypeArguments = extensionMethodTypeArguments
-                }
+                let suspendingCall = MakeExtensionCall(wrapAsTask(returnType, true))
                 return completeSuspendingCall(suspendingCall, returnType, ce.Location, extension.Name)
             }
-            return BoundCallExpression(nil, extension, finalArguments, returnType){
-                MethodTypeArguments = extensionMethodTypeArguments
-            }
+            return MakeExtensionCall(returnType)
         }
         // Issue #1376: an async receiver-clause (extension) function's call-site
         // return type is Task / Task[T], not the underlying void / T. Wrap here
@@ -1504,18 +1505,14 @@ internal partial class OverloadResolver {
         // free-function and user-instance-call paths.
         if extension.IsAsync && !extension.IsAsyncVoid && !isAsyncIteratorReturnType(extension.Type) {
             let asyncReturn = wrapAsTask(extension.Type, extension.AsyncReturnsValueTask)
-            return BoundCallExpression(nil, extension, finalArguments, asyncReturn){
-                MethodTypeArguments = extensionMethodTypeArguments
-            }
+            return MakeExtensionCall(asyncReturn)
         }
         // ADR-0174 D4: a suspending receiver-clause function's call is typed ValueTask[R]; the caller sees R.
         if extension.IsSuspending {
-            let suspendingCall = BoundCallExpression(nil, extension, finalArguments, wrapAsTask(extension.Type, true)){
-                MethodTypeArguments = extensionMethodTypeArguments
-            }
+            let suspendingCall = MakeExtensionCall(wrapAsTask(extension.Type, true))
             return completeSuspendingCall(suspendingCall, extension.Type, ce.Location, extension.Name)
         }
-        return BoundCallExpression(nil, extension, finalArguments){MethodTypeArguments = extensionMethodTypeArguments}
+        return MakeExtensionCall(nil)
     }
 
     func BindUserInstanceCall(
@@ -2008,7 +2005,7 @@ internal partial class OverloadResolver {
         )
         let MakeCall = func (returnTypeOverride TypeSymbol?) BoundUserInstanceCallExpression {
             let result = BoundUserInstanceCallExpression(
-                nil,
+                ce,
                 receiver,
                 method,
                 finalArguments,

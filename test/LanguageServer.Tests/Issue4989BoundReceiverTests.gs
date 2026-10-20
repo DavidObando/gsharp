@@ -25,6 +25,135 @@ import Xunit
 /// symbol lookup on `s.LoadAsync()` resolve to the interface member, never to
 /// a same-named member of one implementation.
 open class Issue4989BoundReceiverTests {
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func Issue5035_LoweredSuspendingArgument_KeepsEarlyCallSiteAndAwait(asyncCaller bool, generic bool) {
+        let source = `package Repro
+class HolderOWNER_GENERIC {
+    prop Value int32 { get; set; }
+    shared {
+        func Read(value string) string -> "decoy"
+        suspend func ReadMETHOD_GENERIC(value int32) string -> "selected"
+    }
+    CALLERfunc Run() {
+        let competing = System.Text.StringBuilder().ToString()
+        let indexed = TARGET.ReadCALL_GENERIC(this.Value).ToString()[^1]
+    }
+}
+`.Replace(
+            "OWNER_GENERIC",
+            if generic {
+                "[T]"
+            } else {
+                ""
+            }
+        ).Replace(
+            "METHOD_GENERIC",
+            if generic {
+                "[U]"
+            } else {
+                ""
+            }
+        ).Replace(
+            "CALL_GENERIC",
+            if generic {
+                "[bool]"
+            } else {
+                ""
+            }
+        ).Replace(
+            "TARGET",
+            if generic {
+                "Holder[int32]"
+            } else {
+                "Holder"
+            }
+        ).Replace(
+            "CALLER",
+            if asyncCaller {
+                "async "
+            } else {
+                ""
+            }
+        )
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let owner = compilation.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Holder")
+        let run = owner.Methods.Single((f FunctionSymbol) -> f.Name == "Run")
+        if !asyncCaller {
+            Assert.Equal("Inferred", run.SuspendingKind.ToString())
+        }
+        let token = TokenAt(
+            content,
+            source,
+            if generic {
+                "Read[bool](this.Value)"
+            } else {
+                "Read(this.Value)"
+            },
+            0
+        )
+        let expected = owner.StaticMethods.Single((f FunctionSymbol) -> f.Name == "Read" && f.IsSuspending)
+        let root = Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "indexed =", 0).Parent).Initializer
+        let plan = Assert.IsType[BoundBlockExpression](
+            compilation.GetSemanticModel(content.SyntaxTree).GetBoundNode(root!!)
+        )
+        let following = Assert.IsType[BoundImportedInstanceCallExpression](
+            Assert.IsType[BoundVariableDeclaration](plan.Statements[0]).Initializer
+        )
+        let completion = Assert.IsType[BoundAwaitExpression](following.Receiver)
+        let selected = Assert.IsType[BoundCallExpression](completion.Expression)
+        Assert.Same(expected, selected.Function)
+        Assert.Same(token.Parent, selected.Syntax)
+        Assert.Same(
+            owner.Properties.Single((p PropertySymbol) -> p.Name == "Value").BackingField,
+            Assert.IsType[BoundFieldAccessExpression](selected.Arguments[0]).Field
+        )
+        Assert.Same(expected, BoundSemantics.GetSymbol(compilation, token))
+        Assert.Same(expected, SemanticLookup.ResolveSymbol(compilation, token))
+        Assert.Same(
+            TypeSymbol.String,
+            BoundSemantics.GetExpressionType(compilation, Assert.IsType[CallExpressionSyntax](token.Parent))
+        )
+        Assert.Equal(
+            typeof(string).GetMethod("ToString", Type.EmptyTypes),
+            BoundSemantics.GetImportedMember(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+        )
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]"),
+            "ToString",
+            "func (string) ToString() string"
+        )
+        let uri = DocumentUri.From("file:///issue5035-callsite-before-lowering.gs")!!
+        let position = LanguageServerTestHelpers.PositionOf(
+            source,
+            if generic {
+                "Read[bool](this.Value)"
+            } else {
+                "Read(this.Value)"
+            }
+        )
+        let declaration = LanguageServerTestHelpers.PositionOf(
+            source,
+            if generic {
+                "Read[U](value int32)"
+            } else {
+                "Read(value int32)"
+            }
+        )
+        let definition = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
+        AssertPosition(declaration, definition.Range.Start)
+        AssertPosition(Position(declaration.Line, declaration.Character + "Read".Length), definition.Range.End)
+        let declaredHover = Assert.IsType[Hover](HoverComputer.ComputeHover(content, declaration))
+        AssertIndexedHover(content, position, "Read", declaredHover.Contents.ToString().Split('\n')[1])
+    }
+
     @Fact
     func Issue5035_BareConstantPrefix_PreservesExactMethodAndRange() {
         const source = `package Repro

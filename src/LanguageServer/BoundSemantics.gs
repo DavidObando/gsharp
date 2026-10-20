@@ -773,7 +773,19 @@ shared class BoundSemantics {
         wrapper BoundExpression,
         inner BoundExpression,
         expression ExpressionSyntax? = nil
-    ) bool -> wrapper.Syntax == nil ||
+    ) bool -> (
+        wrapper is BoundConversionExpression && object.ReferenceEquals(wrapper.ImplicitConversionOperand, inner) &&
+            (
+            expression == nil ||
+                (
+                inner.Syntax is ExpressionSyntax syntax && object.ReferenceEquals(
+                    AssignmentTargetSyntaxFacts.UnwrapParentheses(syntax),
+                    expression
+                )
+            )
+        )
+    ) ||
+        wrapper.Syntax == nil ||
         (
         wrapper.Syntax is AccessorExpressionSyntax &&
             (expression == nil || object.ReferenceEquals(inner.Syntax, expression))

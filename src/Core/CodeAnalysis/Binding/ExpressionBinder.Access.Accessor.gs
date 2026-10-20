@@ -4038,7 +4038,7 @@ internal partial class ExpressionBinder {
             )
             let MakeStaticGenericCall = func (substitutedReturnOverride TypeSymbol?) BoundCallExpression {
                 let result = BoundCallExpression(
-                    nil,
+                    ce,
                     method!!,
                     finalArguments,
                     substitutedReturnOverride ?? method!!.Type

@@ -22,6 +22,175 @@ import Xunit
 /// and (cref:GSharpSyntaxWalker).
 open class Adr0169SemanticModelTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func CompletionCallSite_ReceiverRoutes_KeepOriginalCallBeforeLowering(extension bool) {
+        let source = `package Query
+class Holder {
+    prop Value int32 { get; set; }
+    INSTANCE
+    func Run() { let first = this.Read(this.Value)[^1] }
+}
+EXTENSION
+`.Replace(
+            "INSTANCE",
+            if extension {
+                ""
+            } else {
+                "suspend func Read(value int32) string -> \"selected\""
+            }
+        )
+            .Replace(
+            "EXTENSION",
+            if extension {
+                "suspend func (receiver Holder) Read(value int32) string -> \"selected\""
+            } else {
+                ""
+            }
+        )
+        let (compilation, model, tree) = CreateQualifierModel(source)
+        let owner = compilation.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Holder")
+        let run = owner.Methods.Single((f FunctionSymbol) -> f.Name == "Run")
+        Assert.Equal("Inferred", run.SuspendingKind.ToString())
+        let syntax = Assert.IsType[CallExpressionSyntax](
+            Assert.IsType[IndexExpressionSyntax](QualifierInitializer(tree, "first").RightPart).Target
+        )
+        let completed = Assert.IsType[BoundAwaitExpression](CompletionInitializer(model, tree, "first"))
+        let selected = Assert.IsAssignableFrom[BoundCallOperationExpression](completed.Expression)
+        Assert.Same(syntax, selected.Syntax)
+        Assert.Same(selected, completed.LogicalCompletionOperand)
+        let argument = selected.Arguments[
+            if extension {
+                1
+            } else {
+                0
+            }
+        ]
+        Assert.Same(
+            owner.Properties.Single((p PropertySymbol) -> p.Name == "Value").BackingField,
+            Assert.IsType[BoundFieldAccessExpression](argument).Field
+        )
+        Assert.Same(TypeSymbol.String, completed.Type)
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func CompletionCallSite_BeforePropertyLowering_PreservesAwaitAndExactOrigin(asyncCaller bool, generic bool) {
+        let source = `package Query
+class HolderOWNER_GENERIC {
+    prop Value int32 { get; set; }
+    shared {
+        func Read(value string) string -> "decoy"
+        suspend func ReadMETHOD_GENERIC(value int32) string -> "selected"
+    }
+    CALLERfunc Run() {
+        let first = TARGET.ReadCALL_GENERIC(this.Value)[^1]
+    }
+}
+`.Replace(
+            "OWNER_GENERIC",
+            if generic {
+                "[T]"
+            } else {
+                ""
+            }
+        ).Replace(
+            "METHOD_GENERIC",
+            if generic {
+                "[U]"
+            } else {
+                ""
+            }
+        ).Replace(
+            "CALL_GENERIC",
+            if generic {
+                "[bool]"
+            } else {
+                ""
+            }
+        ).Replace(
+            "TARGET",
+            if generic {
+                "Holder[int32]"
+            } else {
+                "Holder"
+            }
+        ).Replace(
+            "CALLER",
+            if asyncCaller {
+                "async "
+            } else {
+                ""
+            }
+        )
+        let (compilation, model, tree) = CreateQualifierModel(source)
+        let owner = compilation.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Holder")
+        let run = owner.Methods.Single((f FunctionSymbol) -> f.Name == "Run")
+        Assert.Equal(asyncCaller, run.IsAsync)
+        if !asyncCaller {
+            Assert.Equal("Inferred", run.SuspendingKind.ToString())
+            Assert.True(run.IsSuspending)
+        }
+        let root = QualifierInitializer(tree, "first")
+        let completion = Assert.IsType[BoundAwaitExpression](CompletionInitializer(model, tree, "first"))
+        Assert.DoesNotContain(
+            compilation.BoundProgram.Functions[run].DescendantsAndSelf().OfType[BoundImportedCallExpression](),
+            (c BoundImportedCallExpression) -> c.Function.Method.DeclaringType?.FullName ==
+            "Gsharp.Concurrency.Blocking" && c.Function.Method.Name == "Wait"
+        )
+        let call = Assert.IsType[BoundCallExpression](completion.Expression)
+        let syntax = Assert.IsType[CallExpressionSyntax](Assert.IsType[IndexExpressionSyntax](root.RightPart).Target)
+        Assert.Same(syntax, call.Syntax)
+        Assert.Same(call, completion.LogicalCompletionOperand)
+        Assert.Same(owner.StaticMethods.Single((f FunctionSymbol) -> f.Name == "Read" && f.IsSuspending), call.Function)
+        let lowered = Assert.IsType[BoundFieldAccessExpression](call.Arguments[0])
+        Assert.Same(owner.Properties.Single((p PropertySymbol) -> p.Name == "Value").BackingField, lowered.Field)
+        Assert.True(model.TryGetStaticTypeQualifier(root, syntax, out var qualifierType, out _, out var selected))
+        Assert.Same(call, selected)
+        if generic {
+            Assert.Same(TypeSymbol.Int32, Assert.Single(Assert.IsType[StructSymbol](qualifierType).TypeArguments))
+            Assert.Same(TypeSymbol.Bool, Assert.Single(call.MethodTypeArguments))
+        }
+        Assert.Same(TypeSymbol.String, completion.Type)
+        Assert.NotSame(completion.Type, call.Type)
+        let copied = Assert.IsType[BoundAwaitExpression](QualifierChildRewriter().Apply(completion))
+        Assert.Same(syntax, Assert.IsType[BoundCallExpression](copied.Expression).Syntax)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func CompletionReceipt_NilSyntaxReplacement_DoesNotMatchNilOrigin(blocking bool) {
+        const source = `package Query
+class Holder { shared { suspend func Read(value int32) string -> "value" } }
+let first = Holder.Read(1)[^1]
+`
+        let (_, model, tree) = CreateQualifierModel(source)
+        let actual = Assert.IsType[BoundImportedCallExpression](CompletionInitializer(model, tree, "first"))
+        let selected = Assert.IsType[BoundCallExpression](actual.LogicalCompletionOperand)
+        let origin = BoundCallExpression(nil, selected.Function, selected.Arguments, selected.ReturnType)
+        let replacement = BoundCallExpression(nil, selected.Function, selected.Arguments, selected.ReturnType)
+        let wrapper BoundExpression = if blocking {
+            BoundImportedCallExpression(
+                nil,
+                actual.Function,
+                System.Collections.Immutable.ImmutableArray.Create[BoundExpression](origin)
+            )
+        } else {
+            BoundAwaitExpression(nil, origin, actual.Type)
+        }
+        wrapper.RecordLogicalCompletion(origin)
+        Assert.Same(origin, wrapper.LogicalCompletionOperand)
+        Assert.Same(origin.Type, replacement.Type)
+        let changed = CompletionOperandReplacementRewriter(origin, replacement).Apply(wrapper)
+        Assert.Null(changed.LogicalCompletionOperand)
+        Assert.Same(origin, wrapper.LogicalCompletionOperand)
+    }
+
+    @Theory
     @InlineData(false, false)
     @InlineData(true, false)
     @InlineData(false, true)
