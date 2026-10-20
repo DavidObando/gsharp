@@ -211,6 +211,15 @@ dispatch likewise records the exact receiver type parameter and its selected
 constraint owner/slot, retaining those identities through argument copies.
 These are internal, non-child provenance references fixed before publication.
 
+Source enum literals similarly retain the actual selected `EnumMemberSymbol`
+and its owning enum at normal lookup, never recover membership from a numeric
+value. Runtime capture ownership may finish at any independently anchored
+prefix read with exact bound-node/syntax identity; namespace/type segments are
+not runtime receivers. For an imported constraint, the selected closed
+declaring owner may be inherited: its exact slot must belong to the original
+constraint's canonical interface family, while the original type parameter,
+symbolic owner/type arguments and metadata identity remain unchanged.
+
 The existing per-tree lazy semantic index harvests these binding-time
 decisions. They are fixed before the bound program is published; a query
 does not modify project, compilation, bound or syntax state, including

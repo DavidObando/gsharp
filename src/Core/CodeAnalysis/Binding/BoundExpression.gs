@@ -51,6 +51,11 @@ abstract class BoundExpression : BoundNode {
         private set;
     }
 
+    internal prop StaticEnumMember EnumMemberSymbol? {
+        get;
+        private set;
+    }
+
     /// Retains the actual type-receiver decision before inherited syntax anchors
     /// lose its provenance. These references are not bound/syntax tree children.
     internal func RecordStaticQualifier(type TypeSymbol, member ExpressionSyntax) {
@@ -83,6 +88,20 @@ abstract class BoundExpression : BoundNode {
                     .TypeParameter
                     .ConstraintInterfaceType
             }
+        }
+    }
+
+    internal func RecordStaticEnumQualifier(type EnumSymbol, member ExpressionSyntax, selected EnumMemberSymbol) {
+        if this is not BoundLiteralExpression literal || !object.ReferenceEquals(literal.Type, type) ||
+            !object.ReferenceEquals(selected.EnumType, type) || !object.Equals(literal.Value, selected.Value) {
+            return
+        }
+        RecordStaticQualifier(type, member)
+        if StaticEnumMember == nil && object.ReferenceEquals(StaticQualifierType, type) && object.ReferenceEquals(
+            StaticMemberSyntax,
+            member
+        ) {
+            StaticEnumMember = selected
         }
     }
 
@@ -145,6 +164,7 @@ abstract class BoundExpression : BoundNode {
         copy.StaticMemberSyntax = StaticMemberSyntax
         copy.StaticConstantFieldRead = StaticConstantFieldRead
         copy.StaticConstraintOwner = StaticConstraintOwner
+        copy.StaticEnumMember = StaticEnumMember
     }
 
     /// Gets the compile-time constant value of this expression — the Roslyn

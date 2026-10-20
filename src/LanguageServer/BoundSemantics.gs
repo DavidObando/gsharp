@@ -332,19 +332,19 @@ shared class BoundSemantics {
             return false
         }
         segments.RemoveRange(end, segments.Count - end)
-        let root = AssignmentTargetSyntaxFacts.UnwrapParentheses(segments[0])
         // Both the plan and source can inherit the argument's anchor. Prove
-        // ownership through the target prefix's independently anchored read.
-        let read = Unwrap(ReadReceiverSegments(segments, source, 0, root, captures), captures)
-        if read != nil && object.ReferenceEquals(read.Syntax, root) && object.ReferenceEquals(
-            read,
-            Unwrap(model.GetBoundNode(root) as BoundExpression)
-        ) {
-            return true
-        }
-        for var depth = 1; depth < segments.Count; depth++ {
-            let member = Unwrap(ReadReceiverSegments(segments, source, depth, segments[depth], captures), captures)
+        // ownership at an independently anchored runtime or canonical static boundary.
+        for var depth = 0; depth < segments.Count; depth++ {
+            let syntax = AssignmentTargetSyntaxFacts.UnwrapParentheses(segments[depth])
+            let member = Unwrap(ReadReceiverSegments(segments, source, depth, syntax, captures), captures)
+            if member != nil && object.ReferenceEquals(member.Syntax, syntax) && object.ReferenceEquals(
+                member,
+                Unwrap(model.GetBoundNode(syntax) as BoundExpression)
+            ) {
+                return true
+            }
             if member != nil &&
+                depth > 0 &&
                 context is AccessorExpressionSyntax accessor &&
                 StaticMemberOwnsPrefix(model, accessor, segments[depth], member) {
                 return true
@@ -396,6 +396,18 @@ shared class BoundSemantics {
             ) &&
                 object.ReferenceEquals(foldedField.StaticMemberSyntax, member) &&
                 SourceStaticFieldOwnsPrefix(sourceType, name, foldedField)
+        }
+        if read is BoundLiteralExpression literal &&
+            literal.StaticEnumMember is {} enumMember &&
+            sourceType is EnumSymbol enumOwner {
+            return object.ReferenceEquals(enumMember.EnumType, enumOwner) && object.ReferenceEquals(
+                literal.Type,
+                enumOwner
+            ) &&
+                enumOwner.TryGetMember(name, out var selectedMember) && object.ReferenceEquals(
+                selectedMember,
+                enumMember
+            )
         }
         if read is BoundConstrainedStaticCallExpression constrained && sourceType is TypeParameterSymbol parameter {
             return ConstrainedStaticOwnsPrefix(parameter, member, name, constrained)
@@ -505,13 +517,14 @@ shared class BoundSemantics {
         call BoundConstrainedStaticCallExpression
     ) bool {
         let owner = call.StaticConstraintOwner
-        if !object.ReferenceEquals(call.TypeParameter, parameter) || owner == nil || !object.ReferenceEquals(
-            owner,
-            parameter.ConstraintInterfaceType
-        ) {
+        let constraint = parameter.ConstraintInterfaceType
+        if !object.ReferenceEquals(call.TypeParameter, parameter) || owner == nil || constraint == nil {
             return false
         }
         if call.InterfaceMethod is {} selected && owner is InterfaceSymbol contract {
+            if !object.ReferenceEquals(owner, constraint) {
+                return false
+            }
             if member is NameExpressionSyntax && TypeMemberModel.TryGetPropertyWithOwner(
                 contract,
                 name,
@@ -530,7 +543,8 @@ shared class BoundSemantics {
                 .Any((candidate FunctionSymbol) -> object.ReferenceEquals(candidate, selected))
         }
         if call.ClrMethod is {} imported && object.ReferenceEquals(call.ConstrainedInterfaceType, owner) &&
-            owner.ClrType is {} clrType &&
+            owner.ClrType is {} declaringType &&
+            constraint.ClrType is {} constraintType &&
             imported
             .IsStatic {
             let definition = if imported.IsGenericMethod && !imported.IsGenericMethodDefinition {
@@ -539,10 +553,13 @@ shared class BoundSemantics {
                 imported
             }
             return ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(
-                clrType,
+                constraintType,
                 BindingFlags.Public | BindingFlags.Static
             )
-                .Any((candidate MethodInfo) -> SameClrMethod(candidate, definition))
+                .Any(
+                (candidate MethodInfo) -> declaringType.Equals(candidate.DeclaringType) &&
+                    SameClrMethod(candidate, definition)
+            )
         }
         return false
     }
@@ -767,6 +784,7 @@ shared class BoundSemantics {
         case call is BoundCallOperationExpression: call.CalledFunction
         case property is BoundPropertyReferenceOperationExpression: property.ReferencedProperty
         case field is BoundFieldAccessExpression: field.Field
+        case literal is BoundLiteralExpression when literal.StaticEnumMember != nil: literal.StaticEnumMember
         case literal is BoundLiteralExpression: literal.StaticConstantFieldRead?.Field
         default: default(Symbol?)
     }
@@ -801,6 +819,7 @@ shared class BoundSemantics {
                 .WithSignature(substitutedType, property.Property.Parameters)
             case property is BoundPropertyAccessExpression: property.Property
             case field is BoundFieldAccessExpression: field.Field
+            case literal is BoundLiteralExpression when literal.StaticEnumMember != nil: literal.StaticEnumMember
             case literal is BoundLiteralExpression: literal.StaticConstantFieldRead?.Field
             default: default(Symbol?)
         }

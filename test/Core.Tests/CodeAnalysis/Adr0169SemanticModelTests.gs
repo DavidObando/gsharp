@@ -20,6 +20,35 @@ import Xunit
 /// syntax→bound-node, syntax→type queries), (cref:Symbol.DeclaringSyntaxNodes),
 /// and (cref:GSharpSyntaxWalker).
 open class Adr0169SemanticModelTests {
+    @Fact
+    func StaticQualifierQuery_EnumMembers_KeepDistinctEqualValuedDecisions() {
+        const source = `package Query
+enum First { Item }
+enum Second { Item }
+func Run() {
+    let first = First.Item
+    let second = Second.Item
+}
+`
+        let (_, model, tree) = CreateQualifierModel(source)
+        let root = QualifierInitializer(tree, "first")
+        let (owner, qualifier, read) = QueryQualifier(model, root)
+        let (otherOwner, _, otherRead) = QueryQualifier(model, QualifierInitializer(tree, "second"))
+        let literal = Assert.IsType[BoundLiteralExpression](read)
+        let other = Assert.IsType[BoundLiteralExpression](otherRead)
+        Assert.Equal(literal.Value, other.Value)
+        Assert.NotSame(owner, otherOwner)
+        Assert.Same(owner, literal.Type)
+        Assert.Same(otherOwner, other.Type)
+        Assert.NotSame(read.StaticMemberSyntax, other.StaticMemberSyntax)
+        let authored = BoundLiteralExpression(literal.Syntax, literal.Value, literal.Type)
+        literal.CopyStaticQualifierTo(authored)
+        Assert.Null(authored.StaticQualifierType)
+        Assert.Same(root.LeftPart, qualifier)
+        let (_, _, unchanged) = QueryQualifier(model, root)
+        Assert.Same(read, unchanged)
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)

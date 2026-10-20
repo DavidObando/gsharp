@@ -1974,7 +1974,9 @@ internal partial class ExpressionBinder {
                     // member surfaces GS0204 at the member-identifier
                     // location (e.g. `Color.Red`).
                     reportObsoleteUseIfApplicable(ne.Location, member!!, "${enumSymbol.Name}.${member!!.Name}")
-                    return BoundLiteralExpression(nil, member!!.Value, enumSymbol)
+                    let literal = BoundLiteralExpression(nil, member!!.Value, enumSymbol)
+                    literal.RecordStaticEnumQualifier(enumSymbol, ne, member!!)
+                    return literal
                 }
                 Diagnostics.ReportUndefinedEnumMember(ne.Location, memberName, enumSymbol.Name)
                 return BoundErrorExpression(nil)

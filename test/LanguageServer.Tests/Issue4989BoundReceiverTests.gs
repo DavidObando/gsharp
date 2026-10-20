@@ -25,6 +25,178 @@ import Xunit
 /// symbol lookup on `s.LoadAsync()` resolve to the interface member, never to
 /// a same-named member of one implementation.
 open class Issue4989BoundReceiverTests {
+    @Fact
+    func Issue5035_ConstructorPrefix_PreservesExactRuntimeBoundary() {
+        const source = `package Repro
+func Run() {
+    let competing = System.Text.StringBuilder().ToString()
+    let indexed = System.Uri("https://example.test/path").ToString()[^1]
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let method = typeof(Uri).GetMethod("ToString", Type.EmptyTypes)
+        let token = TokenAt(content, source, "ToString()[^1]", 0)
+        Assert.Equal(method, BoundSemantics.GetImportedMember(compilation, token))
+        Assert.True(
+            ImportedClrMemberResolver.TryResolveClrMember(content.SyntaxTree, compilation, token, out var actual)
+        )
+        Assert.Equal(method, actual)
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]"),
+            "ToString",
+            "func (System.Uri) ToString() string"
+        )
+    }
+
+    @Fact
+    func Issue5035_EnumPrefix_PreservesActualMemberAndSelectedMethod() {
+        const source = `package Repro
+enum Color { Red, Green }
+enum Other { Red, Green }
+func Run() {
+    let competing = System.Text.StringBuilder().ToString()
+    let plain = Color.Green.ToString()
+    let indexed = Color.Green.ToString()[^1]
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let root = Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "plain =", 0).Parent).Initializer
+        let plain = Assert.IsType[BoundImportedInstanceCallExpression](
+            compilation.GetSemanticModel(content.SyntaxTree).GetBoundNode(root!!)
+        )
+        let expected = plain.Method
+        Assert.Equal(expected, BoundSemantics.GetImportedMember(compilation, TokenAt(content, source, "ToString()", 1)))
+        Assert.Equal(
+            expected,
+            BoundSemantics.GetImportedMember(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+        )
+        let plainHover = Assert.IsType[Hover](
+            HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "ToString()", 1))
+        )
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]"),
+            "ToString",
+            plainHover.Contents.ToString().Split('\n')[1]
+        )
+        let owner = compilation.GlobalScope.Enums.Single((e EnumSymbol) -> e.Name == "Color")
+        Assert.True(owner.TryGetMember("Green", out var member))
+        Assert.Same(member, BoundSemantics.GetSymbol(compilation, TokenAt(content, source, "Green.ToString()[^1]", 0)))
+        let uri = DocumentUri.From("file:///issue5035-enum-prefix.gs")!!
+        let location = Assert.IsType[Location](
+            DefinitionComputer.ComputeDefinition(
+                uri,
+                content,
+                LanguageServerTestHelpers.PositionOf(source, "Green.ToString()[^1]")
+            )
+        )
+        let declaration = LanguageServerTestHelpers.PositionOf(source, "Green }", 0)
+        Assert.Equal(uri, location.Uri)
+        AssertPosition(declaration, location.Range.Start)
+        AssertPosition(Position(declaration.Line, declaration.Character + "Green".Length), location.Range.End)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5035_InheritedImportedConstraint_PreservesClosedSlot(generic bool) {
+        let root = Path.Combine(Directory.GetCurrentDirectory(), "issue5035-inherited-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root)
+        try {
+            let assemblyPath = Path.Combine(root, "StaticContracts.dll")
+            EmitClrFixture(
+                assemblyPath,
+                if generic {
+                    "#nullable enable\nnamespace StaticContracts { public interface IBase<U> { static abstract string Make(); } public interface IDerived<U> : IBase<U> { } }"
+                } else {
+                    "#nullable enable\nnamespace StaticContracts { public interface IBase { static abstract string Make(); } public interface IDerived : IBase { } }"
+                }
+            )
+            let source = `package Repro
+func Run[T StaticContracts.IDerivedTYPE_ARGUMENTS]() {
+    let competing = System.Text.StringBuilder().ToString()
+    let plain = T.Make().ToString()
+    let indexed = T.Make().ToString()[^1]
+}
+`.Replace(
+                "TYPE_ARGUMENTS",
+                if generic {
+                    "[int32?]"
+                } else {
+                    ""
+                }
+            )
+            let path = Path.Combine(root, "Consumer.gs")
+            File.WriteAllText(path, source)
+            let project = ProjectState(Path.Combine(root, "Consumer.gsproj"))
+            project.References = []string{assemblyPath}
+            let tree = project.UpdateFile(path, source)
+            let content = DocumentContent(
+                tree,
+                Enumerable.Range(0, source.Length).Where((i int32) -> source[i] == '\n').ToList(),
+                project,
+                WorkspaceState()
+            )
+            let compilation = project.GetCompilation()
+            Assert.Empty(compilation.GlobalScope.Diagnostics)
+            Assert.Empty(compilation.BoundProgram.Diagnostics)
+            let expression = Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "indexed =", 0).Parent)
+                .Initializer
+            let block = Assert.IsType[BoundBlockExpression](
+                compilation.GetSemanticModel(tree).GetBoundNode(expression!!)
+            )
+            let outer = Assert.IsType[BoundImportedInstanceCallExpression](
+                Assert.IsType[BoundVariableDeclaration](block.Statements[0]).Initializer
+            )
+            let selected = Assert.IsType[BoundConstrainedStaticCallExpression](outer.Receiver)
+            let original = Assert.IsType[ImportedTypeSymbol](selected.TypeParameter.ClrInterfaceConstraint)
+            let declaring = Assert.IsType[ImportedTypeSymbol](selected.ConstrainedInterfaceType)
+            Assert.NotSame(original, declaring)
+            Assert.Equal(selected.ClrMethod?.DeclaringType, declaring.ClrType)
+            if generic {
+                Assert.Same(
+                    TypeSymbol.Int32,
+                    Assert.IsType[NullableTypeSymbol](Assert.Single(declaring.TypeArguments)).UnderlyingType
+                )
+                Assert.NotEqual(original.OpenDefinition, declaring.OpenDefinition)
+            } else {
+                Assert.NotEqual(original.ClrType, declaring.ClrType)
+            }
+            let plainExpression = Assert.IsType[VariableDeclarationSyntax](
+                TokenAt(content, source, "plain =", 0).Parent
+            )
+                .Initializer
+            let expected = Assert.IsType[BoundImportedInstanceCallExpression](
+                compilation.GetSemanticModel(tree).GetBoundNode(plainExpression!!)
+            )
+                .Method
+            Assert.Equal(expected, outer.Method)
+            Assert.Equal(
+                expected,
+                BoundSemantics.GetImportedMember(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+            )
+            Assert.Equal(
+                selected.ClrMethod,
+                BoundSemantics.GetImportedMember(compilation, TokenAt(content, source, "Make()", 0))
+            )
+            AssertIndexedHover(
+                content,
+                LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]"),
+                "ToString",
+                "func (string) ToString() string"
+            )
+        } finally {
+            Directory.Delete(root, recursive: true)
+        }
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)
