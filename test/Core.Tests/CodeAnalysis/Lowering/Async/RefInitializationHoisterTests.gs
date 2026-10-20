@@ -101,17 +101,24 @@ open class RefInitializationHoisterTests {
         let body = BoundBlockStatement(nil, ImmutableArray.Create[BoundStatement](declSlot, useStmt))
         let result = RefInitializationHoister.Rewrite(body)
         let stmts = result.Statements
-        // Statement 0: empty block (ref local decl removed)
-        Assert.IsType[BoundBlockStatement](stmts[0])
-        // Statement 1: expression is arr[i] (BoundIndexExpression)
+        let prelude = Assert.IsType[BoundBlockStatement](stmts[0])
+        Assert.Equal(3, prelude.Statements.Length)
+        let arrayCapture = Assert.IsType[BoundVariableDeclaration](prelude.Statements[0])
+        let indexCapture = Assert.IsType[BoundVariableDeclaration](prelude.Statements[1])
+        Assert.Same(arr, Assert.IsType[BoundVariableExpression](arrayCapture.Initializer).Variable)
+        Assert.Same(i, Assert.IsType[BoundVariableExpression](indexCapture.Initializer).Variable)
+        let probe = Assert.IsType[BoundAddressOfExpression](
+            Assert.IsType[BoundExpressionStatement](prelude.Statements[2]).Expression
+        )
         Assert.IsType[BoundExpressionStatement](stmts[1])
         let expr = (cast[BoundExpressionStatement](stmts[1])).Expression
         Assert.IsType[BoundIndexExpression](expr)
         let idx = cast[BoundIndexExpression](expr)
         Assert.IsType[BoundVariableExpression](idx.Target)
-        Assert.Equal("arr", (cast[BoundVariableExpression](idx.Target)).Variable.Name)
+        Assert.Same(arrayCapture.Variable, (cast[BoundVariableExpression](idx.Target)).Variable)
         Assert.IsType[BoundVariableExpression](idx.Index)
-        Assert.Equal("i", (cast[BoundVariableExpression](idx.Index)).Variable.Name)
+        Assert.Same(indexCapture.Variable, (cast[BoundVariableExpression](idx.Index)).Variable)
+        Assert.Same(idx, probe.Operand)
     }
 
     @Fact
@@ -308,21 +315,22 @@ open class RefInitializationHoisterTests {
         let bareUse2 = BoundExpressionStatement(nil, BoundVariableExpression(nil, slot))
         let body = BoundBlockStatement(nil, ImmutableArray.Create[BoundStatement](declSlot, bareUse1, bareUse2))
         let result = RefInitializationHoister.Rewrite(body)
-        // Prelude: one receiver temp plus the original address probe. `i` is a
-        // trivially repeatable BoundVariableExpression.
+        // Capture the mutable index as well as the side-effecting array producer.
         let prelude = Assert.IsType[BoundBlockStatement](result.Statements[0])
-        Assert.Equal(2, prelude.Statements.Length)
+        Assert.Equal(3, prelude.Statements.Length)
         let tempDecl = Assert.IsType[BoundVariableDeclaration](prelude.Statements[0])
         Assert.Same(arrCall, tempDecl.Initializer)
-        let probe = Assert.IsType[BoundExpressionStatement](prelude.Statements[1])
+        let indexCapture = Assert.IsType[BoundVariableDeclaration](prelude.Statements[1])
+        Assert.Same(i, Assert.IsType[BoundVariableExpression](indexCapture.Initializer).Variable)
+        let probe = Assert.IsType[BoundExpressionStatement](prelude.Statements[2])
         Assert.IsType[BoundAddressOfExpression](probe.Expression)
-        // Each bare use should be &temp[i].
+        // Each bare use addresses the captured array and index.
         for var k = 1; k <= 2; k++ {
             let es = Assert.IsType[BoundExpressionStatement](result.Statements[k])
             let addr = Assert.IsType[BoundAddressOfExpression](es.Expression)
             let idx = Assert.IsType[BoundIndexExpression](addr.Operand)
             Assert.Same(tempDecl.Variable, (cast[BoundVariableExpression](idx.Target)).Variable)
-            Assert.Same(i, (cast[BoundVariableExpression](idx.Index)).Variable)
+            Assert.Same(indexCapture.Variable, (cast[BoundVariableExpression](idx.Index)).Variable)
         }
     }
 

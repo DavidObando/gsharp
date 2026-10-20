@@ -10,6 +10,7 @@ import Microsoft.CodeAnalysis.Diagnostics
 import System
 import System.Collections.Generic
 import System.Linq
+import GSharp.Core.CodeAnalysis.Compilation
 
 /// ADR-0145 §B/§C facade: drives the full source-generator loop for a bound G#
 /// (cref:Compilation) — project to a C# stub, run the generators, and
@@ -31,7 +32,12 @@ shared class GeneratorHostRunner {
         additionalTexts IReadOnlyList[AdditionalText]? = nil,
         optionsProvider AnalyzerConfigOptionsProvider? = nil
     ) GeneratorHostResult {
+        ArgumentNullException.ThrowIfNull(gsCompilation, paramName: "gsCompilation")
+        ArgumentNullException.ThrowIfNull(references, paramName: "references")
         ArgumentNullException.ThrowIfNull(generators, paramName: "generators")
+        if generators.Count == 0 {
+            return Empty(Array.Empty[GeneratorFailure]())
+        }
         let renderer = ProjectStub(gsCompilation, out var stub)
         let runResult = GeneratorRunner.Run(stub, references, generators, additionalTexts, optionsProvider)
         return Assemble(stub, runResult, references, renderer)
@@ -53,19 +59,49 @@ shared class GeneratorHostRunner {
         additionalTexts IReadOnlyList[AdditionalText]? = nil,
         optionsProvider AnalyzerConfigOptionsProvider? = nil
     ) GeneratorHostResult {
-        ArgumentNullException.ThrowIfNull(analyzerAssemblyPaths, paramName: "analyzerAssemblyPaths")
+        ArgumentNullException.ThrowIfNull(gsCompilation, paramName: "gsCompilation")
+        ArgumentNullException.ThrowIfNull(references, paramName: "references")
+        using let discovery = GeneratorRunner.Discover(analyzerAssemblyPaths)
+        return RunDiscovered(gsCompilation, references, discovery, additionalTexts, optionsProvider)
+    }
+
+    /// Projects and runs an already discovered request without loading analyzers twice.
+    /// @param gsCompilation The compilation to project only when generators exist.
+    /// @param references Metadata references for generation and translation.
+    /// @param discovery Request-scoped generators and load diagnostics.
+    /// @param additionalTexts Non-source generator inputs.
+    /// @param optionsProvider Project and additional-file options.
+    /// @returns Generated G# source and all diagnostics.
+    func RunDiscovered(
+        gsCompilation Compilation,
+        references IReadOnlyList[MetadataReference],
+        discovery GeneratorDiscovery,
+        additionalTexts IReadOnlyList[AdditionalText]? = nil,
+        optionsProvider AnalyzerConfigOptionsProvider? = nil
+    ) GeneratorHostResult {
+        ArgumentNullException.ThrowIfNull(gsCompilation, paramName: "gsCompilation")
+        ArgumentNullException.ThrowIfNull(references, paramName: "references")
+        ArgumentNullException.ThrowIfNull(discovery, paramName: "discovery")
+        if discovery.Generators.Count == 0 {
+            return Empty(discovery.Failures)
+        }
         let renderer = ProjectStub(gsCompilation, out var stub)
-        let runResult = GeneratorRunner.RunFromAnalyzerPaths(
-            stub,
-            references,
-            analyzerAssemblyPaths,
-            additionalTexts,
-            optionsProvider
-        )
+        let runResult = GeneratorRunner.RunDiscovered(stub, references, discovery, additionalTexts, optionsProvider)
         return Assemble(stub, runResult, references, renderer)
     }
 
+    /// Creates a no-generator result without parsing or binding a projection.
+    /// @param failures Analyzer load failures which must still be reported.
+    /// @returns An empty source result retaining the supplied failures.
+    func Empty(failures IReadOnlyList[GeneratorFailure]) GeneratorHostResult -> GeneratorHostResult(
+        Array.Empty[(HintName string, GSharpSource string)](),
+        Array.Empty[Diagnostic](),
+        failures,
+        Array.Empty[string]()
+    )
+
     private func ProjectStub(gsCompilation Compilation, out stub string) GsStubRenderer {
+        using let phase = CompilationMeasurements.BeginPhase("generator.projection")
         stub = GsToCSharpProjection.ProjectToCSharp(gsCompilation, out var renderer)
         return renderer
     }
@@ -84,7 +120,8 @@ shared class GeneratorHostRunner {
             runResult.Documents,
             references,
             renderer.PartialDefinitions,
-            renderer.DataTypes
+            renderer.DataTypes,
+            runResult.InputStubTree
         )
         // Deterministic ordering: sort back-translated parts by hint name.
         let gsFiles = translated

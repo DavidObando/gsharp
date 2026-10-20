@@ -1007,6 +1007,30 @@ internal partial class MethodBodyEmitter {
                 // real user-type tokens instead of the type-erased
                 // List<object>. Static getters and CLR receivers fall back
                 // to the plain MemberRef path inside the overload.
+                // Issue #4986: `Value` / `HasValue` on a same-compilation
+                // struct's or enum's `Nullable<T>` bind against the open
+                // `Nullable<>` (the underlying has no ClrType while binding).
+                // Its getter MemberRef must be parented at the constructed
+                // `Nullable<T>` TypeSpec, as the `!!` unwrap's is.
+                let symbolicNullable = receiver?.Type as NullableTypeSymbol
+                let propertyOwner = property.DeclaringType
+                if symbolicNullable != nil && NullableLifting.RequiresSymbolicNullableGetValue(symbolicNullable) &&
+                    propertyOwner != nil &&
+                    propertyOwner.IsGenericType &&
+                    propertyOwner
+                    .GetGenericTypeDefinition()
+                    .FullName == "System.Nullable`1" &&
+                    (property.Name == "Value" || property.Name == "HasValue") {
+                    this.il.OpCode(ILOpCode.Call)
+                    this.il.Token(
+                        if property.Name == "Value" {
+                            this.GetNullableValueRef(symbolicNullable)
+                        } else {
+                            this.GetNullableHasValueRef(symbolicNullable)
+                        }
+                    )
+                    break
+                }
                 let getterRef = if isStatic {
                     (
                         if access.StaticContainerType != nil {
@@ -1459,6 +1483,11 @@ internal partial class MethodBodyEmitter {
             if receiver is BoundVariableExpression bve && this.TryLoadStructVariableAddress(bve) {
                 return
             }
+            if receiver is BoundTupleElementAccessExpression tuple &&
+                RefCapabilities.IsDirectlyAddressableForImplicitIn(tuple) {
+                this.EmitTupleElementAccess(tuple, addressOnly: true)
+                return
+            }
             // ADR-0056 §4 (#375): a value-type *field* used as an instance
             // receiver (e.g. `w.data.Length` where `data` is a closed
             // constructed generic value type like `ReadOnlySpan[int32]`)
@@ -1674,6 +1703,9 @@ internal partial class MethodBodyEmitter {
         }
         if fa.Receiver is BoundFieldAccessExpression nested {
             return this.IsAddressableFieldAccess(nested)
+        }
+        if fa.Receiver is BoundTupleElementAccessExpression tuple {
+            return RefCapabilities.IsDirectlyAddressableForImplicitIn(tuple)
         }
         // Issue #3185: a prior-cell submission global (or a value-type CLR
         // field chain rooted at one) is addressable storage.

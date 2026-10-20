@@ -341,6 +341,7 @@ type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
   method public GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope get_ReusedGlobalScope()
   method public GSharp.Core.CodeAnalysis.Binding.BoundProgram get_BoundProgram()
   method public GSharp.Core.CodeAnalysis.Binding.SubmissionBindingOptions get_Submission()
+  method public GSharp.Core.CodeAnalysis.Compilation.CompilationWorkBudget get_WorkBudget()
   method public GSharp.Core.CodeAnalysis.Compilation.EmitResult Emit()
   method public GSharp.Core.CodeAnalysis.Compilation.EmitResult Emit(System.IO.Stream peStream)
   method public GSharp.Core.CodeAnalysis.Compilation.EmitResult Emit(System.IO.Stream peStream, System.IO.Stream pdbStream, System.IO.Stream refStream, String assemblyName = null, String assemblyVersion = null)
@@ -375,6 +376,7 @@ type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
   method public Void set_ReusedGlobalScope(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope value)
   method public Void set_Submission(GSharp.Core.CodeAnalysis.Binding.SubmissionBindingOptions value)
   method public Void set_WarnOnMissingDocumentation(Boolean value)
+  method public Void set_WorkBudget(GSharp.Core.CodeAnalysis.Compilation.CompilationWorkBudget value)
   property public Boolean ImplicitSystemImport { get; set; }
   property public Boolean IsLibrary { get; set; }
   property public Boolean Optimize { get; set; }
@@ -386,6 +388,7 @@ type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
   property public GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope ReusedGlobalScope { get; set; }
   property public GSharp.Core.CodeAnalysis.Binding.BoundProgram BoundProgram { get; }
   property public GSharp.Core.CodeAnalysis.Binding.SubmissionBindingOptions Submission { get; set; }
+  property public GSharp.Core.CodeAnalysis.Compilation.CompilationWorkBudget WorkBudget { get; set; }
   property public GSharp.Core.CodeAnalysis.Diagnostics.ILogger Logger { get; set; }
   property public GSharp.Core.CodeAnalysis.Emit.DebugInformationOptions DebugInformation { get; set; }
   property public GSharp.Core.CodeAnalysis.Symbols.NullabilityMode Nullability { get; set; }
@@ -1462,6 +1465,7 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.Binder : System.Object
   method public static GSharp.Core.CodeAnalysis.Binding.BoundProgram BindProgram(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope globalScope, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references = null)
   method public static GSharp.Core.CodeAnalysis.Binding.BoundProgram BindProgram(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope globalScope, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, GSharp.Core.CodeAnalysis.Binding.BoundBodyCache cache)
   method public static GSharp.Core.CodeAnalysis.Binding.BoundProgram BindProgram(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope globalScope, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, GSharp.Core.CodeAnalysis.Binding.BoundBodyCache cache, System.Collections.Immutable.ImmutableHashSet`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> dirtyTrees)
+  method public static GSharp.Core.CodeAnalysis.Binding.BoundProgram BindProgram(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope globalScope, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, GSharp.Core.CodeAnalysis.Binding.BoundBodyCache cache, System.Collections.Immutable.ImmutableHashSet`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> dirtyTrees, GSharp.Core.CodeAnalysis.Compilation.CompilationWorkBudget workBudget)
   method public static GSharp.Core.CodeAnalysis.Symbols.TypeSymbol TryInferExpressionType(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope globalScope, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol containingFunction, System.Collections.Generic.IEnumerable`1<GSharp.Core.CodeAnalysis.Symbols.VariableSymbol> additionalLocals, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax expression)
   property public GSharp.Core.CodeAnalysis.DiagnosticBag Diagnostics { get; }
 type sealed class GSharp.Core.CodeAnalysis.Binding.BoundAddressOfExpression : GSharp.Core.CodeAnalysis.Binding.BoundExpression
@@ -2835,6 +2839,8 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundScope : System.Object
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.StructSymbol> GetDeclaredStructs()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.VariableSymbol> GetDeclaredVariables()
   method public System.Collections.Immutable.ImmutableDictionary`2<String, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> GetDeclaredTypeAliases()
+  method public System.Collections.Immutable.ImmutableDictionary`2<String, System.Collections.Immutable.ImmutableDictionary`2<String, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol>> CaptureTypeAliasIndex()
+  method public System.Collections.Immutable.ImmutableDictionary`2<System.ValueTuple`2<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol, String>, System.Collections.Immutable.ImmutableDictionary`2<String, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol>> CaptureNestedTypeAliasIndex()
   method public System.Collections.Immutable.ImmutableHashSet`1<String> get_PreprocessorSymbols()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Binding.BoundScope parent)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Binding.BoundScope parent, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references)
@@ -3270,6 +3276,31 @@ type sealed class GSharp.Core.CodeAnalysis.ClosureValue : System.Object
   property public GSharp.Core.CodeAnalysis.Symbols.FunctionTypeSymbol FunctionType { get; }
   property public System.Collections.Generic.Dictionary`2<GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> CapturedTypeArguments { get; }
   property public System.Collections.Generic.Dictionary`2<GSharp.Core.CodeAnalysis.Symbols.VariableSymbol, Object> CapturedLocals { get; }
+type sealed class GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements : System.Object, System.IDisposable
+  method public Int64 GetCounter(String name)
+  method public String get_Tool()
+  method public Void WriteJson(String path)
+  method public sealed Void Dispose()
+  method public static Boolean get_IsEnabled()
+  method public static GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements Start(String tool, String outputPath = null)
+  method public static System.IDisposable BeginPhase(String name)
+  method public static System.IDisposable StartFromEnvironment(String tool)
+  method public static Void Count(String name, Int64 amount = 1)
+  method public static Void SetProperty(String name, String value)
+  property public Boolean IsEnabled { get; }
+  property public String Tool { get; }
+type sealed class GSharp.Core.CodeAnalysis.Compilation.CompilationWorkBudget : System.Object
+  method public Int32 get_LastObservedWorkers()
+  method public Int32 get_MaxObservedWorkers()
+  method public Int32 get_MaxWorkers()
+  method public Int32 get_MemoryBudgetMiB()
+  method public System.Threading.CancellationToken get_CancellationToken()
+  method public Void .ctor(Int32 maxWorkers = 1, Int32 memoryBudgetMiB = 1024, System.Threading.CancellationToken cancellationToken = null)
+  property public Int32 LastObservedWorkers { get; }
+  property public Int32 MaxObservedWorkers { get; }
+  property public Int32 MaxWorkers { get; }
+  property public Int32 MemoryBudgetMiB { get; }
+  property public System.Threading.CancellationToken CancellationToken { get; }
 type sealed class GSharp.Core.CodeAnalysis.Diagnostic : System.Object
   method public Boolean get_IsError()
   method public GSharp.Core.CodeAnalysis.Diagnostic WithSeverity(GSharp.Core.CodeAnalysis.DiagnosticSeverity severity)
@@ -5093,14 +5124,17 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.RectangularArrayTypeSymbol : 
   property public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol ElementType { get; }
   property public Int32 Rank { get; }
 type sealed class GSharp.Core.CodeAnalysis.Symbols.ReferenceMetadataIndex : System.Object
-  field public const Int32 FormatVersion = 2
+  field public const Int32 FormatVersion = 3
   field public const String SectionHeader = "[metadataIndex]"
   method public System.Collections.Generic.Dictionary`2<String, Int32> ToNameIndex()
   method public System.Collections.Immutable.ImmutableArray`1<String> get_AssemblyIdentities()
+  method public System.Collections.Immutable.ImmutableArray`1<String> get_ContentFingerprints()
   method public Void WriteTextSection(System.IO.TextWriter writer)
   method public static Boolean TryReadTextSection(System.Collections.Generic.IReadOnlyList`1<String> lines, out GSharp.Core.CodeAnalysis.Symbols.ReferenceMetadataIndex index)
   method public static GSharp.Core.CodeAnalysis.Symbols.ReferenceMetadataIndex Create(System.Collections.Immutable.ImmutableArray`1<String> assemblyIdentities, System.Collections.Immutable.ImmutableArray`1<System.Collections.Immutable.ImmutableArray`1<String>> typeNamesByAssembly)
+  method public static GSharp.Core.CodeAnalysis.Symbols.ReferenceMetadataIndex Create(System.Collections.Immutable.ImmutableArray`1<String> assemblyIdentities, System.Collections.Immutable.ImmutableArray`1<System.Collections.Immutable.ImmutableArray`1<String>> typeNamesByAssembly, System.Collections.Immutable.ImmutableArray`1<String> contentFingerprints)
   property public System.Collections.Immutable.ImmutableArray`1<String> AssemblyIdentities { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<String> ContentFingerprints { get; }
 type sealed class GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver : System.Object, System.IDisposable
   method public Boolean CanAccessInternalMembers(System.Reflection.Assembly assembly)
   method public Boolean IsHostFallback(System.Type type)

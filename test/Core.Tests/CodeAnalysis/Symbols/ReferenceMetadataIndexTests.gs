@@ -21,6 +21,33 @@ import Xunit
 /// binary blob).
 open class ReferenceMetadataIndexTests {
     @Fact
+    func RuntimeImagesWithoutSnapshots_CannotAdoptMetadataIndexes() {
+        using let runtime = ReferenceResolver.Default()
+        let index = runtime.ExportMetadataIndex()
+        Assert.NotEmpty(index.AssemblyIdentities)
+        Assert.NotEmpty(index.ContentFingerprints)
+        Assert.All(index.ContentFingerprints, (fingerprint string) -> Assert.Empty(fingerprint))
+        Assert.False(runtime.TryUseMetadataIndex(index))
+    }
+
+    @Fact
+    func SameAssemblyIdentity_DifferentContent_RejectsWarmIndex() {
+        using let first = CSharpFixture("public class OldSurface {}", assemblyName: "SameIdentity5040")
+        using let second = CSharpFixture("public class NewSurface {}", assemblyName: "SameIdentity5040")
+        using let producer = ReferenceResolver.WithReferences([]string{first.AssemblyPath})
+        File.Copy(second.AssemblyPath, first.AssemblyPath, overwrite: true)
+        using let consumer = ReferenceResolver.WithReferences([]string{first.AssemblyPath})
+        let index = producer.ExportMetadataIndex()
+        Assert.Equal(
+            producer.Assemblies.Select((assembly Assembly) -> assembly.FullName),
+            consumer.Assemblies.Select((assembly Assembly) -> assembly.FullName)
+        )
+        Assert.False(consumer.TryUseMetadataIndex(index))
+        Assert.True(consumer.TryResolveType("NewSurface", out _))
+        Assert.False(consumer.TryResolveType("OldSurface", out _))
+    }
+
+    @Fact
     func ArityInsensitivePresenceUsesWarmIndexWithoutMaterializingColdTypes() {
         let references = CoreReferenceSet()
         using let producer = ReferenceResolver.WithReferences(references)
@@ -249,11 +276,13 @@ name=Sample
                 "assemblyCount=2\n" +
                 "\n" +
                 "assembly=Asm0\n" +
+                "contentFingerprint=first\n" +
                 "typeNameCount=2\n" +
                 "Ns.A\n" +
                 "Ns.B\n" +
                 "\n" +
                 "assembly=Asm1\n" +
+                "contentFingerprint=second\n" +
                 "typeNameCount=1\n" +
                 "Ns.C\n"
         )

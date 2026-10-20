@@ -83,4 +83,15 @@ class BoundUnaryExpression : BoundExpression {
     prop PlatformCheckMessage string? {
         get;
     }
+
+    /// Gets a value indicating whether this node is the unwrap of a narrowed
+    /// value-type nullable read (issue #4986), whose (cref:Operand) is the
+    /// read of the original `Nullable<T>` storage. Member access binding
+    /// reads it to fall back to `Nullable<T>` members such as `Value` and
+    /// `HasValue` when the narrowed type has no member of that name. Only the
+    /// binder observes it; rewriters that rebuild the node may drop it.
+    internal prop IsNarrowingUnwrap bool {
+        get;
+        init;
+    }
 }

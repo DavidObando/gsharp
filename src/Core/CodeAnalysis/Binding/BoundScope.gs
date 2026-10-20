@@ -14,6 +14,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis
 import System.Globalization
+import GSharp.Core.CodeAnalysis.Compilation
 
 /// Bound scope.
 class BoundScope {
@@ -22,7 +23,16 @@ class BoundScope {
     private var functions ImmutableDictionary[string, ImmutableArray[FunctionSymbol].Builder].Builder?
     private var functionKeys ImmutableArray[string].Builder?
     private var imports ImmutableArray[ImportSymbol].Builder?
-    private var typeAliases ImmutableDictionary[string, TypeSymbol].Builder?
+    private var typeAliases ImmutableDictionary[string, TypeSymbol]?
+    private var aliasCandidates ImmutableDictionary[string, ImmutableDictionary[string, TypeSymbol]] =
+    ImmutableDictionary[string, ImmutableDictionary[string, TypeSymbol]].Empty
+    private var aliasCandidatesByArity ImmutableDictionary[string, ImmutableDictionary[string, TypeSymbol]] =
+    ImmutableDictionary[string, ImmutableDictionary[string, TypeSymbol]].Empty
+    private var nestedAliasCandidates ImmutableDictionary[
+        (Owner TypeSymbol, Name string),
+        ImmutableDictionary[string, TypeSymbol]
+    ] =
+    ImmutableDictionary[(Owner TypeSymbol, Name string), ImmutableDictionary[string, TypeSymbol]].Empty
     private var sourcePackagePrefixes ImmutableDictionary[string, bool].Builder?
 
     // ADR-0156 Phase 2: registered on the root scope of an interactive
@@ -86,6 +96,21 @@ class BoundScope {
     private var richAnonymousObjectPlans Dictionary[RichAnonymousObjectBindingKey, RichAnonymousObjectPlan]?
     private var latestRichAnonymousObjectPlans Dictionary[StructSymbol, RichAnonymousObjectPlan]?
     private var structuralAdapterRegistry StructuralAdapterRegistry?
+    private var independentBodyRoot bool
+
+    /// Creates a worker boundary over canonical declarations. Synthesis remains coordinator-owned.
+    internal func CreateIndependentBodyScope() BoundScope -> BoundScope(this){independentBodyRoot = true}
+
+    private prop SynthesisParent BoundScope? {
+        get {
+            if independentBodyRoot {
+                throw System.InvalidOperationException(
+                    "An independent body worker cannot access coordinator synthesis state."
+                )
+            }
+            return Parent
+        }
+    }
 
     // Issues #4089/#4090: the declaration-phase queue of G#-declared generic
     // TYPE-CLAUSE constraint checks, and the latch that says a check must be
@@ -1172,14 +1197,11 @@ class BoundScope {
         // the real Oahu.Data migration corpus.
         let currentPackage string? = GetCurrentDeclaringPackage()
         if currentPackage != nil {
-            if preferredArity > 0 {
-                let ownArityKey = MangleArity(PackageQualifiedName(currentPackage, name), preferredArity)
-                if TryGetTypeAliasInChain(ownArityKey, out type) {
-                    return true
-                }
+            if preferredArity > 0 &&
+                TryResolveTypeAliasByExplicitPackageHint(name, preferredArity, currentPackage, out type) {
+                return true
             }
-            let ownKey = PackageQualifiedName(currentPackage, name)
-            if TryGetTypeAliasInChain(ownKey, out type) {
+            if TryResolveTypeAliasByExplicitPackageHint(name, arity: 0, currentPackage, out type) {
                 return true
             }
         }
@@ -1226,7 +1248,7 @@ class BoundScope {
         // so a lone generic definition keeps resolving by simple name.
         var best TypeSymbol? = nil
         var bestArity = int32.MaxValue
-        for pair in EnumerateTypeAliasesInChain() {
+        for pair in EnumerateTypeAliasCandidates(name, exactArity: false) {
             if TryParseAritySuffix(pair.Key, name, out var arity) && arity < bestArity {
                 best = pair.Value
                 bestArity = arity
@@ -1306,7 +1328,7 @@ class BoundScope {
         // No arity-0 match: resolve the lowest-arity generic variant.
         var best TypeSymbol? = nil
         var bestArity = int32.MaxValue
-        for pair in EnumerateTypeAliasesInChain() {
+        for pair in EnumerateNestedTypeAliasCandidates(containerDefinition, simpleName) {
             if TryParseAritySuffix(pair.Key, qualifiedName, out var qualifiedArity) &&
                 qualifiedArity < bestArity &&
                 IsNestedDirectlyIn(pair.Value, containerDefinition) {
@@ -1315,7 +1337,7 @@ class BoundScope {
             }
         }
         if best == nil {
-            for pair in EnumerateTypeAliasesInChain() {
+            for pair in EnumerateNestedTypeAliasCandidates(containerDefinition, simpleName) {
                 if TryParseAritySuffix(pair.Key, simpleName, out var simpleArity) &&
                     simpleArity < bestArity &&
                     IsNestedDirectlyIn(pair.Value, containerDefinition) {
@@ -1496,7 +1518,7 @@ class BoundScope {
     /// #2224), walking to the root of this scope's chain so every scope in
     /// one bind pass shares the same cache instance.
     /// @returns The shared (cref:AnonymousTypeCache) for this scope's chain.
-    internal func GetAnonymousTypeCache() AnonymousTypeCache -> if Parent != nil {
+    internal func GetAnonymousTypeCache() AnonymousTypeCache -> if SynthesisParent != nil {
         Parent!!.GetAnonymousTypeCache()
     } else {
         (
@@ -1513,7 +1535,7 @@ class BoundScope {
     /// to the root of this scope's chain so every scope in one bind pass
     /// shares the same cache instance — mirrors (cref:GetAnonymousTypeCache).
     /// @returns The shared (cref:SynthesizedRefDelegateCache) for this scope's chain.
-    internal func GetSynthesizedRefDelegateCache() SynthesizedRefDelegateCache -> if Parent != nil {
+    internal func GetSynthesizedRefDelegateCache() SynthesizedRefDelegateCache -> if SynthesisParent != nil {
         Parent!!.GetSynthesizedRefDelegateCache()
     } else {
         (
@@ -1530,7 +1552,7 @@ class BoundScope {
     /// pass's cache so shapes unify across the two binding passes.
     /// @param cache The cache to share.
     internal func InstallSynthesizedRefDelegateCache(cache SynthesizedRefDelegateCache) {
-        if Parent != nil {
+        if SynthesisParent != nil {
             Parent!!.InstallSynthesizedRefDelegateCache(cache)
             return
         }
@@ -1606,7 +1628,7 @@ class BoundScope {
     internal func GetRichAnonymousClassMap() Dictionary[
         AnonymousClassExpressionSyntax,
         StructSymbol
-    ] -> if Parent != nil {
+    ] -> if SynthesisParent != nil {
         Parent!!.GetRichAnonymousClassMap()
     } else {
         (
@@ -1621,7 +1643,7 @@ class BoundScope {
     internal func GetRichAnonymousObjectPlans() Dictionary[
         RichAnonymousObjectBindingKey,
         RichAnonymousObjectPlan
-    ] -> if Parent != nil {
+    ] -> if SynthesisParent != nil {
         Parent!!.GetRichAnonymousObjectPlans()
     } else {
         (
@@ -1636,7 +1658,7 @@ class BoundScope {
     internal func GetLatestRichAnonymousObjectPlans() Dictionary[
         StructSymbol,
         RichAnonymousObjectPlan
-    ] -> if Parent != nil {
+    ] -> if SynthesisParent != nil {
         Parent!!.GetLatestRichAnonymousObjectPlans()
     } else {
         (
@@ -1648,7 +1670,7 @@ class BoundScope {
         )!!
     }
 
-    internal func GetStructuralAdapterRegistry() StructuralAdapterRegistry -> if Parent != nil {
+    internal func GetStructuralAdapterRegistry() StructuralAdapterRegistry -> if SynthesisParent != nil {
         Parent!!.GetStructuralAdapterRegistry()
     } else {
         (
@@ -1668,7 +1690,7 @@ class BoundScope {
     /// @returns The shared pending-check queue for this scope's chain.
     internal func GetPendingUserGenericConstraintChecks() List[
         Binder.PendingUserGenericConstraintCheck
-    ] -> if Parent != nil {
+    ] -> if SynthesisParent != nil {
         Parent!!.GetPendingUserGenericConstraintChecks()
     } else {
         (
@@ -1703,7 +1725,7 @@ class BoundScope {
     /// scope's whole chain.
     /// @param value Whether checks must be queued.
     internal func SetDeferUserGenericConstraintChecks(value bool) {
-        if Parent != nil {
+        if SynthesisParent != nil {
             Parent!!.SetDeferUserGenericConstraintChecks(value)
         } else {
             deferUserGenericConstraintChecks = value
@@ -1856,10 +1878,10 @@ class BoundScope {
     /// so its declaration-order position (root-first across the chain) is fixed
     /// the first time it is introduced.
     private func AddTypeAlias(key string, target TypeSymbol) {
-        typeAliases ??= ImmutableDictionary.CreateBuilder[string, TypeSymbol]()
-        typeAliases!!.Add(key, target)
+        typeAliases = (typeAliases ?? ImmutableDictionary[string, TypeSymbol].Empty).Add(key, target)
         typeAliasKeys ??= ImmutableArray.CreateBuilder[string]()
         typeAliasKeys!!.Add(key)
+        IndexTypeAlias(key, target)
     }
 
     /// Overrides the value of a type-alias key that already exists somewhere in
@@ -1870,8 +1892,130 @@ class BoundScope {
     /// introduced by (cref:AddTypeAlias)) and does not mutate the
     /// ancestor scope that originally owns the key.
     private func SetTypeAliasOverride(key string, target TypeSymbol) {
-        typeAliases ??= ImmutableDictionary.CreateBuilder[string, TypeSymbol]()
-        typeAliases!![key] = target
+        typeAliases = (typeAliases ?? ImmutableDictionary[string, TypeSymbol].Empty).SetItem(key, target)
+        IndexTypeAlias(key, target)
+    }
+
+    private func IndexTypeAlias(key string, target TypeSymbol) {
+        let separator = key.IndexOf('#')
+        let nameWithArity = key.Substring(separator + 1)
+        let aritySeparator = nameWithArity.LastIndexOf('`')
+        let name = if aritySeparator < 0 {
+            nameWithArity
+        } else {
+            nameWithArity.Substring(0, aritySeparator)
+        }
+        let byName = if aliasCandidates.TryGetValue(name, out var names) {
+            names
+        } else {
+            ImmutableDictionary[string, TypeSymbol].Empty
+        }
+        aliasCandidates = aliasCandidates.SetItem(name, byName.SetItem(key, target))
+        let byArity = if aliasCandidatesByArity.TryGetValue(nameWithArity, out var arities) {
+            arities
+        } else {
+            ImmutableDictionary[string, TypeSymbol].Empty
+        }
+        aliasCandidatesByArity = aliasCandidatesByArity.SetItem(nameWithArity, byArity.SetItem(key, target))
+        if TypeContainingType(target) is {} owner {
+            let nestedKey = (TypeDefinition(owner), name.Substring(name.LastIndexOf('.') + 1))
+            let nested = if nestedAliasCandidates.TryGetValue(nestedKey, out var existing) {
+                existing
+            } else {
+                ImmutableDictionary[string, TypeSymbol].Empty
+            }
+            nestedAliasCandidates = nestedAliasCandidates.SetItem(nestedKey, nested.SetItem(key, target))
+        }
+    }
+
+    private func EnumerateNestedTypeAliasCandidates(owner TypeSymbol, name string) sequence[
+        KeyValuePair[string, TypeSymbol]
+    ] {
+        var scope_ BoundScope? = this
+        while scope_ != nil {
+            if scope_.nestedAliasCandidates.TryGetValue((owner, name), out var bucket) {
+                for pair in bucket {
+                    CompilationMeasurements.Count("alias.nested-candidate-visits")
+                    if TryGetTypeAliasInChain(pair.Key, out var visible) && object.ReferenceEquals(
+                        visible,
+                        pair.Value
+                    ) {
+                        yield pair
+                    }
+                }
+            }
+            scope_ = scope_.Parent
+        }
+    }
+
+    /// Captures immutable candidate buckets with nearest-scope key shadowing.
+    /// Symbols retain their canonical identity. This does not freeze symbol bodies or synthesis state.
+    func CaptureTypeAliasIndex() ImmutableDictionary[string, ImmutableDictionary[string, TypeSymbol]] {
+        var result = Parent?.CaptureTypeAliasIndex() ??
+            ImmutableDictionary[string, ImmutableDictionary[string, TypeSymbol]].Empty
+        for bucket in aliasCandidates {
+            var merged = if result.TryGetValue(bucket.Key, out var inherited) {
+                inherited
+            } else {
+                ImmutableDictionary[string, TypeSymbol].Empty
+            }
+            for pair in bucket.Value {
+                merged = merged.SetItem(pair.Key, pair.Value)
+            }
+            result = result.SetItem(bucket.Key, merged)
+        }
+        return result
+    }
+
+    /// Captures nested candidates by canonical owner identity and source name after the declaration barrier.
+    func CaptureNestedTypeAliasIndex() ImmutableDictionary[
+        (Owner TypeSymbol, Name string),
+        ImmutableDictionary[string, TypeSymbol]
+    ] {
+        var result = ImmutableDictionary[(Owner TypeSymbol, Name string), ImmutableDictionary[string, TypeSymbol]].Empty
+        var scope_ BoundScope? = this
+        while scope_ != nil {
+            for bucket in scope_.nestedAliasCandidates {
+                var merged = if result.TryGetValue(bucket.Key, out var existing) {
+                    existing
+                } else {
+                    ImmutableDictionary[string, TypeSymbol].Empty
+                }
+                for pair in bucket.Value {
+                    if TryGetTypeAliasInChain(pair.Key, out var visible) && object.ReferenceEquals(
+                        visible,
+                        pair.Value
+                    ) {
+                        merged = merged.SetItem(pair.Key, pair.Value)
+                    }
+                }
+                result = result.SetItem(bucket.Key, merged)
+            }
+            scope_ = scope_.Parent
+        }
+        return result
+    }
+
+    private func EnumerateTypeAliasCandidates(name string, exactArity bool) sequence[KeyValuePair[string, TypeSymbol]] {
+        var seen HashSet[string]? = nil
+        var scope_ BoundScope? = this
+        while scope_ != nil {
+            let index = if exactArity {
+                scope_.aliasCandidatesByArity
+            } else {
+                scope_.aliasCandidates
+            }
+            if index.TryGetValue(name, out var bucket) {
+                seen ??= HashSet[string](StringComparer.Ordinal)
+                for pair in bucket {
+                    CompilationMeasurements.Count("alias.candidate-visits")
+                    if seen!!.Add(pair.Key) {
+                        yield pair
+                    }
+                }
+            }
+            scope_ = scope_.Parent
+        }
     }
 
     /// Issue #2342 follow-up: records that the type-alias entry stored under
@@ -1992,7 +2136,7 @@ class BoundScope {
         ambiguous = false
         let suffix = "#" + MangleArity(name, arity)
         var byPackage Dictionary[string, TypeSymbol]? = nil
-        for pair in EnumerateTypeAliasesInChain() {
+        for pair in EnumerateTypeAliasCandidates(MangleArity(name, arity), exactArity: true) {
             let key = pair.Key
             if key.Length <= suffix.Length || !key.EndsWith(suffix, StringComparison.Ordinal) || key.IndexOf(
                 '#'
@@ -2002,6 +2146,9 @@ class BoundScope {
             let package_ = key.Substring(0, key.Length - suffix.Length)
             byPackage ??= Dictionary[string, TypeSymbol](StringComparer.Ordinal)
             byPackage!![package_] = pair.Value
+        }
+        if byPackage == nil {
+            return false
         }
         // Fold in the plain-key winner's own package too: it is just as much a
         // genuine colliding declaration as the package-qualified "losers", and
@@ -2015,8 +2162,7 @@ class BoundScope {
                 TypePackageName(plainValue)
             }
             if plainPackage != nil {
-                byPackage ??= Dictionary[string, TypeSymbol](StringComparer.Ordinal)
-                byPackage!![plainPackage] = plainValue!!
+                byPackage[plainPackage] = plainValue!!
             }
         }
         if byPackage == nil || byPackage.Count < 2 {

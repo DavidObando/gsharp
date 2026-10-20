@@ -37,6 +37,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="GSharp.Sdk.Tests" />
+    <Compile Include="../../Compiler/WorkerProtocol.gs" Link="WorkerProtocol.gs" />
   </ItemGroup>
 
   <!-- Issue #4921: the task assembly is netstandard2.0 and ships to .NET Framework

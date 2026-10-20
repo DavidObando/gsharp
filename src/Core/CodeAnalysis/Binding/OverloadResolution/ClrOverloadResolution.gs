@@ -1210,6 +1210,2670 @@ internal shared class ClrOverloadResolution {
         return true
     }
 
+    /// Tests only an extension receiver, without binding its arguments.
+    /// Shares final resolution's inference, constraints and CLR conversions;
+    /// unknown symbolic receivers or argument-dependent bounds stay possible.
+    internal func MayAcceptExtensionReceiver(
+        method MethodInfo,
+        receiver TypeSymbol,
+        argumentCount int32?,
+        argumentNames IReadOnlyList[string?]?
+    ) bool {
+        let receiverClr = receiver.ClrType
+        if receiverClr == nil || receiverClr.ContainsGenericParameters || TypeSymbol.ContainsSameCompilationUserType(
+            receiver
+        ) {
+            return true
+        }
+        let parameters = method.GetParameters()
+        if parameters.Length == 0 {
+            return false
+        }
+        let receiverRefKind = RefCapabilities.GetParameterRefKind(parameters[0])
+        let requiresIdentity = receiverRefKind is RefKind.Ref or RefKind.Out
+        var parameterType = parameters[0].ParameterType
+        if parameterType.IsByRef {
+            parameterType = parameterType.GetElementType() ?? parameterType
+        }
+        if !parameterType.ContainsGenericParameters {
+            if requiresIdentity {
+                return ClrTypeUtilities.AreSame(parameterType, receiverClr)
+            }
+            return ClassifyImplicit(parameterType, receiverClr) != ImplicitConversionKind.None ||
+                Conversion
+                .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(parameters[0])).IsImplicit
+        }
+        let bounds = Dictionary[string, Type](StringComparer.Ordinal)
+        var receiverMatches bool
+        if requiresIdentity {
+            let exact = Dictionary[Type, Type]()
+            receiverMatches = InferExactExtensionReceiverTypeArguments(parameterType, receiverClr, exact)
+            for entry in exact {
+                bounds[entry.Key.Name] = entry.Value
+            }
+        } else {
+            receiverMatches = UnifyForInference(parameterType, receiverClr, bounds)
+        }
+        if !receiverMatches {
+            return false
+        }
+        let typeParameters = method.GetGenericArguments()
+        var remainingParameters = parameters.Skip(1).Take(argumentCount ?? int32.MaxValue).ToArray()
+        if argumentNames != nil {
+            if !TryBuildNamedArgumentReordering(method, argumentNames.Count, argumentNames, out var mapping) &&
+                !TryBuildNamedArgumentReordering(
+                method,
+                argumentNames.Count,
+                argumentNames,
+                isExpanded: true,
+                out mapping
+            ) {
+                remainingParameters = Array.Empty[ParameterInfo]()
+            } else if mapping != nil {
+                remainingParameters = mapping.Skip(1).Select((index int32) -> parameters[index]).ToArray()
+            }
+        }
+        let argumentDependent = typeParameters
+            .Where(
+            (typeParameter Type) -> remainingParameters.Any(
+                (parameter ParameterInfo) -> MentionsGenericParameter(parameter.ParameterType, typeParameter)
+            )
+        )
+            .Select((typeParameter Type) -> typeParameter.Name)
+            .ToHashSet(StringComparer.Ordinal)
+        if typeParameters.Any(
+            (typeParameter Type) -> !bounds.ContainsKey(typeParameter.Name) && !argumentDependent.Contains(
+                typeParameter.Name
+            )
+        ) {
+            return false
+        }
+        if requiresIdentity {
+            let independent = typeParameters
+                .Where(
+                (parameter Type) -> argumentDependent.Contains(parameter.Name) &&
+                    !MentionsGenericParameter(parameterType, parameter)
+            )
+                .Select((parameter Type) -> parameter.Name)
+                .ToHashSet(StringComparer.Ordinal)
+            return ExtensionReceiverBoundsMayApply(method, receiver, parameterType, bounds, independent)
+        }
+        let operators = List[MethodInfo]()
+        ClrOperatorResolution.CollectOperators(receiverClr, "op_Implicit", operators)
+        ClrOperatorResolution.CollectOperators(
+            NullableLifting.GetValueTypeNullableUnderlyingClr(parameterType) ?? parameterType,
+            "op_Implicit",
+            operators
+        )
+        if !OpenExtensionReceiverStandardShapeMayApply(receiverClr, parameterType) && !operators.Any(
+            (conversion MethodInfo) -> {
+                let inputs = conversion.GetParameters()
+                return inputs.Length == 1 &&
+                    (
+                    if inputs[0].ParameterType.ContainsGenericParameters {
+                        OpenExtensionReceiverStandardShapeMayApply(receiverClr, inputs[0].ParameterType)
+                    } else {
+                        IsInferenceBoundPromotion(inputs[0].ParameterType, receiverClr) ||
+                            Conversion
+                            .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(inputs[0]))
+                            .IsImplicit
+                    }
+                ) &&
+                    OpenExtensionReceiverStandardShapeMayApply(conversion.ReturnType, parameterType)
+            }
+        ) {
+            return false
+        }
+        for conversion in operators {
+            let conversionParameters = conversion.GetParameters()
+            let convertedBounds = Dictionary[string, Type](bounds, StringComparer.Ordinal)
+            if conversionParameters.Length == 1 &&
+                UnifyForInference(conversionParameters[0].ParameterType, receiverClr, convertedBounds) &&
+                IndependentExtensionReceiverOutputMayApply(
+                method,
+                receiver,
+                convertedBounds,
+                argumentDependent,
+                conversionParameters[0].ParameterType
+            ) {
+                return true
+            }
+        }
+        if OpenExtensionReceiverStandardShapeMayApply(receiverClr, parameterType) {
+            for carrier in GetReceiverInferenceCarriers(receiverClr) {
+                if ExtensionReceiverCarrierMayApply(
+                    method,
+                    receiver,
+                    parameterType,
+                    carrier,
+                    bounds,
+                    argumentDependent
+                ) {
+                    return true
+                }
+            }
+        }
+        for conversion in operators {
+            let conversionParameters = conversion.GetParameters()
+            let convertedBounds = Dictionary[string, Type](bounds, StringComparer.Ordinal)
+            if conversionParameters.Length != 1 ||
+                !UnifyForInference(conversionParameters[0].ParameterType, receiverClr, convertedBounds) {
+                continue
+            }
+            if ExtensionReceiverBoundsMayApply(
+                method,
+                receiver,
+                parameterType,
+                convertedBounds,
+                argumentDependent,
+                receiverTerms: List[(Type, Type)](){(receiverClr, conversionParameters[0].ParameterType)}
+            ) {
+                return true
+            }
+            for carrier in GetReceiverInferenceCarriers(conversion.ReturnType) {
+                if ExtensionReceiverCarrierMayApply(
+                    method,
+                    receiver,
+                    parameterType,
+                    carrier,
+                    convertedBounds,
+                    argumentDependent,
+                    conversionInputType: conversionParameters[0].ParameterType
+                ) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func OpenExtensionReceiverStandardShapeMayApply(
+        source Type,
+        target Type,
+        tupleElementConversions bool = true
+    ) bool {
+        if source.IsGenericParameter || target.IsGenericParameter {
+            return true
+        }
+        let underlying = NullableLifting.GetValueTypeNullableUnderlyingClr(target)
+        if underlying != nil {
+            return OpenExtensionReceiverStandardShapeMayApply(
+                NullableLifting.GetValueTypeNullableUnderlyingClr(source) ?? source,
+                underlying,
+                tupleElementConversions
+            )
+        }
+        if target.IsArray {
+            let sourceElement = source.GetElementType()
+            let targetElement = target.GetElementType()
+            if !source.IsArray || source.GetArrayRank() != target.GetArrayRank() ||
+                source.IsSZArray != target.IsSZArray ||
+                sourceElement == nil ||
+                targetElement == nil {
+                return false
+            }
+            if tupleElementConversions || sourceElement.IsValueType || targetElement.IsValueType {
+                let exact = Dictionary[Type, Type]()
+                return if sourceElement.ContainsGenericParameters && !targetElement.ContainsGenericParameters {
+                    InferExactExtensionReceiverTypeArguments(sourceElement, targetElement, exact)
+                } else {
+                    InferExactExtensionReceiverTypeArguments(targetElement, sourceElement, exact)
+                }
+            }
+            return OpenExtensionReceiverStandardShapeMayApply(
+                sourceElement,
+                targetElement,
+                tupleElementConversions: false
+            )
+        }
+        if !target.IsGenericType {
+            let kind = ClassifyImplicit(target, source)
+            return kind is not(
+                ImplicitConversionKind.None or
+                    ImplicitConversionKind.UserDefinedImplicit or
+                    ImplicitConversionKind.DelegateRefKindMismatch
+            )
+        }
+        let definition = target.GetGenericTypeDefinition()
+        let matched = FindClosedGeneric(source, definition)
+        if matched == nil {
+            for alternative in GetExtensionReceiverGenericShapes(source, definition) {
+                if OpenExtensionReceiverStandardShapeMayApply(alternative, target, tupleElementConversions) {
+                    return true
+                }
+            }
+            return IsStructurallyInferrableDelegate(target, source) ||
+                TryGetChannelViewElement(definition, source, out _)
+        }
+        let sources = matched.GetGenericArguments()
+        let targets = target.GetGenericArguments()
+        if sources.Length != targets.Length {
+            return false
+        }
+        let slots = definition.GetGenericArguments()
+        let tupleElements = tupleElementConversions && definition.FullName?.StartsWith(
+            "System.ValueTuple`",
+            StringComparison.Ordinal
+        ) == true
+        let exact = Dictionary[Type, Type]()
+        for var i = 0; i < sources.Length; i++ {
+            let variance = if tupleElements {
+                GenericParameterAttributes.Covariant
+            } else if sources[i].IsValueType || targets[i].IsValueType {
+                GenericParameterAttributes.None
+            } else {
+                slots[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
+            }
+            let compatible = switch variance {
+                case GenericParameterAttributes.Covariant: OpenExtensionReceiverStandardShapeMayApply(
+                    sources[i],
+                    targets[i],
+                    tupleElementConversions: tupleElements
+                )
+                case GenericParameterAttributes.Contravariant: OpenExtensionReceiverStandardShapeMayApply(
+                    targets[i],
+                    sources[i],
+                    tupleElementConversions: false
+                )
+                default: if sources[i].ContainsGenericParameters && !targets[i].ContainsGenericParameters {
+                    InferExactExtensionReceiverTypeArguments(sources[i], targets[i], exact)
+                } else {
+                    InferExactExtensionReceiverTypeArguments(targets[i], sources[i], exact)
+                }
+            }
+            if !compatible {
+                return tupleElementConversions && IsStructurallyInferrableDelegate(target, source)
+            }
+        }
+        return true
+    }
+
+    private func GetExtensionReceiverGenericShapes(source Type, definition Type) List[Type] {
+        let shapes = List[Type]()
+        for carrier in GetReceiverInferenceCarriers(source) {
+            if carrier.IsGenericType && ClrTypeUtilities.AreSame(carrier.GetGenericTypeDefinition(), definition) &&
+                !shapes.Any((shape Type) -> ClrTypeUtilities.AreSame(shape, carrier)) {
+                shapes.Add(carrier)
+            }
+        }
+        return shapes
+    }
+
+    private func IndependentExtensionReceiverOutputMayApply(
+        method MethodInfo,
+        receiver TypeSymbol,
+        bounds IReadOnlyDictionary[string, Type],
+        argumentDependent HashSet[string],
+        conversionInputType Type? = nil
+    ) bool {
+        let receiverClr = receiver.ClrType
+        if receiverClr == nil {
+            return true
+        }
+        let parameters = method.GetGenericArguments()
+        var contextObject = parameters[0]
+        while contextObject.BaseType is {} baseType {
+            contextObject = baseType
+        }
+        let arguments = parameters.Select(
+            (parameter Type) -> if bounds.TryGetValue(parameter.Name, out var bound) &&
+                !bound.ContainsGenericParameters {
+                ClrTypeUtilities.RemapHostCoreTypeToContext(bound, contextObject) ?? bound
+            } else {
+                parameter
+            }
+        )
+            .ToArray()
+        let freeBounds = Dictionary[string, Type](StringComparer.Ordinal)
+        for var i = 0; i < parameters.Length; i++ {
+            if arguments[i].ContainsGenericParameters {
+                freeBounds[parameters[i].Name] = parameters[i]
+            }
+        }
+        var partiallyClosedMethod MethodInfo
+        try {
+            partiallyClosedMethod = method.MakeGenericMethod(arguments)
+        } catch (ex ArgumentException) {
+            return false
+        }
+        let receiverType = partiallyClosedMethod.GetParameters()[0].ParameterType
+        let underlyingReceiver = NullableLifting.GetValueTypeNullableUnderlyingClr(receiverType)
+        let operators = List[MethodInfo]()
+        ClrOperatorResolution.CollectOperators(underlyingReceiver ?? receiverType, "op_Implicit", operators)
+        for conversion in operators {
+            let inputs = conversion.GetParameters()
+            if inputs.Length == 1 &&
+                (conversion.ReturnType == receiverType || conversion.ReturnType == underlyingReceiver) &&
+                (
+                if inputs[0].ParameterType.ContainsGenericParameters {
+                    OpenExtensionReceiverStandardShapeMayApply(receiverClr, inputs[0].ParameterType)
+                } else {
+                    IsInferenceBoundPromotion(inputs[0].ParameterType, receiverClr) || Conversion.ClassifyNonStructural(
+                        receiver,
+                        ClrNullability.GetParameterTypeSymbol(inputs[0])
+                    )
+                        .IsImplicit
+                }
+            ) {
+                if ArgumentDependentBoundsMaySatisfyConstraints(
+                    parameters,
+                    arguments,
+                    List[(Type, Type, bool)](){(receiverClr, conversionInputType ?? inputs[0].ParameterType, true)},
+                    argumentDependent,
+                    freeBounds
+                ) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func ExtensionReceiverCarrierMayApply(
+        method MethodInfo,
+        receiver TypeSymbol,
+        parameterType Type,
+        carrier Type,
+        bounds Dictionary[string, Type],
+        argumentDependent HashSet[string],
+        conversionInputType Type? = nil
+    ) bool {
+        if !OpenExtensionReceiverStandardShapeMayApply(carrier, parameterType) {
+            return false
+        }
+        if parameterType.IsGenericType {
+            let shapes = GetExtensionReceiverGenericShapes(carrier, parameterType.GetGenericTypeDefinition())
+            if shapes.Count > 1 {
+                return shapes.Any(
+                    (shape Type) -> ExtensionReceiverCarrierMayApply(
+                        method,
+                        receiver,
+                        parameterType,
+                        shape,
+                        bounds,
+                        argumentDependent,
+                        conversionInputType
+                    )
+                )
+            }
+        }
+        let candidateBounds = Dictionary[string, Type](bounds, StringComparer.Ordinal)
+        let receiverTerms = List[(Type, Type)](){(carrier, parameterType)}
+        if conversionInputType != nil && receiver.ClrType is {} source {
+            receiverTerms.Add((source, conversionInputType))
+        }
+        if UnifyForInference(parameterType, carrier, candidateBounds) {
+            let freeBounds = Dictionary[string, Type](StringComparer.Ordinal)
+            if conversionInputType != nil {
+                for entry in candidateBounds {
+                    if entry.Value.IsGenericParameter && argumentDependent.Contains(entry.Key) &&
+                        !MentionsGenericParameter(conversionInputType, entry.Value) {
+                        freeBounds[entry.Key] = entry.Value
+                    }
+                }
+            }
+            if ExtensionReceiverBoundsMayApply(
+                method,
+                receiver,
+                parameterType,
+                candidateBounds,
+                argumentDependent,
+                freeBounds,
+                receiverTerms
+            ) {
+                return true
+            }
+        }
+        let underlying = NullableLifting.GetValueTypeNullableUnderlyingClr(parameterType)
+        if underlying == nil {
+            return false
+        }
+        let wrappedBounds = Dictionary[string, Type](bounds, StringComparer.Ordinal)
+        return UnifyForInference(underlying, carrier, wrappedBounds) &&
+            ExtensionReceiverBoundsMayApply(
+            method,
+            receiver,
+            parameterType,
+            wrappedBounds,
+            argumentDependent,
+            receiverTerms: receiverTerms
+        )
+    }
+
+    /// Validate receiver witnesses against closed signatures. Upper bounds
+    /// retain compatible but unenumerable subtypes for later argument inference.
+    private func ExtensionReceiverBoundsMayApply(
+        method MethodInfo,
+        receiver TypeSymbol,
+        parameterType Type,
+        bounds Dictionary[string, Type],
+        argumentDependent HashSet[string],
+        freeBounds IReadOnlyDictionary[string, Type]? = nil,
+        receiverTerms IReadOnlyList[(Type, Type)]? = nil
+    ) bool {
+        let receiverClr = receiver.ClrType
+        if receiverClr == nil {
+            return true
+        }
+        let receiverBounds = Dictionary[string, Type](StringComparer.Ordinal)
+        if !UnifyForInference(parameterType, receiverClr, receiverBounds) || receiverBounds.Any(
+            (entry KeyValuePair[string, Type]) -> !argumentDependent.Contains(entry.Key) &&
+                (!bounds.TryGetValue(entry.Key, out var argument) || !ClrTypeUtilities.AreSame(entry.Value, argument))
+        ) {
+            return false
+        }
+        let typeParameters = method.GetGenericArguments()
+        var hasOpenReceiverBound = false
+        for parameter in typeParameters {
+            if !MentionsGenericParameter(parameterType, parameter) {
+                continue
+            }
+            if bounds.TryGetValue(parameter.Name, out var bound) && !bound.ContainsGenericParameters {
+                continue
+            }
+            if !argumentDependent.Contains(parameter.Name) {
+                return false
+            }
+            hasOpenReceiverBound = true
+        }
+        if hasOpenReceiverBound &&
+            IndependentExtensionReceiverOutputMayApply(method, receiver, bounds, argumentDependent) {
+            return true
+        }
+        // Close metadata signatures with primitives from their own load context.
+        var contextObject = typeParameters[0]
+        while contextObject.BaseType is {} baseType {
+            contextObject = baseType
+        }
+        let contextBounds = Dictionary[string, Type](StringComparer.Ordinal)
+        for entry in bounds {
+            contextBounds[entry.Key] = ClrTypeUtilities.RemapHostCoreTypeToContext(entry.Value, contextObject) ??
+                entry.Value
+        }
+        let typeArguments = typeParameters.Select(
+            (parameter Type) -> if contextBounds.TryGetValue(parameter.Name, out var argument) {
+                argument
+            } else {
+                parameter
+            }
+        )
+            .ToArray()
+        if !ClosedExtensionReceiverConversionMayApply(method, receiver, typeArguments) {
+            return false
+        }
+        let constraintsSatisfied = SatisfiesDeclaredConstraints(typeParameters, typeArguments, default, out _, out _)
+        if typeArguments.Any((argument Type) -> argument.ContainsGenericParameters) || !constraintsSatisfied {
+            return ArgumentDependentBoundsMaySatisfyConstraints(
+                typeParameters,
+                typeArguments,
+                (receiverTerms ?? List[(Type, Type)](){(receiverClr, parameterType)}).Select(
+                    (term(Type, Type)) -> (term.Item1, term.Item2, true)
+                )
+                    .ToList(),
+                argumentDependent,
+                freeBounds
+            )
+        }
+        return true
+    }
+
+    private func ArgumentDependentBoundsMaySatisfyConstraints(
+        parameters[]Type,
+        arguments[]Type,
+        receiverTerms IReadOnlyList[(Type, Type, bool)],
+        argumentDependent HashSet[string],
+        freeBounds IReadOnlyDictionary[string, Type]?,
+        pinnedParameters HashSet[int32]? = nil,
+        constraintAlternatives IReadOnlyDictionary[(Type, Type), Type]? = nil,
+        validateAlternatives bool = true,
+        refinements Dictionary[HashSet[(int32, Type, Type, Type, bool)], bool]? = nil,
+        discoveredDomains Dictionary[(Type, Type), List[Type]]? = nil
+    ) bool {
+        let refinements = refinements ??
+            Dictionary[HashSet[(int32, Type, Type, Type, bool)], bool](
+            HashSet[(int32, Type, Type, Type, bool)].CreateSetComparer()
+        )
+        let arguments = NormalizeExtensionReceiverArguments(parameters, arguments)
+        var possibleArguments = cast[[]Type](arguments.Clone())
+        for var index = 0; index < parameters.Length; index++ {
+            let parameter = parameters[index]
+            if !arguments[index].ContainsGenericParameters && pinnedParameters?.Contains(index) != true &&
+                argumentDependent.Contains(parameter.Name) &&
+                (
+                freeBounds?.ContainsKey(parameter.Name) == true || receiverTerms.Any(
+                    (term(Type, Type, bool)) ->
+                    MentionsGenericParameter(term.Item1, parameter) || MentionsGenericParameter(term.Item2, parameter)
+                )
+            ) {
+                possibleArguments[index] = parameter
+            }
+        }
+        possibleArguments = NormalizeExtensionReceiverArguments(parameters, possibleArguments)
+        for var i = 0; i < parameters.Length; i++ {
+            let attributes = ExtensionReceiverParameterAttributes(parameters, possibleArguments, i)
+            if (attributes & GenericParameterAttributes.ReferenceTypeConstraint) != 0 &&
+                (attributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 {
+                return false
+            }
+        }
+        let choices = if constraintAlternatives != nil {
+            Dictionary[(Type, Type), Type](constraintAlternatives)
+        } else {
+            Dictionary[(Type, Type), Type]()
+        }
+        let receiverTerms = ExpandExtensionReceiverConstraintTerms(
+            parameters,
+            possibleArguments,
+            receiverTerms,
+            choices
+        )
+        let refine = CreateExtensionReceiverRefinementQuery(
+            parameters,
+            possibleArguments,
+            receiverTerms,
+            choices,
+            refinements
+        )
+        let domains = Dictionary[(Type, Type), List[Type]]()
+        let constraintTerms = List[(Type, Type, bool)](receiverTerms)
+        for var i = 0; i < parameters.Length; i++ {
+            if possibleArguments[i].ContainsGenericParameters {
+                continue
+            }
+            for rawConstraint in parameters[i].GetGenericParameterConstraints() {
+                let constraint = SubstituteExtensionReceiverTerm(rawConstraint, parameters, possibleArguments)
+                constraintTerms.Add((possibleArguments[i], constraint, false))
+            }
+        }
+        let strictTerms = HashSet[(Type, Type)](
+            constraintTerms.Where((term(Type, Type, bool)) -> !term.Item3).Select(
+                (term(Type, Type, bool)) -> (
+                    SubstituteExtensionReceiverTerm(term.Item1, parameters, possibleArguments),
+                    SubstituteExtensionReceiverTerm(term.Item2, parameters, possibleArguments)
+                )
+            )
+        )
+        for term in constraintTerms {
+            let source = SubstituteExtensionReceiverTerm(term.Item1, parameters, possibleArguments)
+            let constraint = SubstituteExtensionReceiverTerm(term.Item2, parameters, possibleArguments)
+            let key = (source, constraint)
+            let numericDomain = constraint.IsGenericParameter && parameters.Contains(constraint) &&
+                source.IsValueType &&
+                NumericWideningLattice
+                .WideningTargets(source.FullName).Any()
+            if source.ContainsGenericParameters ||
+                !constraint.ContainsGenericParameters ||
+                (!constraint.IsGenericType && !numericDomain) ||
+                choices.ContainsKey(key) {
+                continue
+            }
+            let candidates = if numericDomain {
+                if strictTerms.Contains(key) {
+                    List[Type](){source}
+                } else {
+                    GetReceiverInferenceCarriers(source).Where(
+                        (candidate Type) -> candidate.IsValueType ||
+                            (
+                            ExtensionReceiverParameterAttributes(
+                                parameters,
+                                possibleArguments,
+                                Array.IndexOf(parameters, constraint)
+                            ) &
+                            GenericParameterAttributes.NotNullableValueTypeConstraint
+                        ) == 0
+                    )
+                        .ToList()
+                }
+            } else {
+                GetExtensionReceiverGenericShapes(source, constraint.GetGenericTypeDefinition())
+            }
+            let matches = candidates.Where(
+                (candidate Type) -> OpenExtensionReceiverStandardShapeMayApply(
+                    candidate,
+                    constraint,
+                    tupleElementConversions: false
+                )
+            )
+                .ToList()
+            if matches.Count == 0 {
+                if !OpenExtensionReceiverStandardShapeMayApply(
+                    source,
+                    constraint,
+                    tupleElementConversions: term.Item3
+                ) {
+                    return false
+                }
+                continue
+            }
+            if matches.Count == 1 {
+                choices[key] = matches[0]
+                continue
+            }
+            domains[key] = matches
+            if discoveredDomains != nil {
+                discoveredDomains[key] = matches
+            }
+        }
+        if !ExtensionReceiverBoundDomainsMayApply(parameters, possibleArguments, choices, receiverTerms, refinements) {
+            return false
+        }
+        if validateAlternatives {
+            let discovered = Dictionary[(Type, Type), List[Type]]()
+            let validate = func (selected IReadOnlyDictionary[(Type, Type), Type]) bool {
+                discovered.Clear()
+                return ArgumentDependentBoundsMaySatisfyConstraints(
+                    parameters,
+                    possibleArguments,
+                    receiverTerms,
+                    argumentDependent,
+                    freeBounds,
+                    pinnedParameters,
+                    selected,
+                    validateAlternatives: false,
+                    refinements: refinements,
+                    discoveredDomains: discovered
+                )
+            }
+            if !ExtensionReceiverConstraintDomainsMayApply(
+                parameters,
+                possibleArguments,
+                domains,
+                choices,
+                validate,
+                discovered
+            ) {
+                return false
+            }
+        }
+        for var index = 0; index < parameters.Length; index++ {
+            if !ExtensionReceiverParameterIsOpen(parameters, possibleArguments, index) {
+                continue
+            }
+            let parameter = parameters[index]
+            let lowerBounds = List[Type]()
+            let upperBounds = List[Type]()
+            let referenceUpperBounds = List[Type]()
+            CollectFixedExtensionReceiverConstraintBounds(
+                parameters,
+                possibleArguments,
+                index,
+                lowerBounds,
+                upperBounds,
+                choices,
+                referenceUpperBounds
+            )
+            CollectExtensionReceiverTermBounds(
+                parameters,
+                possibleArguments,
+                index,
+                receiverTerms,
+                lowerBounds,
+                upperBounds,
+                choices,
+                referenceUpperBounds
+            )
+            let exactBounds = upperBounds.Where(
+                (bound Type) -> !bound.ContainsGenericParameters && !InferenceBoundMayRefine(bound)
+            )
+                .ToList()
+            let requiresValue = (
+                ExtensionReceiverParameterAttributes(parameters, possibleArguments, index) &
+                GenericParameterAttributes.NotNullableValueTypeConstraint
+            ) != 0
+            let openClassBounds = List[Type]()
+            let pendingConstraints = Queue[Type](
+                parameter.GetGenericParameterConstraints().Concat(
+                    upperBounds.Where((bound Type) -> bound.IsGenericParameter)
+                )
+            )
+            let visitedConstraints = HashSet[Type]()
+            while pendingConstraints.Count > 0 {
+                let rawConstraint = pendingConstraints.Dequeue()
+                if !visitedConstraints.Add(rawConstraint) {
+                    continue
+                }
+                if rawConstraint.IsGenericParameter {
+                    for inherited in rawConstraint.GetGenericParameterConstraints() {
+                        pendingConstraints.Enqueue(inherited)
+                    }
+                    EnqueueExtensionReceiverUpperBounds(
+                        rawConstraint,
+                        parameters,
+                        possibleArguments,
+                        choices,
+                        receiverTerms,
+                        pendingConstraints
+                    )
+                }
+                let constraint = SubstituteExtensionReceiverTerm(rawConstraint, parameters, possibleArguments)
+                if constraint.IsInterface {
+                    upperBounds.Add(constraint)
+                    continue
+                }
+                if constraint.ContainsGenericParameters {
+                    if !constraint.IsGenericParameter {
+                        openClassBounds.Add(constraint)
+                    }
+                    continue
+                }
+                if !InferenceBoundMayRefine(constraint) {
+                    exactBounds.Add(constraint)
+                } else if requiresValue &&
+                    constraint.FullName != "System.Object" &&
+                    constraint.FullName != "System.ValueType" &&
+                    constraint.FullName != "System.Enum" {
+                    return false
+                } else {
+                    upperBounds.Add(constraint)
+                }
+            }
+            let inferred = Dictionary[Type, Type]()
+            for upper in upperBounds {
+                if lowerBounds.Any((lower Type) -> ClrTypeUtilities.AreSame(lower, upper)) {
+                    exactBounds.Add(upper)
+                }
+            }
+            for constraint in openClassBounds {
+                for upper in upperBounds.Concat(exactBounds) {
+                    if !upper.IsInterface && !InferCompatibleExtensionReceiverClassBounds(upper, constraint, inferred) {
+                        return false
+                    }
+                }
+            }
+            for var i = 0; i < parameters.Length; i++ {
+                if !ExtensionReceiverParameterIsOpen(parameters, possibleArguments, i) || !inferred.TryGetValue(
+                    parameters[i],
+                    out var candidate
+                ) ||
+                    candidate.ContainsGenericParameters {
+                    continue
+                }
+                let candidateArguments = cast[[]Type](possibleArguments.Clone())
+                candidateArguments[i] = candidate
+                let pinned = if pinnedParameters != nil {
+                    HashSet[int32](pinnedParameters)
+                } else {
+                    HashSet[int32]()
+                }
+                pinned.Add(i)
+                return ArgumentDependentBoundsMaySatisfyConstraints(
+                    parameters,
+                    candidateArguments,
+                    receiverTerms,
+                    argumentDependent,
+                    freeBounds,
+                    pinned,
+                    choices,
+                    validateAlternatives,
+                    refinements,
+                    discoveredDomains
+                )
+            }
+            if exactBounds.Count > 0 {
+                let candidateArguments = cast[[]Type](possibleArguments.Clone())
+                candidateArguments[index] = exactBounds[0]
+                if !ExtensionReceiverBoundDomainsMayApply(
+                    parameters,
+                    candidateArguments,
+                    choices,
+                    receiverTerms,
+                    refinements
+                ) {
+                    return false
+                }
+                let pinned = if pinnedParameters != nil {
+                    HashSet[int32](pinnedParameters)
+                } else {
+                    HashSet[int32]()
+                }
+                pinned.Add(index)
+                return ArgumentDependentBoundsMaySatisfyConstraints(
+                    parameters,
+                    candidateArguments,
+                    receiverTerms,
+                    argumentDependent,
+                    freeBounds,
+                    pinned,
+                    choices,
+                    validateAlternatives,
+                    refinements,
+                    discoveredDomains
+                )
+            }
+            if requiresValue && referenceUpperBounds.Count > 0 {
+                return false
+            }
+            for upper in upperBounds {
+                if !requiresValue &&
+                    !InferenceBoundMayHaveCompatibleSubtype(
+                    upper,
+                    parameter,
+                    parameters,
+                    possibleArguments,
+                    refinements,
+                    refine
+                ) {
+                    return false
+                }
+            }
+            if !InferenceUpperBoundsMayRefineTogether(parameter, upperBounds, refinements, refine) {
+                return false
+            }
+        }
+        return SatisfiesDeclaredConstraints(
+            parameters,
+            NormalizeExtensionReceiverArguments(parameters, possibleArguments),
+            default,
+            out _,
+            out _
+        )
+    }
+
+    private func ExtensionReceiverConstraintRoot(parents[]int32, index int32) int32 {
+        var root = index
+        while parents[root] != root {
+            root = parents[root]
+        }
+        return root
+    }
+
+    private func ExtensionReceiverConstraintParameterParents(parameters[]Type, arguments[]Type)[]int32 {
+        let parametersParents = Enumerable.Range(0, parameters.Length).ToArray()
+        for var i = 0; i < parameters.Length; i++ {
+            if arguments[i].ContainsGenericParameters {
+                for var j = 0; j < parameters.Length; j++ {
+                    if MentionsGenericParameter(arguments[i], parameters[j]) {
+                        parametersParents[ExtensionReceiverConstraintRoot(parametersParents, i)] =
+                        ExtensionReceiverConstraintRoot(parametersParents, j)
+                    }
+                }
+            }
+        }
+        for var i = 0; i < parameters.Length; i++ {
+            if !arguments[i].ContainsGenericParameters {
+                continue
+            }
+            for constraint in parameters[i].GetGenericParameterConstraints() {
+                for var j = 0; j < parameters.Length; j++ {
+                    if arguments[j].ContainsGenericParameters && MentionsGenericParameter(constraint, parameters[j]) {
+                        parametersParents[ExtensionReceiverConstraintRoot(parametersParents, i)] =
+                        ExtensionReceiverConstraintRoot(parametersParents, j)
+                    }
+                }
+            }
+        }
+        return parametersParents
+    }
+
+    private func ExtensionReceiverConstraintDomainsMayApply(
+        parameters[]Type,
+        arguments[]Type,
+        domains IReadOnlyDictionary[(Type, Type), List[Type]],
+        choices IReadOnlyDictionary[(Type, Type), Type],
+        validate Func[IReadOnlyDictionary[(Type, Type), Type], bool],
+        discovered IReadOnlyDictionary[(Type, Type), List[Type]]
+    ) bool {
+        if domains.Count == 0 {
+            return true
+        }
+        let parametersParents = ExtensionReceiverConstraintParameterParents(parameters, arguments)
+        let keys = domains.Keys.ToList()
+        let roots = List[HashSet[int32]]()
+        for key in keys {
+            let mentions = HashSet[int32]()
+            for var i = 0; i < parameters.Length; i++ {
+                if arguments[i].ContainsGenericParameters && MentionsGenericParameter(key.Item2, parameters[i]) {
+                    mentions.Add(ExtensionReceiverConstraintRoot(parametersParents, i))
+                }
+            }
+            roots.Add(mentions)
+        }
+        let parents = Enumerable.Range(0, keys.Count).ToArray()
+        for var i = 0; i < keys.Count; i++ {
+            for var j = 0; j < i; j++ {
+                if roots[i].Overlaps(roots[j]) {
+                    parents[ExtensionReceiverConstraintRoot(parents, i)] = ExtensionReceiverConstraintRoot(parents, j)
+                }
+            }
+        }
+        let components = Dictionary[int32, List[(Type, Type)]]()
+        for var i = 0; i < keys.Count; i++ {
+            let root = ExtensionReceiverConstraintRoot(parents, i)
+            if !components.TryGetValue(root, out var component) {
+                component = List[(Type, Type)]()
+                components[root] = component
+            }
+            component.Add(keys[i])
+        }
+        for component in components.Values {
+            if !ExtensionReceiverConstraintComponentMayApply(
+                component,
+                domains,
+                choices,
+                validate,
+                discovered,
+                HashSet[string](StringComparer.Ordinal)
+            ) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func ExtensionReceiverConstraintComponentMayApply(
+        component IReadOnlyList[(Type, Type)],
+        domains IReadOnlyDictionary[(Type, Type), List[Type]],
+        selected IReadOnlyDictionary[(Type, Type), Type],
+        validate Func[IReadOnlyDictionary[(Type, Type), Type], bool],
+        discovered IReadOnlyDictionary[(Type, Type), List[Type]],
+        failed HashSet[string]
+    ) bool {
+        let state = string.Join(
+            ",",
+            component.Select(
+                (key(Type, Type)) ->
+                if selected.TryGetValue(key, out var choice) {
+                    domains[key].FindIndex((candidate Type) -> ClrTypeUtilities.AreSame(choice, candidate))
+                } else {
+                    -1
+                }
+            )
+        )
+        if failed.Contains(state) {
+            return false
+        }
+        if !validate(selected) {
+            failed.Add(state)
+            return false
+        }
+        let choices = Dictionary[(Type, Type), Type](selected)
+        let remaining = Dictionary[(Type, Type), List[Type]]()
+        for key in component {
+            remaining[key] = domains[key].ToList()
+        }
+        var changed = true
+        while changed {
+            changed = false
+            for key in component {
+                if choices.ContainsKey(key) {
+                    continue
+                }
+                let alternatives = remaining[key]
+                for var i = alternatives.Count - 1; i >= 0; i-- {
+                    let candidate = Dictionary[(Type, Type), Type](choices)
+                    candidate[key] = alternatives[i]
+                    if !validate(candidate) {
+                        alternatives.RemoveAt(i)
+                    }
+                }
+                if alternatives.Count == 0 {
+                    failed.Add(state)
+                    return false
+                }
+                if alternatives.Count == 1 {
+                    choices[key] = alternatives[0]
+                    changed = true
+                }
+            }
+        }
+        var branch = component[0]
+        var smallest = int32.MaxValue
+        for key in component {
+            if !choices.ContainsKey(key) && remaining[key].Count < smallest {
+                branch = key
+                smallest = remaining[key].Count
+            }
+        }
+        if smallest == int32.MaxValue {
+            if !validate(choices) {
+                return false
+            }
+            let extended = component.ToList()
+            let expandedDomains = Dictionary[(Type, Type), List[Type]](domains)
+            for domain in discovered {
+                if !expandedDomains.ContainsKey(domain.Key) && !choices.ContainsKey(domain.Key) {
+                    extended.Add(domain.Key)
+                    expandedDomains[domain.Key] = domain.Value
+                }
+            }
+            return extended.Count == component.Count ||
+                ExtensionReceiverConstraintComponentMayApply(
+                extended,
+                expandedDomains,
+                choices,
+                validate,
+                discovered,
+                failed
+            )
+        }
+        for alternative in remaining[branch] {
+            let candidate = Dictionary[(Type, Type), Type](choices)
+            candidate[branch] = alternative
+            if ExtensionReceiverConstraintComponentMayApply(
+                component,
+                domains,
+                candidate,
+                validate,
+                discovered,
+                failed
+            ) {
+                return true
+            }
+        }
+        failed.Add(state)
+        return false
+    }
+
+    private func InferCompatibleExtensionReceiverClassBounds(
+        upper Type,
+        constraint Type,
+        inferred Dictionary[Type, Type]
+    ) bool {
+        if upper.IsGenericParameter || constraint.IsGenericParameter {
+            return true
+        }
+        if upper.IsArray || constraint.IsArray {
+            // Array constructions are validated jointly by the variance solver.
+            if upper.IsArray && constraint.IsArray {
+                return upper.IsSZArray == constraint.IsSZArray && upper.GetArrayRank() == constraint.GetArrayRank()
+            }
+            let other = if upper.IsArray {
+                constraint
+            } else {
+                upper
+            }
+            return other.FullName is "System.Object" or "System.Array"
+        }
+        let Definition = func (type Type) Type {
+            return if type.IsGenericType {
+                type.GetGenericTypeDefinition()
+            } else {
+                type
+            }
+        }
+        let Match = func (type Type, definition Type) Type? {
+            for var current Type? = type; current != nil; current = current!!.BaseType {
+                if ClrTypeUtilities.AreSame(Definition(current), definition) {
+                    return current
+                }
+            }
+            return nil
+        }
+        var pattern Type? = constraint
+        var actual = Match(upper, Definition(constraint))
+        if actual == nil {
+            pattern = Match(constraint, Definition(upper))
+            actual = upper
+        }
+        return pattern != nil && InferExactExtensionReceiverTypeArguments(pattern, actual, inferred)
+    }
+
+    private func InferExactExtensionReceiverTypeArguments(
+        pattern Type,
+        actual Type,
+        inferred Dictionary[Type, Type]
+    ) bool {
+        if pattern == actual {
+            return true
+        }
+        if pattern.IsGenericParameter {
+            if inferred.TryGetValue(pattern, out var existing) {
+                return existing == actual ||
+                    !existing.ContainsGenericParameters &&
+                    !actual.ContainsGenericParameters &&
+                    ClrTypeUtilities.AreSame(existing, actual)
+            }
+            inferred[pattern] = actual
+            return true
+        }
+        if pattern.HasElementType || actual.HasElementType {
+            if pattern.IsArray != actual.IsArray ||
+                pattern.IsByRef != actual.IsByRef ||
+                pattern.IsPointer != actual.IsPointer ||
+                (
+                pattern.IsArray &&
+                    (pattern.GetArrayRank() != actual.GetArrayRank() || pattern.IsSZArray != actual.IsSZArray)
+            ) {
+                return false
+            }
+            let patternElement = pattern.GetElementType()
+            let actualElement = actual.GetElementType()
+            return patternElement != nil &&
+                actualElement != nil &&
+                InferExactExtensionReceiverTypeArguments(patternElement, actualElement, inferred)
+        }
+        if !pattern.IsGenericType || !actual.IsGenericType {
+            return ClrTypeUtilities.AreSame(pattern, actual)
+        }
+        if !ClrTypeUtilities.AreSame(pattern.GetGenericTypeDefinition(), actual.GetGenericTypeDefinition()) {
+            return false
+        }
+        let patterns = pattern.GetGenericArguments()
+        let arguments = actual.GetGenericArguments()
+        for var i = 0; i < patterns.Length; i++ {
+            if !InferExactExtensionReceiverTypeArguments(patterns[i], arguments[i], inferred) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func InferenceBoundMayRefine(type Type) bool {
+        if type.IsValueType {
+            return false
+        }
+        if type.IsArray {
+            return type.GetElementType() is {} element && InferenceBoundMayRefine(element)
+        }
+        if !type.IsSealed {
+            return true
+        }
+        if !type.IsGenericType || !ClrTypeUtilities.IsDelegateType(type) {
+            return false
+        }
+        let arguments = type.GetGenericArguments()
+        let slots = type.GetGenericTypeDefinition().GetGenericArguments()
+        for var i = 0; i < arguments.Length; i++ {
+            if arguments[i].IsValueType {
+                continue
+            }
+            let variance = slots[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
+            if (variance == GenericParameterAttributes.Covariant && InferenceBoundMayRefine(arguments[i])) ||
+                (variance == GenericParameterAttributes.Contravariant && arguments[i].FullName != "System.Object") {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func InferenceRefinementShape(type Type) Type? {
+        if !type.IsArray {
+            return if type.IsGenericType {
+                type.GetGenericTypeDefinition()
+            } else {
+                type
+            }
+        }
+        let contextObject = ResolveObjectInSameContext(type) ?? typeof(object)
+        let enumerable = contextObject.Assembly.GetType("System.Collections.Generic.IEnumerable`1")
+        if enumerable == nil {
+            return nil
+        }
+        // Reuse a same-context metadata slot for the array element equation.
+        let element = enumerable.GetGenericArguments()[0]
+        return if type.IsSZArray {
+            element.MakeArrayType()
+        } else {
+            element.MakeArrayType(type.GetArrayRank())
+        }
+    }
+
+    private func CreateExtensionReceiverRefinementQuery(
+        parameters[]Type,
+        arguments[]Type,
+        receiverTerms IReadOnlyList[(Type, Type, bool)],
+        choices IReadOnlyDictionary[(Type, Type), Type],
+        refinements Dictionary[HashSet[(int32, Type, Type, Type, bool)], bool]
+    ) Func[Type, []Type, IReadOnlyList[(Type, Type, bool)], bool] {
+        return func (owner Type, prototypeSlots[]Type, terms IReadOnlyList[(Type, Type, bool)]) bool {
+            let parents = ExtensionReceiverConstraintParameterParents(parameters, arguments)
+            for term in receiverTerms {
+                ConnectExtensionReceiverTermParameters(
+                    SubstituteExtensionReceiverTerm(term.Item1, parameters, arguments),
+                    SubstituteExtensionReceiverTerm(term.Item2, parameters, arguments),
+                    parameters,
+                    parents
+                )
+            }
+            let roots = Enumerable
+                .Range(0, parameters.Length)
+                .Where(
+                (i int32) -> parameters[i] == owner || terms.Any(
+                    (term(Type, Type, bool)) -> MentionsGenericParameter(term.Item2, parameters[i])
+                )
+            )
+                .Select((i int32) -> ExtensionReceiverConstraintRoot(parents, i))
+                .ToHashSet()
+            let component = Enumerable
+                .Range(0, parameters.Length)
+                .Where((i int32) -> roots.Contains(ExtensionReceiverConstraintRoot(parents, i)))
+                .ToArray()
+            let attributes = ExtensionReceiverParameterAttributes(
+                parameters,
+                arguments,
+                Array.IndexOf(parameters, owner)
+            )
+            if (attributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 ||
+                (
+                (attributes & GenericParameterAttributes.DefaultConstructorConstraint) != 0 &&
+                    terms[0]
+                    .Item1
+                    .GetConstructor(Type.EmptyTypes) == nil
+            ) {
+                return false
+            }
+            if choices.Values.All((selected Type) -> !selected.ContainsGenericParameters) && terms.All(
+                (term(Type, Type, bool)) -> !term.Item2.ContainsGenericParameters
+            ) &&
+                component
+                .All(
+                (i int32) -> parameters[i] == arguments[i] && parameters[i].GetGenericParameterConstraints().All(
+                    (constraint Type) -> !constraint.ContainsGenericParameters || constraint.IsGenericParameter
+                )
+            ) {
+                let key = HashSet[(int32, Type, Type, Type, bool)](
+                    terms.Select((term(Type, Type, bool)) -> (0, term.Item1, term.Item2, term.Item2, term.Item3))
+                )
+                if refinements.TryGetValue(key, out var cached) {
+                    return cached
+                }
+                refinements[key] = true
+                let possible = ArgumentDependentBoundsMaySatisfyConstraints(
+                    prototypeSlots,
+                    prototypeSlots,
+                    terms,
+                    HashSet[string](StringComparer.Ordinal),
+                    nil,
+                    refinements: refinements
+                )
+                refinements[key] = possible
+                return possible
+            }
+            var slots = prototypeSlots
+            if component.Any((i int32) -> slots.Contains(parameters[i])) {
+                slots = prototypeSlots.ToArray()
+                let contextObject = ResolveObjectInSameContext(prototypeSlots[0]) ?? typeof(object)
+                let available = contextObject
+                    .Assembly
+                    .GetTypes()
+                    .Where((type Type) -> type.IsGenericTypeDefinition)
+                    .OrderBy((type Type) -> type.FullName ?? type.Name, StringComparer.Ordinal)
+                    .SelectMany((type Type) -> type.GetGenericArguments())
+                    .Distinct()
+                    .ToArray()
+                for var i = 0; i < slots.Length; i++ {
+                    if !component.Any((index int32) -> parameters[index] == prototypeSlots[i]) {
+                        continue
+                    }
+                    let slotAttributes = prototypeSlots[i].GenericParameterAttributes &
+                    ~GenericParameterAttributes.VarianceMask
+                    let replacement = available.FirstOrDefault(
+                        (candidate Type) ->
+                        (candidate.GenericParameterAttributes & ~GenericParameterAttributes.VarianceMask) ==
+                        slotAttributes && candidate.GetGenericParameterConstraints().All(
+                            (constraint Type) ->
+                            (slotAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 &&
+                                constraint.FullName == "System.ValueType"
+                        ) &&
+                            !parameters.Contains(candidate) && !slots.Contains(candidate) && !arguments.Any(
+                            (argument Type) -> MentionsGenericParameter(argument, candidate)
+                        ) &&
+                            !receiverTerms
+                            .Any(
+                            (term(Type, Type, bool)) ->
+                            MentionsGenericParameter(term.Item1, candidate) ||
+                                MentionsGenericParameter(term.Item2, candidate)
+                        ) &&
+                            !terms.Any((term(Type, Type, bool)) -> MentionsGenericParameter(term.Item2, candidate))
+                    )
+                    if replacement == nil {
+                        return true
+                    }
+                    // Alpha-rename only the new scope, never enclosing target variables.
+                    slots[i] = replacement
+                }
+            }
+            let projectedParameters = component.Select((i int32) -> parameters[i]).Concat(slots).ToArray()
+            let projectedArguments = component.Select((i int32) -> arguments[i]).Concat(slots).ToArray()
+            let projectedTerms = terms.Select(
+                (term(Type, Type, bool)) -> (
+                    SubstituteExtensionReceiverTerm(term.Item1, prototypeSlots, slots),
+                    term.Item2,
+                    term.Item3
+                )
+            )
+                .ToList()
+            for var i = 0; i < slots.Length; i++ {
+                if slots[i] != prototypeSlots[i] {
+                    for constraint in prototypeSlots[i].GetGenericParameterConstraints() {
+                        projectedTerms.Add(
+                            (slots[i], SubstituteExtensionReceiverTerm(constraint, prototypeSlots, slots), false)
+                        )
+                    }
+                }
+            }
+            if component.Length > 0 {
+                projectedTerms.AddRange(
+                    receiverTerms.Select(
+                        (term(Type, Type, bool)) -> (
+                            SubstituteExtensionReceiverTerm(term.Item1, parameters, arguments),
+                            SubstituteExtensionReceiverTerm(term.Item2, parameters, arguments),
+                            term.Item3
+                        )
+                    )
+                )
+                for parameter in parameters {
+                    for constraint in parameter.GetGenericParameterConstraints() {
+                        let source = SubstituteExtensionReceiverTerm(parameter, parameters, arguments)
+                        let target = SubstituteExtensionReceiverTerm(constraint, parameters, arguments)
+                        if component.Any(
+                            (i int32) -> MentionsGenericParameter(source, parameters[i]) ||
+                                MentionsGenericParameter(target, parameters[i])
+                        ) {
+                            projectedTerms.Add((source, target, false))
+                        }
+                    }
+                }
+            }
+            let state = HashSet[(int32, Type, Type, Type, bool)](
+                projectedTerms.Select((term(Type, Type, bool)) -> (0, term.Item1, term.Item2, term.Item2, term.Item3))
+            )
+            state.Add((3, owner, owner, owner, false))
+            for var i = 0; i < projectedParameters.Length; i++ {
+                state.Add((1, projectedParameters[i], projectedArguments[i], projectedArguments[i], false))
+            }
+            if component.Length > 0 {
+                for choice in choices {
+                    state.Add((2, choice.Key.Item1, choice.Key.Item2, choice.Value, false))
+                }
+            }
+            if refinements.TryGetValue(state, out var cached) {
+                return cached
+            }
+            refinements[state] = true
+            let equations = Dictionary[Type, Type]()
+            for var i = 0; i < projectedParameters.Length; i++ {
+                if projectedParameters[i] != projectedArguments[i] {
+                    equations[projectedParameters[i]] = projectedArguments[i]
+                }
+            }
+            if !UnifyExtensionReceiverConstructorEquation(
+                ResolveExtensionReceiverEquations(owner, equations),
+                projectedTerms[0].Item1,
+                slots,
+                equations
+            ) {
+                refinements[state] = false
+                return false
+            }
+            for term in projectedTerms {
+                var source = ResolveExtensionReceiverEquations(term.Item1, equations)
+                let target = ResolveExtensionReceiverEquations(term.Item2, equations)
+                var exact = false
+                if component.Length > 0 && choices.TryGetValue((source, target), out var selected) {
+                    source = selected
+                    exact = target.IsGenericParameter
+                }
+                if !CollectExtensionReceiverConversionBounds(
+                    source,
+                    target,
+                    projectedParameters[0],
+                    List[Type](),
+                    List[Type](),
+                    exact: exact,
+                    tupleElementConversions: term.Item3,
+                    equations: equations,
+                    equationSlots: slots
+                ) {
+                    refinements[state] = false
+                    return false
+                }
+            }
+            for var i = 0; i < projectedArguments.Length; i++ {
+                projectedArguments[i] = ResolveExtensionReceiverEquations(projectedArguments[i], equations)
+            }
+            let projectedChoices = Dictionary[(Type, Type), Type]()
+            if component.Length > 0 {
+                for choice in choices {
+                    let key = (
+                        ResolveExtensionReceiverEquations(choice.Key.Item1, equations),
+                        ResolveExtensionReceiverEquations(choice.Key.Item2, equations)
+                    )
+                    let selected = ResolveExtensionReceiverEquations(choice.Value, equations)
+                    if projectedChoices.TryGetValue(key, out var previous) && previous != selected {
+                        refinements[state] = false
+                        return false
+                    }
+                    projectedChoices[key] = selected
+                }
+            }
+            let possible = ArgumentDependentBoundsMaySatisfyConstraints(
+                projectedParameters,
+                projectedArguments,
+                projectedTerms,
+                HashSet[string](StringComparer.Ordinal),
+                nil,
+                constraintAlternatives: projectedChoices,
+                refinements: refinements
+            )
+            refinements[state] = possible
+            return possible
+        }
+    }
+
+    private func InferenceUpperBoundsMayRefineTogether(
+        owner Type,
+        bounds IReadOnlyList[Type],
+        refinements Dictionary[HashSet[(int32, Type, Type, Type, bool)], bool],
+        refine Func[Type, []Type, IReadOnlyList[(Type, Type, bool)], bool]? = nil
+    ) bool {
+        for var i = 0; i < bounds.Count; i++ {
+            let bound = bounds[i]
+            for var j = 0; j < i; j++ {
+                let other = bounds[j]
+                if bound.ContainsGenericParameters || other.ContainsGenericParameters {
+                    let contract = if bound.ContainsGenericParameters {
+                        bound
+                    } else {
+                        other
+                    }
+                    let family = if bound.ContainsGenericParameters {
+                        other
+                    } else {
+                        bound
+                    }
+                    if contract.IsInterface && !family.ContainsGenericParameters && family.IsSealed {
+                        let source = if InferenceBoundMayRefine(family) {
+                            InferenceRefinementShape(family)
+                        } else {
+                            family
+                        }
+                        if source != nil &&
+                            !OpenExtensionReceiverStandardShapeMayApply(
+                            source,
+                            contract,
+                            tupleElementConversions: false
+                        ) {
+                            return false
+                        }
+                    }
+                    continue
+                }
+                if (!InferenceBoundMayRefine(bound) && !IsExtensionReceiverBoundPromotion(other, bound)) ||
+                    (!InferenceBoundMayRefine(other) && !IsExtensionReceiverBoundPromotion(bound, other)) {
+                    return false
+                }
+                if IsExtensionReceiverBoundPromotion(bound, other) || IsExtensionReceiverBoundPromotion(other, bound) {
+                    continue
+                }
+                if bound.IsInterface || other.IsInterface {
+                    let family = if bound.IsInterface {
+                        other
+                    } else {
+                        bound
+                    }
+                    let contract = if bound.IsInterface {
+                        bound
+                    } else {
+                        other
+                    }
+                    if family.IsSealed {
+                        if !InferenceBoundMayRefine(family) {
+                            return false
+                        }
+                        let source = InferenceRefinementShape(family)
+                        if source != nil &&
+                            !OpenExtensionReceiverStandardShapeMayApply(
+                            source,
+                            contract,
+                            tupleElementConversions: false
+                        ) {
+                            return false
+                        }
+                    }
+                    continue
+                }
+                if bound.IsArray &&
+                    other.IsArray &&
+                    bound.IsSZArray == other.IsSZArray &&
+                    bound.GetArrayRank() == other.GetArrayRank() {
+                    continue
+                }
+                if !bound.IsGenericType || !other.IsGenericType || !ClrTypeUtilities.IsDelegateType(bound) ||
+                    !ClrTypeUtilities.AreSame(bound.GetGenericTypeDefinition(), other.GetGenericTypeDefinition()) {
+                    return false
+                }
+            }
+        }
+        let families = HashSet[Type]()
+        for bound in bounds {
+            if (!bound.IsArray && (!bound.IsGenericType || !ClrTypeUtilities.IsDelegateType(bound))) ||
+                !InferenceBoundMayRefine(bound) {
+                continue
+            }
+            let definition = InferenceRefinementShape(bound)
+            if definition == nil || !families.Add(definition) {
+                continue
+            }
+            let terms = bounds
+                .Where(
+                (other Type) -> if bound.IsArray {
+                    other.IsInterface ||
+                        other.IsArray &&
+                        other.IsSZArray == bound.IsSZArray &&
+                        other.GetArrayRank() == bound.GetArrayRank()
+                } else {
+                    other.IsGenericType && ClrTypeUtilities.AreSame(definition, other.GetGenericTypeDefinition())
+                }
+            )
+                .Select((other Type) -> (definition, other, false))
+                .ToList()
+            if terms.Count < 2 {
+                continue
+            }
+            let key = HashSet[(int32, Type, Type, Type, bool)](
+                terms.Select((term(Type, Type, bool)) -> (0, term.Item1, term.Item2, term.Item2, term.Item3))
+            )
+            let cacheable = refine == nil && terms.All(
+                (term(Type, Type, bool)) -> !term.Item2.ContainsGenericParameters
+            )
+            if cacheable && refinements.TryGetValue(key, out var cached) {
+                if !cached {
+                    return false
+                }
+                continue
+            }
+            let parameters = if definition.GetElementType() is {} element {
+                []Type{element}
+            } else {
+                definition.GetGenericArguments()
+            }
+            // Variance relates constructions, not nominal subclasses. Reuse
+            // the symbolic solver for all of the family's slot obligations.
+            // Active recursive obligations remain unknown, not impossible.
+            if cacheable {
+                refinements[key] = true
+            }
+            let possible = if refine != nil {
+                refine(owner, parameters, terms)
+            } else {
+                ArgumentDependentBoundsMaySatisfyConstraints(
+                    parameters,
+                    parameters,
+                    terms,
+                    HashSet[string](parameters.Select((parameter Type) -> parameter.Name), StringComparer.Ordinal),
+                    nil,
+                    refinements: refinements
+                )
+            }
+            if cacheable {
+                refinements[key] = possible
+            }
+            if !possible {
+                return false
+            }
+        }
+        return true
+    }
+
+    // CLR constraint bounds do not relax standalone G# argument conversions.
+    private func IsExtensionReceiverBoundPromotion(target Type, source Type) bool ->
+    IsInferenceBoundPromotion(target, source) ||
+        (
+        !target.IsValueType &&
+            !source.IsValueType &&
+            OpenExtensionReceiverStandardShapeMayApply(source, target, tupleElementConversions: false) &&
+            IsVariantAssignable(target, source)
+    )
+
+    private func CollectFixedExtensionReceiverConstraintBounds(
+        parameters[]Type,
+        arguments[]Type,
+        index int32,
+        lowerBounds List[Type],
+        upperBounds List[Type],
+        constraintAlternatives IReadOnlyDictionary[(Type, Type), Type],
+        referenceUpperBounds List[Type]? = nil
+    ) {
+        let parameter = parameters[index]
+        for var i = 0; i < parameters.Length; i++ {
+            if i == index || arguments[i].ContainsGenericParameters {
+                continue
+            }
+            for constraint in parameters[i].GetGenericParameterConstraints() {
+                if !MentionsGenericParameter(constraint, parameter) {
+                    continue
+                }
+                let target = SubstituteExtensionReceiverTerm(constraint, parameters, arguments)
+                let source = SubstituteExtensionReceiverTerm(arguments[i], parameters, arguments)
+                let argument = if constraintAlternatives.TryGetValue((source, target), out var selected) {
+                    selected
+                } else {
+                    source
+                }
+                CollectExtensionReceiverConversionBounds(
+                    argument,
+                    constraint,
+                    parameter,
+                    lowerBounds,
+                    upperBounds,
+                    referenceUpperBounds: referenceUpperBounds
+                )
+            }
+        }
+    }
+
+    private func CollectExtensionReceiverConversionBounds(
+        source Type,
+        target Type,
+        parameter Type,
+        lowerBounds List[Type],
+        upperBounds List[Type],
+        exact bool = false,
+        tupleElementConversions bool = false,
+        referenceUpperBounds List[Type]? = nil,
+        referenceVariance bool = false,
+        equations Dictionary[Type, Type]? = nil,
+        equationSlots([]Type)? = nil
+    ) bool {
+        if source == target {
+            return true
+        }
+        if source.IsGenericParameter || target.IsGenericParameter {
+            if source.IsGenericParameter && !tupleElementConversions && equations != nil {
+                var nested = target
+                while nested.IsArray && nested.GetElementType() is {} element {
+                    if element == source {
+                        return false
+                    }
+                    nested = element
+                }
+            }
+            if exact &&
+                source.ContainsGenericParameters &&
+                target.ContainsGenericParameters &&
+                equations != nil &&
+                equationSlots != nil &&
+                equationSlots
+                .Any((slot Type) -> MentionsGenericParameter(source, slot) || MentionsGenericParameter(target, slot)) {
+                return UnifyExtensionReceiverConstructorEquation(source, target, equationSlots, equations)
+            }
+            if source.IsGenericParameter && MentionsGenericParameter(source, parameter) {
+                upperBounds.Add(target)
+                if !exact && referenceVariance && !target.ContainsGenericParameters {
+                    referenceUpperBounds?.Add(target)
+                }
+                if exact && !target.ContainsGenericParameters {
+                    lowerBounds.Add(target)
+                }
+            }
+            if target.IsGenericParameter &&
+                MentionsGenericParameter(target, parameter) &&
+                !source.ContainsGenericParameters {
+                lowerBounds.Add(source)
+                if exact {
+                    upperBounds.Add(source)
+                }
+            }
+            return true
+        }
+        let underlying = if tupleElementConversions && !exact {
+            NullableLifting.GetValueTypeNullableUnderlyingClr(target)
+        } else {
+            nil
+        }
+        if underlying != nil {
+            return CollectExtensionReceiverConversionBounds(
+                NullableLifting.GetValueTypeNullableUnderlyingClr(source) ?? source,
+                underlying,
+                parameter,
+                lowerBounds,
+                upperBounds,
+                tupleElementConversions: true,
+                referenceUpperBounds: referenceUpperBounds,
+                referenceVariance: referenceVariance,
+                equations: equations,
+                equationSlots: equationSlots
+            )
+        }
+        if source.IsArray && target.IsArray && source.GetArrayRank() == target.GetArrayRank() &&
+            source.IsSZArray == target
+            .IsSZArray {
+            let sourceElement = source.GetElementType()
+            let targetElement = target.GetElementType()
+            if sourceElement != nil && targetElement != nil {
+                let elementVariance = (referenceVariance || !tupleElementConversions) &&
+                    !exact &&
+                    !sourceElement.IsValueType &&
+                    !targetElement.IsValueType
+                return CollectExtensionReceiverConversionBounds(
+                    sourceElement,
+                    targetElement,
+                    parameter,
+                    lowerBounds,
+                    upperBounds,
+                    exact || !elementVariance,
+                    tupleElementConversions,
+                    referenceUpperBounds,
+                    elementVariance,
+                    equations,
+                    equationSlots
+                )
+            }
+            return true
+        }
+        if !target.IsGenericType {
+            return true
+        }
+        let definition = target.GetGenericTypeDefinition()
+        if !source.IsGenericType || !ClrTypeUtilities.AreSame(source.GetGenericTypeDefinition(), definition) {
+            if !exact {
+                let shapes = GetExtensionReceiverGenericShapes(source, definition)
+                if shapes.Count == 1 {
+                    return CollectExtensionReceiverConversionBounds(
+                        shapes[0],
+                        target,
+                        parameter,
+                        lowerBounds,
+                        upperBounds,
+                        tupleElementConversions: tupleElementConversions,
+                        referenceUpperBounds: referenceUpperBounds,
+                        referenceVariance: referenceVariance,
+                        equations: equations,
+                        equationSlots: equationSlots
+                    )
+                }
+            }
+            return true
+        }
+        let sources = source.GetGenericArguments()
+        let targets = target.GetGenericArguments()
+        let slots = definition.GetGenericArguments()
+        let tupleElements = tupleElementConversions && !exact && definition.FullName?.StartsWith(
+            "System.ValueTuple`",
+            StringComparison.Ordinal
+        ) == true
+        for var i = 0; i < sources.Length; i++ {
+            let variance = if tupleElements {
+                GenericParameterAttributes.Covariant
+            } else if exact || sources[i].IsValueType || targets[i].IsValueType {
+                GenericParameterAttributes.None
+            } else {
+                slots[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
+            }
+            if variance == GenericParameterAttributes.Contravariant {
+                if !CollectExtensionReceiverConversionBounds(
+                    targets[i],
+                    sources[i],
+                    parameter,
+                    lowerBounds,
+                    upperBounds,
+                    referenceUpperBounds: referenceUpperBounds,
+                    referenceVariance: true,
+                    equations: equations,
+                    equationSlots: equationSlots
+                ) {
+                    return false
+                }
+            } else {
+                if !CollectExtensionReceiverConversionBounds(
+                    sources[i],
+                    targets[i],
+                    parameter,
+                    lowerBounds,
+                    upperBounds,
+                    variance == GenericParameterAttributes.None,
+                    tupleElements,
+                    referenceUpperBounds,
+                    referenceVariance || !tupleElements && variance != GenericParameterAttributes.None,
+                    equations,
+                    equationSlots
+                ) {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    private func SubstituteExtensionReceiverTerm(type Type, parameters[]Type, arguments[]Type) Type {
+        var contextObject = parameters[0]
+        while contextObject.BaseType is {} baseType {
+            contextObject = baseType
+        }
+        var substituted = ClrTypeUtilities.RemapHostCoreTypeToContext(type, contextObject) ?? type
+        let equations = Dictionary[Type, Type]()
+        for var i = 0; i < parameters.Length; i++ {
+            if parameters[i] != arguments[i] {
+                equations[parameters[i]] = arguments[i]
+            }
+        }
+        return ResolveExtensionReceiverEquations(substituted, equations)
+    }
+
+    private func CollectExtensionReceiverTermBounds(
+        parameters[]Type,
+        arguments[]Type,
+        index int32,
+        receiverTerms IReadOnlyList[(Type, Type, bool)],
+        lowerBounds List[Type],
+        upperBounds List[Type],
+        choices IReadOnlyDictionary[(Type, Type), Type],
+        referenceUpperBounds List[Type]? = nil
+    ) int32 {
+        var fixedLowerCount = lowerBounds.Count
+        for var pass = 0; pass < 2; pass++ {
+            let allowTupleElements = pass == 1
+            for term in receiverTerms {
+                if term.Item3 != allowTupleElements {
+                    continue
+                }
+                var source = SubstituteExtensionReceiverTerm(term.Item1, parameters, arguments)
+                let target = SubstituteExtensionReceiverTerm(term.Item2, parameters, arguments)
+                var exact = false
+                if choices.TryGetValue((source, target), out var selected) {
+                    source = selected
+                    exact = target.IsGenericParameter
+                }
+                CollectExtensionReceiverConversionBounds(
+                    source,
+                    target,
+                    parameters[index],
+                    lowerBounds,
+                    upperBounds,
+                    exact: exact,
+                    tupleElementConversions: allowTupleElements,
+                    referenceUpperBounds: referenceUpperBounds
+                )
+            }
+            if !allowTupleElements {
+                fixedLowerCount = lowerBounds.Count
+            }
+        }
+        return fixedLowerCount
+    }
+
+    private func ExpandExtensionReceiverConstraintTerms(
+        parameters[]Type,
+        arguments[]Type,
+        receiverTerms IReadOnlyList[(Type, Type, bool)],
+        choices IReadOnlyDictionary[(Type, Type), Type]
+    ) List[(Type, Type, bool)] {
+        let terms = receiverTerms.ToList()
+        let known = HashSet[(Type, Type, bool)](terms)
+        // A simple dependency path visits at most every method parameter.
+        // Recursive metadata relationships remain symbolic instead of
+        // unfolding an unbounded sequence of constructed types.
+        for var pass = 0; pass < parameters.Length; pass++ {
+            var changed = false
+            for var i = 0; i < parameters.Length; i++ {
+                if !ExtensionReceiverParameterIsOpen(parameters, arguments, i) {
+                    continue
+                }
+                let lower = List[Type]()
+                let upper = List[Type]()
+                CollectFixedExtensionReceiverConstraintBounds(parameters, arguments, i, lower, upper, choices)
+                let fixedLowerCount = CollectExtensionReceiverTermBounds(
+                    parameters,
+                    arguments,
+                    i,
+                    terms,
+                    lower,
+                    upper,
+                    choices
+                )
+                for var index = 0; index < lower.Count; index++ {
+                    let source = lower[index]
+                    if source.ContainsGenericParameters {
+                        continue
+                    }
+                    if source.IsValueType && index >= fixedLowerCount && !upper.Any(
+                        (bound Type) -> ClrTypeUtilities.AreSame(bound, source)
+                    ) {
+                        if NullableLifting.GetValueTypeNullableUnderlyingClr(source) != nil ||
+                            source
+                            .FullName
+                            ?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true {
+                            continue
+                        }
+                        if NumericWideningLattice.WideningTargets(source.FullName).Any() {
+                            let promotion = (source, parameters[i], true)
+                            if known.Add(promotion) {
+                                terms.Add(promotion)
+                                changed = true
+                            }
+                            continue
+                        }
+                    }
+                    for rawConstraint in parameters[i].GetGenericParameterConstraints() {
+                        let constraint = SubstituteExtensionReceiverTerm(rawConstraint, parameters, arguments)
+                        let term = (source, constraint, false)
+                        if known.Add(term) {
+                            terms.Add(term)
+                            changed = true
+                        }
+                    }
+                }
+            }
+            if !changed {
+                break
+            }
+        }
+        return terms
+    }
+
+    private func EnqueueExtensionReceiverUpperBounds(
+        parameter Type,
+        parameters[]Type,
+        arguments[]Type,
+        choices IReadOnlyDictionary[(Type, Type), Type],
+        receiverTerms IReadOnlyList[(Type, Type, bool)],
+        pending Queue[Type]
+    ) {
+        for var i = 0; i < parameters.Length; i++ {
+            if !MentionsGenericParameter(parameter, parameters[i]) {
+                continue
+            }
+            let lower = List[Type]()
+            let upper = List[Type]()
+            CollectFixedExtensionReceiverConstraintBounds(parameters, arguments, i, lower, upper, choices)
+            CollectExtensionReceiverTermBounds(parameters, arguments, i, receiverTerms, lower, upper, choices)
+            for bound in upper {
+                pending.Enqueue(bound)
+            }
+        }
+    }
+
+    private func GetExtensionReceiverDomainCandidates(
+        lowerBounds IReadOnlyList[Type],
+        upperBounds IReadOnlyList[Type]
+    ) List[Type] {
+        let candidates = List[Type]()
+        for lower in lowerBounds {
+            candidates.AddRange(GetReceiverInferenceCarriers(lower))
+        }
+        candidates.AddRange(upperBounds.Where((upper Type) -> !upper.ContainsGenericParameters))
+        return candidates
+    }
+
+    private func ExtensionReceiverBoundDomainsMayApply(
+        parameters[]Type,
+        arguments[]Type,
+        choices IReadOnlyDictionary[(Type, Type), Type],
+        receiverTerms IReadOnlyList[(Type, Type, bool)],
+        refinements Dictionary[HashSet[(int32, Type, Type, Type, bool)], bool]
+    ) bool {
+        let arguments = NormalizeExtensionReceiverArguments(parameters, arguments)
+        let refine = CreateExtensionReceiverRefinementQuery(parameters, arguments, receiverTerms, choices, refinements)
+        if !SatisfiesDeclaredConstraints(parameters, arguments, default, out _, out _) {
+            return false
+        }
+        for term in receiverTerms {
+            if !OpenExtensionReceiverStandardShapeMayApply(
+                SubstituteExtensionReceiverTerm(term.Item1, parameters, arguments),
+                SubstituteExtensionReceiverTerm(term.Item2, parameters, arguments),
+                tupleElementConversions: term.Item3
+            ) {
+                return false
+            }
+        }
+        let inferred = Dictionary[Type, Type]()
+        for var index = 0; index < parameters.Length; index++ {
+            if !ExtensionReceiverParameterIsOpen(parameters, arguments, index) {
+                continue
+            }
+            let parameter = parameters[index]
+            let lowerBounds = List[Type]()
+            let upperBounds = List[Type]()
+            CollectFixedExtensionReceiverConstraintBounds(
+                parameters,
+                arguments,
+                index,
+                lowerBounds,
+                upperBounds,
+                choices
+            )
+            let fixedLowerCount = CollectExtensionReceiverTermBounds(
+                parameters,
+                arguments,
+                index,
+                receiverTerms,
+                lowerBounds,
+                upperBounds,
+                choices
+            )
+            let pending = Queue[Type](
+                parameter.GetGenericParameterConstraints().Concat(
+                    upperBounds.Where((bound Type) -> bound.IsGenericParameter)
+                )
+            )
+            let visited = HashSet[Type]()
+            while pending.Count > 0 {
+                let rawConstraint = pending.Dequeue()
+                if !visited.Add(rawConstraint) {
+                    continue
+                }
+                if rawConstraint.IsGenericParameter {
+                    for inherited in rawConstraint.GetGenericParameterConstraints() {
+                        pending.Enqueue(inherited)
+                    }
+                    EnqueueExtensionReceiverUpperBounds(
+                        rawConstraint,
+                        parameters,
+                        arguments,
+                        choices,
+                        receiverTerms,
+                        pending
+                    )
+                }
+                let constraint = SubstituteExtensionReceiverTerm(rawConstraint, parameters, arguments)
+                if !constraint.IsGenericParameter {
+                    upperBounds.Add(constraint)
+                }
+            }
+            let requiresValue = (
+                ExtensionReceiverParameterAttributes(parameters, arguments, index) &
+                GenericParameterAttributes.NotNullableValueTypeConstraint
+            ) != 0
+            if requiresValue && lowerBounds.Any(
+                (lower Type) -> !lower.IsValueType || NullableLifting.IsValueTypeNullableClr(lower)
+            ) {
+                return false
+            }
+            for var lowerIndex = 0; lowerIndex < lowerBounds.Count; lowerIndex++ {
+                let lower = lowerBounds[lowerIndex]
+                if lowerIndex >= fixedLowerCount && lower.IsGenericType && lower.FullName?.StartsWith(
+                    "System.ValueTuple`",
+                    StringComparison.Ordinal
+                ) == true {
+                    if !ExtensionReceiverTupleConstructorMayApply(
+                        lower,
+                        index,
+                        parameters,
+                        arguments,
+                        upperBounds,
+                        receiverTerms,
+                        choices,
+                        refinements
+                    ) {
+                        return false
+                    }
+                    continue
+                }
+                if upperBounds.Any(
+                    (upper Type) -> if upper.ContainsGenericParameters {
+                        !OpenExtensionReceiverStandardShapeMayApply(lower, upper, tupleElementConversions: false)
+                    } else if lowerIndex >= fixedLowerCount && lower.IsValueType {
+                        !OpenExtensionReceiverStandardShapeMayApply(lower, upper) && !GetReceiverInferenceCarriers(
+                            lower
+                        ).Any(
+                            (candidate Type) ->
+                            IsInferenceBoundPromotion(candidate, lower) &&
+                                IsExtensionReceiverBoundPromotion(upper, candidate)
+                        )
+                    } else {
+                        !IsExtensionReceiverBoundPromotion(upper, lower)
+                    }
+                ) {
+                    return false
+                }
+            }
+            let closed = upperBounds.Where((upper Type) -> !upper.ContainsGenericParameters).ToList()
+            for constraint in upperBounds {
+                if constraint.ContainsGenericParameters && !constraint.IsGenericParameter && !constraint.IsInterface {
+                    for upper in closed {
+                        if !upper.IsInterface &&
+                            !InferCompatibleExtensionReceiverClassBounds(upper, constraint, inferred) {
+                            return false
+                        }
+                    }
+                    if constraint.IsGenericType {
+                        for lower in lowerBounds {
+                            let shapes = GetExtensionReceiverGenericShapes(lower, constraint.GetGenericTypeDefinition())
+                            if shapes.Count == 1 &&
+                                !InferExactExtensionReceiverTypeArguments(constraint, shapes[0], inferred) {
+                                return false
+                            }
+                        }
+                    }
+                }
+            }
+            if !InferenceUpperBoundsMayRefineTogether(
+                parameter,
+                upperBounds.Where(
+                    (upper Type) -> !upper.ContainsGenericParameters || upper.IsInterface || upper.IsArray
+                )
+                    .ToList(),
+                refinements,
+                refine
+            ) {
+                return false
+            }
+            let exact = closed.FirstOrDefault(
+                (upper Type) -> !InferenceBoundMayRefine(upper) || lowerBounds.Any(
+                    (lower Type) -> ClrTypeUtilities.AreSame(lower, upper)
+                )
+            )
+            if exact != nil && !InferExactExtensionReceiverTypeArguments(parameter, exact, inferred) {
+                return false
+            }
+            if exact != nil || lowerBounds.Count > 0 {
+                let candidates = if exact != nil {
+                    List[Type](){exact}
+                } else {
+                    GetExtensionReceiverDomainCandidates(lowerBounds, upperBounds)
+                }
+                var supported = false
+                for candidate in candidates {
+                    var lowerCompatible = true
+                    for var i = 0; i < lowerBounds.Count; i++ {
+                        let incompatible = if i < fixedLowerCount {
+                            !IsExtensionReceiverBoundPromotion(candidate, lowerBounds[i])
+                        } else {
+                            !OpenExtensionReceiverStandardShapeMayApply(lowerBounds[i], candidate)
+                        }
+                        if incompatible {
+                            lowerCompatible = false
+                            break
+                        }
+                    }
+                    if !lowerCompatible || closed.Any(
+                        (upper Type) -> !IsExtensionReceiverBoundPromotion(upper, candidate)
+                    ) {
+                        continue
+                    }
+                    let candidateArguments = cast[[]Type](arguments.Clone())
+                    candidateArguments[index] = candidate
+                    if SatisfiesDeclaredConstraints(
+                        parameters,
+                        NormalizeExtensionReceiverArguments(parameters, candidateArguments),
+                        default,
+                        out _,
+                        out _
+                    ) {
+                        supported = true
+                        break
+                    }
+                }
+                let requiresConstructor = (
+                    ExtensionReceiverParameterAttributes(parameters, arguments, index) &
+                    GenericParameterAttributes.DefaultConstructorConstraint
+                ) != 0
+                let nominalClassDomain = closed.Any(
+                    (upper Type) -> !upper.IsInterface &&
+                        !(upper.IsSealed && InferenceBoundMayRefine(upper)) &&
+                        upper.FullName is not("System.Object" or "System.ValueType" or "System.Enum")
+                )
+                let finitePromotionDomain = (requiresValue || requiresConstructor) && lowerBounds.Any(
+                    (lower Type) ->
+                    lower.FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) != true &&
+                        NullableLifting.GetValueTypeNullableUnderlyingClr(lower) == nil
+                )
+                if !supported && (exact != nil || nominalClassDomain || finitePromotionDomain) {
+                    return false
+                }
+            }
+        }
+        let refinedArguments = cast[[]Type](arguments.Clone())
+        var refined = false
+        for var i = 0; i < parameters.Length; i++ {
+            if !ExtensionReceiverParameterIsOpen(parameters, arguments, i) || !inferred.TryGetValue(
+                parameters[i],
+                out var candidate
+            ) ||
+                candidate.ContainsGenericParameters {
+                continue
+            }
+            refinedArguments[i] = candidate
+            refined = true
+        }
+        if refined {
+            return ExtensionReceiverBoundDomainsMayApply(
+                parameters,
+                refinedArguments,
+                choices,
+                receiverTerms,
+                refinements
+            )
+        }
+        return true
+    }
+
+    private func ExtensionReceiverTupleConstructorMayApply(
+        source Type,
+        index int32,
+        parameters[]Type,
+        arguments[]Type,
+        upperBounds IReadOnlyList[Type],
+        receiverTerms IReadOnlyList[(Type, Type, bool)],
+        choices IReadOnlyDictionary[(Type, Type), Type],
+        refinements Dictionary[HashSet[(int32, Type, Type, Type, bool)], bool]
+    ) bool {
+        let definition = source.GetGenericTypeDefinition()
+        let slots = definition.GetGenericArguments()
+        let sourceArguments = source.GetGenericArguments()
+        let parents = ExtensionReceiverConstraintParameterParents(parameters, arguments)
+        for term in receiverTerms {
+            ConnectExtensionReceiverTermParameters(
+                SubstituteExtensionReceiverTerm(term.Item1, parameters, arguments),
+                SubstituteExtensionReceiverTerm(term.Item2, parameters, arguments),
+                parameters,
+                parents
+            )
+        }
+        let root = ExtensionReceiverConstraintRoot(parents, index)
+        let component = Enumerable
+            .Range(0, parameters.Length)
+            .Where((i int32) -> ExtensionReceiverConstraintRoot(parents, i) == root)
+            .ToArray()
+        // Other components remain symbolic here and are checked by the caller.
+        let componentParameters = component.Select((i int32) -> parameters[i]).ToArray()
+        for candidate in GetReceiverInferenceCarriers(definition) {
+            let equations = Dictionary[Type, Type]()
+            for var i = 0; i < parameters.Length; i++ {
+                if parameters[i] != arguments[i] {
+                    equations[parameters[i]] = arguments[i]
+                }
+            }
+            equations[parameters[index]] = candidate
+            try {
+                if !CollectExtensionReceiverConstructorEquations(parameters, index, upperBounds, slots, equations) {
+                    continue
+                }
+                for var i = 0; i < slots.Length; i++ {
+                    if ResolveExtensionReceiverEquations(slots[i], equations) == slots[i] {
+                        equations[slots[i]] = sourceArguments[i]
+                    }
+                }
+                let possible = component.Select((i int32) -> ResolveExtensionReceiverEquations(arguments[i], equations))
+                    .ToArray()
+                let terms = receiverTerms.Select(
+                    (term(Type, Type, bool)) -> (
+                        ResolveExtensionReceiverEquations(term.Item1, equations),
+                        ResolveExtensionReceiverEquations(term.Item2, equations),
+                        term.Item3
+                    )
+                )
+                    .ToList()
+                for var i = 0; i < parameters.Length; i++ {
+                    for constraint in parameters[i].GetGenericParameterConstraints() {
+                        terms.Add(
+                            (
+                                ResolveExtensionReceiverEquations(parameters[i], equations),
+                                ResolveExtensionReceiverEquations(constraint, equations),
+                                false
+                            )
+                        )
+                    }
+                }
+                let projectedChoices = Dictionary[(Type, Type), Type]()
+                var consistent = true
+                for choice in choices {
+                    let key = (
+                        ResolveExtensionReceiverEquations(choice.Key.Item1, equations),
+                        ResolveExtensionReceiverEquations(choice.Key.Item2, equations)
+                    )
+                    let selected = ResolveExtensionReceiverEquations(choice.Value, equations)
+                    if projectedChoices.TryGetValue(key, out var existing) && existing != selected {
+                        consistent = false
+                        break
+                    }
+                    projectedChoices[key] = selected
+                }
+                if !consistent {
+                    continue
+                }
+                let pinned = Enumerable
+                    .Range(0, componentParameters.Length)
+                    .Where((i int32) -> componentParameters[i] != possible[i])
+                    .ToHashSet()
+                if ArgumentDependentBoundsMaySatisfyConstraints(
+                    componentParameters,
+                    possible,
+                    terms,
+                    componentParameters.Select((parameter Type) -> parameter.Name).ToHashSet(StringComparer.Ordinal),
+                    nil,
+                    pinned,
+                    projectedChoices,
+                    refinements: refinements
+                ) {
+                    return true
+                }
+            } catch (ex ArgumentException) {
+                continue
+            }
+        }
+        return false
+    }
+
+    private func ConnectExtensionReceiverTermParameters(source Type, target Type, parameters[]Type, parents[]int32) {
+        if source.ContainsGenericParameters {
+            let indices = Enumerable
+                .Range(0, parameters.Length)
+                .Where(
+                (i int32) -> MentionsGenericParameter(source, parameters[i]) ||
+                    MentionsGenericParameter(target, parameters[i])
+            )
+                .ToArray()
+            for var i = 1; i < indices.Length; i++ {
+                parents[ExtensionReceiverConstraintRoot(parents, indices[i])] =
+                ExtensionReceiverConstraintRoot(parents, indices[0])
+            }
+            return
+        }
+        if source.HasElementType && target.HasElementType && source.GetElementType() is {} sourceElement &&
+            target.GetElementType() is {} targetElement {
+            ConnectExtensionReceiverTermParameters(sourceElement, targetElement, parameters, parents)
+            return
+        }
+        if !target.IsGenericType {
+            return
+        }
+        let shapes = GetExtensionReceiverGenericShapes(source, target.GetGenericTypeDefinition())
+        if shapes.Count > 1 {
+            let indices = Enumerable
+                .Range(0, parameters.Length)
+                .Where((i int32) -> MentionsGenericParameter(target, parameters[i]))
+                .ToArray()
+            for var i = 1; i < indices.Length; i++ {
+                parents[ExtensionReceiverConstraintRoot(parents, indices[i])] =
+                ExtensionReceiverConstraintRoot(parents, indices[0])
+            }
+        } else if shapes.Count == 1 {
+            let sources = shapes[0].GetGenericArguments()
+            let targets = target.GetGenericArguments()
+            for var i = 0; i < sources.Length; i++ {
+                ConnectExtensionReceiverTermParameters(sources[i], targets[i], parameters, parents)
+            }
+        }
+    }
+
+    private func CollectExtensionReceiverConstructorEquations(
+        parameters[]Type,
+        index int32,
+        upperBounds IReadOnlyList[Type],
+        slots[]Type,
+        equations Dictionary[Type, Type]
+    ) bool {
+        let constraints = List[(Type, Type)]()
+        for parameter in parameters {
+            for constraint in parameter.GetGenericParameterConstraints() {
+                constraints.Add((parameter, constraint))
+            }
+        }
+        constraints.AddRange(upperBounds.Select((upper Type) -> (parameters[index], upper)))
+        let known = HashSet[(Type, Type)](constraints)
+        for var pass = 0; pass <= parameters.Length + slots.Length; pass++ {
+            let count = equations.Count
+            let constraintCount = constraints.Count
+            for var i = 0; i < constraints.Count; i++ {
+                let source = ResolveExtensionReceiverEquations(constraints[i].Item1, equations)
+                let target = ResolveExtensionReceiverEquations(constraints[i].Item2, equations)
+                if source.IsGenericParameter {
+                    continue
+                }
+                if target.IsGenericParameter {
+                    for constraint in target.GetGenericParameterConstraints() {
+                        let term = (source, constraint)
+                        if known.Add(term) {
+                            constraints.Add(term)
+                        }
+                    }
+                    continue
+                }
+                if target.IsGenericType {
+                    let shapes = GetExtensionReceiverGenericShapes(source, target.GetGenericTypeDefinition())
+                    if shapes.Count == 1 {
+                        let sources = shapes[0].GetGenericArguments()
+                        let targets = target.GetGenericArguments()
+                        let positions = target.GetGenericTypeDefinition().GetGenericArguments()
+                        for var position = 0; position < sources.Length; position++ {
+                            let invariant = sources[position].IsValueType ||
+                                targets[position].IsValueType ||
+                                (
+                                positions[position].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
+                            ) ==
+                            GenericParameterAttributes.None
+                            if invariant &&
+                                !UnifyExtensionReceiverConstructorEquation(
+                                sources[position],
+                                targets[position],
+                                slots,
+                                equations
+                            ) {
+                                return false
+                            }
+                        }
+                        continue
+                    }
+                }
+                if !OpenExtensionReceiverStandardShapeMayApply(source, target, tupleElementConversions: false) {
+                    return false
+                }
+            }
+            if equations.Count == count && constraints.Count == constraintCount {
+                return true
+            }
+        }
+        return true
+    }
+
+    private func UnifyExtensionReceiverConstructorEquation(
+        source Type,
+        target Type,
+        slots[]Type,
+        equations Dictionary[Type, Type]
+    ) bool {
+        let source = ResolveExtensionReceiverEquations(source, equations)
+        let target = ResolveExtensionReceiverEquations(target, equations)
+        if source == target ||
+            !source.ContainsGenericParameters &&
+            !target.ContainsGenericParameters &&
+            ClrTypeUtilities.AreSame(source, target) {
+            return true
+        }
+        if source.IsGenericParameter || target.IsGenericParameter {
+            let parameter = if source.IsGenericParameter &&
+                (slots.Contains(source) || !target.IsGenericParameter || !slots.Contains(target)) {
+                source
+            } else {
+                target
+            }
+            let value = if parameter == source {
+                target
+            } else {
+                source
+            }
+            if MentionsGenericParameter(value, parameter) {
+                return false
+            }
+            equations[parameter] = value
+            return true
+        }
+        if source.HasElementType || target.HasElementType {
+            if source.IsArray != target.IsArray ||
+                source.IsByRef != target.IsByRef ||
+                source.IsPointer != target.IsPointer ||
+                source.IsArray &&
+                (source.GetArrayRank() != target.GetArrayRank() || source.IsSZArray != target.IsSZArray) {
+                return false
+            }
+            let sourceElement = source.GetElementType()
+            let targetElement = target.GetElementType()
+            return sourceElement != nil &&
+                targetElement != nil &&
+                UnifyExtensionReceiverConstructorEquation(sourceElement, targetElement, slots, equations)
+        }
+        if !source.IsGenericType || !target.IsGenericType || !ClrTypeUtilities.AreSame(
+            source.GetGenericTypeDefinition(),
+            target.GetGenericTypeDefinition()
+        ) {
+            return false
+        }
+        let sources = source.GetGenericArguments()
+        let targets = target.GetGenericArguments()
+        for var i = 0; i < sources.Length; i++ {
+            if !UnifyExtensionReceiverConstructorEquation(sources[i], targets[i], slots, equations) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func ResolveExtensionReceiverEquations(type Type, equations IReadOnlyDictionary[Type, Type]) Type {
+        if equations.TryGetValue(type, out var replacement) && type != replacement {
+            return ResolveExtensionReceiverEquations(replacement, equations)
+        }
+        if !type.ContainsGenericParameters {
+            return type
+        }
+        if type.HasElementType && type.GetElementType() is {} element {
+            let resolved = ResolveExtensionReceiverEquations(element, equations)
+            if element != resolved {
+                return if type.IsByRef {
+                    resolved.MakeByRefType()
+                } else if type.IsPointer {
+                    resolved.MakePointerType()
+                } else if type.IsSZArray {
+                    resolved.MakeArrayType()
+                } else {
+                    resolved.MakeArrayType(type.GetArrayRank())
+                }
+            }
+            return type
+        }
+        if type.IsGenericType {
+            let arguments = type.GetGenericArguments()
+            var changed = false
+            for var i = 0; i < arguments.Length; i++ {
+                let resolved = ResolveExtensionReceiverEquations(arguments[i], equations)
+                if arguments[i] != resolved {
+                    arguments[i] = resolved
+                    changed = true
+                }
+            }
+            if changed {
+                return type.GetGenericTypeDefinition().MakeGenericType(arguments)
+            }
+        }
+        return type
+    }
+
+    private func NormalizeExtensionReceiverArguments(parameters[]Type, arguments[]Type)[]Type {
+        let equations = Dictionary[Type, Type]()
+        for var i = 0; i < parameters.Length; i++ {
+            if parameters[i] != arguments[i] {
+                equations[parameters[i]] = arguments[i]
+            }
+        }
+        if equations.Count == 0 {
+            return arguments
+        }
+        return arguments.Select((argument Type) -> ResolveExtensionReceiverEquations(argument, equations)).ToArray()
+    }
+
+    private func ExtensionReceiverParameterIsOpen(parameters[]Type, arguments[]Type, index int32) bool ->
+    arguments[index] == parameters[index]
+
+    private func ExtensionReceiverParameterAttributes(
+        parameters[]Type,
+        arguments[]Type,
+        index int32
+    ) GenericParameterAttributes {
+        var attributes = parameters[index].GenericParameterAttributes
+        for var i = 0; i < parameters.Length; i++ {
+            if arguments[i] == parameters[index] {
+                attributes |= parameters[i].GenericParameterAttributes
+            }
+        }
+        return attributes
+    }
+
+    private func InferenceBoundMayHaveCompatibleSubtype(
+        bound Type,
+        parameter Type,
+        parameters[]Type,
+        arguments[]Type,
+        refinements Dictionary[HashSet[(int32, Type, Type, Type, bool)], bool],
+        refine Func[Type, []Type, IReadOnlyList[(Type, Type, bool)], bool]
+    ) bool {
+        if !InferenceBoundMayRefine(bound) ||
+            (
+            ExtensionReceiverParameterAttributes(parameters, arguments, Array.IndexOf(parameters, parameter)) &
+            GenericParameterAttributes.NotNullableValueTypeConstraint
+        ) != 0 {
+            return false
+        }
+        if bound.IsSealed &&
+            (
+            ExtensionReceiverParameterAttributes(parameters, arguments, Array.IndexOf(parameters, parameter)) &
+            GenericParameterAttributes.DefaultConstructorConstraint
+        ) != 0 &&
+            bound.GetConstructor(Type.EmptyTypes) == nil {
+            return false
+        }
+        for rawConstraint in parameter.GetGenericParameterConstraints() {
+            let constraint = SubstituteExtensionReceiverTerm(rawConstraint, parameters, arguments)
+            if constraint.ContainsGenericParameters {
+                if constraint.IsInterface &&
+                    !InferenceUpperBoundsMayRefineTogether(parameter, []Type{bound, constraint}, refinements, refine) {
+                    return false
+                }
+                continue
+            }
+            if constraint.IsValueType {
+                return false
+            }
+            if !InferenceUpperBoundsMayRefineTogether(parameter, []Type{bound, constraint}, refinements, refine) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func ClosedExtensionReceiverConversionMayApply(
+        method MethodInfo,
+        receiver TypeSymbol,
+        typeArguments[]Type
+    ) bool {
+        var closedMethod MethodInfo
+        try {
+            closedMethod = method.MakeGenericMethod(typeArguments)
+        } catch (ex ArgumentException) {
+            // Live reflection enforces constraints while closing; the caller
+            // checks those separately, including bounds later arguments can fix.
+            return true
+        }
+        let parameter = closedMethod.GetParameters()[0]
+        let parameterType = parameter.ParameterType
+        let closedReceiver = if parameterType.IsByRef {
+            parameterType.GetElementType() ?? parameterType
+        } else {
+            parameterType
+        }
+        return if closedReceiver.ContainsGenericParameters {
+            receiver.ClrType is {} source && OpenExtensionReceiverStandardShapeMayApply(source, closedReceiver)
+        } else {
+            (
+                ClassifyImplicit(closedReceiver, receiver.ClrType) != ImplicitConversionKind.None ||
+                    Conversion
+                    .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(parameter)).IsImplicit
+            )
+        }
+    }
+
+    private func GetReceiverInferenceCarriers(type Type) List[Type] {
+        let carriers = List[Type]()
+        for var current Type? = type; current != nil; current = current?.BaseType {
+            carriers.Add(current)
+        }
+        carriers.AddRange(ClrTypeUtilities.SafeGetInterfaces(type))
+        let contextObject = ResolveObjectInSameContext(type) ?? typeof(object)
+        if !carriers.Any((candidate Type) -> ClrTypeUtilities.AreSame(candidate, contextObject)) {
+            carriers.Add(contextObject)
+        }
+        for name in NumericWideningLattice.WideningTargets(type.FullName).OrderBy(
+            (name string) -> name,
+            StringComparer.Ordinal
+        ) {
+            let widened = type.Assembly.GetType(name) ?? Type.GetType(name)
+            if widened != nil {
+                carriers.Add(widened)
+            }
+        }
+        return carriers
+    }
+
     /// Partial method type inference for deferred arrow-lambda arguments
     /// (follow-up to issue #891). When a generic method's lambda
     /// parameter return type is a method type parameter that can only be
@@ -5423,7 +8087,10 @@ internal shared class ClrOverloadResolution {
         }
         try {
             if type.IsGenericParameter {
-                return type.IsSameAs(parameter)
+                return parameter.IsGenericParameter &&
+                    type.GenericParameterPosition == parameter.GenericParameterPosition &&
+                    type.DeclaringMethod == parameter.DeclaringMethod &&
+                    type.DeclaringType == parameter.DeclaringType
             }
             if type.HasElementType {
                 return MentionsGenericParameter(type.GetElementType(), parameter)
@@ -6269,6 +8936,13 @@ internal shared class ClrOverloadResolution {
         case ImplicitConversionKind.NumericWidening: true
         case ImplicitConversionKind.Reference: true
         case ImplicitConversionKind.Boxing: true
+        // The overload classifier ranks return covariance before reference
+        // assignability. Keep actual CLR variance, not shape adapters.
+        case ImplicitConversionKind.DelegateReturnCovariance: target.IsGenericType &&
+            source.IsGenericType &&
+            ClrTypeUtilities.AreSame(target.GetGenericTypeDefinition(), source.GetGenericTypeDefinition()) &&
+            OpenExtensionReceiverStandardShapeMayApply(source, target, tupleElementConversions: false) &&
+            IsVariantAssignable(target, source)
         default: false
     }
 

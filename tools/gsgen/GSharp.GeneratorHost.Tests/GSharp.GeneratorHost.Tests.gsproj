@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="../../../src/Sdk/Gsharp.NET.Sdk/WorkerDiagnosticCapture.gs" Link="WorkerDiagnosticCapture.gs" />
     <ProjectReference Include="../GSharp.GeneratorHost/GSharp.GeneratorHost.gsproj" />
     <ProjectReference Include="../../cs2gs/Cs2Gs.ProjectLoading/Cs2Gs.ProjectLoading.gsproj" />
     <ProjectReference Include="../Gsgen.Cli/Gsgen.Cli.gsproj" />

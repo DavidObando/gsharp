@@ -10,6 +10,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
+import System.Reflection
 
 /// Lowering pass that eliminates `ref` locals (managed pointer locals) from
 /// async method bodies so they do not require hoisting into byref fields — which
@@ -37,6 +38,8 @@ import System.Linq
 ///
 /// This pass runs after (cref:SpillSequenceSpiller) and before
 /// (cref:AsyncStateMachineTypeBuilder) in the async pipeline.
+/// Opaque borrowed addresses remain MoveNext locals only when the shared
+/// suspension-liveness analysis proves they do not cross a suspension.
 shared class RefInitializationHoister {
     private class Rewriter : BoundTreeRewriter {
         private let refLocals Dictionary[LocalVariableSymbol, BoundExpression]
@@ -53,15 +56,22 @@ shared class RefInitializationHoister {
             // recorded for use-site reconstruction.
             let local = node.Variable as LocalVariableSymbol
             let addressOf BoundAddressOfExpression? = node.Initializer as BoundAddressOfExpression
-            if local?.Type is ByRefTypeSymbol && addressOf != nil {
+            if local != nil && local.Type is ByRefTypeSymbol && addressOf != nil && refLocals.ContainsKey(local) {
                 let prelude = ImmutableArray.CreateBuilder[BoundStatement]()
-                let template = HoistOperand(addressOf.Operand, prelude)
-                if (template is BoundIndexExpression or BoundFieldAccessExpression and {Receiver: not nil}) {
+                let template = HoistOperand(addressOf.Operand, prelude, captureComponents: true)
+                if (
+                    template is BoundTupleElementAccessExpression or
+                        BoundIndexExpression or
+                        BoundFieldAccessExpression and
+                        {Receiver: not nil} or
+                        BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: not nil} or
+                        BoundDereferenceExpression{Operand: BoundConditionalAddressExpression}
+                ) {
                     prelude.Add(
                         BoundExpressionStatement(node.Syntax, BoundAddressOfExpression(addressOf.Syntax, template))
                     )
                 }
-                refLocals[local!!] = template
+                refLocals[local] = template
                 return BoundBlockStatement(nil, prelude.ToImmutable())
             }
             return base.RewriteVariableDeclaration(node)
@@ -114,15 +124,33 @@ shared class RefInitializationHoister {
         /// [`prelude`](paramref) for any non-trivial sub-expression.
         private func HoistOperand(
             operand BoundExpression,
-            prelude ImmutableArray[BoundStatement].Builder
+            prelude ImmutableArray[BoundStatement].Builder,
+            captureComponents bool = false
         ) BoundExpression {
+            if RefCapabilities.IsRefReturningAccess(operand) {
+                throw System.InvalidOperationException(
+                    "Opaque ref-returning storage must be rejected before async address reconstruction."
+                )
+            }
             switch operand {
+                case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
+                    return HoistOperand(address.Operand, prelude, captureComponents: true)
+                }
+                case tuple is BoundTupleElementAccessExpression {
+                    // Later arguments can replace an owner or index before address reconstruction.
+                    return BoundTupleElementAccessExpression(
+                        tuple.Syntax,
+                        HoistOperand(tuple.Receiver, prelude, captureComponents: true),
+                        tuple.TupleType,
+                        tuple.Index
+                    )
+                }
                 case idx is BoundIndexExpression {
                     {
-                        let target = HoistIfNeeded(idx.Target, prelude)
+                        let target = HoistIfNeeded(idx.Target, prelude, captureComponents)
                         let indices = idx
                             .Indices
-                            .Select((index BoundExpression) -> HoistIfNeeded(index, prelude))
+                            .Select((index BoundExpression) -> HoistIfNeeded(index, prelude, captureComponents))
                             .ToImmutableArray()
                         return BoundIndexExpression(idx.Syntax, target, indices, idx.Type)
                     }
@@ -139,9 +167,9 @@ shared class RefInitializationHoister {
                         }
                         let receiver = if Binder.IsReferenceTypeForConstraint(field.Receiver.Type) ||
                             !IsReconstructableStorage(field.Receiver) {
-                            HoistIfNeeded(field.Receiver, prelude)
+                            HoistIfNeeded(field.Receiver, prelude, captureComponents)
                         } else {
-                            HoistOperand(field.Receiver, prelude)
+                            HoistOperand(field.Receiver, prelude, captureComponents)
                         }
                         return BoundFieldAccessExpression(
                             field.Syntax,
@@ -173,17 +201,67 @@ shared class RefInitializationHoister {
                 }
                 case clrProp is BoundClrPropertyAccessExpression when clrProp.Receiver != nil {
                     {
-                        let receiver = HoistIfNeeded(clrProp.Receiver!!, prelude)
-                        return BoundClrPropertyAccessExpression(clrProp.Syntax, receiver, clrProp.Member, clrProp.Type)
+                        let owner = clrProp.Receiver!!
+                        let receiver = if clrProp.Member is FieldInfo && !Binder.IsReferenceTypeForConstraint(
+                            owner.Type
+                        ) &&
+                            IsReconstructableStorage(owner) {
+                            HoistOperand(owner, prelude, captureComponents)
+                        } else {
+                            HoistIfNeeded(owner, prelude, captureComponents)
+                        }
+                        return BoundClrPropertyAccessExpression(
+                            clrProp.Syntax,
+                            receiver,
+                            clrProp.Member,
+                            clrProp.Type,
+                            clrProp.StaticContainerType,
+                            clrProp.ConstrainedReceiverTypeParameter,
+                            clrProp.ConstrainedInterfaceType,
+                            clrProp.IsAddressableStaticField,
+                            clrProp.IsReadOnlySubmissionGlobal
+                        )
                     }
+                }
+                case BoundDereferenceExpression{Operand: BoundConditionalAddressExpression address} dereference {
+                    let condition = HoistIfNeeded(address.Condition, prelude, forceCapture: true)
+                    let truePrelude = ImmutableArray.CreateBuilder[BoundStatement]()
+                    let whenTrue = HoistOperand(address.WhenTrueOperand, truePrelude, captureComponents: true)
+                    let falsePrelude = ImmutableArray.CreateBuilder[BoundStatement]()
+                    let whenFalse = HoistOperand(address.WhenFalseOperand, falsePrelude, captureComponents: true)
+                    if truePrelude.Count != 0 {
+                        let skip = BoundLabel("<refSkip>__${tempCounter++}")
+                        prelude.Add(BoundConditionalGotoStatement(nil, skip, condition, jumpIfTrue: false))
+                        prelude.AddRange(truePrelude)
+                        prelude.Add(BoundLabelStatement(nil, skip))
+                    }
+                    if falsePrelude.Count != 0 {
+                        let skip = BoundLabel("<refSkip>__${tempCounter++}")
+                        prelude.Add(BoundConditionalGotoStatement(nil, skip, condition, jumpIfTrue: true))
+                        prelude.AddRange(falsePrelude)
+                        prelude.Add(BoundLabelStatement(nil, skip))
+                    }
+                    return BoundDereferenceExpression(
+                        dereference.Syntax,
+                        BoundConditionalAddressExpression(
+                            address.Syntax,
+                            condition,
+                            whenTrue,
+                            whenFalse,
+                            address.PointeeType
+                        )
+                    )
                 }
                 case dereference is BoundDereferenceExpression {
                     return BoundDereferenceExpression(dereference.Syntax, HoistIfNeeded(dereference.Operand, prelude))
                 }
                 default {
-                    // Any other operand form (e.g., a bare variable for
-                    // `ref x = ref y`) is trivially repeatable or already in a
-                    // hoist-safe shape after spilling. Inline directly.
+                    if operand.Type is ByRefTypeSymbol && operand is not BoundVariableExpression {
+                        throw System.InvalidOperationException(
+                            "Opaque ref-returning storage must be rejected before async address reconstruction."
+                        )
+                    }
+                    // Other operands are repeatable leaves or already spilled storage.
                     return operand
                 }
             }
@@ -194,9 +272,10 @@ shared class RefInitializationHoister {
         /// [`prelude`](paramref) and returns a read of that local.
         private func HoistIfNeeded(
             expression BoundExpression,
-            prelude ImmutableArray[BoundStatement].Builder
+            prelude ImmutableArray[BoundStatement].Builder,
+            forceCapture bool = false
         ) BoundExpression {
-            if RefInitializationHoister.IsTriviallyRepeatable(expression) {
+            if !forceCapture && RefInitializationHoister.IsTriviallyRepeatable(expression) {
                 return expression
             }
             let temp = LocalVariableSymbol("<refTmp>__${tempCounter++}", isReadOnly: false, expression.Type)
@@ -207,6 +286,12 @@ shared class RefInitializationHoister {
         shared {
             private func IsReconstructableStorage(expression BoundExpression) bool {
                 return switch expression {
+                    case tuple is BoundTupleElementAccessExpression: IsReconstructableStorage(tuple.Receiver)
+                    case BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: nil}: true
+                    case BoundClrPropertyAccessExpression{
+                        Member: FieldInfo,
+                        Receiver: {} receiver
+                    }: Binder.IsReferenceTypeForConstraint(receiver.Type) || IsReconstructableStorage(receiver)
                     case _ is BoundVariableExpression: true
                     case _ is BoundDereferenceExpression: true
                     case _ is BoundIndexExpression: true
@@ -221,9 +306,9 @@ shared class RefInitializationHoister {
         }
     }
 
-    /// Rewrites [`body`](paramref) by eliminating all ref locals.
+    /// Rewrites [`body`](paramref) by reconstructing ref locals where possible.
     /// @param body The spilled async method body.
-    /// @returns The rewritten body with no ref local declarations or usages.
+    /// @returns The rewritten body, preserving opaque ref locals only within a suspension-free lifetime.
     func Rewrite(body BoundBlockStatement) BoundBlockStatement {
         // First pass: collect ref local declarations (we still need to know
         // which locals are ref so the rewriter can recognize their uses). The
@@ -231,6 +316,19 @@ shared class RefInitializationHoister {
         // site itself, where we also emit the hoisting prelude.
         let refLocals = Dictionary[LocalVariableSymbol, BoundExpression]()
         if !CollectRefLocals(body, refLocals) {
+            return body
+        }
+        let crossing = RefStructAsyncLivenessAnalyzer.FindLocalsLiveAcrossSuspension(
+            body,
+            refLocals.Keys.Cast[VariableSymbol]()
+        )
+        for local in refLocals.Keys.ToArray() {
+            if !crossing.Contains(local) && RefCapabilities.IsBorrowedLocation(refLocals[local]) {
+                // Keep an opaque address in a MoveNext local when no suspension needs it.
+                refLocals.Remove(local)
+            }
+        }
+        if refLocals.Count == 0 {
             return body
         }
         // Second pass: rewrite the tree. The rewriter replaces each ref local

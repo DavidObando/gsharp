@@ -130,6 +130,7 @@ shared class SpillSequenceSpiller {
         // body never mint two same-named locals with different types — the
         // async state machine maps hoisted locals to fields by name.
         private let spillTempDomain string
+        private let propertyReceiverSpiller SideEffectSpiller
 
         private var spillOrdinal int32
 
@@ -147,6 +148,7 @@ shared class SpillSequenceSpiller {
                     }
                 )
             }
+            this.propertyReceiverSpiller = SideEffectSpiller("<>storage" + this.spillTempDomain)
         }
 
         func RewriteBlock(block BoundBlockStatement) BoundBlockStatement {
@@ -731,7 +733,8 @@ shared class SpillSequenceSpiller {
                                 clrPropAssign.ConstrainedReceiverTypeParameter,
                                 clrPropAssign.ConstrainedInterfaceType
                             )
-                        }
+                        },
+                        preserveReceiverStorage: true
                     )
                 }
                 case clrBinary is BoundClrBinaryOperatorExpression {
@@ -946,7 +949,8 @@ shared class SpillSequenceSpiller {
                                 propAssign.SubstitutedType,
                                 propAssign.InterfaceType
                             )
-                        }
+                        },
+                        preserveReceiverStorage: true
                     )
                 }
                 case tupleLiteral is BoundTupleLiteralExpression {
@@ -2582,7 +2586,8 @@ shared class SpillSequenceSpiller {
             original BoundExpression,
             a BoundExpression,
             b BoundExpression,
-            rebuild(BoundExpression, BoundExpression) -> BoundExpression
+            rebuild(BoundExpression, BoundExpression) -> BoundExpression,
+            preserveReceiverStorage bool = false
         ) BoundSpillSequenceExpression {
             let aHasAwait = HasAwait(a)
             let bHasAwait = HasAwait(b)
@@ -2598,12 +2603,26 @@ shared class SpillSequenceSpiller {
                 sideEffects.AddRange(spilledA.SideEffects)
                 left = spilledA.Value
             }
-            if bHasAwait && !CanDeferAcrossLift(left) {
-                left = StoreOperand(left, locals, sideEffects)
-            }
-            var right = b
             if bHasAwait {
-                let spilledB = SpillExpression(b)
+                if preserveReceiverStorage && SideEffectSpiller.IsInPlaceStorageWriteReceiver(left) {
+                    // This pass also lifts control-flow blocks before SideEffectSpiller runs.
+                    left = propertyReceiverSpiller.CapturePropertyStorageReceiver(
+                        left,
+                        sideEffects,
+                        captureComponents: true
+                    )
+                    propertyReceiverSpiller.ProbeStorageReceiver(left, sideEffects)
+                } else if !CanDeferAcrossLift(left) {
+                    left = StoreOperand(left, locals, sideEffects)
+                }
+            }
+            var right = if preserveReceiverStorage {
+                SideEffectSpiller.SubstituteReceiver(b, a, left)
+            } else {
+                b
+            }
+            if bHasAwait {
+                let spilledB = SpillExpression(right)
                 locals.AddRange(spilledB.Locals)
                 sideEffects.AddRange(spilledB.SideEffects)
                 right = spilledB.Value

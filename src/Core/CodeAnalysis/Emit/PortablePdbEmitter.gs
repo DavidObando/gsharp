@@ -4,6 +4,8 @@
 
 package GSharp.Core.CodeAnalysis.Emit
 
+import GSharp.Core.CodeAnalysis.Compilation
+
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import System
@@ -179,6 +181,7 @@ internal class PortablePdbEmitter {
         entryPoint MethodDefinitionHandle,
         idProvider(IEnumerable[Blob]) -> BlobContentId
     )(Blob BlobBuilder, ContentId BlobContentId) {
+        using let measurement = CompilationMeasurements.BeginPhase("emit.pdb")
         let methodDefRowCount = peRowCounts[int32(TableIndex.MethodDef)]
         // Step 1 — write MethodDebugInformation rows in MethodDef order (Phase 4
         // contract: one row per MethodDef, lockstep).

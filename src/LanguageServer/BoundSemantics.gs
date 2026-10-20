@@ -391,22 +391,45 @@ shared class BoundSemantics {
                     fieldOwner
                 )
             }
-            if read is BoundCallExpression call && call.Function.IsStatic && TypeMemberModel.GetMethods(
-                owner,
-                name,
-                MemberQuery.InheritedStatic(MemberKinds.Method)
-            )
-                .Any((candidate FunctionSymbol) -> object.ReferenceEquals(candidate, call.Function)) &&
-                (call.Function.StaticOwnerType ?? call.Function.ContainingType) is StructSymbol declaredOwner {
-                let effectiveOwner = TypeMemberModel.ResolveStaticMemberOwner(owner, declaredOwner)
+        }
+        if read is BoundCallExpression call &&
+            call
+            .Function
+            .IsStatic &&
+            sourceType != nil &&
+            TypeMemberModel
+            .GetMethods(sourceType, name, MemberQuery.InheritedStatic(MemberKinds.Method)).Any(
+            (candidate FunctionSymbol) -> object.ReferenceEquals(candidate, call.Function)
+        ) {
+            let declaredOwner = call.Function.StaticOwnerType ?? call.Function.ContainingType
+            if sourceType is StructSymbol owner && declaredOwner is StructSymbol declaredStruct {
+                let effectiveOwner = TypeMemberModel.ResolveStaticMemberOwner(owner, declaredStruct)
                 return if call.StaticGenericOwnerType != nil {
                     object.ReferenceEquals(call.StaticGenericOwnerType, effectiveOwner)
                 } else {
                     effectiveOwner.Definition == nil
                 }
             }
+            if sourceType is InterfaceSymbol contract {
+                let selectedOwner = call.StaticGenericInterfaceOwnerType ?? declaredOwner
+                return contract.SelfAndAllBaseInterfaces().Any(
+                    (candidate InterfaceSymbol) -> object.ReferenceEquals(candidate, selectedOwner) &&
+                        TypeMemberModel
+                        .GetMethods(candidate, name, MemberQuery.Static(MemberKinds.Method)).Any(
+                        (method FunctionSymbol) -> object.ReferenceEquals(method, call.Function)
+                    )
+                )
+            }
         }
         let clrType = sourceType?.ClrType
+        if read is BoundLiteralExpression literal && clrType != nil {
+            // Folded CLR fields retain the selected read/qualifier record, not FieldInfo.
+            return object.ReferenceEquals(literal.StaticQualifierType, sourceType) && object.ReferenceEquals(
+                literal.StaticQualifierSyntax,
+                qualifier
+            ) &&
+                object.ReferenceEquals(literal.StaticMemberSyntax, member)
+        }
         if read is BoundClrPropertyAccessExpression{Receiver: nil} imported && clrType != nil {
             const flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.FlattenHierarchy
             let expected MemberInfo? = switch imported.Member {

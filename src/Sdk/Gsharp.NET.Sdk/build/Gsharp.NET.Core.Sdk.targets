@@ -530,25 +530,50 @@
        extensibility surface without special-casing Avalonia. -->
   <Target Name="GenerateMSBuildEditorConfigFileShouldRun" />
 
+  <!-- Track argument and item membership changes even when no input file is newer. -->
+  <Target Name="_GsharpCreateGeneratorInputsCache">
+    <ItemGroup>
+      <_GsharpGeneratorInputsToHash Include="@(Compile->'GS:%(FullPath)')" />
+      <_GsharpGeneratorInputsToHash Include="@(_GsharpForeignCompile->'CS:%(FullPath)')" />
+      <_GsharpGeneratorInputsToHash Include="@(ReferencePathWithRefAssemblies->'REF:%(FullPath)')" />
+      <_GsharpGeneratorInputsToHash Include="@(GsharpAnalyzer->'ANALYZER:%(FullPath)')" />
+      <_GsharpGeneratorInputsToHash Include="@(AdditionalFiles->'ADDITIONAL:%(FullPath)|%(SourceItemGroup)|%(TargetPath)|%(ManifestResourceName)')" />
+      <_GsharpGeneratorInputsToHash Include="@(_GsharpGeneratorGlobalOption->'OPTION:%(Identity)=%(Value)')" />
+      <_GsharpGeneratorInputsToHash Include="ROOTNAMESPACE:$(RootNamespace);TOOL:$(GsgenToolFullPath)" />
+    </ItemGroup>
+    <Hash ItemsToHash="@(_GsharpGeneratorInputsToHash)" IgnoreCase="false">
+      <Output TaskParameter="HashResult" PropertyName="_GsharpGeneratorInputsHash" />
+    </Hash>
+    <MakeDir Directories="$(IntermediateOutputPath)gsgen" />
+    <WriteLinesToFile Lines="$(_GsharpGeneratorInputsHash)"
+                      File="$(IntermediateOutputPath)gsgen/inputs.cache"
+                      Overwrite="True"
+                      WriteOnlyWhenDifferent="True" />
+    <ItemGroup>
+      <FileWrites Include="$(IntermediateOutputPath)gsgen/inputs.cache" />
+    </ItemGroup>
+  </Target>
+
   <!-- (2) Run gsgen over the user's .gs (BEFORE generated files are added to
        @(Compile)), the resolved reference closure, and the resolved analyzers.
-       Incremental: re-runs only when a source/analyzer/reference/project file is
-       newer than the manifest. -->
+       The manifest owns generated files; the task commits a separate success
+       stamp only after exit status and diagnostic streams are accepted. -->
   <Target Name="_GsharpRunSourceGenerators"
           BeforeTargets="CoreCompile"
-          DependsOnTargets="_GsharpPartitionForeignCompile;GenerateMSBuildEditorConfigFileShouldRun;_GsharpResolveAnalyzers;_GsharpCollectGeneratorOptions;ResolveReferences"
+          DependsOnTargets="_GsharpPartitionForeignCompile;GenerateMSBuildEditorConfigFileShouldRun;_GsharpResolveAnalyzers;_GsharpCollectGeneratorOptions;ResolveReferences;_GsharpCreateGeneratorInputsCache"
           Condition=" '$(GsharpRunSourceGenerators)' != 'false' "
-          Inputs="@(Compile);@(_GsharpForeignCompile);@(AdditionalFiles);@(GsharpAnalyzer);@(ReferencePathWithRefAssemblies);$(MSBuildAllProjects)"
-          Outputs="$(IntermediateOutputPath)gsgen\gsgen.manifest">
+          Inputs="@(Compile);@(_GsharpForeignCompile);@(AdditionalFiles);@(GsharpAnalyzer);@(ReferencePathWithRefAssemblies);$(GsgenToolFullPath);$(IntermediateOutputPath)gsgen/inputs.cache;$(MSBuildAllProjects)"
+          Outputs="$(IntermediateOutputPath)gsgen\gsgen.manifest;$(IntermediateOutputPath)gsgen\gsgen.manifest.success">
     <!-- The analyzer-empty fast path is gated on the TASK, not the target's
          Condition: a target whose Condition is false never runs its
          DependsOnTargets, so gating the target on '@(GsharpAnalyzer)' would
          prevent _GsharpResolveAnalyzers (which POPULATES that item) from ever
          running — a chicken-and-egg deadlock. Keep the target unconditional and
          let _GsharpResolveAnalyzers run first, then skip the actual gsgen launch
-         when it resolved nothing AND there is no stray C# to translate either. -->
+         when it resolved nothing AND there is no stray C# to translate either.
+         A previous manifest still needs an empty run to delete orphaned parts. -->
     <GsgenTask
-        Condition=" '@(GsharpAnalyzer)' != '' or '@(_GsharpForeignCompile)' != '' "
+        Condition=" '@(GsharpAnalyzer)' != '' or '@(_GsharpForeignCompile)' != '' or Exists('$(IntermediateOutputPath)gsgen\gsgen.manifest') "
         GsgenToolFullPath="$(GsgenToolFullPath)"
         Compile="@(Compile)"
         ForeignCompile="@(_GsharpForeignCompile)"
@@ -560,6 +585,8 @@
         ManifestPath="$(IntermediateOutputPath)gsgen\gsgen.manifest"
         ResponseFilePath="$(IntermediateOutputPath)$(TargetName).gsgen.rsp"
         RootNamespace="$(RootNamespace)"
+        UseSharedCompilation="$(GSharpUseSharedCompilation)"
+        WorkerGrant="$(GSharpWorkerGrant)"
         BasePath="$(MSBuildProjectDirectory)" />
   </Target>
 
@@ -573,6 +600,9 @@
           BeforeTargets="CoreCompile"
           DependsOnTargets="_GsharpRunSourceGenerators"
           Condition=" '$(GsharpRunSourceGenerators)' != 'false' and Exists('$(IntermediateOutputPath)gsgen\gsgen.manifest') ">
+    <ItemGroup>
+      <_GsharpGeneratedManifest Include="$(IntermediateOutputPath)gsgen/gsgen.manifest" />
+    </ItemGroup>
     <ReadLinesFromFile File="$(IntermediateOutputPath)gsgen\gsgen.manifest">
       <Output TaskParameter="Lines" ItemName="_GsharpGeneratedGsFile" />
     </ReadLinesFromFile>
@@ -584,6 +614,7 @@
            incremental build sees them. -->
       <FileWrites Include="@(_GsharpGeneratedGsFile)" Condition=" '@(_GsharpGeneratedGsFile)' != '' " />
       <FileWrites Include="$(IntermediateOutputPath)gsgen\gsgen.manifest" />
+      <FileWrites Include="$(IntermediateOutputPath)gsgen\gsgen.manifest.success" />
       <FileWrites Include="$(IntermediateOutputPath)$(TargetName).gsgen.rsp" Condition="Exists('$(IntermediateOutputPath)$(TargetName).gsgen.rsp')" />
     </ItemGroup>
 
@@ -603,6 +634,7 @@
                   @(ReferencePathWithRefAssemblies);
                   @(_CoreCompileResourceInputs);
                   @(CompiledLicenseFile);
+                  @(_GsharpGeneratedManifest);
                   $(IntermediateOutputPath)$(TargetName).CoreCompileInputs.cache"
           Outputs="@(IntermediateAssembly);
                    $(DocumentationFile);
@@ -635,6 +667,10 @@
          otherwise surfaces as a FileNotFoundException/TypeLoadException deep in
          member enumeration (issue #340). -->
     <BuildTask
+        UseSharedCompilation="$(GSharpUseSharedCompilation)"
+        WorkerGrant="$(GSharpWorkerGrant)"
+        MaxWorkers="$(GSharpMaxWorkers)"
+        WorkerMemoryBudgetMiB="$(GSharpWorkerMemoryBudgetMiB)"
         GsharpCompilerFullPath="$(GsharpCompilerFullPath)"
         OutputPath="$(IntermediateOutputPath)"
         OutputName="$(TargetName)"

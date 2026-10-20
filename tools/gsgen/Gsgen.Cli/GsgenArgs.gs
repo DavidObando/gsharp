@@ -23,7 +23,7 @@ class GsgenArgs {
         GlobalOptions = Dictionary[string, string](StringComparer.OrdinalIgnoreCase)
     }
 
-    /// Gets the G# source files to include in the compilation (`/gs:`). At least one is required.
+    /// Gets the G# source files (`/gs:`), required except for existing-manifest cleanup without generators or C#.
     prop GsFiles List[string] {
         get;
     }
@@ -82,7 +82,7 @@ class GsgenArgs {
         if string.IsNullOrWhiteSpace(OutDir) {
             throw ArgumentException("missing required '/out:<dir>' argument.")
         }
-        if GsFiles.Count == 0 {
+        if GsFiles.Count == 0 && (AnalyzerPaths.Count > 0 || CsFiles.Count > 0 || !File.Exists(ManifestPath)) {
             throw ArgumentException("at least one '/gs:<path>' argument is required.")
         }
     }

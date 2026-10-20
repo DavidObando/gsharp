@@ -23,6 +23,7 @@ import GSharp.Core.IO
 import GSharp.Core.CodeAnalysis.Analyzers
 import System.ComponentModel
 import System.Reflection.PortableExecutable
+import GSharp.Workers
 
 /// Entry point to gsc, the GSharp command-line compiler.
 open class Program {
@@ -233,6 +234,20 @@ open class Program {
         /// Gets or sets the log file path (from /log:<file>). When non-null, a (cref:FileLogger) is created and
         /// attached to the compilation.
         prop LogPath string?
+
+        private var maxWorkers int32 = 1
+
+        prop MaxWorkers int32 {
+            get -> maxWorkers
+            set -> maxWorkers = value
+        }
+
+        private var workerMemoryBudgetMiB int32 = 1024
+
+        prop WorkerMemoryBudgetMiB int32 {
+            get -> workerMemoryBudgetMiB
+            set -> workerMemoryBudgetMiB = value
+        }
     }
 
     private class CommandLineException : Exception {
@@ -242,11 +257,26 @@ open class Program {
     shared {
         private const Success int32 = 0
         private const Error int32 = 1
+        private var workerCanReuse bool = true
 
         /// Entry point to the GSharp compiler.
         /// @param args Command line arguments.
         /// @returns Exit code.
         func Main(args[]string) int32 {
+            if args.Length == 2 && args[0] == "--compiler-worker" {
+                return WorkerServer.Run(
+                    typeof(Program).Assembly.Location,
+                    RunWorkerRequest,
+                    () -> workerCanReuse,
+                    args[1]
+                )
+            }
+            return Compile(args, requireOutput: false)
+        }
+
+        internal func RunWorkerRequest(args[]string) int32 -> Compile(args, requireOutput: true)
+
+        private func Compile(args[]string, requireOutput bool) int32 {
             if args.Length == 0 {
                 Console.Error.WriteLine("Must specify path to a file via arguments.")
                 return Error
@@ -262,6 +292,19 @@ open class Program {
             } catch (ex UnauthorizedAccessException) {
                 return ReportFatalIOError(ex)
             }
+            if requireOutput && parsed.OutputPath == nil {
+                Console.Error.WriteLine("Compiler workers require /out; evaluation must use the standalone driver.")
+                return Error
+            }
+            if requireOutput && parsed.References.Count == 0 {
+                Console.Error.WriteLine("Compiler workers require explicit /reference inputs.")
+                return Error
+            }
+            if requireOutput {
+                // Analyzer code may retain threads or process events. Do not run
+                // another request in that process until unload isolation is proven.
+                workerCanReuse = parsed.GsAnalyzerPaths.Count == 0
+            }
             if parsed.ShowHelp {
                 PrintHelp()
                 return Success
@@ -271,6 +314,12 @@ open class Program {
                 return Error
             }
             try {
+                using let measurements = CompilationMeasurements.StartFromEnvironment("gsc")
+                using let requestPhase = CompilationMeasurements.BeginPhase("compilation")
+                CompilationMeasurements.SetProperty("target-framework", parsed.TargetFramework ?? "unspecified")
+                CompilationMeasurements.SetProperty("nullability", parsed.Nullability.ToString())
+                CompilationMeasurements.SetProperty("optimize", parsed.Optimize.ToString())
+                CompilationMeasurements.SetProperty("deterministic", parsed.Deterministic.ToString())
                 // Issue #2215: when /analyzer: paths are supplied, spawn gsgen (a
                 // sibling process — ADR-0027 keeps Roslyn out of gsc) to run the
                 // project's source generators and fold the generated .gs into this
@@ -284,8 +333,32 @@ open class Program {
                     allSourceFiles = List[string](parsed.SourceFiles)
                     allSourceFiles.AddRange(generatedGsFiles)
                 }
-                let syntaxTrees = List[SyntaxTree](allSourceFiles.Count)
-                for path in allSourceFiles {
+                var granted = parsed.MaxWorkers
+                if int32.TryParse(Environment.GetEnvironmentVariable("GSHARP_WORKER_GRANT"), out var requestGrant) &&
+                    requestGrant > 0 {
+                    granted = Math.Min(granted, requestGrant)
+                }
+                let workBudget = CompilationWorkBudget(granted, parsed.WorkerMemoryBudgetMiB)
+                let syntaxTrees = [allSourceFiles.Count]SyntaxTree
+                CompilationMeasurements.Count("input.sources", allSourceFiles.Count)
+                if CompilationMeasurements.IsEnabled {
+                    let supplied = if int32.TryParse(
+                        Environment.GetEnvironmentVariable("GSHARP_WORKER_GRANT"),
+                        out var grant
+                    ) &&
+                        grant > 0 {
+                        grant
+                    } else {
+                        workBudget.MaxWorkers
+                    }
+                    CompilationMeasurements.Count("workers.granted", supplied)
+                    CompilationMeasurements.Count("workers.active", 1)
+                }
+                let fullPaths = [allSourceFiles.Count]string
+                var largestSource int64 = 0
+                var totalSourceBytes int64 = 0
+                for var index = 0; index < allSourceFiles.Count; index++ {
+                    let path = allSourceFiles[index]
                     if !File.Exists(path) {
                         Console.Error.WriteLine("Unable to find specified file $path")
                         return Error
@@ -296,24 +369,58 @@ open class Program {
                     // unresolvable, which surfaces as a phantom tab with
                     // "Could not load source ...: Incorrect format of 'source' message."
                     let fullPath = Path.GetFullPath(path)
-                    syntaxTrees.Add(SyntaxTree.Load(fullPath))
+                    fullPaths[index] = fullPath
+                    if CompilationMeasurements.IsEnabled || workBudget.MaxWorkers > 1 {
+                        let sourceBytes = FileInfo(fullPath).Length
+                        largestSource = Math.Max(largestSource, sourceBytes)
+                        totalSourceBytes += sourceBytes
+                        if CompilationMeasurements.IsEnabled {
+                            CompilationMeasurements.Count("input.source-bytes", sourceBytes)
+                        }
+                    }
                 }
+                let usesRuntimeReferences = parsed.OutputPath == nil || parsed.References.Count == 0
+                using let snapshotPhase = CompilationMeasurements.BeginPhase(
+                    "references.runtime-snapshot",
+                    usesRuntimeReferences
+                )
+                let hostSnapshot = if usesRuntimeReferences {
+                    ReferenceResolver.CaptureHostAssemblies()
+                } else {
+                    default(ImmutableArray[System.Reflection.Assembly])
+                }
+                snapshotPhase?.Dispose()
+                using let parsePhase = CompilationMeasurements.BeginPhase("parse")
+                workBudget.Run(
+                    fullPaths.Length,
+                    (index int32) -> {
+                        let fullPath = fullPaths[index]
+                        syntaxTrees[index] = SyntaxTree.Load(fullPath)
+                    },
+                    Math.Max(16777216, largestSource * 16),
+                    allowParallel: fullPaths.Length >= 4 || totalSourceBytes >= 65536
+                )
+                CompilationMeasurements.Count("parse.workers.active", workBudget.LastObservedWorkers)
+                parsePhase?.Dispose()
+                using let referencePhase = CompilationMeasurements.BeginPhase("references.setup")
                 if !ReferenceResolver.TryValidateDriverReferencePaths(parsed.References, out var referenceError) {
                     Console.Error.WriteLine(referenceError)
                     return Error
                 }
                 let referencePaths = ReferenceResolver.ResolveDriverReferencePaths(parsed.References)
-                let references = if parsed.OutputPath == nil {
-                    ReferenceResolver.WithRuntimeReferences(referencePaths)
+                CompilationMeasurements.Count("input.references", referencePaths.Count)
+                using let references = if parsed.OutputPath == nil {
+                    ReferenceResolver.WithRuntimeReferences(referencePaths, hostSnapshot)
                 } else {
                     (
                         if parsed.References.Count > 0 {
                             ReferenceResolver.WithReferences(referencePaths)
                         } else {
-                            ReferenceResolver.WithRuntimeReferences(referencePaths)
+                            ReferenceResolver.WithRuntimeReferences(referencePaths, hostSnapshot)
                         }
                     )
                 }
+                referencePhase?.Dispose()
                 let logger ILogger = if parsed.LogPath != nil {
                     cast[ILogger](FileLogger(parsed.LogPath!!))
                 } else {
@@ -324,7 +431,8 @@ open class Program {
                         "Starting compiler. Sources: ${parsed.SourceFiles.Count}; Output: ${parsed.OutputPath ?? "<none>"}"
                     )
                     ReportMissingTransitiveReferences(references, parsed)
-                    let compilation = Compilation(references, syntaxTrees.ToArray()){
+                    let compilation = Compilation(references, syntaxTrees){
+                        WorkBudget = workBudget,
                         ImplicitSystemImport = parsed.ImplicitSystemImport,
                         Nullability = parsed.Nullability,
                         PlatformNilChecks = parsed.PlatformNilChecks,
@@ -360,7 +468,6 @@ open class Program {
                     return Emit(compilation, parsed, outputPath)
                 } finally {
                     (logger as IDisposable)?.Dispose()
-                    references?.Dispose()
                 }
             } catch (ex IOException) {
                 // I/O failures during source loading, directory creation, output
@@ -943,6 +1050,8 @@ Options:
   /additionalfile:<file>        Non-source generator input (e.g. Avalonia .axaml); forwarded to gsgen (repeatable).
   /globaloption:<key>=<value>   Project-wide generator option (build_property.*); forwarded to gsgen (repeatable).
   /log:<file>                   Write compiler diagnostic log to file.
+  --workers:<1..32>             Opt into bounded within-project work (default: 1).
+  --worker-memory-mib:<MiB>     Concurrent workspace budget, minimum 256 (default: 1024).
   /?, /help                     Show this help message.`)
         }
 
@@ -970,6 +1079,18 @@ Options:
                         body.Substring(separator + 1)
                     }
                     switch name.ToLowerInvariant() {
+                        case "workers" {
+                            if !int32.TryParse(value, out var workers) || workers < 1 || workers > 32 {
+                                throw CommandLineException("--workers requires an integer between 1 and 32.")
+                            }
+                            result.MaxWorkers = workers
+                        }
+                        case "worker-memory-mib" {
+                            if !int32.TryParse(value, out var memory) || memory < 256 {
+                                throw CommandLineException("--worker-memory-mib requires an integer of at least 256.")
+                            }
+                            result.WorkerMemoryBudgetMiB = memory
+                        }
                         case "out" {
                             result.OutputPath = value
                         }

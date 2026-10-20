@@ -16,6 +16,7 @@ import GSharp.Core.CodeAnalysis.Documentation
 import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis
 import System.Collections.Generic
+import SystemObject = System.Object
 
 /// Represents an imported .NET type as a (cref:TypeSymbol).
 /// Instances are cached per CLR (cref:Type) so that reference equality
@@ -210,11 +211,17 @@ class ImportedTypeSymbol : TypeSymbol {
         return AssemblyDocumentationProvider.Resolve(OpenDefinition ?? Type) ?? base.GetDocumentation()
     }
 
+    private class CacheBucket {
+        internal let Gate object = SystemObject()
+        internal let Symbols Dictionary[int32, List[WeakReference[ImportedTypeSymbol]]] = Dictionary[
+            int32,
+            List[WeakReference[ImportedTypeSymbol]]
+        ]()
+        internal var Accesses int32
+    }
+
     shared {
-        private let Cache ConditionalWeakTable[
-            Assembly,
-            ConcurrentDictionary[Type, ImportedTypeSymbol]
-        ] = ConditionalWeakTable[Assembly, ConcurrentDictionary[Type, ImportedTypeSymbol]]()
+        private let Cache ConditionalWeakTable[Assembly, CacheBucket] = ConditionalWeakTable[Assembly, CacheBucket]()
 
         /// Gets or creates the imported type symbol for the given CLR type.
         /// @param type The CLR type.
@@ -238,13 +245,39 @@ class ImportedTypeSymbol : TypeSymbol {
             // is keyed by ITS OWN assembly (the host's System.Collections.Immutable,
             // shared by every compilation in the process) while its argument comes
             // from a private reference context.
-            let assemblyCache = Cache.GetValue(
-                type.Assembly,
-                (_ Assembly) -> ConcurrentDictionary[Type, ImportedTypeSymbol](
-                    LoadContextSensitiveTypeComparer.Instance
-                )
-            )
-            return assemblyCache.GetOrAdd(type, (t Type) -> ImportedTypeSymbol(t))
+            // Issue #5038: a host generic definition can contain private-context
+            // arguments. Neither the bucket's keys nor values may strongly retain
+            // those types. Keep canonical symbols while callers still own them.
+            let bucket = Cache.GetValue(type.Assembly, (_ Assembly) -> CacheBucket())
+            lock bucket.Gate {
+                bucket.Accesses = (bucket.Accesses + 1) % 256
+                if bucket.Accesses == 0 {
+                    for hash in bucket.Symbols.Keys.ToArray() {
+                        let candidates = bucket.Symbols[hash]
+                        candidates.RemoveAll(
+                            (weak WeakReference[ImportedTypeSymbol]) -> !weak.TryGetTarget(out var _symbol)
+                        )
+                        if candidates.Count == 0 {
+                            bucket.Symbols.Remove(hash)
+                        }
+                    }
+                }
+                let key = LoadContextSensitiveTypeComparer.Instance.GetHashCode(type)
+                if !bucket.Symbols.TryGetValue(key, out var symbols) {
+                    symbols = List[WeakReference[ImportedTypeSymbol]]()
+                    bucket.Symbols.Add(key, symbols)
+                }
+                for var i = symbols.Count - 1; i >= 0; i-- {
+                    if !symbols[i].TryGetTarget(out var symbol) {
+                        symbols.RemoveAt(i)
+                    } else if LoadContextSensitiveTypeComparer.Instance.Equals(symbol.Type, type) {
+                        return symbol
+                    }
+                }
+                let created = ImportedTypeSymbol(type)
+                symbols.Add(WeakReference[ImportedTypeSymbol](created))
+                return created
+            }
         }
 
         /// #313: creates a generic type constructed over one or more in-scope type
@@ -392,8 +425,8 @@ class ImportedTypeSymbol : TypeSymbol {
         }
 
         /// Legacy dispose hook, deliberately a NO-OP since #2341: the cache is
-        /// weakly keyed by assembly, so a disposed context's entries are
-        /// collectable without process-wide clearing.
+        /// weakly keyed by assembly and holds weak symbol values, so a disposed
+        /// context's entries are collectable without process-wide clearing.
         ///
         /// Issue #3826: do NOT reintroduce clearing here as a fix for a
         /// cross-compilation identity bug. Entries surviving a dispose is by

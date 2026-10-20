@@ -735,6 +735,168 @@ func Run(h Holder, Items int32) string {
     }
 
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5035_StaticInterfaceChain_PreservesSelectedMethods(generic bool) {
+        let source = `package Repro
+interface IFactoryTYPE_PARAMETERS {
+    shared {
+        func MakeMETHOD_PARAMETERS(value stringEXTRA_PARAMETER) string -> "wrong"
+        func MakeMETHOD_PARAMETERS(value int32EXTRA_PARAMETER) string -> "right"
+    }
+}
+func Run() {
+    let unrelated = IFactoryTYPE_ARGUMENTS.MakeMETHOD_ARGUMENTS("warm"EXTRA_ARGUMENT)
+    let result = IFactoryTYPE_ARGUMENTS.MakeMETHOD_ARGUMENTS(1EXTRA_ARGUMENT).ToString()[^1]
+}
+`.Replace(
+            "TYPE_PARAMETERS",
+            if generic {
+                "[T]"
+            } else {
+                ""
+            }
+        ).Replace(
+            "METHOD_PARAMETERS",
+            if generic {
+                "[U]"
+            } else {
+                ""
+            }
+        ).Replace(
+            "EXTRA_PARAMETER",
+            if generic {
+                ", method U"
+            } else {
+                ""
+            }
+        ).Replace(
+            "TYPE_ARGUMENTS",
+            if generic {
+                "[int32?]"
+            } else {
+                ""
+            }
+        ).Replace(
+            "METHOD_ARGUMENTS",
+            if generic {
+                "[string]"
+            } else {
+                ""
+            }
+        ).Replace(
+            "EXTRA_ARGUMENT",
+            if generic {
+                ", \"method\""
+            } else {
+                ""
+            }
+        )
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let needle = if generic {
+            "Make[string](1"
+        } else {
+            "Make(1"
+        }
+        let token = TokenAt(content, source, needle, 0)
+        let root = Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "result =", 0).Parent).Initializer
+        let block = Assert.IsType[BoundBlockExpression](
+            compilation.GetSemanticModel(content.SyntaxTree).GetBoundNode(root!!)
+        )
+        let sourceCapture = Assert.IsType[BoundVariableDeclaration](block.Statements[0])
+        let outerCall = Assert.IsType[BoundImportedInstanceCallExpression](sourceCapture.Initializer)
+        let selected = Assert.IsType[BoundCallExpression](outerCall.Receiver)
+        let owner = Assert.IsType[InterfaceSymbol](selected.StaticGenericInterfaceOwnerType)
+        let expected = TypeMemberModel.GetMethods(owner, "Make", MemberQuery.Static(MemberKinds.Method)).Single(
+            (method FunctionSymbol) -> object.ReferenceEquals(method.Parameters[0].Type, TypeSymbol.Int32)
+        )
+        Assert.Same(expected, selected.Function)
+        if generic {
+            Assert.Same(
+                TypeSymbol.Int32,
+                Assert.IsType[NullableTypeSymbol](Assert.Single(owner.TypeArguments)).UnderlyingType
+            )
+            Assert.Same(TypeSymbol.String, Assert.Single(selected.MethodTypeArguments))
+        }
+        Assert.Same(expected, BoundSemantics.GetSymbol(compilation, token))
+        Assert.Same(expected, SemanticLookup.ResolveSymbol(compilation, token))
+        let position = LanguageServerTestHelpers.PositionOf(source, needle)
+        AssertIndexedHover(
+            content,
+            position,
+            "Make",
+            if generic {
+                "static func Make[U](value int32, method U) string"
+            } else {
+                "static func Make(value int32) string"
+            }
+        )
+        let uri = DocumentUri.From("file:///issue5035-interface-chain.gs")!!
+        let location = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
+        let declaration = LanguageServerTestHelpers.PositionOf(
+            source,
+            if generic {
+                "Make[U](value int32"
+            } else {
+                "Make(value int32"
+            }
+        )
+        Assert.Equal(uri, location.Uri)
+        AssertPosition(declaration, location.Range.Start)
+        AssertPosition(Position(declaration.Line, declaration.Character + "Make".Length), location.Range.End)
+        let outerToken = TokenAt(content, source, "ToString()[^1]", 0)
+        let method = typeof(string).GetMethod("ToString", Type.EmptyTypes)
+        Assert.Equal(method, outerCall.Method)
+        Assert.Equal(method, BoundSemantics.GetImportedMember(compilation, outerToken))
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]"),
+            "ToString",
+            "func (string) ToString() string"
+        )
+    }
+
+    @Fact
+    func Issue5035_FoldedClrConstant_PreservesExactByteMethod() {
+        const source = `package Repro
+func Run() {
+    let unrelated = System.Text.StringBuilder().ToString()
+    let result = byte.MaxValue.ToString()[^1]
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let token = TokenAt(content, source, "ToString()[^1]", 0)
+        let root = Assert.IsType[AccessorExpressionSyntax](
+            Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "result =", 0).Parent).Initializer
+        )
+        let model = compilation.GetSemanticModel(content.SyntaxTree)
+        let capture = Assert.IsType[BoundVariableDeclaration](
+            Assert.IsType[BoundBlockExpression](model.GetBoundNode(root)).Statements[0]
+        )
+        let call = Assert.IsType[BoundImportedInstanceCallExpression](capture.Initializer)
+        Assert.IsType[BoundLiteralExpression](call.Receiver)
+        let method = typeof(byte).GetMethod("ToString", Type.EmptyTypes)
+        Assert.Equal(method, call.Method)
+        Assert.Equal(method, BoundSemantics.GetImportedMember(compilation, token))
+        Assert.True(
+            ImportedClrMemberResolver.TryResolveClrMember(content.SyntaxTree, compilation, token, out var navigation)
+        )
+        Assert.Equal(method, navigation)
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]"),
+            "ToString",
+            "func (uint8) ToString() string"
+        )
+    }
+
+    @Theory
     @InlineData("^1")
     @InlineData("..")
     func Issue5035_StaticCallIndex_PreservesSelectedOverload(indexText string) {

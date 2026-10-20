@@ -409,6 +409,10 @@ internal class BinderContext {
     }
 
     prop CachedImportedExtensionSyntaxTree SyntaxTree?
+    prop CachedImportedExtensionReferences ReferenceResolver?
+    prop CachedImportedExtensionAssemblyName string?
+    prop CachedImportedExtensionImports ImmutableArray[ImportSymbol]
+    prop CachedImportedExtensionMethods Dictionary[string, ImmutableArray[MethodInfo]]?
 
     func CanUseNativeBufferAlias(
         $scope BoundScope,
