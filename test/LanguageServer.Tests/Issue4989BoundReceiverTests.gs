@@ -734,6 +734,65 @@ func Run(h Holder, Items int32) string {
         }
     }
 
+    @Theory
+    @InlineData("slice[string]")
+    @InlineData("readonly slice[string]")
+    func Issue5035_NestedNativeSliceArgument_KeepsParameterOwnership(nativeType string) {
+        let source = `package Repro
+class Holder {
+    prop Items NATIVE_TYPE
+}
+func Run(h Holder, Items []int32) string {
+    let first = h.Items[Items[0]]
+    return h.Items[Items[0]].ToString()
+}
+`.Replace("NATIVE_TYPE", nativeType)
+        let root = Path.Combine(
+            Directory.GetCurrentDirectory(),
+            "out",
+            "issue5035-owner-" + Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(root)
+        try {
+            let path = Path.Combine(root, "Consumer.gs")
+            File.WriteAllText(path, source)
+            let project = ProjectState(Path.Combine(root, "Consumer.gsproj"))
+            project.References = []string{Path.Combine(AppContext.BaseDirectory, "Gsharp.Runtime.Values.dll")}
+            let tree = project.UpdateFile(path, source)
+            let lines = Enumerable.Range(0, source.Length).Where((i int32) -> source[i] == '\n').ToList()
+            let content = DocumentContent(tree, lines, project, WorkspaceState())
+            let compilation = project.GetCompilation()
+            Assert.Empty(compilation.GlobalScope.Diagnostics)
+            Assert.Empty(compilation.BoundProgram.Diagnostics)
+            let parameter = Assert.IsAssignableFrom[ParameterSymbol](
+                BoundSemantics.GetSymbol(compilation, TokenAt(content, source, "Items []int32", 0))
+            )
+            let property = Assert.IsAssignableFrom[PropertySymbol](
+                BoundSemantics.GetSymbol(compilation, TokenAt(content, source, "Items " + nativeType, 0))
+            )
+            let uri = DocumentUri.FromFileSystemPath(path)!!
+            for var occurrence = 0; occurrence < 2; occurrence++ {
+                let position = LanguageServerTestHelpers.PositionOf(source, "Items[0]", occurrence)
+                let argument = TokenAt(content, source, "Items[0]", occurrence)
+                Assert.Same(parameter, SemanticLookup.ResolveSymbol(compilation, argument))
+                if BoundSemantics.GetSymbol(compilation, argument) is {} bound {
+                    Assert.Same(parameter, bound)
+                }
+                Assert.Equal(typeof([]int32), parameter.Type.ClrType)
+                AssertIndexedHover(content, position, "Items", "(parameter) Items []int32")
+                let location = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
+                let expected = LanguageServerTestHelpers.PositionOf(source, "Items []int32")
+                Assert.Equal(uri, location.Uri)
+                AssertPosition(expected, location.Range.Start)
+                AssertPosition(Position(expected.Line, expected.Character + "Items".Length), location.Range.End)
+                let outer = TokenAt(content, source, "Items[Items[0]]", occurrence)
+                Assert.Same(property, BoundSemantics.GetSymbol(compilation, outer))
+            }
+        } finally {
+            Directory.Delete(root, recursive: true)
+        }
+    }
+
     shared {
         private const IndexedSource string = `package Repro
 import System.Collections.Generic

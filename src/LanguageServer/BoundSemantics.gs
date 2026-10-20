@@ -255,7 +255,7 @@ shared class BoundSemantics {
         model GSharp.Core.CodeAnalysis.SemanticModel,
         expression ExpressionSyntax
     ) BoundExpression? {
-        if model.GetBoundNode(expression) is BoundExpression anchored {
+        if model.GetBoundNode(expression) is BoundExpression anchored && OwnsIndexAnchor(expression, anchored) {
             return anchored
         }
         // Generated index plans can retain the written argument as their anchor.
@@ -264,11 +264,27 @@ shared class BoundSemantics {
         if TerminalSegment(expression) is IndexExpressionSyntax index && index.Indices.Count == 1 {
             let argumentAnchor = model.GetBoundNode(index.Index) as BoundExpression
             if Unwrap(argumentAnchor) is {} read &&
-                IndexTargetOf(read, capturedOnly: index.Index is not RangeExpressionSyntax) != nil {
+                IndexTargetOf(read, capturedOnly: index.Index is not RangeExpressionSyntax) != nil &&
+                OwnsIndexAnchor(expression, read) {
                 return argumentAnchor
             }
         }
         return nil
+    }
+
+    private func OwnsIndexAnchor(expression ExpressionSyntax, anchored BoundExpression) bool {
+        // Implicit capture reads anchored on an argument belong to its enclosing
+        // index, not to an index expression nested inside that argument.
+        if Unwrap(anchored) is BoundDereferenceExpression{Operand: BoundBlockExpression} read &&
+            IndexTargetOf(read, capturedOnly: true) != nil &&
+            read.Syntax is ExpressionSyntax argument &&
+            argument.Parent is IndexExpressionSyntax owner &&
+            owner
+            .Indices
+            .Any((item ExpressionSyntax) -> object.ReferenceEquals(item, argument)) {
+            return object.ReferenceEquals(TerminalSegment(expression), owner)
+        }
+        return true
     }
 
     private func TerminalSegment(expression ExpressionSyntax) ExpressionSyntax {
