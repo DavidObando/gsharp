@@ -948,10 +948,13 @@ following exact values:
 | `validation` | Target RID; .NET SDK, JIT/runtime and NativeAOT toolchain identities; verifier version/reference hashes; probe-suite revision and artifact hashes; profile resource/domain limits. |
 | `requiredCapabilities` | Sorted unique `(capabilityId, revision, probeId, probeSourceHash)` records. No version-range guess or presence-only assembly test substitutes for a passed probe. |
 
-Compiler/SDK and support-package pins must name available releases when
-implementation starts. If a native fix is needed, land/release it separately
-and move the repository pin in its own PR under the N-1 rule. Do not depend
-on an unreleased feature or replace the SDK locally to obtain green evidence.
+Compiler/SDK pins must name available releases when implementation starts.
+The first compatibility-support implementation may use its own versioned,
+content-pinned build artifact for corpus validation; distributed output must
+pin an available support package. Neither case permits an unreleased compiler
+feature. If a native fix is needed, land/release it separately and move the
+repository pin in its own PR under the N-1 rule. Do not replace the SDK
+locally to obtain green evidence.
 
 The driver owns small versioned probes, not a new compiler discovery API.
 `CheckCapabilities(requirements, resolvedArtifacts) -> CapabilityReport`
@@ -1355,7 +1358,7 @@ concrete evidence before their milestone is enabled:
 | Gate | Required decision/evidence |
 | --- | --- |
 | M0 maintenance | Preserve implemented schema/profile v1, source-backed method authority and Linux-only complete analysis. Extra facts required by a lowerer need an explicitly versioned extension or separately validated sidecar, never reinterpretation of v1 or .NET-side rebinding. |
-| First M1 runtime | Implement the section 6.1 allowlist and section 6.2 byte/zero/fault contracts with the independent matrix. Select published compiler/runtime/support pins and prove each helper's legal G# lowering. No product implementation is approved by a passing docs check. |
+| First M1 runtime | Implement the section 6.1 allowlist and section 6.2 byte/zero/fault contracts with the independent matrix. Select published compiler/native-runtime pins, identify the compatibility-support artifact, and prove each helper's legal G# lowering. No product implementation is approved by a passing docs check. |
 | Native integration | Implement the separate execution-contract handshake and demanded probes from section 7 without changing M0. Missing capabilities block only dependent families; never substitute copying arrays, unknown byrefs or reflection proxies. |
 | Interface bridge and interop boundary | Implement and witness section 7's tagged payload, direct slots and per-call copies before admission. CLR exports, cross-unit identity and broader reuse remain deferred; native `adapt` alone is insufficient. |
 | Maps and control effects | Freeze map APIs and legal lowering for eager defer, direct recovery, panic payloads and iterator nonlocal control flow before their families or dependent packages are admitted. Minimal fault transport and named results do not complete them. |
