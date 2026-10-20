@@ -5,13 +5,17 @@
 package GSharp.Sdk.Tests
 
 import System
+import System.Collections
 import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Runtime.InteropServices
+import System.Threading
 import System.Threading.Tasks
 import System.Xml.Linq
 import Gsharp.NET.Sdk.Tools
+import Microsoft.Build.Framework
+import TaskItem = Microsoft.Build.Utilities.TaskItem
 import Xunit
 
 /// Exercises production generator targets with a real framework generator and host.
@@ -115,6 +119,126 @@ partial class P {
         Build("App", "First", additional: false, generators: false, foreign: false, error: "Generated")
         Assert.False(File.Exists(generated))
         Assert.Equal(string.Empty, File.ReadAllText(manifest))
+    }
+
+    @Fact
+    func StandaloneCancellation_StopsGeneratorDescendants() {
+        let pidFile = Path.Combine(directory, "helper.pid")
+        let tool = CompileBlockingTool(pidFile)
+        let engine = RecordingEngine()
+        let task = GsgenTask{
+            BuildEngine: engine,
+            GsgenToolFullPath: tool,
+            Compile: []ITaskItem{TaskItem(Path.Combine(directory, "Input.gs"))},
+            BasePath: directory,
+            OutputDir: Path.Combine(directory, "generated"),
+            ManifestPath: Path.Combine(directory, "manifest"),
+            ResponseFilePath: Path.Combine(directory, "generator.rsp")
+        }
+        let execution = System.Threading.Tasks.Task.Run(() -> task.Execute())
+        try {
+            Assert.True(SpinWait.SpinUntil(() -> File.Exists(pidFile), 10000))
+            using let child = Process.GetProcessById(int32.Parse(File.ReadAllText(pidFile)))
+            task.Cancel()
+            Assert.True(execution.Wait(10000), "Cancellation did not complete while a generator helper was alive.")
+            Assert.False(execution.Result)
+            Assert.True(child.WaitForExit(10000), "Standalone cancellation left a generator helper alive.")
+            Assert.False(engine.HadError)
+        } finally {
+            task.Cancel()
+            if File.Exists(pidFile) {
+                try {
+                    using let child = Process.GetProcessById(int32.Parse(File.ReadAllText(pidFile)))
+                    if !child.HasExited {
+                        child.Kill(entireProcessTree: true)
+                    }
+                    child.WaitForExit()
+                } catch (ex ArgumentException) {
+                    // The owned helper already exited.
+
+                }
+            }
+            Assert.True(execution.Wait(10000), "The cancelled task did not stop after helper cleanup.")
+        }
+    }
+
+    private func CompileBlockingTool(pidFile string) string {
+        let source = Path.Combine(directory, "BlockingTool.cs")
+        File.WriteAllText(source, `using System;
+using System.Diagnostics;
+using System.IO;
+using System.Threading;
+class BlockingTool {
+    static void Main(string[] args) {
+        if (args[0] == "child") { Thread.Sleep(60000); return; }
+        using var child = Process.Start(new ProcessStartInfo("dotnet") {
+            UseShellExecute = false,
+            ArgumentList = { typeof(BlockingTool).Assembly.Location, "child" }
+        });
+        File.WriteAllText(@"__PID__", child.Id.ToString());
+        Thread.Sleep(60000);
+    }
+}`.Replace("__PID__", pidFile.Replace("\"", "\"\"")))
+        let sdkRoot = Path.GetFullPath(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "..", "..", "..", "sdk"))
+        let compiler = Directory
+            .GetDirectories(sdkRoot)
+            .Select((path string) -> Path.Combine(path, "Roslyn", "bincore", "csc.dll"))
+            .First(File.Exists)
+        let tool = Path.Combine(directory, "BlockingTool.dll")
+        let start = ProcessStartInfo("dotnet"){
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }
+        start.ArgumentList.Add(compiler)
+        start.ArgumentList.Add("/nologo")
+        start.ArgumentList.Add("/target:exe")
+        start.ArgumentList.Add("/out:$tool")
+        let references = (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string ?? string.Empty).Split(
+            Path.PathSeparator,
+            StringSplitOptions.RemoveEmptyEntries
+        )
+        for reference in references {
+            start.ArgumentList.Add("/r:$reference")
+        }
+        start.ArgumentList.Add(source)
+        using let process = Process.Start(start) ?? throw InvalidOperationException("Cannot compile blocking tool.")
+        let stdout = process.StandardOutput.ReadToEndAsync()
+        let stderr = process.StandardError.ReadToEndAsync()
+        if !process.WaitForExit(30000) {
+            process.Kill(entireProcessTree: true)
+            process.WaitForExit()
+            throw TimeoutException("Blocking tool compilation timed out.")
+        }
+        System.Threading.Tasks.Task.WaitAll(stdout, stderr)
+        Assert.True(process.ExitCode == 0, stdout.Result + stderr.Result)
+        File.WriteAllText(
+            Path.ChangeExtension(tool, ".runtimeconfig.json"),
+            `{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}`
+        )
+        return tool
+    }
+
+    private class RecordingEngine : IBuildEngine {
+        prop HadError bool
+        prop ContinueOnError bool -> false
+        prop LineNumberOfTaskNode int32 -> 0
+        prop ColumnNumberOfTaskNode int32 -> 0
+        prop ProjectFileOfTaskNode string -> string.Empty
+        func LogErrorEvent(e BuildErrorEventArgs) -> HadError = true
+
+        func LogWarningEvent(e BuildWarningEventArgs) { }
+
+        func LogMessageEvent(e BuildMessageEventArgs) { }
+
+        func LogCustomEvent(e CustomBuildEventArgs) { }
+
+        func BuildProjectFile(
+            project string,
+            targets[]string,
+            properties IDictionary,
+            outputs IDictionary
+        ) bool -> false
     }
 
     private func Build(

@@ -270,22 +270,7 @@ open class GsgenTask : Task, ICancelableTask {
             // Mirror BuildTask (issue #1667): register the cancellation token so an
             // MSBuild Cancel() actually kills the child gsgen process instead of
             // blocking in WaitForExit() until it finishes on its own.
-            using let cancelRegistration = this
-                .cts
-                .Token
-                .Register(
-                () -> {
-                    try {
-                        // netstandard2.0 (this task's TFM) lacks Process.Kill(bool);
-                        // gsgen doesn't spawn grandchildren, so killing it directly
-                        // stops the generator run.
-                        proc.Kill()
-                    } catch (InvalidOperationException) {
-                        // Process already exited.
-
-                    }
-                }
-            )
+            using let cancelRegistration = this.cts.Token.Register(() -> WorkerProcessClient.Kill(proc))
             var lastStdoutLine string? = nil
             var lastStderrLine string? = nil
             proc.OutputDataReceived += (_ object, e DataReceivedEventArgs) -> {
