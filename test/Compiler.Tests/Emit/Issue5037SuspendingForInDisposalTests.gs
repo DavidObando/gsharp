@@ -95,7 +95,9 @@ open class Issue5037SuspendingForInDisposalTests {
                 ("async-throw", "P0,Douter,Xbody"),
                 ("async-iterator-normal", "P0,Y1,Y2,Douter"),
                 ("async-iterator-early", "P0,Y1,Douter"),
-                ("async-iterator-throw", "P0,Douter,Xbody")
+                ("async-iterator-throw", "P0,Douter,Xbody"),
+                ("async-iterator-inline-early", "P0,Y1,Douter"),
+                ("async-iterator-inline-normal", "P0,Y1,Y2,Douter")
             }
             let failures = List[string]()
             for entry in cases {
@@ -269,6 +271,15 @@ public static class DisposalContract
                 var gate = new TaskCompletionSource();
                 var values = (IAsyncEnumerable<int>)type.GetMethod("AsyncForward").Invoke(null,
                     new object[] { outer, gate.Task, scenario == "async-iterator-throw" });
+                if (scenario.StartsWith("async-iterator-inline-"))
+                {
+                    var consumer = ConsumeInline(values, log, scenario.EndsWith("-early"));
+                    if (consumer.IsCompleted) throw new Exception("consumer did not await pending MoveNextAsync");
+                    log.Add("P" + log.Count);
+                    gate.SetResult();
+                    consumer.GetAwaiter().GetResult();
+                    return string.Join(",", log);
+                }
                 var cursor = values.GetAsyncEnumerator();
                 try
                 {
@@ -330,6 +341,20 @@ public static class DisposalContract
         }
         catch (InvalidOperationException error) { log.Add("X" + error.Message); }
         return string.Join(",", log);
+    }
+
+    private static async Task ConsumeInline(IAsyncEnumerable<int> values, List<string> log, bool early)
+    {
+        var cursor = values.GetAsyncEnumerator();
+        try
+        {
+            while (await cursor.MoveNextAsync().ConfigureAwait(false))
+            {
+                log.Add("Y" + cursor.Current);
+                if (early) break;
+            }
+        }
+        finally { await cursor.DisposeAsync().ConfigureAwait(false); }
     }
 
     private sealed class Counted : IEnumerable<int>

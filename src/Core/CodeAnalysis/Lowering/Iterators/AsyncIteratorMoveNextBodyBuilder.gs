@@ -42,6 +42,7 @@ shared class AsyncIteratorMoveNextBodyBuilder {
 
         private let awaitResumeAfterLabels Dictionary[int32, BoundLabel] = Dictionary[int32, BoundLabel]()
         private let exitLabel BoundLabel = BoundLabel("<>ai_exit")
+        private let yieldResultLabel BoundLabel = BoundLabel("<>ai_yieldResult")
         private let endOfBodyLabel BoundLabel = BoundLabel("<>ai_end")
 
         init(
@@ -113,6 +114,11 @@ shared class AsyncIteratorMoveNextBodyBuilder {
             stmts.Add(tryStmt)
             // return; (after try/catch)
             stmts.Add(BoundReturnStatement(nil, nil))
+            // Publish only after suspension guards have run. An inline
+            // consumer continuation can reenter MoveNext or DisposeAsync.
+            stmts.Add(BoundLabelStatement(nil, yieldResultLabel))
+            stmts.Add(Stmt(EmitPromiseSetResult(true)))
+            stmts.Add(BoundReturnStatement(nil, nil))
             return BoundBlockStatement(nil, stmts.ToImmutable())
         }
 
@@ -133,7 +139,7 @@ shared class AsyncIteratorMoveNextBodyBuilder {
             stmts.Add(BoundLabelStatement(nil, endOfBodyLabel))
             stmts.Add(Stmt(WriteField(stateField, Literal(StateMachineStates.FinishedState))))
             stmts.Add(Stmt(EmitPromiseSetResult(false)))
-            // Exit label (for suspension return paths).
+            // Exit label for await suspension.
             stmts.Add(BoundLabelStatement(nil, exitLabel))
             return BoundBlockStatement(nil, stmts.ToImmutable())
         }
@@ -331,10 +337,7 @@ shared class AsyncIteratorMoveNextBodyBuilder {
                 stmts.Add(BuildContext.Stmt(ctx.WriteField(ctx.currentField, rewrittenExpr)))
                 // this.<>1__state = yieldState;
                 stmts.Add(BuildContext.Stmt(ctx.WriteField(ctx.stateField, BuildContext.Literal(yieldState))))
-                // this.<>v__promiseOfValueOrEnd.SetResult(true);
-                stmts.Add(BuildContext.Stmt(ctx.EmitPromiseSetResult(true)))
-                // return;
-                stmts.Add(BoundGotoStatement(nil, ctx.exitLabel))
+                stmts.Add(BoundGotoStatement(nil, ctx.yieldResultLabel))
                 // yieldResumeK:
                 stmts.Add(BoundLabelStatement(nil, ctx.yieldResumeLabels[yieldState]))
                 // this.<>1__state = -1;
