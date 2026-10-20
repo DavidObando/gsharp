@@ -646,6 +646,33 @@ must not replace this proof with a syntax denylist or concurrent dictionaries.
 Full-workload measurements and default promotion remain separate acceptance
 work, as specified above.
 
+### Method-local emission boundary (#5042)
+
+Emission keeps closure and state-machine discovery ordered, including
+`BoundProgram.Initializers`. It fixes synthesized identities, generic remaps
+and method handles before scheduling eligible method bodies. Workers use the
+existing instruction emitter with method-owned labels, locals, IL buffers and
+unresolved sequence points. An isolated emitter has no coordinator reference:
+an attempt to use metadata, token caches or mutable generic remaps fails.
+The coordinator commits local signatures, body offsets, document handles and
+debug records in the existing method order. Metadata and PDB serialization
+remain sequential. Reference emission never schedules instruction generation.
+
+The initial eligibility proof accepts primitive arithmetic and control flow
+over body-owned locals and parameters. Calls, strings, conversions, captures,
+by-ref operations, exception regions, suspension and unknown nodes retain the
+existing coordinator path. Noncapturing primitive lambda bodies can also use
+method-local lowering after ordered discovery. This does not duplicate the
+body-binding lowerer scheduled by #5041.
+
+The same request budget joins each lowering and instruction batch. One worker
+keeps the original instruction path. Measurements separate discovery,
+emit-lambda lowering, local planning, instruction generation, implementation
+and reference emission, PDB construction, PE serialization and documentation.
+Parallel-batch counters require observed overlap of real instruction work;
+starting a timer or using a second thread is not evidence of parallel emission.
+Nested phase totals remain nonadditive.
+
 The work prioritizes measured bottlenecks and preserves the existing
 compiler and SDK architecture. Small sequential improvements can land
 before the larger concurrency work. A stable phase model makes later

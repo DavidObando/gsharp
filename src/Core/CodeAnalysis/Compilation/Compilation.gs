@@ -502,7 +502,9 @@ open class Compilation {
                 pdbStream: nil,
                 embeddedResources: EmbeddedResources
             )
-        } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
+        } catch (ex Exception) when !(ex is OutOfMemoryException) &&
+            !(ex is StackOverflowException) &&
+            !(ex is OperationCanceledException) {
             if Environment.GetEnvironmentVariable("GS_DEBUG_STACK") != nil {
                 Console.Error.WriteLine(ex.ToString())
             }
@@ -711,7 +713,9 @@ open class Compilation {
                 using let measurement = CompilationMeasurements.BeginPhase("documentation.emit")
                 DocumentationFileEmitter.Emit(docStream, assemblyName ?? program.PackageName, program)
             }
-        } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
+        } catch (ex Exception) when !(ex is OutOfMemoryException) &&
+            !(ex is StackOverflowException) &&
+            !(ex is OperationCanceledException) {
             // 6.2 SilentEmitFailure invariant: widen the catch to all non-fatal
             // exceptions so that any emit-time failure (regardless of exception
             // type) produces a structured GS9998 diagnostic anchored at the
@@ -772,7 +776,8 @@ open class Compilation {
             assemblyVersion,
             targetFrameworkMoniker,
             embeddedResources,
-            Optimize
+            Optimize,
+            WorkBudget
         )
     }
 
