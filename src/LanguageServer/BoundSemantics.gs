@@ -177,14 +177,11 @@ shared class BoundSemantics {
             if GetBoundAnchor(model, root) is {} anchored {
                 anchors.Push((root, anchored))
             }
-            if root.Parent is AccessorExpressionSyntax accessor &&
-                (object.ReferenceEquals(accessor.LeftPart, root) || object.ReferenceEquals(accessor.RightPart, root)) {
-                root = accessor
-            } else if root.Parent is IndexExpressionSyntax index && object.ReferenceEquals(index.Target, root) {
-                root = index
-            } else {
+            let parent = ReceiverParent(root)
+            if parent == nil {
                 break
             }
+            root = parent
         }
         while anchors.Count > 0 {
             let (syntax, node) = anchors.Pop()
@@ -193,6 +190,13 @@ shared class BoundSemantics {
             }
         }
         return nil
+    }
+
+    private func ReceiverParent(expression ExpressionSyntax) ExpressionSyntax? -> switch expression.Parent {
+        case accessor is AccessorExpressionSyntax when object.ReferenceEquals(accessor.LeftPart, expression) ||
+            object.ReferenceEquals(accessor.RightPart, expression): accessor
+        case index is IndexExpressionSyntax when object.ReferenceEquals(index.Target, expression): index
+        default: default(ExpressionSyntax?)
     }
 
     private func FindFromAnchor(
@@ -216,6 +220,15 @@ shared class BoundSemantics {
         if index < 0 {
             return nil
         }
+        return ReadReceiverSegments(segments, anchored, index, expression)
+    }
+
+    private func ReadReceiverSegments(
+        segments List[ExpressionSyntax],
+        anchored BoundExpression,
+        index int32,
+        expression ExpressionSyntax
+    ) BoundExpression? {
         let lastSyntax = if index == segments.Count - 1 {
             expression
         } else {
@@ -256,7 +269,7 @@ shared class BoundSemantics {
         expression ExpressionSyntax
     ) BoundExpression? {
         if model.GetBoundNode(expression) is BoundExpression anchored &&
-            OwnedIndexAnchor(expression, anchored) is {} owned {
+            OwnedIndexAnchor(model, expression, anchored) is {} owned {
             return owned
         }
         // Generated index plans can retain the written argument as their anchor.
@@ -267,20 +280,62 @@ shared class BoundSemantics {
             if argumentAnchor != nil &&
                 Unwrap(argumentAnchor) is {} read &&
                 IndexTargetOf(read, capturedOnly: index.Index is not RangeExpressionSyntax) != nil &&
-                OwnedIndexAnchor(expression, argumentAnchor) is {} recovered {
+                OwnedIndexAnchor(model, expression, argumentAnchor) is {} recovered {
                 return recovered
             }
         }
         return nil
     }
 
-    private func OwnedIndexAnchor(expression ExpressionSyntax, anchored BoundExpression) BoundExpression? {
-        if OwnsIndexAnchor(expression, anchored) {
-            return anchored
+    private func OwnedIndexAnchor(
+        model GSharp.Core.CodeAnalysis.SemanticModel,
+        expression ExpressionSyntax,
+        anchored BoundExpression
+    ) BoundExpression? {
+        var current = anchored
+        while Unwrap(current) is {} read && IndexTargetOf(read, capturedOnly: true) is {} source {
+            if CapturedSourceOwnsIndex(model, expression, source) {
+                return current
+            }
+            let argument = CapturedIndexArgument(current)
+            if argument == nil || object.ReferenceEquals(argument, current) ||
+                argument.Syntax is not ExpressionSyntax syntax ||
+                !object.ReferenceEquals(TerminalSegment(syntax), TerminalSegment(expression)) {
+                return nil
+            }
+            current = argument
         }
-        // A verified retained argument has stronger provenance than a raw
-        // syntax anchor. Its enclosing syntax must not reassign its ownership.
-        return CapturedIndexArgument(anchored)
+        return current
+    }
+
+    private func CapturedSourceOwnsIndex(
+        model GSharp.Core.CodeAnalysis.SemanticModel,
+        expression ExpressionSyntax,
+        source BoundExpression
+    ) bool {
+        let index = TerminalSegment(expression)
+        if index is not IndexExpressionSyntax {
+            return false
+        }
+        var context = expression
+        while ReceiverParent(context) is {} parent {
+            context = parent
+        }
+        let segments = List[ExpressionSyntax]()
+        AddReceiverSegments(context, segments)
+        let end = segments.FindIndex((segment ExpressionSyntax) -> object.ReferenceEquals(segment, index))
+        if end <= 0 {
+            return false
+        }
+        segments.RemoveRange(end, segments.Count - end)
+        let root = AssignmentTargetSyntaxFacts.UnwrapParentheses(segments[0])
+        // Both the plan and source can inherit the argument's anchor. Prove
+        // ownership through the target prefix's independently anchored read.
+        let read = Unwrap(ReadReceiverSegments(segments, source, 0, root))
+        return read != nil && object.ReferenceEquals(read.Syntax, root) && object.ReferenceEquals(
+            read,
+            Unwrap(model.GetBoundNode(root) as BoundExpression)
+        )
     }
 
     private func CapturedIndexArgument(anchored BoundExpression) BoundExpression? {
@@ -323,21 +378,6 @@ shared class BoundSemantics {
         } else {
             default(BoundExpression?)
         }
-    }
-
-    private func OwnsIndexAnchor(expression ExpressionSyntax, anchored BoundExpression) bool {
-        // Every recognized capture plan anchored on an argument belongs to its
-        // enclosing index, regardless of whether the plan returns a ref or value.
-        if Unwrap(anchored) is {} read &&
-            IndexTargetOf(read, capturedOnly: true) != nil &&
-            read.Syntax is ExpressionSyntax argument &&
-            argument.Parent is IndexExpressionSyntax owner &&
-            owner
-            .Indices
-            .Any((item ExpressionSyntax) -> object.ReferenceEquals(item, argument)) {
-            return object.ReferenceEquals(TerminalSegment(expression), owner)
-        }
-        return true
     }
 
     private func TerminalSegment(expression ExpressionSyntax) ExpressionSyntax {

@@ -735,6 +735,67 @@ func Run(h Holder, Items int32) string {
     }
 
     @Theory
+    @InlineData("int32", typeof([]int32))
+    @InlineData("System.Range", typeof([]System.Range))
+    func Issue5035_NestedArrayArgument_PreservesInnerSourceProperty(elementType string, arrayType Type) {
+        let source = `package Repro
+class Other {
+    prop Values []ELEMENT_TYPE
+}
+func Run(items []string, other Other) {
+    let first = items[other.Values[^1]]
+    let second = items[other.Values[^1]].ToString()
+}
+`.Replace("ELEMENT_TYPE", elementType)
+        let root = Path.Combine(
+            Directory.GetCurrentDirectory(),
+            "out",
+            "issue5035-array-owner-" + Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(root)
+        try {
+            let path = Path.Combine(root, "Consumer.gs")
+            File.WriteAllText(path, source)
+            let project = ProjectState(Path.Combine(root, "Consumer.gsproj"))
+            let tree = project.UpdateFile(path, source)
+            let lines = Enumerable.Range(0, source.Length).Where((i int32) -> source[i] == '\n').ToList()
+            let content = DocumentContent(tree, lines, project, WorkspaceState())
+            let compilation = project.GetCompilation()
+            Assert.Empty(compilation.GlobalScope.Diagnostics)
+            Assert.Empty(compilation.BoundProgram.Diagnostics)
+            let values = Assert.IsAssignableFrom[PropertySymbol](
+                BoundSemantics.GetSymbol(compilation, TokenAt(content, source, "Values []" + elementType, 0))
+            )
+            let items = Assert.IsAssignableFrom[ParameterSymbol](
+                BoundSemantics.GetSymbol(compilation, TokenAt(content, source, "items []string", 0))
+            )
+            let uri = DocumentUri.FromFileSystemPath(path)!!
+            for var occurrence = 0; occurrence < 2; occurrence++ {
+                let position = LanguageServerTestHelpers.PositionOf(source, "Values[^1]", occurrence)
+                let token = TokenAt(content, source, "Values[^1]", occurrence)
+                Assert.Same(values, BoundSemantics.GetSymbol(compilation, token))
+                Assert.Same(values, SemanticLookup.ResolveSymbol(compilation, token))
+                let type = BoundSemantics.GetExpressionType(compilation, token.Parent as ExpressionSyntax)
+                Assert.Same(values.Type, type)
+                Assert.Equal(arrayType.FullName, type?.ClrType?.FullName)
+                Assert.Equal(arrayType.Assembly.FullName, type?.ClrType?.Assembly.FullName)
+                AssertIndexedHover(content, position, "Values", "prop Values []" + elementType + " { get; set; }")
+                let location = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
+                let expected = LanguageServerTestHelpers.PositionOf(source, "Values []" + elementType)
+                Assert.Equal(uri, location.Uri)
+                AssertPosition(expected, location.Range.Start)
+                AssertPosition(Position(expected.Line, expected.Character + "Values".Length), location.Range.End)
+                Assert.Same(
+                    items,
+                    BoundSemantics.GetSymbol(compilation, TokenAt(content, source, "items[", occurrence))
+                )
+            }
+        } finally {
+            Directory.Delete(root, recursive: true)
+        }
+    }
+
+    @Theory
     @InlineData("slice[string]", "int32", typeof([]int32), false, "0")
     @InlineData("readonly slice[string]", "int32", typeof([]int32), false, "0")
     @InlineData("slice[string]", "System.Range", typeof([]System.Range), false, "0")
