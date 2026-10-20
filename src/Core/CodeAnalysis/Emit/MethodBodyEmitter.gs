@@ -37,7 +37,12 @@ import System.Collections
 /// ~1500 LoC. Behaviour-preserving — IL is byte-identical with the
 /// pre-PR-E-11 baseline (see `RefactoringBaselineTests`).
 internal partial class MethodBodyEmitter {
-    private let outer ReflectionMetadataEmitter
+    private let coordinator ReflectionMetadataEmitter?
+    private prop outer ReflectionMetadataEmitter -> Invariant.Required(
+        this.coordinator,
+        "an isolated method body cannot access metadata or generic remaps"
+    )
+    private let recordLocalSequencePoint((int32, SyntaxNode?) -> void)?
     private let il InstructionEncoder
     private let locals Dictionary[VariableSymbol, int32]
     private let parameters Dictionary[ParameterSymbol, int32]
@@ -135,7 +140,7 @@ internal partial class MethodBodyEmitter {
     private var currentPositionEndsInTerminator bool
 
     init(
-        outer ReflectionMetadataEmitter,
+        outer ReflectionMetadataEmitter?,
         il InstructionEncoder,
         locals Dictionary[VariableSymbol, int32],
         parameters Dictionary[ParameterSymbol, int32],
@@ -159,9 +164,11 @@ internal partial class MethodBodyEmitter {
         enclosingClosure ClosureEmitter.ClosureInfo? = nil,
         stackAllocResultSlots Dictionary[BoundStackAllocExpression, int32]? = nil,
         hasFixedReturns bool = false,
-        fixedReturnSlot int32 = -1
+        fixedReturnSlot int32 = -1,
+        recordLocalSequencePoint((int32, SyntaxNode?) -> void)? = nil
     ) {
-        this.outer = outer
+        this.coordinator = outer
+        this.recordLocalSequencePoint = recordLocalSequencePoint
         this.il = il
         this.locals = locals
         this.parameters = parameters
@@ -445,6 +452,13 @@ internal partial class MethodBodyEmitter {
     }
 
     private func RecordSequencePoint(syntax SyntaxNode?) {
+        if this.recordLocalSequencePoint != nil {
+            if this.il.Offset != this.lastSequencePointIlOffset {
+                this.recordLocalSequencePoint(this.il.Offset, syntax)
+                this.lastSequencePointIlOffset = this.il.Offset
+            }
+            return
+        }
         if this.outer.emitCtx.Pdb == nil {
             return
         }
