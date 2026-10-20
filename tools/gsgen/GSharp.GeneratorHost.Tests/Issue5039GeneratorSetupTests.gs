@@ -378,12 +378,13 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         )
         let changed = worker.Run(args.ToArray())
         Assert.Equal(0, changed.ExitCode)
-        Assert.False(changed.Retire)
+        Assert.True(changed.Retire)
         Assert.Contains("generator console output", changed.Stdout)
         Assert.Contains(string.Empty.PadRight(16383, 'x') + "😀", changed.Stdout)
         Assert.Contains("flush-continued", changed.Stdout)
         Assert.Contains("v2|||on", changed.Stdout)
         Assert.Contains("v2|||on", File.ReadAllText(Assert.Single(GeneratedFiles())))
+        Assert.True(worker.WaitForExit())
     }
 
     @Fact
@@ -405,6 +406,48 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         Assert.Contains("retained|||on", File.ReadAllText(Assert.Single(GeneratedFiles())))
         Assert.True(result.Retire, "A retained analyzer context must not enter the next request.")
         Assert.True(worker.WaitForExit())
+    }
+
+    @Theory
+    @InlineData("stdout")
+    @InlineData("stderr")
+    @InlineData("encoding")
+    func Worker_ConsoleMutation_DoesNotSuppressTheNextRequestsDiagnostics(mode string) {
+        let mutation = if mode == "stdout" {
+            "System.Console.SetOut(System.IO.TextWriter.Null); "
+        } else if mode == "stderr" {
+            "System.Console.SetError(System.IO.TextWriter.Null); "
+        } else {
+            "System.Console.OutputEncoding = System.Text.Encoding.Unicode; "
+        }
+        let generator = Path.Combine(directory, "Generator.dll")
+        CompileDll(
+            GeneratorSource.Replace("__VERSION__", "mutated").Replace("var inputs =", mutation + "var inputs ="),
+            generator,
+            "Generator"
+        )
+        let gs = Write("Input.gs", "package App\npartial class Foo {}")
+        let args = Arguments(gs, generator).ToArray()
+        using let worker = GeneratorWorker(directory)
+        let first = worker.Run(args)
+        Assert.Equal(0, first.ExitCode)
+        Assert.True(first.Retire, "A generator that mutates Console state must not poison a reused process.")
+        Assert.True(worker.WaitForExit())
+        CompileDll(
+            GeneratorSource.Replace("__VERSION__", "next").Replace(
+                "var inputs =",
+                "System.Console.WriteLine(\"next stdout\"); System.Console.Error.WriteLine(\"next stderr\"); var inputs ="
+            ),
+            generator,
+            "Generator"
+        )
+        using let restarted = GeneratorWorker(directory)
+        Assert.NotEqual(worker.ProcessId, restarted.ProcessId)
+        let next = restarted.Run(args, allowStderr: true)
+        Assert.Equal(0, next.ExitCode)
+        Assert.Contains("warning PROBE5039: next|||on", next.Stdout)
+        Assert.Contains("next stdout", next.Stdout)
+        Assert.Contains("next stderr", next.Stderr)
     }
 
     @Fact
@@ -672,6 +715,8 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         prop Reader BinaryReader {
             get;
         }
+
+        prop ProcessId int32 -> process.Id
 
         func Begin(arguments[]string) {
             let environment = Dictionary[string, string](StringComparer.Ordinal)
