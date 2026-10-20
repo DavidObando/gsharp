@@ -10,6 +10,22 @@ import Xunit
 
 class Issue5041WorkBudgetTests {
     @Theory
+    @InlineData("return _ == _")
+    @InlineData("_ = 0\nreturn true")
+    func DiscardReferencesCannotProveAnEnclosingMemberPrimitive(body string) {
+        let compilation = Compilation(
+            SyntaxTree.Parse(
+                "package Discards\nclass Marker { }\nclass Holder {\nvar _ Marker = Marker()\nfunc Same() bool {\nlet _ = 0\n" +
+                    body +
+                    "\n}\n}"
+            )
+        )
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        let holder = Assert.Single(compilation.GlobalScope.Structs, (type StructSymbol) -> type.Name == "Holder")
+        Assert.False(IndependentBodyClassifier.CanBind(Assert.Single(holder.Methods)))
+    }
+
+    @Theory
     @InlineData(1, 1024)
     @InlineData(8, 256)
     @InlineData(8, 1024)

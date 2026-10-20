@@ -136,11 +136,7 @@ internal shared class IndependentBodyClassifier {
                 }
             }
             case NameExpressionSyntax name {
-                return if locals.TryGetValue(name.IdentifierToken.ValueText, out var type) {
-                    type
-                } else {
-                    default(TypeSymbol?)
-                }
+                return LookupLocal(name.IdentifierToken.ValueText, locals)
             }
             case ParenthesizedExpressionSyntax paren {
                 return ExpressionType(paren.Expression, locals)
@@ -164,7 +160,8 @@ internal shared class IndependentBodyClassifier {
             }
             case AssignmentExpressionSyntax assignment {
                 let value = ExpressionType(assignment.Expression, locals)
-                return if locals.TryGetValue(assignment.IdentifierToken.ValueText, out var type) && value == type {
+                let type = LookupLocal(assignment.IdentifierToken.ValueText, locals)
+                return if type != nil && value == type {
                     type
                 } else {
                     default(TypeSymbol?)
@@ -173,6 +170,15 @@ internal shared class IndependentBodyClassifier {
             default {
                 return nil
             }
+        }
+    }
+
+    private func LookupLocal(name string, locals Dictionary[string, TypeSymbol]) TypeSymbol? {
+        // Discards do not create lookup-visible local bindings.
+        return if name != "_" && locals.TryGetValue(name, out var type) {
+            type
+        } else {
+            default(TypeSymbol?)
         }
     }
 }
