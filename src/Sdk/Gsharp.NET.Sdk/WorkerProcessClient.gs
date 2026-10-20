@@ -7,6 +7,7 @@ import System.Collections
 import System.Collections.Generic
 import System.Diagnostics
 import System.IO
+import System.IO.Pipes
 import System.Text
 import System.Threading
 import System.Threading.Tasks
@@ -23,6 +24,9 @@ internal class WorkerProcessClient : IDisposable {
     private var workerEnvironment Dictionary[string, string]?
     private var idleTimer Timer?
     private var lastActivity int64
+    private var protocol NamedPipeServerStream?
+    private var nativeOut WorkerDiagnosticCapture?
+    private var nativeError WorkerDiagnosticCapture?
 
     internal func TryRun(
         path string,
@@ -60,6 +64,8 @@ internal class WorkerProcessClient : IDisposable {
                         .ComponentModel
                         .Win32Exception ||
                         ex is InvalidOperationException ||
+                        ex is ArgumentException ||
+                        ex is NotSupportedException ||
                         ex is TimeoutException {
                         Dispose()
                         cancellation.ThrowIfCancellationRequested()
@@ -71,13 +77,17 @@ internal class WorkerProcessClient : IDisposable {
                 using let registration = cancellation.Register(() -> Kill(activeProcess))
                 // Once a request is sent, transport loss is a failure, not a retry.
                 try {
+                    let fence = "\u001egsharp-" + Guid.NewGuid().ToString("N") + "\u001f"
+                    nativeOut?.Begin(fence)
+                    nativeError?.Begin(fence)
                     WorkerProtocol.WriteRequest(
                         writer ?? throw InvalidOperationException("Worker input is unavailable."),
                         requestedIdentity,
                         directory,
                         arguments,
                         environment,
-                        workerGrant
+                        workerGrant,
+                        fence
                     )
                     let input = reader ?? throw InvalidOperationException("Worker output is unavailable.")
                     let status = input.ReadByte()
@@ -90,22 +100,17 @@ internal class WorkerProcessClient : IDisposable {
                         throw InvalidDataException("Worker did not acknowledge the request.")
                     }
                     transportMessage("G# worker accepted request: pid=${activeProcess.Id}.")
-                    let stdoutLine = StringBuilder()
-                    let stderrLine = StringBuilder()
                     while true {
                         let kind = input.ReadByte()
                         switch kind {
-                            case WorkerProtocol.Stdout {
-                                ReadOutput(input, stdoutLine, stdout)
-                            }
-                            case WorkerProtocol.Stderr {
-                                ReadOutput(input, stderrLine, stderr)
-                            }
                             case WorkerProtocol.Completed {
                                 exitCode = input.ReadInt32()
-                                let retire = input.ReadBoolean()
+                                let serverRetire = input.ReadBoolean()
                                 let retained = input.ReadInt64()
                                 let workingSet = input.ReadInt64()
+                                let _out = nativeOut?.Complete(cancellation, stdout)
+                                let _error = nativeError?.Complete(cancellation, stderr)
+                                let retire = serverRetire
                                 cancellation.ThrowIfCancellationRequested()
                                 transportMessage(
                                     "G# worker completed: pid=${activeProcess.Id}, retained=$retained bytes, workingSet=$workingSet bytes, retire=$retire."
@@ -129,9 +134,10 @@ internal class WorkerProcessClient : IDisposable {
                     ex is System
                     .ComponentModel
                     .Win32Exception {
+                    let detail = nativeOut?.FailureMessage() ?? nativeError?.FailureMessage() ?? ex.Message
                     Dispose()
                     cancellation.ThrowIfCancellationRequested()
-                    throw IOException("Worker request transport failed: ${ex.Message}", ex)
+                    throw IOException("Worker request transport failed: $detail", ex)
                 }
             } finally {
                 if completedExchange && process?.HasExited == false {
@@ -171,7 +177,16 @@ internal class WorkerProcessClient : IDisposable {
         if typeof(Process).GetMethod("Kill", []Type{typeof(bool)}) == nil {
             throw InvalidOperationException("This MSBuild runtime cannot cancel a worker process tree.")
         }
-        let start = ProcessStartInfo("dotnet", "\"$path\" $flag"){
+        let pipeName = CreateProtocolPipeName()
+        let pipe = NamedPipeServerStream(
+            pipeName,
+            PipeDirection.In,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | cast[PipeOptions](0x20000000)
+        )
+        protocol = pipe
+        let start = ProcessStartInfo("dotnet", "\"$path\" $flag $pipeName"){
             UseShellExecute = false,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
@@ -184,15 +199,26 @@ internal class WorkerProcessClient : IDisposable {
         }
         let child = Process.Start(start) ?? throw IOException("Cannot start worker.")
         process = child
-        // Drain startup/runtime stderr. Only framed request diagnostics enter MSBuild.
-        child.ErrorDataReceived += (_sender object, _event DataReceivedEventArgs) -> { }
-        child.BeginErrorReadLine()
-        let input = BinaryReader(child.StandardOutput.BaseStream, Encoding.UTF8)
+        nativeOut = WorkerDiagnosticCapture(child.StandardOutput, () -> Kill(child))
+        nativeError = WorkerDiagnosticCapture(child.StandardError, () -> Kill(child))
+        child.Exited += (_sender object, _event EventArgs) -> {
+            try {
+                if !pipe.IsConnected {
+                    pipe.Dispose()
+                }
+            } catch (ex ObjectDisposedException) {
+                // Startup cleanup already closed the private channel.
+
+            }
+        }
+        child.EnableRaisingEvents = true
+        let input = BinaryReader(pipe, Encoding.UTF8)
         reader = input
         writer = BinaryWriter(child.StandardInput.BaseStream, Encoding.UTF8)
         using let registration = cancellation.Register(() -> Kill(child))
         let handshake = Task.Run(
             () -> {
+                pipe.WaitForConnection()
                 if input.ReadInt32() != WorkerProtocol.Version || input.ReadString() != requestedIdentity {
                     throw InvalidDataException("Worker SDK identity or protocol version differs.")
                 }
@@ -224,32 +250,34 @@ internal class WorkerProcessClient : IDisposable {
             if child != nil {
                 Kill(child)
                 child.WaitForExit()
+                nativeOut?.Dispose()
+                nativeError?.Dispose()
                 child.Dispose()
             }
             reader?.Dispose()
             writer?.Dispose()
             reader = nil
             writer = nil
+            nativeOut = nil
+            nativeError = nil
+            protocol?.Dispose()
+            protocol = nil
         }
     }
 
     shared {
         private let RegistrationGate object = SystemObject()
 
-        private func ReadOutput(input BinaryReader, partial StringBuilder, report(string) -> void) {
-            let complete = input.ReadBoolean()
-            let text = input.ReadString()
-            if partial.Length + text.Length > WorkerProtocol.MaxFrameBytes {
-                throw InvalidDataException("Worker diagnostic line exceeds the protocol limit.")
-            }
-            if complete && partial.Length == 0 {
-                report(text)
-                return
-            }
-            partial.Append(text)
-            if complete {
-                report(partial.ToString())
-                partial.Clear()
+        internal func CreateProtocolPipeName() string {
+            let random = Convert
+                .ToBase64String(Guid.NewGuid().ToByteArray())
+                .Replace('/', '_')
+                .Replace('+', '-')
+                .TrimEnd('=')
+            return if Path.DirectorySeparatorChar == '\\' {
+                "gsharp-" + random
+            } else {
+                Path.Combine(Path.GetFullPath(Path.GetTempPath()), "p" + random)
             }
         }
 

@@ -249,8 +249,13 @@ open class Program {
         /// @param args Command line arguments.
         /// @returns Exit code.
         func Main(args[]string) int32 {
-            if args.Length == 1 && args[0] == "--compiler-worker" {
-                return WorkerServer.Run(typeof(Program).Assembly.Location, RunWorkerRequest, () -> workerCanReuse)
+            if args.Length == 2 && args[0] == "--compiler-worker" {
+                return WorkerServer.Run(
+                    typeof(Program).Assembly.Location,
+                    RunWorkerRequest,
+                    () -> workerCanReuse,
+                    args[1]
+                )
             }
             return Compile(args, requireOutput: false)
         }

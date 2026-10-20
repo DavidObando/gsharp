@@ -6,21 +6,20 @@ import System.Collections.Concurrent
 import System.Collections.Generic
 import System.Diagnostics
 import System.IO
+import System.IO.Pipes
 import System.Runtime.InteropServices
 import System.Text
 import System.Threading
 
 /// Serial compiler host. Process isolation is the cancellation boundary.
 internal shared class WorkerServer {
-    internal func Run(toolPath string, compile([]string) -> int32, canReuse(() -> bool)? = nil) int32 {
+    internal func Run(toolPath string, compile([]string) -> int32, canReuse(() -> bool)?, protocolPipe string) int32 {
         EstablishProcessLifetime()
         let identity = WorkerProtocol.ToolIdentity(toolPath)
         using let input = BinaryReader(Console.OpenStandardInput(), Encoding.UTF8)
-        using let output = BinaryWriter(Console.OpenStandardOutput(), Encoding.UTF8)
-        using let stdout = WorkerOutput(output, WorkerProtocol.Stdout)
-        using let stderr = WorkerOutput(output, WorkerProtocol.Stderr)
-        Console.SetOut(stdout)
-        Console.SetError(stderr)
+        using let connection = NamedPipeClientStream(".", protocolPipe, PipeDirection.Out)
+        connection.Connect(30000)
+        using let output = BinaryWriter(connection, Encoding.UTF8)
         output.Write(WorkerProtocol.Version)
         output.Write(identity)
         output.Flush()
@@ -54,6 +53,7 @@ internal shared class WorkerServer {
             let requestedIdentity = payload.ReadString()
             let directory = payload.ReadString()
             let grant = payload.ReadInt32()
+            let fence = payload.ReadString()
             let arguments = [WorkerProtocol.ReadCount(payload)]string
             for var i = 0; i < arguments.Length; i++ {
                 arguments[i] = payload.ReadString()
@@ -66,7 +66,7 @@ internal shared class WorkerServer {
             if version != WorkerProtocol.Version || requestedIdentity != identity || grant < 1 || !Path.IsPathRooted(
                 directory
             ) ||
-                !Directory.Exists(directory) || stream.Position != stream.Length {
+                !Directory.Exists(directory) || stream.Position != stream.Length || fence.Length != 41 {
                 output.Write(WorkerProtocol.Rejected)
                 output.Write("Worker version, directory, or resource grant is invalid.")
                 output.Flush()
@@ -74,19 +74,8 @@ internal shared class WorkerServer {
             }
             output.Write(WorkerProtocol.Accepted)
             output.Flush()
-            if RunRequest(
-                output,
-                stdout,
-                stderr,
-                directory,
-                arguments,
-                environment,
-                grant,
-                compile,
-                canReuse,
-                request
-            ) {
-                return 0
+            if RunRequest(output, directory, arguments, environment, grant, compile, canReuse, request, fence) {
+                TerminateProcessLifetime()
             }
         }
         return 0
@@ -105,6 +94,9 @@ internal shared class WorkerServer {
         } else if CreateSession() < 0 && GetProcessGroup() != Environment.ProcessId {
             throw IOException("Cannot create the compiler worker's process group.")
         }
+        if !OperatingSystem.IsWindows() && !File.Exists("/bin/ps") {
+            throw IOException("Compiler worker containment requires /bin/ps.")
+        }
     }
 
     private func TerminateProcessLifetime() {
@@ -115,6 +107,71 @@ internal shared class WorkerServer {
         }
         Environment.FailFast("Compiler worker owner disconnected.")
     }
+
+    private func HasLiveDescendants() bool {
+        if OperatingSystem.IsWindows() {
+            return QueryInformationJobObject(
+                job,
+                1,
+                out var accounting,
+                uint32(Marshal.SizeOf[JobAccounting]()),
+                IntPtr.Zero
+            ) == 0 ||
+                accounting.ActiveProcesses > 1
+        }
+        let start = ProcessStartInfo("/bin/ps", "-axo pid=,pgid="){
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }
+        using let query = Process.Start(start) ?? throw IOException("Cannot inspect compiler worker descendants.")
+        let stdout = query.StandardOutput.ReadToEndAsync()
+        let stderr = query.StandardError.ReadToEndAsync()
+        if !query.WaitForExit(5000) {
+            query.Kill(entireProcessTree: true)
+            query.WaitForExit()
+            return true
+        }
+        let text = stdout.GetAwaiter().GetResult()
+        let _error = stderr.GetAwaiter().GetResult()
+        if query.ExitCode != 0 {
+            return true
+        }
+        for line in text.Split('\n') {
+            let columns = line.Split([]char{' ', '\t'}, StringSplitOptions.RemoveEmptyEntries)
+            if columns.Length == 2 && int32.TryParse(columns[0], out var pid) && int32.TryParse(
+                columns[1],
+                out var group
+            ) &&
+                group == Environment.ProcessId &&
+                pid != Environment.ProcessId &&
+                pid != query.Id {
+                return true
+            }
+        }
+        return false
+    }
+
+    @StructLayout(LayoutKind.Sequential)
+    private struct JobAccounting {
+        var TotalUserTime int64
+        var TotalKernelTime int64
+        var PeriodUserTime int64
+        var PeriodKernelTime int64
+        var PageFaults uint32
+        var TotalProcesses uint32
+        var ActiveProcesses uint32
+        var TerminatedProcesses uint32
+    }
+
+    @DllImport("kernel32.dll", SetLastError: true)
+    private func QueryInformationJobObject(
+        job IntPtr,
+        kind int32,
+        out accounting JobAccounting,
+        length uint32,
+        returnedLength IntPtr
+    ) int32;
 
     @DllImport("kernel32.dll", EntryPoint: "CreateJobObjectW", SetLastError: true)
     private func CreateJobObject(attributes IntPtr, name IntPtr) IntPtr;
@@ -139,15 +196,14 @@ internal shared class WorkerServer {
 
     private func RunRequest(
         output BinaryWriter,
-        stdout WorkerOutput,
-        stderr WorkerOutput,
         directory string,
         arguments[]string,
         environment Dictionary[string, string],
         grant int32,
         compile([]string) -> int32,
         canReuse(() -> bool)?,
-        request int32
+        request int32,
+        fence string
     ) bool {
         let oldDirectory = Environment.CurrentDirectory
         let oldEnvironment = Environment.GetEnvironmentVariables()
@@ -179,9 +235,17 @@ internal shared class WorkerServer {
             let retire = request == WorkerProtocol.MaxRequests ||
                 retained >= WorkerProtocol.MaxRetainedBytes ||
                 workingSet >= WorkerProtocol.MaxWorkingSetBytes ||
-                !reusable
-            stdout.Complete()
-            stderr.Complete()
+                !reusable ||
+                HasLiveDescendants()
+            Console.Out.Flush()
+            Console.Error.Flush()
+            let marker = Encoding.UTF8.GetBytes(fence)
+            using let nativeOut = Console.OpenStandardOutput()
+            using let nativeError = Console.OpenStandardError()
+            nativeOut.Write(marker)
+            nativeOut.Flush()
+            nativeError.Write(marker)
+            nativeError.Flush()
             lock output {
                 output.Write(WorkerProtocol.Completed)
                 output.Write(exitCode)
@@ -199,75 +263,6 @@ internal shared class WorkerServer {
             for entry DictionaryEntry in oldEnvironment {
                 Environment.SetEnvironmentVariable(cast[string](entry.Key), cast[string](entry.Value))
             }
-        }
-    }
-
-    private class WorkerOutput : TextWriter {
-        private let output BinaryWriter
-        private let kind uint8
-        private let line StringBuilder = StringBuilder()
-        private var hasFragment bool
-        private var carriageReturn bool
-
-        init(output BinaryWriter, kind uint8) {
-            this.output = output
-            this.kind = kind
-        }
-
-        override prop Encoding Encoding -> Encoding.UTF8
-
-        override func Write(value char) {
-            lock output {
-                if value == '\r' {
-                    Emit(completeLine: true)
-                    carriageReturn = true
-                } else if value == '\n' {
-                    if !carriageReturn {
-                        Emit(completeLine: true)
-                    }
-                    carriageReturn = false
-                } else {
-                    carriageReturn = false
-                    line.Append(value)
-                    if line.Length >= 16384 {
-                        Emit(completeLine: false)
-                    }
-                }
-            }
-        }
-
-        override func Flush() {
-            lock output {
-                if line.Length > 0 {
-                    Emit(completeLine: false)
-                }
-                output.Flush()
-            }
-        }
-
-        internal func Complete() {
-            lock output {
-                if line.Length > 0 || hasFragment {
-                    Emit(completeLine: true)
-                }
-            }
-        }
-
-        private func Emit(completeLine bool) {
-            var pending char? = nil
-            if !completeLine && line.Length > 0 && char.IsHighSurrogate(line[line.Length - 1]) {
-                pending = line[line.Length - 1]
-                line.Length--
-            }
-            output.Write(kind)
-            output.Write(completeLine)
-            output.Write(line.ToString())
-            output.Flush()
-            line.Clear()
-            if pending is {} high {
-                line.Append(high)
-            }
-            hasFragment = !completeLine
         }
     }
 }

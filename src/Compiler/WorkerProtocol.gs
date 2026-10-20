@@ -9,7 +9,7 @@ import System.Text
 
 /// The private, versioned transport shared by the SDK and compiler worker.
 internal shared class WorkerProtocol {
-    internal const Version int32 = 2
+    internal const Version int32 = 3
     internal const MaxFrameBytes int32 = 16 * 1024 * 1024
     internal const MaxRequests int32 = 16
     internal const MaxRetainedBytes int64 = 256 * 1024 * 1024
@@ -66,7 +66,8 @@ internal shared class WorkerProtocol {
         directory string,
         arguments[]string,
         environment Dictionary[string, string],
-        workerGrant int32
+        workerGrant int32,
+        diagnosticFence string
     ) {
         using let stream = MemoryStream()
         using let payload = BinaryWriter(stream, Encoding.UTF8, leaveOpen: true)
@@ -74,6 +75,7 @@ internal shared class WorkerProtocol {
         payload.Write(identity)
         payload.Write(directory)
         payload.Write(workerGrant)
+        payload.Write(diagnosticFence)
         payload.Write(arguments.Length)
         for argument in arguments {
             payload.Write(argument)
