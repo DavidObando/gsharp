@@ -273,9 +273,9 @@ shared class BoundSemantics {
     }
 
     private func OwnsIndexAnchor(expression ExpressionSyntax, anchored BoundExpression) bool {
-        // Implicit capture reads anchored on an argument belong to its enclosing
-        // index, not to an index expression nested inside that argument.
-        if Unwrap(anchored) is BoundDereferenceExpression{Operand: BoundBlockExpression} read &&
+        // Every recognized capture plan anchored on an argument belongs to its
+        // enclosing index, regardless of whether the plan returns a ref or value.
+        if Unwrap(anchored) is {} read &&
             IndexTargetOf(read, capturedOnly: true) != nil &&
             read.Syntax is ExpressionSyntax argument &&
             argument.Parent is IndexExpressionSyntax owner &&

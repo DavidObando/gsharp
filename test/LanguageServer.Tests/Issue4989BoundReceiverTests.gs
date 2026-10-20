@@ -735,18 +735,24 @@ func Run(h Holder, Items int32) string {
     }
 
     @Theory
-    @InlineData("slice[string]")
-    @InlineData("readonly slice[string]")
-    func Issue5035_NestedNativeSliceArgument_KeepsParameterOwnership(nativeType string) {
+    @InlineData("slice[string]", "int32", typeof([]int32))
+    @InlineData("readonly slice[string]", "int32", typeof([]int32))
+    @InlineData("slice[string]", "System.Range", typeof([]System.Range))
+    @InlineData("readonly slice[string]", "System.Range", typeof([]System.Range))
+    func Issue5035_NestedNativeSliceArgument_KeepsParameterOwnership(
+        nativeType string,
+        elementType string,
+        parameterType Type
+    ) {
         let source = `package Repro
 class Holder {
     prop Items NATIVE_TYPE
 }
-func Run(h Holder, Items []int32) string {
+func Run(h Holder, Items []ELEMENT_TYPE) {
     let first = h.Items[Items[0]]
-    return h.Items[Items[0]].ToString()
+    let second = h.Items[Items[0]].ToString()
 }
-`.Replace("NATIVE_TYPE", nativeType)
+`.Replace("NATIVE_TYPE", nativeType).Replace("ELEMENT_TYPE", elementType)
         let root = Path.Combine(
             Directory.GetCurrentDirectory(),
             "out",
@@ -765,7 +771,7 @@ func Run(h Holder, Items []int32) string {
             Assert.Empty(compilation.GlobalScope.Diagnostics)
             Assert.Empty(compilation.BoundProgram.Diagnostics)
             let parameter = Assert.IsAssignableFrom[ParameterSymbol](
-                BoundSemantics.GetSymbol(compilation, TokenAt(content, source, "Items []int32", 0))
+                BoundSemantics.GetSymbol(compilation, TokenAt(content, source, "Items []" + elementType, 0))
             )
             let property = Assert.IsAssignableFrom[PropertySymbol](
                 BoundSemantics.GetSymbol(compilation, TokenAt(content, source, "Items " + nativeType, 0))
@@ -778,10 +784,11 @@ func Run(h Holder, Items []int32) string {
                 if BoundSemantics.GetSymbol(compilation, argument) is {} bound {
                     Assert.Same(parameter, bound)
                 }
-                Assert.Equal(typeof([]int32), parameter.Type.ClrType)
-                AssertIndexedHover(content, position, "Items", "(parameter) Items []int32")
+                Assert.Equal(parameterType.FullName, parameter.Type.ClrType?.FullName)
+                Assert.Equal(parameterType.Assembly.FullName, parameter.Type.ClrType?.Assembly.FullName)
+                AssertIndexedHover(content, position, "Items", "(parameter) Items []" + elementType)
                 let location = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
-                let expected = LanguageServerTestHelpers.PositionOf(source, "Items []int32")
+                let expected = LanguageServerTestHelpers.PositionOf(source, "Items []" + elementType)
                 Assert.Equal(uri, location.Uri)
                 AssertPosition(expected, location.Range.Start)
                 AssertPosition(Position(expected.Line, expected.Character + "Items".Length), location.Range.End)
