@@ -415,6 +415,7 @@ internal partial class ExpressionBinder {
                     variable is ImplicitStaticFieldVariableSymbol ||
                     variable is ImplicitPropertyVariableSymbol ||
                     variable is ImplicitStaticPropertyVariableSymbol {
+                    receiver!!.AnchorSyntax(leftName)
                     receiver = ApplyMemberNarrowing(receiver!!)
                 }
             } else if TryBindInheritedClrInstanceMemberByBareName(name, out var inheritedClrHead) {
@@ -443,6 +444,7 @@ internal partial class ExpressionBinder {
                     userInterfaceSymbol = inheritedColorInterface
                     enumSymbol = inheritedColorEnum
                 } else {
+                    inheritedClrHead?.AnchorSyntax(leftName)
                     return BindAccessorStep(inheritedClrHead, nil, rightPart)
                 }
             } else if TryResolveInterfaceInstancePropertyByBareName(name, out _, out _) &&
@@ -482,6 +484,7 @@ internal partial class ExpressionBinder {
                 // submission — e.g. `p.Sum()` where `p` was declared in an
                 // earlier cell — binds the head as the submission's static
                 // field read and continues the chain on that value.
+                submissionHead?.AnchorSyntax(leftName)
                 return BindAccessorStep(submissionHead, nil, rightPart)
             } else if binderCtx.TryLookupSourceType(
                 $scope,

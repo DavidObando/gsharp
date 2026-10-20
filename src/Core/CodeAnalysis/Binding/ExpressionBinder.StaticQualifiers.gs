@@ -11,7 +11,10 @@ internal partial class ExpressionBinder {
         if member is not(NameExpressionSyntax or CallExpressionSyntax) {
             return
         }
-        let read = UnwrapTransparentMemberResult(result)
+        var read = UnwrapTransparentMemberResult(result)
+        while read.LogicalCompletionOperand is {} operand {
+            read = UnwrapTransparentMemberResult(operand)
+        }
         let isStatic = switch read {
             case property is BoundPropertyAccessExpression: property.Receiver == nil && property.Property.IsStatic
             case field is BoundFieldAccessExpression: field.Receiver == nil && field.Field.IsStatic

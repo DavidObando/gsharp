@@ -42,21 +42,14 @@ class BoundAwaitExpression : BoundExpression {
         get;
     }
 
-    internal prop ImplicitCompletionOperand BoundExpression? {
-        get;
-        private set;
-    }
+    internal prop ImplicitCompletionOperand BoundExpression? -> LogicalCompletionOperand
 
     internal func RecordImplicitCompletion(operand BoundExpression) {
-        if ImplicitCompletionOperand == nil && object.ReferenceEquals(Expression, operand) {
-            ImplicitCompletionOperand = operand
-        }
+        RecordLogicalCompletion(operand)
     }
 
     internal func CopyImplicitCompletionTo(copy BoundAwaitExpression) {
-        if object.ReferenceEquals(ImplicitCompletionOperand, Expression) {
-            copy.RecordImplicitCompletion(copy.Expression)
-        }
+        CopyLogicalCompletionTo(copy)
     }
 
     shared {

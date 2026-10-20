@@ -246,7 +246,7 @@ internal class SuspendingCallRewriter : BoundTreeRewriter {
     /// ```
     protected override func RewriteImportedCallExpression(node BoundImportedCallExpression) BoundExpression {
         let rewritten = cast[BoundImportedCallExpression](base.RewriteImportedCallExpression(node))
-        if !LockRegions.IsBlockingBridge(rewritten) {
+        if rewritten.LogicalCompletionOperand is not{} inner {
             // A channel operation that no lexical scope encloses parks on this
             // function's hidden context, so the caller's scope cancels it
             // (ADR-0174 D7); one bound at a root keeps the default token.
@@ -275,7 +275,6 @@ internal class SuspendingCallRewriter : BoundTreeRewriter {
             // bound; supply it so cancellation crosses the assembly boundary.
             return ChannelRuntimeBinder.SupplyImportedContext(rewritten, ambient)
         }
-        let inner = rewritten.Arguments[0]
         if goDepth > 0 {
             // The goroutine consumes the ValueTask itself. An `async let` keeps
             // the result, so it must not be discarded on the way (ADR-0174 D15).

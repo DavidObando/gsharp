@@ -225,6 +225,13 @@ Property-to-storage lowering retains the selected property's logical substituted
 type and syntax; fresh same-member field/property/call copies keep their original
 syntax identity when rewriting a receiver.
 
+The shared fill-once syntax anchoring operation also covers implicit property
+and bare shared-member prefixes before narrowing; narrowed-read factories retain
+the original read's anchor. Compiler-created await and blocking completions share
+one exact-operand receipt, retained only across verified same-selected-operation
+copies. Readers/inference cross that receipt without a logical receiver step;
+authored calls to the same runtime wait API receive no receipt or reclassification.
+
 Representation-changing constant folding retains the actual selected source
 field read (its `FieldSymbol` and effective closed owner), not just a literal
 value or member name. A verified fold carries that semantic association to

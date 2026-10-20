@@ -21,6 +21,114 @@ import Xunit
 /// and (cref:GSharpSyntaxWalker).
 open class Adr0169SemanticModelTests {
     @Fact
+    func AuthoredBlockingWait_InAsyncCaller_RemainsTheSelectedRuntimeCall() {
+        const source = `package Query
+class Holder {
+    shared {
+        func Value(value string) string -> "decoy"
+        suspend func Value(value int32) string -> "fixture"
+    }
+}
+let completed = Holder.Value(1)[^1]
+async func Run() {
+    let authored = Gsharp.Concurrency.Blocking.Wait[string](
+        System.Threading.Tasks.ValueTask[string]("authored"))
+}
+`
+        let (_, model, tree) = CreateQualifierModel(source)
+        let root = QualifierInitializer(tree, "completed")
+        let member = Assert.IsType[CallExpressionSyntax](Assert.IsType[IndexExpressionSyntax](root.RightPart).Target)
+        Assert.True(model.TryGetStaticTypeQualifier(root, member, out var owner, out var qualifier, out var selected))
+        let original = Assert.IsType[BoundCallExpression](selected)
+        Assert.Same(root.LeftPart, qualifier)
+        Assert.Same(
+            Assert
+                .IsType[StructSymbol](owner)
+                .StaticMethods
+                .Single((f FunctionSymbol) -> f.Name == "Value" && f.IsSuspending),
+            original.Function
+        )
+        Assert.Same(owner, original.StaticQualifierType)
+        let plan = Assert.IsType[BoundBlockExpression](model.GetBoundNode(root))
+        let bridge = Assert.IsType[BoundImportedCallExpression](
+            Assert.IsType[BoundVariableDeclaration](plan.Statements[0]).Initializer
+        )
+        Assert.Same(original, Assert.Single(bridge.Arguments))
+        let syntax = tree
+            .Root
+            .DescendantNodes()
+            .OfType[CallExpressionSyntax]()
+            .Single((c CallExpressionSyntax) -> c.Identifier.Text == "Wait")
+        let call = Assert.IsType[BoundImportedCallExpression](model.GetBoundNode(syntax))
+        Assert.Same(call.Function, model.GetSymbolInfo(syntax).Symbol)
+        Assert.Equal("Gsharp.Concurrency.Blocking", call.Function.Method.DeclaringType?.FullName)
+        Assert.Same(TypeSymbol.String, call.Type)
+    }
+
+    @Theory
+    @InlineData(0)
+    @InlineData(1)
+    @InlineData(2)
+    func ImplicitNamedMember_PreservesAnchorAcrossSelectionAndNarrowing(mode int32) {
+        let source = `package Query
+class Box {
+    SHARED_OPEN
+    DECLARATION
+    func Run() {
+        GUARD_OPEN
+        let first = Address.ToString()
+        GUARD_CLOSE
+    }
+    SHARED_CLOSE
+}
+`.Replace(
+            "DECLARATION",
+            if mode == 0 {
+                "prop Address System.Uri? { get; }"
+            } else if mode == 1 {
+                "var Address System.Uri = System.Uri(\"https://example.test/path\")"
+            } else {
+                "prop Address System.Uri -> System.Uri(\"https://example.test/path\")"
+            }
+        ).Replace(
+            "SHARED_OPEN",
+            if mode > 0 {
+                "shared {"
+            } else {
+                ""
+            }
+        ).Replace(
+            "SHARED_CLOSE",
+            if mode > 0 {
+                "}"
+            } else {
+                ""
+            }
+        ).Replace(
+            "GUARD_OPEN",
+            if mode == 0 {
+                "if Address != nil {"
+            } else {
+                ""
+            }
+        ).Replace(
+            "GUARD_CLOSE",
+            if mode == 0 {
+                "}"
+            } else {
+                ""
+            }
+        )
+        let (_, model, tree) = CreateQualifierModel(source)
+        let root = QualifierInitializer(tree, "first")
+        let call = Assert.IsType[BoundImportedInstanceCallExpression](model.GetBoundNode(root))
+        Assert.Same(root.LeftPart, call.Receiver.Syntax)
+        Assert.Same(call.Receiver, model.GetBoundNode(root.LeftPart))
+        Assert.False(call.Receiver.Type is NullableTypeSymbol)
+        Assert.Equal(typeof(System.Uri), call.Receiver.Type.ClrType)
+    }
+
+    @Fact
     func InstancePropertyLowering_KeepsClosedLogicalTypeAndFollowingReadAnchor() {
         const source = `package Query
 class Box[T] {

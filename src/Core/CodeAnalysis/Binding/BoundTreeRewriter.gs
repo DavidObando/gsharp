@@ -615,6 +615,7 @@ abstract class BoundTreeRewriter {
 
     private func CompleteSelectedCallCopy(original BoundExpression, copy BoundExpression) BoundExpression {
         original.CopyStaticQualifierTo(copy)
+        original.CopyLogicalCompletionTo(copy)
         return copy
     }
 

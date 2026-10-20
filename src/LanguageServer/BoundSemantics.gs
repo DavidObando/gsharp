@@ -738,9 +738,7 @@ shared class BoundSemantics {
     ) BoundExpression? {
         var current = node
         while current != nil {
-            if current is BoundAwaitExpression completed &&
-                completed.ImplicitCompletionOperand is {} operand &&
-                object.ReferenceEquals(completed.Expression, operand) {
+            if current.LogicalCompletionOperand is {} operand {
                 current = operand
             } else if current is BoundConversionExpression conversion &&
                 IsSynthesizedWrapper(conversion, conversion.Expression) {

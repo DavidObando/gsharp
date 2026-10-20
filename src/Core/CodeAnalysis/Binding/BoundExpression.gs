@@ -26,6 +26,51 @@ abstract class BoundExpression : BoundNode {
         set;
     }
 
+    internal prop LogicalCompletionOperand BoundExpression? {
+        get;
+        private set;
+    }
+
+    internal func RecordLogicalCompletion(operand BoundExpression) {
+        let actual BoundExpression? = switch this {
+            case awaited is BoundAwaitExpression: awaited.Expression
+            case call is BoundImportedCallExpression when call.Arguments.Length == 1: call.Arguments[0]
+            default: default(BoundExpression?)
+        }
+        if LogicalCompletionOperand == nil && object.ReferenceEquals(actual, operand) {
+            LogicalCompletionOperand = operand
+        }
+    }
+
+    internal func CopyLogicalCompletionTo(copy BoundExpression) {
+        if LogicalCompletionOperand == nil || !object.ReferenceEquals(Type, copy.Type) {
+            return
+        }
+        if this is BoundAwaitExpression awaited && copy is BoundAwaitExpression completed && object.ReferenceEquals(
+            LogicalCompletionOperand,
+            awaited.Expression
+        ) {
+            completed.RecordLogicalCompletion(completed.Expression)
+        } else if this is BoundImportedCallExpression call &&
+            copy is BoundImportedCallExpression completedCall &&
+            call
+            .Arguments
+            .Length == 1 &&
+            completedCall
+            .Arguments
+            .Length == 1 &&
+            object.ReferenceEquals(LogicalCompletionOperand, call.Arguments[0]) && object.ReferenceEquals(
+            Syntax,
+            copy.Syntax
+        ) &&
+            SameSelectedCall(copy) &&
+            call
+            .ArgumentRefKinds
+            .Equals(completedCall.ArgumentRefKinds) {
+            completedCall.RecordLogicalCompletion(completedCall.Arguments[0])
+        }
+    }
+
     internal prop StaticQualifierType TypeSymbol? {
         get;
         private set;
@@ -121,41 +166,7 @@ abstract class BoundExpression : BoundNode {
             sourceField.Field.ConstantValue,
             literal.Value
         )
-        let sameRead = foldingConstant || switch this {
-            case call is BoundCallExpression when copy is BoundCallExpression replacement:
-            object.ReferenceEquals(call.Function, replacement.Function) && object.ReferenceEquals(
-                call.StaticGenericOwnerType,
-                replacement.StaticGenericOwnerType
-            ) &&
-                object.ReferenceEquals(
-                call.StaticGenericInterfaceOwnerType,
-                replacement.StaticGenericInterfaceOwnerType
-            ) &&
-                call
-                .MethodTypeArguments
-                .Equals(replacement.MethodTypeArguments)
-            case call is BoundImportedCallExpression when copy is BoundImportedCallExpression replacement:
-            object.ReferenceEquals(call.Function, replacement.Function) && object.ReferenceEquals(
-                call.StaticContainerType,
-                replacement.StaticContainerType
-            ) &&
-                call
-                .TypeArgumentSymbols
-                .Equals(replacement.TypeArgumentSymbols)
-            case call is BoundConstrainedStaticCallExpression when copy is BoundConstrainedStaticCallExpression replacement:
-            object.ReferenceEquals(call.TypeParameter, replacement.TypeParameter) && object.ReferenceEquals(
-                call.InterfaceMethod,
-                replacement.InterfaceMethod
-            ) &&
-                object.ReferenceEquals(call.ClrMethod, replacement.ClrMethod) && object.ReferenceEquals(
-                call.ConstrainedInterfaceType,
-                replacement.ConstrainedInterfaceType
-            ) &&
-                call
-                .TypeArgumentSymbols
-                .Equals(replacement.TypeArgumentSymbols)
-            default: false
-        }
+        let sameRead = foldingConstant || SameSelectedCall(copy)
         if !sameRead || (!foldingConstant && !object.ReferenceEquals(Syntax, copy.Syntax)) {
             return
         }
@@ -165,6 +176,39 @@ abstract class BoundExpression : BoundNode {
         copy.StaticConstantFieldRead = StaticConstantFieldRead
         copy.StaticConstraintOwner = StaticConstraintOwner
         copy.StaticEnumMember = StaticEnumMember
+    }
+
+    private func SameSelectedCall(copy BoundExpression) bool -> switch this {
+        case call is BoundCallExpression when copy is BoundCallExpression replacement:
+        object.ReferenceEquals(call.Function, replacement.Function) && object.ReferenceEquals(
+            call.StaticGenericOwnerType,
+            replacement.StaticGenericOwnerType
+        ) &&
+            object.ReferenceEquals(call.StaticGenericInterfaceOwnerType, replacement.StaticGenericInterfaceOwnerType) &&
+            call
+            .MethodTypeArguments
+            .Equals(replacement.MethodTypeArguments)
+        case call is BoundImportedCallExpression when copy is BoundImportedCallExpression replacement:
+        object.ReferenceEquals(call.Function, replacement.Function) && object.ReferenceEquals(
+            call.StaticContainerType,
+            replacement.StaticContainerType
+        ) &&
+            call
+            .TypeArgumentSymbols
+            .Equals(replacement.TypeArgumentSymbols)
+        case call is BoundConstrainedStaticCallExpression when copy is BoundConstrainedStaticCallExpression replacement:
+        object.ReferenceEquals(call.TypeParameter, replacement.TypeParameter) && object.ReferenceEquals(
+            call.InterfaceMethod,
+            replacement.InterfaceMethod
+        ) &&
+            object.ReferenceEquals(call.ClrMethod, replacement.ClrMethod) && object.ReferenceEquals(
+            call.ConstrainedInterfaceType,
+            replacement.ConstrainedInterfaceType
+        ) &&
+            call
+            .TypeArgumentSymbols
+            .Equals(replacement.TypeArgumentSymbols)
+        default: false
     }
 
     /// Gets the compile-time constant value of this expression — the Roslyn
