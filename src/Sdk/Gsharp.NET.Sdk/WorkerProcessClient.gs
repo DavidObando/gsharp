@@ -316,8 +316,7 @@ internal class WorkerProcessClient : IDisposable {
                 UseShellExecute = false,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
+                RedirectStandardError = true
             }
             let arguments = typeof(ProcessStartInfo).GetProperty("ArgumentList")?.GetValue(start) as IList[string] ??
                 throw InvalidOperationException("This MSBuild runtime cannot pass worker arguments safely.")

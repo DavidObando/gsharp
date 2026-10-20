@@ -108,7 +108,9 @@ so an explicitly permitted standalone fallback remains distinguishable.
 This preserves crash messages without treating a failed request as success.
 Worker startup passes the tool,
 switch and pipe name as typed process arguments, preserving spaces, Unicode
-and valid filename quotes without reparsing a command line. MSBuild hosts
+and valid filename quotes without reparsing a command line. Its Windows console
+creation flags match standalone compilation; it does not force a new encoding.
+MSBuild hosts
 without build-lifetime task objects, typed process arguments or process-tree
 cancellation use the standalone path and log that decision.
 

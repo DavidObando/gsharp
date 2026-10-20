@@ -13,6 +13,7 @@ import System.Reflection
 import System.Reflection.Metadata
 import System.Reflection.PortableExecutable
 import System.Runtime.CompilerServices
+import System.Runtime.InteropServices
 import System.Security
 import System.Text
 import System.Text.Json
@@ -1017,6 +1018,54 @@ open class CompilerWorkerTests : IDisposable {
         )
     }
 
+    @Fact
+    func WindowsNonUtf8ConsolePreservesStandaloneAndWorkerDiagnosticParity() {
+        let marker = Path.Combine(directory, "console-proof.txt")
+        File.WriteAllText(
+            Path.Combine(directory, "console.gs"),
+            "import System\nimport System.IO\nimport System.Reflection\n" +
+                "func Main(args[]string) {\nif args.Length == 2 {\n" +
+                "Console.WriteLine(Console.OutputEncoding.CodePage.ToString())\nConsole.WriteLine(\"résumé\")\nreturn\n}\n" +
+                "try {\nlet assembly = Assembly.LoadFrom(\"${EscapeSource(typeof(CompilerWorkerTests).Assembly.Location)}\")\n" +
+                "let method = assembly.GetType(\"GSharp.Sdk.Tests.CompilerWorkerTests\")!!.GetMethod(\"VerifyWindowsConsoleParity\")!!\n" +
+                "method.Invoke(nil, []object{args[0], args[1], Assembly.GetExecutingAssembly().Location})\n" +
+                "File.WriteAllText(args[2], \"green\")\n} catch (ex Exception) {\n" +
+                "File.WriteAllText(args[2], ex.ToString())\nEnvironment.Exit(1)\n}\n}"
+        )
+        let (toolExit, diagnostics) = Standalone(
+            directory,
+            []string{"/out:console.dll", "/target:exe", "/targetframework:net10.0", "console.gs"}
+        )
+        Assert.True(toolExit == 0, diagnostics)
+        for path in Directory.GetFiles(
+            Path.GetDirectoryName(typeof(CompilerWorkerTests).Assembly.Location) ?? ".",
+            "*.dll"
+        ) {
+            File.Copy(path, Path.Combine(directory, Path.GetFileName(path)))
+        }
+        let start = ProcessStartInfo("dotnet"){
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }
+        start.ArgumentList.Add(Path.Combine(directory, "console.dll"))
+        if Path.DirectorySeparatorChar != '\\' {
+            start.ArgumentList.Add("--encoding")
+            start.ArgumentList.Add("unused")
+            let portable = RunProcess(start)
+            Assert.True(portable.Exit == 0, portable.Stderr)
+            Assert.Contains("résumé", portable.Stdout)
+            return
+        }
+        for argument in[]string{CompilerPath(), directory, marker} {
+            start.ArgumentList.Add(argument)
+        }
+        let result = RunProcess(start)
+        Assert.True(File.Exists(marker), result.Stderr)
+        Assert.True(result.Exit == 0, File.ReadAllText(marker))
+        Assert.Equal("green", File.ReadAllText(marker))
+    }
+
     @Theory
     @InlineData("s x")
     @InlineData("u λ")
@@ -1227,6 +1276,71 @@ open class CompilerWorkerTests : IDisposable {
     )
 
     shared {
+        @DllImport("kernel32.dll")
+        private func AllocConsole() int32;
+
+        @DllImport("kernel32.dll")
+        private func FreeConsole() int32;
+
+        func VerifyWindowsConsoleParity(compiler string, directory string, probe string) {
+            FreeConsole()
+            Assert.True(AllocConsole() != 0)
+            try {
+                Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)
+                Console.OutputEncoding = Encoding.GetEncoding(437)
+                let inherited = RunProcess(WorkerProcessClient.CreateStartInfo(probe, "--encoding", "unused"))
+                Assert.Equal("437\nrésumé", inherited.Stdout.Replace("\r\n", "\n").TrimEnd('\n'))
+                let detachedStart = WorkerProcessClient.CreateStartInfo(probe, "--encoding", "unused")
+                detachedStart.CreateNoWindow = true
+                let detached = RunProcess(detachedStart)
+                Assert.NotEqual(inherited.Stdout, detached.Stdout)
+
+                let source = "résumé.gs"
+                File.WriteAllText(
+                    Path.Combine(directory, source),
+                    "open class Sample { func Get() int32 -> missingName }"
+                )
+                let arguments = WithReferences([]string{"/out:result.dll", "/target:library", source})
+                let start = ProcessStartInfo("dotnet"){
+                    UseShellExecute = false,
+                    WorkingDirectory = directory,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                }
+                start.ArgumentList.Add(compiler)
+                for argument in arguments {
+                    start.ArgumentList.Add(argument)
+                }
+                let expected = RunProcess(start)
+                Assert.Equal(1, expected.Exit)
+                let expectedDiagnostics = (expected.Stdout + expected.Stderr).Replace("\r\n", "\n").TrimEnd('\n')
+                Assert.Contains(source, expectedDiagnostics)
+                using let worker = WorkerProcessClient()
+                let output = List[string]()
+                let errors = List[string]()
+                let messages = List[string]()
+                Assert.True(
+                    worker.TryRun(
+                        compiler,
+                        "--compiler-worker",
+                        directory,
+                        arguments,
+                        1,
+                        CancellationToken.None,
+                        (line string) -> output.Add(line),
+                        (line string) -> errors.Add(line),
+                        (line string) -> messages.Add(line),
+                        out var exit
+                    )
+                )
+                Assert.Equal(expected.Exit, exit)
+                Assert.Equal(expectedDiagnostics, string.Join("\n", output.Concat(errors)))
+                Assert.Single(messages.Where((line string) -> line.Contains("worker completed")))
+            } finally {
+                FreeConsole()
+            }
+        }
+
         private func EscapeSource(value string) string -> value.Replace("\\", "\\\\").Replace("\"", "\\\"")
 
         private func BuildProject(project string, directory string)(Exit int32, Log string) {
