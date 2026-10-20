@@ -11,6 +11,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <_ExplicitReference Remove="$(GsharpValuesRuntimeAssemblyFullPath)" />
+    <ProjectReference Include="../Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj" />
     <ProjectReference Include="@(GsharpCore-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
     <ProjectReference Include="../Formatting/GSharp.Formatting/GSharp.Formatting.gsproj" />
   </ItemGroup>

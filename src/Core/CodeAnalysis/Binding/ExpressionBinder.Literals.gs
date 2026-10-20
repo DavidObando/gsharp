@@ -666,6 +666,26 @@ internal partial class ExpressionBinder {
     }
 
     private func BindLiteralExpression(syntax LiteralExpressionSyntax) BoundExpression {
+        if syntax.LiteralToken.Kind == SyntaxKind.ByteStringToken {
+            if !ByteStringTypes.TryResolveDefinition($scope.References!!, out var byteStringType) {
+                Diagnostics.ReportByteStringRuntime(syntax.Location)
+                return BoundErrorExpression(syntax)
+            }
+            let bytes = cast[ImmutableArray[uint8]](syntax.Value!!)
+            let factory = Invariant.Required(
+                ByteStringTypes.GetLiteralFactory(byteStringType),
+                "validated byte-string runtime provides the literal factory",
+                expression: "ByteStringTypes.GetLiteralFactory(byteStringType)"
+            )
+            return BoundClrStaticCallExpression(
+                syntax,
+                factory,
+                TypeSymbol.FromClrTypeWithoutNullability(byteStringType, NullabilityFreeReason.ResolvedTypeName),
+                ImmutableArray.Create[BoundExpression](
+                    BoundLiteralExpression(syntax, Convert.ToHexString(bytes.AsSpan()))
+                )
+            )
+        }
         // Phase 3.C.2: a literal whose syntax value is null is the `nil`
         // literal — preserve null so BoundLiteralExpression picks the Null
         // sentinel type. All other literals default missing values to 0

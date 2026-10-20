@@ -77,6 +77,14 @@ internal shared class TypeClauseCompletions {
         AddSnippet(
             items,
             seen,
+            "bytestring",
+            "bytestring",
+            "Immutable arbitrary bytes with byte indexing and content equality; distinct from CLR string.",
+            "03"
+        )
+        AddSnippet(
+            items,
+            seen,
             "slice[T]",
             "slice[$${1:T}]",
             "Shared managed-array view with independent length and capacity.",

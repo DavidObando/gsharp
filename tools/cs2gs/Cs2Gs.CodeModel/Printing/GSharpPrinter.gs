@@ -1088,6 +1088,22 @@ shared class GSharpPrinter {
 
     private func RenderLiteral(literal LiteralExpression) string {
         switch literal.Kind {
+            case LiteralKind.ByteString {
+                let result = System.Text.StringBuilder("b\"")
+                for value in Convert.FromHexString(literal.Value) {
+                    if value == 34 || value == 92 {
+                        result.Append('\\')
+                        result.Append(char(value))
+                    } else if value >= 32 && value <= 126 {
+                        result.Append(char(value))
+                    } else {
+                        result.Append("\\x")
+                        result.Append(value.ToString("X2", System.Globalization.CultureInfo.InvariantCulture))
+                    }
+                }
+                result.Append('"')
+                return result.ToString()
+            }
             case LiteralKind.String {
                 // Issue #3501: a multiline C# literal (raw/verbatim test
                 // fixture) renders as a Go-style backtick raw string keeping

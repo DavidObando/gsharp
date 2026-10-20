@@ -119,6 +119,7 @@
         "dependencies": {
           "GSharp.Core": "[1.0.0, )",
           "GSharp.Formatting": "[1.0.0, )",
+          "Gsharp.Runtime.Values": "[1.0.0, )",
           "MessagePack": "[2.5.307, )",
           "Microsoft.VisualStudio.Validation": "[17.8.8, )",
           "StreamJsonRpc": "[2.22.11, )"

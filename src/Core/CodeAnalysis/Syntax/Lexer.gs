@@ -30,6 +30,7 @@ class Lexer {
     private var start int32
     private var kind SyntaxKind
     private var value object?
+    private var byteStringSourceChecked bool
 
     // Issue #1677: set by ReadIdentifierOrKeyword when it determines the token is a plain
     // identifier (not a keyword). Lex() reuses this interned string instead of substringing
@@ -402,7 +403,9 @@ class Lexer {
                 ReadWhiteSpace()
             }
             default {
-                if char.IsLetter(Current) || Current == '_' {
+                if Current == 'b' && Lookahead == '"' {
+                    ReadByteString()
+                } else if char.IsLetter(Current) || Current == '_' {
                     ReadIdentifierOrKeyword()
                 } else if char.IsWhiteSpace(Current) {
                     ReadWhiteSpace()
@@ -590,6 +593,156 @@ class Lexer {
         }
         kind = SyntaxKind.StringToken
         value = sb.ToString()
+    }
+
+    private func ReadByteString() {
+        ValidateByteStringSourceEncoding()
+        position += 2
+        let bytes = ImmutableArray.CreateBuilder[uint8]()
+        var terminated = false
+        while position < end && Current != '\r' && Current != '\n' {
+            if Current == '"' {
+                position++
+                terminated = true
+                break
+            }
+            let scalarStart = position
+            var scalar = int64(Current)
+            if Current == '\\' {
+                position++
+                if position >= end || Current == '\r' || Current == '\n' {
+                    break
+                }
+                let escape = Current
+                position++
+                switch escape {
+                    case '0' {
+                        bytes.Add(0)
+                        continue
+                    }
+                    case 'n' {
+                        bytes.Add(10)
+                        continue
+                    }
+                    case 'r' {
+                        bytes.Add(13)
+                        continue
+                    }
+                    case 't' {
+                        bytes.Add(9)
+                        continue
+                    }
+                    case '\\' {
+                        bytes.Add(92)
+                        continue
+                    }
+                    case '"' {
+                        bytes.Add(34)
+                        continue
+                    }
+                    case 'x', 'u', 'U' {
+                        let count = if escape == 'x' {
+                            2
+                        } else if escape == 'u' {
+                            4
+                        } else {
+                            8
+                        }
+                        scalar = 0
+                        var consumed = 0
+                        while consumed < count && IsHexDigit(Current) {
+                            scalar = (scalar << 4) | int64(HexValue(Current))
+                            consumed++
+                            position++
+                        }
+                        if consumed != count {
+                            Diagnostics.ReportByteStringLiteral(
+                                TextLocation(text, TextSpan(scalarStart, position - scalarStart)),
+                                "The escape requires exactly $count hexadecimal digits."
+                            )
+                            continue
+                        }
+                        if escape == 'x' {
+                            bytes.Add(uint8(scalar))
+                            continue
+                        }
+                    }
+                    default {
+                        Diagnostics.ReportByteStringLiteral(
+                            TextLocation(text, TextSpan(scalarStart, Math.Min(position, end) - scalarStart)),
+                            "Unknown byte-string escape."
+                        )
+                        continue
+                    }
+                }
+            } else {
+                position++
+                if char.IsHighSurrogate(char(scalar)) && char.IsLowSurrogate(Current) {
+                    scalar = char.ConvertToUtf32(char(scalar), Current)
+                    position++
+                }
+            }
+            if scalar > 0x10FFFF || (scalar >= 0xD800 && scalar <= 0xDFFF) {
+                Diagnostics.ReportByteStringLiteral(
+                    TextLocation(text, TextSpan(scalarStart, position - scalarStart)),
+                    "Expected a Unicode scalar; use a byte escape for arbitrary data."
+                )
+                continue
+            }
+            AppendUtf8Scalar(bytes, int32(scalar))
+        }
+        if !terminated {
+            Diagnostics.ReportUnterminatedString(TextLocation(text, TextSpan(start, 2)))
+        }
+        kind = SyntaxKind.ByteStringToken
+        value = bytes.ToImmutable()
+    }
+
+    private func ValidateByteStringSourceEncoding() {
+        if byteStringSourceChecked {
+            return
+        }
+        byteStringSourceChecked = true
+        if text.RawBytes is not{} bytes {
+            return
+        }
+        // Validate the loader's original encoding once, before trusting repaired text.
+        var encoding Encoding = UTF8Encoding(false, true)
+        if bytes.Length >= 4 && bytes[0] == 0xFF && bytes[1] == 0xFE && bytes[2] == 0 && bytes[3] == 0 {
+            encoding = UTF32Encoding(false, false, true)
+        } else if bytes.Length >= 4 && bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0xFE && bytes[3] == 0xFF {
+            encoding = UTF32Encoding(true, false, true)
+        } else if bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
+            encoding = UnicodeEncoding(false, false, true)
+        } else if bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
+            encoding = UnicodeEncoding(true, false, true)
+        }
+        try {
+            encoding.GetCharCount(bytes)
+        } catch (_ DecoderFallbackException) {
+            Diagnostics.ReportByteStringLiteral(
+                TextLocation(text, TextSpan(start, 2)),
+                "The source file contains invalid encoded characters; byte literals cannot use repaired source text."
+            )
+        }
+    }
+
+    private func AppendUtf8Scalar(bytes ImmutableArray[uint8].Builder, scalar int32) {
+        if scalar <= 0x7F {
+            bytes.Add(uint8(scalar))
+        } else if scalar <= 0x7FF {
+            bytes.Add(uint8(0xC0 | (scalar >> 6)))
+            bytes.Add(uint8(0x80 | (scalar & 0x3F)))
+        } else if scalar <= 0xFFFF {
+            bytes.Add(uint8(0xE0 | (scalar >> 12)))
+            bytes.Add(uint8(0x80 | ((scalar >> 6) & 0x3F)))
+            bytes.Add(uint8(0x80 | (scalar & 0x3F)))
+        } else {
+            bytes.Add(uint8(0xF0 | (scalar >> 18)))
+            bytes.Add(uint8(0x80 | ((scalar >> 12) & 0x3F)))
+            bytes.Add(uint8(0x80 | ((scalar >> 6) & 0x3F)))
+            bytes.Add(uint8(0x80 | (scalar & 0x3F)))
+        }
     }
 
     private func ReadString() {
@@ -818,6 +971,20 @@ class Lexer {
                 Diagnostics.ReportUnterminatedInterpolationHole(loc)
                 return false
             }
+            if c == 'b' && Lookahead == '"' {
+                position++
+                if !SkipInterpolationNestedLiteral('"', interpolate: false) {
+                    return false
+                }
+                continue
+            }
+            if char.IsLetter(c) || c == '_' || (c == '$' && (char.IsLetter(Lookahead) || Lookahead == '_')) {
+                position++
+                while char.IsLetterOrDigit(Current) || Current == '_' {
+                    position++
+                }
+                continue
+            }
             if c == '"' || c == '\'' {
                 if !SkipInterpolationNestedLiteral(c) {
                     // Issue #1602: a nested hole ran past the nesting limit —
@@ -879,10 +1046,11 @@ class Lexer {
     /// `${ … }` interpolation; a single-quoted char literal uses backslash
     /// escapes. (cref:position) starts on the opening delimiter.
     /// @param quote The opening delimiter (`"` or `'`).
+    /// @param interpolate Whether a nested double-quoted literal admits interpolation holes.
     /// @returns `false` when a nested interpolation hole
     /// exceeded the nesting limit (issue #1602), so the caller must abandon
     /// its own scan; `true` otherwise.
-    private func SkipInterpolationNestedLiteral(quote char) bool {
+    private func SkipInterpolationNestedLiteral(quote char, interpolate bool = true) bool {
         position++ // consume opening delimiter
         if quote == '"' {
             while Current != '\u0000' && Current != '\r' && Current != '\n' {
@@ -894,7 +1062,7 @@ class Lexer {
                     position++ // closing quote
                     return true
                 }
-                if Current == '$' && Lookahead == '{' {
+                if interpolate && Current == '$' && Lookahead == '{' {
                     position += 2 // consume nested '${'
                     if !ScanInterpolationHole(position) {
                         // Issue #1602: propagate the nested failure so every

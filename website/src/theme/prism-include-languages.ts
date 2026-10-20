@@ -50,7 +50,7 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
   // binder but resolve to the canonical names — we highlight both so source
   // that uses either spelling renders consistently.
   const builtinTypes =
-    /\b(?:bool|byte|char|decimal|double|float|float32|float64|int|int8|int16|int32|int64|long|nint|nuint|object|sbyte|short|string|uint|uint8|uint16|uint32|uint64|ulong|ushort|void)\b/;
+    /\b(?:bool|byte|bytestring|char|decimal|double|float|float32|float64|int|int8|int16|int32|int64|long|nint|nuint|object|sbyte|short|string|uint|uint8|uint16|uint32|uint64|ulong|ushort|void)\b/;
 
   Prism.languages.gsharp = {
     comment: [
@@ -68,6 +68,18 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
       pattern: /`[^`]*`/,
       greedy: true,
       alias: 'string',
+    },
+    'byte-string': {
+      pattern: /(^|[^\p{L}\p{N}_$])b"(?:\\.|[^"\\\r\n])*"/u,
+      lookbehind: true,
+      greedy: true,
+      alias: 'string',
+      inside: {
+        'byte-escape': {
+          pattern: /\\(?:["\\0nrt]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})/,
+          alias: 'char',
+        },
+      },
     },
     // Interpolated/regular double-quoted strings with escapes and ${...} holes.
     string: {

@@ -324,6 +324,10 @@ internal class PatternBinder {
     ) BoundPattern {
         var expression = bindExpression(syntax.Expression)
         expressionResolved = !(expression is BoundErrorExpression) && expression.Type != TypeSymbol.Error
+        if ByteStringTypes.IsDefinition(expression.Type.ClrType) {
+            Diagnostics.ReportSwitchCaseValueNotConstant(syntax.Expression.Location)
+            return BoundConstantPattern(syntax, discriminantType, BoundErrorExpression(syntax))
+        }
         // Issue #1157: adapt a constant integer LITERAL case label that fits the
         // discriminant's integer type to that type, mirroring the constant
         // adaptation #1144 restored for binary operators. Without this, a literal

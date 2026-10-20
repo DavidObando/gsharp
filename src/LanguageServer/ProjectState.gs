@@ -152,8 +152,9 @@ open class ProjectState {
     /// in-memory buffer (e.g. successive diagnostic / hover pulls).
     /// @param filePath Absolute path to the `.gs` file.
     /// @param text The current text content of the file.
+    /// @param rawBytes Original file bytes, when loaded from disk rather than an editor buffer.
     /// @returns The parsed (cref:SyntaxTree).
-    func UpdateFile(filePath string, text string) SyntaxTree {
+    func UpdateFile(filePath string, text string, rawBytes[]?uint8 = nil) SyntaxTree {
         let key = NormalizePath(filePath)
         if syntaxTrees.TryGetValue(key, out var existing) &&
             existing
@@ -161,10 +162,12 @@ open class ProjectState {
             ?.FileName == filePath &&
             existing
             .Text
-            .ToString() == text {
+            .ToString() == text && (rawBytes ?? Array.Empty[uint8]()).SequenceEqual(
+            existing.Text.RawBytes ?? Array.Empty[uint8]()
+        ) {
             return existing
         }
-        let sourceText = SourceText.From(text, filePath)
+        let sourceText = SourceText.From(text, filePath, rawBytes)
         let tree = SyntaxTree.Parse(sourceText)
         syntaxTrees[key] = tree
         Invalidate()
@@ -177,7 +180,7 @@ open class ProjectState {
     func AddFileFromDisk(filePath string) SyntaxTree? {
         try {
             let text = File.ReadAllText(filePath)
-            return UpdateFile(filePath, text)
+            return UpdateFile(filePath, text, File.ReadAllBytes(filePath))
         } catch (IOException) {
             return nil
         } catch (UnauthorizedAccessException) {

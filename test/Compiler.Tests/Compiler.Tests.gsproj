@@ -7,6 +7,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Exercise this checkout's runtime, not the pin's implicit runtime reference. -->
+    <_ExplicitReference Remove="$(GsharpValuesRuntimeAssemblyFullPath)" />
+    <ProjectReference Include="../../src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj" />
     <ProjectReference Include="@(GsharpCompiler-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
     <ProjectReference Include="@(GsharpRepl-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\Sdk\Gsharp.Extensions\Gsharp.Extensions.csproj" ReferenceOutputAssembly="false" />

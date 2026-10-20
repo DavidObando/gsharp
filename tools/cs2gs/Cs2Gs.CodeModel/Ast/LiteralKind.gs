@@ -12,5 +12,6 @@ enum LiteralKind {
     RawString,
     Bool,
     Char,
-    Null
+    Null,
+    ByteString
 }

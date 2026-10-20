@@ -4151,6 +4151,20 @@ class Binder {
             return MapTypeSymbol.Get(keyType, valueType)
         }
         if !syntax.HasQualifier &&
+            !syntax.HasTypeArguments &&
+            syntax.Identifier is {Text: "bytestring"} byteStringName &&
+            binderCtx
+            .CanUseIntrinsicAlias($scope, byteStringName, function) {
+            if !ByteStringTypes.TryResolveDefinition($scope.References!!, out var byteStringType) {
+                Diagnostics.ReportByteStringRuntime(byteStringName.Location)
+                return nil
+            }
+            return ApplyArraySuffix(
+                syntax,
+                TypeSymbol.FromClrTypeWithoutNullability(byteStringType, NullabilityFreeReason.ResolvedTypeName)
+            )
+        }
+        if !syntax.HasQualifier &&
             syntax.HasTypeArguments &&
             syntax.Identifier is {Text: "managed"} managedName &&
             binderCtx

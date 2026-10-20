@@ -11,6 +11,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Ship this checkout's runtime rather than the pin's implicit copy. -->
+    <_ExplicitReference Remove="$(GsharpValuesRuntimeAssemblyFullPath)" />
     <ProjectReference Include="@(GsharpCore-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
     <!-- ADR-0174 D1: ship the channel runtime next to gsc so the driver probe
          (ReferenceResolver.ResolveDriverReferencePaths) finds it outside MSBuild. -->

@@ -556,6 +556,17 @@ internal partial class ExpressionBinder {
                 // delegate to a helper that resolves the rightPart against
                 // the constraint interface's static-virtual table.
                 return BindTypeParameterStaticAccessorStep(tpSym, leftName, rightPart)
+            } else if leftName.IdentifierToken.Text == "bytestring" && binderCtx.CanUseIntrinsicAlias(
+                $scope,
+                leftName.IdentifierToken,
+                getCurrentFunction(),
+                expression: true
+            ) {
+                if !ByteStringTypes.TryResolveDefinition($scope.References!!, out var byteStringType) {
+                    Diagnostics.ReportByteStringRuntime(leftName.Location)
+                    return BoundErrorExpression(syntax)
+                }
+                classSymbol = ImportedClassSymbol(byteStringType, leftName, references: $scope.References)
             } else if TryResolvePredefinedTypeReceiver(name, leftName, out var predefinedClass) {
                 // Issue #919: a lowercase predefined primitive type alias used as
                 // the receiver of a static member access (e.g. `string.Empty`,

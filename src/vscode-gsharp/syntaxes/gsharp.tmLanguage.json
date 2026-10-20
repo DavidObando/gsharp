@@ -48,8 +48,25 @@
     },
     "strings": {
       "patterns": [
+        { "include": "#byte-string" },
         { "include": "#interpreted-string" },
         { "include": "#raw-string" }
+      ]
+    },
+    "byte-string": {
+      "name": "string.quoted.byte.gsharp",
+      "begin": "(?<![\\w$])b\"",
+      "end": "\"|(?=$)",
+      "applyEndPatternLast": true,
+      "patterns": [
+        {
+          "name": "constant.character.escape.gsharp",
+          "match": "\\\\([\"\\\\0nrt]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})"
+        },
+        {
+          "name": "invalid.illegal.unrecognized-string-escape.gsharp",
+          "match": "\\\\."
+        }
       ]
     },
     "interpreted-string": {
@@ -331,7 +348,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.gsharp",
-          "match": "\\b(bool|uint8|int8|int16|uint16|int32|uint32|int64|uint64|nint|nuint|float32|float64|decimal|char|string|object|void|byte|sbyte|short|ushort|int|uint|long|ulong|float|double)\\b"
+          "match": "\\b(bool|uint8|int8|int16|uint16|int32|uint32|int64|uint64|nint|nuint|float32|float64|decimal|char|string|bytestring|object|void|byte|sbyte|short|ushort|int|uint|long|ulong|float|double)\\b"
         }
       ]
     },

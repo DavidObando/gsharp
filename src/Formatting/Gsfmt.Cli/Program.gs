@@ -98,14 +98,16 @@ internal shared class Program {
         var failed = false
         for path in files {
             var original string
+            var sourceText SourceText
             try {
                 original = File.ReadAllText(path)
+                sourceText = SourceText.From(original, path, File.ReadAllBytes(path))
             } catch (ex Exception) when ex is IOException || ex is UnauthorizedAccessException {
                 Console.Error.WriteLine("gsfmt: $path: ${ex.Message}")
                 failed = true
                 continue
             }
-            let result = GSharpFormatter.Format(SourceText.From(original, path))
+            let result = GSharpFormatter.Format(sourceText)
             if !result.Diagnostics.IsEmpty {
                 PrintDiagnostics(path, result)
                 failed = true

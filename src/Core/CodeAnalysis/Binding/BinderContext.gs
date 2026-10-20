@@ -428,6 +428,9 @@ internal class BinderContext {
         currentFunction FunctionSymbol?,
         expression bool = false
     ) bool {
+        if CurrentTypeParameters?.ContainsKey(identifier.ValueText) ?? false {
+            return false
+        }
         if TryLookupSourceType($scope, identifier.ValueText, -1, currentFunction, out _, out var ambiguous) ||
             ambiguous ||
             $scope.HasImportedTypeName(identifier.ValueText) {
