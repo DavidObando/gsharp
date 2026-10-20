@@ -3081,7 +3081,7 @@ internal partial class ExpressionBinder {
                         }
                         var instCall = ConversionClassifier.AutoDereferenceRefReturn(
                             BoundImportedInstanceCallExpression(
-                                nil,
+                                ce,
                                 callReceiver,
                                 method,
                                 returnType,

@@ -1995,7 +1995,7 @@ abstract class BoundTreeRewriter {
             return node
         }
         return BoundBaseInterfaceCallExpression(
-            nil,
+            node.Syntax,
             receiver,
             node.Interface,
             node.Method,
@@ -2026,7 +2026,7 @@ abstract class BoundTreeRewriter {
             return node
         }
         return BoundBaseClassCallExpression(
-            nil,
+            node.Syntax,
             receiver,
             node.BaseClass,
             node.Method,

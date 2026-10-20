@@ -251,6 +251,14 @@ Receiver type normalization recognizes the binder's exact implicit-conversion
 operand receipt with the original queried syntax; early call anchors must not
 turn an argument conversion into the receiver's logical type or peel authored casts.
 
+Public bound/type queries promote an exact physical completion operand to its
+verified logical completion, including a direct physical syntax-index hit.
+Already-indexed outer conversion/flow nodes remain themselves. Public symbol
+traversal may follow the same receipt across the call/accessor boundary; authored
+waits/awaits have no such edge. Canonical qualifier queries retain the separate
+exact selected physical-read index. Imported instance producers and verified
+base-call copies retain their actual original call syntax before lowering.
+
 Representation-changing constant folding retains the actual selected source
 field read (its `FieldSymbol` and effective closed owner), not just a literal
 value or member name. A verified fold carries that semantic association to

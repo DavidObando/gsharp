@@ -24,6 +24,83 @@ open class Adr0169SemanticModelTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func LogicalCompletion_PublicCallAndAccessorQueries_KeepSourceTypeAndSymbol(array bool) {
+        let source = `package Query
+class Holder {
+    shared {
+        suspend func Read() RESULT_TYPE -> RESULT
+        suspend func Number() int32 -> 1
+    }
+}
+async func Run() {
+    let first = Holder.Read()
+    let converted = cast[object](Holder.Number())
+    let authored = await System.Threading.Tasks.Task.FromResult("authored")
+}
+`.Replace(
+            "RESULT_TYPE",
+            if array {
+                "[]string"
+            } else {
+                "string"
+            }
+        )
+            .Replace(
+            "RESULT",
+            if array {
+                "[]string{\"value\"}"
+            } else {
+                "\"value\""
+            }
+        )
+        let (compilation, model, tree) = CreateQualifierModel(source)
+        let expected = compilation
+            .GlobalScope
+            .Structs
+            .Single((s StructSymbol) -> s.Name == "Holder")
+            .StaticMethods
+            .Single((f FunctionSymbol) -> f.Name == "Read")
+        let root = QualifierInitializer(tree, "first")
+        let call = Assert.IsType[CallExpressionSyntax](root.RightPart)
+        let completion = Assert.IsType[BoundAwaitExpression](model.GetBoundNode(root))
+        let physical = Assert.IsType[BoundCallExpression](completion.LogicalCompletionOperand)
+        Assert.Same(call, physical.Syntax)
+        Assert.NotSame(physical.Type, completion.Type)
+        Assert.Same(completion.Type, model.GetTypeInfo(call).Type)
+        Assert.Same(completion.Type, model.GetTypeInfo(root).Type)
+        Assert.Same(expected, model.GetSymbolInfo(call).Symbol)
+        Assert.Same(expected, model.GetSymbolInfo(root).Symbol)
+        Assert.True(model.TryGetStaticTypeQualifier(root, call, out _, out _, out var selected))
+        Assert.Same(physical, selected)
+        let converted = tree
+            .Root
+            .DescendantNodes()
+            .OfType[VariableDeclarationSyntax]()
+            .Single((v VariableDeclarationSyntax) -> v.Identifier.Text == "converted")
+            .Initializer
+        let conversion = Assert.IsType[BoundConversionExpression](model.GetBoundNode(converted!!))
+        Assert.Same(TypeSymbol.Object, conversion.Type)
+        Assert.Same(TypeSymbol.Object, model.GetTypeInfo(converted!!).Type)
+        Assert.Same(conversion, model.GetBoundNode(converted!!))
+        let authoredSyntax = tree
+            .Root
+            .DescendantNodes()
+            .OfType[VariableDeclarationSyntax]()
+            .Single((v VariableDeclarationSyntax) -> v.Identifier.Text == "authored")
+            .Initializer
+        let authored = Assert.IsType[BoundAwaitExpression](model.GetBoundNode(authoredSyntax!!))
+        Assert.Null(authored.LogicalCompletionOperand)
+        Assert.Same(TypeSymbol.String, model.GetTypeInfo(authoredSyntax!!).Type)
+        Assert.NotSame(
+            TypeSymbol.String,
+            model.GetTypeInfo(Assert.IsType[AwaitExpressionSyntax](authoredSyntax).Expression).Type
+        )
+        Assert.Null(model.GetSymbolInfo(authoredSyntax!!).Symbol)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func CompletionCallSite_ReceiverRoutes_KeepOriginalCallBeforeLowering(extension bool) {
         let source = `package Query
 class Holder {

@@ -52,7 +52,7 @@ class SemanticModel {
     func GetBoundNode(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) BoundNode? {
         cancellationToken.ThrowIfCancellationRequested()
         if index.Value.BoundBySyntax.TryGetValue(node, out var bound) {
-            return bound
+            return PublicCompletionView(bound)
         }
         // A qualified call is split across two syntax nodes in G#: the whole
         // `Receiver.Callee(args)` is an AccessorExpressionSyntax and the binder
@@ -72,7 +72,7 @@ class SemanticModel {
             .Value
             .BoundBySyntax
             .TryGetValue(accessor, out var qualified) {
-            return qualified
+            return PublicCompletionView(qualified)
         }
         // Source-call producers anchor the genuine call before lowering. Keep
         // the established qualified-expression query as the same call-shape
@@ -83,10 +83,23 @@ class SemanticModel {
                 terminal = segment.RightPart
             }
             if terminal is CallExpressionSyntax && index.Value.BoundBySyntax.TryGetValue(terminal, out var namedCall) {
-                return namedCall
+                return PublicCompletionView(namedCall)
             }
         }
         return nil
+    }
+
+    private func PublicCompletionView(bound BoundNode) BoundNode {
+        var current = bound
+        while current is BoundExpression operand &&
+            index
+            .Value
+            .LogicalCompletions
+            .TryGetValue(operand, out var completion) &&
+            completion != nil {
+            current = completion
+        }
+        return current
     }
 
     /// Returns the symbol declared by [`node`](paramref) — the
@@ -115,10 +128,17 @@ class SemanticModel {
     /// @returns The resolution result; (cref:SymbolInfo.Symbol) is null when nothing is referenced.
     func GetSymbolInfo(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) SymbolInfo {
         var bound BoundNode? = GetBoundNode(node, cancellationToken)
-        for var depth = 0; bound != nil && depth < 16; depth++ {
-            let accessors = GetAccessors(bound.GetType())
+        for var depth = 0; depth < 16; depth++ {
+            if bound is not{} current {
+                break
+            }
+            if current is BoundExpression{LogicalCompletionOperand: {} operand} {
+                bound = operand
+                continue
+            }
+            let accessors = GetAccessors(current.GetType())
             for getter in accessors.SymbolProperties {
-                if (getter(bound) is Symbol symbol and not TypeSymbol) {
+                if (getter(current) is Symbol symbol and not TypeSymbol) {
                     return SymbolInfo(symbol)
                 }
             }
@@ -129,9 +149,9 @@ class SemanticModel {
             // nested CallExpressionSyntax while every bound node in the wrapper
             // chain carries the enclosing AccessorExpressionSyntax.
             var sameSyntaxChild BoundNode? = nil
-            let boundSyntax = bound.Syntax ?? node
+            let boundSyntax = current.Syntax ?? node
             for getter in accessors.BoundNodeProperties {
-                if getter(bound) is BoundNode child && object.ReferenceEquals(child.Syntax, boundSyntax) {
+                if getter(current) is BoundNode child && object.ReferenceEquals(child.Syntax, boundSyntax) {
                     sameSyntaxChild = child
                     break
                 }
@@ -215,7 +235,8 @@ class SemanticModel {
     private data class Index(
         BoundBySyntax Dictionary[SyntaxNode, BoundNode],
         DeclaredBySyntax Dictionary[SyntaxNode, Symbol],
-        StaticQualifierReads Dictionary[SyntaxNode, BoundExpression?]
+        StaticQualifierReads Dictionary[SyntaxNode, BoundExpression?],
+        LogicalCompletions Dictionary[BoundExpression, BoundExpression?]
     ) : IEquatable[SemanticModel.Index] { }
 
     /// Records the outermost bound node per syntax node (first-win in a
@@ -226,17 +247,20 @@ class SemanticModel {
         private let boundBySyntax Dictionary[SyntaxNode, BoundNode]
         private let declaredBySyntax Dictionary[SyntaxNode, Symbol]
         private let staticQualifierReads Dictionary[SyntaxNode, BoundExpression?]
+        private let logicalCompletions Dictionary[BoundExpression, BoundExpression?]
 
         init(
             tree SyntaxTree,
             boundBySyntax Dictionary[SyntaxNode, BoundNode],
             declaredBySyntax Dictionary[SyntaxNode, Symbol],
-            staticQualifierReads Dictionary[SyntaxNode, BoundExpression?]
+            staticQualifierReads Dictionary[SyntaxNode, BoundExpression?],
+            logicalCompletions Dictionary[BoundExpression, BoundExpression?]
         ) {
             this.tree = tree
             this.boundBySyntax = boundBySyntax
             this.declaredBySyntax = declaredBySyntax
             this.staticQualifierReads = staticQualifierReads
+            this.logicalCompletions = logicalCompletions
         }
 
         override func Visit(node BoundNode?) {
@@ -266,6 +290,16 @@ class SemanticModel {
             if node.Syntax is {} syntax && object.ReferenceEquals(syntax.SyntaxTree, tree) &&
                 !boundBySyntax.ContainsKey(syntax) {
                 boundBySyntax.Add(syntax, node)
+            }
+            if node is BoundExpression{LogicalCompletionOperand: {} operand} completion &&
+                operand.Syntax is {} origin &&
+                object
+                .ReferenceEquals(origin.SyntaxTree, tree) {
+                if !logicalCompletions.TryGetValue(operand, out var existingCompletion) {
+                    logicalCompletions.Add(operand, completion)
+                } else if !object.ReferenceEquals(existingCompletion, completion) {
+                    logicalCompletions[operand] = nil
+                }
             }
             if node is BoundExpression{StaticMemberSyntax: {} member, StaticQualifierType: not nil} expression &&
                 object
@@ -299,12 +333,13 @@ class SemanticModel {
             let boundBySyntax = Dictionary[SyntaxNode, BoundNode](ReferenceEqualityComparer.Instance)
             let declaredBySyntax = Dictionary[SyntaxNode, Symbol](ReferenceEqualityComparer.Instance)
             let staticQualifierReads = Dictionary[SyntaxNode, BoundExpression?](ReferenceEqualityComparer.Instance)
+            let logicalCompletions = Dictionary[BoundExpression, BoundExpression?](ReferenceEqualityComparer.Instance)
             let program = compilation.BoundProgram
             let globalScope = compilation.GlobalScope
             for symbol in EnumerateDeclaredSymbols(program, globalScope) {
                 RecordDeclarations(symbol, tree, declaredBySyntax)
             }
-            let walker = IndexingWalker(tree, boundBySyntax, declaredBySyntax, staticQualifierReads)
+            let walker = IndexingWalker(tree, boundBySyntax, declaredBySyntax, staticQualifierReads, logicalCompletions)
             for (function, body) in program.Functions {
                 if function.Declaration is {} declaration && !object.ReferenceEquals(declaration.SyntaxTree, tree) {
                     continue
@@ -312,7 +347,7 @@ class SemanticModel {
                 walker.Visit(body)
             }
             walker.Visit(program.Statement)
-            return SemanticModel.Index(boundBySyntax, declaredBySyntax, staticQualifierReads)
+            return SemanticModel.Index(boundBySyntax, declaredBySyntax, staticQualifierReads, logicalCompletions)
         }
 
         private func EnumerateDeclaredSymbols(program BoundProgram, globalScope BoundGlobalScope) sequence[Symbol] {

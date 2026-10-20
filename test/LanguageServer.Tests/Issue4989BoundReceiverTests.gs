@@ -26,6 +26,183 @@ import Xunit
 /// a same-named member of one implementation.
 open class Issue4989BoundReceiverTests {
     @Theory
+    @InlineData(0, false)
+    @InlineData(0, true)
+    @InlineData(1, false)
+    @InlineData(1, true)
+    @InlineData(2, false)
+    @InlineData(2, true)
+    func Issue5035_ImportedAndBaseLoweredArgument_PublishesAwait(mode int32, asyncCaller bool) {
+        let root = Path.Combine(
+            Directory.GetCurrentDirectory(),
+            "issue5035-imported-completion-" + Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(root)
+        try {
+            let assemblyPath = Path.Combine(root, "CompletionContracts.dll")
+            EmitClrFixture(assemblyPath, `using System.Threading.Tasks;
+using Gsharp.Concurrency;
+namespace CompletionContracts {
+    public class Api {
+        [Suspending] public ValueTask<string> Read(int value, Context context = default) => new("selected");
+        public string Read(string value) => "decoy";
+    }
+}`, []string{
+                    Path.Combine(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "System.Runtime.dll"),
+                    typeof(Gsharp.Concurrency.SuspendingAttribute).Assembly.Location
+                })
+            let source = `package Repro
+BASE_DECLARATION
+class Holder BASE_TYPE {
+    prop Value int32 { get; set; }
+    CALLERfunc Run(PARAMETER) {
+        let competing = System.Text.StringBuilder().ToString()
+        let indexed = RECEIVER.Read(this.Value).ToString()[^1]
+    }
+}
+`.Replace(
+                "BASE_DECLARATION",
+                if mode == 2 {
+                    "open class SourceBase { suspend func Read(value int32) string -> \"selected\" }"
+                } else {
+                    ""
+                }
+            ).Replace(
+                "BASE_TYPE",
+                if mode == 0 {
+                    ""
+                } else if mode == 1 {
+                    ": CompletionContracts.Api"
+                } else {
+                    ": SourceBase"
+                }
+            ).Replace(
+                "CALLER",
+                if asyncCaller {
+                    "async "
+                } else {
+                    ""
+                }
+            ).Replace(
+                "PARAMETER",
+                if mode == 0 {
+                    "api CompletionContracts.Api"
+                } else {
+                    ""
+                }
+            ).Replace(
+                "RECEIVER",
+                if mode == 0 {
+                    "api"
+                } else {
+                    "base"
+                }
+            )
+            let path = Path.Combine(root, "Consumer.gs")
+            File.WriteAllText(path, source)
+            let project = ProjectState(Path.Combine(root, "Consumer.gsproj"))
+            project.References = []string{
+                assemblyPath,
+                typeof(Gsharp.Concurrency.SuspendingAttribute).Assembly.Location
+            }
+            let tree = project.UpdateFile(path, source)
+            let content = DocumentContent(
+                tree,
+                Enumerable.Range(0, source.Length).Where((i int32) -> source[i] == '\n').ToList(),
+                project,
+                WorkspaceState()
+            )
+            let compilation = project.GetCompilation()
+            Assert.Empty(compilation.GlobalScope.Diagnostics)
+            Assert.Empty(compilation.BoundProgram.Diagnostics)
+            let owner = compilation.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Holder")
+            let run = owner.Methods.Single((f FunctionSymbol) -> f.Name == "Run")
+            if !asyncCaller {
+                Assert.Equal("Inferred", run.SuspendingKind.ToString())
+            }
+            let expression = Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "indexed =", 0).Parent)
+                .Initializer
+            let plan = Assert.IsType[BoundBlockExpression](
+                compilation.GetSemanticModel(tree).GetBoundNode(expression!!)
+            )
+            let following = Assert.IsType[BoundImportedInstanceCallExpression](
+                Assert.IsType[BoundVariableDeclaration](plan.Statements[0]).Initializer
+            )
+            let completion = Assert.IsType[BoundAwaitExpression](following.Receiver)
+            let token = TokenAt(content, source, "Read(this.Value)", 0)
+            Assert.Same(token.Parent, completion.Expression.Syntax)
+            var argument BoundExpression
+            if mode == 2 {
+                let selected = Assert.IsType[BoundBaseClassCallExpression](completion.Expression)
+                let expected = compilation
+                    .GlobalScope
+                    .Structs
+                    .Single((s StructSymbol) -> s.Name == "SourceBase")
+                    .Methods
+                    .Single((f FunctionSymbol) -> f.Name == "Read")
+                Assert.Same(expected, selected.Method)
+                Assert.Same(expected, BoundSemantics.GetSymbol(compilation, token))
+                argument = selected.Arguments[0]
+                let definition = Assert.IsType[Location](
+                    DefinitionComputer.ComputeDefinition(
+                        DocumentUri.FromFileSystemPath(path)!!,
+                        content,
+                        LanguageServerTestHelpers.PositionOf(source, "Read(this.Value)")
+                    )
+                )
+                let declaration = LanguageServerTestHelpers.PositionOf(source, "Read(value int32)")
+                AssertPosition(declaration, definition.Range.Start)
+            } else {
+                let selected = Assert.IsType[BoundImportedInstanceCallExpression](completion.Expression)
+                Assert.Equal("CompletionContracts.Api", selected.Method.DeclaringType?.FullName)
+                Assert.Equal("System.Int32", selected.Method.GetParameters()[0].ParameterType.FullName)
+                Assert.Equal("CompletionContracts", selected.Method.Module.Assembly.GetName().Name)
+                Assert.Equal(selected.Method, BoundSemantics.GetImportedMember(compilation, token))
+                argument = selected.Arguments[0]
+            }
+            Assert.Same(
+                owner.Properties.Single((p PropertySymbol) -> p.Name == "Value").BackingField,
+                Assert.IsType[BoundFieldAccessExpression](argument).Field
+            )
+            Assert.Equal(
+                "System.String",
+                BoundSemantics
+                    .GetExpressionType(compilation, Assert.IsType[CallExpressionSyntax](token.Parent))
+                    ?.ClrType
+                    ?.FullName
+            )
+            Assert.Equal("System.String", following.Method.DeclaringType?.FullName)
+            Assert.Equal("ToString", following.Method.Name)
+            Assert.Empty(following.Method.GetParameters())
+            Assert.Equal(
+                following.Method,
+                BoundSemantics.GetImportedMember(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+            )
+            AssertIndexedHover(
+                content,
+                LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]"),
+                "ToString",
+                "func (string) ToString() string"
+            )
+            Assert.DoesNotContain(
+                compilation.BoundProgram.Functions[run].DescendantsAndSelf().OfType[BoundImportedCallExpression](),
+                (c BoundImportedCallExpression) ->
+                c
+                    .Function
+                    .Method
+                    .DeclaringType
+                    ?.FullName == "Gsharp.Concurrency.Blocking" &&
+                    c
+                    .Function
+                    .Method
+                    .Name == "Wait"
+            )
+        } finally {
+            Directory.Delete(root, recursive: true)
+        }
+    }
+
+    @Theory
     @InlineData(false, false)
     @InlineData(true, false)
     @InlineData(false, true)
@@ -2971,15 +3148,14 @@ async func Run(mac bool, linux bool) {
 `
 
         /// Compiles a native C# contract into [`assemblyPath`](paramref).
-        private func EmitClrFixture(assemblyPath string, source string) {
+        private func EmitClrFixture(assemblyPath string, source string, references([]string)? = nil) {
             let fixture = CSharpCompilation.Create(
                 Path.GetFileNameWithoutExtension(assemblyPath),
                 []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(source)},
-                []Microsoft
-                    .CodeAnalysis
-                    .PortableExecutableReference{
-                    Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(typeof(object).Assembly.Location)
-                },
+                (references ?? []string{})
+                    .Prepend(typeof(object).Assembly.Location)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Select((path string) -> Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(path)),
                 CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary)
             )
             using let stream = File.Create(assemblyPath)

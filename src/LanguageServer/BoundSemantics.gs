@@ -796,6 +796,7 @@ shared class BoundSemantics {
     private func ReferencedSymbol(node BoundExpression) Symbol? -> switch node {
         case variable is BoundVariableExpression: variable.Variable
         case call is BoundCallOperationExpression: call.CalledFunction
+        case baseCall is BoundBaseClassCallExpression: baseCall.Method ?? cast[Symbol?](baseCall.Property)
         case property is BoundPropertyReferenceOperationExpression: property.ReferencedProperty
         case field is BoundFieldAccessExpression: ReferencedFieldSymbol(field)
         case literal is BoundLiteralExpression when literal.StaticEnumMember != nil: literal.StaticEnumMember
@@ -822,6 +823,8 @@ shared class BoundSemantics {
             case call is BoundCallExpression: call.Function
             case constrained is BoundConstrainedStaticCallExpression: constrained.InterfaceMethod
             case userCall is BoundUserInstanceCallExpression: userCall.Method
+            case baseCall is BoundBaseClassCallExpression: baseCall.Method ?? cast[Symbol?](baseCall.Property)
+            case baseCall is BoundBaseInterfaceCallExpression: baseCall.Method
             // A read through a constructed generic interface keeps the
             // declaration's property and records the substituted type beside
             // it; show the property at that type. References still match it
