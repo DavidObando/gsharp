@@ -383,24 +383,44 @@ shared class BoundSemantics {
                     propertyOwner
                 )
             }
-            if read is BoundFieldAccessExpression{Receiver: nil, Field: {IsStatic: true}} field &&
-                TypeMemberModel
-                .TryGetStaticFieldIncludingInherited(owner, name, out var expectedField, out var fieldOwner) {
+        }
+        if read is BoundFieldAccessExpression{Receiver: nil, Field: {IsStatic: true}} field {
+            if sourceType is StructSymbol owner && TypeMemberModel.TryGetStaticFieldIncludingInherited(
+                owner,
+                name,
+                out var expectedField,
+                out var fieldOwner
+            ) {
                 return object.ReferenceEquals(field.Field, expectedField) && object.ReferenceEquals(
                     field.StructType,
                     fieldOwner
                 )
             }
+            if sourceType is InterfaceSymbol contract {
+                return object.ReferenceEquals(field.InterfaceType, contract) && object.ReferenceEquals(
+                    field.Field,
+                    (contract.Definition ?? contract).GetStaticField(name)
+                )
+            }
         }
-        if read is BoundCallExpression call &&
-            call
-            .Function
-            .IsStatic &&
-            sourceType != nil &&
-            TypeMemberModel
-            .GetMethods(sourceType, name, MemberQuery.InheritedStatic(MemberKinds.Method)).Any(
-            (candidate FunctionSymbol) -> object.ReferenceEquals(candidate, call.Function)
-        ) {
+        if read is BoundCallExpression call && call.Function.IsStatic && sourceType != nil {
+            if sourceType is InterfaceSymbol contract &&
+                member is NameExpressionSyntax &&
+                TypeMemberModel.TryGetPropertyWithOwner(contract, name, out var property, out var propertyOwner) &&
+                property.IsStatic &&
+                property
+                .HasGetter {
+                return object.ReferenceEquals(property.GetterSymbol, call.Function) && object.ReferenceEquals(
+                    propertyOwner,
+                    contract
+                ) &&
+                    object.ReferenceEquals(call.StaticGenericInterfaceOwnerType, propertyOwner)
+            }
+            if !TypeMemberModel.GetMethods(sourceType, name, MemberQuery.InheritedStatic(MemberKinds.Method)).Any(
+                (candidate FunctionSymbol) -> object.ReferenceEquals(candidate, call.Function)
+            ) {
+                return false
+            }
             let declaredOwner = call.Function.StaticOwnerType ?? call.Function.ContainingType
             if sourceType is StructSymbol owner && declaredOwner is StructSymbol declaredStruct {
                 let effectiveOwner = TypeMemberModel.ResolveStaticMemberOwner(owner, declaredStruct)

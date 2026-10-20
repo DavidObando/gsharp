@@ -735,6 +735,118 @@ func Run(h Holder, Items int32) string {
     }
 
     @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func Issue5035_InterfaceStaticSlots_PreserveIndexedMethod(property bool, generic bool) {
+        let source = `package Repro
+interface IStateTYPE_PARAMETERS {
+    shared {
+        MEMBER
+    }
+}
+func Run() {
+    let unrelated = System.Text.StringBuilder().ToString()
+    let plain = IStateTYPE_ARGUMENTS.Value
+    let result = IStateTYPE_ARGUMENTS.Value.ToString()[^1]
+}
+`.Replace(
+            "TYPE_PARAMETERS",
+            if generic {
+                "[T]"
+            } else {
+                ""
+            }
+        ).Replace(
+            "TYPE_ARGUMENTS",
+            if generic {
+                "[int32?]"
+            } else {
+                ""
+            }
+        ).Replace(
+            "MEMBER",
+            if property {
+                "prop Value string { get -> \"right\" }"
+            } else {
+                "var Value int32 = 1"
+            }
+        )
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let model = compilation.GetSemanticModel(content.SyntaxTree)
+        let root = Assert.IsType[AccessorExpressionSyntax](
+            Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "result =", 0).Parent).Initializer
+        )
+        let capture = Assert.IsType[BoundVariableDeclaration](
+            Assert.IsType[BoundBlockExpression](model.GetBoundNode(root)).Statements[0]
+        )
+        let call = Assert.IsType[BoundImportedInstanceCallExpression](capture.Initializer)
+        var owner InterfaceSymbol
+        var expected Symbol
+        if property {
+            let getter = Assert.IsType[BoundCallExpression](call.Receiver)
+            owner = Assert.IsType[InterfaceSymbol](getter.StaticGenericInterfaceOwnerType)
+            let slot = (owner.Definition ?? owner).Properties.Single((p PropertySymbol) -> p.Name == "Value")
+            Assert.True(slot.IsStatic)
+            Assert.Same(slot.GetterSymbol, getter.Function)
+            Assert.True(getter.MethodTypeArguments.IsDefaultOrEmpty)
+            Assert.True(TypeMemberModel.TryGetPropertyWithOwner(owner, slot, out var canonical, out var declaredOwner))
+            Assert.Same(slot, canonical)
+            Assert.Same(owner, declaredOwner)
+            let plainRoot = Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "plain =", 0).Parent)
+                .Initializer
+            Assert.Same(slot.GetterSymbol, Assert.IsType[BoundCallExpression](model.GetBoundNode(plainRoot!!)).Function)
+            expected = slot
+        } else {
+            let field = Assert.IsType[BoundFieldAccessExpression](call.Receiver)
+            owner = Assert.IsType[InterfaceSymbol](field.InterfaceType)
+            expected = Assert.IsType[FieldSymbol]((owner.Definition ?? owner).GetStaticField("Value"))
+            Assert.Same(expected, field.Field)
+            Assert.True(field.Field.IsStatic)
+            Assert.Null(field.Receiver)
+        }
+        if generic {
+            Assert.Same(
+                TypeSymbol.Int32,
+                Assert.IsType[NullableTypeSymbol](Assert.Single(owner.TypeArguments)).UnderlyingType
+            )
+            Assert.NotSame(owner.Definition, owner)
+        }
+        let method = (
+            if property {
+                typeof(string)
+            } else {
+                typeof(int32)
+            }
+        ).GetMethod("ToString", Type.EmptyTypes)
+        Assert.Equal(method, call.Method)
+        let token = TokenAt(content, source, "ToString()[^1]", 0)
+        Assert.Equal(method, BoundSemantics.GetImportedMember(compilation, token))
+        Assert.True(
+            ImportedClrMemberResolver.TryResolveClrMember(content.SyntaxTree, compilation, token, out var metadata)
+        )
+        Assert.Equal(method, metadata)
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]"),
+            "ToString",
+            if property {
+                "func (string) ToString() string"
+            } else {
+                "func (int32) ToString() string"
+            }
+        )
+        if !property {
+            let member = TokenAt(content, source, "Value.ToString()[^1]", 0)
+            Assert.Same(expected, SemanticLookup.ResolveSymbol(compilation, member))
+        }
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func Issue5035_StaticInterfaceChain_PreservesSelectedMethods(generic bool) {
