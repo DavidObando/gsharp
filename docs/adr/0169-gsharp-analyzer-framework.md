@@ -203,6 +203,13 @@ Arbitrary virtual replacements, changed members and unrelated authored nodes
 do not inherit that authority. Original nodes and published snapshots are not
 repaired or mutated by copying or querying.
 
+Inference reconstruction of a callee marked suspending uses that same checked
+selected-call association, including its actual function identity and closed
+arguments. Compiler-created completion awaits carry an explicit operand
+identity; ownership traversal may cross only those marked wrappers without a
+receiver step. Authored awaits remain opaque. Logical type queries retain the
+completion's source result type rather than exposing its physical ValueTask.
+
 Representation-changing constant folding retains the actual selected source
 field read (its `FieldSymbol` and effective closed owner), not just a literal
 value or member name. A verified fold carries that semantic association to

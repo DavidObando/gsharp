@@ -286,12 +286,7 @@ internal class SuspendingCallRewriter : BoundTreeRewriter {
             }
         }
         if ContainerSuspends && lockDepth == 0 && inner.Type != nil {
-            return BoundAwaitExpression(
-                rewritten.Syntax,
-                inner,
-                rewritten.Type,
-                ExpressionBinder.TryGetAwaiterTypeSymbol(inner.Type)
-            )
+            return CompleteAwait(rewritten.Syntax, inner, rewritten.Type)
         }
         ReportResidualBridge(rewritten.Syntax, inner)
         return rewritten
@@ -354,36 +349,28 @@ internal class SuspendingCallRewriter : BoundTreeRewriter {
             return if arguments.Length == call.Arguments.Length {
                 rewritten
             } else {
-                cast[BoundExpression](
-                    BoundCallExpression(
-                        call.Syntax,
-                        call.Function,
-                        arguments,
-                        call.ReturnType,
-                        call.IsConditionalElided
-                    ){
-                        StaticGenericOwnerType = call.StaticGenericOwnerType,
-                        StaticGenericInterfaceOwnerType = call.StaticGenericInterfaceOwnerType,
-                        MethodTypeArguments = call.MethodTypeArguments
-                    }
-                )
+                CopySelectedCall(call, arguments, call.ReturnType)
             }
         }
         // The bind-time ReturnType is the (possibly substituted) logical R; the
         // retyped call carries ValueTask[R] in its place.
         let logicalType = call.ReturnType ?? call.Function.Type
-        let retyped = BoundCallExpression(
-            call.Syntax,
-            call.Function,
-            arguments,
-            runtime.ValueTaskOf(logicalType),
-            call.IsConditionalElided
-        ){
+        let retyped = CopySelectedCall(call, arguments, runtime.ValueTaskOf(logicalType))
+        return Complete(retyped, logicalType, call.Function.Name)
+    }
+
+    private func CopySelectedCall(
+        call BoundCallExpression,
+        arguments ImmutableArray[BoundExpression],
+        returnType TypeSymbol?
+    ) BoundCallExpression {
+        let copy = BoundCallExpression(call.Syntax, call.Function, arguments, returnType, call.IsConditionalElided){
             StaticGenericOwnerType = call.StaticGenericOwnerType,
             StaticGenericInterfaceOwnerType = call.StaticGenericInterfaceOwnerType,
             MethodTypeArguments = call.MethodTypeArguments
         }
-        return Complete(retyped, logicalType, call.Function.Name)
+        call.CopyStaticQualifierTo(copy)
+        return copy
     }
 
     /// ```xmldoc
@@ -491,16 +478,26 @@ internal class SuspendingCallRewriter : BoundTreeRewriter {
             }
         }
         if ContainerSuspends && lockDepth == 0 {
-            return BoundAwaitExpression(
-                retyped.Syntax,
-                retyped,
-                logicalType,
-                ExpressionBinder.TryGetAwaiterTypeSymbol(retyped.Type)
-            )
+            return CompleteAwait(retyped.Syntax, retyped, logicalType)
         }
         let bridge = runtime.BindBlockingWait(retyped, logicalType)
         ReportResidualBridge(retyped.Syntax, retyped, calleeName)
         return bridge
+    }
+
+    private func CompleteAwait(
+        syntax SyntaxNode?,
+        operand BoundExpression,
+        logicalType TypeSymbol
+    ) BoundAwaitExpression {
+        let completed = BoundAwaitExpression(
+            syntax,
+            operand,
+            logicalType,
+            ExpressionBinder.TryGetAwaiterTypeSymbol(operand.Type)
+        )
+        completed.RecordImplicitCompletion(operand)
+        return completed
     }
 
     private func ReportResidualBridge(syntax SyntaxNode?, inner BoundExpression, calleeName string? = nil) {

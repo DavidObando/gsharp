@@ -20,6 +20,61 @@ import Xunit
 /// syntax→bound-node, syntax→type queries), (cref:Symbol.DeclaringSyntaxNodes),
 /// and (cref:GSharpSyntaxWalker).
 open class Adr0169SemanticModelTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func StaticQualifierQuery_ImplicitCompletionAndSharedProperty_KeepSemanticSelection(property bool) {
+        let source = if property {
+            `package Query
+class Box {
+    shared {
+        prop Value int32 { get; set; }
+        prop Other int32 { get; set; }
+    }
+    func Run() { let first = Box.Value }
+}
+`
+        } else {
+            `package Query
+class Box {
+    shared {
+        func Values(ch in chan[string]) []string {
+            let value = <-ch
+            return []string{value}
+        }
+    }
+}
+func Run(ch chan[string]) { let first = Box.Values(ch) }
+`
+        }
+        let (_, model, tree) = CreateQualifierModel(source)
+        let root = QualifierInitializer(tree, "first")
+        let (owner, qualifier, read) = QueryQualifier(model, root)
+        let box = Assert.IsType[StructSymbol](owner)
+        if property {
+            let expected = box.StaticProperties.Single((p PropertySymbol) -> p.Name == "Value")
+            let selected = Assert.IsType[BoundPropertyAccessExpression](read)
+            Assert.Same(expected, selected.Property)
+            Assert.Same(box, selected.StructType)
+            Assert.NotNull(expected.BackingField)
+            Assert.DoesNotContain(box.Properties, (p PropertySymbol) -> object.ReferenceEquals(p, expected))
+        } else {
+            let physical = Assert.IsType[BoundCallExpression](read)
+            Assert.True(physical.Function.IsSuspending)
+            Assert.Same(box.StaticMethods.Single((f FunctionSymbol) -> f.Name == "Values"), physical.Function)
+            let logical = Assert.IsType[BoundAwaitExpression](model.GetBoundNode(root))
+            Assert.Same(physical, logical.Expression)
+            Assert.NotSame(physical.Type, logical.Type)
+            Assert.Equal(typeof([]string), logical.Type.ClrType)
+            let authored = BoundAwaitExpression(logical.Syntax, physical, logical.Type)
+            physical.CopyStaticQualifierTo(authored)
+            Assert.Null(authored.StaticQualifierType)
+        }
+        Assert.Same(root.LeftPart, qualifier)
+        let (_, _, unchanged) = QueryQualifier(model, root)
+        Assert.Same(read, unchanged)
+    }
+
     @Fact
     func StaticQualifierQuery_EnumMembers_KeepDistinctEqualValuedDecisions() {
         const source = `package Query

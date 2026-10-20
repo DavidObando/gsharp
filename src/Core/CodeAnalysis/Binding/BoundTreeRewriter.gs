@@ -763,7 +763,11 @@ abstract class BoundTreeRewriter {
         if expression == node.Expression {
             return node
         }
-        return BoundAwaitExpression(node.Syntax, expression, node.Type, node.AwaiterTypeSymbol)
+        let copy = BoundAwaitExpression(node.Syntax, expression, node.Type, node.AwaiterTypeSymbol)
+        if object.ReferenceEquals(node.ImplicitCompletionOperand, node.Expression) {
+            copy.RecordImplicitCompletion(expression)
+        }
+        return copy
     }
 
     /// Rewrites a bound switch expression.

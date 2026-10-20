@@ -25,6 +25,216 @@ import Xunit
 /// symbol lookup on `s.LoadAsync()` resolve to the interface member, never to
 /// a same-named member of one implementation.
 open class Issue4989BoundReceiverTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5035_InferredCallee_PreservesSelectedMemberAndLogicalType(chained bool) {
+        let source = `package Repro
+class Holder {
+    shared {
+        func Values(value int32) RESULT_TYPE -> DECOY
+        func Values(ch in chan[string]) RESULT_TYPE {
+            let value = <-ch
+            return RESULT
+        }
+    }
+}
+func Run(ch chan[string]) {
+    let competing = System.Text.StringBuilder().ToString()
+    let wrong = Holder.Values(1)
+    let authored = await System.Threading.Tasks.Task.FromResult("authored")
+    let indexed = Holder.Values(ch)SUFFIX
+}
+`.Replace(
+            "RESULT_TYPE",
+            if chained {
+                "string"
+            } else {
+                "[]string"
+            }
+        ).Replace(
+            "DECOY",
+            if chained {
+                "\"wrong\""
+            } else {
+                "[]string{\"wrong\"}"
+            }
+        ).Replace(
+            "RESULT",
+            if chained {
+                "value"
+            } else {
+                "[]string{value}"
+            }
+        ).Replace(
+            "SUFFIX",
+            if chained {
+                ".ToString()[^1]"
+            } else {
+                "[^1]"
+            }
+        )
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let owner = compilation.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Holder")
+        let expected = owner.StaticMethods.Single((f FunctionSymbol) -> f.Name == "Values" && f.IsSuspending)
+        let root = Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "indexed =", 0).Parent).Initializer
+        let plan = Assert.IsType[BoundBlockExpression](
+            compilation.GetSemanticModel(content.SyntaxTree).GetBoundNode(root!!)
+        )
+        let captured = Assert.IsType[BoundVariableDeclaration](plan.Statements[0]).Initializer
+        let completed = if chained {
+            Assert.IsType[BoundImportedInstanceCallExpression](captured).Receiver
+        } else {
+            captured
+        }
+        let completion = Assert.IsType[BoundAwaitExpression](completed)
+        let selected = Assert.IsType[BoundCallExpression](completion.Expression)
+        Assert.Same(expected, selected.Function)
+        Assert.True(expected.IsSuspending)
+        Assert.Same(
+            if chained {
+                TypeSymbol.String
+            } else {
+                expected.Type
+            },
+            completion.Type
+        )
+        let token = TokenAt(content, source, "Values(ch)", 0)
+        Assert.Same(expected, BoundSemantics.GetSymbol(compilation, token))
+        Assert.Same(expected, SemanticLookup.ResolveSymbol(compilation, token))
+        let expression = Assert.IsType[CallExpressionSyntax](token.Parent)
+        Assert.Equal(
+            if chained {
+                typeof(string)
+            } else {
+                typeof([]string)
+            },
+            BoundSemantics.GetExpressionType(compilation, expression)?.ClrType
+        )
+        let uri = DocumentUri.From("file:///issue5035-inferred-callee.gs")!!
+        let position = LanguageServerTestHelpers.PositionOf(source, "Values(ch)")
+        let definition = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
+        let declaration = LanguageServerTestHelpers.PositionOf(source, "Values(ch in chan[string])")
+        Assert.Equal(uri, definition.Uri)
+        AssertPosition(declaration, definition.Range.Start)
+        AssertPosition(Position(declaration.Line, declaration.Character + "Values".Length), definition.Range.End)
+        let declaredHover = Assert.IsType[Hover](HoverComputer.ComputeHover(content, declaration))
+        AssertIndexedHover(content, position, "Values", declaredHover.Contents.ToString().Split('\n')[1])
+        if chained {
+            let method = typeof(string).GetMethod("ToString", Type.EmptyTypes)
+            Assert.Equal(
+                method,
+                BoundSemantics.GetImportedMember(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+            )
+            AssertIndexedHover(
+                content,
+                LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]"),
+                "ToString",
+                "func (string) ToString() string"
+            )
+            Assert.Contains(
+                CompletionComputer.ComputeCompletions(
+                    content,
+                    LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]")
+                ),
+                (item CompletionItem) -> item.Label == "Substring"
+            )
+        }
+        let authored = Assert.IsType[AwaitExpressionSyntax](
+            Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "authored =", 0).Parent).Initializer
+        )
+        Assert.Equal(typeof(string), BoundSemantics.GetExpressionType(compilation, authored)?.ClrType)
+        Assert.Equal(
+            typeof(System.Threading.Tasks.Task[string]),
+            Assert
+                .IsType[BoundAwaitExpression](compilation.GetSemanticModel(content.SyntaxTree).GetBoundNode(authored))
+                .Expression
+                .Type
+                .ClrType
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5035_SharedAutoProperty_RemainsCanonicalInsideDeclaringType(sharedMethod bool) {
+        let source = if sharedMethod {
+            `package Repro
+class Holder {
+    shared {
+        prop Value int32 { get; set; }
+        func Run() {
+            let competing = System.Text.StringBuilder().ToString()
+            let indexed = Holder.Value.ToString()[^1]
+        }
+    }
+}
+`
+        } else {
+            `package Repro
+class Holder {
+    shared { prop Value int32 { get; set; } }
+    func Run() {
+        let competing = System.Text.StringBuilder().ToString()
+        let indexed = Holder.Value.ToString()[^1]
+    }
+}
+`
+        }
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let owner = compilation.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Holder")
+        let property = owner.StaticProperties.Single((p PropertySymbol) -> p.Name == "Value")
+        let expression = Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "indexed =", 0).Parent)
+            .Initializer
+        let plan = Assert.IsType[BoundBlockExpression](
+            compilation.GetSemanticModel(content.SyntaxTree).GetBoundNode(expression!!)
+        )
+        let call = Assert.IsType[BoundImportedInstanceCallExpression](
+            Assert.IsType[BoundVariableDeclaration](plan.Statements[0]).Initializer
+        )
+        let selected = Assert.IsType[BoundPropertyAccessExpression](call.Receiver)
+        Assert.Same(property, selected.Property)
+        Assert.Same(owner, selected.StructType)
+        Assert.NotNull(property.BackingField)
+        Assert.DoesNotContain(owner.Properties, (p PropertySymbol) -> object.ReferenceEquals(p, property))
+        Assert.Null(property.GetterSymbol)
+        let method = typeof(int32).GetMethod("ToString", Type.EmptyTypes)
+        Assert.Equal(
+            method,
+            BoundSemantics.GetImportedMember(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+        )
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]"),
+            "ToString",
+            "func (int32) ToString() string"
+        )
+        let token = TokenAt(content, source, "Value.ToString()[^1]", 0)
+        Assert.Same(property, BoundSemantics.GetSymbol(compilation, token))
+        Assert.Equal(
+            typeof(int32),
+            BoundSemantics.GetExpressionType(compilation, Assert.IsType[NameExpressionSyntax](token.Parent))?.ClrType
+        )
+        let uri = DocumentUri.From("file:///issue5035-shared-auto.gs")!!
+        let location = Assert.IsType[Location](
+            DefinitionComputer.ComputeDefinition(
+                uri,
+                content,
+                LanguageServerTestHelpers.PositionOf(source, "Value.ToString()[^1]")
+            )
+        )
+        let declaration = LanguageServerTestHelpers.PositionOf(source, "Value int32")
+        Assert.Equal(uri, location.Uri)
+        AssertPosition(declaration, location.Range.Start)
+        AssertPosition(Position(declaration.Line, declaration.Character + "Value".Length), location.Range.End)
+    }
+
     @Fact
     func Issue5035_ConstructorPrefix_PreservesExactRuntimeBoundary() {
         const source = `package Repro
