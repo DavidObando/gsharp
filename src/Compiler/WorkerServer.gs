@@ -149,8 +149,12 @@ internal shared class WorkerServer {
                     carriageReturn = false
                 } else {
                     carriageReturn = false
+                    // Keep a surrogate pair inside one UTF-8 string fragment.
+                    if line.Length >= 16384 && !char.IsLowSurrogate(value) {
+                        Emit(completeLine: false)
+                    }
                     line.Append(value)
-                    if line.Length >= 16384 {
+                    if line.Length >= 16384 && !char.IsHighSurrogate(value) {
                         Emit(completeLine: false)
                     }
                 }
