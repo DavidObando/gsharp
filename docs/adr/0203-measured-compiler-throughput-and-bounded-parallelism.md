@@ -657,6 +657,10 @@ an attempt to use metadata, token caches or mutable generic remaps fails.
 The coordinator commits local signatures, body offsets, document handles and
 debug records in the existing method order. Metadata and PDB serialization
 remain sequential. Reference emission never schedules instruction generation.
+It also retains proven primitive lambdas' original bodies for discovery instead
+of repeating their control-flow lowering. Those bodies need neither IL slots
+nor debug records in a reference assembly. Closure, state-machine and metadata
+plans remain emission-owned; they are not shared as mutable state between outputs.
 
 The initial eligibility proof accepts primitive arithmetic and control flow
 over body-owned locals and parameters. Calls, strings, conversions, captures,

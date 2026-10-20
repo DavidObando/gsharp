@@ -841,6 +841,7 @@ internal class ReflectionMetadataEmitter {
         iteratorRewriteResult IteratorRewriteResult? = nil,
         asyncIteratorRewriteResult AsyncIteratorRewriteResult? = nil
     ) {
+        using let planningPhase = CompilationMeasurements.BeginPhase("emit.planning")
         this.InitializePortablePdb()
         this.RegisterRewriteResults(asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult)
         let lambdaLiterals = this.SynthesizeClosuresAndStateMachines()
@@ -850,6 +851,7 @@ internal class ReflectionMetadataEmitter {
         let fieldRows = this.PlanFieldRows(aggregateTypes)
         let methodRows = this.PlanMethodRows(aggregateTypes)
         let packageMethods = this.PlanPackageAndStateMachineMethods(generatedTypes, aggregateTypes, methodRows)
+        planningPhase?.Dispose()
         this.functions.PrepareIndependentBodies(this.workBudget)
         this.EmitUserTypeDefinitionsAndEarlyMethods(aggregateTypes, fieldRows, methodRows)
         let programTypeDefinitions = this.EmitProgramAndStateMachineTypeDefinitions(
@@ -1212,32 +1214,42 @@ internal class ReflectionMetadataEmitter {
             }
         }
         using let loweringPhase = CompilationMeasurements.BeginPhase("lowering.emit-lambdas")
-        let localLiterals = zeroCaptureLiterals.Where(
-            (literal BoundFunctionLiteralExpression) ->
-            literal.Function.TypeParameters.IsDefaultOrEmpty && IndependentMethodBody.IsLocal(literal.Body)
-        )
-            .ToArray()
-        let localSet = HashSet[BoundFunctionLiteralExpression](localLiterals)
-        let localBodies = [localLiterals.Length]BoundBlockStatement?
-        for literal in zeroCaptureLiterals {
-            if !localSet.Contains(literal) {
-                this.lambdaBodies[literal.Function] = Lowerer.Lower(literal.Body)
+        let localJobs = List[int32]()
+        let bodies = [zeroCaptureLiterals.Count]BoundBlockStatement?
+        var largestBody int64 = 0
+        for var index = 0; index < zeroCaptureLiterals.Count; index++ {
+            let literal = zeroCaptureLiterals[index]
+            if literal.Function.TypeParameters.IsDefaultOrEmpty && IndependentMethodBody.IsLocal(literal.Body) {
+                if this.emitCtx.MetadataOnly {
+                    bodies[index] = literal.Body
+                    CompilationMeasurements.Count("emit.reference.lambda-lowering-skipped")
+                } else {
+                    localJobs.Add(index)
+                    largestBody = Math.Max(
+                        largestBody,
+                        literal.Syntax?.Span.Length ?? literal.Body.Syntax?.Span.Length ?? 0
+                    )
+                }
+            } else {
+                bodies[index] = Lowerer.Lower(literal.Body)
             }
         }
         this.workBudget.Run(
-            localLiterals.Length,
+            localJobs.Count,
             (index int32) -> {
-                localBodies[index] = Lowerer.Lower(localLiterals[index].Body)
-            }
+                let slot = localJobs[index]
+                bodies[slot] = Lowerer.Lower(zeroCaptureLiterals[slot].Body)
+            },
+            workspaceBytes: Math.Max(100663296, largestBody * 128)
         )
-        CompilationMeasurements.Count("lowering.emit-lambdas.completed", localLiterals.Length)
+        CompilationMeasurements.Count("lowering.emit-lambdas.completed", localJobs.Count)
         CompilationMeasurements.Count("lowering.emit-lambdas.observed-workers", this.workBudget.LastObservedWorkers)
         if this.workBudget.LastObservedWorkers > 1 {
             CompilationMeasurements.Count("lowering.emit-lambdas.parallel-batches")
         }
-        for var index = 0; index < localLiterals.Length; index++ {
-            this.lambdaBodies[localLiterals[index].Function] = Invariant.Required(
-                localBodies[index],
+        for var index = 0; index < zeroCaptureLiterals.Count; index++ {
+            this.lambdaBodies[zeroCaptureLiterals[index].Function] = Invariant.Required(
+                bodies[index],
                 "joined lowering produced its body"
             )
         }
@@ -3986,7 +3998,7 @@ internal class ReflectionMetadataEmitter {
     }
 
     private func BuildPortablePdbAndDebugDirectory(entryHandle MethodDefinitionHandle) DebugArtifacts {
-        using let measurement = CompilationMeasurements.BeginPhase("emit.pdb")
+        using let measurement = CompilationMeasurements.BeginPhase("emit.debug-directory")
         // 7. Build the Portable PDB blob FIRST so we can wire its content id
         // (CodeView), SHA-256 checksum (PdbChecksum), and — when embedded —
         // the blob itself into the PE's DebugDirectory. PortablePdbEmitter

@@ -7,6 +7,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import GSharp.Tests
 import System
+import System.Collections.Generic
 import System.IO
 import System.Linq
 import System.Reflection
@@ -70,18 +71,23 @@ func LambdaHost() int32 {
         }
     }
 
-    @Fact
-    func InitializersClosuresGenericsSuspensionByRefAndExceptionsRemainDeterministic() {
+    @Theory
+    @InlineData(DebugInformationFormat.Portable)
+    @InlineData(DebugInformationFormat.Embedded)
+    func InitializersClosuresGenericsSuspensionByRefAndExceptionsRemainDeterministic(format DebugInformationFormat) {
         let source = `package ParallelEmit
 import System
+import System.Collections.Generic
 import System.Threading.Tasks
 class State {
-    var Value int32 = (func() int32 -> 3)()
+    var Value int32 = (func() int32 { return 3 })()
+    init() { Value += 1 }
     shared {
-        var Seed int32 = (func() int32 -> 7)()
+        var Seed int32 = (func() int32 { return 7 })()
         init { Seed += 1 }
     }
     func Read() int32 -> Value + Seed
+    func Pure(x int32) int32 -> x + 1
 }
 func Identity[T](value T) T -> value
 func Values() sequence[int32] {
@@ -91,6 +97,11 @@ async func Answer() int32 {
     await Task.Yield()
     return 6
 }
+func AsyncValues() IAsyncEnumerable[int32] {
+    yield 5
+    await Task.Yield()
+    yield 7
+}
 func Run() int32 {
     var parsed = 0
     Int32.TryParse("4", &parsed)
@@ -99,7 +110,7 @@ func Run() int32 {
         return captured }
     var total = 0
     for value in Values() { total += value }
-    try { return State().Read() + Identity(parsed) + next() + total + Answer().GetAwaiter().GetResult() }
+    try { return State().Read() + State().Pure(5) + Identity(parsed) + next() + total + Answer().GetAwaiter().GetResult() }
     finally { total += 10 }
 }
 ` + IndependentFunctions()
@@ -107,7 +118,7 @@ func Run() int32 {
         var reference[]uint8 = Array.Empty[uint8]()
         var symbols[]uint8 = Array.Empty[uint8]()
         for workers in[]int32{1, 2, 4, 8} {
-            let compilation = Create(source)
+            let compilation = Create(source, format)
             compilation.WorkBudget = CompilationWorkBudget(workers)
             using let pe = MemoryStream()
             using let pdb = MemoryStream()
@@ -128,7 +139,23 @@ func Run() int32 {
                 "Run",
                 BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic
             )!!
-            Assert.Equal(25, method.Invoke(nil, nil))
+            Assert.Equal(32, method.Invoke(nil, nil))
+            let stream = cast[IAsyncEnumerable[int32]](
+                assembly.GetType("ParallelEmit.<Program>", true)!!.GetMethod(
+                    "AsyncValues",
+                    BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic
+                )!!.Invoke(nil, nil)
+            )
+            let enumerator = stream.GetAsyncEnumerator()
+            let values = List[int32]()
+            try {
+                while enumerator.MoveNextAsync().AsTask().GetAwaiter().GetResult() {
+                    values.Add(enumerator.Current)
+                }
+            } finally {
+                enumerator.DisposeAsync().AsTask().GetAwaiter().GetResult()
+            }
+            Assert.Equal([]int32{5, 7}, values)
             using let refOnly = MemoryStream()
             let refResult = compilation.Emit(
                 peStream: nil,
@@ -161,14 +188,11 @@ func Run() int32 {
     }
 
     shared {
-        private func Create(source string) Compilation -> Compilation(
-            SyntaxTree.Parse(SourceText.From(source, "parallel.gs"))
-        ){
-            DebugInformation = DebugInformationOptions{
-                Format: DebugInformationFormat.Portable,
-                Deterministic: true,
-                PdbFilePath: "parallel.pdb"
-            }
+        private func Create(
+            source string,
+            format DebugInformationFormat = DebugInformationFormat.Portable
+        ) Compilation -> Compilation(SyntaxTree.Parse(SourceText.From(source, "parallel.gs"))){
+            DebugInformation = DebugInformationOptions{Format: format, Deterministic: true, PdbFilePath: "parallel.pdb"}
         }
 
         private func IndependentFunctions() string -> string.Concat(

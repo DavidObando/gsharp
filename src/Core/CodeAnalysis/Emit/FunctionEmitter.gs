@@ -106,7 +106,11 @@ internal class FunctionEmitter {
         using let instructions = CompilationMeasurements.BeginPhase("emit.method-bodies.instructions")
         let largestBody = candidates.Max(
             (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) ->
-            cast[int64](pair.Key.Declaration?.Span.Length ?? pair.Value.Statements.Length * 64)
+            if pair.Key.Declaration is {} declaration {
+                cast[int64](declaration.Span.Length)
+            } else {
+                cast[int64](pair.Value.Statements.Length) * 64
+            }
         )
         budget.Run(
             work.Length,
