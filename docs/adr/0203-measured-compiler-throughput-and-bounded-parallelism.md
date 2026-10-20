@@ -594,6 +594,29 @@ separate PRs. Full stage-2 certification is not made a new PR requirement.
 
 ## Consequences
 
+### Imported metadata facts (#5070)
+
+Open CLR declaration lookups share a weak, target-type-owned cache of successful
+token matches. Each hit checks the actual module object. The key includes the
+original member kind, flags, name scope and reflection view. Direct reflection
+retains its existing load-failure behavior; signature-filtered callers reuse
+the existing member arrays. A scan stops at its original first match.
+The cache stores only members enumerated from its target, never a foreign
+request's module or constructed generic arguments under a live host type.
+
+The nullability funnel also reuses successful attribute reads and immutable
+raw `Nullable` and `NullableContext` bytes under weak actual-provider keys.
+Successful absence is cached; failed attribute reads remain retryable.
+Receiver substitution, ambient nullability options, tuple names, by-ref storage,
+default-value lifts and flow contracts retain their existing readers and rules.
+No final `TypeSymbol` is cached by this mechanism.
+
+Opt-in counters distinguish definition requests, scans, inspected members and
+successful cache entries, plus contract requests, attribute reads and raw
+nullable/context decodes. Entries distinguish reflection views and are not a
+count of unique logical members across contexts. These counters describe work,
+not a measured build-speed gain.
+
 ### Local declaration discovery reduction (#5055)
 
 The generator projection and compiler keep separate declaration scopes.

@@ -15,6 +15,7 @@ import System.Reflection.Emit
 import System.Runtime.CompilerServices
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Compilation
 
 /// Helpers for comparing (cref:Type) instances that may originate from
 /// different reflection contexts (e.g. the gsc host's live runtime vs. a
@@ -44,6 +45,74 @@ shared class ClrTypeUtilities {
     /// for BCL types with wide interface sets (`List<T>`) that cost
     /// was paid once per call site instead of once per type.
     private var interfacesCache ConditionalWeakTable[Type, []Type] = ConditionalWeakTable[Type, []Type]()
+
+    // Only members enumerated from the weak key enter this cache. A foreign request's
+    // module or generic arguments must not become rooted through a live host type (#5038).
+    private let metadataDefinitions ConditionalWeakTable[
+        Type,
+        ConcurrentDictionary[(Token int32, Flags BindingFlags, Kind MemberTypes, Name string, Safe bool), MemberInfo]
+    ] = ConditionalWeakTable[
+        Type,
+        ConcurrentDictionary[(Token int32, Flags BindingFlags, Kind MemberTypes, Name string, Safe bool), MemberInfo]
+    ]()
+
+    /// Finds a member on an open declaring type without changing the caller's reflection view.
+    /// @param type The target declaring type.
+    /// @param member The member whose module and metadata token identify the declaration.
+    /// @param flags The original enumeration flags.
+    /// @param safeEnumeration Whether to use the signature-filtered member enumeration.
+    /// @returns The matching declaration, or `nil`.
+    internal func FindMetadataDefinition(
+        type Type,
+        member MemberInfo,
+        flags BindingFlags,
+        safeEnumeration bool = false
+    ) MemberInfo? {
+        CompilationMeasurements.Count("metadata.definition-requests")
+        let token = member.MetadataToken
+        let module = member.Module
+        let kind = member.MemberType
+        let name = if member is MethodBase {
+            string.Empty
+        } else {
+            member.Name
+        }
+        let cache = metadataDefinitions.GetValue(
+            type,
+            (_ Type) -> ConcurrentDictionary[
+                (Token int32, Flags BindingFlags, Kind MemberTypes, Name string, Safe bool),
+                MemberInfo
+            ]()
+        )
+        let key = (token, flags, kind, name, safeEnumeration)
+        if cache.TryGetValue(key, out var cached) && object.ReferenceEquals(cached.Module, module) {
+            return cached
+        }
+        CompilationMeasurements.Count("metadata.definition-scans")
+        let candidates IEnumerable[MemberInfo] = switch member {
+            case _ is ConstructorInfo: if safeEnumeration {
+                SafeGetConstructors(type, flags)
+            } else {
+                type.GetConstructors(flags)
+            }
+            case _ is MethodInfo: if safeEnumeration {
+                SafeGetMethods(type, flags)
+            } else {
+                type.GetMethods(flags)
+            }
+            default: type.GetMember(name, kind, flags)
+        }
+        for candidate in candidates {
+            CompilationMeasurements.Count("metadata.definition-members")
+            if candidate.MetadataToken == token && object.ReferenceEquals(candidate.Module, module) {
+                if cache.TryAdd(key, candidate) {
+                    CompilationMeasurements.Count("metadata.definition-cache-entries")
+                }
+                return candidate
+            }
+        }
+        return nil
+    }
 
     /// Returns whether two (cref:Type)s refer to the same logical CLR
     /// type, regardless of which reflection context produced them. Two types

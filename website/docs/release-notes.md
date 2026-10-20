@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Imported metadata readers reuse raw declaration facts** (issue #5070, ADR-0203). Open-member token lookups and raw nullable/context attribute decoding share weak, actual-reflection-object caches. Receiver-specific nullability, module identity and direct versus signature-filtered load behavior remain unchanged. Failed attribute reads remain retryable, and host generic definitions do not retain private reference contexts. Opt-in measurements report requests, scans and decodes; this is not a build-speed claim.
+
 - **The compiler now builds with the published G# SDK 0.5.179** (issue #2189). The bootstrap pin moves from 0.5.7 to the release containing the measured compiler lookup, generator setup and bounded-worker improvements. The analyzer-testing package follows the same pin. This separate pin update builds the repository with that released compiler; its CI provides stage-2 verification under the N-1 rule.
 
 - **Declaration discovery skips impossible anonymous-object walks** (issue #5055, ADR-0203). Parsing records whether each source tree can contain an anonymous object. Generator projection and compilation avoid the full-tree rich-anonymous declaration search for other trees, while keeping the existing synthesis order where needed. Core profiles eliminated 700 walks per declaration pass and reduced projection/declaration allocations by 667/410 MiB; the three-pair compiler and Oahu rebuild comparison did not demonstrate a build-speed gain. Declaration scopes remain request-owned, and generated partials still bind afresh; generator execution, diagnostics and SDK success stamps are unchanged.
