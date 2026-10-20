@@ -203,8 +203,9 @@ class BlockingTool {
         }
         start.ArgumentList.Add(source)
         using let process = Process.Start(start) ?? throw InvalidOperationException("Cannot compile blocking tool.")
-        let stdout = process.StandardOutput.ReadToEndAsync()
-        let stderr = process.StandardError.ReadToEndAsync()
+        using let outputDeadline = CancellationTokenSource(TimeSpan.FromSeconds(30))
+        let stdout = process.StandardOutput.ReadToEndAsync(outputDeadline.Token)
+        let stderr = process.StandardError.ReadToEndAsync(outputDeadline.Token)
         if !process.WaitForExit(30000) {
             process.Kill(entireProcessTree: true)
             process.WaitForExit()
@@ -273,8 +274,9 @@ class BlockingTool {
         start.Environment["GSHARP_MEASURE_PHASES"] = Path.Combine(directory, "phase-{id}.json")
         using let process = Process.Start(start) ??
             throw InvalidOperationException("Cannot start generator target test.")
-        let stdout = process.StandardOutput.ReadToEndAsync()
-        let stderr = process.StandardError.ReadToEndAsync()
+        using let outputDeadline = CancellationTokenSource(TimeSpan.FromSeconds(120))
+        let stdout = process.StandardOutput.ReadToEndAsync(outputDeadline.Token)
+        let stderr = process.StandardError.ReadToEndAsync(outputDeadline.Token)
         if !process.WaitForExit(120000) {
             process.Kill(entireProcessTree: true)
             process.WaitForExit()
