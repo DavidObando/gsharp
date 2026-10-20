@@ -19,13 +19,16 @@ import System.Threading
 /// a C# stub, runs the supplied Roslyn generators over that stub, and writes the
 /// back-translated `.g.gs` parts (plus a newline manifest) to the output
 /// directory so the SDK can feed them into gsc.
-/// @remarks Modeled EXACTLY on (cref:BuildTask): same `dotnet <tool>.dll @rsp` process launch, the same
-/// response-file writer, the same
-/// (cref:DiagnosticLine) relay (gsgen emits diagnostics in gsc's canonical
-/// header format), and the same cancellation registration that kills the child
-/// process when MSBuild cancels the build.
+/// @remarks Default execution uses `dotnet <tool>.dll @rsp`, like (cref:BuildTask).
+/// Optional shared execution uses a serial build-lifetime worker. Both modes
+/// preserve structured diagnostic relay and kill the child on MSBuild cancellation.
 open class GsgenTask : Task, ICancelableTask {
     private let cts CancellationTokenSource = CancellationTokenSource()
+
+    /// Initializes a task with a conservative serial worker grant.
+    init() {
+        WorkerGrant = 1
+    }
 
     /// Gets or sets the full path to gsgen.dll.
     @Required
@@ -133,6 +136,12 @@ open class GsgenTask : Task, ICancelableTask {
     /// Gets or sets the project base directory, used as the process working directory.
     prop BasePath string?
 
+    /// Gets or sets whether to reuse a bounded generator worker within this build.
+    prop UseSharedCompilation bool
+
+    /// Gets or sets the resource grant forwarded to the serial generator request.
+    prop WorkerGrant int32
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -142,9 +151,9 @@ open class GsgenTask : Task, ICancelableTask {
     /// <inheritdoc />
     /// ```
     open override func Execute() bool {
-        // No sources means nothing to project; treat as a no-op success (gsgen
-        // itself requires at least one /gs:, so we never launch it empty).
-        if this.Compile == nil || this.Compile!!.Length == 0 {
+        let compile = this.Compile ?? Array.Empty[ITaskItem]()
+        // A previous manifest still owns generated files after the final source is removed.
+        if compile.Length == 0 && !File.Exists(this.ManifestPath) {
             return true
         }
         let gsgenToolFullPath = (this.GsgenToolFullPath ?? string.Empty)
@@ -159,8 +168,115 @@ open class GsgenTask : Task, ICancelableTask {
             this.Log.LogError("GsgenTask requires GsgenToolFullPath, OutputDir, ManifestPath, and ResponseFilePath.")
             return false
         }
+        let successStamp = manifestPath + ".success"
+        let stagingDirectory = Path.Combine(Path.GetFullPath(outputDir), ".staging-" + Guid.NewGuid().ToString("N"))
+        try {
+            File.Delete(successStamp)
+            Directory.CreateDirectory(stagingDirectory)
+            let stagedManifest = Path.Combine(stagingDirectory, "gsgen.manifest")
+            if File.Exists(manifestPath) {
+                File.Copy(manifestPath, stagedManifest)
+            }
+            if !RunGenerator(compile, gsgenToolFullPath, stagingDirectory, stagedManifest, responseFilePath) {
+                return false
+            }
+            PublishGeneratedFiles(stagingDirectory, stagedManifest, outputDir, manifestPath)
+            File.WriteAllText(successStamp, string.Empty)
+            return true
+        } catch (ex Exception) when ex is IOException || ex is UnauthorizedAccessException {
+            this.Log.LogError("Generator execution or success-stamp commit failed: ${ex.Message}")
+            return false
+        } finally {
+            try {
+                if Directory.Exists(stagingDirectory) {
+                    Directory.Delete(stagingDirectory, recursive: true)
+                }
+            } catch (ex Exception) when ex is IOException || ex is UnauthorizedAccessException {
+                this.Log.LogMessage(
+                    MessageImportance.Low,
+                    "Could not remove generator staging directory: ${ex.Message}"
+                )
+            }
+        }
+    }
+
+    private func PublishGeneratedFiles(
+        stagingDirectory string,
+        stagedManifest string,
+        outputDir string,
+        manifestPath string
+    ) {
+        let comparer = if Path.DirectorySeparatorChar == '\\' {
+            StringComparer.OrdinalIgnoreCase
+        } else {
+            StringComparer.Ordinal
+        }
+        let staged = List[string]()
+        let written = List[string]()
+        let keep = HashSet[string](comparer)
+        for path in File.ReadAllLines(stagedManifest) {
+            if string.IsNullOrWhiteSpace(path) {
+                continue
+            }
+            let full = Path.GetFullPath(path)
+            let destination = Path.Combine(outputDir, Path.GetFileName(full))
+            if !comparer.Equals(Path.GetDirectoryName(full), stagingDirectory) || !full.EndsWith(
+                ".g.gs",
+                StringComparison.Ordinal
+            ) ||
+                !keep.Add(Path.GetFullPath(destination)) {
+                throw IOException("Invalid generated-file entry in staged manifest: '$path'.")
+            }
+            staged.Add(full)
+            written.Add(destination)
+        }
+        for var index = 0; index < staged.Count; index++ {
+            let content = File.ReadAllText(staged[index])
+            let destination = written[index]
+            if !File.Exists(destination) || !string.Equals(
+                File.ReadAllText(destination),
+                content,
+                StringComparison.Ordinal
+            ) {
+                File.WriteAllText(destination, content)
+            }
+        }
+        for existing in Directory.GetFiles(outputDir, "*.g.gs", SearchOption.TopDirectoryOnly) {
+            if !keep.Contains(Path.GetFullPath(existing)) {
+                File.Delete(existing)
+            }
+        }
+        let manifestDirectory = Path.GetDirectoryName(Path.GetFullPath(manifestPath))
+        if !string.IsNullOrEmpty(manifestDirectory) {
+            Directory.CreateDirectory(manifestDirectory)
+        }
+        File.WriteAllText(
+            manifestPath,
+            if written.Count == 0 {
+                string.Empty
+            } else {
+                string.Join(Environment.NewLine, written) + Environment.NewLine
+            }
+        )
+    }
+
+    private func RunGenerator(
+        compile[]ITaskItem,
+        gsgenToolFullPath string,
+        outputDir string,
+        manifestPath string,
+        responseFilePath string
+    ) bool {
+        var resourceGrant WorkerCoreLease
+        try {
+            resourceGrant = WorkerCoreLease.Acquire(this.BuildEngine, 1, 1024, this.cts.Token)
+        } catch (ex OperationCanceledException) {
+            return false
+        }
+        using let grantLifetime = resourceGrant
+        this.WorkerGrant = resourceGrant.Grant
         let args = List[string]()
-        for s in this.Compile!! {
+        for s in compile {
             args.Add(BuildTask.QuoteIfNeeded("/gs:${s.ItemSpec}"))
         }
         for r in this.References {
@@ -192,12 +308,54 @@ open class GsgenTask : Task, ICancelableTask {
         }
         Directory.CreateDirectory(Path.GetDirectoryName(responseFilePath) ?? ".")
         File.WriteAllLines(responseFilePath, args, Encoding.UTF8)
+        if this.UseSharedCompilation && this.BuildEngine is IBuildEngine4 engine {
+            if this.WorkerGrant < 1 {
+                this.Log.LogError("GsgenTask requires a positive WorkerGrant.")
+                return false
+            }
+            var lastWorkerOutput string? = nil
+            var lastWorkerError string? = nil
+            try {
+                let client = WorkerProcessClient.Get(engine, "GSharp.GeneratorWorker")
+                if client.TryRun(
+                    Path.GetFullPath(gsgenToolFullPath),
+                    "--generator-worker",
+                    Path.GetFullPath(this.BasePath ?? Environment.CurrentDirectory),
+                    []string{"@" + Path.GetFullPath(responseFilePath)},
+                    this.WorkerGrant,
+                    this.cts.Token,
+                    (line string) -> {
+                        lastWorkerOutput = line
+                        this.LogCompilerLine(line)
+                    },
+                    (line string) -> {
+                        lastWorkerError = line
+                        this.Log.LogError(line)
+                    },
+                    (message string) -> this.Log.LogMessage(MessageImportance.Low, message),
+                    out var exitCode
+                ) {
+                    return this.Complete(exitCode, lastWorkerOutput, lastWorkerError, gsgenToolFullPath)
+                }
+            } catch (ex OperationCanceledException) {
+                return false
+            } catch (ex IOException) {
+                this.Log.LogError("Generator worker transport failed after dispatch: ${ex.Message}")
+                return false
+            }
+        } else if this.UseSharedCompilation {
+            this.Log.LogMessage(
+                MessageImportance.Low,
+                "G# generator worker unavailable without IBuildEngine4; using standalone gsgen."
+            )
+        }
         let psi = ProcessStartInfo("dotnet", "\"$gsgenToolFullPath\" @\"$responseFilePath\""){
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             WorkingDirectory = this.BasePath ?? Environment.CurrentDirectory
         }
+        psi.EnvironmentVariables["GSHARP_WORKER_GRANT"] = resourceGrant.Grant.ToString()
         var proc Process
         try {
             proc = Process.Start(psi)
@@ -211,22 +369,7 @@ open class GsgenTask : Task, ICancelableTask {
             // Mirror BuildTask (issue #1667): register the cancellation token so an
             // MSBuild Cancel() actually kills the child gsgen process instead of
             // blocking in WaitForExit() until it finishes on its own.
-            using let cancelRegistration = this
-                .cts
-                .Token
-                .Register(
-                () -> {
-                    try {
-                        // netstandard2.0 (this task's TFM) lacks Process.Kill(bool);
-                        // gsgen doesn't spawn grandchildren, so killing it directly
-                        // stops the generator run.
-                        proc.Kill()
-                    } catch (InvalidOperationException) {
-                        // Process already exited.
-
-                    }
-                }
-            )
+            using let cancelRegistration = this.cts.Token.Register(() -> WorkerProcessClient.Kill(proc))
             var lastStdoutLine string? = nil
             var lastStderrLine string? = nil
             proc.OutputDataReceived += (_ object, e DataReceivedEventArgs) -> {
@@ -245,43 +388,50 @@ open class GsgenTask : Task, ICancelableTask {
             proc.BeginOutputReadLine()
             proc.BeginErrorReadLine()
             proc.WaitForExit()
-            if this.cts.IsCancellationRequested {
-                // Build was cancelled: gsgen was killed above; report failure
-                // without logging a spurious "exited with code N" error.
-                return false
-            }
-            // Boundary-ring invariant (mirrors BuildTask GS9998): if gsgen exits
-            // non-zero without emitting a structured diagnostic, anchor a synthetic
-            // GS9998 at the first Compile item so the IDE navigates to a source
-            // file, not gsgen.dll.
-            if proc.ExitCode != 0 && !this.Log.HasLoggedErrors {
-                let anchorFile = if this.Compile?.Length > 0 {
-                    this.Compile!![0].ItemSpec!!
-                } else {
-                    gsgenToolFullPath
-                }
-                let lastOutput = lastStderrLine ?? lastStdoutLine
-                let breadcrumb = if string.IsNullOrWhiteSpace(lastOutput) {
-                    string.Empty!!
-                } else {
-                    " Last generator output: $lastOutput"
-                }
-                this.Log.LogError(
-                    subcategory: nil,
-                    errorCode: "GS9998",
-                    helpKeyword: nil,
-                    file: anchorFile,
-                    lineNumber: 1,
-                    columnNumber: 1,
-                    endLineNumber: 1,
-                    endColumnNumber: 1,
-                    message: "gsgen exited with code ${proc.ExitCode} without emitting a structured diagnostic.$breadcrumb"
-                )
-            }
-            // Return false only on a hard failure: a non-zero exit AND at least one
-            // logged error. Generator warnings/info alone never fail the build.
-            return proc.ExitCode == 0 || !this.Log.HasLoggedErrors
+            return this.Complete(proc.ExitCode, lastStdoutLine, lastStderrLine, gsgenToolFullPath)
         }
+    }
+
+    private func Complete(
+        exitCode int32,
+        lastStdoutLine string?,
+        lastStderrLine string?,
+        gsgenToolFullPath string
+    ) bool {
+        if this.cts.IsCancellationRequested {
+            // Build was cancelled: gsgen was killed above; report failure
+            // without logging a spurious "exited with code N" error.
+            return false
+        }
+        // Boundary-ring invariant (mirrors BuildTask GS9998): if gsgen exits
+        // non-zero without emitting a structured diagnostic, anchor a synthetic
+        // GS9998 at the first Compile item so the IDE navigates to a source
+        // file, not gsgen.dll.
+        if exitCode != 0 && !this.Log.HasLoggedErrors {
+            let anchorFile = if this.Compile?.Length > 0 {
+                this.Compile!![0].ItemSpec!!
+            } else {
+                gsgenToolFullPath
+            }
+            let lastOutput = lastStderrLine ?? lastStdoutLine
+            let breadcrumb = if string.IsNullOrWhiteSpace(lastOutput) {
+                string.Empty!!
+            } else {
+                " Last generator output: $lastOutput"
+            }
+            this.Log.LogError(
+                subcategory: nil,
+                errorCode: "GS9998",
+                helpKeyword: nil,
+                file: anchorFile,
+                lineNumber: 1,
+                columnNumber: 1,
+                endLineNumber: 1,
+                endColumnNumber: 1,
+                message: "gsgen exited with code $exitCode without emitting a structured diagnostic.$breadcrumb"
+            )
+        }
+        return exitCode == 0 && !this.Log.HasLoggedErrors
     }
 
     /// Routes a single line of gsgen stdout to the MSBuild logger. Diagnostic

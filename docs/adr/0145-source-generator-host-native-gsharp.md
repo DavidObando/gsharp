@@ -177,6 +177,31 @@ unavailable. A separate process gives crash isolation (a hostile generator kills
 only `gsgen`, surfaced as `GS9200`), matches how gsc itself runs, and shares one
 binary with the LS.
 
+**Bounded build-time reuse (issue #5039).** `GSharpUseSharedCompilation=true`
+opts the SDK into a serial worker registered for one MSBuild node and build.
+The default stays one-shot. The compiler and generator host share a versioned
+transport, not a process or Roslyn dependency. Requests carry their working
+directory, environment, arguments, and resource grant. Cancellation kills the
+worker tree; only startup failures and pre-execution rejection permit fallback.
+Protocol responses use a private named pipe, while ordinary stdout and stderr
+retain managed, finalizer, and inherited helper diagnostics. The SDK drains
+request-specific completion fences on both diagnostic streams before consuming
+completion. A generator that leaves helpers running forces retirement; normal
+retirement terminates the owned process group or job after flushing the
+completion packet. Owner loss terminates it immediately, including during a
+blocked request.
+
+Each generation request loads fresh generators in collectible contexts and
+uses a fresh driver. Immutable, content-hashed metadata images have a fixed
+cache ceiling. The host reuses Roslyn input and generated trees during
+back-translation, but never reuses the pre-generator G# scope as the final
+scope. An empty output manifest does not bypass generation or diagnostics.
+The worker checks analyzer unload probes after collection and retires if any
+remain alive. Request count, idle time, retained managed memory, and working
+set also bound worker lifetime. Console channel and encoding changes, including
+those made by finalizers, force retirement: public writer replacement cannot
+reset the runtime's private redirection state safely for another request.
+
 ### G. Language-server integration — a persistent `gsgen serve` sidecar
 
 The LS spawns `gsgen serve` lazily per workspace (out-of-proc, chosen over

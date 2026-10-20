@@ -9,6 +9,7 @@ import Cs2Gs.CodeModel.Printing
 import Cs2Gs.CodeModel.RoundTrip
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Text
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
@@ -50,6 +51,7 @@ shared class GeneratedDocTranslator {
     /// @param dataTypes The top-level G# data types the stub rendered, whose generated parts
     /// are spelled as `data` parts ((cref:SpellDataTypeParts));
     /// `null` or empty for none.
+    /// @param inputStubTree The immutable generator input tree, or none for standalone translation.
     /// @returns The back-translated G# parts: one per namespace of each generated document with members or
     /// file-level attributes.
     func Translate(
@@ -57,8 +59,10 @@ shared class GeneratedDocTranslator {
         generated IReadOnlyList[GeneratedCsDocument],
         references IReadOnlyList[MetadataReference],
         declaringParts IReadOnlyList[StubPartialDefinition]? = nil,
-        dataTypes IReadOnlyList[StubDataType]? = nil
+        dataTypes IReadOnlyList[StubDataType]? = nil,
+        inputStubTree SyntaxTree? = nil
     ) IReadOnlyList[TranslatedGsDocument] {
+        using let phase = CompilationMeasurements.BeginPhase("generator.translation")
         ArgumentNullException.ThrowIfNull(stubCSharp, paramName: "stubCSharp")
         ArgumentNullException.ThrowIfNull(generated, paramName: "generated")
         ArgumentNullException.ThrowIfNull(references, paramName: "references")
@@ -67,12 +71,24 @@ shared class GeneratedDocTranslator {
             return results
         }
         let parseOptions = CSharpParseOptions(LanguageVersion.Latest)
-        let stubTree = CSharpSyntaxTree.ParseText(stubCSharp, parseOptions, path: StubPath)
+        let stubTree = if inputStubTree != nil {
+            CompilationMeasurements.Count("generator.stub_tree_reuses")
+            inputStubTree.WithFilePath(StubPath)
+        } else {
+            CompilationMeasurements.Count("generator.host_csharp_trees_parsed")
+            CSharpSyntaxTree.ParseText(stubCSharp, parseOptions, path: StubPath)
+        }
         // Bind stub + every generated tree together so generated members resolve
         // against user declarations and package runtime types.
         let generatedTrees = List[(Doc GeneratedCsDocument, Tree SyntaxTree)]()
         for doc in generated {
-            let tree = CSharpSyntaxTree.ParseText(doc.SourceText, parseOptions, path: doc.HintName)
+            let tree = if doc.SyntaxTree is {} generatedTree {
+                CompilationMeasurements.Count("generator.generated_tree_reuses")
+                generatedTree.WithFilePath(doc.HintName)
+            } else {
+                CompilationMeasurements.Count("generator.host_csharp_trees_parsed")
+                CSharpSyntaxTree.ParseText(doc.SourceText, parseOptions, path: doc.HintName)
+            }
             generatedTrees.Add((doc, tree))
         }
         let trees = List[SyntaxTree]{stubTree}

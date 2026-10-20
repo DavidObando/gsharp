@@ -4,6 +4,7 @@
 
 package GSharp.GeneratorHost
 
+import GSharp.Core.CodeAnalysis.Compilation
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import Microsoft.CodeAnalysis.Diagnostics
@@ -13,6 +14,8 @@ import System.Collections.Immutable
 import System.IO
 import System.Linq
 import System.Reflection
+import System.Runtime.InteropServices
+import System.Runtime.Loader
 import System.Security.Cryptography
 
 /// ADR-0145 §C: runs Roslyn incremental source generators against the C# stub
@@ -25,19 +28,64 @@ import System.Security.Cryptography
 /// never propagates out of a `Run*` call, so one broken generator cannot
 /// abort the host.
 shared class GeneratorRunner {
-    /// A trivial (cref:IAnalyzerAssemblyLoader) that loads analyzer
-    /// assemblies from disk via (cref:Assembly.LoadFrom(string)).
-    private class AnalyzerAssemblyLoader : IAnalyzerAssemblyLoader {
+    /// Each analyzer directory has a collectible dependency context. Roslyn stays
+    /// in the host context so generator interfaces retain their identity.
+    private class AnalyzerAssemblyLoader : AssemblyLoadContext, IAnalyzerAssemblyLoader, IDisposable {
+        private let directory string
+        private let dependencies AssemblyDependencyResolver
+
+        init(path string) : base("gsgen-analyzers", true) {
+            directory = Path.GetDirectoryName(Path.GetFullPath(path)) ?? Environment.CurrentDirectory
+            dependencies = AssemblyDependencyResolver(Path.GetFullPath(path))
+        }
+
         func AddDependencyLocation(fullPath string) {
-            // No dependency-resolution bookkeeping needed for the simple
-            // LoadFrom strategy; the CLR probes alongside the loaded assembly.
+            // Dependencies are resolved beside this analyzer, not another
+            // analyzer with a different version of the same dependency.
 
         }
 
-        func LoadFromPath(fullPath string) Assembly -> Assembly.LoadFrom(fullPath)
+        func LoadFromPath(fullPath string) Assembly -> LoadFromAssemblyPath(Path.GetFullPath(fullPath))
+
+        protected override func Load(name AssemblyName) Assembly? {
+            let roslyn = typeof(ISourceGenerator).Assembly
+            let csharp = typeof(CSharpCompilation).Assembly
+            if name.Name == roslyn.GetName().Name {
+                return roslyn
+            }
+            if name.Name == csharp.GetName().Name {
+                return csharp
+            }
+            if name.Name is {} simpleName && FrameworkAssemblyNames.Contains(simpleName) {
+                return AssemblyLoadContext.Default.LoadFromAssemblyName(name)
+            }
+            let candidate = dependencies.ResolveAssemblyToPath(name) ?? Path.Combine(
+                directory,
+                (name.Name ?? string.Empty) + ".dll"
+            )
+            return if File.Exists(candidate) {
+                LoadFromPath(candidate)
+            } else {
+                nil
+            }
+        }
+
+        protected override func LoadUnmanagedDll(name string) IntPtr {
+            let path = dependencies.ResolveUnmanagedDllToPath(name)
+            return if path == nil {
+                IntPtr.Zero
+            } else {
+                LoadUnmanagedDllFromPath(path)
+            }
+        }
+
+        func Dispose() -> Unload()
 
         shared {
-            let Instance GeneratorRunner.AnalyzerAssemblyLoader = GeneratorRunner.AnalyzerAssemblyLoader()
+            private let FrameworkAssemblyNames HashSet[string] = Directory
+                .GetFiles(RuntimeEnvironment.GetRuntimeDirectory(), "*.dll")
+                .Select((path string) -> Path.GetFileNameWithoutExtension(path))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
         }
     }
 
@@ -87,9 +135,28 @@ shared class GeneratorRunner {
         additionalTexts IReadOnlyList[AdditionalText]? = nil,
         optionsProvider AnalyzerConfigOptionsProvider? = nil
     ) GeneratorRunResult {
+        using let discovery = Discover(analyzerAssemblyPaths)
+        return RunDiscovered(stubCSharp, references, discovery, additionalTexts, optionsProvider)
+    }
+
+    /// Discovers real generators before a caller loads, binds, or projects G#.
+    /// Dispose the result after the complete generation and translation request.
+    /// @param analyzerAssemblyPaths Analyzer assemblies in resolution order.
+    /// @returns Generators, load failures, and their request-scoped load contexts.
+    func Discover(analyzerAssemblyPaths IReadOnlyList[string]) GeneratorDiscovery {
+        using let phase = CompilationMeasurements.BeginPhase("generator.discovery")
         ArgumentNullException.ThrowIfNull(analyzerAssemblyPaths, paramName: "analyzerAssemblyPaths")
+        CompilationMeasurements.Count("generator.analyzer_paths", analyzerAssemblyPaths.Count)
         let failures = List[GeneratorFailure]()
         let generators = List[ISourceGenerator]()
+        let contexts = List[IDisposable]()
+        let loaders = Dictionary[string, GeneratorRunner.AnalyzerAssemblyLoader](
+            if OperatingSystem.IsWindows() {
+                StringComparer.OrdinalIgnoreCase
+            } else {
+                StringComparer.Ordinal
+            }
+        )
         let analyzerHashes = HashSet[string](StringComparer.Ordinal)
         for path in analyzerAssemblyPaths {
             try {
@@ -98,13 +165,53 @@ shared class GeneratorRunner {
                 if !analyzerHashes.Add(hash) {
                     continue
                 }
-                let reference = AnalyzerFileReference(path, GeneratorRunner.AnalyzerAssemblyLoader.Instance)
+                let fullPath = Path.GetFullPath(path)
+                let directory = Path.GetDirectoryName(fullPath) ?? Environment.CurrentDirectory
+                // Assemblies beside one another share their dependency closure.
+                // Different package directories keep separate version identities.
+                if !loaders.TryGetValue(directory, out var loader) {
+                    loader = GeneratorRunner.AnalyzerAssemblyLoader(fullPath)
+                    loaders.Add(directory, loader)
+                    contexts.Add(loader)
+                }
+                let reference = AnalyzerFileReference(fullPath, loader)
+                reference.AnalyzerLoadFailed += (_ object?, args AnalyzerLoadFailureEventArgs) -> {
+                    failures.Add(GeneratorFailure("failed to load analyzer '$path': ${args.Message}", args.Exception))
+                }
                 generators.AddRange(reference.GetGenerators(LanguageNames.CSharp))
             } catch (ex Exception) {
                 failures.Add(GeneratorFailure("failed to load analyzer '$path'", ex))
             }
         }
-        return RunCore(stubCSharp, references, generators, failures, additionalTexts, optionsProvider)
+        CompilationMeasurements.Count("generator.generators", generators.Count)
+        CompilationMeasurements.Count("generator.load_failures", failures.Count)
+        CompilationMeasurements.Count("generator.load_contexts", contexts.Count)
+        return GeneratorDiscovery(generators, failures, contexts)
+    }
+
+    /// Runs a discovery result without loading the analyzer assemblies again.
+    /// @param stubCSharp Declaration-only C# projection.
+    /// @param references Metadata references in project order.
+    /// @param discovery Generators and load failures for this request.
+    /// @param additionalTexts Non-source generator inputs.
+    /// @param optionsProvider Project and additional-file options.
+    /// @returns Generated source, diagnostics, and failures.
+    func RunDiscovered(
+        stubCSharp string,
+        references IReadOnlyList[MetadataReference],
+        discovery GeneratorDiscovery,
+        additionalTexts IReadOnlyList[AdditionalText]? = nil,
+        optionsProvider AnalyzerConfigOptionsProvider? = nil
+    ) GeneratorRunResult {
+        ArgumentNullException.ThrowIfNull(discovery, paramName: "discovery")
+        return RunCore(
+            stubCSharp,
+            references,
+            discovery.Generators,
+            discovery.Failures.ToList(),
+            additionalTexts,
+            optionsProvider
+        )
     }
 
     private func RunCore(
@@ -117,6 +224,11 @@ shared class GeneratorRunner {
     ) GeneratorRunResult {
         ArgumentNullException.ThrowIfNull(stubCSharp, paramName: "stubCSharp")
         ArgumentNullException.ThrowIfNull(references, paramName: "references")
+        if generators.Count == 0 {
+            return GeneratorRunResult(Array.Empty[GeneratedCsDocument](), Array.Empty[Diagnostic](), failures)
+        }
+        using let phase = CompilationMeasurements.BeginPhase("generator.execution")
+        CompilationMeasurements.Count("generator.host_csharp_trees_parsed")
         let stubTree = CSharpSyntaxTree.ParseText(
             stubCSharp,
             CSharpParseOptions(LanguageVersion.Latest),
@@ -131,9 +243,6 @@ shared class GeneratorRunner {
             )
                 .WithAllowUnsafe(true)
         )
-        if generators.Count == 0 {
-            return GeneratorRunResult(Array.Empty[GeneratedCsDocument](), Array.Empty[Diagnostic](), failures)
-        }
         // ADR-0145 §C / issue #2223: forward the project's non-source inputs
         // (e.g. Avalonia .axaml) and their MSBuild options so file/options-driven
         // generators can find and process them.
@@ -156,9 +265,49 @@ shared class GeneratorRunner {
             }
             diagnostics.AddRange(perGenerator.Diagnostics)
             for source in perGenerator.GeneratedSources {
-                documents.Add(GeneratedCsDocument(source.HintName, source.SourceText))
+                documents.Add(GeneratedCsDocument(source.HintName, source.SourceText, source.SyntaxTree))
             }
         }
-        return GeneratorRunResult(documents, diagnostics, failures)
+        CompilationMeasurements.Count("generator.generated_documents", documents.Count)
+        CompilationMeasurements.Count("generator.diagnostics", diagnostics.Count)
+        return GeneratorRunResult(documents, diagnostics, failures, stubTree)
+    }
+}
+
+/// Request-scoped analyzer discovery. It never caches prior output or drivers.
+class GeneratorDiscovery : IDisposable {
+    private let contexts IReadOnlyList[IDisposable]
+
+    internal init(
+        generators IReadOnlyList[ISourceGenerator],
+        failures IReadOnlyList[GeneratorFailure],
+        contexts IReadOnlyList[IDisposable]
+    ) {
+        Generators = generators
+        Failures = failures
+        this.contexts = contexts
+        LoadContexts = contexts.Select((context IDisposable) -> WeakReference(context)).ToArray()
+    }
+
+    /// Gets the actual generators, including generators that may emit no source.
+    prop Generators IReadOnlyList[ISourceGenerator] {
+        get;
+    }
+
+    /// Gets failures reported while loading analyzer assemblies or generators.
+    prop Failures IReadOnlyList[GeneratorFailure] {
+        get;
+    }
+
+    /// Gets weak lifetime probes so a worker can retire when an analyzer cannot unload.
+    prop LoadContexts IReadOnlyList[WeakReference] {
+        get;
+    }
+
+    /// Requests unloading after the caller releases the request's results.
+    func Dispose() {
+        for context in contexts {
+            context.Dispose()
+        }
     }
 }

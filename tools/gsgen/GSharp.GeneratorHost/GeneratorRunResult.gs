@@ -17,14 +17,17 @@ class GeneratorRunResult {
     /// @param documents The generated C# documents.
     /// @param generatorDiagnostics The diagnostics reported by the generators.
     /// @param failures Generators that threw or analyzer assemblies that failed to load.
+    /// @param inputStubTree The immutable generator input tree reused for back-translation, or none.
     init(
         documents IReadOnlyList[GeneratedCsDocument],
         generatorDiagnostics IReadOnlyList[Diagnostic],
-        failures IReadOnlyList[GeneratorFailure]
+        failures IReadOnlyList[GeneratorFailure],
+        inputStubTree SyntaxTree? = nil
     ) {
         Documents = documents
         GeneratorDiagnostics = generatorDiagnostics
         Failures = failures
+        InputStubTree = inputStubTree
     }
 
     /// Gets the generated C# documents (hint name + source text).
@@ -41,6 +44,11 @@ class GeneratorRunResult {
     prop Failures IReadOnlyList[GeneratorFailure] {
         get;
     }
+
+    /// Gets the immutable Roslyn input tree, not a bound scope or final compilation.
+    prop InputStubTree SyntaxTree? {
+        get;
+    }
 }
 
 /// One generated C# document produced by a Roslyn source generator: its
@@ -50,9 +58,11 @@ class GeneratedCsDocument {
     /// Initializes a new instance of the (cref:GeneratedCsDocument) class.
     /// @param hintName The generator-assigned hint name (e.g. `Foo.g.cs`).
     /// @param sourceText The generated C# source text.
-    init(hintName string, sourceText SourceText) {
+    /// @param syntaxTree The already parsed generator tree, or none for a foreign document.
+    init(hintName string, sourceText SourceText, syntaxTree SyntaxTree? = nil) {
         HintName = hintName
         SourceText = sourceText
+        SyntaxTree = syntaxTree
     }
 
     /// Gets the generator-assigned hint name.
@@ -62,6 +72,11 @@ class GeneratedCsDocument {
 
     /// Gets the generated C# source text.
     prop SourceText SourceText {
+        get;
+    }
+
+    /// Gets the generator's immutable tree when available.
+    prop SyntaxTree SyntaxTree? {
         get;
     }
 }

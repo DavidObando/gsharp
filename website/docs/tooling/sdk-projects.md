@@ -141,9 +141,25 @@ For native `.gsproj` projects, `gsgen` hosts Roslyn source generators outside `g
 4. writes deterministic `.g.gs` files under `obj\gsgen\`; and
 5. adds those generated files to `@(Compile)` before invoking `gsc`.
 
-`GsharpRunSourceGenerators=false` disables this pass. `GsgenToolFullPath` overrides the tool path. The common no-generator project pays only the analyzer-resolution check and skips the actual `gsgen` launch.
+`GsharpRunSourceGenerators=false` disables this pass. `GsgenToolFullPath` overrides the tool path. A project without analyzer paths or foreign C# files skips the launch, unless an earlier manifest needs orphan cleanup. Analyzer assemblies without actual generators do not trigger G# parsing, reference setup, or stub projection.
 
 `gsgen` projects G# declarations to C# stubs, runs the real Roslyn generators, translates generated C# back to G#, and emits partial `.g.gs` parts. This is the path used by source generators in migrated projects too: `cs2gs` preserves generator inputs rather than freezing generated output.
+
+An empty manifest does not skip future generator execution. Generators can report diagnostics without producing source, or produce new source after changes to declarations, references, options, additional files, or generator assemblies. Generated partials still participate in the final `gsc` compilation; the host's pre-generator declaration scope is not reused as the final scope.
+
+Set `GSHARP_MEASURE_PHASES` to a JSON file path to record opt-in host phases without changing diagnostic output. Use `{pid}` and `{id}` in the path to separate processes and requests. Reports include discovery, metadata and reference setup, source loading, projection, execution, translation, and output. Nested process-inclusive phase durations are not additive.
+
+`GSharpUseSharedCompilation=true` opts `GsgenTask` into one serial generator worker per MSBuild node and build. The default remains one-shot execution. Each request loads fresh generator instances in collectible package contexts and runs a new driver. Only content-hashed immutable metadata images and host code are reused; previous generator output is never a cache key. The cache caps stored input images at 128 MiB and 512 entries, excluding Roslyn's metadata indexes and object overhead.
+
+Workers retire after 16 requests, 60 seconds idle, 256 MiB retained managed memory, or 1 GiB working set. These are post-request retirement limits, not limits on an active compilation's peak memory. A worker also retires if an analyzer context cannot unload, a generator leaves helper processes running, a request or finalizer changes Console channels or encodings, or generation used the host's implicit G# reference surface rather than an explicit reference closure. Normal retirement, MSBuild cancellation, and owner disconnection terminate the worker's owned process tree; the next request starts a fresh host. Startup failures or rejected requests explicitly fall back to one-shot execution. A dispatched request is never retried after transport loss.
+
+Worker responses use a private named pipe, separate from diagnostic stdout and stderr. The SDK captures both diagnostic streams, including output inherited by generator helper processes, and drains request completion fences before reporting completion. The completion packet carries the compilation result; a retired worker's OS exit code is not that result.
+
+Failed or interrupted requests stop the owned worker and drain bounded diagnostic lines and unfinished tails without retrying. Pre-acceptance output is startup information, so permitted fallback does not turn it into a compiler error. Worker startup passes typed arguments, preserving supported spaces, Unicode, and quotes in tool and pipe paths.
+
+Removing the final source and analyzer still clears an existing manifest and deletes its generated parts before they can be added back to compilation. This source-free cleanup does not bypass source validation when generators or foreign C# translation are requested.
+
+The manifest records owned files, not task success. The SDK stages each request's files and manifest privately, then publishes changes and removes orphans only after the tool exit status and diagnostic streams pass validation. Diagnostic failures preserve the previous generated files and manifest, including their timestamps. The SDK removes `gsgen.manifest.success` before an attempt and commits it after publication. Errors written directly to stdout or stderr therefore remain visible on unchanged rebuilds until corrected; successful builds return to normal no-op behavior.
 
 A generator that implements a partial method, such as the Regex generator, pairs with a G# declaring part. Write a static one inside a `shared` block; `private shared partial func` is not valid G#:
 
