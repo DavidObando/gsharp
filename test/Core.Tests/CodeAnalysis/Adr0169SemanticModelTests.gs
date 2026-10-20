@@ -21,6 +21,78 @@ import Xunit
 /// and (cref:GSharpSyntaxWalker).
 open class Adr0169SemanticModelTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func StaticQualifierQuery_FoldedFieldsAndConstrainedCopies_RetainActualDecision(constrained bool) {
+        let source = if constrained {
+            `package Query
+interface IFactory[U] { shared { func Make(value int32) string; } }
+func Run[T IFactory[int32?]]() { let first = T.Make(1) }
+func Other[T IFactory[int32?]]() { let second = T.Make(2) }
+`
+        } else {
+            `package Query
+class Box[T] {
+    shared {
+        const Value int32 = 1
+        const Other int32 = 1
+    }
+}
+func Run() {
+    let first = Box[int32?].Value
+    let second = Box[int32?].Other
+}
+`
+        }
+        let (_, model, tree) = CreateQualifierModel(source)
+        let first = QualifierInitializer(tree, "first")
+        let (owner, qualifier, read) = QueryQualifier(model, first)
+        let (_, _, other) = QueryQualifier(model, QualifierInitializer(tree, "second"))
+        Assert.Same(first.LeftPart, qualifier)
+        if constrained {
+            let call = Assert.IsType[BoundConstrainedStaticCallExpression](read)
+            Assert.Same(owner, call.TypeParameter)
+            let contract = Assert.IsType[InterfaceSymbol](call.TypeParameter.InterfaceConstraint)
+            Assert.Same(contract.StaticMethods.Single((m FunctionSymbol) -> m.Name == "Make"), call.InterfaceMethod)
+            Assert.Same(
+                TypeSymbol.Int32,
+                Assert.IsType[NullableTypeSymbol](Assert.Single(contract.TypeArguments)).UnderlyingType
+            )
+            let copied = Assert.IsType[BoundConstrainedStaticCallExpression](QualifierChildRewriter().Apply(read))
+            Assert.NotSame(read, copied)
+            Assert.Same(owner, copied.StaticQualifierType)
+            Assert.Same(qualifier, copied.StaticQualifierSyntax)
+            Assert.Same(read.StaticMemberSyntax, copied.StaticMemberSyntax)
+            Assert.Same(call.InterfaceMethod, copied.InterfaceMethod)
+            Assert.Same(call.TypeParameter, copied.TypeParameter)
+            let unrelated = BoundConstrainedStaticCallExpression(
+                read.Syntax,
+                Assert.IsType[BoundConstrainedStaticCallExpression](other).TypeParameter,
+                call.InterfaceMethod!!,
+                call.Arguments,
+                call.ReturnType
+            )
+            read.CopyStaticQualifierTo(unrelated)
+            Assert.Null(unrelated.StaticQualifierType)
+        } else {
+            let literal = Assert.IsType[BoundLiteralExpression](read)
+            Assert.Equal(literal.Value, Assert.IsType[BoundLiteralExpression](other).Value)
+            Assert.NotSame(read, other)
+            Assert.NotSame(read.StaticMemberSyntax, other.StaticMemberSyntax)
+            let closed = Assert.IsType[StructSymbol](owner)
+            Assert.Same(
+                TypeSymbol.Int32,
+                Assert.IsType[NullableTypeSymbol](Assert.Single(closed.TypeArguments)).UnderlyingType
+            )
+            let unrelated = BoundLiteralExpression(other.Syntax, literal.Value, literal.Type)
+            read.CopyStaticQualifierTo(unrelated)
+            Assert.Null(unrelated.StaticQualifierType)
+        }
+        let (_, _, unchanged) = QueryQualifier(model, first)
+        Assert.Same(read, unchanged)
+    }
+
+    @Theory
     @InlineData(false, true, true)
     @InlineData(true, true, true)
     @InlineData(false, false, true)

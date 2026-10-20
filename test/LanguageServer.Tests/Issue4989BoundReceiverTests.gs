@@ -25,6 +25,160 @@ import Xunit
 /// symbol lookup on `s.LoadAsync()` resolve to the interface member, never to
 /// a same-named member of one implementation.
 open class Issue4989BoundReceiverTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5035_SourceConstant_PreservesFoldedFieldIdentity(generic bool) {
+        let source = `package Repro
+class HolderTYPE_PARAMETERS {
+    shared { const Value int32 = 1 }
+}
+func Run() {
+    let competing = System.Text.StringBuilder().ToString()
+    let indexed = HolderTYPE_ARGUMENTS.Value.ToString()[^1]
+}
+`.Replace(
+            "TYPE_PARAMETERS",
+            if generic {
+                "[T]"
+            } else {
+                ""
+            }
+        )
+            .Replace(
+            "TYPE_ARGUMENTS",
+            if generic {
+                "[int32?]"
+            } else {
+                ""
+            }
+        )
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let holder = compilation.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Holder")
+        let field = holder.ConstFields.Single((f FieldSymbol) -> f.Name == "Value")
+        Assert.True(field.IsConst)
+        let root = Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "indexed =", 0).Parent).Initializer
+        let block = Assert.IsType[BoundBlockExpression](
+            compilation.GetSemanticModel(content.SyntaxTree).GetBoundNode(root!!)
+        )
+        let call = Assert.IsType[BoundImportedInstanceCallExpression](
+            Assert.IsType[BoundVariableDeclaration](block.Statements[0]).Initializer
+        )
+        Assert.Equal(field.ConstantValue, Assert.IsType[BoundLiteralExpression](call.Receiver).Value)
+        let method = typeof(int32).GetMethod("ToString", Type.EmptyTypes)
+        Assert.Equal(method, call.Method)
+        let token = TokenAt(content, source, "ToString()[^1]", 0)
+        Assert.Equal(method, BoundSemantics.GetImportedMember(compilation, token))
+        Assert.True(
+            ImportedClrMemberResolver.TryResolveClrMember(content.SyntaxTree, compilation, token, out var actual)
+        )
+        Assert.Equal(method, actual)
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]"),
+            "ToString",
+            "func (int32) ToString() string"
+        )
+        Assert.Same(field, BoundSemantics.GetSymbol(compilation, TokenAt(content, source, "Value.ToString", 0)))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5035_ConstrainedStatic_PreservesSelectedSlotAndCopy(loweredArgument bool) {
+        let source = if loweredArgument {
+            `package Repro
+interface IFactory[U] { shared { func Make(value int32) string; } }
+class Holder {
+    prop Value int32 { get; set; }
+    func Run[T IFactory[int32?]]() {
+        let competing = System.Text.StringBuilder().ToString()
+        let indexed = T.Make(this.Value).ToString()[^1]
+    }
+}
+`
+        } else {
+            `package Repro
+interface IFactory { shared { func Make() string; } }
+func Run[T IFactory]() {
+    let competing = System.Text.StringBuilder().ToString()
+    let indexed = T.Make().ToString()[^1]
+}
+`
+        }
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let root = Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "indexed =", 0).Parent).Initializer
+        let block = Assert.IsType[BoundBlockExpression](
+            compilation.GetSemanticModel(content.SyntaxTree).GetBoundNode(root!!)
+        )
+        let call = Assert.IsType[BoundImportedInstanceCallExpression](
+            Assert.IsType[BoundVariableDeclaration](block.Statements[0]).Initializer
+        )
+        let constrained = Assert.IsType[BoundConstrainedStaticCallExpression](call.Receiver)
+        let owner = Assert.IsType[InterfaceSymbol](constrained.TypeParameter.InterfaceConstraint)
+        let slot = owner.StaticMethods.Single((m FunctionSymbol) -> m.Name == "Make")
+        Assert.Same(slot, constrained.InterfaceMethod)
+        if loweredArgument {
+            Assert.IsType[BoundFieldAccessExpression](Assert.Single(constrained.Arguments))
+            Assert.Same(
+                TypeSymbol.Int32,
+                Assert.IsType[NullableTypeSymbol](Assert.Single(owner.TypeArguments)).UnderlyingType
+            )
+        }
+        let method = typeof(string).GetMethod("ToString", Type.EmptyTypes)
+        Assert.Equal(method, call.Method)
+        let token = TokenAt(content, source, "ToString()[^1]", 0)
+        Assert.Equal(method, BoundSemantics.GetImportedMember(compilation, token))
+        Assert.True(
+            ImportedClrMemberResolver.TryResolveClrMember(content.SyntaxTree, compilation, token, out var actual)
+        )
+        Assert.Equal(method, actual)
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]"),
+            "ToString",
+            "func (string) ToString() string"
+        )
+        let member = TokenAt(
+            content,
+            source,
+            if loweredArgument {
+                "Make(this.Value)"
+            } else {
+                "Make().ToString"
+            },
+            0
+        )
+        Assert.Same(slot, BoundSemantics.GetSymbol(compilation, member))
+        let uri = DocumentUri.From("file:///issue5035-constrained-slot.gs")!!
+        let position = LanguageServerTestHelpers.PositionOf(
+            source,
+            if loweredArgument {
+                "Make(this.Value)"
+            } else {
+                "Make().ToString"
+            }
+        )
+        let location = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
+        let declaration = LanguageServerTestHelpers.PositionOf(
+            source,
+            if loweredArgument {
+                "Make(value int32)"
+            } else {
+                "Make() string"
+            }
+        )
+        Assert.Equal(uri, location.Uri)
+        AssertPosition(declaration, location.Range.Start)
+        AssertPosition(Position(declaration.Line, declaration.Character + "Make".Length), location.Range.End)
+    }
+
     @Fact
     func Issue5035_LoweredCallArgument_PreservesStaticOverload() {
         const source = `package Repro

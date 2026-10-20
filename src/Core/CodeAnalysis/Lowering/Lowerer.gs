@@ -517,7 +517,9 @@ class Lowerer : BoundTreeRewriter {
     /// ```
     protected override func RewriteFieldAccessExpression(node BoundFieldAccessExpression) BoundExpression {
         if node.Field.IsConst {
-            return BoundLiteralExpression(nil, node.Field.ConstantValue, node.Field.Type)
+            let literal = BoundLiteralExpression(nil, node.Field.ConstantValue, node.Field.Type)
+            node.CopyStaticQualifierTo(literal)
+            return literal
         }
         return base.RewriteFieldAccessExpression(node)
     }

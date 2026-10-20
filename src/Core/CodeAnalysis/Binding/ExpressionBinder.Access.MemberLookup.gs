@@ -4198,6 +4198,16 @@ internal partial class ExpressionBinder {
         leftName NameExpressionSyntax,
         rightPart ExpressionSyntax
     ) BoundExpression {
+        let result = BindTypeParameterStaticAccessorStepCore(tpSym, leftName, rightPart)
+        RecordStaticTypeQualifier(result, tpSym, rightPart)
+        return result
+    }
+
+    private func BindTypeParameterStaticAccessorStepCore(
+        tpSym TypeParameterSymbol,
+        leftName NameExpressionSyntax,
+        rightPart ExpressionSyntax
+    ) BoundExpression {
         // Issue #3525: a type parameter constrained to an imported CLR
         // interface (e.g. `T : IParsable[T]`) has no InterfaceConstraint —
         // its static-virtual members are reached through ClrInterfaceConstraint

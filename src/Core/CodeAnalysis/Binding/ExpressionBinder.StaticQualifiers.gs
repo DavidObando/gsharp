@@ -17,6 +17,8 @@ internal partial class ExpressionBinder {
             case field is BoundFieldAccessExpression: field.Receiver == nil && field.Field.IsStatic
             case call is BoundCallExpression: call.Function.IsStatic
             case call is BoundImportedCallExpression: call.Function?.Method.IsStatic == true
+            case call is BoundConstrainedStaticCallExpression:
+            call.InterfaceMethod?.IsStatic == true || call.ClrMethod?.IsStatic == true
             case BoundLiteralExpression: member is NameExpressionSyntax
             case imported is BoundClrPropertyAccessExpression: imported.Receiver == nil && switch imported.Member {
                 case field is FieldInfo: field.IsStatic

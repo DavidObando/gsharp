@@ -203,6 +203,14 @@ Arbitrary virtual replacements, changed members and unrelated authored nodes
 do not inherit that authority. Original nodes and published snapshots are not
 repaired or mutated by copying or querying.
 
+Representation-changing constant folding retains the actual selected source
+field read (its `FieldSymbol` and effective closed owner), not just a literal
+value or member name. A verified fold carries that semantic association to
+the new literal; unrelated literals do not acquire it. Constrained static
+dispatch likewise records the exact receiver type parameter and its selected
+constraint owner/slot, retaining those identities through argument copies.
+These are internal, non-child provenance references fixed before publication.
+
 The existing per-tree lazy semantic index harvests these binding-time
 decisions. They are fixed before the bound program is published; a query
 does not modify project, compilation, bound or syntax state, including

@@ -721,7 +721,7 @@ abstract class BoundTreeRewriter {
 
         // (ClrMethod) instead of a FunctionSymbol (InterfaceMethod).
 
-        return if node.InterfaceMethod != nil {
+        let copy = if node.InterfaceMethod != nil {
             BoundConstrainedStaticCallExpression(
                 node.Syntax,
                 node.TypeParameter,
@@ -741,6 +741,7 @@ abstract class BoundTreeRewriter {
                 node.TypeArgumentSymbols
             )
         }
+        return CompleteSelectedCallCopy(node, copy)
     }
 
     /// Rewrites a conversion expression.

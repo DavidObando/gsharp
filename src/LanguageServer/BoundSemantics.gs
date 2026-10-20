@@ -67,6 +67,7 @@ shared class BoundSemantics {
         let member MemberInfo? = switch Unwrap(FindReferencedNode(model, token)) {
             case instanceCall is BoundImportedInstanceCallExpression: instanceCall.Method
             case staticCall is BoundImportedCallExpression: staticCall.Function?.Method
+            case constrained is BoundConstrainedStaticCallExpression: constrained.ClrMethod
             case property is BoundClrPropertyAccessExpression: property.Member
             default: default(MemberInfo?)
         }
@@ -385,23 +386,19 @@ shared class BoundSemantics {
             }
         }
         if read is BoundFieldAccessExpression{Receiver: nil, Field: {IsStatic: true}} field {
-            if sourceType is StructSymbol owner && TypeMemberModel.TryGetStaticFieldIncludingInherited(
-                owner,
-                name,
-                out var expectedField,
-                out var fieldOwner
-            ) {
-                return object.ReferenceEquals(field.Field, expectedField) && object.ReferenceEquals(
-                    field.StructType,
-                    fieldOwner
-                )
-            }
-            if sourceType is InterfaceSymbol contract {
-                return object.ReferenceEquals(field.InterfaceType, contract) && object.ReferenceEquals(
-                    field.Field,
-                    (contract.Definition ?? contract).GetStaticField(name)
-                )
-            }
+            return SourceStaticFieldOwnsPrefix(sourceType, name, field)
+        }
+        if read is BoundLiteralExpression folded && folded.StaticConstantFieldRead is {} foldedField {
+            return foldedField.Field.IsConst && object.Equals(folded.Value, foldedField.Field.ConstantValue) &&
+                object.ReferenceEquals(foldedField.StaticQualifierType, sourceType) && object.ReferenceEquals(
+                foldedField.StaticQualifierSyntax,
+                qualifier
+            ) &&
+                object.ReferenceEquals(foldedField.StaticMemberSyntax, member) &&
+                SourceStaticFieldOwnsPrefix(sourceType, name, foldedField)
+        }
+        if read is BoundConstrainedStaticCallExpression constrained && sourceType is TypeParameterSymbol parameter {
+            return ConstrainedStaticOwnsPrefix(parameter, member, name, constrained)
         }
         if read is BoundCallExpression call && call.Function.IsStatic && sourceType != nil {
             if sourceType is InterfaceSymbol contract &&
@@ -475,6 +472,75 @@ shared class BoundSemantics {
             return ClrTypeUtilities.SafeGetMethods(
                 clrType,
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.FlattenHierarchy
+            )
+                .Any((candidate MethodInfo) -> SameClrMethod(candidate, definition))
+        }
+        return false
+    }
+
+    private func SourceStaticFieldOwnsPrefix(
+        sourceType TypeSymbol?,
+        name string,
+        field BoundFieldAccessExpression
+    ) bool {
+        if field.Receiver != nil || !field.Field.IsStatic {
+            return false
+        }
+        if sourceType is StructSymbol owner && TypeMemberModel.TryGetStaticFieldIncludingInherited(
+            owner,
+            name,
+            out var expected,
+            out var declaring
+        ) {
+            return object.ReferenceEquals(field.Field, expected) && object.ReferenceEquals(field.StructType, declaring)
+        }
+        return sourceType is InterfaceSymbol contract && object.ReferenceEquals(field.InterfaceType, contract) &&
+            object.ReferenceEquals(field.Field, (contract.Definition ?? contract).GetStaticField(name))
+    }
+
+    private func ConstrainedStaticOwnsPrefix(
+        parameter TypeParameterSymbol,
+        member ExpressionSyntax,
+        name string,
+        call BoundConstrainedStaticCallExpression
+    ) bool {
+        let owner = call.StaticConstraintOwner
+        if !object.ReferenceEquals(call.TypeParameter, parameter) || owner == nil || !object.ReferenceEquals(
+            owner,
+            parameter.ConstraintInterfaceType
+        ) {
+            return false
+        }
+        if call.InterfaceMethod is {} selected && owner is InterfaceSymbol contract {
+            if member is NameExpressionSyntax && TypeMemberModel.TryGetPropertyWithOwner(
+                contract,
+                name,
+                out var property,
+                out _
+            ) &&
+                property.IsStatic &&
+                property.HasGetter {
+                return object.ReferenceEquals(property.GetterSymbol, selected)
+            }
+            return member is CallExpressionSyntax && TypeMemberModel.GetMethods(
+                contract,
+                name,
+                MemberQuery.Static(MemberKinds.Method)
+            )
+                .Any((candidate FunctionSymbol) -> object.ReferenceEquals(candidate, selected))
+        }
+        if call.ClrMethod is {} imported && object.ReferenceEquals(call.ConstrainedInterfaceType, owner) &&
+            owner.ClrType is {} clrType &&
+            imported
+            .IsStatic {
+            let definition = if imported.IsGenericMethod && !imported.IsGenericMethodDefinition {
+                imported.GetGenericMethodDefinition()
+            } else {
+                imported
+            }
+            return ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(
+                clrType,
+                BindingFlags.Public | BindingFlags.Static
             )
                 .Any((candidate MethodInfo) -> SameClrMethod(candidate, definition))
         }
@@ -701,6 +767,7 @@ shared class BoundSemantics {
         case call is BoundCallOperationExpression: call.CalledFunction
         case property is BoundPropertyReferenceOperationExpression: property.ReferencedProperty
         case field is BoundFieldAccessExpression: field.Field
+        case literal is BoundLiteralExpression: literal.StaticConstantFieldRead?.Field
         default: default(Symbol?)
     }
 
@@ -721,6 +788,7 @@ shared class BoundSemantics {
             }: staticProperty.Property
             case variable is BoundVariableExpression: variable.Variable
             case call is BoundCallExpression: call.Function
+            case constrained is BoundConstrainedStaticCallExpression: constrained.InterfaceMethod
             case userCall is BoundUserInstanceCallExpression: userCall.Method
             // A read through a constructed generic interface keeps the
             // declaration's property and records the substituted type beside
@@ -733,6 +801,7 @@ shared class BoundSemantics {
                 .WithSignature(substitutedType, property.Property.Parameters)
             case property is BoundPropertyAccessExpression: property.Property
             case field is BoundFieldAccessExpression: field.Field
+            case literal is BoundLiteralExpression: literal.StaticConstantFieldRead?.Field
             default: default(Symbol?)
         }
         // A field-like event's read binds its synthesized backing field; the

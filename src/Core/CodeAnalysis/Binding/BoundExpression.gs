@@ -41,6 +41,16 @@ abstract class BoundExpression : BoundNode {
         private set;
     }
 
+    internal prop StaticConstantFieldRead BoundFieldAccessExpression? {
+        get;
+        private set;
+    }
+
+    internal prop StaticConstraintOwner TypeSymbol? {
+        get;
+        private set;
+    }
+
     /// Retains the actual type-receiver decision before inherited syntax anchors
     /// lose its provenance. These references are not bound/syntax tree children.
     internal func RecordStaticQualifier(type TypeSymbol, member ExpressionSyntax) {
@@ -64,16 +74,35 @@ abstract class BoundExpression : BoundNode {
             StaticQualifierType = type
             StaticQualifierSyntax = owner.LeftPart
             StaticMemberSyntax = member
+            if this is BoundFieldAccessExpression{Field: {IsConst: true}} field {
+                StaticConstantFieldRead = field
+            }
+            if this is BoundConstrainedStaticCallExpression constrained {
+                StaticConstraintOwner = constrained.ConstrainedInterfaceType ??
+                    constrained
+                    .TypeParameter
+                    .ConstraintInterfaceType
+            }
         }
     }
 
-    // Only the rewriter's fresh, same-selected-call copy boundary invokes this.
+    // Only fresh same-read copies and the compiler's verified constant fold invoke this.
     // Arbitrary virtual replacements do not inherit another read's authority.
     internal func CopyStaticQualifierTo(copy BoundExpression) {
         if StaticQualifierType == nil || copy.StaticQualifierType != nil {
             return
         }
-        let sameRead = switch this {
+        let foldingConstant = this is BoundFieldAccessExpression sourceField &&
+            sourceField
+            .Field
+            .IsConst &&
+            object.ReferenceEquals(StaticConstantFieldRead, sourceField) &&
+            copy is BoundLiteralExpression literal &&
+            object.ReferenceEquals(sourceField.Field.Type, literal.Type) && object.Equals(
+            sourceField.Field.ConstantValue,
+            literal.Value
+        )
+        let sameRead = foldingConstant || switch this {
             case call is BoundCallExpression when copy is BoundCallExpression replacement:
             object.ReferenceEquals(call.Function, replacement.Function) && object.ReferenceEquals(
                 call.StaticGenericOwnerType,
@@ -94,14 +123,28 @@ abstract class BoundExpression : BoundNode {
                 call
                 .TypeArgumentSymbols
                 .Equals(replacement.TypeArgumentSymbols)
+            case call is BoundConstrainedStaticCallExpression when copy is BoundConstrainedStaticCallExpression replacement:
+            object.ReferenceEquals(call.TypeParameter, replacement.TypeParameter) && object.ReferenceEquals(
+                call.InterfaceMethod,
+                replacement.InterfaceMethod
+            ) &&
+                object.ReferenceEquals(call.ClrMethod, replacement.ClrMethod) && object.ReferenceEquals(
+                call.ConstrainedInterfaceType,
+                replacement.ConstrainedInterfaceType
+            ) &&
+                call
+                .TypeArgumentSymbols
+                .Equals(replacement.TypeArgumentSymbols)
             default: false
         }
-        if !sameRead || !object.ReferenceEquals(Syntax, copy.Syntax) {
+        if !sameRead || (!foldingConstant && !object.ReferenceEquals(Syntax, copy.Syntax)) {
             return
         }
         copy.StaticQualifierType = StaticQualifierType
         copy.StaticQualifierSyntax = StaticQualifierSyntax
         copy.StaticMemberSyntax = StaticMemberSyntax
+        copy.StaticConstantFieldRead = StaticConstantFieldRead
+        copy.StaticConstraintOwner = StaticConstraintOwner
     }
 
     /// Gets the compile-time constant value of this expression — the Roslyn
