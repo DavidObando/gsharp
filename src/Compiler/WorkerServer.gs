@@ -2,14 +2,18 @@ package GSharp.Workers
 
 import System
 import System.Collections
+import System.Collections.Concurrent
 import System.Collections.Generic
 import System.Diagnostics
 import System.IO
+import System.Runtime.InteropServices
 import System.Text
+import System.Threading
 
 /// Serial compiler host. Process isolation is the cancellation boundary.
 internal shared class WorkerServer {
     internal func Run(toolPath string, compile([]string) -> int32, canReuse(() -> bool)? = nil) int32 {
+        EstablishProcessLifetime()
         let identity = WorkerProtocol.ToolIdentity(toolPath)
         using let input = BinaryReader(Console.OpenStandardInput(), Encoding.UTF8)
         using let output = BinaryWriter(Console.OpenStandardOutput(), Encoding.UTF8)
@@ -20,8 +24,31 @@ internal shared class WorkerServer {
         output.Write(WorkerProtocol.Version)
         output.Write(identity)
         output.Flush()
+        using let requests = BlockingCollection[[]uint8](1)
+        let ownerMonitor = Thread(
+            () -> {
+                try {
+                    while true {
+                        let frame = WorkerProtocol.ReadFrame(input)
+                        if !requests.TryAdd(frame) {
+                            break
+                        }
+                    }
+                } catch (ex Exception) when ex is IOException ||
+                    ex is InvalidDataException ||
+                    ex is FormatException ||
+                    ex is DecoderFallbackException ||
+                    ex is InvalidOperationException {
+                    // An incomplete request or closed pipe cannot own a live worker.
+
+                }
+                TerminateProcessLifetime()
+            }
+        )
+        ownerMonitor.IsBackground = true
+        ownerMonitor.Start()
         for var request = 1; request <= WorkerProtocol.MaxRequests; request++ {
-            using let stream = MemoryStream(WorkerProtocol.ReadFrame(input))
+            using let stream = MemoryStream(requests.Take())
             using let payload = BinaryReader(stream, Encoding.UTF8)
             let version = payload.ReadInt32()
             let requestedIdentity = payload.ReadString()
@@ -64,6 +91,51 @@ internal shared class WorkerServer {
         }
         return 0
     }
+
+    private var job IntPtr
+
+    // Process.Kill(true) rejects a tree containing its caller.
+    // A worker owns an OS group or job for atomic owner-loss teardown.
+    private func EstablishProcessLifetime() {
+        if OperatingSystem.IsWindows() {
+            job = CreateJobObject(IntPtr.Zero, IntPtr.Zero)
+            if job == IntPtr.Zero || AssignProcessToJobObject(job, GetCurrentProcessHandle()) == 0 {
+                throw IOException("Cannot contain compiler worker descendants in a Windows job.")
+            }
+        } else if CreateSession() < 0 && GetProcessGroup() != Environment.ProcessId {
+            throw IOException("Cannot create the compiler worker's process group.")
+        }
+    }
+
+    private func TerminateProcessLifetime() {
+        if OperatingSystem.IsWindows() {
+            TerminateJobObject(job, 1)
+        } else {
+            KillProcessGroup(-Environment.ProcessId, 9)
+        }
+        Environment.FailFast("Compiler worker owner disconnected.")
+    }
+
+    @DllImport("kernel32.dll", EntryPoint: "CreateJobObjectW", SetLastError: true)
+    private func CreateJobObject(attributes IntPtr, name IntPtr) IntPtr;
+
+    @DllImport("kernel32.dll", SetLastError: true)
+    private func AssignProcessToJobObject(job IntPtr, process IntPtr) int32;
+
+    @DllImport("kernel32.dll", EntryPoint: "GetCurrentProcess")
+    private func GetCurrentProcessHandle() IntPtr;
+
+    @DllImport("kernel32.dll", SetLastError: true)
+    private func TerminateJobObject(job IntPtr, exitCode uint32) int32;
+
+    @DllImport("libc", EntryPoint: "setsid", SetLastError: true)
+    private func CreateSession() int32;
+
+    @DllImport("libc", EntryPoint: "getpgrp")
+    private func GetProcessGroup() int32;
+
+    @DllImport("libc", EntryPoint: "kill", SetLastError: true)
+    private func KillProcessGroup(group int32, signal int32) int32;
 
     private func RunRequest(
         output BinaryWriter,
