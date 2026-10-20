@@ -89,6 +89,16 @@ adjust. Only the entry-point body and its local signature change; the other
 images produce byte-identical stdout and pass unsuppressed ILVerify. The sample
 inventory, existing compile-failure entries, and hashing policy are unchanged.
 
+The #5037 cleanup fix changes exactly `TupleSequenceIterators` and
+`YieldInTryFinally`. The tuple sample's two generated iterators now preserve
+enumerator cleanup through yields, with an `IDisposable.Dispose` reference and
+protected `MoveNext` and `Dispose` bodies. `YieldInTryFinally.Dispose` now places
+the suspension guard inside the cleanup handler, following the nested-finally
+disposal plan. The other 158 hash-map entries, including five existing null
+entries, and the other 153 per-table entries remain unchanged. Both emitted
+programs match the expected stdout and pass unsuppressed ILVerify. Hashing and
+reference-set policies are unchanged.
+
 The hierarchy-mode transport in PR #4808 intentionally changes 48 of the
 160 existing hashes. All 107 other emitted hashes and five existing `null`
 entries remain unchanged. A complete comparison against the genuine previous

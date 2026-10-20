@@ -3008,10 +3008,10 @@
       "rows=17 sha256=7EA96B7DDFEBC6E4"
     ],
     "MemberRef": [
-      "rows=58 sha256=0AE450A5D149C002"
+      "rows=59 sha256=D006A4D45845657D"
     ],
     "MethodBodies": [
-      "rows=21 sha256=ADFD6859B6946402"
+      "rows=21 sha256=957135E4775D982B"
     ],
     "MethodDef": [
       "rows=21 sha256=C0BEB3E07AAC07C4"
@@ -3020,7 +3020,7 @@
       "rows=5 sha256=25B379CFD9ACF338"
     ],
     "TypeRef": [
-      "rows=16 sha256=351AB6AA02572561"
+      "rows=17 sha256=305DCD6A8B2E3B53"
     ]
   },
   "samples/UserRefStruct.gs": {
@@ -3763,7 +3763,7 @@
       "rows=11 sha256=F661EA15C3D2D155"
     ],
     "MethodBodies": [
-      "rows=11 sha256=CD27395892EF32AC"
+      "rows=11 sha256=68A31DDCEDB8529A"
     ],
     "MethodDef": [
       "rows=11 sha256=34BA3A13E7383AAD"
