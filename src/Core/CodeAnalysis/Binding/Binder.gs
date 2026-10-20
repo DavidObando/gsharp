@@ -6769,15 +6769,23 @@ class Binder {
             let richAnonymousClasses = List[
                 (Node AnonymousClassExpressionSyntax, Declaration StructDeclarationSyntax)
             ]()
-            for tree in syntaxTrees {
-                CollectRichAnonymousObjectDeclarations(
-                    tree.Root,
-                    tree,
-                    richAnonymousClasses,
-                    binder.Diagnostics,
-                    &anonClassCounter,
-                    enclosingTypeParameters: ImmutableArray[TypeParameterListSyntax].Empty
-                )
+            {
+                using let discovery = CompilationMeasurements.BeginPhase("declarations.rich-anonymous-discovery")
+                for tree in syntaxTrees {
+                    if !tree.MayContainAnonymousClasses {
+                        CompilationMeasurements.Count("declarations.rich-anonymous.skipped-trees")
+                        continue
+                    }
+                    CompilationMeasurements.Count("declarations.rich-anonymous.scanned-trees")
+                    CollectRichAnonymousObjectDeclarations(
+                        tree.Root,
+                        tree,
+                        richAnonymousClasses,
+                        binder.Diagnostics,
+                        &anonClassCounter,
+                        enclosingTypeParameters: ImmutableArray[TypeParameterListSyntax].Empty
+                    )
+                }
             }
             let structDeclarations = PartialTypeMerger
                 .MergeStructs(
