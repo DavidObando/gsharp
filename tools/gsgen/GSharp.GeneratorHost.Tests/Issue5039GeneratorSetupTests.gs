@@ -11,6 +11,7 @@ import GSharp.Workers
 import GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation
 import GsSourceText = GSharp.Core.CodeAnalysis.Text.SourceText
 import GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree
+import Gsharp.NET.Sdk.Tools
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
@@ -19,6 +20,7 @@ import System.Collections.Generic
 import System.Collections.Immutable
 import System.Diagnostics
 import System.IO
+import System.IO.Pipes
 import System.Linq
 import System.Reflection
 import System.Runtime.CompilerServices
@@ -430,7 +432,7 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         CompileDll(
             GeneratorSource.Replace("__VERSION__", "before").Replace(
                 "var inputs =",
-                "System.Console.WriteLine(\"generator started\"); System.Threading.Thread.Sleep(60000); var inputs ="
+                "System.IO.File.WriteAllText(\"started\", \"yes\"); System.Threading.Thread.Sleep(60000); var inputs ="
             ),
             generator,
             "Generator"
@@ -440,9 +442,7 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         {
             using let worker = GeneratorWorker(directory)
             worker.Begin(args.ToArray())
-            Assert.Equal(WorkerProtocol.Stdout, worker.Reader.ReadByte())
-            Assert.True(worker.Reader.ReadBoolean())
-            Assert.Equal("generator started", worker.Reader.ReadString())
+            WaitForGeneratorStart()
             worker.Kill()
             Assert.True(worker.WaitForExit())
         }
@@ -460,7 +460,7 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         CompileDll(
             GeneratorSource.Replace("__VERSION__", "owner").Replace(
                 "var inputs =",
-                "System.Console.WriteLine(\"generator started\"); System.Threading.Thread.Sleep(60000); var inputs ="
+                "System.IO.File.WriteAllText(\"started\", \"yes\"); System.Threading.Thread.Sleep(60000); var inputs ="
             ),
             generator,
             "Generator"
@@ -468,9 +468,7 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         let gs = Write("Input.gs", "package App\n@Obsolete\npartial class Foo {}")
         using let worker = GeneratorWorker(directory)
         worker.Begin(Arguments(gs, generator).ToArray())
-        Assert.Equal(WorkerProtocol.Stdout, worker.Reader.ReadByte())
-        Assert.True(worker.Reader.ReadBoolean())
-        Assert.Equal("generator started", worker.Reader.ReadString())
+        WaitForGeneratorStart()
         worker.DisconnectOwner()
         Assert.True(worker.WaitForExit(), "A disconnected owner must not leave a blocked generator host alive.")
     }
@@ -510,7 +508,7 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         CompileDll(
             GeneratorSource.Replace("__VERSION__", "retire").Replace(
                 "var inputs =",
-                "System.AppDomain.CurrentDomain.ProcessExit += (s, e) => System.GC.KeepAlive(this); using (var child = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(\"dotnet\") { UseShellExecute = false, ArgumentList = { " +
+                "using (var child = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(\"dotnet\") { UseShellExecute = false, ArgumentList = { " +
                     SymbolDisplay.FormatLiteral(helper, true) +
                     " } })) { System.IO.File.WriteAllText(" +
                     SymbolDisplay.FormatLiteral(pidFile, true) + ", child.Id.ToString()); } var inputs ="
@@ -523,6 +521,7 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         try {
             let result = worker.Run(Arguments(gs, generator).ToArray())
             Assert.Equal(0, result.ExitCode)
+            Assert.True(File.Exists(pidFile))
             Assert.True(result.Retire)
             Assert.True(worker.WaitForExit())
             if FindHelper(pidFile) is {} child {
@@ -530,13 +529,57 @@ open class Issue5039GeneratorSetupTests : IDisposable {
                 Assert.True(owned.WaitForExit(10000), "Normal worker retirement left its helper alive.")
             }
         } finally {
+            StopHelper(pidFile)
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Worker_InterruptedRequest_StopsGeneratorDescendants(disconnectOwner bool) {
+        let helper = CompileHelper("System.Threading.Thread.Sleep(60000);")
+        let pidFile = Path.Combine(directory, "helper.pid")
+        let generator = Path.Combine(directory, "Generator.dll")
+        CompileDll(
+            GeneratorSource.Replace("__VERSION__", "blocked").Replace(
+                "var inputs =",
+                "using (var child = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(\"dotnet\") { UseShellExecute = false, ArgumentList = { " +
+                    SymbolDisplay.FormatLiteral(helper, true) +
+                    " } })) { System.IO.File.WriteAllText(" +
+                    SymbolDisplay.FormatLiteral(pidFile, true) +
+                    ", child.Id.ToString()); } System.IO.File.WriteAllText(\"started\", \"yes\"); System.Threading.Thread.Sleep(60000); var inputs ="
+            ),
+            generator,
+            "Generator"
+        )
+        let gs = Write("Input.gs", "package App\n@Obsolete\npartial class Foo {}")
+        using let worker = GeneratorWorker(directory)
+        try {
+            worker.Begin(Arguments(gs, generator).ToArray())
+            WaitForGeneratorStart()
+            Assert.True(File.Exists(pidFile))
+            if disconnectOwner {
+                worker.DisconnectOwner()
+            } else {
+                worker.Kill()
+            }
+            Assert.True(worker.WaitForExit())
             if FindHelper(pidFile) is {} child {
                 using let owned = child
-                if !owned.HasExited {
-                    owned.Kill(entireProcessTree: true)
-                }
-                owned.WaitForExit()
+                Assert.True(owned.WaitForExit(10000), "An interrupted generator request left its helper alive.")
             }
+        } finally {
+            StopHelper(pidFile)
+        }
+    }
+
+    private func StopHelper(pidFile string) {
+        if FindHelper(pidFile) is {} child {
+            using let owned = child
+            if !owned.HasExited {
+                owned.Kill(entireProcessTree: true)
+            }
+            owned.WaitForExit()
         }
     }
 
@@ -566,16 +609,43 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         }
     }
 
+    private func WaitForGeneratorStart() {
+        Assert.True(
+            SpinWait.SpinUntil(() -> File.Exists(Path.Combine(directory, "started")), 10000),
+            "The generator did not reach its blocked execution point."
+        )
+    }
+
     private class GeneratorWorker : IDisposable {
         private let directory string
         private let process Process
         private let writer BinaryWriter
+        private let protocol NamedPipeServerStream
+        private let stdout WorkerDiagnosticCapture
+        private let stderr WorkerDiagnosticCapture
         private let identity string
         private let timeout CancellationTokenSource = CancellationTokenSource(TimeSpan.FromMinutes(2))
         private let cancel CancellationTokenRegistration
 
         init(directory string, startupDirectory string? = nil) {
             this.directory = directory
+            let random = Convert
+                .ToBase64String(Guid.NewGuid().ToByteArray())
+                .Replace('/', '_')
+                .Replace('+', '-')
+                .TrimEnd('=')
+            let pipeName = if OperatingSystem.IsWindows() {
+                "gsharp-" + random
+            } else {
+                Path.Combine(Path.GetFullPath(Path.GetTempPath()), "p" + random)
+            }
+            protocol = NamedPipeServerStream(
+                pipeName,
+                PipeDirection.In,
+                1,
+                PipeTransmissionMode.Byte,
+                PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly
+            )
             let start = ProcessStartInfo("dotnet"){
                 UseShellExecute = false,
                 RedirectStandardInput = true,
@@ -585,11 +655,13 @@ open class Issue5039GeneratorSetupTests : IDisposable {
             }
             start.ArgumentList.Add(typeof(GsgenProgram).Assembly.Location)
             start.ArgumentList.Add("--generator-worker")
+            start.ArgumentList.Add(pipeName)
             process = Process.Start(start) ?? throw InvalidOperationException("Cannot launch generator worker.")
             cancel = timeout.Token.Register(Kill)
-            process.ErrorDataReceived += (_sender object, _event DataReceivedEventArgs) -> { }
-            process.BeginErrorReadLine()
-            Reader = BinaryReader(process.StandardOutput.BaseStream, Encoding.UTF8)
+            stdout = WorkerDiagnosticCapture(process.StandardOutput, Kill)
+            stderr = WorkerDiagnosticCapture(process.StandardError, Kill)
+            protocol.WaitForConnectionAsync(timeout.Token).GetAwaiter().GetResult()
+            Reader = BinaryReader(protocol, Encoding.UTF8)
             writer = BinaryWriter(process.StandardInput.BaseStream, Encoding.UTF8)
             Assert.Equal(WorkerProtocol.Version, Reader.ReadInt32())
             identity = Reader.ReadString()
@@ -605,7 +677,10 @@ open class Issue5039GeneratorSetupTests : IDisposable {
                 environment.Add(cast[string](entry.Key), cast[string](entry.Value))
             }
             environment["GSHARP_TEST_SCOPE_5039"] = "request-scope"
-            WorkerProtocol.WriteRequest(writer, identity, directory, arguments, environment, workerGrant: 1)
+            let fence = "\u001egsharp-" + Guid.NewGuid().ToString("N") + "\u001f"
+            stdout.Begin(fence)
+            stderr.Begin(fence)
+            WorkerProtocol.WriteRequest(writer, identity, directory, arguments, environment, 1, fence)
             Assert.Equal(WorkerProtocol.Accepted, Reader.ReadByte())
         }
 
@@ -616,33 +691,27 @@ open class Issue5039GeneratorSetupTests : IDisposable {
             Stderr string
         ) {
             Begin(arguments)
-            let stdout = StringBuilder()
-            let stderr = StringBuilder()
-            while true {
-                let kind = Reader.ReadByte()
-                if kind == WorkerProtocol.Stdout {
-                    let complete = Reader.ReadBoolean()
-                    stdout.Append(Reader.ReadString())
-                    if complete {
-                        stdout.AppendLine()
-                    }
-                } else if kind == WorkerProtocol.Stderr {
-                    let complete = Reader.ReadBoolean()
-                    let text = Reader.ReadString()
-                    Assert.True(allowStderr, "Unexpected worker stderr: " + text)
-                    stderr.Append(text)
-                    if complete {
-                        stderr.AppendLine()
-                    }
-                } else {
-                    Assert.Equal(WorkerProtocol.Completed, kind)
-                    let exitCode = Reader.ReadInt32()
-                    let retire = Reader.ReadBoolean()
-                    Reader.ReadInt64()
-                    Reader.ReadInt64()
-                    return (exitCode, stdout.ToString(), retire, stderr.ToString())
+            Assert.Equal(WorkerProtocol.Completed, Reader.ReadByte())
+            let exitCode = Reader.ReadInt32()
+            let retire = Reader.ReadBoolean()
+            Reader.ReadInt64()
+            Reader.ReadInt64()
+            let output = StringBuilder()
+            let errors = StringBuilder()
+            stdout.Complete(
+                timeout.Token,
+                (text string) -> {
+                    output.AppendLine(text)
                 }
-            }
+            )
+            stderr.Complete(
+                timeout.Token,
+                (text string) -> {
+                    Assert.True(allowStderr, "Unexpected worker stderr: " + text)
+                    errors.AppendLine(text)
+                }
+            )
+            return (exitCode, output.ToString(), retire, errors.ToString())
         }
 
         func WaitForExit() bool -> process.WaitForExit(10000)
@@ -658,10 +727,13 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         func Dispose() {
             Kill()
             process.WaitForExit()
+            stdout.Dispose()
+            stderr.Dispose()
             cancel.Dispose()
             timeout.Dispose()
             writer.Dispose()
             Reader.Dispose()
+            protocol.Dispose()
             process.Dispose()
         }
     }

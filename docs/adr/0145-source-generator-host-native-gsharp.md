@@ -183,6 +183,13 @@ The default stays one-shot. The compiler and generator host share a versioned
 transport, not a process or Roslyn dependency. Requests carry their working
 directory, environment, arguments, and resource grant. Cancellation kills the
 worker tree; only startup failures and pre-execution rejection permit fallback.
+Protocol responses use a private named pipe, while ordinary stdout and stderr
+retain managed, finalizer, and inherited helper diagnostics. The SDK drains
+request-specific completion fences on both diagnostic streams before consuming
+completion. A generator that leaves helpers running forces retirement; normal
+retirement terminates the owned process group or job after flushing the
+completion packet. Owner loss terminates it immediately, including during a
+blocked request.
 
 Each generation request loads fresh generators in collectible contexts and
 uses a fresh driver. Immutable, content-hashed metadata images have a fixed

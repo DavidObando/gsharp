@@ -34,14 +34,15 @@ shared class GsgenProgram {
     /// @param args The response-file-expanded arguments.
     /// @returns The process exit code.
     func Main(args[]string) int32 {
-        if args.Length == 1 && args[0] == "--generator-worker" {
+        if args.Length == 2 && args[0] == "--generator-worker" {
             let cache = MetadataReferenceCache()
             var contexts IReadOnlyList[WeakReference] = Array.Empty[WeakReference]()
             var stableReferences = true
             return WorkerServer.Run(
                 typeof(GsgenProgram).Assembly.Location,
                 (request[]string) -> RunRequest(request, Console.Out, cache, out contexts, out stableReferences),
-                () -> stableReferences && contexts.All((context WeakReference) -> !context.IsAlive)
+                () -> stableReferences && contexts.All((context WeakReference) -> !context.IsAlive),
+                args[1]
             )
         }
         return Run(args, Console.Out)
