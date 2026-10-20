@@ -168,6 +168,27 @@ open class GsgenTask : Task, ICancelableTask {
             this.Log.LogError("GsgenTask requires GsgenToolFullPath, OutputDir, ManifestPath, and ResponseFilePath.")
             return false
         }
+        let successStamp = manifestPath + ".success"
+        try {
+            File.Delete(successStamp)
+            if !RunGenerator(compile, gsgenToolFullPath, outputDir, manifestPath, responseFilePath) {
+                return false
+            }
+            File.WriteAllText(successStamp, string.Empty)
+            return true
+        } catch (ex Exception) when ex is IOException || ex is UnauthorizedAccessException {
+            this.Log.LogError("Generator execution or success-stamp commit failed: ${ex.Message}")
+            return false
+        }
+    }
+
+    private func RunGenerator(
+        compile[]ITaskItem,
+        gsgenToolFullPath string,
+        outputDir string,
+        manifestPath string,
+        responseFilePath string
+    ) bool {
         var resourceGrant WorkerCoreLease
         try {
             resourceGrant = WorkerCoreLease.Acquire(this.BuildEngine, 1, 1024, this.cts.Token)
@@ -332,9 +353,7 @@ open class GsgenTask : Task, ICancelableTask {
                 message: "gsgen exited with code $exitCode without emitting a structured diagnostic.$breadcrumb"
             )
         }
-        // Return false only on a hard failure: a non-zero exit AND at least one
-        // logged error. Generator warnings/info alone never fail the build.
-        return exitCode == 0 || !this.Log.HasLoggedErrors
+        return exitCode == 0 && !this.Log.HasLoggedErrors
     }
 
     /// Routes a single line of gsgen stdout to the MSBuild logger. Diagnostic

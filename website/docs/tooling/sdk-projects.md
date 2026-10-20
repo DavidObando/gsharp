@@ -159,6 +159,8 @@ Failed or interrupted requests stop the owned worker and drain bounded diagnosti
 
 Removing the final source and analyzer still clears an existing manifest and deletes its generated parts before they can be added back to compilation. This source-free cleanup does not bypass source validation when generators or foreign C# translation are requested.
 
+The manifest records owned files, not task success. The SDK removes `gsgen.manifest.success` before an attempt and commits it only after the tool exit status and diagnostic streams pass validation. Errors written directly to stdout or stderr therefore remain visible on unchanged rebuilds until corrected; successful builds return to normal no-op behavior.
+
 A generator that implements a partial method, such as the Regex generator, pairs with a G# declaring part. Write a static one inside a `shared` block; `private shared partial func` is not valid G#:
 
 ```gsharp

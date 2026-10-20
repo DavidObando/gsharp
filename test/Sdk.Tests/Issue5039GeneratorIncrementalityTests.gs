@@ -134,6 +134,53 @@ partial class P {
         Assert.Equal(2, ReportCount())
     }
 
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func DirectDiagnosticErrors_AreRepeatedUntilFixed_ThenReturnToNoOpBuilds(reuse bool, stderr bool) {
+        WriteProject()
+        File.WriteAllText(Path.Combine(directory, "Input.gs"), "package App\npartial class Foo {}")
+        let additional = Path.Combine(directory, "Input.txt")
+        File.WriteAllText(additional, "ok")
+        let generator = CompileCSharpFixture(`using System.Linq;
+using Microsoft.CodeAnalysis;
+[Generator]
+public sealed class RawDiagnosticGenerator : IIncrementalGenerator {
+    public void Initialize(IncrementalGeneratorInitializationContext context) {
+        context.RegisterSourceOutput(context.AdditionalTextsProvider.Collect(), (spc, files) => {
+            if (files.Any(file => file.GetText().ToString() == "error"))
+                __WRITER__.WriteLine("gsgen(1,1): error RAW5039: raw generator failure");
+            spc.AddSource("Foo.g.cs", "namespace App { partial class Foo { public int Value => 1; } }");
+        });
+    }
+}`.Replace(
+                "__WRITER__",
+                if stderr {
+                    "System.Console.Error"
+                } else {
+                    "System.Console"
+                }
+            ), "RawDiagnosticGenerator", executable: false)
+        let projectFile = Path.Combine(directory, "Generators.proj")
+        let project = XDocument.Load(projectFile)
+        project.Root?.Element("PropertyGroup")?.SetElementValue("GeneratorAssembly", generator)
+        project.Save(projectFile)
+        Build("App", "First", reuse: reuse)
+        Assert.Equal(1, ReportCount())
+        File.WriteAllText(additional, "error")
+        Build("App", "First", error: "RAW5039", reuse: reuse)
+        Assert.Equal(2, ReportCount())
+        Build("App", "First", error: "RAW5039", reuse: reuse)
+        Assert.Equal(3, ReportCount())
+        File.WriteAllText(additional, "ok")
+        Build("App", "First", reuse: reuse)
+        Assert.Equal(4, ReportCount())
+        Build("App", "First", reuse: reuse)
+        Assert.Equal(4, ReportCount())
+    }
+
     private func ReportCount() int32 -> Directory.GetFiles(directory, "phase-*.json").Length
 
     @Fact
@@ -204,8 +251,7 @@ partial class P {
     }
 
     private func CompileBlockingTool(pidFile string) string {
-        let source = Path.Combine(directory, "BlockingTool.cs")
-        File.WriteAllText(source, `using System;
+        return CompileCSharpFixture(`using System;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
@@ -219,13 +265,18 @@ class BlockingTool {
         File.WriteAllText(@"__PID__", child.Id.ToString());
         Thread.Sleep(60000);
     }
-}`.Replace("__PID__", pidFile.Replace("\"", "\"\"")))
+}`.Replace("__PID__", pidFile.Replace("\"", "\"\"")), "BlockingTool", executable: true)
+    }
+
+    private func CompileCSharpFixture(text string, name string, executable bool) string {
+        let source = Path.Combine(directory, "$name.cs")
+        File.WriteAllText(source, text)
         let sdkRoot = Path.GetFullPath(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "..", "..", "..", "sdk"))
         let compiler = Directory
             .GetDirectories(sdkRoot)
             .Select((path string) -> Path.Combine(path, "Roslyn", "bincore", "csc.dll"))
             .First(File.Exists)
-        let tool = Path.Combine(directory, "BlockingTool.dll")
+        let tool = Path.Combine(directory, "$name.dll")
         let start = ProcessStartInfo("dotnet"){
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -233,7 +284,13 @@ class BlockingTool {
         }
         start.ArgumentList.Add(compiler)
         start.ArgumentList.Add("/nologo")
-        start.ArgumentList.Add("/target:exe")
+        start.ArgumentList.Add(
+            if executable {
+                "/target:exe"
+            } else {
+                "/target:library"
+            }
+        )
         start.ArgumentList.Add("/out:$tool")
         let references = (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string ?? string.Empty).Split(
             Path.PathSeparator,
@@ -241,6 +298,19 @@ class BlockingTool {
         )
         for reference in references {
             start.ArgumentList.Add("/r:$reference")
+        }
+        if !executable {
+            let configuration = DirectoryInfo(AppContext.BaseDirectory).Parent?.Name ?? "Release"
+            start.ArgumentList.Add(
+                "/r:" + Path.Combine(
+                    RepoRoot.Path,
+                    "out",
+                    "bin",
+                    configuration,
+                    "Gsgen.Cli",
+                    "Microsoft.CodeAnalysis.dll"
+                )
+            )
         }
         start.ArgumentList.Add(source)
         using let process = Process.Start(start) ?? throw InvalidOperationException("Cannot compile blocking tool.")
@@ -254,10 +324,12 @@ class BlockingTool {
         }
         System.Threading.Tasks.Task.WaitAll(stdout, stderr)
         Assert.True(process.ExitCode == 0, stdout.Result + stderr.Result)
-        File.WriteAllText(
-            Path.ChangeExtension(tool, ".runtimeconfig.json"),
-            `{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}`
-        )
+        if executable {
+            File.WriteAllText(
+                Path.ChangeExtension(tool, ".runtimeconfig.json"),
+                `{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}`
+            )
+        }
         return tool
     }
 
@@ -289,7 +361,8 @@ class BlockingTool {
         additional bool = true,
         generators bool = true,
         foreign bool = true,
-        error string? = nil
+        error string? = nil,
+        reuse bool = false
     ) {
         let start = ProcessStartInfo("dotnet"){
             WorkingDirectory = directory,
@@ -308,7 +381,8 @@ class BlockingTool {
             "-p:AdditionalGroup=$group",
             "-p:UseAdditional=${additional.ToString()}",
             "-p:UseGenerators=${generators.ToString()}",
-            "-p:UseForeign=${foreign.ToString()}"
+            "-p:UseForeign=${foreign.ToString()}",
+            "-p:GSharpUseSharedCompilation=${reuse.ToString()}"
         } {
             start.ArgumentList.Add(argument)
         }

@@ -556,14 +556,14 @@
 
   <!-- (2) Run gsgen over the user's .gs (BEFORE generated files are added to
        @(Compile)), the resolved reference closure, and the resolved analyzers.
-       Incremental: re-runs only when a source/analyzer/reference/project file is
-       newer than the manifest. -->
+       The manifest owns generated files; the task commits a separate success
+       stamp only after exit status and diagnostic streams are accepted. -->
   <Target Name="_GsharpRunSourceGenerators"
           BeforeTargets="CoreCompile"
           DependsOnTargets="_GsharpPartitionForeignCompile;GenerateMSBuildEditorConfigFileShouldRun;_GsharpResolveAnalyzers;_GsharpCollectGeneratorOptions;ResolveReferences;_GsharpCreateGeneratorInputsCache"
           Condition=" '$(GsharpRunSourceGenerators)' != 'false' "
           Inputs="@(Compile);@(_GsharpForeignCompile);@(AdditionalFiles);@(GsharpAnalyzer);@(ReferencePathWithRefAssemblies);$(GsgenToolFullPath);$(IntermediateOutputPath)gsgen/inputs.cache;$(MSBuildAllProjects)"
-          Outputs="$(IntermediateOutputPath)gsgen\gsgen.manifest">
+          Outputs="$(IntermediateOutputPath)gsgen\gsgen.manifest;$(IntermediateOutputPath)gsgen\gsgen.manifest.success">
     <!-- The analyzer-empty fast path is gated on the TASK, not the target's
          Condition: a target whose Condition is false never runs its
          DependsOnTargets, so gating the target on '@(GsharpAnalyzer)' would
@@ -614,6 +614,7 @@
            incremental build sees them. -->
       <FileWrites Include="@(_GsharpGeneratedGsFile)" Condition=" '@(_GsharpGeneratedGsFile)' != '' " />
       <FileWrites Include="$(IntermediateOutputPath)gsgen\gsgen.manifest" />
+      <FileWrites Include="$(IntermediateOutputPath)gsgen\gsgen.manifest.success" />
       <FileWrites Include="$(IntermediateOutputPath)$(TargetName).gsgen.rsp" Condition="Exists('$(IntermediateOutputPath)$(TargetName).gsgen.rsp')" />
     </ItemGroup>
 
