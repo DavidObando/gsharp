@@ -56,7 +56,7 @@ class CompilationMeasurements : IDisposable {
             Id = Interlocked.Increment(&owner.nextId)
             ParentId = parent?.Id
             Name = name
-            StartMilliseconds = Stopwatch.GetElapsedTime(owner.started, started).TotalMilliseconds
+            StartMilliseconds = Stopwatch.GetElapsedTime(processOrigin, started).TotalMilliseconds
             using let process = Process.GetCurrentProcess()
             cpu = process.TotalProcessorTime
             owner.active.Value = this
@@ -137,6 +137,8 @@ class CompilationMeasurements : IDisposable {
             ["ProcessId"] = Environment.ProcessId,
             ["LogicalProcessors"] = Environment.ProcessorCount,
             ["ElapsedMilliseconds"] = Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+            ["RequestStartMilliseconds"] = Stopwatch.GetElapsedTime(processOrigin, started).TotalMilliseconds,
+            ["TimestampFrequency"] = Stopwatch.Frequency,
             ["CounterSemantics"] = "process-inclusive; nested and overlapping deltas are not additive",
             ["Properties"] = properties,
             ["Counters"] = counters.OrderBy((pair KeyValuePair[string, int64]) -> pair.Key).ToDictionary(
@@ -162,6 +164,7 @@ class CompilationMeasurements : IDisposable {
     shared {
         private let current AsyncLocal[CompilationMeasurements?] = AsyncLocal[CompilationMeasurements?]()
         private let disabled IDisposable = DisabledMeasurement()
+        private let processOrigin int64 = Stopwatch.GetTimestamp()
         /// Gets whether the current request records measurements.
         prop IsEnabled bool -> current.Value != nil
 
@@ -188,9 +191,11 @@ class CompilationMeasurements : IDisposable {
         }
 
         /// Opens a nested phase, or returns a shared no-op when measurements are disabled.
-        func BeginPhase(name string) IDisposable {
+        func BeginPhase(name string) IDisposable -> BeginPhase(name, enabled: true)
+
+        internal func BeginPhase(name string, enabled bool) IDisposable {
             let owner = current.Value
-            return if owner == nil {
+            return if !enabled || owner == nil {
                 disabled
             } else {
                 cast[IDisposable](Phase(owner, name))

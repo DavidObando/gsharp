@@ -829,6 +829,7 @@ class ReferenceResolver : IDisposable {
     /// (cref:System.Reflection.AssemblyName.FullName) in the same order);
     /// Content fingerprints must also match. Same-identity reference replacements
     /// return `false` and leave the resolver on the cold path.
+    /// Runtime assemblies without immutable image snapshots cannot verify an index.
     /// Must be called before the first resolution so the warm index is in place
     /// for binding.
     /// @param index The candidate metadata index.
@@ -861,13 +862,8 @@ class ReferenceResolver : IDisposable {
         if AssemblyContentFingerprints.TryGetValue(assembly, out var fingerprint) {
             return assembly.ManifestModule.ModuleVersionId.ToString("N") + ":" + fingerprint.Value
         }
-        if assembly.IsDynamic || !TryGetAssemblyPath(assembly, out var path) {
-            return string.Empty
-        }
-        using let stream = File.OpenRead(path)
-        return assembly.ManifestModule.ModuleVersionId.ToString("N") + ":" + Convert.ToHexString(
-            SHA256.HashData(stream)
-        )
+        // Runtime assemblies have no immutable image snapshot here. A later disk read cannot verify their loaded bytes.
+        return string.Empty
     }
 
     /// Returns whether the reference set contains at least one type below the

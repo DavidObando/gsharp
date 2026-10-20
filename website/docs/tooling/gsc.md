@@ -150,4 +150,6 @@ Schema version 1 records tool/runtime versions, compilation options, source byte
 
 Each span has an ID, parent ID, process-relative start time, elapsed time, process CPU/allocation deltas, current working set, process-lifetime peak working set, and managed heap size. CPU and allocation counters include all process activity, including runtime work. Nested and overlapping spans are **not additive**: the body span already includes its whole-program analysis, and implementation emit includes PDB serialization. Use the root compilation span for overall elapsed time. Process-lifetime peak memory is not a per-request peak.
 
+`StartMilliseconds` and `RequestStartMilliseconds` share a monotonic origin across requests in the same process. The origin is initialized when the measurement facility is first used, not at OS process creation. `TimestampFrequency` records the monotonic timer's ticks per second.
+
 API hosts can use `CompilationMeasurements.Start(tool)` with `BeginPhase(name)`, `Count(name, amount)`, and `SetProperty(name, value)`, then `WriteJson(path)`. An explicit host session owns nested driver instrumentation, even when the environment variable is set. Dispose all phases before disposing the request. Disabled measurement calls do not allocate phase objects. Measurements do not enable parallel workers or alter compiler semantics.

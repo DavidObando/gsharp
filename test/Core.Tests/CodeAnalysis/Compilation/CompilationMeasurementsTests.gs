@@ -11,6 +11,65 @@ import Xunit
 
 class CompilationMeasurementsTests {
     @Fact
+    func ReusedDeclarations_AreCountedButDoNotProduceDeclarationSpans() {
+        let tree = SyntaxTree.Parse("package P\nfunc Value() int32 -> 42")
+        let original = Compilation(tree){IsLibrary = true}
+        let globals = original.GlobalScope
+        let path = Path.Combine(AppContext.BaseDirectory, "reuse-" + Guid.NewGuid().ToString("N") + ".json")
+        try {
+            using let measurements = CompilationMeasurements.Start("reuse")
+            let updated = Compilation(tree){IsLibrary = true, ReusedGlobalScope = globals}
+            Assert.Empty(updated.BoundProgram.Diagnostics)
+            measurements.WriteJson(path)
+            using let json = JsonDocument.Parse(File.ReadAllText(path))
+            let phases = json.RootElement.GetProperty("Phases").EnumerateArray().ToArray()
+            Assert.NotEmpty(phases)
+            Assert.Contains(phases, (phase JsonElement) -> phase.GetProperty("Name").GetString() == "bodies")
+            Assert.DoesNotContain(
+                phases,
+                (phase JsonElement) -> phase.GetProperty("Name").GetString() == "declarations"
+            )
+            Assert.Equal(1L, measurements.GetCounter("declarations.reuses"))
+        } finally {
+            File.Delete(path)
+        }
+    }
+
+    @Fact
+    func SeparateRequests_ShareOneMonotonicTimeOrigin() {
+        let firstPath = Path.Combine(AppContext.BaseDirectory, "clock-first-" + Guid.NewGuid().ToString("N") + ".json")
+        let secondPath = firstPath + ".second"
+        try {
+            using let first = CompilationMeasurements.Start("first")
+            using let firstPhase = CompilationMeasurements.BeginPhase("first-phase")
+            firstPhase.Dispose()
+            first.WriteJson(firstPath)
+            first.Dispose()
+            using let second = CompilationMeasurements.Start("second")
+            using let secondPhase = CompilationMeasurements.BeginPhase("second-phase")
+            secondPhase.Dispose()
+            second.WriteJson(secondPath)
+            using let firstJson = JsonDocument.Parse(File.ReadAllText(firstPath))
+            using let secondJson = JsonDocument.Parse(File.ReadAllText(secondPath))
+            let firstSpan = firstJson.RootElement.GetProperty("Phases")[0]
+            let secondSpan = secondJson.RootElement.GetProperty("Phases")[0]
+            let firstEnd = firstSpan.GetProperty("StartMilliseconds").GetDouble() + firstSpan.GetProperty(
+                "ElapsedMilliseconds"
+            )
+                .GetDouble()
+            Assert.True(secondSpan.GetProperty("StartMilliseconds").GetDouble() >= firstEnd)
+            Assert.True(secondJson.RootElement.GetProperty("RequestStartMilliseconds").GetDouble() >= firstEnd)
+            Assert.Equal(
+                firstJson.RootElement.GetProperty("TimestampFrequency").GetInt64(),
+                secondJson.RootElement.GetProperty("TimestampFrequency").GetInt64()
+            )
+        } finally {
+            File.Delete(firstPath)
+            File.Delete(secondPath)
+        }
+    }
+
+    @Fact
     func ExplicitHostSession_OwnsCountersWhenEnvironmentProfilingIsEnabled() {
         let previous = Environment.GetEnvironmentVariable("GSHARP_MEASURE_PHASES")
         let path = Path.Combine(AppContext.BaseDirectory, "hosted-" + Guid.NewGuid().ToString("N") + ".json")

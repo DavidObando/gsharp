@@ -4,6 +4,7 @@ import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import System
+import System.IO
 import System.Runtime.CompilerServices
 import Xunit
 
@@ -42,11 +43,16 @@ class Issue5040RecordShapeIndexTests {
     @Fact
     func RecordShapes_CachePositiveAndNegativeResults_WithoutCrossingLoadContexts() {
         using let fixture = CSharpFixture("public record Value(int Number); public class NotARecord {}")
+        using let replacement = CSharpFixture(
+            "public record Value(int Changed); public record NotARecord(int BecameRecord);",
+            assemblyName: Path.GetFileNameWithoutExtension(fixture.AssemblyPath)
+        )
         using let first = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
-        using let second = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        using let second = ReferenceResolver.WithReferences([]string{replacement.AssemblyPath})
         Assert.True(first.TryResolveType("Value", out var record))
         Assert.True(first.TryResolveType("NotARecord", out var ordinary))
         Assert.True(second.TryResolveType("Value", out var otherRecord))
+        Assert.True(second.TryResolveType("NotARecord", out var formerlyNegative))
         using let measurements = CompilationMeasurements.Start("test")
         for var i = 0; i < 100; i++ {
             Assert.True(ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(record, out _))
@@ -56,7 +62,19 @@ class Issue5040RecordShapeIndexTests {
         Assert.Equal(2L, measurements.GetCounter("records.shape-scans"))
         Assert.True(ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(record, out var shape))
         Assert.True(ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(otherRecord, out var otherShape))
-        Assert.NotSame(shape, otherShape)
-        Assert.Equal(3L, measurements.GetCounter("records.shape-scans"))
+        Assert.Equal(
+            "Number",
+            Assert.Single(Assert.IsType[ImportedTypeSemantics](shape).PrimaryConstructorParameterNames)
+        )
+        Assert.Equal(
+            "Changed",
+            Assert.Single(Assert.IsType[ImportedTypeSemantics](otherShape).PrimaryConstructorParameterNames)
+        )
+        Assert.True(ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(formerlyNegative, out var becameRecord))
+        Assert.Equal(
+            "BecameRecord",
+            Assert.Single(Assert.IsType[ImportedTypeSemantics](becameRecord).PrimaryConstructorParameterNames)
+        )
+        Assert.Equal(4L, measurements.GetCounter("records.shape-scans"))
     }
 }

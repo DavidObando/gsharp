@@ -21,6 +21,18 @@ import Xunit
 /// binary blob).
 open class ReferenceMetadataIndexTests {
     @Fact
+    func RuntimeImagesWithoutSnapshots_CannotAdoptIndexes_OrReadReplacedPaths() {
+        using let fixture = CSharpFixture("public class RuntimeImage5040 {}")
+        using let runtime = ReferenceResolver.WithRuntimeReferences([]string{fixture.AssemblyPath})
+        File.Delete(fixture.AssemblyPath)
+        let index = runtime.ExportMetadataIndex()
+        Assert.NotEmpty(index.AssemblyIdentities)
+        Assert.NotEmpty(index.ContentFingerprints)
+        Assert.All(index.ContentFingerprints, (fingerprint string) -> Assert.Empty(fingerprint))
+        Assert.False(runtime.TryUseMetadataIndex(index))
+    }
+
+    @Fact
     func SameAssemblyIdentity_DifferentContent_RejectsWarmIndex() {
         using let first = CSharpFixture("public class OldSurface {}", assemblyName: "SameIdentity5040")
         using let second = CSharpFixture("public class NewSurface {}", assemblyName: "SameIdentity5040")

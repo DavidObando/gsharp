@@ -288,7 +288,11 @@ open class Compilation {
     prop GlobalScope BoundGlobalScope {
         get {
             if globalScope == nil {
-                using let measurement = CompilationMeasurements.BeginPhase("declarations")
+                let reused = ReusedGlobalScope
+                using let measurement = CompilationMeasurements.BeginPhase("declarations", reused == nil)
+                if reused != nil {
+                    CompilationMeasurements.Count("declarations.reuses")
+                }
                 // Belt-and-braces: make sure References sees the current
                 // assembly name before the (possibly cached, see
                 // ImportedTypeSymbol.AggregateCache) binding pass runs, even
@@ -299,7 +303,7 @@ open class Compilation {
                 // reader that decides what an oblivious byte means is a static
                 // leaf with no Compilation in reach.
                 using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
-                let globalScope = ReusedGlobalScope ?? Binder.BindGlobalScope(
+                let globalScope = reused ?? Binder.BindGlobalScope(
                     previous: nil,
                     EmbeddedAttributeSource.AddEmbeddedAttributes(SyntaxTrees, References),
                     References,
