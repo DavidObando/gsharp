@@ -4,6 +4,7 @@
 
 package GSharp.Core.CodeAnalysis.Symbols
 
+import GSharp.Core.CodeAnalysis.Compilation
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
@@ -65,6 +66,9 @@ internal shared class ImportedAssemblySemantics {
         Assembly,
         AssemblySemantics
     ]()
+
+    private data class RecordShape(Semantics ImportedTypeSemantics?) { }
+    private let RecordShapes ConditionalWeakTable[Type, RecordShape] = ConditionalWeakTable[Type, RecordShape]()
 
     func TryGetTypeSemantics(type Type?, @NotNullWhen(true) out semantics ImportedTypeSemantics?) bool {
         semantics = nil
@@ -130,6 +134,26 @@ internal shared class ImportedAssemblySemantics {
     /// @param semantics The synthesized semantics on success.
     /// @returns `true` when [`type`](paramref) has the full record shape.
     func TryDetectCSharpRecordSemantics(type Type?, @NotNullWhen(true) out semantics ImportedTypeSemantics?) bool {
+        semantics = nil
+        if type == nil {
+            return false
+        }
+        CompilationMeasurements.Count("records.shape-queries")
+        semantics = RecordShapes.GetValue(type, DetectRecordShape).Semantics
+        return semantics != nil
+    }
+
+    private func DetectRecordShape(type Type) RecordShape {
+        CompilationMeasurements.Count("records.shape-scans")
+        using let measurement = CompilationMeasurements.BeginPhase("references.record-shape")
+        TryDetectCSharpRecordSemanticsCore(type, out var semantics)
+        return RecordShape(semantics)
+    }
+
+    private func TryDetectCSharpRecordSemanticsCore(
+        type Type?,
+        @NotNullWhen(true) out semantics ImportedTypeSemantics?
+    ) bool {
         semantics = nil
         if type == nil || type.IsPrimitive || type.IsEnum || type.IsInterface || type.IsGenericTypeDefinition {
             return false

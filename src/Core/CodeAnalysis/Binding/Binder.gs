@@ -25,6 +25,7 @@ import GSharp.Core.CodeAnalysis.Binding.Suspension
 import GSharp.Core.CodeAnalysis.Emit
 import System.Diagnostics
 import System.Runtime.InteropServices
+import GSharp.Core.CodeAnalysis.Compilation
 
 /// Binder.
 class Binder {
@@ -8288,6 +8289,7 @@ class Binder {
             // and complete those calls (implicit await / blocking root bridge).
             // Runs after every body is bound and anchored, so the fixed point sees
             // the whole call graph; the entry point's body is one of the bodies.
+            using let analysisPhase = CompilationMeasurements.BeginPhase("bodies.whole-program-analyses")
             let entryBodyWasTheStatementBlock = globalScope.EntryPoint is {} entryBefore && functionBodies.TryGetValue(
                 entryBefore,
                 out var entryBodyBefore
@@ -8325,6 +8327,7 @@ class Binder {
                 managedReferenceDiagnostics
             )
             diagnostics.AddRange(managedReferenceDiagnostics.ToImmutableArray())
+            analysisPhase?.Dispose()
             if entryBodyWasTheStatementBlock && functionBodies.TryGetValue(
                 globalScope.EntryPoint!!,
                 out var inferredEntryBody

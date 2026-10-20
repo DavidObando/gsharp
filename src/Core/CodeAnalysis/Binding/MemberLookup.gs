@@ -19,6 +19,8 @@ import GSharp.Core.CodeAnalysis
 import System.Collections
 import System.Collections.Concurrent
 import System.Globalization
+import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Syntax
 
 /// Result of resolving an imported CLR indexer overload set.
 internal enum ClrIndexerResolutionOutcome {
@@ -302,32 +304,92 @@ internal class MemberLookup {
     /// @param methodName The extension method's simple name.
     /// @returns The list of candidate (cref:MethodInfo) overloads.
     func CollectImportedExtensionMethods(methodName string) List[MethodInfo] {
-        let result = List[MethodInfo]()
-        for type in this.GetImportedExtensionClasses() {
-            var methods[]MethodInfo
-            try {
-                var flags = BindingFlags.Public | BindingFlags.Static
-                if this.binderCtx.References.CanAccessInternalMembers(type.Assembly) {
-                    flags |= BindingFlags.NonPublic
-                }
-                methods = type.GetMethods(flags)
-            } catch {
-                continue
-            }
-            for method in methods {
-                if !ClrTypeUtilities.EmittedMemberNameMatches(method, methodName) {
-                    continue
-                }
-                if !HasExtensionAttribute(method) || !IsVisibleImportedMethod(method) {
-                    continue
-                }
-                if method.GetParameters().Length == 0 {
-                    continue
-                }
-                result.Add(method)
+        let classes = this.GetImportedExtensionClasses()
+        if binderCtx.CachedImportedExtensionMethods is {} cached {
+            CompilationMeasurements.Count("extensions.name-index-hits")
+            return if cached.TryGetValue(methodName, out var bucket) {
+                bucket.ToList()
+            } else {
+                List[MethodInfo]()
             }
         }
-        return result
+        using let measurement = CompilationMeasurements.BeginPhase("references.extension-name-index")
+        let byName = Dictionary[string, List[MethodInfo]](StringComparer.Ordinal)
+        for type in classes {
+            let metadata = importedExtensionIndexes.GetValue(type, BuildImportedExtensionIndex)
+            for pair in metadata.Methods {
+                for method in pair.Value {
+                    if IsVisibleImportedMethod(method) {
+                        AddImportedExtensionCandidate(byName, pair.Key, method)
+                    }
+                }
+            }
+        }
+        let index = byName.ToImmutableDictionary(
+            (pair KeyValuePair[string, List[MethodInfo]]) -> pair.Key,
+            (pair KeyValuePair[string, List[MethodInfo]]) -> pair.Value.ToImmutableArray(),
+            StringComparer.Ordinal
+        )
+        binderCtx.CachedImportedExtensionMethods = index
+        return if index.TryGetValue(methodName, out var candidates) {
+            candidates.ToList()
+        } else {
+            List[MethodInfo]()
+        }
+    }
+
+    private data class ImportedExtensionIndex(Methods ImmutableDictionary[string, ImmutableArray[MethodInfo]]) { }
+
+    private func BuildImportedExtensionIndex(type Type) ImportedExtensionIndex {
+        using let measurement = CompilationMeasurements.BeginPhase("references.extension-metadata-index")
+        let byName = Dictionary[string, List[MethodInfo]](StringComparer.Ordinal)
+        var methods[]MethodInfo
+        try {
+            methods = type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+        } catch {
+            return ImportedExtensionIndex(ImmutableDictionary[string, ImmutableArray[MethodInfo]].Empty)
+        }
+        const allMembers = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance
+        let scopeNames = ClrTypeUtilities
+            .SafeGetProperties(type, allMembers)
+            .Select((candidate PropertyInfo) -> candidate.Name)
+            .Concat(ClrTypeUtilities.SafeGetFields(type, allMembers).Select((candidate FieldInfo) -> candidate.Name))
+            .Concat(ClrTypeUtilities.SafeGetEvents(type, allMembers).Select((candidate EventInfo) -> candidate.Name))
+            .Concat(ClrTypeUtilities.SafeGetMethods(type, allMembers).Select((candidate MethodInfo) -> candidate.Name))
+            .ToArray()
+        for method in methods {
+            CompilationMeasurements.Count("extensions.method-visits")
+            if !HasExtensionAttribute(method) {
+                continue
+            }
+            if method.GetParameters().Length == 0 {
+                continue
+            }
+            AddImportedExtensionCandidate(byName, method.Name, method)
+            let emittedName = SyntaxFacts.GetEmittedIdentifier(method.Name, IdentifierNameContext.General, scopeNames)
+            if emittedName != method.Name {
+                AddImportedExtensionCandidate(byName, emittedName, method)
+            }
+        }
+        return ImportedExtensionIndex(
+            byName.ToImmutableDictionary(
+                (pair KeyValuePair[string, List[MethodInfo]]) -> pair.Key,
+                (pair KeyValuePair[string, List[MethodInfo]]) -> pair.Value.ToImmutableArray(),
+                StringComparer.Ordinal
+            )
+        )
+    }
+
+    private func AddImportedExtensionCandidate(
+        index Dictionary[string, List[MethodInfo]],
+        name string,
+        method MethodInfo
+    ) {
+        if !index.TryGetValue(name, out var bucket) {
+            bucket = List[MethodInfo]()
+            index.Add(name, bucket)
+        }
+        bucket.Add(method)
     }
 
     /// Issue #294: enumerates static classes declared in the currently
@@ -349,13 +411,20 @@ internal class MemberLookup {
             this
             .binderCtx
             .CachedImportedExtensionImportCount == importCount &&
-            object
-            .ReferenceEquals(
+            object.ReferenceEquals(binderCtx.CachedImportedExtensionScope, binderCtx.RootScope) &&
+            binderCtx.CachedImportedExtensionAssemblyName == binderCtx
+            .References
+            .CurrentAssemblyName &&
+            binderCtx
+            .CachedImportedExtensionImports
+            .SequenceEqual(imports) && object.ReferenceEquals(
             this.binderCtx.CachedImportedExtensionSyntaxTree,
             this.binderCtx.RootScope.GetCurrentReferencingSyntaxTreeForCache()
         ) {
             return this.binderCtx.CachedImportedExtensionClasses!!
         }
+        using let measurement = CompilationMeasurements.BeginPhase("references.extension-holders")
+        binderCtx.CachedImportedExtensionMethods = nil
         let namespaces = HashSet[string](StringComparer.Ordinal)
         if !imports.IsDefault {
             for import_ in imports {
@@ -402,6 +471,9 @@ internal class MemberLookup {
         }
         this.binderCtx.CachedImportedExtensionClasses = classes
         this.binderCtx.CachedImportedExtensionImportCount = importCount
+        binderCtx.CachedImportedExtensionImports = imports
+        binderCtx.CachedImportedExtensionScope = binderCtx.RootScope
+        binderCtx.CachedImportedExtensionAssemblyName = binderCtx.References.CurrentAssemblyName
         this
             .binderCtx
             .CachedImportedExtensionSyntaxTree = this
@@ -611,6 +683,9 @@ internal class MemberLookup {
     private class SymbolicInferenceConflictMarker { }
 
     shared {
+        private let importedExtensionIndexes ConditionalWeakTable[Type, ImportedExtensionIndex] =
+        ConditionalWeakTable[Type, ImportedExtensionIndex]()
+
         /// Issue #3679: distinguishes the internal-inclusive candidate set from the
         /// public-only one inside (cref:methodsIncludingSelfAndInterfacesCache).
         /// A NUL is not a legal metadata method name, so no probed name can collide

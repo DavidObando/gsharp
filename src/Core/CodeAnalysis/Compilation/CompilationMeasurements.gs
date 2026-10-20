@@ -6,12 +6,13 @@ import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Reflection
 import System.Text.Json
 import System.Threading
 
 /// Collects opt-in, request-owned compiler measurements without changing diagnostic output.
 /// Process counters are inclusive deltas. Nested or overlapping spans must not be added together.
-open class CompilationMeasurements : IDisposable {
+class CompilationMeasurements : IDisposable {
     private class DisabledMeasurement : IDisposable {
         func Dispose() { }
     }
@@ -23,6 +24,9 @@ open class CompilationMeasurements : IDisposable {
         StringComparer.Ordinal
     )
     private let active AsyncLocal[Phase?] = AsyncLocal[Phase?]()
+    private let properties ConcurrentDictionary[string, string] = ConcurrentDictionary[string, string](
+        StringComparer.Ordinal
+    )
     private var nextId int32
     private var disposed bool
 
@@ -38,7 +42,7 @@ open class CompilationMeasurements : IDisposable {
     }
 
     /// A completed or active phase. CPU and allocation deltas cover the whole process, not only its worker.
-    open class Phase : IDisposable {
+    private class Phase : IDisposable {
         private let owner CompilationMeasurements
         private let parent Phase?
         private let started int64 = Stopwatch.GetTimestamp()
@@ -125,11 +129,16 @@ open class CompilationMeasurements : IDisposable {
             ["SchemaVersion"] = 1,
             ["Tool"] = Tool,
             ["CompilerVersion"] = typeof(CompilationMeasurements).Assembly.GetName().Version?.ToString(),
+            ["CompilerInformationalVersion"] = typeof(CompilationMeasurements)
+                .Assembly
+                .GetCustomAttribute[AssemblyInformationalVersionAttribute]()
+                ?.InformationalVersion,
             ["RuntimeVersion"] = Environment.Version.ToString(),
             ["ProcessId"] = Environment.ProcessId,
             ["LogicalProcessors"] = Environment.ProcessorCount,
             ["ElapsedMilliseconds"] = Stopwatch.GetElapsedTime(started).TotalMilliseconds,
             ["CounterSemantics"] = "process-inclusive; nested and overlapping deltas are not additive",
+            ["Properties"] = properties,
             ["Counters"] = counters.OrderBy((pair KeyValuePair[string, int64]) -> pair.Key).ToDictionary(
                 (pair KeyValuePair[string, int64]) -> pair.Key,
                 (pair KeyValuePair[string, int64]) -> pair.Value
@@ -153,6 +162,8 @@ open class CompilationMeasurements : IDisposable {
     shared {
         private let current AsyncLocal[CompilationMeasurements?] = AsyncLocal[CompilationMeasurements?]()
         private let disabled IDisposable = DisabledMeasurement()
+        /// Gets whether the current request records measurements.
+        prop IsEnabled bool -> current.Value != nil
 
         /// Starts an explicit request. Dispose it after disposing every phase.
         func Start(tool string, outputPath string? = nil) CompilationMeasurements -> CompilationMeasurements(
@@ -185,7 +196,22 @@ open class CompilationMeasurements : IDisposable {
 
         /// Adds a request counter, or does nothing when measurements are disabled.
         func Count(name string, amount int64 = 1) {
-            current.Value?.counters.AddOrUpdate(name, amount, (key string, value int64) -> value + amount)
+            current
+                .Value
+                ?.counters
+                .AddOrUpdate[int64](
+                name,
+                (key string, delta int64) -> delta,
+                (key string, value int64, delta int64) -> value + delta,
+                amount
+            )
+        }
+
+        /// Records a request option or tool identity without changing diagnostics.
+        func SetProperty(name string, value string) {
+            if current.Value is {} owner {
+                owner.properties[name] = value
+            }
         }
     }
 }

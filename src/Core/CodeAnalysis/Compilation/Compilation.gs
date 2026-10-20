@@ -288,6 +288,7 @@ open class Compilation {
     prop GlobalScope BoundGlobalScope {
         get {
             if globalScope == nil {
+                using let measurement = CompilationMeasurements.BeginPhase("declarations")
                 // Belt-and-braces: make sure References sees the current
                 // assembly name before the (possibly cached, see
                 // ImportedTypeSymbol.AggregateCache) binding pass runs, even
@@ -329,9 +330,12 @@ open class Compilation {
     prop BoundProgram BoundProgram {
         get {
             if boundProgram == nil {
+                let declarations = GlobalScope
+                using let measurement = CompilationMeasurements.BeginPhase("bodies")
                 // ADR-0186: body binding reads imported member signatures too.
                 using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
-                let bp = Binder.BindProgram(GlobalScope, References, BodyCache, DirtyBodyTrees)
+                let bp = Binder.BindProgram(declarations, References, BodyCache, DirtyBodyTrees)
+                CompilationMeasurements.Count("input.methods", bp.Functions.Count)
                 Interlocked.CompareExchange[BoundProgram?](&this.boundProgram, bp, nil)
             }
             return boundProgram!!
@@ -395,6 +399,7 @@ open class Compilation {
             return CreateEmitResult(success: false, allDiagnostics)
         }
         let documentationDiagnostics = DiagnosticBag()
+        using let documentationValidationPhase = CompilationMeasurements.BeginPhase("documentation.validation")
         DocumentationValidator.Validate(
             SyntaxTrees,
             program.Functions.Keys.ToImmutableArray(),
@@ -402,11 +407,14 @@ open class Compilation {
             documentationDiagnostics,
             WarnOnMissingDocumentation
         )
+        documentationValidationPhase?.Dispose()
         // ADR-0055 / issue #368: lower interpolated strings to the
         // DefaultInterpolatedStringHandler pattern on the emit path only, before
         // the async/iterator rewriters and IL emission. The interpreter path is
         // untouched and renders the interpolation node directly.
+        using let interpolationPhase = CompilationMeasurements.BeginPhase("lowering.interpolated-strings")
         program = InterpolatedStringHandlerLowerer.Lower(program, References ?? ReferenceResolver.Default())
+        interpolationPhase?.Dispose()
         // Issue #3730: the lowering above resolves the handler surface from the
         // compilation's reference closure. Keep its targeted GS0545 safety gate
         // for an unusable resolved handler shape; a missing handler now takes
@@ -424,8 +432,12 @@ open class Compilation {
         // after interpolated-string lowering and before the async /
         // iterator state machine rewriters so the spilled temps
         // participate in hoist-set computation.
+        using let initializationPhase = CompilationMeasurements.BeginPhase("lowering.initialization")
         program = InitializationPlanner.Prepare(program)
+        initializationPhase?.Dispose()
+        using let spillPhase = CompilationMeasurements.BeginPhase("lowering.side-effects")
         program = SideEffectSpiller.Lower(program)
+        spillPhase?.Dispose()
         // Issue #523: hoist captured locals/parameters into per-variable
         // box classes so function literals see writes to the variable cell
         // (Go/C# closure semantics). On the emit path, this must run after
@@ -434,16 +446,22 @@ open class Compilation {
         // Issue #2037: thread the MLC cross-reflection-context projector so
         // box classes hoisting an imported constructed generic over an
         // enclosing type parameter don't erase it under cs2gs.
+        using let capturePhase = CompilationMeasurements.BeginPhase("lowering.capture-boxing")
         program = CaptureBoxingRewriter.Lower(
             program,
             (References ?? ReferenceResolver.Default()).MapClrTypeToReferences
         )
+        capturePhase?.Dispose()
+        using let managedReferencePhase = CompilationMeasurements.BeginPhase("lowering.managed-references")
         program = ManagedReferenceLowerer.Lower(program, References ?? ReferenceResolver.Default())
+        managedReferencePhase?.Dispose()
         // Issue #2130: after capture-boxing has introduced the closure cells
         // expression trees must reference, rewrite lambda-to-expression-tree
         // conversions into ordinary bound calls to System.Linq.Expressions
         // factory methods.
+        using let expressionTreePhase = CompilationMeasurements.BeginPhase("lowering.expression-trees")
         program = ExpressionTreeLowerer.Lower(program)
+        expressionTreePhase?.Dispose()
         let (lowered, loweredProgram, lowerDiagnostics) = LowerForEmit(
             program,
             References ?? ReferenceResolver.Default()
@@ -560,6 +578,7 @@ open class Compilation {
             return CreateEmitResult(success: false, allDiagnostics)
         }
         let documentationDiagnostics = DiagnosticBag()
+        using let documentationValidationPhase = CompilationMeasurements.BeginPhase("documentation.validation")
         DocumentationValidator.Validate(
             SyntaxTrees,
             program.Functions.Keys.ToImmutableArray(),
@@ -567,11 +586,14 @@ open class Compilation {
             documentationDiagnostics,
             WarnOnMissingDocumentation
         )
+        documentationValidationPhase?.Dispose()
         // ADR-0055 / issue #368: lower interpolated strings to the
         // DefaultInterpolatedStringHandler pattern on the emit path only, before
         // the async/iterator rewriters and IL emission. The interpreter path is
         // untouched and renders the interpolation node directly.
+        using let interpolationPhase = CompilationMeasurements.BeginPhase("lowering.interpolated-strings")
         program = InterpolatedStringHandlerLowerer.Lower(program, References ?? ReferenceResolver.Default())
+        interpolationPhase?.Dispose()
         // Issue #3730: the lowering above resolves the handler surface from the
         // compilation's reference closure. Keep its targeted GS0545 safety gate
         // for an unusable resolved handler shape; a missing handler now takes
@@ -589,8 +611,12 @@ open class Compilation {
         // after interpolated-string lowering and before the async /
         // iterator state machine rewriters so the spilled temps
         // participate in hoist-set computation.
+        using let initializationPhase = CompilationMeasurements.BeginPhase("lowering.initialization")
         program = InitializationPlanner.Prepare(program)
+        initializationPhase?.Dispose()
+        using let spillPhase = CompilationMeasurements.BeginPhase("lowering.side-effects")
         program = SideEffectSpiller.Lower(program)
+        spillPhase?.Dispose()
         // Issue #523: hoist captured locals/parameters into per-variable
         // box classes so function literals see writes to the variable cell
         // (Go/C# closure semantics). Must run after side-effect spilling
@@ -599,16 +625,22 @@ open class Compilation {
         // Issue #2037: thread the MLC cross-reflection-context projector so
         // box classes hoisting an imported constructed generic over an
         // enclosing type parameter don't erase it under cs2gs.
+        using let capturePhase = CompilationMeasurements.BeginPhase("lowering.capture-boxing")
         program = CaptureBoxingRewriter.Lower(
             program,
             (References ?? ReferenceResolver.Default()).MapClrTypeToReferences
         )
+        capturePhase?.Dispose()
+        using let managedReferencePhase = CompilationMeasurements.BeginPhase("lowering.managed-references")
         program = ManagedReferenceLowerer.Lower(program, References ?? ReferenceResolver.Default())
+        managedReferencePhase?.Dispose()
         // Issue #2130: after capture-boxing has introduced the closure cells
         // expression trees must reference, rewrite lambda-to-expression-tree
         // conversions into ordinary bound calls to System.Linq.Expressions
         // factory methods.
+        using let expressionTreePhase = CompilationMeasurements.BeginPhase("lowering.expression-trees")
         program = ExpressionTreeLowerer.Lower(program)
+        expressionTreePhase?.Dispose()
         let (lowered, loweredProgram, lowerDiagnostics) = LowerForEmit(
             program,
             References ?? ReferenceResolver.Default()
@@ -625,6 +657,7 @@ open class Compilation {
             .ToImmutableArray()
         try {
             if peStream != nil {
+                using let measurement = CompilationMeasurements.BeginPhase("emit.implementation")
                 EmitAssembly(
                     program,
                     peStream,
@@ -642,6 +675,7 @@ open class Compilation {
                 )
             }
             if refStream != nil {
+                using let measurement = CompilationMeasurements.BeginPhase("emit.reference")
                 // Reference assemblies never carry debug info — pass an explicit
                 // None override so we don't accidentally write a CodeView entry
                 // pointing at a sidecar that doesn't describe this PE.
@@ -661,6 +695,7 @@ open class Compilation {
                 )
             }
             if docStream != nil {
+                using let measurement = CompilationMeasurements.BeginPhase("documentation.emit")
                 DocumentationFileEmitter.Emit(docStream, assemblyName ?? program.PackageName, program)
             }
         } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
@@ -835,10 +870,18 @@ open class Compilation {
             // synthesized non-virtual forwarders BEFORE the state-machine rewriters,
             // so the hoisted `<>4__this` receiver never reaches a non-virtual base
             // call (ilverify ThisMismatch).
+            using let baseCallPhase = CompilationMeasurements.BeginPhase("lowering.base-calls")
             program = BaseCallForwarderRewriter.Rewrite(program)
+            baseCallPhase?.Dispose()
+            using let asyncPhase = CompilationMeasurements.BeginPhase("lowering.async")
             let asyncRewriteResult = AsyncStateMachineRewriter.Rewrite(program, references)
+            asyncPhase?.Dispose()
+            using let iteratorPhase = CompilationMeasurements.BeginPhase("lowering.iterators")
             let iteratorRewriteResult = IteratorRewriter.Rewrite(program)
+            iteratorPhase?.Dispose()
+            using let asyncIteratorPhase = CompilationMeasurements.BeginPhase("lowering.async-iterators")
             let asyncIteratorRewriteResult = AsyncIteratorRewriter.Rewrite(program, references)
+            asyncIteratorPhase?.Dispose()
             // Gate: fail fast on unsupported async constructs after lowering.
             // This runs after the rewriters because it inspects StateMachineType
             // which is set during AsyncStateMachineRewriter.Rewrite.
