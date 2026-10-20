@@ -296,8 +296,9 @@ jobs:
   # every assembly, evaluates every shard's filter over that list, and fails
   # unless the shards partition it exactly.
   #
-  # It runs in parallel with `tests` and is well inside their wall time, so it
-  # never lengthens the run. The environment is deliberately bare:
+  # It runs in parallel with `tests` and needs the same build-and-verify budget:
+  # the selected graph includes G#-built suites and staged SDK payloads before
+  # theory discovery can enumerate every test. The environment is deliberately bare:
   # GSHARP_DIFFERENTIAL_CONFORMANCE changes how many rows the language
   # conformance theory enumerates, so the check has to see the same corpus the
   # shards do.
@@ -305,7 +306,7 @@ jobs:
     needs: select
     if: contains(fromJSON(needs.select.outputs.plan).jobs, 'test-partition')
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v5
