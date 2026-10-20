@@ -228,6 +228,11 @@ for n in numbers() {
 }
 ```
 
+A `for … in` loop keeps its enumerator alive while its body is suspended at
+`yield` or `await`. It disposes a disposable enumerator when the loop finishes,
+exits early, or throws. Disposing a suspended iterator also disposes its active
+loop enumerators, from the innermost loop outward.
+
 ## 5. Use `async sequence[T]` for async streams
 
 `async sequence[T]` is the asynchronous counterpart — it is the return

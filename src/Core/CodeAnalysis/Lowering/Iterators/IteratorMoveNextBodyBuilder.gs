@@ -368,12 +368,8 @@ shared class IteratorMoveNextBodyBuilder {
         }
         let tryDispatch = IteratorTryDispatchPlanner.Plan(plan.Body, plan.YieldStates)
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-        // Walk pending try-finallies in innermost-first order. For each:
-        //   if (<state matches a yield state inside this try>) {
-        //     try { /* empty: leave triggers finally */ } finally { <user finally> }
-        //   }
-        // We always set state = -1 BEFORE the chain so the iterator is left
-        // in the finished state even if a finally throws.
+        // Nest pending cleanup regions so outer finallies still run when
+        // an inner finally throws. Finish the iterator before running cleanup.
         statements.Add(BoundExpressionStatement(nil, FieldWrite(stateField, BoundLiteralExpression(nil, -1))))
         if !tryDispatch.FinallyTrysInnermostFirst.IsDefaultOrEmpty {
             // We need to compute the per-try yield-state membership using
@@ -387,10 +383,7 @@ shared class IteratorMoveNextBodyBuilder {
             statements.Clear()
             statements.Add(BoundVariableDeclaration(nil, savedStateLocal, FieldRead(stateField)))
             statements.Add(BoundExpressionStatement(nil, FieldWrite(stateField, BoundLiteralExpression(nil, -1))))
-            // For each try-finally that contains yields (innermost first):
-            //   if (savedState == s1 || savedState == s2 || ...) {
-            //     try {} finally { <rewritten user finally> }
-            //   }
+            var cleanup BoundStatement = BoundBlockStatement(nil, ImmutableArray[BoundStatement].Empty)
             for tryStmt in tryDispatch.FinallyTrysInnermostFirst {
                 let insideStates = tryDispatch.GetYieldStatesInTry(tryStmt)
                 if insideStates.IsDefaultOrEmpty {
@@ -436,16 +429,14 @@ shared class IteratorMoveNextBodyBuilder {
                         expression: "tryStmt.FinallyBlock"
                     )
                 )
-                // try {} finally { … }
-                let emptyTryBody = BoundBlockStatement(nil, ImmutableArray[BoundStatement].Empty)
-                let tryFinally = BoundTryStatement(
+                cleanup = BoundTryStatement(
                     nil,
-                    emptyTryBody,
+                    cleanup,
                     ImmutableArray[BoundCatchClause].Empty,
-                    rewrittenFinally
+                    BoundIfStatement(nil, condition, rewrittenFinally, elseStatement: nil)
                 )
-                statements.Add(BoundIfStatement(nil, condition, tryFinally, elseStatement: nil))
             }
+            statements.Add(cleanup)
         }
         statements.Add(BoundReturnStatement(nil, nil))
         return Lowerer.Lower(BoundBlockStatement(nil, statements.ToImmutable()))
