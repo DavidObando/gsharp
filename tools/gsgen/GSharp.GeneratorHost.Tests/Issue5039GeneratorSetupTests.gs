@@ -108,6 +108,32 @@ open class Issue5039GeneratorSetupTests : IDisposable {
     }
 
     @Fact
+    func GeneratedTranslation_SourceCensusSkipsMetadataTypes_AndPreservesHomonymsAndNullableAliases() {
+        let generator = Path.Combine(directory, "Generator.dll")
+        CompileDll(
+            GeneratorSource.Replace(
+                "public string Greeting =>",
+                "public global::System.Uri? Address => null; public string Greeting =>"
+            )
+                .Replace("__VERSION__", "census"),
+            generator,
+            "Generator"
+        )
+        let gs = Write("Input.gs", "package App\nclass Uri {}\n@Obsolete\npartial class Foo {}")
+        using let measurements = CompilationMeasurements.Start("gsgen-test")
+        Run(Arguments(gs, generator), MetadataReferenceCache())
+        let generated = File.ReadAllText(Assert.Single(GeneratedFiles()))
+        Assert.Contains("partial class Foo", generated)
+        Assert.Contains("System.Uri", generated)
+        Assert.DoesNotContain("prop Address Uri?", generated)
+        Assert.Contains("? -> nil", generated)
+        Assert.Contains("census|||on", generated)
+        let visited = measurements.GetCounter("translation.source_census.types_visited")
+        Assert.InRange(visited, 1, 32)
+        Assert.Equal(1, measurements.GetCounter("translation.import_semantic_model_reuses"))
+    }
+
+    @Fact
     func EmptyManifest_DoesNotSuppressDiagnostics_OrLaterGeneratedPart() {
         using let measurements = CompilationMeasurements.Start("gsgen-test")
         let generator = CompileGenerator("v1")

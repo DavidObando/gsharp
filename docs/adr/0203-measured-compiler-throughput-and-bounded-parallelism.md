@@ -662,6 +662,18 @@ This is an allocation and work reduction, not cross-stage declaration reuse:
 parsing, semantic declarations and reference import still run separately in
 `gsgen` and `gsc`. Their remaining duplication stays outside this local change.
 
+### Generated-document translation work reduction (#5054)
+
+Back-translation retains the immutable Roslyn input/generated trees and metadata
+references from generator setup. Import reservation now uses the active document's
+semantic model instead of rebinding that tree through a second model. A model
+that ignores accessibility retains the prior separate-model path.
+Source-name censuses visit the current assembly and globally visible
+compilation references, not metadata-only assemblies whose types cannot have
+source locations. Reference aliases and source-symbol rebinding remain inputs.
+Per-document alias state, translation order, diagnostics and output publication
+are unchanged. This reduction adds no cache, worker pool or SDK bypass.
+
 ### Initial bounded-worker implementation (#5041)
 
 The initial implementation remains opt-in (`GSharpMaxWorkers=1` by default).

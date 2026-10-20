@@ -379,7 +379,7 @@ partial class CSharpToGSharpTranslator {
                 entryPoint
             }
         )
-        typeMapper.ReserveImportNames(imports, contributingTrees, context.Compilation)
+        typeMapper.ReserveImportNames(imports, contributingTrees, context)
         let visitor = DeclarationVisitor(
             context,
             typeMapper,
