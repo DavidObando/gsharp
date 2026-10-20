@@ -97,7 +97,10 @@ open class Issue5037SuspendingForInDisposalTests {
                 ("async-iterator-early", "P0,Y1,Douter"),
                 ("async-iterator-throw", "P0,Douter,Xbody"),
                 ("async-iterator-inline-early", "P0,Y1,Douter"),
-                ("async-iterator-inline-normal", "P0,Y1,Y2,Douter")
+                ("async-iterator-inline-normal", "P0,Y1,Y2,Douter"),
+                ("inline-register-normal", "Y1,Douter"),
+                ("inline-register-body", "Y1,Douter,Xbody"),
+                ("inline-register-getresult", "Y1,Douter,Xawait")
             }
             let failures = List[string]()
             for entry in cases {
@@ -181,6 +184,16 @@ shared class Forwarder {
             yield value
         }
     }
+
+    async func InlineAwait(values IEnumerable[int32], gate ValueTask, fail bool) async sequence[int32] {
+        for value in values {
+            yield value
+            await gate
+            if fail {
+                throw InvalidOperationException("body")
+            }
+        }
+    }
 }`
 
         // Roslyn compiles this contract against the same explicit ref pack passed to gsc.
@@ -190,6 +203,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Threading.Tasks;
+using System.Threading.Tasks.Sources;
 
 public static class DisposalContract
 {
@@ -248,6 +262,15 @@ public static class DisposalContract
             yield return value;
         }
     }
+    public static async IAsyncEnumerable<int> InlineAwait(IEnumerable<int> values, ValueTask gate, bool fail)
+    {
+        foreach (int value in values)
+        {
+            yield return value;
+            await gate;
+            if (fail) throw new InvalidOperationException("body");
+        }
+    }
 
     public static string Run(Type type, string scenario)
     {
@@ -266,7 +289,21 @@ public static class DisposalContract
         if (scenario.Contains("dispose")) inner.ThrowDispose = true;
         try
         {
-            if (scenario.StartsWith("async-iterator-"))
+            if (scenario.StartsWith("inline-register-"))
+            {
+                outer.Limit = 1;
+                var gate = new ValueTask(new InlineSource(scenario.EndsWith("-getresult")), 0);
+                var values = (IAsyncEnumerable<int>)type.GetMethod("InlineAwait").Invoke(null,
+                    new object[] { outer, gate, scenario.EndsWith("-body") });
+                var cursor = values.GetAsyncEnumerator();
+                try
+                {
+                    while (cursor.MoveNextAsync().AsTask().GetAwaiter().GetResult())
+                        log.Add("Y" + cursor.Current);
+                }
+                finally { cursor.DisposeAsync().GetAwaiter().GetResult(); }
+            }
+            else if (scenario.StartsWith("async-iterator-"))
             {
                 var gate = new TaskCompletionSource();
                 var values = (IAsyncEnumerable<int>)type.GetMethod("AsyncForward").Invoke(null,
@@ -357,11 +394,31 @@ public static class DisposalContract
         finally { await cursor.DisposeAsync().ConfigureAwait(false); }
     }
 
+    private sealed class InlineSource : IValueTaskSource
+    {
+        private readonly bool fail;
+        private bool completed;
+        public InlineSource(bool fail) { this.fail = fail; }
+        public ValueTaskSourceStatus GetStatus(short token) =>
+            !completed ? ValueTaskSourceStatus.Pending :
+                fail ? ValueTaskSourceStatus.Faulted : ValueTaskSourceStatus.Succeeded;
+        public void GetResult(short token)
+        {
+            if (fail) throw new InvalidOperationException("await");
+        }
+        public void OnCompleted(Action<object> continuation, object state, short token,
+            ValueTaskSourceOnCompletedFlags flags)
+        {
+            completed = true;
+            continuation(state);
+        }
+    }
+
     private sealed class Counted : IEnumerable<int>
     {
         private readonly string name;
         private readonly List<string> log;
-        public int ThrowMove, ThrowCurrent;
+        public int ThrowMove, ThrowCurrent, Limit = 2;
         public bool ThrowAcquire, ThrowDispose;
         public Counted(string name, List<string> log) { this.name = name; this.log = log; }
         public IEnumerator<int> GetEnumerator()
@@ -381,7 +438,7 @@ public static class DisposalContract
             public bool MoveNext()
             {
                 if (++position == owner.ThrowMove) throw new InvalidOperationException("move");
-                return position <= 2;
+                return position <= owner.Limit;
             }
             public void Dispose()
             {

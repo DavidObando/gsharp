@@ -33,6 +33,13 @@ shared class AsyncIteratorMoveNextBodyBuilder {
         private let awaiterPoolFields Dictionary[Type, FieldSymbol]
         private let awaitTryDispatch TryDispatchPlan
         private let yieldTryDispatch IteratorTryDispatchPlan
+        // Await registration can reenter MoveNext and change the shared state.
+        // Finally guards must keep the state of their own invocation.
+        private let invocationState LocalVariableSymbol = LocalVariableSymbol(
+            "<>ai_invocationState",
+            isReadOnly: false,
+            TypeSymbol.Int32
+        )
 
         // Labels for yield resume points
         private let yieldResumeLabels Dictionary[int32, BoundLabel] = Dictionary[int32, BoundLabel]()
@@ -91,6 +98,9 @@ shared class AsyncIteratorMoveNextBodyBuilder {
 
         func BuildBody() BoundBlockStatement {
             let stmts = ImmutableArray.CreateBuilder[BoundStatement]()
+            stmts.Add(
+                BoundVariableDeclaration(nil, invocationState, Literal(StateMachineStates.NotStartedOrRunningState))
+            )
             // try {
             //   state dispatch
             //   user body (with yield + await rewritten)
@@ -271,7 +281,12 @@ shared class AsyncIteratorMoveNextBodyBuilder {
         }
 
         private func WriteField(field FieldSymbol, value BoundExpression) BoundExpression {
-            return BoundFieldAssignmentExpression(nil, thisParameter, smClass, field, value)
+            let storedValue BoundExpression = if object.ReferenceEquals(field, stateField) {
+                BoundAssignmentExpression(nil, invocationState, value)
+            } else {
+                value
+            }
+            return BoundFieldAssignmentExpression(nil, thisParameter, smClass, field, storedValue)
         }
 
         /// Walks the user body, replacing yields, awaits, variable accesses (hoisted to fields),
@@ -478,7 +493,7 @@ shared class AsyncIteratorMoveNextBodyBuilder {
             private func AddSuspendedState(condition BoundExpression?, state int32) BoundExpression {
                 let equalsState = BoundBinaryExpression(
                     nil,
-                    ctx.ReadField(ctx.stateField),
+                    BoundVariableExpression(nil, ctx.invocationState),
                     Invariant.Required(
                         BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
                         "int32 equality operator exists for async iterator state dispatch",
