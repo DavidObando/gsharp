@@ -58,6 +58,44 @@ partial class Foo {
     }
 
     @Fact
+    func CleanupOnly_ExistingManifest_DeletesGeneratedFilesWithoutSources() {
+        let outDir = Path.Combine(workDir, "gen")
+        Directory.CreateDirectory(outDir)
+        let generated = Path.Combine(outDir, "Removed.g.gs")
+        let manifest = Path.Combine(workDir, "manifest.txt")
+        File.WriteAllText(generated, "partial class Removed {}")
+        File.WriteAllText(manifest, generated)
+        let stdout = StringWriter()
+        Assert.Equal(0, GsgenProgram.Run([]string{"/out:$outDir", "/manifest:$manifest"}, stdout))
+        Assert.Equal(string.Empty, stdout.ToString())
+        Assert.False(File.Exists(generated))
+        Assert.Equal(string.Empty, File.ReadAllText(manifest))
+    }
+
+    @Theory
+    @InlineData("/analyzer:generator.dll")
+    @InlineData("/csfile:Foreign.cs")
+    @InlineData("")
+    func MissingSources_OutsideCleanup_PreservesRequiredValidationAndPreviousOutputs(option string) {
+        let outDir = Path.Combine(workDir, "gen")
+        Directory.CreateDirectory(outDir)
+        let generated = Path.Combine(outDir, "Previous.g.gs")
+        let manifest = Path.Combine(workDir, "manifest.txt")
+        File.WriteAllText(generated, "partial class Previous {}")
+        File.WriteAllText(manifest, generated)
+        let args = List[string]{"/out:$outDir"}
+        if option.Length > 0 {
+            args.Add("/manifest:$manifest")
+            args.Add(option)
+        }
+        let stdout = StringWriter()
+        Assert.Equal(1, GsgenProgram.Run(args.ToArray(), stdout))
+        Assert.Contains("at least one '/gs:", stdout.ToString())
+        Assert.True(File.Exists(generated))
+        Assert.Equal(generated, File.ReadAllText(manifest))
+    }
+
+    @Fact
     func ResponseFile_IsExpanded_LikeGsc() {
         let outDir = Path.Combine(this.workDir, "gen")
         let manifest = Path.Combine(this.workDir, "manifest.txt")

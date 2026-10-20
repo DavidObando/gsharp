@@ -151,9 +151,9 @@ open class GsgenTask : Task, ICancelableTask {
     /// <inheritdoc />
     /// ```
     open override func Execute() bool {
-        // No sources means nothing to project; treat as a no-op success (gsgen
-        // itself requires at least one /gs:, so we never launch it empty).
-        if this.Compile == nil || this.Compile!!.Length == 0 {
+        let compile = this.Compile ?? Array.Empty[ITaskItem]()
+        // A previous manifest still owns generated files after the final source is removed.
+        if compile.Length == 0 && !File.Exists(this.ManifestPath) {
             return true
         }
         let gsgenToolFullPath = (this.GsgenToolFullPath ?? string.Empty)
@@ -177,7 +177,7 @@ open class GsgenTask : Task, ICancelableTask {
         using let grantLifetime = resourceGrant
         this.WorkerGrant = resourceGrant.Grant
         let args = List[string]()
-        for s in this.Compile!! {
+        for s in compile {
             args.Add(BuildTask.QuoteIfNeeded("/gs:${s.ItemSpec}"))
         }
         for r in this.References {

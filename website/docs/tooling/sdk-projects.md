@@ -157,6 +157,8 @@ Worker responses use a private named pipe, separate from diagnostic stdout and s
 
 Failed or interrupted requests stop the owned worker and drain bounded diagnostic lines and unfinished tails without retrying. Pre-acceptance output is startup information, so permitted fallback does not turn it into a compiler error. Worker startup passes typed arguments, preserving supported spaces, Unicode, and quotes in tool and pipe paths.
 
+Removing the final source and analyzer still clears an existing manifest and deletes its generated parts before they can be added back to compilation. This source-free cleanup does not bypass source validation when generators or foreign C# translation are requested.
+
 A generator that implements a partial method, such as the Regex generator, pairs with a G# declaring part. Write a static one inside a `shared` block; `private shared partial func` is not valid G#:
 
 ```gsharp

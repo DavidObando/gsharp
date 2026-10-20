@@ -93,6 +93,47 @@ partial class P {
         Assert.Equal(2, ReportCount())
     }
 
+    @Fact
+    func RemovingFinalSourceAndAnalyzer_CleansGeneratedPartsBeforeCompileInclusion() {
+        WriteProject()
+        let source = Path.Combine(directory, "Input.gs")
+        File.WriteAllText(source, `package App
+import System.Text.RegularExpressions
+partial class P {
+    shared {
+        @GeneratedRegex("a")
+        private partial func Match() Regex;
+    }
+}
+`)
+        Build("App", "First", additional: false)
+        let manifest = Path.Combine(directory, "obj", "gsgen", "gsgen.manifest")
+        let generated = File
+            .ReadAllLines(manifest)
+            .Where((path string) -> path.Length > 0)
+            .Select((path string) -> Path.GetFullPath(Path.Combine(directory, path)))
+            .ToArray()
+        Assert.NotEmpty(generated)
+        Assert.All(generated, (path string) -> Assert.True(File.Exists(path)))
+        File.Delete(source)
+        let projectFile = Path.Combine(directory, "Generators.proj")
+        let project = XDocument.Load(projectFile)
+        let root = project.Root ?? throw InvalidOperationException("The test project has no root.")
+        root.SetAttributeValue("DefaultTargets", "_GsharpIncludeGeneratedCompile")
+        root.Add(
+            XElement.Parse(
+                "<Target Name=\"AssertEmptyCompile\" AfterTargets=\"_GsharpIncludeGeneratedCompile\"><Error Condition=\"'@(Compile)' != ''\" Text=\"Stale generated Compile items: @(Compile)\" /></Target>"
+            )
+        )
+        project.Save(projectFile)
+        Build("App", "First", additional: false, generators: false)
+        Assert.Equal(string.Empty, File.ReadAllText(manifest))
+        Assert.All(generated, (path string) -> Assert.False(File.Exists(path)))
+        Assert.Equal(2, ReportCount())
+        Build("App", "First", additional: false, generators: false)
+        Assert.Equal(2, ReportCount())
+    }
+
     private func ReportCount() int32 -> Directory.GetFiles(directory, "phase-*.json").Length
 
     @Fact
