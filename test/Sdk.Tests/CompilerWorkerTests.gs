@@ -152,6 +152,58 @@ open class CompilerWorkerTests : IDisposable {
     }
 
     @Fact
+    func OversizedDiagnosticDisposesTransportAndNextRequestStartsFresh() {
+        let source = Path.Combine(directory, "input.gs")
+        File.WriteAllText(source, "open class Sample { }")
+        let arguments = []string{"/out:result.dll", "/target:library", "input.gs"}
+        Assert.True(Run(directory, arguments, List[string](), List[string](), out var warmup))
+        Assert.Equal(0, warmup)
+        let previousProcess = messages.Last().Split(',')[0]
+        File.WriteAllText(
+            source,
+            "open class Sample { func Get() int32 -> missingName } //".PadRight(16 * 1024 * 1024 + 1)
+        )
+        let failure = Assert.Throws[IOException](
+            () -> Run(directory, arguments, List[string](), List[string](), out var _exit)
+        )
+        Assert.Contains("protocol limit", failure.Message)
+        File.WriteAllText(source, "open class Sample { }")
+        Assert.True(Run(directory, arguments, List[string](), List[string](), out var after))
+        Assert.Equal(0, after)
+        Assert.NotEqual(previousProcess, messages.Last().Split(',')[0])
+    }
+
+    @Fact
+    func UnexpectedRequestFailureCannotLeaveAReusableStream() {
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { }")
+        let arguments = []string{"/out:result.dll", "/target:library", "input.gs"}
+        Assert.True(Run(directory, arguments, List[string](), List[string](), out var first))
+        Assert.Equal(0, first)
+        let previousProcess = messages.Last().Split(',')[0]
+        Assert.Throws[ApplicationException](
+            () -> client.TryRun(
+                CompilerPath(),
+                "--compiler-worker",
+                directory,
+                WithReferences(arguments),
+                1,
+                CancellationToken.None,
+                (_line string) -> { },
+                (_line string) -> { },
+                (line string) -> {
+                    if line.Contains("accepted request") {
+                        throw ApplicationException("The request logger failed.")
+                    }
+                },
+                out var _exit
+            )
+        )
+        Assert.True(Run(directory, arguments, List[string](), List[string](), out var after))
+        Assert.Equal(0, after)
+        Assert.NotEqual(previousProcess, messages.Last().Split(',')[0])
+    }
+
+    @Fact
     func SubprocessDeadlineDoesNotWaitForOutputEof() {
         let start = ProcessStartInfo("dotnet"){
             UseShellExecute = false,
