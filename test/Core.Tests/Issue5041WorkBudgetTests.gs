@@ -9,6 +9,16 @@ import System.Threading
 import Xunit
 
 class Issue5041WorkBudgetTests {
+    @Theory
+    @InlineData(1, 1024)
+    @InlineData(8, 256)
+    @InlineData(8, 1024)
+    func LastSequentialOperationCancellationIsObserved(workers int32, memoryMiB int32) {
+        using let cts = CancellationTokenSource()
+        let budget = CompilationWorkBudget(workers, memoryMiB, cts.Token)
+        Assert.Throws[OperationCanceledException](() -> budget.Run(1, (_ int32) -> cts.Cancel()))
+    }
+
     @Fact
     func IndependentWorkOverlapsWithinOneBudgetAndJoinsOnCancellation() {
         let budget = CompilationWorkBudget(2, 1024)

@@ -55,23 +55,38 @@ class CompilationWorkBudget {
 
     /// Executes indexed work and joins all workers. Failures are rethrown in input order.
     /// The action owns its output slot and must not publish mutable state to other actions.
-    internal func Run(count int32, action(int32) -> void, workspaceBytes int64 = 100663296) {
+    internal func Run(count int32, action(int32) -> void, workspaceBytes int64 = 100663296, allowParallel bool = true) {
         CancellationToken.ThrowIfCancellationRequested()
         if Interlocked.CompareExchange(&running, 1, 0) != 0 {
             throw InvalidOperationException("Compilation phases cannot nest or overlap worker budgets.")
         }
         try {
-            Volatile.Write(&lastPeak, 1)
-            let available = cast[int64](MemoryBudgetMiB - 256) * 1048576
-            let workers = Math.Min(
-                count,
-                Math.Min(MaxWorkers, cast[int32](Math.Min(32, Math.Max(1, available / Math.Max(1, workspaceBytes)))))
+            Volatile.Write(
+                &lastPeak,
+                if count > 0 {
+                    1
+                } else {
+                    0
+                }
             )
+            let available = cast[int64](MemoryBudgetMiB - 256) * 1048576
+            let workers = if allowParallel {
+                Math.Min(
+                    count,
+                    Math.Min(
+                        MaxWorkers,
+                        cast[int32](Math.Min(32, Math.Max(1, available / Math.Max(1, workspaceBytes))))
+                    )
+                )
+            } else {
+                1
+            }
             if workers <= 1 {
                 for var i = 0; i < count; i++ {
                     CancellationToken.ThrowIfCancellationRequested()
                     action(i)
                 }
+                CancellationToken.ThrowIfCancellationRequested()
                 return
             }
             let failures = [count]ExceptionDispatchInfo?

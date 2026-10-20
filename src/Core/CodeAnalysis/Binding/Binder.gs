@@ -7680,8 +7680,16 @@ class Binder {
             globalScope BoundGlobalScope,
             references ReferenceResolver?,
             cache BoundBodyCache?,
+            dirtyTrees ImmutableHashSet[SyntaxTree]?
+        ) BoundProgram -> BindProgram(globalScope, references, cache, dirtyTrees, workBudget: nil)
+
+        /// Binds bodies using one request-owned worker budget after declarations have completed.
+        func BindProgram(
+            globalScope BoundGlobalScope,
+            references ReferenceResolver?,
+            cache BoundBodyCache?,
             dirtyTrees ImmutableHashSet[SyntaxTree]?,
-            workBudget CompilationWorkBudget? = nil
+            workBudget CompilationWorkBudget?
         ) BoundProgram {
             let parentScope = CreateParentScope(
                 globalScope,
@@ -8602,9 +8610,7 @@ class Binder {
                     .ContainsKey(function) {
                     return
                 }
-                if !boundBodies.ContainsKey(function) && seen.Add(function) && IndependentBodyClassifier.CanBind(
-                    function
-                ) {
+                if !boundBodies.ContainsKey(function) && seen.Add(function) && function.Declaration?.Body != nil {
                     jobs.Add((function, owner))
                     largestBody = Math.Max(largestBody, function.Declaration!!.Body!!.Span.Length)
                 }
@@ -8623,6 +8629,19 @@ class Binder {
                 for method in owner.StaticMethods {
                     if !method.IsExtension {
                         add(method, owner)
+                    }
+                }
+                // Cold scheduling and eligibility checks cost more than binding a few small bodies.
+                if jobs.Count < 8 && largestBody < 8192 {
+                    return results
+                }
+                largestBody = 0
+                for var index = jobs.Count - 1; index >= 0; index-- {
+                    let function = jobs[index].Function
+                    if !IndependentBodyClassifier.CanBind(function) {
+                        jobs.RemoveAt(index)
+                    } else {
+                        largestBody = Math.Max(largestBody, function.Declaration!!.Body!!.Span.Length)
                     }
                 }
             }
@@ -8646,7 +8665,8 @@ class Binder {
                     )
                     outputs[index] = BodyBindResult(body, bodyDiagnostics.ToImmutable())
                 },
-                workspaceBytes: Math.Max(100663296, largestBody * 128)
+                workspaceBytes: Math.Max(100663296, largestBody * 128),
+                allowParallel: jobs.Count >= 8 || largestBody >= 8192
             )
             CompilationMeasurements.Count("bodies.workers.active", budget.LastObservedWorkers)
             for var index = 0; index < jobs.Count; index++ {

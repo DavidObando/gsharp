@@ -14,9 +14,13 @@ class Issue5041BoundedDriverTests {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let first = Path.Combine(fixture.Directory, "first.gs")
         let second = Path.Combine(fixture.Directory, "second.gs")
+        let third = Path.Combine(fixture.Directory, "third.gs")
+        let fourth = Path.Combine(fixture.Directory, "fourth.gs")
         let output = Path.Combine(fixture.Directory, "implicit.dll")
         File.WriteAllText(first, "package Implicit\nfunc First(x int32) int32 -> x + 1")
         File.WriteAllText(second, "package Implicit\nfunc Second(x int32) int32 -> x + 2")
+        File.WriteAllText(third, "package Implicit\nfunc Third(x int32) int32 -> x + 3")
+        File.WriteAllText(fourth, "package Implicit\nfunc Fourth(x int32) int32 -> x + 4")
         var baseline[]uint8 = Array.Empty[uint8]()
         var baselinePdb[]uint8 = Array.Empty[uint8]()
         for workers in[]int32{1, 2, 4, 8} {
@@ -34,7 +38,9 @@ class Issue5041BoundedDriverTests {
                 "/out:" + output,
                 "--workers:$workers",
                 first,
-                second
+                second,
+                third,
+                fourth
             } {
                 start.ArgumentList.Add(argument)
             }
@@ -55,6 +61,28 @@ class Issue5041BoundedDriverTests {
                 Assert.Equal(baseline, File.ReadAllBytes(output))
                 Assert.Equal(baselinePdb, File.ReadAllBytes(Path.ChangeExtension(output, ".pdb")))
             }
+        }
+    }
+
+    @Fact
+    func SmallInputsKeepTheMeasuredSequentialFastPathWhenWorkersAreRequested() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let sibling = Path.Combine(fixture.Directory, "sibling.gs")
+        File.WriteAllText(sibling, "package Small\nfunc Sibling() int32 -> 2")
+        let report = Path.Combine(fixture.Directory, "small.json")
+        let previous = Environment.GetEnvironmentVariable("GSHARP_MEASURE_PHASES")
+        try {
+            Environment.SetEnvironmentVariable("GSHARP_MEASURE_PHASES", report)
+            let dll = fixture.Compile("package Small\nfunc Value() int32 -> 1", "small", false, "--workers:8", sibling)
+            Assert.True(File.Exists(dll))
+            using let json = JsonDocument.Parse(File.ReadAllText(report))
+            let counters = json.RootElement.GetProperty("Counters")
+            Assert.Equal(2, counters.GetProperty("input.sources").GetInt32())
+            Assert.Equal(1, counters.GetProperty("workers.active").GetInt32())
+            Assert.Equal(1, counters.GetProperty("parse.workers.active").GetInt32())
+            Assert.False(counters.TryGetProperty("workers.parallel-batches", out _))
+        } finally {
+            Environment.SetEnvironmentVariable("GSHARP_MEASURE_PHASES", previous)
         }
     }
 
@@ -208,9 +236,9 @@ async func Main() {
                     Assert.Equal(pdb, File.ReadAllBytes(Path.ChangeExtension(dll, ".pdb")))
                     using let measurements = JsonDocument.Parse(File.ReadAllText(report))
                     let counters = measurements.RootElement.GetProperty("Counters")
-                    Assert.True(counters.GetProperty("bodies.independent").GetInt32() >= 512)
-                    Assert.True(counters.GetProperty("workers.parallel-items").GetInt32() >= 528)
                     if Environment.ProcessorCount > 1 {
+                        Assert.True(counters.GetProperty("bodies.independent").GetInt32() >= 512)
+                        Assert.True(counters.GetProperty("workers.parallel-items").GetInt32() >= 528)
                         Assert.True(counters.GetProperty("workers.active").GetInt32() > 1)
                         Assert.True(counters.GetProperty("parse.workers.active").GetInt32() > 1)
                         Assert.True(counters.GetProperty("bodies.workers.active").GetInt32() > 1)

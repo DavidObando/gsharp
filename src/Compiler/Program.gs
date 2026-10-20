@@ -356,6 +356,7 @@ open class Program {
                 }
                 let fullPaths = [allSourceFiles.Count]string
                 var largestSource int64 = 0
+                var totalSourceBytes int64 = 0
                 for var index = 0; index < allSourceFiles.Count; index++ {
                     let path = allSourceFiles[index]
                     if !File.Exists(path) {
@@ -369,10 +370,13 @@ open class Program {
                     // "Could not load source ...: Incorrect format of 'source' message."
                     let fullPath = Path.GetFullPath(path)
                     fullPaths[index] = fullPath
-                    let sourceBytes = FileInfo(fullPath).Length
-                    largestSource = Math.Max(largestSource, sourceBytes)
-                    if CompilationMeasurements.IsEnabled {
-                        CompilationMeasurements.Count("input.source-bytes", sourceBytes)
+                    if CompilationMeasurements.IsEnabled || workBudget.MaxWorkers > 1 {
+                        let sourceBytes = FileInfo(fullPath).Length
+                        largestSource = Math.Max(largestSource, sourceBytes)
+                        totalSourceBytes += sourceBytes
+                        if CompilationMeasurements.IsEnabled {
+                            CompilationMeasurements.Count("input.source-bytes", sourceBytes)
+                        }
                     }
                 }
                 let usesRuntimeReferences = parsed.OutputPath == nil || parsed.References.Count == 0
@@ -392,7 +396,8 @@ open class Program {
                     (index int32) -> {
                         syntaxTrees[index] = SyntaxTree.Load(fullPaths[index])
                     },
-                    Math.Max(16777216, largestSource * 16)
+                    Math.Max(16777216, largestSource * 16),
+                    allowParallel: fullPaths.Length >= 4 || totalSourceBytes >= 65536
                 )
                 CompilationMeasurements.Count("parse.workers.active", workBudget.LastObservedWorkers)
                 parsePhase?.Dispose()
