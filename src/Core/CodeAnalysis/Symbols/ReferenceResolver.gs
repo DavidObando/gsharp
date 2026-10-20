@@ -858,10 +858,13 @@ class ReferenceResolver : IDisposable {
     }
 
     private func GetReferenceContentFingerprint(assembly Assembly) string {
-        if assembly.IsDynamic || string.IsNullOrEmpty(assembly.Location) {
+        if AssemblyContentFingerprints.TryGetValue(assembly, out var fingerprint) {
+            return assembly.ManifestModule.ModuleVersionId.ToString("N") + ":" + fingerprint.Value
+        }
+        if assembly.IsDynamic || !TryGetAssemblyPath(assembly, out var path) {
             return string.Empty
         }
-        using let stream = File.OpenRead(assembly.Location)
+        using let stream = File.OpenRead(path)
         return assembly.ManifestModule.ModuleVersionId.ToString("N") + ":" + Convert.ToHexString(
             SHA256.HashData(stream)
         )
@@ -1108,12 +1111,14 @@ class ReferenceResolver : IDisposable {
             var asm Assembly
             if assemblyBytes.TryGetValue(fileName, out var bytes) {
                 asm = context.LoadFromByteArray(bytes)
+                ReferenceResolver.RegisterAssemblyContentFingerprint(asm, bytes)
             } else {
                 // Fallback: read from disk with sharing flags.
                 using let fs = FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)
                 let buffer = [int32(fs.Length)]uint8
                 fs.ReadExactly(buffer)
                 asm = context.LoadFromByteArray(buffer)
+                ReferenceResolver.RegisterAssemblyContentFingerprint(asm, buffer)
             }
             ReferenceResolver.RegisterAssemblyOriginalPath(asm, path)
             return asm
@@ -1124,6 +1129,7 @@ class ReferenceResolver : IDisposable {
             if !string.IsNullOrEmpty(simpleName) && assemblyBytes.TryGetValue(simpleName!!, out var bytes) {
                 try {
                     let asm = context.LoadFromByteArray(bytes)
+                    ReferenceResolver.RegisterAssemblyContentFingerprint(asm, bytes)
                     if assemblyPaths.TryGetValue(simpleName!!, out var originalPath) {
                         ReferenceResolver.RegisterAssemblyOriginalPath(asm, originalPath)
                     }
@@ -1188,6 +1194,15 @@ class ReferenceResolver : IDisposable {
             Assembly,
             string
         ]()
+        private let AssemblyContentFingerprints ConditionalWeakTable[Assembly, Lazy[string]] =
+        ConditionalWeakTable[Assembly, Lazy[string]]()
+
+        private func RegisterAssemblyContentFingerprint(assembly Assembly, bytes[]uint8) {
+            AssemblyContentFingerprints.GetValue(
+                assembly,
+                (key Assembly) -> Lazy[string](() -> Convert.ToHexString(SHA256.HashData(bytes)))
+            )
+        }
 
         // Memoizes TryResolveType results for the lifetime of this resolver.
         //

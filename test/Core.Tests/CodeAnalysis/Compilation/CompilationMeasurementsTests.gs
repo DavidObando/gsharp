@@ -11,6 +11,23 @@ import Xunit
 
 class CompilationMeasurementsTests {
     @Fact
+    func ExplicitHostSession_OwnsCountersWhenEnvironmentProfilingIsEnabled() {
+        let previous = Environment.GetEnvironmentVariable("GSHARP_MEASURE_PHASES")
+        let path = Path.Combine(AppContext.BaseDirectory, "hosted-" + Guid.NewGuid().ToString("N") + ".json")
+        try {
+            Environment.SetEnvironmentVariable("GSHARP_MEASURE_PHASES", path)
+            using let host = CompilationMeasurements.Start("host")
+            using let driver = CompilationMeasurements.StartFromEnvironment("driver")
+            CompilationMeasurements.Count("owned-by-host")
+            Assert.Equal(1L, host.GetCounter("owned-by-host"))
+            Assert.False(File.Exists(path))
+        } finally {
+            Environment.SetEnvironmentVariable("GSHARP_MEASURE_PHASES", previous)
+            File.Delete(path)
+        }
+    }
+
+    @Fact
     func DisabledMeasurements_DoNotAllocatePerLookup() {
         CompilationMeasurements.Count("disabled")
         using let warmup = CompilationMeasurements.BeginPhase("disabled")

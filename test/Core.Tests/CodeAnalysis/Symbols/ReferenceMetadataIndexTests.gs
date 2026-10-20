@@ -25,7 +25,8 @@ open class ReferenceMetadataIndexTests {
         using let first = CSharpFixture("public class OldSurface {}", assemblyName: "SameIdentity5040")
         using let second = CSharpFixture("public class NewSurface {}", assemblyName: "SameIdentity5040")
         using let producer = ReferenceResolver.WithReferences([]string{first.AssemblyPath})
-        using let consumer = ReferenceResolver.WithReferences([]string{second.AssemblyPath})
+        File.Copy(second.AssemblyPath, first.AssemblyPath, overwrite: true)
+        using let consumer = ReferenceResolver.WithReferences([]string{first.AssemblyPath})
         let index = producer.ExportMetadataIndex()
         Assert.Equal(
             producer.Assemblies.Select((assembly Assembly) -> assembly.FullName),
