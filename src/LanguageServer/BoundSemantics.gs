@@ -343,7 +343,9 @@ shared class BoundSemantics {
         }
         for var depth = 1; depth < segments.Count; depth++ {
             let member = Unwrap(ReadReceiverSegments(segments, source, depth, segments[depth], captures), captures)
-            if member != nil && StaticMemberOwnsPrefix(model, segments, depth, member) {
+            if member != nil &&
+                context is AccessorExpressionSyntax accessor &&
+                StaticMemberOwnsPrefix(model, accessor, segments[depth], member) {
                 return true
             }
         }
@@ -352,35 +354,30 @@ shared class BoundSemantics {
 
     private func StaticMemberOwnsPrefix(
         model GSharp.Core.CodeAnalysis.SemanticModel,
-        segments List[ExpressionSyntax],
-        depth int32,
+        root AccessorExpressionSyntax,
+        member ExpressionSyntax,
         read BoundExpression
     ) bool {
-        if segments[depth] is not NameExpressionSyntax name {
+        let name string? = switch member {
+            case syntax is NameExpressionSyntax: syntax.IdentifierToken.Text
+            case syntax is CallExpressionSyntax: syntax.Identifier.Text
+            default: default(string?)
+        }
+        if name == nil || !model.TryGetStaticTypeQualifier(
+            root,
+            member,
+            out var sourceType,
+            out var qualifier,
+            out var selected
+        ) ||
+            qualifier == nil ||
+            !object.ReferenceEquals(selected, read) {
             return false
         }
-        if read is not(
-            BoundPropertyAccessExpression{Receiver: nil, Property: {IsStatic: true}} or
-                BoundFieldAccessExpression{Receiver: nil, Field: {IsStatic: true}} or
-                BoundClrPropertyAccessExpression{Receiver: nil}
-        ) {
-            return false
-        }
-        let (sourceType, clrType) = SemanticLookup.ResolveTypeQualifier(
-            model.Compilation,
-            name.SyntaxTree,
-            segments,
-            depth
-        )
         if sourceType is StructSymbol owner {
             if read is BoundPropertyAccessExpression{Receiver: nil, Property: {IsStatic: true}} property &&
                 TypeMemberModel
-                .TryGetStaticPropertyIncludingInherited(
-                owner,
-                name.IdentifierToken.Text,
-                out var expectedProperty,
-                out var propertyOwner
-            ) {
+                .TryGetStaticPropertyIncludingInherited(owner, name, out var expectedProperty, out var propertyOwner) {
                 return object.ReferenceEquals(property.Property, expectedProperty) && object.ReferenceEquals(
                     property.StructType,
                     propertyOwner
@@ -388,27 +385,50 @@ shared class BoundSemantics {
             }
             if read is BoundFieldAccessExpression{Receiver: nil, Field: {IsStatic: true}} field &&
                 TypeMemberModel
-                .TryGetStaticFieldIncludingInherited(
-                owner,
-                name.IdentifierToken.Text,
-                out var expectedField,
-                out var fieldOwner
-            ) {
+                .TryGetStaticFieldIncludingInherited(owner, name, out var expectedField, out var fieldOwner) {
                 return object.ReferenceEquals(field.Field, expectedField) && object.ReferenceEquals(
                     field.StructType,
                     fieldOwner
                 )
             }
+            if read is BoundCallExpression call && call.Function.IsStatic && TypeMemberModel.GetMethods(
+                owner,
+                name,
+                MemberQuery.InheritedStatic(MemberKinds.Method)
+            )
+                .Any((candidate FunctionSymbol) -> object.ReferenceEquals(candidate, call.Function)) &&
+                (call.Function.StaticOwnerType ?? call.Function.ContainingType) is StructSymbol declaredOwner {
+                let effectiveOwner = TypeMemberModel.ResolveStaticMemberOwner(owner, declaredOwner)
+                return if call.StaticGenericOwnerType != nil {
+                    object.ReferenceEquals(call.StaticGenericOwnerType, effectiveOwner)
+                } else {
+                    effectiveOwner.Definition == nil
+                }
+            }
         }
+        let clrType = sourceType?.ClrType
         if read is BoundClrPropertyAccessExpression{Receiver: nil} imported && clrType != nil {
             const flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.FlattenHierarchy
             let expected MemberInfo? = switch imported.Member {
-                case FieldInfo{IsStatic: true}: ClrTypeUtilities.SafeGetField(clrType, name.IdentifierToken.Text, flags)
+                case FieldInfo{IsStatic: true}: ClrTypeUtilities.SafeGetField(clrType, name, flags)
                 case property is PropertyInfo when(property.GetMethod ?? property.SetMethod)?.IsStatic == true:
-                ClrTypeUtilities.SafeGetProperty(clrType, name.IdentifierToken.Text, flags)
+                ClrTypeUtilities.SafeGetProperty(clrType, name, flags)
                 default: default(MemberInfo?)
             }
             return expected != nil && imported.Member.Equals(expected)
+        }
+        if read is BoundImportedCallExpression{Function: {} function} && function.Method.IsStatic && clrType != nil {
+            let method = function.Method
+            let definition = if method.IsGenericMethod && !method.IsGenericMethodDefinition {
+                method.GetGenericMethodDefinition()
+            } else {
+                method
+            }
+            return ClrTypeUtilities.SafeGetMethods(
+                clrType,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.FlattenHierarchy
+            )
+                .Any((candidate MethodInfo) -> candidate.Equals(definition))
         }
         return false
     }

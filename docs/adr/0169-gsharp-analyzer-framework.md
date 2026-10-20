@@ -178,6 +178,34 @@ corpus cannot reach a row, by a snippet translation test.
   and `SyntaxNode.Parent` (backed by a lazily built per-tree parent index) —
   the Roslyn `Parent` idiom analyzers pattern-match with.
 
+### Internal static-qualifier query (issue #5035)
+
+`SemanticModel.TryGetStaticTypeQualifier` is an **internal** Core/LS query,
+not an addition to the public analyzer API. Given an original accessor root
+and exact member syntax boundary, it returns the binder's closed qualifier
+type, original qualifier syntax boundary and selected bound read, or unknown.
+The query never interprets type-argument brackets as value indexing.
+
+The normal binder records this small, non-child provenance on the selected
+static read at its existing static-dispatch boundary. Thus the query reuses
+the **actual** canonical receiver/type-value decision, including primitive
+aliases, imports, lexical values, color-color overload decisions, enclosing
+and method type parameters, and constructed arguments/nullability. It does not
+rebuild scope, reparse type strings, maintain another primitive/type resolver,
+or reselect the member. Consumers retain the actual callable, closed owner
+and method type arguments; an open generic definition is not a substitute
+for its construction.
+
+The existing per-tree lazy semantic index harvests these binding-time
+decisions. They are fixed before the bound program is published; a query
+does not modify project, compilation, bound or syntax state, including
+parent/tree identities. Index publication follows the existing thread-safe
+semantic-model contract. Concurrent/reentrant queries use only their own
+compilation snapshot; foreign-tree boundaries, traversal through an index
+argument, missing provenance and ambiguous reads return unknown rather than
+guessing. Existing compiler identity/type-import funnels remain authoritative;
+this adds no CLR signature-nullability producer or language/parser change.
+
 ### Execution: `GSharpAnalyzerDriver`, in-process in `gsc`
 
 A driver runs after binding over the same `Compilation` used for emit

@@ -5,6 +5,7 @@
 package GSharp.Core.Tests.CodeAnalysis
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
@@ -12,12 +13,178 @@ import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Generic
 import System.Linq
+import System.Threading.Tasks
 import Xunit
 
 /// Covers the ADR-0169 (cref:SemanticModel) (syntax→symbol,
 /// syntax→bound-node, syntax→type queries), (cref:Symbol.DeclaringSyntaxNodes),
 /// and (cref:GSharpSyntaxWalker).
 open class Adr0169SemanticModelTests {
+    @Fact
+    func StaticQualifierQuery_UsesCanonicalPrimitiveAliasAndClosedOwner() {
+        const source = `package Query
+import D = System.Decimal
+class Box[T] {
+    shared {
+        prop Items []string -> []string{"one"}
+        func Select[U](value U) []string -> []string{"selected"}
+    }
+}
+func Run() {
+    let primitive = decimal.Zero
+    let alias = D.Zero
+    let alternate = byte.MaxValue
+    let generic = Box[int32?].Items
+    let genericCall = Box[int32?].Select[string]("value")
+}
+`
+        let (compilation, model, tree) = CreateQualifierModel(source)
+        for name in[]string{"primitive", "alias", "alternate"} {
+            let root = QualifierInitializer(tree, name)
+            let (type, qualifier, read) = QueryQualifier(model, root)
+            Assert.Same(root.LeftPart, qualifier)
+            if read is BoundClrPropertyAccessExpression imported {
+                Assert.Equal(imported.Member.DeclaringType, type.ClrType)
+            } else {
+                Assert.Same(TypeSymbol.UInt8, Assert.IsType[BoundLiteralExpression](read).Type)
+            }
+            Assert.Equal(
+                if name == "alternate" {
+                    typeof(byte)
+                } else {
+                    typeof(decimal)
+                },
+                type.ClrType
+            )
+        }
+        let genericRoot = QualifierInitializer(tree, "generic")
+        let (closedType, syntax, selected) = QueryQualifier(model, genericRoot)
+        let property = Assert.IsType[BoundPropertyAccessExpression](selected)
+        Assert.Same(property.StructType, closedType)
+        Assert.Same(genericRoot.LeftPart, syntax)
+        let closed = Assert.IsType[StructSymbol](closedType)
+        Assert.Same(
+            compilation.GlobalScope.Structs.Single((type StructSymbol) -> type.Name == "Box"),
+            closed.Definition
+        )
+        Assert.Same(
+            TypeSymbol.Int32,
+            Assert.IsType[NullableTypeSymbol](Assert.Single(closed.TypeArguments)).UnderlyingType
+        )
+        let (callType, _, callRead) = QueryQualifier(model, QualifierInitializer(tree, "genericCall"))
+        let call = Assert.IsType[BoundCallExpression](callRead)
+        Assert.Same(callType, call.StaticGenericOwnerType)
+        Assert.Same(TypeSymbol.String, Assert.Single(call.MethodTypeArguments))
+    }
+
+    @Fact
+    func StaticQualifierQuery_PreservesTypeParametersShadowingAndColorColor() {
+        const source = `package Query
+class Box[T] {
+    shared { prop Items []string -> []string{"one"} }
+}
+class Instance { prop Items []string -> []string{"instance"} }
+class Palette {
+    func Tag(value string) string -> value
+    shared { func Tag(value int32) string -> "static" }
+}
+func Generic[T]() { let generic = Box[T].Items }
+func Shadow(Box []Instance) { let value = Box[0].Items }
+func Color(Palette Palette) {
+    let staticCall = Palette.Tag(1)
+    let instanceCall = Palette.Tag("instance")
+}
+`
+        let (compilation, model, tree) = CreateQualifierModel(source)
+        let (type, _, _) = QueryQualifier(model, QualifierInitializer(tree, "generic"))
+        let genericFunction = compilation
+            .GlobalScope
+            .Functions
+            .Single((function FunctionSymbol) -> function.Name == "Generic")
+        Assert.Same(
+            Assert.Single(genericFunction.TypeParameters),
+            Assert.Single(Assert.IsType[StructSymbol](type).TypeArguments)
+        )
+        let shadow = QualifierInitializer(tree, "value")
+        Assert.False(model.TryGetStaticTypeQualifier(shadow, shadow.RightPart, out _, out _, out _))
+        let staticRoot = QualifierInitializer(tree, "staticCall")
+        let (owner, _, selected) = QueryQualifier(model, staticRoot)
+        let call = Assert.IsType[BoundCallExpression](selected)
+        Assert.True(call.Function.IsStatic)
+        Assert.Same(TypeSymbol.Int32, Assert.Single(call.Function.Parameters).Type)
+        Assert.Same(call.Function.StaticOwnerType, owner)
+        let instanceRoot = QualifierInitializer(tree, "instanceCall")
+        Assert.False(model.TryGetStaticTypeQualifier(instanceRoot, instanceRoot.RightPart, out _, out _, out _))
+    }
+
+    @Fact
+    func StaticQualifierQuery_IsConcurrentReadOnlyAndSnapshotScoped() {
+        const source = `package Query
+class Box[T] {
+    shared { prop Items []string -> []string{"one"} }
+}
+func Run() { let result = Box[ARGUMENT].Items }
+`
+        let (oldCompilation, oldModel, oldTree) = CreateQualifierModel(source.Replace("ARGUMENT", "int32"))
+        let (_, newModel, newTree) = CreateQualifierModel(source.Replace("ARGUMENT", "int32?"))
+        let oldRoot = QualifierInitializer(oldTree, "result")
+        let newRoot = QualifierInitializer(newTree, "result")
+        let nodes = oldTree.Root.DescendantNodesAndSelf().ToArray()
+        let parents = nodes.Select((node SyntaxNode) -> node.Parent).ToArray()
+        let program = oldCompilation.BoundProgram
+        let (oldType, oldQualifier, oldRead) = QueryQualifier(oldModel, oldRoot)
+        let (newType, _, _) = QueryQualifier(newModel, newRoot)
+        Parallel.For(
+            0,
+            16,
+            (i int32) -> {
+                let (found, qualifier, read) = QueryQualifier(oldModel, oldRoot)
+                Assert.Same(oldType, found)
+                Assert.Same(oldQualifier, qualifier)
+                Assert.Same(oldRead, read)
+                Assert.Same(TypeSymbol.Int32, Assert.Single(Assert.IsType[StructSymbol](found).TypeArguments))
+                let (current, _, _) = QueryQualifier(newModel, newRoot)
+                Assert.Same(newType, current)
+                Assert.IsType[NullableTypeSymbol](Assert.Single(Assert.IsType[StructSymbol](current).TypeArguments))
+            }
+        )
+        Assert.Same(program, oldCompilation.BoundProgram)
+        Assert.False(newModel.TryGetStaticTypeQualifier(oldRoot, oldRoot.RightPart, out _, out _, out _))
+        for var i = 0; i < nodes.Length; i++ {
+            Assert.Same(oldTree, nodes[i].SyntaxTree)
+            Assert.Same(parents[i], nodes[i].Parent)
+        }
+    }
+
+    private func CreateQualifierModel(source string)(Compilation, SemanticModel, SyntaxTree) {
+        let tree = SyntaxTree.Parse(SourceText.From(source, "qualifier-query.gs"))
+        let compilation = Compilation(tree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        return (compilation, compilation.GetSemanticModel(tree), tree)
+    }
+
+    private func QualifierInitializer(tree SyntaxTree, name string) AccessorExpressionSyntax ->
+    Assert.IsType[AccessorExpressionSyntax](
+        tree
+            .Root
+            .DescendantNodes()
+            .OfType[VariableDeclarationSyntax]()
+            .Single((declaration VariableDeclarationSyntax) -> declaration.Identifier.Text == name)
+            .Initializer
+    )
+
+    private func QueryQualifier(model SemanticModel, root AccessorExpressionSyntax)(
+        TypeSymbol,
+        ExpressionSyntax,
+        BoundExpression
+    ) {
+        Assert.True(
+            model.TryGetStaticTypeQualifier(root, root.RightPart, out var type, out var qualifier, out var read)
+        )
+        return (type, qualifier, read)
+    }
+
     @Fact
     func GetDeclaredSymbol_OnFunctionDeclaration_ReturnsFunctionSymbol() {
         let (model, tree) = CreateModel(Source)

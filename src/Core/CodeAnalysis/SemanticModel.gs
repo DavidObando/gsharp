@@ -143,6 +143,58 @@ class SemanticModel {
         }
     }
 
+    /// Reads the actual binder's closed type-receiver decision at an original
+    /// member boundary. No scope rebuilding, member reselection or AST adaptation.
+    internal func TryGetStaticTypeQualifier(
+        root AccessorExpressionSyntax,
+        member ExpressionSyntax,
+        out type TypeSymbol?,
+        out qualifier ExpressionSyntax?,
+        out read BoundExpression?
+    ) bool {
+        type = nil
+        qualifier = nil
+        read = nil
+        if !object.ReferenceEquals(root.SyntaxTree, syntaxTree) || !object.ReferenceEquals(
+            member.SyntaxTree,
+            syntaxTree
+        ) {
+            return false
+        }
+        var current SyntaxNode = member
+        while !object.ReferenceEquals(current, root) {
+            if current.Parent is AccessorExpressionSyntax accessor &&
+                (
+                object.ReferenceEquals(accessor.LeftPart, current) || object.ReferenceEquals(
+                    accessor.RightPart,
+                    current
+                )
+            ) {
+                current = accessor
+            } else if current.Parent is IndexExpressionSyntax parentIndex && object.ReferenceEquals(
+                parentIndex.Target,
+                current
+            ) {
+                current = parentIndex
+            } else {
+                return false
+            }
+        }
+        if !index
+            .Value
+            .StaticQualifierReads
+            .TryGetValue(member, out var selected) ||
+            selected == nil ||
+            selected.StaticQualifierType == nil ||
+            selected.StaticQualifierSyntax == nil {
+            return false
+        }
+        type = selected.StaticQualifierType
+        qualifier = selected.StaticQualifierSyntax
+        read = selected
+        return true
+    }
+
     private data class BoundNodeAccessors(
         SymbolProperties[](BoundNode) -> object?,
         BoundNodeProperties[](BoundNode) -> object?
@@ -150,7 +202,8 @@ class SemanticModel {
 
     private data class Index(
         BoundBySyntax Dictionary[SyntaxNode, BoundNode],
-        DeclaredBySyntax Dictionary[SyntaxNode, Symbol]
+        DeclaredBySyntax Dictionary[SyntaxNode, Symbol],
+        StaticQualifierReads Dictionary[SyntaxNode, BoundExpression?]
     ) : IEquatable[SemanticModel.Index] { }
 
     /// Records the outermost bound node per syntax node (first-win in a
@@ -160,15 +213,18 @@ class SemanticModel {
         private let tree SyntaxTree
         private let boundBySyntax Dictionary[SyntaxNode, BoundNode]
         private let declaredBySyntax Dictionary[SyntaxNode, Symbol]
+        private let staticQualifierReads Dictionary[SyntaxNode, BoundExpression?]
 
         init(
             tree SyntaxTree,
             boundBySyntax Dictionary[SyntaxNode, BoundNode],
-            declaredBySyntax Dictionary[SyntaxNode, Symbol]
+            declaredBySyntax Dictionary[SyntaxNode, Symbol],
+            staticQualifierReads Dictionary[SyntaxNode, BoundExpression?]
         ) {
             this.tree = tree
             this.boundBySyntax = boundBySyntax
             this.declaredBySyntax = declaredBySyntax
+            this.staticQualifierReads = staticQualifierReads
         }
 
         override func Visit(node BoundNode?) {
@@ -199,6 +255,16 @@ class SemanticModel {
                 !boundBySyntax.ContainsKey(syntax) {
                 boundBySyntax.Add(syntax, node)
             }
+            if node is BoundExpression{StaticMemberSyntax: {} member, StaticQualifierType: not nil} expression &&
+                object
+                .ReferenceEquals(member.SyntaxTree, tree) {
+                if !staticQualifierReads.TryGetValue(member, out var existing) {
+                    staticQualifierReads.Add(member, expression)
+                } else if !object.ReferenceEquals(existing, expression) {
+                    // Multiple distinct reads for one boundary are not authority.
+                    staticQualifierReads[member] = nil
+                }
+            }
             for getter in SemanticModel.GetAccessors(node.GetType()).SymbolProperties {
                 if getter(node) is Symbol symbol {
                     SemanticModel.RecordDeclarations(symbol, tree, declaredBySyntax)
@@ -220,12 +286,13 @@ class SemanticModel {
         private func BuildIndex(compilation Compilation, tree SyntaxTree) SemanticModel.Index {
             let boundBySyntax = Dictionary[SyntaxNode, BoundNode](ReferenceEqualityComparer.Instance)
             let declaredBySyntax = Dictionary[SyntaxNode, Symbol](ReferenceEqualityComparer.Instance)
+            let staticQualifierReads = Dictionary[SyntaxNode, BoundExpression?](ReferenceEqualityComparer.Instance)
             let program = compilation.BoundProgram
             let globalScope = compilation.GlobalScope
             for symbol in EnumerateDeclaredSymbols(program, globalScope) {
                 RecordDeclarations(symbol, tree, declaredBySyntax)
             }
-            let walker = IndexingWalker(tree, boundBySyntax, declaredBySyntax)
+            let walker = IndexingWalker(tree, boundBySyntax, declaredBySyntax, staticQualifierReads)
             for (function, body) in program.Functions {
                 if function.Declaration is {} declaration && !object.ReferenceEquals(declaration.SyntaxTree, tree) {
                     continue
@@ -233,7 +300,7 @@ class SemanticModel {
                 walker.Visit(body)
             }
             walker.Visit(program.Statement)
-            return SemanticModel.Index(boundBySyntax, declaredBySyntax)
+            return SemanticModel.Index(boundBySyntax, declaredBySyntax, staticQualifierReads)
         }
 
         private func EnumerateDeclaredSymbols(program BoundProgram, globalScope BoundGlobalScope) sequence[Symbol] {

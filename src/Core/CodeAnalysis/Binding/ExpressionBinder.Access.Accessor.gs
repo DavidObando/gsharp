@@ -1988,6 +1988,15 @@ internal partial class ExpressionBinder {
     /// Resolves user struct/class static members (ADR-0053) and nested
     /// construction under the actual enclosing receiver.
     private func BindUserTypeStaticAccessorStep(structSym StructSymbol, rightPart ExpressionSyntax) BoundExpression {
+        let result = BindUserTypeStaticAccessorStepCore(structSym, rightPart)
+        RecordStaticTypeQualifier(result, structSym, rightPart)
+        return result
+    }
+
+    private func BindUserTypeStaticAccessorStepCore(
+        structSym StructSymbol,
+        rightPart ExpressionSyntax
+    ) BoundExpression {
         switch rightPart {
             case nested is AccessorExpressionSyntax {
                 // Issue #1537: the left portion may name a nested TYPE of the
@@ -2314,6 +2323,15 @@ internal partial class ExpressionBinder {
     /// @param rightPart The member being accessed.
     /// @returns The bound access, or a bound error expression.
     private func BindInterfaceStaticAccessorStep(
+        interfaceSym InterfaceSymbol,
+        rightPart ExpressionSyntax
+    ) BoundExpression {
+        let result = BindInterfaceStaticAccessorStepCore(interfaceSym, rightPart)
+        RecordStaticTypeQualifier(result, interfaceSym, rightPart)
+        return result
+    }
+
+    private func BindInterfaceStaticAccessorStepCore(
         interfaceSym InterfaceSymbol,
         rightPart ExpressionSyntax
     ) BoundExpression {
@@ -4024,6 +4042,7 @@ internal partial class ExpressionBinder {
                     StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner,
                     MethodTypeArguments = methodTypeArguments
                 }
+                RecordStaticTypeQualifier(result, ownerType, ce)
                 return result
             }
             if substitution != nil {

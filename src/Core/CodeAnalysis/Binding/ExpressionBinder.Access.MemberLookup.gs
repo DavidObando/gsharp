@@ -168,6 +168,12 @@ internal partial class ExpressionBinder {
         if !recoveredDeclaredReceiver {
             TrackBackwardGotoNarrowingAccess(receiver, rightPart, result)
         }
+        if receiver == nil && classSymbol != nil && rightPart is (NameExpressionSyntax or CallExpressionSyntax) {
+            let owner = classSymbol.ConstructedReceiver ??
+                classSymbol.SymbolicReceiver ??
+                ImportedTypeSymbol.GetWithoutNullability(classSymbol.ClassType, NullabilityFreeReason.ResolvedTypeName)
+            RecordStaticTypeQualifier(result, owner, rightPart)
+        }
         return result
     }
 

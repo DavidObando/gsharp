@@ -737,6 +737,127 @@ func Run(h Holder, Items int32) string {
     @Theory
     @InlineData("^1")
     @InlineData("..")
+    func Issue5035_StaticCallIndex_PreservesSelectedOverload(indexText string) {
+        let source = `package Repro
+class Holder {
+    shared {
+        func Values(value string) []string -> []string{"string"}
+        func Values(value int32) []string -> []string{"int32"}
+    }
+}
+func Run() {
+    let warm = Holder.Values("warm")
+    let result = Holder.Values(1)[INDEX]
+}
+`.Replace("INDEX", indexText)
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let owner = compilation.GlobalScope.Structs.Single((type StructSymbol) -> type.Name == "Holder")
+        let expected = owner.StaticMethods.Single(
+            (method FunctionSymbol) -> method.Name == "Values" &&
+                method
+                .Parameters
+                .Length == 1 &&
+                object.ReferenceEquals(method.Parameters[0].Type, TypeSymbol.Int32)
+        )
+        let position = LanguageServerTestHelpers.PositionOf(source, "Values(1)")
+        let token = TokenAt(content, source, "Values(1)", 0)
+        Assert.Same(expected, BoundSemantics.GetSymbol(compilation, token))
+        Assert.Same(expected, SemanticLookup.ResolveSymbol(compilation, token))
+        AssertIndexedHover(content, position, "Values", "static func Values(value int32) []string")
+        let uri = DocumentUri.From("file:///issue5035-static-call.gs")!!
+        let definition = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
+        let declaration = LanguageServerTestHelpers.PositionOf(source, "Values(value int32)")
+        Assert.Equal(uri, definition.Uri)
+        AssertPosition(declaration, definition.Range.Start)
+        AssertPosition(Position(declaration.Line, declaration.Character + "Values".Length), definition.Range.End)
+    }
+
+    @Fact
+    func Issue5035_PrimitiveStaticPrefix_PreservesExactDecimalMetadata() {
+        const source = `package Repro
+func Run() {
+    let unrelated = System.Text.StringBuilder().ToString()
+    let result = decimal.Zero.ToString()[^1]
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let field = typeof(decimal).GetField("Zero")
+        Assert.True(field?.IsInitOnly)
+        Assert.Equal(field, BoundSemantics.GetImportedMember(compilation, TokenAt(content, source, "Zero.ToString", 0)))
+        let method = typeof(decimal).GetMethod("ToString", Type.EmptyTypes)
+        let token = TokenAt(content, source, "ToString()[^1]", 0)
+        Assert.Equal(method, BoundSemantics.GetImportedMember(compilation, token))
+        Assert.True(
+            ImportedClrMemberResolver.TryResolveClrMember(content.SyntaxTree, compilation, token, out var navigation)
+        )
+        Assert.Equal(method, navigation)
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]"),
+            "ToString",
+            "func (decimal) ToString() string"
+        )
+    }
+
+    @Theory
+    @InlineData("int32", false)
+    @InlineData("int32?", true)
+    func Issue5035_ConstructedStaticIndex_PreservesClosedOwner(argument string, nullable bool) {
+        let source = `package Repro
+class Holder[T] {
+    shared { prop Items []string -> []string{"one"} }
+}
+func Run() {
+    let result = Holder[ARGUMENT].Items[^1]
+}
+`.Replace("ARGUMENT", argument)
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let token = TokenAt(content, source, "Items[^1]", 0)
+        let index = Assert.IsType[IndexExpressionSyntax](token.Parent?.Parent)
+        let accessor = Assert.IsType[AccessorExpressionSyntax](index.Parent)
+        if nullable {
+            Assert.IsType[GenericNameExpressionSyntax](accessor.LeftPart)
+        } else {
+            Assert.IsType[IndexExpressionSyntax](accessor.LeftPart)
+        }
+        let block = Assert.IsType[BoundBlockExpression](
+            compilation.GetSemanticModel(content.SyntaxTree).GetBoundNode(accessor)
+        )
+        let capture = Assert.IsType[BoundVariableDeclaration](block.Statements[0])
+        let property = Assert.IsType[BoundPropertyAccessExpression](capture.Initializer)
+        let closed = Assert.IsType[StructSymbol](property.StructType)
+        let definition = compilation.GlobalScope.Structs.Single((type StructSymbol) -> type.Name == "Holder")
+        Assert.Same(definition, closed.Definition)
+        let typeArgument = Assert.Single(closed.TypeArguments)
+        if nullable {
+            Assert.Same(TypeSymbol.Int32, Assert.IsType[NullableTypeSymbol](typeArgument).UnderlyingType)
+        } else {
+            Assert.Same(TypeSymbol.Int32, typeArgument)
+        }
+        Assert.Same(property.Property, BoundSemantics.GetSymbol(compilation, token))
+        Assert.Same(property.Property, SemanticLookup.ResolveSymbol(compilation, token))
+        let position = LanguageServerTestHelpers.PositionOf(source, "Items[^1]")
+        AssertIndexedHover(content, position, "Items", "prop Items []string { get; }")
+        let uri = DocumentUri.From("file:///issue5035-generic-static.gs")!!
+        let location = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
+        let declaration = LanguageServerTestHelpers.PositionOf(source, "Items []string")
+        Assert.Equal(uri, location.Uri)
+        AssertPosition(declaration, location.Range.Start)
+        AssertPosition(Position(declaration.Line, declaration.Character + "Items".Length), location.Range.End)
+    }
+
+    @Theory
+    @InlineData("^1")
+    @InlineData("..")
     func Issue5035_NullConditionalIndex_PreservesSourceProperty(indexText string) {
         let source = `package Repro
 class Holder {

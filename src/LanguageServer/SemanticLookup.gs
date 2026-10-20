@@ -1050,14 +1050,6 @@ shared class SemanticLookup {
             }
         }
 
-        internal func ResolveTypeName(name string) TypeSymbol? {
-            return if this.globals.TryGetValue(name, out var symbol) {
-                symbol as TypeSymbol
-            } else {
-                ResolvePrimitiveOrImportedType(name) as TypeSymbol
-            }
-        }
-
         shared {
             private func NormalizeForReferences(symbol Symbol?) Symbol? -> switch symbol {
                 case s is StructSymbol: cast[Symbol](s.Definition ?? s)
@@ -1521,32 +1513,6 @@ shared class SemanticLookup {
             }
         }
         return nil
-    }
-
-    // Read the canonical type/alias map without entering ResolveSymbol's
-    // bound-member funnel again. Type qualifiers have no runtime receiver.
-    internal func ResolveTypeQualifier(
-        compilation Compilation,
-        tree SyntaxTree,
-        segments IReadOnlyList[ExpressionSyntax],
-        count int32
-    )(Source TypeSymbol?, Clr Type?) {
-        let names = List[string]()
-        for var i = 0; i < count; i++ {
-            if segments[i] is not NameExpressionSyntax name || name.IdentifierToken.IsMissing {
-                return (nil, nil)
-            }
-            names.Add(name.IdentifierToken.Text)
-        }
-        let qualifiedName = string.Join(".", names)
-        let source = BuildModel(compilation).ResolveTypeName(qualifiedName)
-        if source != nil {
-            return (
-                source,
-                (compilation.References ?? ReferenceResolver.Default()).MapClrTypeToReferences(source.ClrType)
-            )
-        }
-        return (nil, ResolveImportedClrType(tree, compilation, qualifiedName))
     }
 
     func FindReferences(
