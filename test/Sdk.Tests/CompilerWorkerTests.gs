@@ -7,6 +7,7 @@ import System
 import System.Collections.Generic
 import System.Diagnostics
 import System.IO
+import System.IO.Pipes
 import System.Linq
 import System.Reflection
 import System.Reflection.Metadata
@@ -37,6 +38,108 @@ open class CompilerWorkerTests : IDisposable {
         client.Dispose()
         Directory.Delete(directory, recursive: true)
         GC.SuppressFinalize(this)
+    }
+
+    @Fact
+    func InheritedHelperDiagnosticsCannotCorruptPrivateProtocol() {
+        let (analyzer, _marker) = CreateHelperAnalyzer(background: false)
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { }")
+        let output = List[string]()
+        let errors = List[string]()
+        Assert.True(
+            Run(
+                directory,
+                []string{"/out:result.dll", "/target:library", "/gsanalyzer:" + analyzer, "input.gs"},
+                output,
+                errors,
+                out var exit
+            )
+        )
+        Assert.Equal(0, exit)
+        Assert.Contains("helper-stdout 😀", output)
+        Assert.Contains("helper-stderr", errors)
+        Assert.True(
+            Run(
+                directory,
+                []string{"/out:next.dll", "/target:library", "input.gs"},
+                List[string](),
+                List[string](),
+                out var next
+            )
+        )
+        Assert.Equal(0, next)
+    }
+
+    @Fact
+    func NormalRetirementTerminatesOwnedHelperDescendants() {
+        let (analyzer, marker) = CreateHelperAnalyzer(background: true)
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { }")
+        var helperPid = 0
+        try {
+            let processField = typeof(WorkerProcessClient).GetField(
+                "process",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            ) ??
+                throw InvalidOperationException("The real worker process is required.")
+            Assert.True(
+                client.TryRun(
+                    CompilerPath(),
+                    "--compiler-worker",
+                    directory,
+                    WithReferences(
+                        []string{"/out:result.dll", "/target:library", "/gsanalyzer:" + analyzer, "input.gs"}
+                    ),
+                    1,
+                    CancellationToken.None,
+                    (_line string) -> { },
+                    (_line string) -> { },
+                    (message string) -> {
+                        if message.Contains("worker completed") {
+                            let worker = processField.GetValue(client) as Process ??
+                                throw InvalidOperationException("Completion must retain its worker until teardown.")
+                            Assert.True(worker.WaitForExit(5000), "Worker did not retire before SDK disposal.")
+                            helperPid = int32.Parse(File.ReadAllText(marker))
+                            try {
+                                using let helper = Process.GetProcessById(helperPid)
+                                Assert.True(
+                                    helper.WaitForExit(5000),
+                                    "A helper survived server retirement before SDK disposal."
+                                )
+                            } catch (ex ArgumentException) {
+                                // Server teardown already removed the owned helper.
+
+                            }
+                        }
+                    },
+                    out var exit
+                )
+            )
+            Assert.Equal(0, exit)
+            helperPid = int32.Parse(File.ReadAllText(marker))
+            try {
+                using let helper = Process.GetProcessById(helperPid)
+                Assert.True(helper.WaitForExit(5000), "A helper survived normal worker retirement.")
+            } catch (ex ArgumentException) {
+                // The owned helper exited before its process handle was opened.
+
+            }
+        } finally {
+            if helperPid == 0 && File.Exists(marker) {
+                helperPid = int32.Parse(File.ReadAllText(marker))
+            }
+            if helperPid > 0 {
+                try {
+                    using let helper = Process.GetProcessById(helperPid)
+                    if !helper.HasExited {
+                        helper.Kill(entireProcessTree: true)
+                        helper.WaitForExit()
+                    }
+                } catch (ex ArgumentException) {
+                    // The owned helper is already gone.
+
+                }
+            }
+        }
     }
 
     @Fact
@@ -165,45 +268,14 @@ open class CompilerWorkerTests : IDisposable {
     }
 
     @Fact
-    func FlushKeepsLogicalLinesAndSurrogatePairsUntilCompletion() {
-        using let stream = MemoryStream()
-        using let binary = BinaryWriter(stream, Encoding.UTF8, leaveOpen: true)
-        let type = typeof(Program).Assembly.GetType("GSharp.Workers.WorkerServer+WorkerOutput") ??
-            throw InvalidOperationException("The real worker output writer is required.")
-        using let output = Activator.CreateInstance(
-            type,
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-            binder: nil,
-            args: []object{binary, uint8(2)},
-            culture: nil
-        ) as TextWriter ??
-            throw InvalidOperationException("Cannot create the worker output writer.")
-        output.Write("error GS1234: ")
-        output.Flush()
-        output.Write('\uD83D')
-        output.Flush()
-        output.Write('\uDE00')
-        output.WriteLine(" message")
-        output.Write("tail")
-        output.Flush()
-        let complete = type.GetMethod("Complete", BindingFlags.Instance | BindingFlags.NonPublic) ??
-            throw InvalidOperationException("The request-end completion method is required.")
-        complete.Invoke(output, nil)
-        stream.Position = 0
-        using let reader = BinaryReader(stream, Encoding.UTF8, leaveOpen: true)
+    func DiagnosticCapturePreservesUnicodeLinesAndUnterminatedTail() {
+        let fence = "\u001egsharp-" + Guid.NewGuid().ToString("N") + "\u001f"
+        using let stream = MemoryStream(Encoding.UTF8.GetBytes("error GS1234: 😀 message\r\ntail" + fence))
+        using let reader = StreamReader(stream, Encoding.UTF8)
+        using let capture = WorkerDiagnosticCapture(reader, () -> { }, fence)
         let lines = List[string]()
-        let partial = StringBuilder()
-        while stream.Position < stream.Length {
-            Assert.Equal(uint8(2), reader.ReadByte())
-            let final = reader.ReadBoolean()
-            partial.Append(reader.ReadString())
-            if final {
-                lines.Add(partial.ToString())
-                partial.Clear()
-            }
-        }
+        Assert.True(capture.Complete(CancellationToken.None, (line string) -> lines.Add(line)))
         Assert.Equal[string]([]string{"error GS1234: 😀 message", "tail"}, lines)
-        Assert.Equal(0, partial.Length)
     }
 
     @Fact
@@ -339,6 +411,9 @@ open class CompilerWorkerTests : IDisposable {
         }
         start.ArgumentList.Add(CompilerPath())
         start.ArgumentList.Add("--compiler-worker")
+        let name = WorkerProcessClient.CreateProtocolPipeName()
+        using let protocol = NamedPipeServerStream(name, PipeDirection.In)
+        start.ArgumentList.Add(name)
         let elapsed = Stopwatch.StartNew()
         Assert.Throws[TimeoutException](
             () -> {
@@ -770,6 +845,56 @@ open class CompilerWorkerTests : IDisposable {
         Assert.Equal(0, restarted)
     }
 
+    private func CreateHelperAnalyzer(background bool)(Analyzer string, Marker string) {
+        let marker = Path.Combine(directory, "helper.pid")
+        let escaped = EscapeSource(marker)
+        let helperBody = if background {
+            "File.WriteAllText(\"${escaped}.new\", Environment.ProcessId.ToString())\n" +
+                "File.Move(\"${escaped}.new\", \"$escaped\")\nThread.Sleep(Timeout.Infinite)"
+        } else {
+            "Console.Out.Write(\"helper-\")\nConsole.Out.Flush()\n" +
+                "Console.Out.WriteLine(\"stdout 😀\")\nConsole.Error.WriteLine(\"helper-stderr\")"
+        }
+        File.WriteAllText(
+            Path.Combine(directory, "helper.gs"),
+            "import System\nimport System.IO\nimport System.Threading\nfunc Main() {\n$helperBody\n}"
+        )
+        let (helperExit, helperDiagnostics) = Standalone(
+            directory,
+            []string{"/out:helper.dll", "/target:exe", "/targetframework:net10.0", "helper.gs"}
+        )
+        Assert.True(helperExit == 0, helperDiagnostics)
+        let helper = EscapeSource(Path.Combine(directory, "helper.dll"))
+        let wait = if background {
+            "if !SpinWait.SpinUntil(() -> File.Exists(\"$escaped\"), 5000) { throw Exception(\"helper did not start\") }"
+        } else {
+            "process.WaitForExit()"
+        }
+        File.WriteAllText(
+            Path.Combine(directory, "analyzer.gs"),
+            "import System\nimport System.IO\nimport System.Diagnostics\nimport System.Threading\n" +
+                "import System.Collections.Immutable\nimport GSharp.Core.CodeAnalysis\n" +
+                "import GSharp.Core.CodeAnalysis.Analyzers\n" +
+                "@GSharpDiagnosticAnalyzer\nclass HelperAnalyzer : GSharpDiagnosticAnalyzer {\n" +
+                "override prop SupportedDiagnostics ImmutableArray[DiagnosticDescriptor] -> ImmutableArray[DiagnosticDescriptor].Empty\n" +
+                "override func Initialize(context AnalysisContext) {\n" +
+                "let start = ProcessStartInfo(\"dotnet\", \"\\\"$helper\\\"\"){UseShellExecute = false}\n" +
+                "using let process = Process.Start(start) ?? throw Exception(\"helper startup failed\")\n$wait\n}\n}"
+        )
+        let analyzer = Path.Combine(directory, "analyzer.dll")
+        let (analyzerExit, analyzerDiagnostics) = Standalone(
+            directory,
+            []string{
+                "/out:" + analyzer,
+                "/target:library",
+                "/r:" + typeof(ReferenceResolver).Assembly.Location,
+                "analyzer.gs"
+            }
+        )
+        Assert.True(analyzerExit == 0, analyzerDiagnostics)
+        return (analyzer, marker)
+    }
+
     private func Run(
         project string,
         arguments[]string,
@@ -793,6 +918,8 @@ open class CompilerWorkerTests : IDisposable {
     )
 
     shared {
+        private func EscapeSource(value string) string -> value.Replace("\\", "\\\\").Replace("\"", "\\\"")
+
         private func BuildProject(project string, directory string)(Exit int32, Log string) {
             let start = ProcessStartInfo("dotnet"){
                 WorkingDirectory = directory,
