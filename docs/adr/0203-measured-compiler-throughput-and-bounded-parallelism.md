@@ -674,6 +674,27 @@ source locations. Reference aliases and source-symbol rebinding remain inputs.
 Per-document alias state, translation order, diagnostics and output publication
 are unchanged. This reduction adds no cache, worker pool or SDK bypass.
 
+On the pinned Oahu workload, same-bootstrap unmodified/fixed host payloads differed
+only in the translator DLL, PDB and XML. One warmup per variant preceded alternating
+timed rebuilds; separate instrumented builds measured the actual reusable-worker
+translation request. The existing opt-in four-worker, four-node configuration
+and the compiler payload stayed fixed.
+
+| October 20 follow-up | Before | Fixed |
+| --- | ---: | ---: |
+| Complete Oahu rebuild median, three pairs | 32.710 s | 29.146 s |
+| Oahu.UI translation median, three separate actual-worker probes | 3.601 s | 3.191 s |
+| Translation allocations, median process delta | 251.9 MB | 79.6 MB |
+| No-op median, two runs per variant | 3.464 s | 3.477 s |
+
+All 38 generated filenames and contents matched across full builds, including
+Oahu.UI's 36 documents. No-op logs contained no compiler or generator task.
+These shared-desktop samples are not confidence intervals or a general speedup
+promise. Separate cold-host phase probes were noisy and had a slower fixed median
+(3.406 s versus 3.671 s), despite the same allocation reduction. Their latency
+does not establish a cold translation improvement. Nested phase costs are not
+additive; timed solution rebuilds had instrumentation disabled.
+
 ### Initial bounded-worker implementation (#5041)
 
 The initial implementation remains opt-in (`GSharpMaxWorkers=1` by default).
