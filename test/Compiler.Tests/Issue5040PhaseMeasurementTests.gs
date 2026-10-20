@@ -13,6 +13,7 @@ class Issue5040PhaseMeasurementTests {
         let directory = Path.Combine(AppContext.BaseDirectory, "phase-measurement-" + Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(directory)
         let previous = Environment.GetEnvironmentVariable("GSHARP_MEASURE_PHASES")
+        let previousGrant = Environment.GetEnvironmentVariable("GSHARP_WORKER_GRANT")
         let originalOut = Console.Out
         let originalError = Console.Error
         try {
@@ -33,6 +34,7 @@ class Issue5040PhaseMeasurementTests {
             Console.SetOut(measuredOut)
             Console.SetError(measuredError)
             Environment.SetEnvironmentVariable("GSHARP_MEASURE_PHASES", report)
+            Environment.SetEnvironmentVariable("GSHARP_WORKER_GRANT", "3")
             Assert.Equal(0, Program.Main(args))
             Assert.Equal(baseline, File.ReadAllBytes(output))
             Assert.Equal(baselineOut.ToString(), measuredOut.ToString())
@@ -51,10 +53,13 @@ class Issue5040PhaseMeasurementTests {
                 Assert.Contains(phases, (phase JsonElement) -> phase.GetProperty("Name").GetString() == name)
             }
             Assert.Equal(1, json.RootElement.GetProperty("Counters").GetProperty("input.sources").GetInt32())
+            Assert.Equal(3, json.RootElement.GetProperty("Counters").GetProperty("workers.granted").GetInt32())
+            Assert.Equal(1, json.RootElement.GetProperty("Counters").GetProperty("workers.active").GetInt32())
         } finally {
             Console.SetOut(originalOut)
             Console.SetError(originalError)
             Environment.SetEnvironmentVariable("GSHARP_MEASURE_PHASES", previous)
+            Environment.SetEnvironmentVariable("GSHARP_WORKER_GRANT", previousGrant)
             Directory.Delete(directory, recursive: true)
         }
     }

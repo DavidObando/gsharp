@@ -292,7 +292,19 @@ open class Program {
                 }
                 let syntaxTrees = List[SyntaxTree](allSourceFiles.Count)
                 CompilationMeasurements.Count("input.sources", allSourceFiles.Count)
-                CompilationMeasurements.Count("workers.granted", 1)
+                if CompilationMeasurements.IsEnabled {
+                    let granted = if int32.TryParse(
+                        Environment.GetEnvironmentVariable("GSHARP_WORKER_GRANT"),
+                        out var grant
+                    ) &&
+                        grant > 0 {
+                        grant
+                    } else {
+                        1
+                    }
+                    CompilationMeasurements.Count("workers.granted", granted)
+                    CompilationMeasurements.Count("workers.active", 1)
+                }
                 using let parsePhase = CompilationMeasurements.BeginPhase("parse")
                 for path in allSourceFiles {
                     if !File.Exists(path) {
