@@ -9,7 +9,7 @@ import System.Text
 
 /// The private, versioned transport shared by the SDK and compiler worker.
 internal shared class WorkerProtocol {
-    internal const Version int32 = 1
+    internal const Version int32 = 2
     internal const MaxFrameBytes int32 = 16 * 1024 * 1024
     internal const MaxRequests int32 = 16
     internal const MaxRetainedBytes int64 = 256 * 1024 * 1024

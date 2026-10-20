@@ -57,7 +57,7 @@ internal class WorkerProcessClient : IDisposable {
                     ex is TimeoutException {
                     Dispose()
                     cancellation.ThrowIfCancellationRequested()
-                    transportMessage("G# worker unavailable; using standalone compiler: ${ex.Message}")
+                    transportMessage("G# worker unavailable; using standalone tool: ${ex.Message}")
                     return false
                 }
             }
@@ -76,7 +76,7 @@ internal class WorkerProcessClient : IDisposable {
                 let input = reader ?? throw InvalidOperationException("Worker output is unavailable.")
                 let status = input.ReadByte()
                 if status == WorkerProtocol.Rejected {
-                    transportMessage("G# worker rejected request; using standalone compiler: ${input.ReadString()}")
+                    transportMessage("G# worker rejected request; using standalone tool: ${input.ReadString()}")
                     Dispose()
                     return false
                 }
@@ -84,14 +84,16 @@ internal class WorkerProcessClient : IDisposable {
                     throw InvalidDataException("Worker did not acknowledge the request.")
                 }
                 transportMessage("G# worker accepted request: pid=${activeProcess.Id}.")
+                let stdoutLine = StringBuilder()
+                let stderrLine = StringBuilder()
                 while true {
                     let kind = input.ReadByte()
                     switch kind {
                         case WorkerProtocol.Stdout {
-                            stdout(input.ReadString())
+                            ReadOutput(input, stdoutLine, stdout)
                         }
                         case WorkerProtocol.Stderr {
-                            stderr(input.ReadString())
+                            ReadOutput(input, stderrLine, stderr)
                         }
                         case WorkerProtocol.Completed {
                             exitCode = input.ReadInt32()
@@ -193,6 +195,23 @@ internal class WorkerProcessClient : IDisposable {
 
     shared {
         private let RegistrationGate object = SystemObject()
+
+        private func ReadOutput(input BinaryReader, partial StringBuilder, report(string) -> void) {
+            let complete = input.ReadBoolean()
+            let text = input.ReadString()
+            if partial.Length + text.Length > WorkerProtocol.MaxFrameBytes {
+                throw InvalidDataException("Worker diagnostic line exceeds the protocol limit.")
+            }
+            if complete && partial.Length == 0 {
+                report(text)
+                return
+            }
+            partial.Append(text)
+            if complete {
+                report(partial.ToString())
+                partial.Clear()
+            }
+        }
 
         private func SameEnvironment(current Dictionary[string, string], previous Dictionary[string, string]?) bool {
             if previous == nil || current.Count != previous.Count {
