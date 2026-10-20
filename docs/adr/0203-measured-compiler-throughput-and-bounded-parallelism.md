@@ -594,6 +594,71 @@ separate PRs. Full stage-2 certification is not made a new PR requirement.
 
 ## Consequences
 
+### Local declaration discovery reduction (#5055)
+
+The generator projection and compiler keep separate declaration scopes.
+Those scopes contain mutable symbols and bound initializers; generated partials
+require a fresh binding pass. No live scope crosses the host boundary.
+The existing reference metadata index is content-validated, but exporting and
+transporting it is not adopted without a measured benefit.
+
+Both declaration passes previously searched every syntax node for rich anonymous
+objects, even when the parser constructed none. Anonymous-expression construction
+now records a conservative presence summary on its owning syntax tree.
+Trees without anonymous expressions skip this discovery walk. Other trees keep
+the existing walk, generic context and synthesis order. Interpolation subparsers
+record against the same tree. Speculative parsing can cause an extra walk, never
+a missing declaration. A new parse owns a new summary, so source edits and
+membership changes cannot reuse stale absence.
+
+This local reduction does not cache projection or generation results.
+References, options, generator bytes, additional files and their metadata still
+flow through the existing driver and SDK invalidation paths. Empty generator
+output never suppresses execution or diagnostics. Last-good output, retries,
+orphan cleanup and task-owned success stamps retain their existing authority.
+Optional measurements count scanned and skipped trees separately.
+
+The October 20 comparison used the fixed compiler `c7b82dcb` and Oahu
+`9db7f232` workloads above. Both tool variants used the verified
+`0.5.7-perf2189.s2` benchmark bootstrap from `4e1a4430`; only their rebuilt
+Core DLL/PDB payloads differed. The production `0.5.7` pin did not change.
+Each variant received one warmup and three alternating measured rebuilds,
+with restore excluded, four MSBuild nodes and the existing opt-in four-worker
+settings. All samples were retained.
+
+| Rebuild wall time, seconds | Baseline median (range) | Changed median (range) |
+| --- | ---: | ---: |
+| Compiler product graph | 57.683 (57.358-59.256) | 57.995 (57.672-58.286) |
+| Complete Oahu solution | 30.530 (30.449-31.406) | 30.731 (30.382-31.767) |
+
+There is no demonstrated build-speed gain. The changed medians were 0.5%
+and 0.7% slower, with overlapping ranges. The desktop remained shared;
+recorded load rose during Oahu runs. No sample was removed as an outlier.
+
+Separate untimed real-driver profiles measured the local reduction:
+
+| Request or phase | Baseline seconds / allocated MiB | Changed seconds / allocated MiB |
+| --- | ---: | ---: |
+| Core generator request | 10.721 / 3734.0 | 10.411 / 3065.8 |
+| Core generator projection, nested in that request | 7.397 / 3088.1 | 7.093 / 2420.9 |
+| Core compiler declarations | 7.276 / 3079.1 | 7.290 / 2669.1 |
+| Oahu UI generator request | 5.795 / 496.8 | 6.707 / 500.0 |
+| Oahu UI generator projection, nested in that request | 0.505 / 173.4 | 0.436 / 169.5 |
+
+These are single process-inclusive observations, not timing medians or retained
+memory. Do not add nested rows. Core avoided 700 whole-tree discovery walks
+in each declaration pass. Its projection allocated 667.3 MiB less (21.6%);
+compiler declarations allocated 409.9 MiB less (13.3%). Oahu UI avoided
+16 walks. All seven Core generators still ran with zero documents; Oahu UI
+still ran 17 generators and produced 36 documents. The slower changed Oahu UI
+request is retained, not credited as a latency improvement.
+
+All captured implementation/copied/reference DLLs, PDBs, XML files and manifests
+matched byte-for-byte. Oahu's 38 nonempty generated G# files also matched.
+This is an allocation and work reduction, not cross-stage declaration reuse:
+parsing, semantic declarations and reference import still run separately in
+`gsgen` and `gsc`. Their remaining duplication stays outside this local change.
+
 ### Initial bounded-worker implementation (#5041)
 
 The initial implementation remains opt-in (`GSharpMaxWorkers=1` by default).

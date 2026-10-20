@@ -16,6 +16,7 @@ open class SyntaxTree {
     private var documentationTable Dictionary[SyntaxNode, string]?
     private var parents Dictionary[SyntaxNode, SyntaxNode]?
     private var root CompilationUnitSyntax?
+    private var mayContainAnonymousClasses bool
 
     private init(text SourceText) {
         Text = text
@@ -46,6 +47,12 @@ open class SyntaxTree {
         get;
         private set;
     }
+
+    // Speculative parsing can retain a positive summary for a discarded node.
+    // Every anonymous-expression constructor records against its tree, including interpolation subparsers (issue #5055).
+    internal prop MayContainAnonymousClasses bool -> mayContainAnonymousClasses
+
+    internal func RecordAnonymousClassExpression() -> mayContainAnonymousClasses = true
 
     /// Returns the parent of [`node`](paramref) within this tree, or
     /// `null` for the root (ADR-0169: backs
