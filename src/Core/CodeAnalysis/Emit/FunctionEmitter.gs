@@ -94,6 +94,7 @@ internal class FunctionEmitter {
             SymbolSourceOrderComparer.Instance
         )
             .ToArray()
+        CompilationMeasurements.Count("emit.method-bodies.eligible", candidates.Length)
         if candidates.Length < 2 {
             return
         }
