@@ -166,8 +166,9 @@ content.
 
 Typed nil/interface values, byte strings, maps, panic/defer/recover, fixed
 value arrays, and concurrency are inventoried as typed syntax sites with
-migration blockers. Their G# lowering and runtime representations are explicit
-M1 prerequisites and are not selected by M0.
+migration blockers. M0 does not select their G# lowering or runtime representations.
+
+The proposed M1 sequence starts with a bounded byte-string/rune, basic-value, evaluation-order, control-flow and named-result corpus. Interfaces/locations/captures and fixed value arrays require separate admitted families and independent Go/JIT/NativeAOT witnesses. Concurrency, maps, panic/defer/recover and iterator control effects remain later gates, not prerequisites for the first text/value fixture. The first full package target remains pinned cliamp's `internal/fuzzy`, followed by `internal/tomlutil` and `internal/deeplink`; none is claimed as migrated. Later executable capability contracts will be versioned separately from M0 schema/profile v1 and will not turn its `migrationReady: false` into executable support.
 
 Schema v1 preserves compiled-file and package-initialization order and rejects
 missing fields, null collections, count mismatches, stale payload-derived IDs,

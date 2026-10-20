@@ -2,7 +2,7 @@
 
 - **Status**: Proposed
 - **Date**: 2026-09-19
-- **Phase**: Tooling design; typed inventory before staged implementation
+- **Phase**: M0 implemented; proposed, staged M1 lowering contracts
 - **Issue**: [#4333](https://github.com/DavidObando/gsharp/issues/4333)
 - **Related**: [ADR-0115](0115-csharp-to-gsharp-migration-tool.md),
   [ADR-0154](0154-test-oracle-strength.md),
@@ -18,17 +18,22 @@
   implemented. The paired
   [prerequisite viability spike](../../bench/go2gs-prerequisites/README.md)
   confirms the covered semantics. Performance fixes #4511 and #4512 are
-  implemented; #4513 defines the remaining translator and workload policy
+  implemented; the approved #4513 policy defines translator and workload gates
   before application-scale performance readiness is claimed.
-  Approval of their design direction is not implementation availability.
+  Their implemented native surface is not proof of Go compatibility.
   This ADR neither accepts nor changes them.
 - **Implementation status**: M0 typed inventory is implemented under
-  [`tools/go2gs`](../../tools/go2gs/README.md) with schema/profile version 1.
+  [`tools/go2gs`](../../tools/go2gs/README.md) with schema/profile version 1
+  (PR #4562, merged October 19, 2026).
   It provides `analyze` and analysis validation only. Translation, lowering,
   compatibility support, and runtime validation remain later milestones.
   Typed nil/interface values, byte strings, maps, panic/defer/recover, fixed
   value arrays, and concurrency are inventoried with migration blockers; their
-  G# lowering/runtime representations are explicit prerequisites for M1.
+  G# lowering/runtime representations gate their respective M1 families.
+  Schema v1 always reports `migrationReady: false`. Complete public analysis
+  requires Linux with the secure user/mount namespace and read-only tmpfs
+  facilities described by the implementation README, not merely a Linux host.
+  macOS and Windows preload failure reporting is not successful analysis.
 
 ## Context
 
@@ -38,11 +43,15 @@ same spirit as cs2gs. Similar surface syntax is not sufficient: Go values,
 aliasing, initialization, interface identity, byte strings, and concurrency
 have observable contracts that differ from CLR defaults.
 
-This design uses the G# source at `dd7622098` plus proposal commit
-`6ed7ef842ace8c9b973b7ff76e9100ef4999eb12`. Existing source, not historical
-limitations quoted in older ADRs, determines what can be reused. In
-particular, existing borrowed-reference work is not a missing feature to
-reimplement, and proposed persistent handles are a different category.
+The original September 19 design used `dd7622098` plus proposal commit
+`6ed7ef842ace8c9b973b7ff76e9100ef4999eb12`. The October 20 M1 refinement
+checks native integration against `4e1a4430c94f655110d3f5b4d2f854f01a7c278f`.
+Existing source, not historical limitations quoted in older ADRs, determines
+what can be reused. Borrowed references and implemented persistent handles
+are distinct categories. The
+[September 27 analysis](../go2gs-preimplementation-performance-and-slice-design.md)
+remains historical recommendations, not new measurements or approval for a
+slice syntax change. This refinement keeps ADR-0190's additive syntax.
 
 ### Evidence and limits of the cliamp inventory
 
@@ -77,11 +86,11 @@ whole tool:
 
 | Existing component | go2gs decision |
 | --- | --- |
-| [Cs2Gs.CodeModel](../../tools/cs2gs/Cs2Gs.CodeModel/Cs2Gs.CodeModel.csproj), its [AST](../../tools/cs2gs/Cs2Gs.CodeModel/Ast/GTypeReference.cs), and [GSharpPrinter](../../tools/cs2gs/Cs2Gs.CodeModel/Printing/GSharpPrinter.cs) | Reuse the Roslyn-independent G# output model and printer. It references `Core`; it is not dependency-free. Add bounded native-type/operation nodes only when existing nodes cannot express the accepted output. |
-| [GSharpRoundTrip](../../tools/cs2gs/Cs2Gs.CodeModel/RoundTrip/GSharpRoundTrip.cs) | Reparse every emitted file with the actual G# parser. Parsing is necessary, not evidence of semantic fidelity. |
-| [CSharpToGSharpTranslator](../../tools/cs2gs/Cs2Gs.Translator/CSharpToGSharpTranslator.cs), [CSharpProjectLoader](../../tools/cs2gs/Cs2Gs.ProjectLoading/CSharpProjectLoader.cs) | Do not use as a Go frontend: they depend on Roslyn, C# binding, and MSBuild project loading. |
-| [GscInvoker](../../tools/cs2gs/Cs2Gs.Pipeline/GscInvoker.cs), [ProcessRunner](../../tools/cs2gs/Cs2Gs.Pipeline/ProcessRunner.cs), [IlVerifyRunner](../../tools/cs2gs/Cs2Gs.Pipeline/IlVerifyRunner.cs), [Fingerprint](../../tools/cs2gs/Cs2Gs.Pipeline/Fingerprint.cs) | Reuse or narrowly extract process/compiler/verifier mechanics and fingerprint principles after separating C# assumptions. Do not fork these helpers. |
-| [MigrationPipeline](../../tools/cs2gs/Cs2Gs.Pipeline/MigrationPipeline.cs), [CorpusApp](../../tools/cs2gs/Cs2Gs.Pipeline/CorpusApp.cs), [StageExecutionContext](../../tools/cs2gs/Cs2Gs.Pipeline/IMigrationStage.cs), [TriageArtifact](../../tools/cs2gs/Cs2Gs.Pipeline/TriageArtifact.cs) | Reuse ordered stage semantics and reporting concepts, not the contexts unchanged. C# project paths, NuGet/reference metadata, test oracles, `csFile`, and `offendingCSharpConstruct` need a Go-specific schema or a small language-neutral extraction. |
+| [Cs2Gs.CodeModel](../../tools/cs2gs/Cs2Gs.CodeModel/Cs2Gs.CodeModel.gsproj), its [AST](../../tools/cs2gs/Cs2Gs.CodeModel/Ast/GTypeReference.gs), and [GSharpPrinter](../../tools/cs2gs/Cs2Gs.CodeModel/Printing/GSharpPrinter.gs) | Reuse the Roslyn-independent G# output model and printer. It references `Core`; it is not dependency-free. Add bounded native-type/operation nodes only when existing nodes cannot express the accepted output. |
+| [GSharpRoundTrip](../../tools/cs2gs/Cs2Gs.CodeModel/RoundTrip/GSharpRoundTrip.gs) | Reparse every emitted file with the actual G# parser. Parsing is necessary, not evidence of semantic fidelity. |
+| [CSharpToGSharpTranslator](../../tools/cs2gs/Cs2Gs.Translator/CSharpToGSharpTranslator.gs), [CSharpProjectLoader](../../tools/cs2gs/Cs2Gs.ProjectLoading/CSharpProjectLoader.gs) | Do not use as a Go frontend: they depend on Roslyn, C# binding, and MSBuild project loading. |
+| [GscInvoker](../../tools/cs2gs/Cs2Gs.Pipeline/GscInvoker.gs), [ProcessRunner](../../tools/cs2gs/Cs2Gs.Pipeline/ProcessRunner.gs), [IlVerifyRunner](../../tools/cs2gs/Cs2Gs.Pipeline/IlVerifyRunner.gs), [Fingerprint](../../tools/cs2gs/Cs2Gs.Pipeline/Fingerprint.gs) | Reuse or narrowly extract process/compiler/verifier mechanics and fingerprint principles after separating C# assumptions. Do not fork these helpers. |
+| [MigrationPipeline](../../tools/cs2gs/Cs2Gs.Pipeline/MigrationPipeline.gs), [CorpusApp](../../tools/cs2gs/Cs2Gs.Pipeline/CorpusApp.gs), [StageExecutionContext](../../tools/cs2gs/Cs2Gs.Pipeline/IMigrationStage.gs), [TriageArtifact](../../tools/cs2gs/Cs2Gs.Pipeline/TriageArtifact.gs) | Reuse ordered stage semantics and reporting concepts, not the contexts unchanged. C# project paths, NuGet/reference metadata, test oracles, `csFile`, and `offendingCSharpConstruct` need a Go-specific schema or a small language-neutral extraction. |
 
 No new printer, C# reimplementation of Go binding, Go-to-C# intermediate port,
 or universal multi-language compiler framework is justified.
@@ -95,9 +104,10 @@ report every gap. Verify generated programs against independent original Go
 executions. Start with inventory and semantic witnesses, not bulk rewriting
 of main.go.**
 
-Everything named `go2gs`, its commands, artifacts, helper types, and support
-libraries below is **proposed**, not an installed command or implemented
-compiler feature.
+M0's `analyze`, `validate-analysis`, profile and inventory contracts are
+implemented. Emission, executable validation, helper APIs and compatibility
+support below remain **proposed**. Conceptual signatures specify obligations,
+not installed APIs, new G# syntax or changes to native language semantics.
 
 ### 1. Fidelity contract, goals, and non-goals
 
@@ -137,9 +147,12 @@ Manual ports and deliberate behavior changes are recorded separately.
 
 Use a separately versioned Go helper built with a pinned compatible
 toolchain, [golang.org/x/tools/go/packages][go-packages], `go/ast`,
-[go/types][go-types], and [go/constant][go-constant]. The selected x/tools
-version is pinned when the helper is implemented; no unverified version
-number or package installation is prescribed by this document.
+[go/types][go-types], and [go/constant][go-constant]. M0 pins x/tools in
+[`go.mod`](../../tools/go2gs/go.mod). The tables below describe the broader
+profile design; implemented profile-v1 restrictions, including metadata-only
+loading, in-process type checking, no workspace and no CGo execution, are
+specified in the [M0 README](../../tools/go2gs/README.md). They are not
+relaxed by the proposed executable profiles.
 
 The profile fixes entry packages and the exact source/toolchain context:
 
@@ -224,7 +237,7 @@ from identifier strings:
 | Generic/interface facts | Type parameters, constraint/type-set terms, substitutions/instances, relevant satisfaction checks, comparability, embedded obligations, and struct field tags/export flags. Interface type sets are not inferred from CLR reflection. |
 | Initialization/build provenance | Dependency graph, `types.Info.InitOrder`, ordered init functions and compiler input-file order, blank imports, resolved embedded assets, effective per-file language versions from `types.Info.FileVersions` with module fallback for non-syntax inputs, and source/content hashes. |
 
-Use a bounded versioned JSON record stream with interned IDs and explicit
+Use a bounded versioned JSON artifact with interned IDs and explicit
 length/count limits. Preserve raw string/constant bytes losslessly, including
 invalid UTF-8 string values, through an explicit byte encoding. Reject unknown
 required record kinds, stale payload-derived IDs, and dangling IDs; diagnostics
@@ -436,7 +449,7 @@ row needs discriminating witnesses; unsupported subcases remain diagnostics.
 | Struct values and receivers | Use value types with recursively correct field representation. Assignment, arguments, return, interface insertion, range values, and value-receiver calls copy values, while reference-like fields retain their own sharing. Translate receiver bodies through explicit by-value or persistent-location bridges; an in-body G# struct method's borrowed `this` does not itself implement Go copy-per-call. |
 | Pointers and function values | Use nullable `managed[T]?` for admitted Go pointer locations; do not spell every Go pointer as existing borrowed `*T`. Preserve nil pointer receiver calls that do not dereference their receiver. Method-value creation snapshots the proper receiver; method expressions retain explicit receiver parameters. Closures share lexical bindings. Nil functions stay distinct from a callable empty delegate; only source-legal nil comparisons are emitted. |
 | Fixed arrays `[N]T` | Retain length in Go type identity and use real value lowering. Current G# `[N]T` is CLR-array-backed, not Go array copying. The first audio profile admits generated field-backed `[2]float64` and `[10]float64` values with checked constant/dynamic indexing, whole-value copies and equality. Other shapes, nested arrays, array slicing and escaping element addresses stay blocked until their full storage semantics are implemented; see section 7. |
-| Slices `[]T` | Use proposed native `slice[T]` for the non-nil payload, with an explicit nullable descriptor for Go nil. Compatibility operations preserve nil-sensitive construction, len/cap, bounds, append/copy/clear, capacity-limited subslices, and panic translation. Descriptor equality is never Go slice equality; Go slices only compare with nil. |
+| Slices `[]T` | Use implemented native `slice[T]` for the non-nil payload, with an explicit nullable descriptor for Go nil. Compatibility operations preserve nil-sensitive construction, len/cap, bounds, append/copy/clear, capacity-limited subslices, and panic translation. Descriptor equality is never Go slice equality; Go slices only compare with nil. |
 | Strings, bytes, and runes | Use a small immutable Go byte-string value, not `System.String` as the semantic representation. Preserve arbitrary bytes, byte indexing/slicing/length and bytewise comparison. Rune iteration reports UTF-8 byte offsets and yields the replacement rune while advancing one byte for an invalid encoding; `[]rune` is not UTF-16 `char[]`. String/byte-slice conversion copies where aliasing would be observable. Explicit CLR text adapters define encoding/error policy. |
 | Maps | Use a nullable Go map contract over suitable BCL storage, with Go zero on missing keys and a separate comma-ok flag. Nil reads/deletes/clear/len are legal as specified; writing a nil map panics. Preserve element copy behavior and non-addressability, permitted key comparability, NaN/signed-zero cases, and typed-interface keys. Iteration must satisfy Go mutation rules, not `Dictionary` fail-fast enumeration or a promised insertion order. |
 | Equality and hashing | Generate Go equality/comparability operations for named/unnamed values, arrays, structs and dynamic interfaces. Do not inherit data-struct/CLR equality when it compares slices, compares wrapper identities, treats NaNs differently, or includes blank fields. Map hashing agrees with source equality and preserves original dynamic type distinctions. |
@@ -459,17 +472,193 @@ permission to translate them approximately. `os.Exit`, for example, must not
 accidentally run deferred cleanup just because ordinary CLR exception
 unwinding would do so.
 
+#### 6.1 M1 admission is per family, not all-or-nothing
+
+Freeze the contracts below before implementing a lowerer. Then start with
+the proposed **`m1-text-values-v1`** executable profile. It selects Linux/amd64,
+Go 1.26.6 with matching helper/toolchain provenance, `int` width 64, CGo off,
+offline inputs, and no Go experiments or GODEBUG overrides. This is a new
+fixture profile, not a modification of the existing darwin/arm64 M0 inventory
+profile. Its analysis host must satisfy M0's Linux execution requirements.
+JIT and NativeAOT validation must run on the selected target.
+
+| First executable family | Admitted boundary |
+| --- | --- |
+| Values and functions | `bool`, `byte`, `rune`, target-width `int`, their predeclared aliases, exact representable constants, strings, and `[]byte`/`[]rune`. Direct synchronous functions, local variables, constant package declarations, tuple results and named-result slots. No user-defined types, pointers, interfaces, closures, generics or effectful package initialization yet. |
+| Operators and sequencing | Integer `+`, `-`, unary signs, `++`/`--`, integer/string comparisons, Boolean operators and short circuiting, assignment and simultaneous assignment. Integer conversions among the admitted types use Go width/truncation rules; string conversions are listed below. Other operators diagnose until separately witnessed. |
+| Control flow | Blocks, `:=`, if, expression/tagless switch, three-clause/condition loops, range over strings and admitted slices, unlabelled break/continue, explicit and naked return. No fallthrough, goto, labelled branches or iterator-function range in this profile. |
+| Text and small buffers | Byte-string literals, concatenation, byte length/index/two-index slicing, bytewise equality/order, `[]byte`/`[]rune` conversions and their reverse string conversions. Nil slices, empty/nonempty literals, `make`, len/cap, checked element reads/writes, two/three-index subslices, and descriptor copies. Append/copy/clear are later slice admissions, not inferred from native support. |
+| Mapped API | Only `unicode.ToLower(rune)`, using tables and rules from the selected Go toolchain. No blanket `unicode`, `strings`, `fmt` or testing-package support claim. Fixture transport is a separately specified harness, not translated application I/O. |
+
+These operations cover the direction of pinned `internal/fuzzy/fuzzy.go`:
+named results, `[]rune`, string range, `unicode.ToLower`, scoring and control
+flow. This is **not** a claim that its package, test variants or dependency
+boundary already migrate. First witnesses are small unchanged Go programs.
+Bank the complete fuzzy package only at M2, followed by `internal/tomlutil`
+and `internal/deeplink`.
+
+Every syntax site, type, initializer and dependency API in a selected unit
+must be admitted. An unreachable unsupported site still blocks that unit.
+Unlisted operations produce an attributed `unsupported-operation` diagnostic;
+unmapped APIs produce `compatibility-api`. These are proposed diagnostic
+reason keys, not existing numeric IDs. Include profile, family, operation,
+Go span/type ID, affected closure and the admission gate in each diagnostic.
+Do not filter away source files or mistake M0's broad blocker categories for
+an executable support table.
+
+Later M1 profiles independently add interfaces/locations/captures and the
+fixed-array family. Each records its exact admitted dependencies and witness
+set. Neither family nor concurrency must be implemented before the first
+text/value witness. Feature expansion versions the admission profile; it
+does not silently broaden `m1-text-values-v1`.
+
+#### 6.2 Byte strings, zero values and faults
+
+The proposed `GoString` is a value descriptor containing a private byte-array
+owner, offset and byte length. A default descriptor denotes the empty string,
+not Go nil. The owner is immutable after publication. Literals materialize
+their exact decoded Go bytes, not a CLR string round trip. A substring may
+share immutable storage; concatenation may reuse an empty operand or create
+owned storage. Equality, ordering and hashing consume bytes, not owner
+identity, culture, Unicode normalization or UTF-16 code units.
+
+The following signatures are notation for specialized generated/support
+operations, not a universal runtime type system. `GoInt` is the selected
+signed target width; `GoIndex` retains an operand's signedness, width and bits
+until bounds validation. `GoSlice<T>` below abbreviates `Slice<T>?`, not a new
+backing-store class.
+
+```text
+GoString.FromBytesCopy(source: GoSlice<byte>) -> GoString
+GoString.ToBytesCopy(value: GoString) -> GoSlice<byte>
+GoString.FromRunesCopy(source: GoSlice<int32>) -> GoString
+GoString.ToRunesCopy(value: GoString) -> GoSlice<int32>
+GoString.Length(value: GoString) -> GoInt
+GoString.ByteAt(value: GoString, index: GoIndex) -> byte
+GoString.Subslice(value: GoString, lo: GoIndex, hi: GoIndex) -> GoString
+GoString.Concat(left: GoString, right: GoString) -> GoString
+GoString.Compare(left: GoString, right: GoString) -> int32
+GoString.Equal(left: GoString, right: GoString) -> bool
+GoString.Hash(value: GoString, seed: uint64) -> uint64
+GoString.DecodeNext(value: GoString, offset: GoInt)
+    -> (hasValue: bool, byteOffset: GoInt, rune: int32, nextOffset: GoInt)
+GoUnicode.ToLower(rune: int32, tables: PinnedUnicodeTables) -> int32
+GoBounds.Index(index: GoIndex, length: GoInt, site: SourceSite) -> int32
+GoBounds.Range(lo: GoIndex, hi: GoIndex, max: GoIndex, site: SourceSite)
+    -> (lo: int32, hi: int32)
+GoSliceOps.Make<T>(length: GoIndex, capacity: GoIndex) -> GoSlice<T>
+GoSliceOps.Subslice<T>(value: GoSlice<T>, lo: GoIndex, hi: GoIndex,
+    max: GoIndex) -> GoSlice<T>
+```
+
+`DecodeNext` accepts offsets from zero through byte length. At the end it
+returns `hasValue=false` without advancing. Otherwise it reports the starting
+**byte** offset and advances by the UTF-8 width. Invalid encodings return
+U+FFFD and advance **one byte**, including truncated/overlong sequences and
+encoded surrogates. A valid encoding of U+FFFD advances by three bytes.
+String range evaluates its source once and repeatedly uses this operation.
+`ToRunesCopy` uses the same decode rule, not `char[]`; reverse conversion
+encodes invalid rune values as U+FFFD. Neither direction normalizes text.
+`unicode.ToLower` is Go's simple rune mapping, not culture-sensitive casing,
+full case folding, or an assumption that .NET's Unicode version agrees.
+Record the selected Go source/table content hashes and `unicode.Version`.
+
+`FromBytesCopy`/`FromRunesCopy` snapshot mutable input at conversion; later
+writes cannot change the string. Reverse conversions return writable storage
+that cannot mutate a string or another conversion result. Zero-length
+conversions return **non-nil empty slices**, including conversion from the
+empty string; nil byte/rune inputs produce the empty string. No writable
+array, span, slice or persistent handle escapes a string owner. A readonly
+view over somebody else's writable buffer does not meet this contract.
+
+The only CLR text boundary initially specified is explicit strict conversion:
+`ToClrUtf8Strict(GoString) -> (System.String, InteropTextError?)` and
+`FromClrUtf8Strict(System.String) -> (GoString, InteropTextError?)`.
+Invalid UTF-8 on export and unpaired UTF-16 surrogates on import return an
+interop error, without replacement or a partial result. Valid text is encoded
+without normalization. This boundary is not used for Go string operations.
+Any lossy adapter requires a named policy and its own later admission.
+
+The nullable native slice descriptor has two states: absent means nil;
+present means non-nil, even with zero length/capacity. Nil len/cap are zero.
+Nil `[0:0]` and `[0:0:0]` remain nil; the same ranges on non-nil empty
+descriptors remain non-nil. Native descriptor equality is never exposed as
+Go slice equality. Only comparisons with nil are legal. Descriptor copies
+share elements; string conversions copy elements. `make` and literals must
+produce present descriptors and zero every newly observable slot using the
+Go element zero plan, including capacity later exposed by reslicing.
+For the first byte/rune family, CLR zero and Go zero coincide. Later string,
+interface, nested-slice and aggregate elements require their own zero witness;
+G# collection default construction cannot choose Go nilness.
+
+All index/bound expressions evaluate with Go's required sequencing before
+checks. Compare in the source integer domain before narrowing to native
+`int32`: `-1` and `1 << 32` must not become valid index zero. For strings the
+upper bound is byte length; for slice reslicing it is capacity, with an
+omitted high bound supplied from length. Three-index slicing additionally
+requires `0 <= lo <= hi <= max <= capacity`. Integer arithmetic wraps at its
+Go width rather than inheriting checked overflow. Constant representability
+remains a frontend obligation.
+
+The initial storage domain has lengths/capacities at most `Int32.MaxValue`,
+plus smaller explicit resource budgets in the executable profile. Invalid
+Go bounds produce a Go fault before any narrowing. A Go-valid allocation or
+result beyond the representable/budgeted domain produces
+`unsupported-value-domain` or resource failure, not an invented Go panic,
+truncation or a successful parity result.
+
+The minimal proposed carrier is `GoFault(kind, site, operands)`. Initially
+`kind` covers index bounds, slice bounds and invalid make length/capacity;
+operands retain their source widths. Only explicit Go checks create it.
+The harness classifies the corresponding fault from unchanged Go execution
+and compares category, operands and effect trace, not incidental panic text.
+Unexpected CLR exceptions, allocation failures and process failures remain
+validation failures. There is no broad CLR-exception-to-Go-fault catch.
+This unrecoverable fixture boundary does **not** implement arbitrary panic
+values, defer stacks, recover or goroutine unwinding. Those remain separate
+admissions. Future interface assertion/comparison faults extend the versioned
+carrier only with independent witnesses.
+
+#### 6.3 Deferred control effects and concurrent neighbors
+
+The first executable profile rejects `go`, channel types/creation/send/receive/
+range, `select`, synchronization/atomic/context APIs, callbacks and foreign
+calls. Report `concurrency-boundary` at the originating site and dependent
+call edges; reject even an unused channel declaration or unreachable launch.
+Do not lower a goroutine synchronously, replace nil-channel blocking with a
+null exception, or use arbitrary worker blocking as a fallback.
+
+Later concurrency admission needs an explicit suspension contract across
+direct functions, function values/delegates, interface slots, callbacks and
+foreign calls. Inventory every potentially suspending edge and reject edges
+without a witnessed ABI. Native ADR-0174 machinery is reusable, not a promise
+that arbitrary Go callable boundaries already match. Future witnesses must
+cover caller-side launch callee/argument evaluation before scheduling;
+nil, closed and buffered channels; send/close faults; closed-and-drained
+receives; select operand/assignment timing and ready-arm choice; publication,
+atomics and race-free synchronization under the Go memory model. Goroutine
+lifetime, cancellation, blocking I/O and shutdown need explicit mappings.
+Any new language-wide suspension ABI requires a separate ADR.
+
+Maps, explicit `panic`, `defer`, `recover`, and iterator-function control
+effects likewise produce `deferred-semantics`, not placeholder helpers.
+Named-result slots can be admitted without defer; a later defer profile must
+prove that post-defer results are read from those slots. `tomlutil` remains
+blocked on map, capture and iterator contracts, while `deeplink` also needs
+error/wrapping and parsing boundaries. These are not prerequisites for
+`m1-text-values-v1`.
+
 ### 7. Native capability integration without changing their contracts
 
 **Slices: ADR-0190 / #4328.** Use `Gsharp.Values.Slice<T>` and
-`ReadOnlySlice<T>` from proposed `Gsharp.Runtime.Values`, spelled `slice[T]`
-and `readonly slice[T]`. Raw `[]T` and proposed `array[T]` remain exact CLR
+`ReadOnlySlice<T>` from `Gsharp.Runtime.Values`, spelled `slice[T]`
+and `readonly slice[T]`. Raw `[]T` and `array[T]` remain exact CLR
 arrays. The current
-[BindArraySlice](../../src/Core/CodeAnalysis/Binding/ExpressionBinder.Access.MemberLookup.cs)
+[BindArraySlice](../../src/Core/CodeAnalysis/Binding/ExpressionBinder.Access.MemberLookup.gs)
 copying path must not be changed globally for go2gs.
 
-Lower to `.Subslice` for known instance operations. `.Slice` is the proposed
-extension convenience facade, not an instance member declared inside the C#
+Lower to `.Subslice` for known instance operations. `.Slice` is the imported
+extension convenience facade, not an instance member declared inside the G#
 `Slice<T>` runtime type. Keep exclusive endpoints and saved evaluation order.
 Use the native descriptor's sharing, overlapping-copy behavior, append
 capacity, and addressable value elements rather than build another
@@ -504,7 +693,9 @@ byref's current value and call it the original pointer. Pointer equality uses
 the admitted location contract, not `ReferenceEquals` on handle objects;
 zero-size/unsafe address observations remain outside this profile.
 
-**Value arrays are a separate gate.** Native slices solve outer-buffer sharing,
+#### Fixed-array family contract
+
+Native slices solve outer-buffer sharing,
 not the value semantics of `[][2]float64`. Generate a small ordinary two-field
 stereo value and a ten-field value for the initial admitted shapes, preserving
 Go type IDs; dynamic indexing lowers to checked field selection and nested
@@ -516,12 +707,55 @@ Broader fixed-array lengths/types, nested shapes, persistent element locations
 and array/slice interoperability require a witnessed value-array design before
 their dependent package closes.
 
+The initial proposed array profile admits only `[2]float64` and `[10]float64`
+(and Go-defined names over those shapes), as standalone values, ordinary
+struct fields and native-slice elements. Each generated value contains exactly
+two or ten `float64` fields, not a reference to an inner array. Length,
+element type and any defined-name identity belong to the Go type descriptor.
+An alias retains its original Go type identity. CLR layout coincidence never
+makes distinct Go types identical.
+
+```text
+Array2F64.Zero() -> Array2F64
+Array2F64.Get(value: Array2F64, index: GoIndex, site: SourceSite) -> float64
+Array2F64.Set(location: ref Array2F64, index: GoIndex,
+    value: float64, site: SourceSite) -> void
+Array2F64.Equal(left: Array2F64, right: Array2F64) -> bool
+// Array10F64 supplies the same operations with ten fields.
+```
+
+Assignment, argument, return, interface insertion and value-range snapshots
+copy all fields. Equality compares each element using Go floating equality:
+NaN is unequal to itself, while signed zeros compare equal. Future hashing
+must respect that equality; CLR `Double.Equals` is not the equality helper.
+Default storage is all zero. Reads and writes validate the original index
+against 2 or 10 before a checked field dispatch; an invalid switch arm cannot
+return zero or write a default field.
+
+For `frames[i][j] = rhs`, normalization retains the outer descriptor and
+evaluated indices at their required evaluation points, then writes through
+the original element slot. The helper receives a segment-local borrowed
+`ref Array2F64`, not a property-returned copy. Compound assignment selects
+that location once. Native `Slice<T>` already exposes a ref-returning indexer;
+using it must pass the array family's own ILVerify and alias witnesses.
+No borrow crosses suspension or an unknown call boundary.
+
+Other lengths/element types, nested fixed arrays, slicing these field-backed
+arrays, pointer-to-array range and escaping element addresses report
+`fixed-array-storage` with the exact shape and operation. Array whole-value
+copies cannot conceal an allocation, and streaming storage must not allocate
+one inner CLR array or box per frame. Additional shapes require storage and
+performance evidence, not a generic `T[]` fallback or a new native-array
+language contract in this ADR.
+
 **Captures/adaptation: ADR-0189 / #4329.** Explicit initializer fields snapshot;
 free variables in bodies share lexical bindings. Use native captures and
 static `adapt[I](source)` forwarding where their bounded member surface
-matches. Initial automatic adaptation admits nongeneric by-value instance
-methods; later borrowed/generic/property/event surfaces remain independently
-gated. Extension methods are not automatic structural candidates.
+matches. Native adaptation already covers generic methods, properties,
+indexers, events and ref contracts. The initial **Go translator profile**
+admits only nongeneric by-value instance method signatures; broader surfaces
+remain independently gated there. This is not a missing native capability.
+Extension methods are not automatic structural candidates.
 
 Implement Go interface values with a small Go-specific tagged value/descriptor
 layer and generated direct dispatch bridges. Store the original Go dynamic
@@ -545,6 +779,90 @@ there is no universal runtime structural search. Value receiver forwarding
 still copies on each Go call, unlike mutation retained in a native adapter's
 owned struct field. These are translator obligations, not amendments to
 ADR-0189.
+
+#### Interface representation and direct bridge API
+
+The proposed interface family uses a small value `GoInterface`:
+`(dynamicTypeId?, payload?)`. Both fields absent means nil interface.
+A present tag selects a generated immutable `ValuePayload<T>` snapshot or a
+`PointerPayload<T>` containing a nullable `managed[T]` value. A typed nil
+pointer has a present pointer tag/payload and an absent handle, never an
+absent interface. The box is an implementation detail, not Go identity.
+Interface copies may share an immutable box. Calls/assertions cannot mutate
+its stored value, and pointer payloads preserve the selected location rather
+than the pointer variable.
+
+`dynamicTypeId` is the frontend's canonical Go identity within the closed
+semantic profile, resolving aliases without collapsing defined types or
+`T` versus `*T`. Generate type descriptors and demanded bridges in sorted
+identity order. Descriptors contain the payload kind, Go comparability and
+typed copy/equality/hash operations, plus method-set bindings derived from
+M0's validated source-backed authority. No runtime CLR type discovery,
+reflection proxy, general method-name lookup or adapter cache is needed.
+
+```text
+GoInterface.BoxValue<T>(type: GoTypeId, value: T) -> GoInterface
+GoInterface.BoxPointer<T>(pointerType: GoTypeId,
+    pointer: managed[T]?) -> GoInterface
+GoInterface.IsNil(value: GoInterface) -> bool
+GoInterface.Convert(value: GoInterface, target: GoInterfaceId) -> GoInterface
+GoInterface.TryAssert<T>(value: GoInterface, target: GoTypeId) -> (T, bool)
+GoInterface.Assert<T>(value: GoInterface, target: GoTypeId, site: SourceSite) -> T
+GoInterface.TryAssertInterface(value: GoInterface, target: GoInterfaceId)
+    -> (GoInterface, bool)
+GoInterface.Equal(left: GoInterface, right: GoInterface, site: SourceSite) -> bool
+GoInterface.Hash(value: GoInterface, seed: uint64, site: SourceSite) -> uint64
+Invoke_I_M(receiver: GoInterface, arguments: declared slot types)
+    -> declared result types
+```
+
+These are checked generated entry points, not APIs accepting arbitrary
+caller-supplied type tags or an `object[]` invocation ABI. `Convert` is used
+only for a statically legal interface conversion; it preserves nil or the
+original dynamic tag and payload. Assertions to interfaces instead test the
+original dynamic type's Go method set. A comma-ok failure returns the target
+Go zero and false; a single-result assertion faults. Concrete value assertions
+return a copy; pointer assertions preserve pointer/nil identity. Type switches
+test source cases in order against these same facts, with a distinct nil
+case and Go's case-dependent variable type. Missing closed-world metadata
+is a translation blocker, not an assertion failure.
+
+Initially admit closed nongeneric interfaces over admitted scalar/string
+values, byte/rune slices, plain structs of admitted fields, admitted array
+values, and witnessed nullable pointer locations. Array payloads require the
+array profile; location payloads require the location profile. Interface
+methods use admitted synchronous by-value signatures. Promoted methods use
+the frontend's exact selection path; an unwitnessed embedded-pointer path or
+method-value capture reports `interface-bridge`. Function/map payloads,
+unknown dynamically loaded types and unsupported generic instances remain
+blocked. No public cross-assembly Go interface ABI is implied.
+
+Equality first compares nilness and dynamic identity. Different dynamic
+types compare false; matching comparable types compare payloads with Go
+operations. Matching non-comparable dynamic types (including a nil slice)
+produce a Go comparison fault, not false or CLR box equality. A struct's
+static comparability can still require recursive dynamic-interface checks.
+Pointer equality uses nil/location identity. Value equality uses snapshots
+and preserves Go floating/blank-field rules when those fields are admitted.
+Hashing includes the original dynamic identity and uses equality-consistent
+payload hashing, including signed-zero normalization; non-comparable payloads
+fault. Hash values need not equal Go's private hash implementation.
+Defining this obligation does not admit maps.
+
+`Invoke_I_M` dispatches through generated exact slots. A value receiver
+copies the payload **on every call**, including a value method selected
+through `*T`. In that case it reads/copies the current pointee; a nil pointer
+faults before entering the value-method body. A pointer-receiver bridge
+passes the nullable handle without eagerly dereferencing it, allowing a
+method to handle nil. This distinction is independent of native `adapt`.
+
+Generated Go descriptors stay internal to the closed composition unit.
+Ordinary CLR interfaces keep CLR nullness. Any requested export to a CLR
+interface requires an explicit wrapper whose fresh object identity and
+typed-nil behavior are part of that boundary; arbitrary CLR objects cannot
+be imported by guessing a Go type from `GetType()`. The first profile rejects
+such interop as `interface-interop`. Wrapper reuse across an observable CLR
+boundary is never licensed by Go interface equality.
 
 #### Interface conversion and reuse policy
 
@@ -610,6 +928,55 @@ A borrowed `ref` lowering is permitted only inside a proven non-escaping
 segment with no retained identity requirement. It is not the default Go
 pointer representation. Zero-size and unsafe pointer identity remain explicit
 unsupported boundaries.
+
+#### Versioned capability handshake
+
+M0's existing `go2gs.analysis`/`go2gs.profile` version 1 stays unchanged,
+including `migrationReady=false`. It neither advertises executable support
+nor contains a compiler-capability handshake. The later translation manifest
+proposes a separate **`go2gs.execution-contract` version 1** requirements
+record. It binds the immutable analysis hash to an admission profile and the
+following exact values:
+
+| Required field | Representation and validation |
+| --- | --- |
+| `analysis` / `admission` | Analysis schema name/version/content SHA-256; admission profile ID/version/content SHA-256; sorted admitted family IDs and their contract revisions. Unknown required fields/families/revisions fail closed. |
+| `go` | Requested/actual/helper Go versions and hashes, GOROOT identity, effective language versions, GOOS/GOARCH, type widths, experiments/GODEBUG, and Unicode version/table hashes. Match the analyzed profile; no host-width inference. |
+| `compiler` | Published SDK package ID/version/content hash, gsc and compiler dependency hashes, and the selected syntax contract (`adr0190-additive-v1`). Repository compiler/tool source remains G# and builds with `global.json`'s previous released SDK; this PR moves no pin. |
+| `nativeRuntime` | Exact assembly names, package versions and implementation/reference assembly hashes for Values and any other demanded runtime. Same display version with different bytes is a mismatch. Channels is not required for the text/value profile. |
+| `goSupport` | Separate compatibility-support package/version/content hash, semantic ABI revision, generated descriptor/bridge format revision and mapped API set. These are proposed identities; no package version is available yet. |
+| `validation` | Target RID; .NET SDK, JIT/runtime and NativeAOT toolchain identities; verifier version/reference hashes; probe-suite revision and artifact hashes; profile resource/domain limits. |
+| `requiredCapabilities` | Sorted unique `(capabilityId, revision, probeId, probeSourceHash)` records. No version-range guess or presence-only assembly test substitutes for a passed probe. |
+
+Compiler/SDK and support-package pins must name available releases when
+implementation starts. If a native fix is needed, land/release it separately
+and move the repository pin in its own PR under the N-1 rule. Do not depend
+on an unreleased feature or replace the SDK locally to obtain green evidence.
+
+The driver owns small versioned probes, not a new compiler discovery API.
+`CheckCapabilities(requirements, resolvedArtifacts) -> CapabilityReport`
+first checks hashes and signatures, then compiles/reparses, IL-verifies and
+executes the demanded probes in JIT and NativeAOT. Each result records
+`passed`, `failed` or `unavailable` plus evidence/reason. Reuse is permitted
+only under the complete artifact/profile/probe key. The native compiler's
+own diagnostics remain additional checks, not this handshake.
+
+| Capability | Required probe and current implementation basis |
+| --- | --- |
+| `native-slice-v1` | Exact nominal identity, nullable descriptor, shared subrange, capacity, ref-returning element/nested writes and copied descriptor behavior. [Slice.gs](../../src/Sdk/Gsharp.Runtime.Values/Slice.gs) supplies `Subslice`, `Create`, indexers and managed-location access; [NativeSliceTypes.gs](../../src/Core/CodeAnalysis/Symbols/NativeSliceTypes.gs) performs compiler recognition. |
+| `managed-location-v1` | Nullable handles, retained owner/index after reslice/reallocation, root sharing, location equality and segment-local borrow. [ManagedRef.gs](../../src/Sdk/Gsharp.Runtime.Values/ManagedRef.gs) supplies `Borrow` and `FromArrayNative`; generated field/root support must be probed too. |
+| `capture-adapt-v1` | Shared lexical cell versus initializer snapshot, one evaluation, fresh exposed wrapper and exact requested slot forwarding, including negative null-source behavior. ADR-0189's richer native surface does not expand the Go profile. |
+| `go-text-values-v1`, `go-interface-v1`, `go-array-f64-v1` | The corresponding semantic witnesses below, tied to the Go-support ABI and generated bridge revision, not to native feature availability alone. |
+
+The first profile requires only native slices and Go text/value support.
+Later profiles add the actual location/adaptation/capture capabilities they
+use; direct interface bridges need not manufacture an unused native adapter.
+Required versions/signatures or probe results that disagree produce
+`capability-mismatch`; missing artifacts, tools or executable target produce
+`capability-unavailable`. Neither result publishes a runnable migration
+attestation. Compile-only exploration remains unverified. No copying-array,
+reflection-proxy or unknown-byref fallback is allowed. Changed inputs
+invalidate generated-output and validation attestations before reuse.
 
 ### 8. Demand-driven compatibility and dependency policy
 
@@ -762,6 +1129,61 @@ repository's tiered-PGO steady-state configuration; that is reproducible launch
 configuration, not a false assertion that CoreCLR reports the internal tier of
 every measured method.
 
+#### M1 independent witness matrix
+
+This is a **required future test plan**, not tests run by the design PR.
+Each positive row needs unchanged original Go fixture source, its input/hash
+and independently observed output, then generated G# in JIT and NativeAOT.
+Original Go and generated programs must not share the helper under test.
+A Go-only driver may catch a fixture's fault for structured observation;
+that driver does not make translated `recover` supported. Record the driver
+and compare fault categories/effect traces without relying on panic text.
+
+Every admitted row must pass translate/reparse, compile, ILVerify and
+behavioral parity in order. Repeated clean translations under different
+checkout roots must produce byte-identical generated source and maps.
+Mutants below are controlled *wrong lowerings* to apply during implementation
+under ADR-0154, not claims of discrimination already demonstrated.
+
+| Family / independent Go observation | Wrong lowering that must fail | Admission |
+| --- | --- | --- |
+| Bytes `41 c2 a2 f0 9f 98 80 ff ef bf bd`: length 11; range byte offsets `0,1,3,7,8`; separate valid replacement rune and invalid byte | UTF-16 storage/indexing; counting runes as bytes; advancing three bytes for every replacement rune | First text/value profile |
+| Truncated/overlong UTF-8, surrogate encodings, embedded NUL and arbitrary byte slices; compare byte order and `[]rune` results | Decoder coalesces invalid bytes, normalizes text, or uses culture/string comparison | First |
+| Convert writable bytes/runes to string, mutate input, convert back twice and mutate one result | Readonly alias masquerades as immutable ownership; conversion results share writable backing | First |
+| Empty string to bytes/runes, nil and non-nil empty literals/make, len/cap and zero-length subslices | Collapse nil and empty; convert empty text to nil; G# defaults create a non-nil Go zero | First |
+| Zeroed make capacity later exposed by reslicing; copied descriptors observe the same element writes | Initialize only length, clone on descriptor copy/subslice, or expose stale capacity | First |
+| Negative and high-bit indices/bounds, invalid make lengths, boundary slicing and effectful operand traces | Narrow to int32 first; return empty on bounds fault; duplicate or reorder required evaluation | First |
+| Exact constants, 64-bit `int` wrap, rune/byte truncation, simultaneous assignments, short circuiting and repeated loop conditions | Host-width arithmetic, checked overflow, early store, or duplicated operand | First |
+| Explicit/naked named returns and early scoring exits; pinned Go `unicode.ToLower` cases including non-ASCII/supplementary runes | Snapshot results before assignment, use UTF-16 chars or .NET case mapping/table version | First; fuzzy direction only |
+| Strict CLR text boundary accepts valid text and rejects invalid UTF-8/unpaired surrogates | Silent replacement or normalization | Support-boundary probe; not application interop admission |
+| Nil interface versus `(*T)(nil)`; nil-aware pointer method runs, value method through nil pointer faults before body | Collapse typed nil; adapt null; eagerly dereference every pointer receiver | Later interface/location |
+| Insert value, mutate source; repeatedly call a mutating value-receiver method and assert a value copy | Live source alias; persistent adapter-owned receiver mutation; assertion exposes the stored box | Later interface |
+| Insert pointer then reassign pointer variable; interface conversion/type switch retains original `T`/`*T` and named type | Capture variable instead of pointer value; tag by wrapper CLR type; collapse defined types | Later interface/location |
+| Equal values in separate boxes; equal locations via separate handles; differing dynamic tags; nil-slice interface comparison faults | Wrapper reference equality, unrestricted CLR equality, or comparability inferred from non-nullness | Later interface |
+| Equal signed-zero payloads hash equally; NaNs remain unequal; nested interface fields preserve comparison faults | CLR `Double.Equals`, raw signed-zero hash bits, or suppress recursive faults | Later interface/array as required |
+| Captured binding versus initializer snapshot, per-iteration roots and addressed parameter copy | Copy live captures, share distinct dynamic roots, or retain caller storage for a by-value parameter | Later location/capture |
+| Copy `[2]float64`/`[10]float64`, then mutate one; compare zero, signed zero and NaN elements | Inner CLR arrays alias; native `[N]T` treated as Go value; CLR float equality | Later fixed-array |
+| `frames[i][j]` and compound writes with effectful indices reach the caller; invalid indices fault | Mutate property copy, evaluate index twice, wrap large index, or default invalid field selection | Later fixed-array |
+| Unsupported array length/nesting/slicing/escaping element address | Emit a copied `ToArray` view or an unowned/unknown byref | Rejection gate for array family |
+| Independently remove/change compiler, Values or Go-support hash, required slot/revision, target or AOT availability | Accept display-version equality, silently fall back, or report unavailable as passed | Every demanding profile |
+| Add `go`, nil-channel receive, select, sync use, a concurrent initializer or hidden suspending callback to a valid fixture | Execute synchronously, erase unused syntax, block a worker or publish partial success | First-profile rejection |
+| Add map write, defer/recover, iterator-function range or an unmapped dependency API | Stub or silently drop control effects/API; mistake named-result support for defer support | First-profile rejection |
+| Repeated emission/source maps and stage status under compile, verifier, parity or tool-availability failure | Random/hash-order names, absolute paths, skipped stages marked green, or stale attestation reuse | Every profile |
+
+Negative witnesses assert the proposed reason key, original source span,
+affected closure and **no published successful translation**. Loader-invalid
+Go remains a frontend error, not an unsupported-lowering witness.
+Hashing tests compare Go-equal values and Go comparison behavior, not Go's
+unexported hash bits. Allocation witnesses belong to the separate performance
+gate; semantic parity alone cannot establish no per-frame allocation.
+
+Reports keep three independent decisions: semantic support for the exact
+admitted family, completed verification for the selected closure, and
+performance readiness under approved budgets. A missing NativeAOT run is
+unverified, not a verified semantic milestone. A fully verified family may
+still have a performance blocker. Preserve #4511/#4512/#4513 policy without
+adding a universal Go speed ratio or treating this document as a benchmark.
+
 ### 10. Diagnostics, ownership, and coverage ratchets
 
 Diagnostic identifiers and serialization are a go2gs contract, not reused
@@ -862,9 +1284,10 @@ content/toolchain/profile/dependency keys. Bound specialization count, emitted
 helper volume, memory, execution time and artifact size; exceeding a budget
 produces an actionable incomplete result, not truncated semantic output.
 
-M0 records cold/warm loading time, peak memory, interchange/output size and
-package count on a named machine/profile; these are measurements to establish,
-not numbers claimed here. M1 sets reviewed regression ceilings from that
+M0 records cold loading time, peak memory, interchange size and counts in
+`run.json`; it does not label a cache-influenced second load as a warm baseline.
+Reproducible warm measurements remain later work. No new measurements are
+claimed here. M1 sets reviewed regression ceilings from an established
 baseline. Investigate unexpected superlinear growth before broadening the
 closure. Initial runtime witnesses include no per-sample boxing/inner-array
 allocation for stereo frames, allocation-free handle dereference as specified
@@ -911,8 +1334,8 @@ ADR or the approval of its design.
 
 | Milestone | Semantic completion | Performance readiness |
 | --- | --- | --- |
-| M0: typed inventory and correctness spikes | Active versus ignored/test/native/embed inputs and all relevant module/package edges have reproducible hashes, typed facts and classified gaps. Loader failures reproduce as incomplete inventory. Small witnesses cover byte strings, simultaneous assignment, value receivers, typed nil and nil/empty slices. No bulk `main.go` emission is the first deliverable. | Record reproducible translator and prerequisite profiles with honest unsupported cases. Performance is evidence, not a condition for completing inventory. |
-| M1: semantic corpus | Each admitted family has independent Go, JIT and AOT witnesses, an ADR-0154 discrimination witness, stable generated text/maps and all four verification stages green. Every unsupported neighbor yields an attributed diagnostic; fixed-array and interface-identity gates cannot be waved through by parsing. | The prerequisite spike passes its evidence gates; steady-state paths, adapter controls and the integrated #4511/#4512 allocation budgets meet the rules above. |
+| M0: typed inventory (implemented) | Active versus ignored/test/native/embed inputs and relevant module/package edges have reproducible hashes, typed facts and classified gaps. Loader failures reproduce as incomplete inventory. Schema/profile v1 and offline analysis validation landed in #4562. No emitted/runtime semantic witnesses or `migrationReady=true` claim. | Record reproducible inventory measurements and prerequisite profiles with honest unsupported cases. Performance is evidence, not a condition for completing inventory. |
+| M1: staged semantic corpus (proposed) | Freeze sections 6–7 contracts, then bank `m1-text-values-v1`; add interface/location/capture, fixed-array and other admitted families independently. Each needs original Go, JIT/AOT, ADR-0154 discrimination, deterministic text/maps, all four stages and rejected-neighbor witnesses from section 9. Do not wait for all Go control effects or concurrency before the first executable fixture. | Preserve prerequisite evidence and applicable steady-state/adapter/#4511/#4512 gates. A first text fixture does not claim readiness for an unused interface, array or concurrent workload. |
 | M2: real leaf packages | `internal/fuzzy`, then `internal/tomlutil`, then `internal/deeplink` are banked separately only when each complete selected test variant/closure and paired behavior pass. Required iterator, shared-capture, wrapping, byte-limit and rejection semantics remain blockers until admitted. | Each selected package closure passes approved JIT and AOT latency/allocation budgets against package-specific same-runtime controls. |
 | M3: offline audio fixtures | Source-attributed EQ/gapless and alias-sensitive ring-buffer fixtures preserve mutation, frame-copy independence, numerical/state/chunk behavior and avoid devices/network. Extracted fixtures do not mark the full `player` or Beep closure green. | The measured workload meets approved JIT/AOT latency and allocation budgets with no per-frame boxing/inner arrays, hidden slice copies, or avoidable per-sample conversion/location creation. |
 | M4: headless application, IPC and providers | The actual selected application/test closures pass protocol, error/typed-nil, security rejection, cancellation, permission and shutdown/resource oracles. Omitted production dependencies and unknown optional capabilities remain visible blockers. | Each representative headless profile passes approved throughput, tail-latency, allocation-rate, GC and memory budgets in JIT and AOT. |
@@ -931,10 +1354,11 @@ concrete evidence before their milestone is enabled:
 
 | Gate | Required decision/evidence |
 | --- | --- |
-| M0 frontend release | Select/pin the compatible Go/x/tools versions and schema v1 encoding, freeze stable identity/constant/span rules, and demonstrate loader/offline/CGo failure provenance. |
-| M1 runtime contracts | Finalize Go byte-string/map/interface/panic support APIs and the legal G# lowering for eager defer, direct recovery and iterator nonlocal control flow. A candidate that changes user-visible behavior stays blocked. |
-| Native integration | Detect and pin actual compiler/runtime versions providing ADR-0190, ADR-0188 and the necessary ADR-0189 stages. Never fall back to copying arrays, unknown byrefs or reflection proxies when one is missing. |
-| Interface bridge and interop boundary | Define the explicit typed-nil/dynamic-type representation and the boundary at which CLR wrapper identity becomes observable before enabling reuse beyond explicit retained values. Native `adapt` cannot supply this contract. |
+| M0 maintenance | Preserve implemented schema/profile v1, source-backed method authority and Linux-only complete analysis. Extra facts required by a lowerer need an explicitly versioned extension or separately validated sidecar, never reinterpretation of v1 or .NET-side rebinding. |
+| First M1 runtime | Implement the section 6.1 allowlist and section 6.2 byte/zero/fault contracts with the independent matrix. Select published compiler/runtime/support pins and prove each helper's legal G# lowering. No product implementation is approved by a passing docs check. |
+| Native integration | Implement the separate execution-contract handshake and demanded probes from section 7 without changing M0. Missing capabilities block only dependent families; never substitute copying arrays, unknown byrefs or reflection proxies. |
+| Interface bridge and interop boundary | Implement and witness section 7's tagged payload, direct slots and per-call copies before admission. CLR exports, cross-unit identity and broader reuse remain deferred; native `adapt` alone is insufficient. |
+| Maps and control effects | Freeze map APIs and legal lowering for eager defer, direct recovery, panic payloads and iterator nonlocal control flow before their families or dependent packages are admitted. Minimal fault transport and named results do not complete them. |
 | Performance budgets | Carry the approved prerequisite control-relative threshold and integrated #4511/#4512 allocation ceilings forward, then approve representative M2-M5 profile budgets. The current spike does not approve universal application limits. |
 | Value-array expansion | Prove representation, copies, equality, dynamic addressability and slice sharing for additional shapes before admitting them. A future native value-array proposal is possible but not silently included in ADR-0190. |
 | Concurrency closure | Establish channel/select/memory-model witnesses and suspension propagation across functions, delegates, interfaces and foreign callbacks. Blocking I/O/locks cannot simply occupy arbitrary pooled workers forever and be called Go scheduling equivalence. |
@@ -961,7 +1385,7 @@ Costs and limits:
 - Two toolchains, a versioned typed interchange, Go-specific compatibility
   contracts and independent test execution are real maintenance obligations.
 - Go value arrays, dynamic interfaces, byte strings, panic/recover and
-  concurrency require work even after the three native proposals land.
+  concurrency require work beyond the three implemented native capabilities.
 - Closed-world assembly composition simplifies correct dispatch but does not
   initially provide separately publishable Go-package-shaped CLR libraries
   or enforce Go package privacy on arbitrary later G# edits.
