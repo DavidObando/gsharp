@@ -9,6 +9,73 @@ import System.Text.Json
 import Xunit
 
 class Issue5041BoundedDriverTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func EveryBodyIsClassifiedAfterAllOwnersAreCollected(declaredTypes bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let pure = string.Concat(
+            Enumerable.Range(0, 8).Select(
+                (i int32) -> "func Pure$i(x int32) int32 {\nlet n0 = x + 1\n" + string.Concat(
+                    Enumerable.Range(1, 32).Select((n int32) -> "let n$n = n${n - 1} + $n\n")
+                ) +
+                    "return n31\n}\n"
+            )
+        )
+        const dependent = `func Anon(x int32) int32 {
+    let value = object { let Value = x + 1 }
+    return value.Value
+}
+func Closure(x int32) int32 {
+    let next = () -> x + 1
+    return next()
+}
+`
+        let members = if declaredTypes {
+            "class Early { func Value(x int32) int32 -> x }\nclass Late { shared {\n" + pure + dependent + "}}\n"
+        } else {
+            pure + dependent
+        }
+        let receiver = if declaredTypes {
+            "Late."
+        } else {
+            string.Empty
+        }
+        let source = "package AllBodies\nimport System\n" +
+            members +
+            "func Main() {\nConsole.WriteLine(${receiver}Anon(41))\nConsole.WriteLine(${receiver}Closure(42))\n}\n"
+        let report = Path.Combine(fixture.Directory, "all-bodies.json")
+        let previous = Environment.GetEnvironmentVariable("GSHARP_MEASURE_PHASES")
+        try {
+            Environment.SetEnvironmentVariable("GSHARP_MEASURE_PHASES", report)
+            var baseline[]uint8 = Array.Empty[uint8]()
+            for workers in[]int32{1, 2, 4, 8} {
+                let dll = fixture.Compile(
+                    source,
+                    "all-bodies",
+                    true,
+                    "/deterministic+",
+                    "/debug:none",
+                    "--workers:$workers"
+                )
+                Assert.Equal("42\n43\n", fixture.Run(dll))
+                if workers == 1 {
+                    baseline = File.ReadAllBytes(dll)
+                } else {
+                    Assert.Equal(baseline, File.ReadAllBytes(dll))
+                    if Environment.ProcessorCount > 1 {
+                        using let json = JsonDocument.Parse(File.ReadAllText(report))
+                        Assert.True(
+                            json.RootElement.GetProperty("Counters").GetProperty("bodies.independent").GetInt32() >= 8
+                        )
+                    }
+                }
+            }
+        } finally {
+            Environment.SetEnvironmentVariable("GSHARP_MEASURE_PHASES", previous)
+        }
+    }
+
     @Fact
     func FreshStandaloneProcessesFreezeImplicitReferencesBeforeWorkers() {
         using let fixture = NativeSliceLanguageTests.Fixture()
@@ -173,6 +240,7 @@ partial class State {
     func Pure(x int32) int32 -> x + 1
 }
 interface Reader { func Read() int32; }
+delegate RefAction(ref value int32);
 func Identity[T](value T) T -> value
 private func Make() -> object { func Read() int32 -> 4 }
 func Values() sequence[int32] {
@@ -199,6 +267,12 @@ async func Main() {
     Console.WriteLine(first.Value + second.Value)
     Console.WriteLine(next())
     Console.WriteLine(reader.Read())
+    var refValue = 5
+    let mutate ((ref int32) -> void) = func(ref value int32) { value += 3 }
+    mutate(ref refValue)
+    let namedAction RefAction = func(ref value int32) { value += 1 }
+    namedAction(ref refValue)
+    Console.WriteLine(refValue)
     for value in Values() { Console.WriteLine(value) }
     Console.WriteLine(await Answer())
 }`
@@ -230,7 +304,7 @@ async func Main() {
                     .Concat(references)
                     .ToArray()
                 let dll = fixture.Compile(program, "parallel", true, options)
-                Assert.Equal("20\n43\n9\n4\n6\n2\n2\n2\n3\n6\n", fixture.Run(dll))
+                Assert.Equal("20\n43\n9\n4\n6\n2\n2\n9\n2\n3\n6\n", fixture.Run(dll))
                 if workers == 1 {
                     implementation = File.ReadAllBytes(dll)
                     referenceImage = File.ReadAllBytes(reference)
@@ -261,15 +335,18 @@ async func Main() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let first = Path.Combine(fixture.Directory, "z-first.gs")
         let second = Path.Combine(fixture.Directory, "a-last.gs")
+        let valid = Path.Combine(fixture.Directory, "valid.gs")
         File.WriteAllText(first, "package Broken\nfunc First( {")
         File.WriteAllText(second, "package Broken\nfunc Last( {")
+        File.WriteAllText(valid, "package Broken\nfunc Valid() int32 -> 1")
         let (baselineCode, baseline) = fixture.TryCompile(
             "package Broken\n",
             "broken",
             false,
             "--workers:1",
             first,
-            second
+            second,
+            valid
         )
         Assert.NotEqual(0, baselineCode)
         Assert.Contains("GS0005", baseline)
@@ -282,7 +359,8 @@ async func Main() {
                 false,
                 "--workers:$workers",
                 first,
-                second
+                second,
+                valid
             )
             Assert.Equal(baselineCode, code)
             Assert.Equal(baseline, diagnostics)

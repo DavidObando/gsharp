@@ -8628,18 +8628,18 @@ class Binder {
                         add(method, owner)
                     }
                 }
-                // Cold scheduling and eligibility checks cost more than binding a few small bodies.
-                if jobs.Count < 8 && largestBody < 8192 {
-                    return results
-                }
-                largestBody = 0
-                for var index = jobs.Count - 1; index >= 0; index-- {
-                    let function = jobs[index].Function
-                    if !IndependentBodyClassifier.CanBind(function) {
-                        jobs.RemoveAt(index)
-                    } else {
-                        largestBody = Math.Max(largestBody, function.Declaration!!.Body!!.Span.Length)
-                    }
+            }
+            // Cold scheduling and eligibility checks cost more than binding a few small bodies.
+            if jobs.Count < 8 && largestBody < 8192 {
+                return results
+            }
+            largestBody = 0
+            for var index = jobs.Count - 1; index >= 0; index-- {
+                let function = jobs[index].Function
+                if !IndependentBodyClassifier.CanBind(function) {
+                    jobs.RemoveAt(index)
+                } else {
+                    largestBody = Math.Max(largestBody, function.Declaration!!.Body!!.Span.Length)
                 }
             }
             CompilationMeasurements.Count("bodies.independent", jobs.Count)
