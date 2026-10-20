@@ -253,6 +253,12 @@ internal shared class WorkerServer {
     ) bool {
         let oldDirectory = Environment.CurrentDirectory
         let oldEnvironment = Environment.GetEnvironmentVariables()
+        let oldInput = Console.In
+        let oldOutput = Console.Out
+        let oldError = Console.Error
+        let oldInputEncoding = Console.InputEncoding
+        let oldOutputEncoding = Console.OutputEncoding
+        var encodingRestored = false
         try {
             for entry DictionaryEntry in oldEnvironment {
                 Environment.SetEnvironmentVariable(cast[string](entry.Key), nil)
@@ -276,15 +282,24 @@ internal shared class WorkerServer {
                 retained = GC.GetTotalMemory(forceFullCollection: false)
                 reusable = canReuse?.Invoke() ?? true
             }
+            Console.Out.Flush()
+            Console.Error.Flush()
             using let process = Process.GetCurrentProcess()
             let workingSet = process.WorkingSet64
+            // Console setters change private redirection flags as well as public references.
+            // A mutated console cannot safely participate in another request.
             let retire = request == WorkerProtocol.MaxRequests ||
                 retained >= WorkerProtocol.MaxRetainedBytes ||
                 workingSet >= WorkerProtocol.MaxWorkingSetBytes ||
                 !reusable ||
-                HasLiveDescendants()
-            Console.Out.Flush()
-            Console.Error.Flush()
+                !object.ReferenceEquals(Console.In, oldInput) || !object.ReferenceEquals(Console.Out, oldOutput) ||
+                !object.ReferenceEquals(Console.Error, oldError) || !object.ReferenceEquals(
+                Console.InputEncoding,
+                oldInputEncoding
+            ) ||
+                !object.ReferenceEquals(Console.OutputEncoding, oldOutputEncoding) || HasLiveDescendants()
+            RestoreConsoleEncoding(oldInputEncoding, oldOutputEncoding)
+            encodingRestored = true
             let marker = Encoding.UTF8.GetBytes(fence)
             using let nativeOut = Console.OpenStandardOutput()
             using let nativeError = Console.OpenStandardError()
@@ -302,13 +317,28 @@ internal shared class WorkerServer {
             }
             return retire
         } finally {
-            Environment.CurrentDirectory = oldDirectory
-            for entry DictionaryEntry in Environment.GetEnvironmentVariables() {
-                Environment.SetEnvironmentVariable(cast[string](entry.Key), nil)
+            try {
+                if !encodingRestored {
+                    RestoreConsoleEncoding(oldInputEncoding, oldOutputEncoding)
+                }
+            } finally {
+                Environment.CurrentDirectory = oldDirectory
+                for entry DictionaryEntry in Environment.GetEnvironmentVariables() {
+                    Environment.SetEnvironmentVariable(cast[string](entry.Key), nil)
+                }
+                for entry DictionaryEntry in oldEnvironment {
+                    Environment.SetEnvironmentVariable(cast[string](entry.Key), cast[string](entry.Value))
+                }
             }
-            for entry DictionaryEntry in oldEnvironment {
-                Environment.SetEnvironmentVariable(cast[string](entry.Key), cast[string](entry.Value))
-            }
+        }
+    }
+
+    private func RestoreConsoleEncoding(input Encoding, output Encoding) {
+        if !object.ReferenceEquals(Console.InputEncoding, input) {
+            Console.InputEncoding = input
+        }
+        if !object.ReferenceEquals(Console.OutputEncoding, output) {
+            Console.OutputEncoding = output
         }
     }
 }

@@ -1018,6 +1018,86 @@ open class CompilerWorkerTests : IDisposable {
         )
     }
 
+    @Theory
+    @InlineData("none")
+    @InlineData("stdout")
+    @InlineData("stderr")
+    @InlineData("stdin")
+    @InlineData("inputencoding")
+    @InlineData("outputencoding")
+    func SharedServerRetiresEveryMutatedConsoleChannelBeforeAnotherRequest(mode string) {
+        File.WriteAllText(
+            Path.Combine(directory, "console-worker.gs"),
+            "import System\nimport System.Reflection\nfunc Main(args[]string) {\n" +
+                "let assembly = Assembly.LoadFrom(\"${EscapeSource(typeof(CompilerWorkerTests).Assembly.Location)}\")\n" +
+                "let method = assembly.GetType(\"GSharp.Sdk.Tests.CompilerWorkerTests\")!!.GetMethod(\"RunConsoleMutationWorker\")!!\n" +
+                "method.Invoke(nil, []object{Assembly.GetExecutingAssembly().Location, \"${EscapeSource(CompilerPath())}\", args[1]})\n}"
+        )
+        let (toolExit, diagnostics) = Standalone(
+            directory,
+            []string{"/out:console-worker.dll", "/target:exe", "/targetframework:net10.0", "console-worker.gs"}
+        )
+        Assert.True(toolExit == 0, diagnostics)
+        for path in Directory.GetFiles(
+            Path.GetDirectoryName(typeof(CompilerWorkerTests).Assembly.Location) ?? ".",
+            "*.dll"
+        ) {
+            if !string.Equals(Path.GetFileName(path), "gsc.dll", StringComparison.OrdinalIgnoreCase) {
+                File.Copy(path, Path.Combine(directory, Path.GetFileName(path)))
+            }
+        }
+        let tool = Path.Combine(directory, "console-worker.dll")
+        Assert.True(
+            client.TryRun(
+                tool,
+                "--compiler-worker",
+                directory,
+                []string{mode},
+                1,
+                CancellationToken.None,
+                (_line string) -> { },
+                (_line string) -> { },
+                (line string) -> messages.Add(line),
+                out var firstExit
+            )
+        )
+        Assert.Equal(0, firstExit)
+        let firstCompleted = messages.Single((line string) -> line.Contains("worker completed"))
+        if mode != "none" {
+            let pid = int32.Parse(firstCompleted.Split(',')[0].Split('=')[1])
+            try {
+                using let first = Process.GetProcessById(pid)
+                Assert.True(first.HasExited, "A console-mutating worker survived request completion.")
+            } catch (ex ArgumentException) {
+                // The retired first worker already exited and was reaped.
+
+            }
+        }
+        let output = List[string]()
+        let errors = List[string]()
+        Assert.True(
+            client.TryRun(
+                tool,
+                "--compiler-worker",
+                directory,
+                []string{"next"},
+                1,
+                CancellationToken.None,
+                (line string) -> output.Add(line),
+                (line string) -> errors.Add(line),
+                (line string) -> messages.Add(line),
+                out var nextExit
+            )
+        )
+        Assert.Equal(1, nextExit)
+        Assert.Equal[string]([]string{"next warning"}, output)
+        Assert.Equal[string]([]string{"next error"}, errors)
+        let completed = messages.Where((line string) -> line.Contains("worker completed")).ToArray()
+        Assert.Equal(2, completed.Length)
+        Assert.Equal(mode != "none", completed[0].Contains("retire=True"))
+        Assert.Equal(mode != "none", completed[0].Split(',')[0] != completed[1].Split(',')[0])
+    }
+
     @Fact
     func WindowsNonUtf8ConsolePreservesStandaloneAndWorkerDiagnosticParity() {
         let marker = Path.Combine(directory, "console-proof.txt")
@@ -1276,6 +1356,53 @@ open class CompilerWorkerTests : IDisposable {
     )
 
     shared {
+        func RunConsoleMutationWorker(tool string, compiler string, pipe string) {
+            let server = Assembly.LoadFrom(compiler).GetType("GSharp.Workers.WorkerServer") ??
+                throw InvalidOperationException("The actual compiler server is required.")
+            let run = server.GetMethod("Run", BindingFlags.NonPublic | BindingFlags.Static) ??
+                throw InvalidOperationException("The actual server entrypoint is required.")
+            let parameters = run.GetParameters()
+            let compile = Delegate.CreateDelegate(
+                parameters[1].ParameterType,
+                typeof(CompilerWorkerTests).GetMethod("CompileConsoleMutation") ??
+                    throw InvalidOperationException("The isolated request callback is required.")
+            )
+            let canReuse = Delegate.CreateDelegate(
+                parameters[2].ParameterType,
+                typeof(CompilerWorkerTests).GetMethod("ConsoleAlwaysReusable") ??
+                    throw InvalidOperationException("The unconditional reuse probe is required.")
+            )
+            run.Invoke(nil, []object{tool, compile, canReuse, pipe})
+        }
+
+        func ConsoleAlwaysReusable() bool -> true
+
+        func CompileConsoleMutation(arguments[]string) int32 {
+            switch arguments[0] {
+                case "stdout" {
+                    Console.SetOut(TextWriter.Null)
+                }
+                case "stderr" {
+                    Console.SetError(TextWriter.Null)
+                }
+                case "stdin" {
+                    Console.SetIn(TextReader.Null)
+                }
+                case "inputencoding" {
+                    Console.InputEncoding = Encoding.Unicode
+                }
+                case "outputencoding" {
+                    Console.OutputEncoding = Encoding.Unicode
+                }
+                case "next" {
+                    Console.WriteLine("next warning")
+                    Console.Error.WriteLine("next error")
+                    return 1
+                }
+            }
+            return 0
+        }
+
         @DllImport("kernel32.dll")
         private func AllocConsole() int32;
 

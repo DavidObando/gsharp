@@ -93,6 +93,14 @@ Unix process group or Windows job. If containment cannot be established,
 the handshake fails and the SDK logs its standalone fallback.
 Normal retirement also terminates that containment after flushing the result.
 Live descendants force retirement rather than entering another request.
+Changing `Console.In`, `Console.Out`, `Console.Error`, `Console.InputEncoding`
+or `Console.OutputEncoding` also forces retirement, even when the replacement
+is framework-owned and generator load contexts unload. Eligibility is checked
+after collection, finalizers and unload probes. Saved encodings are restored
+before completion/cleanup, but changed writers/readers are not reset in an
+attempt to continue reuse: public setters also change private console state.
+Reusable tools must leave these process-wide console channels unchanged.
+This is a serial reuse boundary, not a sandbox for arbitrary process globals.
 Windows jobs terminate children when the worker's job handle closes; on Unix
 the SDK also cleans the verified worker group if the root has already exited.
 
