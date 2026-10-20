@@ -637,6 +637,8 @@
     <BuildTask
         UseSharedCompilation="$(GSharpUseSharedCompilation)"
         WorkerGrant="$(GSharpWorkerGrant)"
+        MaxWorkers="$(GSharpMaxWorkers)"
+        WorkerMemoryBudgetMiB="$(GSharpWorkerMemoryBudgetMiB)"
         GsharpCompilerFullPath="$(GsharpCompilerFullPath)"
         OutputPath="$(IntermediateOutputPath)"
         OutputName="$(TargetName)"

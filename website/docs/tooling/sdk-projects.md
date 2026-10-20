@@ -58,6 +58,38 @@ During `CoreCompile`, the SDK task builds a response file and invokes `dotnet gs
 
 `OutputType` controls the compiler target. `Exe` becomes `/target:exe`; other values are treated as libraries and become `/target:library`.
 
+### Opt-in within-project workers
+
+`GSharpMaxWorkers` requests a total worker count between 1 and 32. It defaults
+to 1; MSBuild still schedules projects. For example:
+
+```bash
+dotnet build -m:4 -p:GSharpMaxWorkers=4 -p:GSharpWorkerMemoryBudgetMiB=1024
+```
+
+Each compiler task calls `IBuildEngine9.RequestCores` once and passes the
+actual grant to the compiler, including reusable worker requests. It releases
+that grant when the request finishes, fails, or is cancelled. Hosts without
+this interface use one worker. Compiler phases reuse the same budget, rather
+than creating independent full-machine pools.
+
+The compiler parses files independently and publishes trees in input order.
+Body workers currently accept only proven primitive operations on parameters
+and body-owned locals. Other bodies, inferred signatures and synthesis stay
+on the coordinator. Diagnostics and bodies merge in their original order;
+whole-program analyses run after the body barrier.
+
+`GSharpWorkerMemoryBudgetMiB` defaults to 1024 and must be at least 256.
+The concurrency calculation reserves 256 MiB and 96 MiB per worker, with
+larger source/body workspaces reducing concurrency further. This bounds the
+workspace concurrency estimate, **not** the entire process heap or retained
+syntax/symbol graph. Processor count and the MSBuild grant also cap workers.
+Generators use the same lease contract, but their host remains serial;
+third-party generators can create their own threads.
+
+This feature remains opt-in. A higher worker count is not a promise that
+every body is independent or that every project builds faster.
+
 ## Target frameworks
 
 The template defaults to `net10.0`. The SDK and compiler also support cross-targeting through MSBuild reference assemblies; `net8.0` and `net10.0` are tested end to end, and the `gsc` runtime-config mapping recognizes `net8.0`, `net9.0`, and `net10.0`.

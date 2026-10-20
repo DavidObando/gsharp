@@ -216,6 +216,14 @@ open class Compilation {
     /// `null`, which is exactly the historical behavior.
     prop BodyCache BoundBodyCache?
 
+    /// Gets or sets the shared budget for independent parse, binding, and emit work. Defaults to sequential execution.
+    private var workBudget CompilationWorkBudget = CompilationWorkBudget()
+
+    prop WorkBudget CompilationWorkBudget {
+        get -> workBudget
+        set -> workBudget = value
+    }
+
     /// Gets or sets a pre-bound (cref:BoundGlobalScope) to reuse instead
     /// of re-binding from the syntax trees (ADR-0105 Phase 2). The language
     /// server sets this when a single-file, body-only edit lets the previous
@@ -338,7 +346,8 @@ open class Compilation {
                 using let measurement = CompilationMeasurements.BeginPhase("bodies")
                 // ADR-0186: body binding reads imported member signatures too.
                 using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
-                let bp = Binder.BindProgram(declarations, References, BodyCache, DirtyBodyTrees)
+                WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+                let bp = Binder.BindProgram(declarations, References, BodyCache, DirtyBodyTrees, WorkBudget)
                 CompilationMeasurements.Count("input.methods", bp.Functions.Count)
                 Interlocked.CompareExchange[BoundProgram?](&this.boundProgram, bp, nil)
             }

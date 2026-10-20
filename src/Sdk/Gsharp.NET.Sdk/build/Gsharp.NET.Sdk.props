@@ -6,6 +6,9 @@
     <WarningLevel>4</WarningLevel>
     <GSharpUseSharedCompilation Condition=" '$(GSharpUseSharedCompilation)' == '' ">false</GSharpUseSharedCompilation>
     <GSharpWorkerGrant Condition=" '$(GSharpWorkerGrant)' == '' ">1</GSharpWorkerGrant>
+    <!-- One per-request MSBuild grant bounds all cooperating compiler phases. -->
+    <GSharpMaxWorkers Condition=" '$(GSharpMaxWorkers)'=='' ">1</GSharpMaxWorkers>
+    <GSharpWorkerMemoryBudgetMiB Condition=" '$(GSharpWorkerMemoryBudgetMiB)'=='' ">1024</GSharpWorkerMemoryBudgetMiB>
 
     <!-- Resolve gsc and the build task. In a packed Gsharp.NET.Sdk NuGet these
          sit alongside this .props in ../tools/. -->

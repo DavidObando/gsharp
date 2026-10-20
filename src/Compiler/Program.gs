@@ -234,6 +234,20 @@ open class Program {
         /// Gets or sets the log file path (from /log:<file>). When non-null, a (cref:FileLogger) is created and
         /// attached to the compilation.
         prop LogPath string?
+
+        private var maxWorkers int32 = 1
+
+        prop MaxWorkers int32 {
+            get -> maxWorkers
+            set -> maxWorkers = value
+        }
+
+        private var workerMemoryBudgetMiB int32 = 1024
+
+        prop WorkerMemoryBudgetMiB int32 {
+            get -> workerMemoryBudgetMiB
+            set -> workerMemoryBudgetMiB = value
+        }
     }
 
     private class CommandLineException : Exception {
@@ -319,23 +333,32 @@ open class Program {
                     allSourceFiles = List[string](parsed.SourceFiles)
                     allSourceFiles.AddRange(generatedGsFiles)
                 }
-                let syntaxTrees = List[SyntaxTree](allSourceFiles.Count)
+                var granted = parsed.MaxWorkers
+                if int32.TryParse(Environment.GetEnvironmentVariable("GSHARP_WORKER_GRANT"), out var requestGrant) &&
+                    requestGrant > 0 {
+                    granted = Math.Min(granted, requestGrant)
+                }
+                let workBudget = CompilationWorkBudget(granted, parsed.WorkerMemoryBudgetMiB)
+                let syntaxTrees = [allSourceFiles.Count]SyntaxTree
                 CompilationMeasurements.Count("input.sources", allSourceFiles.Count)
                 if CompilationMeasurements.IsEnabled {
-                    let granted = if int32.TryParse(
+                    let supplied = if int32.TryParse(
                         Environment.GetEnvironmentVariable("GSHARP_WORKER_GRANT"),
                         out var grant
                     ) &&
                         grant > 0 {
                         grant
                     } else {
-                        1
+                        workBudget.MaxWorkers
                     }
-                    CompilationMeasurements.Count("workers.granted", granted)
+                    CompilationMeasurements.Count("workers.granted", supplied)
                     CompilationMeasurements.Count("workers.active", 1)
                 }
                 using let parsePhase = CompilationMeasurements.BeginPhase("parse")
-                for path in allSourceFiles {
+                let fullPaths = [allSourceFiles.Count]string
+                var largestSource int64 = 0
+                for var index = 0; index < allSourceFiles.Count; index++ {
+                    let path = allSourceFiles[index]
                     if !File.Exists(path) {
                         Console.Error.WriteLine("Unable to find specified file $path")
                         return Error
@@ -346,11 +369,20 @@ open class Program {
                     // unresolvable, which surfaces as a phantom tab with
                     // "Could not load source ...: Incorrect format of 'source' message."
                     let fullPath = Path.GetFullPath(path)
+                    fullPaths[index] = fullPath
+                    let sourceBytes = FileInfo(fullPath).Length
+                    largestSource = Math.Max(largestSource, sourceBytes)
                     if CompilationMeasurements.IsEnabled {
-                        CompilationMeasurements.Count("input.source-bytes", FileInfo(fullPath).Length)
+                        CompilationMeasurements.Count("input.source-bytes", sourceBytes)
                     }
-                    syntaxTrees.Add(SyntaxTree.Load(fullPath))
                 }
+                workBudget.Run(
+                    fullPaths.Length,
+                    (index int32) -> {
+                        syntaxTrees[index] = SyntaxTree.Load(fullPaths[index])
+                    },
+                    Math.Max(16777216, largestSource * 16)
+                )
                 parsePhase?.Dispose()
                 using let referencePhase = CompilationMeasurements.BeginPhase("references.setup")
                 if !ReferenceResolver.TryValidateDriverReferencePaths(parsed.References, out var referenceError) {
@@ -381,7 +413,8 @@ open class Program {
                         "Starting compiler. Sources: ${parsed.SourceFiles.Count}; Output: ${parsed.OutputPath ?? "<none>"}"
                     )
                     ReportMissingTransitiveReferences(references, parsed)
-                    let compilation = Compilation(references, syntaxTrees.ToArray()){
+                    let compilation = Compilation(references, syntaxTrees){
+                        WorkBudget = workBudget,
                         ImplicitSystemImport = parsed.ImplicitSystemImport,
                         Nullability = parsed.Nullability,
                         PlatformNilChecks = parsed.PlatformNilChecks,
@@ -1000,6 +1033,8 @@ Options:
   /additionalfile:<file>        Non-source generator input (e.g. Avalonia .axaml); forwarded to gsgen (repeatable).
   /globaloption:<key>=<value>   Project-wide generator option (build_property.*); forwarded to gsgen (repeatable).
   /log:<file>                   Write compiler diagnostic log to file.
+  --workers:<1..32>             Opt into bounded within-project work (default: 1).
+  --worker-memory-mib:<MiB>     Concurrent workspace budget, minimum 256 (default: 1024).
   /?, /help                     Show this help message.`)
         }
 
@@ -1027,6 +1062,18 @@ Options:
                         body.Substring(separator + 1)
                     }
                     switch name.ToLowerInvariant() {
+                        case "workers" {
+                            if !int32.TryParse(value, out var workers) || workers < 1 || workers > 32 {
+                                throw CommandLineException("--workers requires an integer between 1 and 32.")
+                            }
+                            result.MaxWorkers = workers
+                        }
+                        case "worker-memory-mib" {
+                            if !int32.TryParse(value, out var memory) || memory < 256 {
+                                throw CommandLineException("--worker-memory-mib requires an integer of at least 256.")
+                            }
+                            result.WorkerMemoryBudgetMiB = memory
+                        }
                         case "out" {
                             result.OutputPath = value
                         }
