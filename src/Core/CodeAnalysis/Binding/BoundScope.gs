@@ -97,6 +97,11 @@ class BoundScope {
     private var latestRichAnonymousObjectPlans Dictionary[StructSymbol, RichAnonymousObjectPlan]?
     private var structuralAdapterRegistry StructuralAdapterRegistry?
     private var independentBodyRoot bool
+    private var cachedOrderedTypeAliases ImmutableArray[KeyValuePair[string, TypeSymbol]]
+    private var cachedParentTypeAliases ImmutableArray[KeyValuePair[string, TypeSymbol]]
+    private var cachedOwnTypeAliases ImmutableDictionary[string, TypeSymbol]?
+    private var cachedStructAliases ImmutableArray[KeyValuePair[string, TypeSymbol]]
+    private var cachedStructs ImmutableArray[StructSymbol]
 
     /// Creates a worker boundary over canonical declarations. Synthesis remains coordinator-owned.
     internal func CreateIndependentBodyScope() BoundScope -> BoundScope(this){independentBodyRoot = true}
@@ -1458,7 +1463,17 @@ class BoundScope {
 
     /// Gets the set of declared user-defined struct types in this scope chain.
     /// @returns The structs in declaration order.
-    func GetDeclaredStructs() ImmutableArray[StructSymbol] -> GetDeclaredTypeSymbols[StructSymbol]()
+    func GetDeclaredStructs() ImmutableArray[StructSymbol] {
+        if typeAliases == nil && Parent != nil {
+            return Parent!!.GetDeclaredStructs()
+        }
+        let aliases = GetOrderedTypeAliases()
+        if cachedStructs.IsDefault || !cachedStructAliases.Equals(aliases) {
+            cachedStructs = GetDeclaredTypeSymbols[StructSymbol](aliases)
+            cachedStructAliases = aliases
+        }
+        return cachedStructs
+    }
 
     /// Gets the set of declared user-defined interface types in this scope chain (Phase 3.B.4).
     /// @returns The interfaces in declaration order.
@@ -2463,19 +2478,22 @@ class BoundScope {
     /// position it had when FIRST introduced (root-most scope first), while its
     /// value reflects the nearest (most specific) scope that declared or
     /// overrode it.
-    private func GetOrderedTypeAliases() List[KeyValuePair[string, TypeSymbol]] {
+    private func GetOrderedTypeAliases() ImmutableArray[KeyValuePair[string, TypeSymbol]] {
+        let parentAliases = Parent?.GetOrderedTypeAliases() ?? ImmutableArray[KeyValuePair[string, TypeSymbol]].Empty
+        if typeAliases is not{} ownAliases {
+            return parentAliases
+        }
+        if !cachedOrderedTypeAliases.IsDefault && object.ReferenceEquals(cachedOwnTypeAliases, ownAliases) &&
+            cachedParentTypeAliases.Equals(parentAliases) {
+            return cachedOrderedTypeAliases
+        }
+        // ADR-0203: readers share canonical declarations until this scope or an ancestor changes its aliases.
         let merged = Dictionary[string, TypeSymbol]()
         let order = List[string]()
-        CollectTypeAliasesInto(merged, order)
-        let result = List[KeyValuePair[string, TypeSymbol]](order.Count)
-        for key in order {
-            result.Add(KeyValuePair[string, TypeSymbol](key, merged[key]))
+        for pair in parentAliases {
+            merged.Add(pair.Key, pair.Value)
+            order.Add(pair.Key)
         }
-        return result
-    }
-
-    private func CollectTypeAliasesInto(merged Dictionary[string, TypeSymbol], order List[string]) {
-        Parent?.CollectTypeAliasesInto(merged, order)
         if typeAliasKeys != nil {
             for key in typeAliasKeys!! {
                 if !merged.ContainsKey(key) {
@@ -2483,16 +2501,27 @@ class BoundScope {
                 }
             }
         }
-        if typeAliases != nil {
-            for pair in typeAliases!! {
-                merged[pair.Key] = pair.Value
-            }
+        for pair in ownAliases {
+            merged[pair.Key] = pair.Value
         }
+        let result = ImmutableArray.CreateBuilder[KeyValuePair[string, TypeSymbol]](order.Count)
+        for key in order {
+            result.Add(KeyValuePair[string, TypeSymbol](key, merged[key]))
+        }
+        cachedOrderedTypeAliases = result.MoveToImmutable()
+        cachedParentTypeAliases = parentAliases
+        cachedOwnTypeAliases = ownAliases
+        return cachedOrderedTypeAliases
     }
 
-    private func GetDeclaredTypeSymbols[TSymbol TypeSymbol]() ImmutableArray[TSymbol] {
+    private func GetDeclaredTypeSymbols[TSymbol TypeSymbol]() ImmutableArray[TSymbol] ->
+    GetDeclaredTypeSymbols[TSymbol](GetOrderedTypeAliases())
+
+    private func GetDeclaredTypeSymbols[TSymbol TypeSymbol](
+        aliases ImmutableArray[KeyValuePair[string, TypeSymbol]]
+    ) ImmutableArray[TSymbol] {
         let builder = ImmutableArray.CreateBuilder[TSymbol]()
-        for pair in GetOrderedTypeAliases() {
+        for pair in aliases {
             if pair.Value is TSymbol typed {
                 builder.Add(typed)
             }

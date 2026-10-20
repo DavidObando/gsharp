@@ -92,12 +92,12 @@ internal class BinderContext {
     /// static-member scope via a non-alias type import (`import Ns.Type`,
     /// the G# spelling of C#'s `using static`). `null` until first
     /// computed by (cref:GetStaticImportTypes); invalidated when the
-    /// import or struct count moves.
+    /// import sequence, canonical struct snapshot, or referencing file changes.
     private var cachedStaticImportTypes ImmutableArray[StructSymbol]
 
     private var hasCachedStaticImportTypes bool
-    private var cachedStaticImportImportCount int32 = -1
-    private var cachedStaticImportStructCount int32 = -1
+    private var cachedStaticImportImports ImmutableArray[ImportSymbol]
+    private var cachedStaticImportStructs ImmutableArray[StructSymbol]
     private var cachedStaticImportSyntaxTree SyntaxTree?
     private var channelRuntime ChannelRuntimeBinder?
     private var closureAssignedNames HashSet[string]?
@@ -631,11 +631,11 @@ internal class BinderContext {
         }
         let imports = RootScope.GetDeclaredImports()
         let structs = RootScope.GetDeclaredStructs()
-        if hasCachedStaticImportTypes &&
-            cachedStaticImportImportCount == imports.Length &&
-            cachedStaticImportStructCount == structs.Length &&
-            object
-            .ReferenceEquals(cachedStaticImportSyntaxTree, RootScope.GetCurrentReferencingSyntaxTreeForCache()) {
+        if hasCachedStaticImportTypes && cachedStaticImportImports.SequenceEqual(imports) &&
+            cachedStaticImportStructs.Equals(structs) && object.ReferenceEquals(
+            cachedStaticImportSyntaxTree,
+            RootScope.GetCurrentReferencingSyntaxTreeForCache()
+        ) {
             return cachedStaticImportTypes
         }
         var builder ImmutableArray[StructSymbol].Builder? = nil
@@ -669,8 +669,8 @@ internal class BinderContext {
         let result = builder?.ToImmutable() ?? ImmutableArray[StructSymbol].Empty
         cachedStaticImportTypes = result
         hasCachedStaticImportTypes = true
-        cachedStaticImportImportCount = imports.Length
-        cachedStaticImportStructCount = structs.Length
+        cachedStaticImportImports = imports
+        cachedStaticImportStructs = structs
         cachedStaticImportSyntaxTree = RootScope.GetCurrentReferencingSyntaxTreeForCache()
         return result
     }

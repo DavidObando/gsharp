@@ -8644,13 +8644,25 @@ class Binder {
             largestBody = 0
             for var index = jobs.Count - 1; index >= 0; index-- {
                 let function = jobs[index].Function
-                if !IndependentBodyClassifier.CanBind(function) {
+                let previousPackage = parentScope.SetCurrentDeclaringPackage(
+                    jobs[index].Owner?.PackageName ?? function.Package?.Name
+                )
+                let previousTree = parentScope.SetCurrentReferencingSyntaxTree(function.Declaration!!.SyntaxTree)
+                var eligible bool
+                try {
+                    eligible = IndependentBodyClassifier.CanBind(function, parentScope)
+                } finally {
+                    parentScope.SetCurrentReferencingSyntaxTree(previousTree)
+                    parentScope.SetCurrentDeclaringPackage(previousPackage)
+                }
+                if !eligible {
                     jobs.RemoveAt(index)
                 } else {
                     largestBody = Math.Max(largestBody, function.Declaration!!.Body!!.Span.Length)
                 }
             }
             CompilationMeasurements.Count("bodies.independent", jobs.Count)
+            parentScope.GetDeclaredStructs()
             let outputs = [jobs.Count]BodyBindResult
             let mode = NullabilityOptions.Mode
             let checks = NullabilityOptions.PlatformNilChecksEnabled

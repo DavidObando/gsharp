@@ -4,10 +4,24 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import System.Collections.Generic
 
-/// Proves that a body uses only primitive operations and body-owned locals.
+/// Proves that a body uses scalar operations, canonical enum constants, and body-owned locals.
 /// Unknown forms stay on the coordinator, which owns shared synthesis and inferred signatures.
-internal shared class IndependentBodyClassifier {
-    internal func CanBind(function FunctionSymbol) bool {
+internal class IndependentBodyClassifier {
+    private let declarationScope BoundScope?
+    private var typeLookupContext BinderContext?
+    private var currentFunction FunctionSymbol?
+
+    private init(declarationScope BoundScope?) {
+        this.declarationScope = declarationScope
+    }
+
+    shared {
+        internal func CanBind(function FunctionSymbol, declarationScope BoundScope? = nil) bool ->
+        IndependentBodyClassifier(declarationScope).CanBindBody(function)
+    }
+
+    private func CanBindBody(function FunctionSymbol) bool {
+        currentFunction = function
         if function
             .Declaration
             ?.Body is not{} body ||
@@ -44,7 +58,9 @@ internal shared class IndependentBodyClassifier {
         type == TypeSymbol.NInt ||
         type == TypeSymbol.NUInt ||
         type == TypeSymbol.Float32 ||
-        type == TypeSymbol.Float64
+        type == TypeSymbol.Float64 ||
+        type == TypeSymbol.String ||
+        (type is EnumSymbol and {ContainingType: nil})
 
     private func VisitStatement(
         statement StatementSyntax,
@@ -116,9 +132,36 @@ internal shared class IndependentBodyClassifier {
                 return expression.Expression is AssignmentExpressionSyntax &&
                     ExpressionType(expression.Expression, locals) != nil
             }
+            case SwitchStatementSyntax selection {
+                let type = ExpressionType(selection.Expression, locals)
+                if type == nil {
+                    return false
+                }
+                for arm in selection.Cases {
+                    if arm.Guard != nil ||
+                        (!arm.IsDefault && !IsScalarPattern(arm.Value, type, locals)) ||
+                        !VisitStatement(arm.Body, Dictionary[string, TypeSymbol](locals), returnType) {
+                        return false
+                    }
+                }
+                return true
+            }
             default {
                 return false
             }
+        }
+    }
+
+    private func IsScalarPattern(pattern PatternSyntax?, type TypeSymbol, locals Dictionary[string, TypeSymbol]) bool {
+        return switch pattern {
+            case ConstantPatternSyntax constant: ExpressionType(constant.Expression, locals) == type
+            case TypeOrConstantPatternSyntax candidate when candidate.PropertyPattern == nil:
+            ExpressionType(candidate.Expression, locals) == type
+            case DiscardPatternSyntax: true
+            case BinaryPatternSyntax binary:
+            IsScalarPattern(binary.Left, type, locals) && IsScalarPattern(binary.Right, type, locals)
+            case ParenthesizedPatternSyntax parenthesized: IsScalarPattern(parenthesized.Pattern, type, locals)
+            default: false
         }
     }
 
@@ -129,7 +172,9 @@ internal shared class IndependentBodyClassifier {
                 SyntaxKind.ParenthesizedExpression or
                 SyntaxKind.UnaryExpression or
                 SyntaxKind.BinaryExpression or
-                SyntaxKind.AssignmentExpression
+                SyntaxKind.AssignmentExpression or
+                SyntaxKind.AccessorExpression or
+                SyntaxKind.SwitchExpression
         ) {
             return nil
         }
@@ -143,6 +188,8 @@ internal shared class IndependentBodyClassifier {
                     case uint64: TypeSymbol.UInt64
                     case float32: TypeSymbol.Float32
                     case float64: TypeSymbol.Float64
+                    case char: TypeSymbol.Char
+                    case string: TypeSymbol.String
                     default: default(TypeSymbol?)
                 }
             }
@@ -177,6 +224,59 @@ internal shared class IndependentBodyClassifier {
                 } else {
                     default(TypeSymbol?)
                 }
+            }
+            case AccessorExpressionSyntax accessor {
+                let scope_ = declarationScope
+                if accessor.IsNullConditional ||
+                    accessor.LeftPart is not NameExpressionSyntax owner ||
+                    accessor.RightPart is not NameExpressionSyntax member ||
+                    locals.ContainsKey(owner.IdentifierToken.ValueText) || scope_ == nil || scope_.TryLookupSymbol(
+                    owner.IdentifierToken.ValueText
+                ) is VariableSymbol {
+                    return nil
+                }
+                if currentFunction?.StaticOwnerType is StructSymbol ownerType &&
+                    (
+                    !ownerType.TypeParameters.IsDefaultOrEmpty || !StructSymbol.CollectEnclosingTypeParameters(
+                        ownerType
+                    )
+                        .IsDefaultOrEmpty
+                ) {
+                    return nil
+                }
+                let name = owner.IdentifierToken.ValueText
+                if scope_.TryLookupImport(name, out var import_) && import_!!.IsAlias {
+                    return nil
+                }
+                typeLookupContext ??= BinderContext(scope_)
+                if !typeLookupContext!!.TryLookupSourceType(scope_, name, 0, currentFunction, out var type, out _) ||
+                    type is not(EnumSymbol and {ContainingType: nil}) {
+                    return nil
+                }
+                let enumType = cast[EnumSymbol](type)
+                return if enumType.TryGetMember(member.IdentifierToken.ValueText, out _) {
+                    enumType
+                } else {
+                    default(TypeSymbol?)
+                }
+            }
+            case SwitchExpressionSyntax selection {
+                let type = ExpressionType(selection.Expression, locals)
+                if type == nil {
+                    return nil
+                }
+                var resultType TypeSymbol? = nil
+                for arm in selection.Arms {
+                    if arm.Guard != nil || (!arm.IsDefault && !IsScalarPattern(arm.Value, type, locals)) {
+                        return nil
+                    }
+                    let candidate = ExpressionType(arm.Result, locals)
+                    if candidate == nil || (resultType != nil && resultType != candidate) {
+                        return nil
+                    }
+                    resultType = candidate
+                }
+                return resultType
             }
             default {
                 return nil
