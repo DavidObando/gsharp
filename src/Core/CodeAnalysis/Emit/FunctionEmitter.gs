@@ -97,6 +97,17 @@ internal class FunctionEmitter {
         if candidates.Length < 2 {
             return
         }
+        let largestBody = candidates.Max(
+            (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) ->
+            if pair.Key.Declaration?.Body is {} body {
+                cast[int64](body.Span.Length)
+            } else {
+                cast[int64](pair.Value.Statements.Length) * 64
+            }
+        )
+        if candidates.Length < 8 && largestBody < 8192 {
+            return
+        }
         let work = candidates.Select(
             (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) ->
             IndependentMethodBody(this.outer, pair.Key, pair.Value)
@@ -104,14 +115,6 @@ internal class FunctionEmitter {
             .ToArray()
         planning?.Dispose()
         using let instructions = CompilationMeasurements.BeginPhase("emit.method-bodies.instructions")
-        let largestBody = candidates.Max(
-            (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) ->
-            if pair.Key.Declaration is {} declaration {
-                cast[int64](declaration.Span.Length)
-            } else {
-                cast[int64](pair.Value.Statements.Length) * 64
-            }
-        )
         budget.Run(
             work.Length,
             (index int32) -> work[index].Emit(),
@@ -126,6 +129,10 @@ internal class FunctionEmitter {
             this.independentBodies.Add(candidates[index].Key, work[index])
             CompilationMeasurements.Count("emit.method-bodies.completed")
             CompilationMeasurements.Count("emit.method-bodies.il-bytes", work[index].Il.Offset)
+            CompilationMeasurements.Count(
+                "emit.method-bodies.buffered-sequence-points",
+                work[index].BufferedSequencePointCount
+            )
         }
     }
 

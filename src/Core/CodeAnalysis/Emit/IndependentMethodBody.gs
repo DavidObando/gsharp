@@ -31,10 +31,15 @@ internal class IndependentMethodBody {
                 parameters[parameter] = next++
             }
         }
+        let captureSequencePoints = outer.emitCtx.Pdb != nil
         this.emitter = Session.CreateEmitter(
             parameters,
             isolated: true,
-            recordLocalSequencePoint: (offset int32, syntax SyntaxNode?) -> this.points.Add((offset, syntax))
+            recordLocalSequencePoint: (offset int32, syntax SyntaxNode?) -> {
+                if captureSequencePoints {
+                    this.points.Add((offset, syntax))
+                }
+            }
         )
     }
 
@@ -48,6 +53,7 @@ internal class IndependentMethodBody {
         get;
         private set;
     }
+    prop BufferedSequencePointCount int32 -> this.points.Count
 
     func Emit() {
         try {

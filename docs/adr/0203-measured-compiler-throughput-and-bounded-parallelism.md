@@ -680,6 +680,16 @@ Parallel-batch counters require observed overlap of real instruction work;
 starting a timer or using a second thread is not evidence of parallel emission.
 Nested phase totals remain nonadditive.
 
+Tiny local batches retain sequential execution under the existing eight-body
+or 8192-source-character guard. Non-debug workspaces do not retain sequence
+points. All requested outputs are staged before the request's final cancellation
+check. Publication then completes without intermediate cancellation checks.
+Cancellation observed before that boundary publishes no artifact; cancellation
+requested by a destination write cannot leave the reference pass uncomputed.
+Destination I/O failures still follow the caller's stream contract, not a
+transaction across arbitrary external streams. Staged output is retained output,
+not part of the concurrent workspace memory estimate.
+
 The work prioritizes measured bottlenecks and preserves the existing
 compiler and SDK architecture. Small sequential improvements can land
 before the larger concurrency work. A stable phase model makes later

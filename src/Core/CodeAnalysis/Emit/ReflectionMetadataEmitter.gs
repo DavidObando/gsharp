@@ -1240,7 +1240,8 @@ internal class ReflectionMetadataEmitter {
                 let slot = localJobs[index]
                 bodies[slot] = Lowerer.Lower(zeroCaptureLiterals[slot].Body)
             },
-            workspaceBytes: Math.Max(100663296, largestBody * 128)
+            workspaceBytes: Math.Max(100663296, largestBody * 128),
+            allowParallel: localJobs.Count >= 8 || largestBody >= 8192
         )
         CompilationMeasurements.Count("lowering.emit-lambdas.completed", localJobs.Count)
         CompilationMeasurements.Count("lowering.emit-lambdas.observed-workers", this.workBudget.LastObservedWorkers)

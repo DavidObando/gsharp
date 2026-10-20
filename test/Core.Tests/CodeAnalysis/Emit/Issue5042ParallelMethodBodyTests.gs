@@ -187,6 +187,70 @@ func Run() int32 {
         Assert.Equal(0, reference.Length)
     }
 
+    @Theory
+    @InlineData(DebugInformationFormat.None)
+    @InlineData(DebugInformationFormat.Portable)
+    func NoPdbRequestRetainsNoSequencePointBuffers(format DebugInformationFormat) {
+        let compilation = Create("package ParallelEmit\n" + IndependentFunctions(), format)
+        let _ = compilation.BoundProgram
+        compilation.WorkBudget = CompilationWorkBudget(4)
+        using let measurement = CompilationMeasurements.Start("no-pdb-buffer-test")
+        using let pe = MemoryStream()
+        let result = compilation.Emit(pe, pdbStream: nil, refStream: nil, docStream: nil, assemblyName: "NoPdb")
+        Assert.True(result.Success)
+        Assert.NotEmpty(pe.ToArray())
+        if compilation.WorkBudget.MaxWorkers > 1 {
+            Assert.True(measurement.GetCounter("emit.method-bodies.completed") >= 64)
+            Assert.Equal(0, measurement.GetCounter("emit.method-bodies.buffered-sequence-points"))
+        }
+    }
+
+    @Fact
+    func CancellationDuringPublicationCommitsAllRequestedArtifacts() {
+        let source = "package ParallelEmit\n" + IndependentFunctions()
+        using let expectedPe = MemoryStream()
+        using let expectedPdb = MemoryStream()
+        using let expectedReference = MemoryStream()
+        using let expectedDocumentation = MemoryStream()
+        let baseline = Create(source)
+        baseline.WorkBudget = CompilationWorkBudget(4)
+        Assert.True(
+            baseline.Emit(expectedPe, expectedPdb, expectedReference, expectedDocumentation, assemblyName: "AtomicEmit")
+                .Success
+        )
+        using let cancellation = CancellationTokenSource()
+        let compilation = Create(source)
+        compilation.WorkBudget = CompilationWorkBudget(4, cancellationToken: cancellation.Token)
+        using let pe = CancelOnWriteStream(cancellation)
+        using let pdb = MemoryStream()
+        using let reference = MemoryStream()
+        using let documentation = MemoryStream()
+        let result = compilation.Emit(pe, pdb, reference, documentation, assemblyName: "AtomicEmit")
+        Assert.True(result.Success)
+        Assert.True(cancellation.IsCancellationRequested)
+        Assert.NotEmpty(expectedPe.ToArray())
+        Assert.NotEmpty(expectedPdb.ToArray())
+        Assert.NotEmpty(expectedReference.ToArray())
+        Assert.NotEmpty(expectedDocumentation.ToArray())
+        Assert.Equal(expectedPe.ToArray(), pe.ToArray())
+        Assert.Equal(expectedPdb.ToArray(), pdb.ToArray())
+        Assert.Equal(expectedReference.ToArray(), reference.ToArray())
+        Assert.Equal(expectedDocumentation.ToArray(), documentation.ToArray())
+    }
+
+    private class CancelOnWriteStream : MemoryStream {
+        private let cancellation CancellationTokenSource
+
+        init(cancellation CancellationTokenSource) {
+            this.cancellation = cancellation
+        }
+
+        override func Write(buffer[]uint8, offset int32, count int32) {
+            base.Write(buffer, offset, count)
+            this.cancellation.Cancel()
+        }
+    }
+
     shared {
         private func Create(
             source string,
