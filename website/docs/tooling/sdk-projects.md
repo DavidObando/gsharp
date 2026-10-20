@@ -91,6 +91,9 @@ third-party generators can create their own threads.
 
 This feature remains opt-in. A higher worker count is not a promise that
 every body is independent or that every project builds faster.
+Small inputs retain the measured sequential path: fewer than four files
+under 64 KiB, or fewer than eight body candidates with no body reaching
+8 KiB. These thresholds avoid cold scheduling and eligibility overhead.
 
 ## Target frameworks
 

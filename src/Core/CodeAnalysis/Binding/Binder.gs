@@ -7740,53 +7740,17 @@ class Binder {
             }
             let functionBodies = ImmutableDictionary.CreateBuilder[FunctionSymbol, BoundBlockStatement]()
             let diagnostics = ImmutableArray.CreateBuilder[Diagnostic]()
-            var scope_ BoundGlobalScope? = globalScope
-            while scope_ != nil {
-                for function in scope_.Functions {
-                    if HasInferredRichAnonymousReturn(function, parentScope) {
-                        functionBodies[function] = BindDeclaredFunctionBody(
-                            cache,
-                            dirtyTrees,
-                            parentScope,
-                            function,
-                            owner: nil,
-                            diagnostics
-                        )
-                    }
-                }
-                scope_ = scope_.Previous
-            }
-            // BindProgram requires a global scope; the earlier null-tolerant rehydration checks make flow analysis conservative.
-            for structSym in globalScope.Structs {
-                for method in structSym.Methods {
-                    if HasInferredRichAnonymousReturn(method, parentScope) {
-                        functionBodies[method] = BindDeclaredFunctionBody(
-                            cache,
-                            dirtyTrees,
-                            parentScope,
-                            method,
-                            structSym,
-                            diagnostics
-                        )
-                    }
-                }
-            }
-            for ifaceSym in globalScope.Interfaces {
-                for method in ifaceSym
-                    .Methods
-                    .Concat(ifaceSym.StaticMethods)
-                    .Concat(ifaceSym.PrivateMethods)
-                    .Concat(ifaceSym.StaticPrivateMethods) {
-                    if method?.Declaration?.Body != nil && HasInferredRichAnonymousReturn(method, parentScope) {
-                        functionBodies[method] = BindDeclaredFunctionBody(
-                            cache,
-                            dirtyTrees,
-                            parentScope,
-                            method,
-                            owner: nil,
-                            diagnostics
-                        )
-                    }
+            for member in GetDeclaredBodyFunctions(globalScope) {
+                let function = member.Function
+                if function.Declaration?.Body != nil && HasInferredRichAnonymousReturn(function, parentScope) {
+                    functionBodies[function] = BindDeclaredFunctionBody(
+                        cache,
+                        dirtyTrees,
+                        parentScope,
+                        function,
+                        member.Owner,
+                        diagnostics
+                    )
                 }
             }
             // Declarations, field initializers, and rich inferred returns are complete.
@@ -7799,7 +7763,7 @@ class Binder {
                 dirtyTrees,
                 workBudget
             )
-            scope_ = globalScope
+            var scope_ BoundGlobalScope? = globalScope
             while scope_ != nil {
                 for function in scope_.Functions {
                     if functionBodies.ContainsKey(function) {
@@ -8240,6 +8204,9 @@ class Binder {
                     if method.IsExtension {
                         continue
                     }
+                    if functionBodies.ContainsKey(method) {
+                        continue
+                    }
                     if independentBodies.TryGetValue(method, out var independent) {
                         functionBodies.Add(method, independent.Body)
                         AppendBodyDiagnostics(diagnostics, independent.Diagnostics, method)
@@ -8587,6 +8554,36 @@ class Binder {
         } &&
             parentScope
             .GetRichAnonymousClassMap().ContainsKey(anonymous)
+
+        private func GetDeclaredBodyFunctions(globalScope BoundGlobalScope) List[
+            (Function FunctionSymbol, Owner StructSymbol?)
+        ] {
+            let result = List[(Function FunctionSymbol, Owner StructSymbol?)]()
+            var declarations BoundGlobalScope? = globalScope
+            while declarations != nil {
+                for function in declarations.Functions {
+                    result.Add((function, default(StructSymbol?)))
+                }
+                declarations = declarations.Previous
+            }
+            for owner in globalScope.Structs {
+                for method in owner.Methods.Concat(owner.StaticMethods) {
+                    if !method.IsExtension {
+                        result.Add((method, owner))
+                    }
+                }
+            }
+            for owner in globalScope.Interfaces {
+                for method in owner
+                    .Methods
+                    .Concat(owner.StaticMethods)
+                    .Concat(owner.PrivateMethods)
+                    .Concat(owner.StaticPrivateMethods) {
+                    result.Add((method, default(StructSymbol?)))
+                }
+            }
+            return result
+        }
 
         private func BindIndependentBodies(
             globalScope BoundGlobalScope,

@@ -157,6 +157,10 @@ partial class State {
     shared {
         var Count int32 = 7
         init { Count += 1 }
+        func RichRead() int32 -> Build[int32](9).Read()
+        private func Build[T](value T) -> object {
+            func Read() T -> value
+        }
     }
     func Read() int32 -> Seed + Count
 }
@@ -190,6 +194,7 @@ async func Main() {
     let reader = object : Reader { func Read() int32 -> captured }
     Console.WriteLine(State().Read())
     Console.WriteLine(State().Pure(F0_1(41)))
+    Console.WriteLine(State.RichRead())
     Console.WriteLine(Identity(Make().Read()))
     Console.WriteLine(first.Value + second.Value)
     Console.WriteLine(next())
@@ -225,7 +230,7 @@ async func Main() {
                     .Concat(references)
                     .ToArray()
                 let dll = fixture.Compile(program, "parallel", true, options)
-                Assert.Equal("20\n43\n4\n6\n2\n2\n2\n3\n6\n", fixture.Run(dll))
+                Assert.Equal("20\n43\n9\n4\n6\n2\n2\n2\n3\n6\n", fixture.Run(dll))
                 if workers == 1 {
                     implementation = File.ReadAllBytes(dll)
                     referenceImage = File.ReadAllBytes(reference)

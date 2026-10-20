@@ -55,7 +55,10 @@ class CompilationWorkBudget {
 
     /// Executes indexed work and joins all workers. Failures are rethrown in input order.
     /// The action owns its output slot and must not publish mutable state to other actions.
-    internal func Run(count int32, action(int32) -> void, workspaceBytes int64 = 100663296, allowParallel bool = true) {
+    internal func Run(count int32, action(int32) -> void, workspaceBytes int64 = 100663296) ->
+    Run(count, action, workspaceBytes, allowParallel: true)
+
+    internal func Run(count int32, action(int32) -> void, workspaceBytes int64, allowParallel bool) {
         CancellationToken.ThrowIfCancellationRequested()
         if Interlocked.CompareExchange(&running, 1, 0) != 0 {
             throw InvalidOperationException("Compilation phases cannot nest or overlap worker budgets.")

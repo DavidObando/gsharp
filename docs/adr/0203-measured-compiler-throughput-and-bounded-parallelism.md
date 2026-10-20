@@ -611,9 +611,17 @@ reserve, 96 MiB per worker, and larger source/body estimates. This is not
 a hard limit on total heap, retained output, or third-party generator threads.
 The default workspace budget is 1024 MiB. Processor count also caps workers.
 The compiler exposes `--workers:N` and `--worker-memory-mib:N`.
+Cold microbenchmarks showed scheduling overhead on tiny inputs. Parsing
+stays sequential below four files and 64 KiB. Body eligibility is not
+computed below eight candidates when every body is smaller than 8 KiB.
+Larger phases still obey the shared grant and workspace limits.
 
 Parsing owns one lexer/parser/tree per input slot. Body binding first
 completes declarations, field initializers, and rich inferred return bodies.
+The inferred-return pass includes static members and uses the same canonical
+declarations as the later body pass. Host assembly candidates are captured
+before workers run, so runtime scheduling dependencies cannot change the
+implicit reference universe or its PDB metadata.
 The first worker eligibility proof accepts only primitive operations over
 parameters and body-owned locals. Calls, imported member access, type
 construction, lambdas, anonymous objects, adapters, generics and unknown
