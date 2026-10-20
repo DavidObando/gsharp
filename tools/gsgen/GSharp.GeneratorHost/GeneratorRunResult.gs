@@ -5,7 +5,6 @@
 package GSharp.GeneratorHost
 
 import Microsoft.CodeAnalysis
-import Microsoft.CodeAnalysis.CSharp
 import Microsoft.CodeAnalysis.Text
 import System
 import System.Collections.Generic
@@ -18,17 +17,17 @@ class GeneratorRunResult {
     /// @param documents The generated C# documents.
     /// @param generatorDiagnostics The diagnostics reported by the generators.
     /// @param failures Generators that threw or analyzer assemblies that failed to load.
-    /// @param inputCompilation The immutable generator input reused for back-translation, or none.
+    /// @param inputStubTree The immutable generator input tree reused for back-translation, or none.
     init(
         documents IReadOnlyList[GeneratedCsDocument],
         generatorDiagnostics IReadOnlyList[Diagnostic],
         failures IReadOnlyList[GeneratorFailure],
-        inputCompilation CSharpCompilation? = nil
+        inputStubTree SyntaxTree? = nil
     ) {
         Documents = documents
         GeneratorDiagnostics = generatorDiagnostics
         Failures = failures
-        InputCompilation = inputCompilation
+        InputStubTree = inputStubTree
     }
 
     /// Gets the generated C# documents (hint name + source text).
@@ -46,8 +45,8 @@ class GeneratorRunResult {
         get;
     }
 
-    /// Gets the immutable Roslyn input, not a G# scope or a final compilation.
-    prop InputCompilation CSharpCompilation? {
+    /// Gets the immutable Roslyn input tree, not a bound scope or final compilation.
+    prop InputStubTree SyntaxTree? {
         get;
     }
 }

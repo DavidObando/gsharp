@@ -51,7 +51,7 @@ shared class GeneratedDocTranslator {
     /// @param dataTypes The top-level G# data types the stub rendered, whose generated parts
     /// are spelled as `data` parts ((cref:SpellDataTypeParts));
     /// `null` or empty for none.
-    /// @param inputCompilation The immutable generator input, or none for standalone translation.
+    /// @param inputStubTree The immutable generator input tree, or none for standalone translation.
     /// @returns The back-translated G# parts: one per namespace of each generated document with members or
     /// file-level attributes.
     func Translate(
@@ -60,7 +60,7 @@ shared class GeneratedDocTranslator {
         references IReadOnlyList[MetadataReference],
         declaringParts IReadOnlyList[StubPartialDefinition]? = nil,
         dataTypes IReadOnlyList[StubDataType]? = nil,
-        inputCompilation CSharpCompilation? = nil
+        inputStubTree SyntaxTree? = nil
     ) IReadOnlyList[TranslatedGsDocument] {
         using let phase = CompilationMeasurements.BeginPhase("generator.translation")
         ArgumentNullException.ThrowIfNull(stubCSharp, paramName: "stubCSharp")
@@ -71,9 +71,9 @@ shared class GeneratedDocTranslator {
             return results
         }
         let parseOptions = CSharpParseOptions(LanguageVersion.Latest)
-        let stubTree = if inputCompilation != nil {
+        let stubTree = if inputStubTree != nil {
             CompilationMeasurements.Count("generator.stub_tree_reuses")
-            inputCompilation.SyntaxTrees.Single().WithFilePath(StubPath)
+            inputStubTree.WithFilePath(StubPath)
         } else {
             CompilationMeasurements.Count("generator.host_csharp_trees_parsed")
             CSharpSyntaxTree.ParseText(stubCSharp, parseOptions, path: StubPath)
@@ -93,22 +93,15 @@ shared class GeneratedDocTranslator {
         }
         let trees = List[SyntaxTree]{stubTree}
         trees.AddRange(generatedTrees.Select((t(Doc GeneratedCsDocument, Tree SyntaxTree)) -> t.Tree))
-        let compilation = if inputCompilation == nil {
-            CSharpCompilation.Create(
-                "GsgenBackTranslate",
-                trees,
-                references,
-                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
-                    NullableContextOptions.Enable
-                )
-                    .WithAllowUnsafe(true)
+        let compilation = CSharpCompilation.Create(
+            "GsgenBackTranslate",
+            trees,
+            references,
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
             )
-        } else {
-            inputCompilation
-                .WithAssemblyName("GsgenBackTranslate")
-                .ReplaceSyntaxTree(inputCompilation.SyntaxTrees.Single(), stubTree)
-                .AddSyntaxTrees(generatedTrees.Select((t(Doc GeneratedCsDocument, Tree SyntaxTree)) -> t.Tree))
-        }
+                .WithAllowUnsafe(true)
+        )
         // Every generated tree is translated; the stub never is. A generated
         // partial method implementation whose definition is in the stub (a
         // user G# declaring part, e.g. `@GeneratedRegex ... partial func`)

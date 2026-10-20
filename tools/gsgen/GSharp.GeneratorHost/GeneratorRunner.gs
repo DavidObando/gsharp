@@ -264,7 +264,7 @@ shared class GeneratorRunner {
         }
         CompilationMeasurements.Count("generator.generated_documents", documents.Count)
         CompilationMeasurements.Count("generator.diagnostics", diagnostics.Count)
-        return GeneratorRunResult(documents, diagnostics, failures, compilation)
+        return GeneratorRunResult(documents, diagnostics, failures, stubTree)
     }
 }
 

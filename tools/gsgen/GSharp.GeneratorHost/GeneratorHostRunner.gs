@@ -121,7 +121,7 @@ shared class GeneratorHostRunner {
             references,
             renderer.PartialDefinitions,
             renderer.DataTypes,
-            runResult.InputCompilation
+            runResult.InputStubTree
         )
         // Deterministic ordering: sort back-translated parts by hint name.
         let gsFiles = translated
