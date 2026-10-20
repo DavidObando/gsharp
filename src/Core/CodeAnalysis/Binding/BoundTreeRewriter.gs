@@ -1684,7 +1684,7 @@ abstract class BoundTreeRewriter {
             node
         } else {
             BoundClrPropertyAccessExpression(
-                nil,
+                node.Syntax,
                 receiver,
                 node.Member,
                 node.Type,
@@ -1961,7 +1961,7 @@ abstract class BoundTreeRewriter {
         // when emit-time structural re-inference is impossible (#1931).
 
         return BoundUserInstanceCallExpression(
-            nil,
+            node.Syntax,
             receiver,
             node.Method,
             builder?.ToImmutable() ?? node.Arguments,
@@ -2056,7 +2056,7 @@ abstract class BoundTreeRewriter {
             node
         } else {
             BoundFieldAccessExpression(
-                nil,
+                node.Syntax,
                 receiver,
                 Invariant.Required(
                     node.StructType,
@@ -2141,7 +2141,7 @@ abstract class BoundTreeRewriter {
             node
         } else {
             BoundPropertyAccessExpression(
-                nil,
+                node.Syntax,
                 receiver,
                 node.StructType,
                 node.Property,

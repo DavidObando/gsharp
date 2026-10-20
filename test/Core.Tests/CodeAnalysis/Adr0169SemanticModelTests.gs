@@ -20,6 +20,97 @@ import Xunit
 /// syntax→bound-node, syntax→type queries), (cref:Symbol.DeclaringSyntaxNodes),
 /// and (cref:GSharpSyntaxWalker).
 open class Adr0169SemanticModelTests {
+    @Fact
+    func InstancePropertyLowering_KeepsClosedLogicalTypeAndFollowingReadAnchor() {
+        const source = `package Query
+class Box[T] {
+    prop Items []T { get; set; }
+    func Run(other Box[string]) {
+        let first = other.Items[0].Length
+    }
+}
+`
+        let (_, model, tree) = CreateQualifierModel(source)
+        let root = QualifierInitializer(tree, "first")
+        let following = Assert.IsType[BoundClrPropertyAccessExpression](model.GetBoundNode(root))
+        Assert.Same(root, following.Syntax)
+        Assert.Equal(typeof(string).GetProperty("Length"), following.Member)
+        let index = Assert.IsType[BoundIndexExpression](following.Receiver)
+        let physical = Assert.IsType[BoundFieldAccessExpression](index.Target)
+        let owner = Assert.IsType[StructSymbol](physical.StructType)
+        let property = owner.Properties.Single((p PropertySymbol) -> p.Name == "Items")
+        Assert.Same(TypeSymbol.String, Assert.Single(owner.TypeArguments))
+        Assert.Same(property.BackingField, physical.Field)
+        Assert.Same(property.Type, physical.Type)
+        Assert.NotSame(physical.Field.Type, physical.Type)
+        Assert.Same(following, model.GetBoundNode(root))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImplicitFieldRead_RetainsOriginalNameAnchorThroughNarrowing(narrowed bool) {
+        let source = `package Query
+class Box {
+    FIELD_KIND Address System.UriNULLABLE = System.Uri("https://example.test/path")
+    func Run() {
+        GUARD_OPEN
+        let first = Address.ToString()
+        GUARD_CLOSE
+    }
+}
+`.Replace(
+            "NULLABLE",
+            if narrowed {
+                "?"
+            } else {
+                ""
+            }
+        ).Replace(
+            "FIELD_KIND",
+            if narrowed {
+                "let"
+            } else {
+                "var"
+            }
+        ).Replace(
+            "GUARD_OPEN",
+            if narrowed {
+                "if Address != nil {"
+            } else {
+                ""
+            }
+        ).Replace(
+            "GUARD_CLOSE",
+            if narrowed {
+                "}"
+            } else {
+                ""
+            }
+        )
+        let (_, model, tree) = CreateQualifierModel(source)
+        let root = QualifierInitializer(tree, "first")
+        let call = Assert.IsType[BoundImportedInstanceCallExpression](model.GetBoundNode(root))
+        let field = Assert.IsType[BoundFieldAccessExpression](call.Receiver)
+        Assert.Same(root.LeftPart, field.Syntax)
+        Assert.Same(field, model.GetBoundNode(root.LeftPart))
+        Assert.Equal(narrowed, field.Field.Type is NullableTypeSymbol)
+        Assert.False(field.Type is NullableTypeSymbol)
+        let copy = Assert.IsType[BoundFieldAccessExpression](FieldReceiverCopyRewriter().Apply(field))
+        Assert.NotSame(field, copy)
+        Assert.Same(field.Syntax, copy.Syntax)
+        Assert.Same(field.Field, copy.Field)
+        Assert.Same(field.NarrowedType, copy.NarrowedType)
+        Assert.Same(field, model.GetBoundNode(root.LeftPart))
+    }
+
+    private class FieldReceiverCopyRewriter : BoundTreeRewriter {
+        func Apply(node BoundExpression) BoundExpression -> RewriteExpression(node)
+
+        protected override func RewriteVariableExpression(node BoundVariableExpression) BoundExpression ->
+        BoundVariableExpression(node.Syntax, node.Variable, node.NarrowedType)
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)

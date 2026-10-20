@@ -28,6 +28,255 @@ open class Issue4989BoundReceiverTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func Issue5035_ImplicitFieldPrefix_KeepsSelectedMethodAndFlowType(narrowed bool) {
+        let source = `package Repro
+class Holder {
+    FIELD_KIND Address System.UriNULLABLE = System.Uri("https://example.test/path")
+    func Run() {
+        let competing = System.Text.StringBuilder().ToString()
+        GUARD_OPEN
+        let indexed = Address.ToString()[^1]
+        GUARD_CLOSE
+    }
+    func Control() {
+        GUARD_OPEN
+        let control = this.Address.ToString()[^1]
+        GUARD_CLOSE
+    }
+}
+`.Replace(
+            "NULLABLE",
+            if narrowed {
+                "?"
+            } else {
+                ""
+            }
+        ).Replace(
+            "FIELD_KIND",
+            if narrowed {
+                "let"
+            } else {
+                "var"
+            }
+        ).Replace(
+            "GUARD_OPEN",
+            if narrowed {
+                "if Address != nil {"
+            } else {
+                ""
+            }
+        ).Replace(
+            "GUARD_CLOSE",
+            if narrowed {
+                "}"
+            } else {
+                ""
+            }
+        )
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let owner = compilation.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Holder")
+        let field = owner.Fields.Single((f FieldSymbol) -> f.Name == "Address")
+        let token = TokenAt(content, source, "Address.ToString()", 0)
+        let method = typeof(System.Uri).GetMethod("ToString", Type.EmptyTypes)
+        Assert.Equal(
+            method,
+            BoundSemantics.GetImportedMember(compilation, TokenAt(content, source, "ToString()[^1]", 1))
+        )
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]", 1),
+            "ToString",
+            "func (System.Uri) ToString() string"
+        )
+        Assert.Equal(
+            method,
+            BoundSemantics.GetImportedMember(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+        )
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]"),
+            "ToString",
+            "func (System.Uri) ToString() string"
+        )
+        Assert.Same(field, BoundSemantics.GetSymbol(compilation, token))
+        Assert.Same(field, SemanticLookup.ResolveSymbol(compilation, token))
+        let flowType = BoundSemantics.GetExpressionType(compilation, Assert.IsType[NameExpressionSyntax](token.Parent))
+        Assert.Equal(typeof(System.Uri), flowType?.ClrType)
+        Assert.False(flowType is NullableTypeSymbol)
+        Assert.Equal(narrowed, field.Type is NullableTypeSymbol)
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Address.ToString()"),
+            "Address",
+            "(field) Address System.Uri" + if narrowed {
+                "?"
+            } else {
+                ""
+            }
+        )
+        let uri = DocumentUri.From("file:///issue5035-implicit-field.gs")!!
+        let definition = Assert.IsType[Location](
+            DefinitionComputer.ComputeDefinition(
+                uri,
+                content,
+                LanguageServerTestHelpers.PositionOf(source, "Address.ToString()")
+            )
+        )
+        let declaration = LanguageServerTestHelpers.PositionOf(source, "Address System.Uri")
+        AssertPosition(declaration, definition.Range.Start)
+        AssertPosition(Position(declaration.Line, declaration.Character + "Address".Length), definition.Range.End)
+    }
+
+    @Theory
+    @InlineData(0)
+    @InlineData(1)
+    @InlineData(2)
+    func Issue5035_InstanceAutoProperty_RetainsLogicalMemberAfterLowering(mode int32) {
+        let source = `package Repro
+class HolderGENERIC {
+    prop Items ELEMENT_TYPE { ACCESSORS }
+    var Other []string = []string{"other"}
+    func Run(EXTRA_PARAMETER Items int32) {
+        GUARD_OPEN
+        let indexed = TARGET.Items[Items]
+        let after = TARGET.Items[Items].Length
+        let unrelated = this.Other[Items]
+        GUARD_CLOSE
+    }
+}
+`.Replace(
+            "GENERIC",
+            if mode == 1 {
+                "[T]"
+            } else {
+                ""
+            }
+        ).Replace(
+            "ELEMENT_TYPE",
+            if mode == 1 {
+                "[]T"
+            } else if mode == 2 {
+                "([]string)?"
+            } else {
+                "[]string"
+            }
+        ).Replace(
+            "ACCESSORS",
+            if mode == 2 {
+                "get;"
+            } else {
+                "get; set;"
+            }
+        ).Replace(
+            "EXTRA_PARAMETER",
+            if mode == 1 {
+                "other Holder[string], "
+            } else {
+                ""
+            }
+        ).Replace(
+            "TARGET",
+            if mode == 1 {
+                "other"
+            } else {
+                "this"
+            }
+        ).Replace(
+            "GUARD_OPEN",
+            if mode == 2 {
+                "if this.Items != nil {"
+            } else {
+                ""
+            }
+        ).Replace(
+            "GUARD_CLOSE",
+            if mode == 2 {
+                "}"
+            } else {
+                ""
+            }
+        )
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let model = compilation.GetSemanticModel(content.SyntaxTree)
+        let owner = compilation.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Holder")
+        let initializer = Assert.IsType[VariableDeclarationSyntax](TokenAt(content, source, "indexed =", 0).Parent)
+            .Initializer
+        let physical = Assert.IsType[BoundFieldAccessExpression](
+            Assert.IsType[BoundIndexExpression](model.GetBoundNode(initializer!!)).Target
+        )
+        let effectiveOwner = Assert.IsType[StructSymbol](physical.StructType)
+        let property = effectiveOwner.Properties.Single((p PropertySymbol) -> p.Name == "Items")
+        Assert.True(property.IsAutoProperty)
+        Assert.Same(property.BackingField, physical.Field)
+        if mode == 1 {
+            Assert.Same(TypeSymbol.String, Assert.Single(effectiveOwner.TypeArguments))
+        }
+        for var occurrence = 0; occurrence < 2; occurrence++ {
+            let token = TokenAt(content, source, "Items[Items]", occurrence)
+            let position = LanguageServerTestHelpers.PositionOf(source, "Items[Items]", occurrence)
+            let resolved = Assert.IsType[PropertySymbol](BoundSemantics.GetSymbol(compilation, token))
+            Assert.Same(property.Declaration, resolved.Declaration)
+            Assert.Same(property.BackingField, resolved.BackingField)
+            Assert.Equal(property.Type, resolved.Type)
+            Assert.Same(
+                property.Declaration,
+                Assert.IsType[PropertySymbol](SemanticLookup.ResolveSymbol(compilation, token)).Declaration
+            )
+            let flow = BoundSemantics.GetExpressionType(compilation, Assert.IsType[NameExpressionSyntax](token.Parent))
+            Assert.Equal(typeof([]string), flow?.ClrType)
+            Assert.False(flow is NullableTypeSymbol)
+            AssertIndexedHover(
+                content,
+                position,
+                "Items",
+                if mode == 2 {
+                    "prop Items []?string { get; }"
+                } else {
+                    "prop Items []string { get; set; }"
+                }
+            )
+            let uri = DocumentUri.From("file:///issue5035-instance-property.gs")!!
+            let definition = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
+            let declaration = LanguageServerTestHelpers.PositionOf(
+                source,
+                "Items ELEMENT_TYPE".Replace(
+                    "ELEMENT_TYPE",
+                    if mode == 1 {
+                        "[]T"
+                    } else if mode == 2 {
+                        "([]string)?"
+                    } else {
+                        "[]string"
+                    }
+                )
+            )
+            AssertPosition(declaration, definition.Range.Start)
+            AssertPosition(Position(declaration.Line, declaration.Character + "Items".Length), definition.Range.End)
+            let argument = TokenAt(content, source, "Items]", occurrence)
+            Assert.Same(
+                owner.Methods.Single((f FunctionSymbol) -> f.Name == "Run").Parameters.Last(),
+                SemanticLookup.ResolveSymbol(compilation, argument)
+            )
+        }
+        Assert.Equal(
+            typeof(string).GetProperty("Length"),
+            BoundSemantics.GetImportedMember(compilation, TokenAt(content, source, "Length", 0))
+        )
+        Assert.Same(
+            owner.Fields.Single((f FieldSymbol) -> f.Name == "Other"),
+            BoundSemantics.GetSymbol(compilation, TokenAt(content, source, "Other[", 0))
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func Issue5035_InferredCallee_PreservesSelectedMemberAndLogicalType(chained bool) {
         VerifySuspendingCallee(chained, "inferred")
     }

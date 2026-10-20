@@ -544,11 +544,11 @@ class Lowerer : BoundTreeRewriter {
             this.declaringType != nil &&
             DeclaresPropertyDirectly(this.declaringType, node.Property) {
             return BoundFieldAccessExpression(
-                nil,
+                node.Syntax,
                 node.Receiver,
                 node.StructType,
                 node.Property.BackingField!!,
-                node.SubstitutedType,
+                node.SubstitutedType ?? node.Property.Type,
                 node.NarrowedType
             )
         }

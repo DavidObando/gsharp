@@ -303,7 +303,7 @@ internal partial class ExpressionBinder {
                     let makeNarrowedField(TypeSymbol) -> BoundExpression = (
                         narrowedType TypeSymbol
                     ) -> BoundFieldAccessExpression(
-                        nil,
+                        leftName,
                         BoundVariableExpression(nil, implicitField.Receiver),
                         implicitField.StructType,
                         implicitField.Field,
@@ -311,7 +311,7 @@ internal partial class ExpressionBinder {
                     )
                     receiver = BuildNarrowedRead(
                         BoundFieldAccessExpression(
-                            nil,
+                            leftName,
                             BoundVariableExpression(nil, implicitField.Receiver),
                             implicitField.StructType,
                             implicitField.Field

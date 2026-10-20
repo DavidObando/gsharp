@@ -787,7 +787,7 @@ shared class BoundSemantics {
         case variable is BoundVariableExpression: variable.Variable
         case call is BoundCallOperationExpression: call.CalledFunction
         case property is BoundPropertyReferenceOperationExpression: property.ReferencedProperty
-        case field is BoundFieldAccessExpression: field.Field
+        case field is BoundFieldAccessExpression: ReferencedFieldSymbol(field)
         case literal is BoundLiteralExpression when literal.StaticEnumMember != nil: literal.StaticEnumMember
         case literal is BoundLiteralExpression: literal.StaticConstantFieldRead?.Field
         default: default(Symbol?)
@@ -822,7 +822,7 @@ shared class BoundSemantics {
                 .Property
                 .WithSignature(substitutedType, property.Property.Parameters)
             case property is BoundPropertyAccessExpression: property.Property
-            case field is BoundFieldAccessExpression: field.Field
+            case field is BoundFieldAccessExpression: ReferencedFieldSymbol(field)
             case literal is BoundLiteralExpression when literal.StaticEnumMember != nil: literal.StaticEnumMember
             case literal is BoundLiteralExpression: literal.StaticConstantFieldRead?.Field
             default: default(Symbol?)
@@ -836,6 +836,18 @@ shared class BoundSemantics {
             symbol
         } else {
             default(Symbol?)
+        }
+    }
+
+    private func ReferencedFieldSymbol(field BoundFieldAccessExpression) Symbol {
+        let property = TypeMemberModel.PropertyForBackingField(field.StructType, field.Field)
+        if property == nil {
+            return field.Field
+        }
+        return if field.SubstitutedType is {} substituted && !object.ReferenceEquals(substituted, property.Type) {
+            property.WithSignature(substituted, property.Parameters)
+        } else {
+            property
         }
     }
 }

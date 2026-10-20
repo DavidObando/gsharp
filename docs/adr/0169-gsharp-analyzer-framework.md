@@ -216,6 +216,15 @@ Verified base/spill copies preserve an existing exact-operand marker. Ordinary
 authored awaits and synthesized control-flow/disposal awaits are not marked
 merely because they have no syntax or contain a call.
 
+Implicit instance-field reads keep their original name anchor through narrowing
+and verified field copies; the synthesized `this` remains synthetic. Auto-property
+storage reads resolve the unique exact canonical `PropertySymbol.BackingField`
+association in their effective closed owner, not a backing-field spelling.
+Declared/substituted member signatures remain separate from flow-narrowed read types.
+Property-to-storage lowering retains the selected property's logical substituted
+type and syntax; fresh same-member field/property/call copies keep their original
+syntax identity when rewriting a receiver.
+
 Representation-changing constant folding retains the actual selected source
 field read (its `FieldSymbol` and effective closed owner), not just a literal
 value or member name. A verified fold carries that semantic association to

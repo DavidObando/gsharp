@@ -937,7 +937,7 @@ internal partial class ExpressionBinder {
                 return node
             }
             let baseRead = BoundFieldAccessExpression(
-                nil,
+                fieldAccess.Syntax,
                 fieldAccess.Receiver,
                 fieldAccess.StructType,
                 fieldAccess.Field,
@@ -947,7 +947,7 @@ internal partial class ExpressionBinder {
             let makeNarrowedField(TypeSymbol) -> BoundExpression = (
                 narrowedType TypeSymbol
             ) -> BoundFieldAccessExpression(
-                nil,
+                fieldAccess.Syntax,
                 fieldAccess.Receiver,
                 fieldAccess.StructType,
                 fieldAccess.Field,
