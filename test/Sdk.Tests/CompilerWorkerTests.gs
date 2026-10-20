@@ -40,6 +40,82 @@ open class CompilerWorkerTests : IDisposable {
     }
 
     @Fact
+    func OwnerDisconnectTerminatesABlockedCompilerAndItsChild() {
+        let marker = Path.Combine(directory, "blocked-child.pid")
+        let escapedMarker = marker.Replace("\\", "\\\\").Replace("\"", "\\\"")
+        File.WriteAllText(
+            Path.Combine(directory, "blocker.gs"),
+            "import System\nimport System.IO\nimport System.Threading\n" +
+                "func Main() {\n File.WriteAllText(\"${escapedMarker}.new\", Environment.ProcessId.ToString())\n " +
+                "File.Move(\"${escapedMarker}.new\", \"$escapedMarker\")\n Thread.Sleep(Timeout.Infinite)\n}"
+        )
+        let (toolExit, toolDiagnostics) = Standalone(
+            directory,
+            []string{"/out:blocker.dll", "/target:exe", "/targetframework:net10.0", "blocker.gs"}
+        )
+        Assert.True(toolExit == 0, toolDiagnostics)
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { }")
+        let arguments = WithReferences(
+            []string{
+                "/out:result.dll",
+                "/target:library",
+                "/analyzer:unused.dll",
+                "/gsgentool:" + Path.Combine(directory, "blocker.dll"),
+                "input.gs"
+            }
+        )
+        using let cancellation = CancellationTokenSource()
+        using let accepted = ManualResetEventSlim()
+        let processField = typeof(WorkerProcessClient).GetField(
+            "process",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        ) ??
+            throw InvalidOperationException("The real worker process field is required.")
+        let request = Task.Run(
+            () -> {
+                try {
+                    client.TryRun(
+                        CompilerPath(),
+                        "--compiler-worker",
+                        directory,
+                        arguments,
+                        1,
+                        cancellation.Token,
+                        (_line string) -> { },
+                        (_line string) -> { },
+                        (line string) -> {
+                            if line.Contains("accepted request") {
+                                accepted.Set()
+                            }
+                        },
+                        out var _exit
+                    )
+                    return false
+                } catch (ex IOException) {
+                    return true
+                } catch (ex OperationCanceledException) {
+                    return false
+                }
+            }
+        )
+        try {
+            Assert.True(accepted.Wait(5000))
+            Assert.True(SpinWait.SpinUntil(() -> File.Exists(marker), 5000))
+            let worker = processField.GetValue(client) as Process ??
+                throw InvalidOperationException("The accepted request must have a worker.")
+            using let child = Process.GetProcessById(int32.Parse(File.ReadAllText(marker)))
+            worker.StandardInput.Close()
+            Assert.True(worker.WaitForExit(5000), "Worker survived its owner's input disconnection.")
+            Assert.True(child.WaitForExit(5000), "The blocked compiler's child survived owner disconnection.")
+            Assert.True(request.Wait(5000))
+            Assert.True(request.Result)
+        } finally {
+            cancellation.Cancel()
+            request.Wait(5000)
+        }
+    }
+
+    @Fact
     func ReusedCompilerCreatesOneIsolatedMeasurementSessionPerRequest() {
         let previous = Environment.GetEnvironmentVariable("GSHARP_MEASURE_PHASES")
         File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { }")
