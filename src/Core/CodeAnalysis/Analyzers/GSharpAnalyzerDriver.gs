@@ -401,6 +401,7 @@ class GSharpAnalyzerDriver {
             if analyzers.IsDefaultOrEmpty {
                 return ImmutableArray[Diagnostic].Empty
             }
+            using let measurement = CompilationMeasurements.BeginPhase("analyzers")
             let driver = GSharpAnalyzerDriver(compilation, options ?? AnalyzerOptions(), cancellationToken)
             driver.RunCore(analyzers)
             return driver.diagnostics.ToImmutableArray()

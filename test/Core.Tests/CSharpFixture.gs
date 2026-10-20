@@ -20,11 +20,15 @@ internal class CSharpFixture : IDisposable {
     internal init(
         source string,
         additionalReferences IEnumerable[MetadataReference]? = nil,
-        parseOptions CSharpParseOptions? = nil
+        parseOptions CSharpParseOptions? = nil,
+        assemblyName string? = nil
     ) {
         DirectoryPath = Path.Combine(AppContext.BaseDirectory, "csharp-fixtures", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(DirectoryPath)
-        AssemblyPath = Path.Combine(DirectoryPath, "CSharpContract" + Guid.NewGuid().ToString("N") + ".dll")
+        AssemblyPath = Path.Combine(
+            DirectoryPath,
+            (assemblyName ?? ("CSharpContract" + Guid.NewGuid().ToString("N"))) + ".dll"
+        )
         try {
             let compilation = CSharpCompilation.Create(
                 Path.GetFileNameWithoutExtension(AssemblyPath),

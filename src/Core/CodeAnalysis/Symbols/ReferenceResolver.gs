@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.Symbols
 
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Binding.OverloadResolution
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Concurrent
@@ -19,6 +20,7 @@ import System.Reflection.Metadata
 import System.Reflection.PortableExecutable
 import System.Runtime.CompilerServices
 import System.Runtime.Loader
+import System.Security.Cryptography
 import System.Threading
 import SystemObject = System.Object
 
@@ -797,10 +799,13 @@ class ReferenceResolver : IDisposable {
     /// it costs roughly one index build.
     /// @returns A snapshot of the resolver's type-name surface.
     func ExportMetadataIndex() ReferenceMetadataIndex {
+        using let measurement = CompilationMeasurements.BeginPhase("references.metadata-index-export")
         let identities = ImmutableArray.CreateBuilder[string](assemblies.Length)
         let namesByAssembly = ImmutableArray.CreateBuilder[ImmutableArray[string]](assemblies.Length)
+        let fingerprints = ImmutableArray.CreateBuilder[string](assemblies.Length)
         for asm in assemblies {
             identities.Add(asm.GetName().FullName)
+            fingerprints.Add(GetReferenceContentFingerprint(asm))
             let names = ImmutableArray.CreateBuilder[string]()
             for t in EnumerateDefinedAndForwardedTypes(asm) {
                 if t.FullName is {} fullName {
@@ -809,7 +814,11 @@ class ReferenceResolver : IDisposable {
             }
             namesByAssembly.Add(names.ToImmutable())
         }
-        return ReferenceMetadataIndex.Create(identities.MoveToImmutable(), namesByAssembly.MoveToImmutable())
+        return ReferenceMetadataIndex.Create(
+            identities.MoveToImmutable(),
+            namesByAssembly.MoveToImmutable(),
+            fingerprints.MoveToImmutable()
+        )
     }
 
     /// ADR-0107: adopts a previously-built (cref:ReferenceMetadataIndex)
@@ -818,25 +827,43 @@ class ReferenceResolver : IDisposable {
     /// recorded assembly identities match this resolver's freshly-loaded
     /// assemblies <em>exactly</em> (same count, same
     /// (cref:System.Reflection.AssemblyName.FullName) in the same order);
-    /// any mismatch returns `false` and leaves the resolver on
-    /// the cold (eager) path. This identity check is defence-in-depth on top of
-    /// the cache's reference-set fingerprint: if the references somehow changed
-    /// without the fingerprint noticing, the payload is still rejected here.
+    /// Content fingerprints must also match. Same-identity reference replacements
+    /// return `false` and leave the resolver on the cold path.
+    /// Runtime assemblies without immutable image snapshots cannot verify an index.
     /// Must be called before the first resolution so the warm index is in place
     /// for binding.
     /// @param index The candidate metadata index.
     /// @returns `true` when the index was adopted; otherwise `false`.
     func TryUseMetadataIndex(index ReferenceMetadataIndex?) bool {
+        using let measurement = CompilationMeasurements.BeginPhase("references.metadata-index-adopt")
         if index == nil || index.AssemblyIdentities.Length != assemblies.Length {
             return false
         }
         for var i = 0; i < assemblies.Length; i++ {
-            if !string.Equals(index.AssemblyIdentities[i], assemblies[i].GetName().FullName, StringComparison.Ordinal) {
+            if !string.Equals(
+                index.AssemblyIdentities[i],
+                assemblies[i].GetName().FullName,
+                StringComparison.Ordinal
+            ) ||
+                string.IsNullOrEmpty(index.ContentFingerprints[i]) || !string.Equals(
+                index.ContentFingerprints[i],
+                GetReferenceContentFingerprint(assemblies[i]),
+                StringComparison.Ordinal
+            ) {
                 return false
             }
         }
         warmNameIndex = index.ToNameIndex()
+        CompilationMeasurements.Count("references.metadata-index-adoptions")
         return true
+    }
+
+    private func GetReferenceContentFingerprint(assembly Assembly) string {
+        if AssemblyContentFingerprints.TryGetValue(assembly, out var fingerprint) {
+            return assembly.ManifestModule.ModuleVersionId.ToString("N") + ":" + fingerprint.Value
+        }
+        // Runtime assemblies have no immutable image snapshot here. A later disk read cannot verify their loaded bytes.
+        return string.Empty
     }
 
     /// Returns whether the reference set contains at least one type below the
@@ -855,6 +882,7 @@ class ReferenceResolver : IDisposable {
         candidates.Any((candidate string) -> TryResolveType(candidate, out _))
 
     private func BuildArityInsensitiveTypeNames() Dictionary[string, ImmutableArray[string]] {
+        using let measurement = CompilationMeasurements.BeginPhase("references.arity-name-index")
         let names IEnumerable[string] = if warmNameIndex != nil {
             cast[IEnumerable[string]](warmNameIndex!!.Keys)
         } else {
@@ -885,6 +913,7 @@ class ReferenceResolver : IDisposable {
     }
 
     private func BuildNamespaceIndex() ImmutableHashSet[string] {
+        using let measurement = CompilationMeasurements.BeginPhase("references.namespace-index")
         let builder = ImmutableHashSet.CreateBuilder[string](StringComparer.Ordinal)
         let AddNamespacePrefixes = func (typeName string) {
             let topLevelName = typeName.Split('+')[0]
@@ -1078,12 +1107,14 @@ class ReferenceResolver : IDisposable {
             var asm Assembly
             if assemblyBytes.TryGetValue(fileName, out var bytes) {
                 asm = context.LoadFromByteArray(bytes)
+                ReferenceResolver.RegisterAssemblyContentFingerprint(asm, bytes)
             } else {
                 // Fallback: read from disk with sharing flags.
                 using let fs = FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)
                 let buffer = [int32(fs.Length)]uint8
                 fs.ReadExactly(buffer)
                 asm = context.LoadFromByteArray(buffer)
+                ReferenceResolver.RegisterAssemblyContentFingerprint(asm, buffer)
             }
             ReferenceResolver.RegisterAssemblyOriginalPath(asm, path)
             return asm
@@ -1094,6 +1125,7 @@ class ReferenceResolver : IDisposable {
             if !string.IsNullOrEmpty(simpleName) && assemblyBytes.TryGetValue(simpleName!!, out var bytes) {
                 try {
                     let asm = context.LoadFromByteArray(bytes)
+                    ReferenceResolver.RegisterAssemblyContentFingerprint(asm, bytes)
                     if assemblyPaths.TryGetValue(simpleName!!, out var originalPath) {
                         ReferenceResolver.RegisterAssemblyOriginalPath(asm, originalPath)
                     }
@@ -1158,6 +1190,15 @@ class ReferenceResolver : IDisposable {
             Assembly,
             string
         ]()
+        private let AssemblyContentFingerprints ConditionalWeakTable[Assembly, Lazy[string]] =
+        ConditionalWeakTable[Assembly, Lazy[string]]()
+
+        private func RegisterAssemblyContentFingerprint(assembly Assembly, bytes[]uint8) {
+            AssemblyContentFingerprints.GetValue(
+                assembly,
+                (key Assembly) -> Lazy[string](() -> Convert.ToHexString(SHA256.HashData(bytes)))
+            )
+        }
 
         // Memoizes TryResolveType results for the lifetime of this resolver.
         //
@@ -1676,6 +1717,7 @@ class ReferenceResolver : IDisposable {
         }
 
         private func BuildTypeNameIndex(assemblies ImmutableArray[Assembly]) Dictionary[string, Type] {
+            using let measurement = CompilationMeasurements.BeginPhase("references.type-name-index")
             let index = Dictionary[string, Type](StringComparer.Ordinal)
             for asm in assemblies {
                 for t in EnumerateDefinedAndForwardedTypes(asm) {

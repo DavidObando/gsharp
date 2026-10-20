@@ -9,6 +9,7 @@ import System.Collections.Generic
 import System.Collections.Immutable
 import System.Globalization
 import System.IO
+import System.Linq
 
 /// A serializable snapshot of the full-type-name → declaring-assembly index that
 /// (cref:ReferenceResolver) derives from a reference set. It exists so the
@@ -22,7 +23,7 @@ import System.IO
 /// (cref:Type) objects, which are bound to a live
 /// (cref:System.Reflection.MetadataLoadContext) and cannot survive a process
 /// exit. A consumer re-creates the load context, validates the recorded assembly
-/// identities against the freshly-loaded ones, and then materialises individual
+/// identities and content fingerprints against the freshly-loaded ones, then materialises individual
 /// (cref:Type) instances lazily by name (see
 /// (cref:ReferenceResolver.TryUseMetadataIndex)). Because the recorded names
 /// are exactly those the eager enumeration produced, warm resolution is a superset
@@ -38,13 +39,16 @@ import System.IO
 class ReferenceMetadataIndex {
     private let assemblyIdentities ImmutableArray[string]
     private let typeNamesByAssembly ImmutableArray[ImmutableArray[string]]
+    private let contentFingerprints ImmutableArray[string]
 
     private init(
         assemblyIdentities ImmutableArray[string],
-        typeNamesByAssembly ImmutableArray[ImmutableArray[string]]
+        typeNamesByAssembly ImmutableArray[ImmutableArray[string]],
+        contentFingerprints ImmutableArray[string]
     ) {
         this.assemblyIdentities = assemblyIdentities
         this.typeNamesByAssembly = typeNamesByAssembly
+        this.contentFingerprints = contentFingerprints
     }
 
     /// Gets the recorded assembly identities ((cref:System.Reflection.AssemblyName.FullName)),
@@ -52,6 +56,8 @@ class ReferenceMetadataIndex {
     /// (cref:ReferenceResolver) searches them. Consumers validate these
     /// against the freshly-loaded reference set before trusting the payload.
     prop AssemblyIdentities ImmutableArray[string] -> assemblyIdentities
+    /// Gets content fingerprints in resolver search order. Empty entries cannot be adopted.
+    prop ContentFingerprints ImmutableArray[string] -> contentFingerprints
 
     /// Builds the merged full-name → assembly-index map with <em>first-writer-wins</em>
     /// precedence (the first assembly, in search order, that declares a given name
@@ -102,6 +108,9 @@ class ReferenceMetadataIndex {
             writer.Write("assembly=")
             writer.Write(assemblyIdentities[i] ?? string.Empty)
             writer.Write('\n')
+            writer.Write("contentFingerprint=")
+            writer.Write(contentFingerprints[i])
+            writer.Write('\n')
             writer.Write("typeNameCount=")
             writer.Write(names.Length.ToString(CultureInfo.InvariantCulture))
             writer.Write('\n')
@@ -118,7 +127,7 @@ class ReferenceMetadataIndex {
         /// newer payload is rejected (cold rebuild) rather than misread. This is
         /// independent of the cache <em>descriptor</em> version owned by the
         /// language server, and is folded into the descriptor fingerprint.
-        const FormatVersion int32 = 2
+        const FormatVersion int32 = 3
 
         /// The INI-style section header under which the index is serialized inside
         /// the `.lscache` descriptor. The section is always written last so
@@ -144,6 +153,17 @@ class ReferenceMetadataIndex {
         func Create(
             assemblyIdentities ImmutableArray[string],
             typeNamesByAssembly ImmutableArray[ImmutableArray[string]]
+        ) ReferenceMetadataIndex -> Create(assemblyIdentities, typeNamesByAssembly, default(ImmutableArray[string]))
+
+        /// Creates an index with content fingerprints. Unverified entries cannot be adopted by a resolver.
+        /// @param assemblyIdentities Assembly full names in search order.
+        /// @param typeNamesByAssembly Type full-names per assembly.
+        /// @param contentFingerprints Content fingerprints in search order, or default for unverified entries.
+        /// @returns A new metadata index.
+        func Create(
+            assemblyIdentities ImmutableArray[string],
+            typeNamesByAssembly ImmutableArray[ImmutableArray[string]],
+            contentFingerprints ImmutableArray[string]
         ) ReferenceMetadataIndex {
             if assemblyIdentities.Length != typeNamesByAssembly.Length {
                 throw ArgumentException(
@@ -151,7 +171,15 @@ class ReferenceMetadataIndex {
                     "typeNamesByAssembly"
                 )
             }
-            return ReferenceMetadataIndex(assemblyIdentities, typeNamesByAssembly)
+            let fingerprints = if contentFingerprints.IsDefault {
+                Enumerable.Repeat(string.Empty, assemblyIdentities.Length).ToImmutableArray()
+            } else {
+                contentFingerprints
+            }
+            if fingerprints.Length != assemblyIdentities.Length {
+                throw ArgumentException("Content fingerprints must match the assembly count.", "contentFingerprints")
+            }
+            return ReferenceMetadataIndex(assemblyIdentities, typeNamesByAssembly, fingerprints)
         }
 
         /// Attempts to parse the (cref:SectionHeader) section out of a
@@ -191,11 +219,16 @@ class ReferenceMetadataIndex {
                 }
                 let identities = ImmutableArray.CreateBuilder[string](assemblyCount)
                 let names = ImmutableArray.CreateBuilder[ImmutableArray[string]](assemblyCount)
+                let fingerprints = ImmutableArray.CreateBuilder[string](assemblyCount)
                 for var a = 0; a < assemblyCount; a++ {
                     if !TryReadStringField(lines, &cursor, "assembly", out var identity) {
                         return false
                     }
                     if identity == nil {
+                        return false
+                    }
+                    if !TryReadStringField(lines, &cursor, "contentFingerprint", out var fingerprint) ||
+                        fingerprint == nil {
                         return false
                     }
                     if !TryReadIntField(lines, &cursor, "typeNameCount", out var nameCount) ||
@@ -212,9 +245,14 @@ class ReferenceMetadataIndex {
                         cursor++
                     }
                     identities.Add(identity)
+                    fingerprints.Add(fingerprint)
                     names.Add(perAssembly.MoveToImmutable())
                 }
-                index = ReferenceMetadataIndex(identities.MoveToImmutable(), names.MoveToImmutable())
+                index = ReferenceMetadataIndex(
+                    identities.MoveToImmutable(),
+                    names.MoveToImmutable(),
+                    fingerprints.MoveToImmutable()
+                )
                 return true
             } catch (OutOfMemoryException) {
                 // A corrupt count could request an absurd allocation; the bounds

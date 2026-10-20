@@ -271,6 +271,12 @@ open class Program {
                 return Error
             }
             try {
+                using let measurements = CompilationMeasurements.StartFromEnvironment("gsc")
+                using let requestPhase = CompilationMeasurements.BeginPhase("compilation")
+                CompilationMeasurements.SetProperty("target-framework", parsed.TargetFramework ?? "unspecified")
+                CompilationMeasurements.SetProperty("nullability", parsed.Nullability.ToString())
+                CompilationMeasurements.SetProperty("optimize", parsed.Optimize.ToString())
+                CompilationMeasurements.SetProperty("deterministic", parsed.Deterministic.ToString())
                 // Issue #2215: when /analyzer: paths are supplied, spawn gsgen (a
                 // sibling process — ADR-0027 keeps Roslyn out of gsc) to run the
                 // project's source generators and fold the generated .gs into this
@@ -285,6 +291,21 @@ open class Program {
                     allSourceFiles.AddRange(generatedGsFiles)
                 }
                 let syntaxTrees = List[SyntaxTree](allSourceFiles.Count)
+                CompilationMeasurements.Count("input.sources", allSourceFiles.Count)
+                if CompilationMeasurements.IsEnabled {
+                    let granted = if int32.TryParse(
+                        Environment.GetEnvironmentVariable("GSHARP_WORKER_GRANT"),
+                        out var grant
+                    ) &&
+                        grant > 0 {
+                        grant
+                    } else {
+                        1
+                    }
+                    CompilationMeasurements.Count("workers.granted", granted)
+                    CompilationMeasurements.Count("workers.active", 1)
+                }
+                using let parsePhase = CompilationMeasurements.BeginPhase("parse")
                 for path in allSourceFiles {
                     if !File.Exists(path) {
                         Console.Error.WriteLine("Unable to find specified file $path")
@@ -296,13 +317,19 @@ open class Program {
                     // unresolvable, which surfaces as a phantom tab with
                     // "Could not load source ...: Incorrect format of 'source' message."
                     let fullPath = Path.GetFullPath(path)
+                    if CompilationMeasurements.IsEnabled {
+                        CompilationMeasurements.Count("input.source-bytes", FileInfo(fullPath).Length)
+                    }
                     syntaxTrees.Add(SyntaxTree.Load(fullPath))
                 }
+                parsePhase?.Dispose()
+                using let referencePhase = CompilationMeasurements.BeginPhase("references.setup")
                 if !ReferenceResolver.TryValidateDriverReferencePaths(parsed.References, out var referenceError) {
                     Console.Error.WriteLine(referenceError)
                     return Error
                 }
                 let referencePaths = ReferenceResolver.ResolveDriverReferencePaths(parsed.References)
+                CompilationMeasurements.Count("input.references", referencePaths.Count)
                 let references = if parsed.OutputPath == nil {
                     ReferenceResolver.WithRuntimeReferences(referencePaths)
                 } else {
@@ -319,6 +346,7 @@ open class Program {
                 } else {
                     cast[ILogger](NullLogger.Instance)
                 }
+                referencePhase?.Dispose()
                 try {
                     logger.LogInfo(
                         "Starting compiler. Sources: ${parsed.SourceFiles.Count}; Output: ${parsed.OutputPath ?? "<none>"}"

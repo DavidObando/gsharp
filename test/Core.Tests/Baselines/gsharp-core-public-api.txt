@@ -2835,6 +2835,8 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundScope : System.Object
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.StructSymbol> GetDeclaredStructs()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.VariableSymbol> GetDeclaredVariables()
   method public System.Collections.Immutable.ImmutableDictionary`2<String, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> GetDeclaredTypeAliases()
+  method public System.Collections.Immutable.ImmutableDictionary`2<String, System.Collections.Immutable.ImmutableDictionary`2<String, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol>> CaptureTypeAliasIndex()
+  method public System.Collections.Immutable.ImmutableDictionary`2<System.ValueTuple`2<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol, String>, System.Collections.Immutable.ImmutableDictionary`2<String, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol>> CaptureNestedTypeAliasIndex()
   method public System.Collections.Immutable.ImmutableHashSet`1<String> get_PreprocessorSymbols()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Binding.BoundScope parent)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Binding.BoundScope parent, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references)
@@ -3270,6 +3272,19 @@ type sealed class GSharp.Core.CodeAnalysis.ClosureValue : System.Object
   property public GSharp.Core.CodeAnalysis.Symbols.FunctionTypeSymbol FunctionType { get; }
   property public System.Collections.Generic.Dictionary`2<GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> CapturedTypeArguments { get; }
   property public System.Collections.Generic.Dictionary`2<GSharp.Core.CodeAnalysis.Symbols.VariableSymbol, Object> CapturedLocals { get; }
+type sealed class GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements : System.Object, System.IDisposable
+  method public Int64 GetCounter(String name)
+  method public String get_Tool()
+  method public Void WriteJson(String path)
+  method public sealed Void Dispose()
+  method public static Boolean get_IsEnabled()
+  method public static GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements Start(String tool, String outputPath = null)
+  method public static System.IDisposable BeginPhase(String name)
+  method public static System.IDisposable StartFromEnvironment(String tool)
+  method public static Void Count(String name, Int64 amount = 1)
+  method public static Void SetProperty(String name, String value)
+  property public Boolean IsEnabled { get; }
+  property public String Tool { get; }
 type sealed class GSharp.Core.CodeAnalysis.Diagnostic : System.Object
   method public Boolean get_IsError()
   method public GSharp.Core.CodeAnalysis.Diagnostic WithSeverity(GSharp.Core.CodeAnalysis.DiagnosticSeverity severity)
@@ -5093,14 +5108,17 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.RectangularArrayTypeSymbol : 
   property public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol ElementType { get; }
   property public Int32 Rank { get; }
 type sealed class GSharp.Core.CodeAnalysis.Symbols.ReferenceMetadataIndex : System.Object
-  field public const Int32 FormatVersion = 2
+  field public const Int32 FormatVersion = 3
   field public const String SectionHeader = "[metadataIndex]"
   method public System.Collections.Generic.Dictionary`2<String, Int32> ToNameIndex()
   method public System.Collections.Immutable.ImmutableArray`1<String> get_AssemblyIdentities()
+  method public System.Collections.Immutable.ImmutableArray`1<String> get_ContentFingerprints()
   method public Void WriteTextSection(System.IO.TextWriter writer)
   method public static Boolean TryReadTextSection(System.Collections.Generic.IReadOnlyList`1<String> lines, out GSharp.Core.CodeAnalysis.Symbols.ReferenceMetadataIndex index)
   method public static GSharp.Core.CodeAnalysis.Symbols.ReferenceMetadataIndex Create(System.Collections.Immutable.ImmutableArray`1<String> assemblyIdentities, System.Collections.Immutable.ImmutableArray`1<System.Collections.Immutable.ImmutableArray`1<String>> typeNamesByAssembly)
+  method public static GSharp.Core.CodeAnalysis.Symbols.ReferenceMetadataIndex Create(System.Collections.Immutable.ImmutableArray`1<String> assemblyIdentities, System.Collections.Immutable.ImmutableArray`1<System.Collections.Immutable.ImmutableArray`1<String>> typeNamesByAssembly, System.Collections.Immutable.ImmutableArray`1<String> contentFingerprints)
   property public System.Collections.Immutable.ImmutableArray`1<String> AssemblyIdentities { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<String> ContentFingerprints { get; }
 type sealed class GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver : System.Object, System.IDisposable
   method public Boolean CanAccessInternalMembers(System.Reflection.Assembly assembly)
   method public Boolean IsHostFallback(System.Type type)
