@@ -13,4 +13,4 @@
     
   </ItemGroup>
 
-<ItemGroup><Reference Include="GSharp.Core"><HintPath>$([System.IO.Path]::GetDirectoryName('$(GsharpCompilerFullPath)'))/GSharp.Core.dll</HintPath><Private>true</Private></Reference></ItemGroup><ItemGroup><PackageReference Include="GSharp.CodeAnalysis.Analyzers.Testing" Version="0.5.7" /></ItemGroup></Project>
+<ItemGroup><Reference Include="GSharp.Core"><HintPath>$([System.IO.Path]::GetDirectoryName('$(GsharpCompilerFullPath)'))/GSharp.Core.dll</HintPath><Private>true</Private></Reference></ItemGroup><ItemGroup><PackageReference Include="GSharp.CodeAnalysis.Analyzers.Testing" Version="0.5.179" /></ItemGroup></Project>

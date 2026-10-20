@@ -79,7 +79,7 @@ with these deliberate differences, all found while preparing the commit:
 - `GSA0001`-`GSA0003` are retired by hand (`docs/internal-analyzers.md`).
 - `build/selfhost-stage2.py` names the two stage helpers `PackageContentHash.gs` and
   `TestSupervisorLogger.gs`; `build/test-selfhost-stage2.py` skips the C# corpus derivation test
-  on a G# tree; `build/check-release-version-refs.py` allow-lists the bootstrap pin (`0.4.1270` at the cut-over, now `0.5.7`)
+  on a G# tree; `build/check-release-version-refs.py` allow-lists the bootstrap pin (`0.4.1270` at the cut-over, now `0.5.179`)
   in `global.json` and `InternalAnalyzers.Tests.gsproj`.
 - `build.yml` checks the final C# tag out beside the workspace, **builds it**, and exports
   `CS2GS_TEST_SOURCE_ROOT` for the `Cs2Gs.Tests` shards only (see "Source-inspection tests need the
