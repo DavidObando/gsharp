@@ -87,6 +87,10 @@ Cancellation kills the worker process tree; the next request starts a new
 worker. Replacing the tool payload also starts a new worker.
 The SDK serializes idle retirement with request dispatch. The server does
 not independently expire while a request is being submitted.
+An owner-input reader stays active during compilation. Closing the owner
+pipe terminates the worker and its ordinary descendants through an owned
+Unix process group or Windows job. If containment cannot be established,
+the handshake fails and the SDK logs its standalone fallback.
 
 The SDK logs unavailable transport or an incompatible handshake before
 falling back to standalone compilation. Transport loss after sending a
