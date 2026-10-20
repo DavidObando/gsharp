@@ -85,6 +85,8 @@ retained-memory and request-count bounds, not limits on a compilation's
 peak memory or native working set. The build disposes its workers on exit.
 Cancellation kills the worker process tree; the next request starts a new
 worker. Replacing the tool payload also starts a new worker.
+The SDK serializes idle retirement with request dispatch. The server does
+not independently expire while a request is being submitted.
 
 The SDK logs unavailable transport or an incompatible handshake before
 falling back to standalone compilation. Transport loss after sending a
