@@ -15,11 +15,14 @@ import Compilation = GSharp.Core.CodeAnalysis.Compilation.Compilation
 import GsReferenceResolver = GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver
 import GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree
 import System.Text
+import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Workers
 
-/// One-shot entry point for the `gsgen` tool (ADR-0145 §A/§F). The MSBuild
+/// Entry point for the `gsgen` tool (ADR-0145 §A/§F). The MSBuild
 /// SDK invokes it as `dotnet gsgen.dll @file.rsp`; it projects the supplied
 /// G# sources to a C# stub, runs the supplied Roslyn generators over it, and
 /// writes the back-translated `.g.gs` parts to the output directory.
+/// Opt-in build workers use the same request path with bounded immutable metadata reuse.
 /// @remarks Diagnostics are written to STDOUT in gsc's canonical header format
 /// (`file(line,col[,endLine,endCol]): severity CODE: message`) so the
 /// MSBuild `BuildTask` regex can relay them with structured location, code,
@@ -30,16 +33,73 @@ shared class GsgenProgram {
     /// logic stays testable in-process without spawning a child process.
     /// @param args The response-file-expanded arguments.
     /// @returns The process exit code.
-    func Main(args[]string) int32 -> Run(args, Console.Out)
+    func Main(args[]string) int32 {
+        if args.Length == 1 && args[0] == "--generator-worker" {
+            let cache = MetadataReferenceCache()
+            var contexts IReadOnlyList[WeakReference] = Array.Empty[WeakReference]()
+            var stableReferences = true
+            return WorkerServer.Run(
+                typeof(GsgenProgram).Assembly.Location,
+                (request[]string) -> RunRequest(request, Console.Out, cache, out contexts, out stableReferences),
+                () -> stableReferences && contexts.All((context WeakReference) -> !context.IsAlive)
+            )
+        }
+        return Run(args, Console.Out)
+    }
 
     /// Runs the generator host over the parsed arguments, writing diagnostics to
     /// [`stdout`](paramref) and returning a process exit code.
     /// @param args The response-file-expanded arguments.
     /// @param stdout The sink for diagnostics (the process stdout in production).
     /// @returns 0 on success (even with generator warnings); non-zero on a hard host failure.
-    func Run(args[]string, stdout TextWriter) int32 {
+    func Run(args[]string, stdout TextWriter) int32 -> RunRequest(args, stdout, nil, out _, out _)
+
+    /// Runs one request using the worker's bounded, content-validated metadata cache.
+    /// @param args Response-file arguments for this request.
+    /// @param stdout The request's diagnostics sink.
+    /// @param metadataCache Immutable reference images owned by the worker.
+    /// @returns The request exit code.
+    func Run(args[]string, stdout TextWriter, metadataCache MetadataReferenceCache) int32 ->
+    RunRequest(args, stdout, metadataCache, out _, out _)
+
+    private func RunRequest(
+        args[]string,
+        stdout TextWriter,
+        metadataCache MetadataReferenceCache?,
+        out contexts IReadOnlyList[WeakReference],
+        out stableReferences bool
+    ) int32 {
+        contexts = Array.Empty[WeakReference]()
+        stableReferences = true
         ArgumentNullException.ThrowIfNull(stdout, paramName: "stdout")
         try {
+            using let measurements = CompilationMeasurements.StartFromEnvironment("gsgen")
+            using let request = CompilationMeasurements.BeginPhase("generator.request")
+            if CompilationMeasurements.IsEnabled {
+                CompilationMeasurements.SetProperty(
+                    "generator.host.mvid",
+                    typeof(GsgenProgram).Assembly.ManifestModule.ModuleVersionId.ToString("D")
+                )
+                CompilationMeasurements.SetProperty(
+                    "generator.roslyn.version",
+                    typeof(Microsoft.CodeAnalysis.CSharp.CSharpCompilation)
+                        .Assembly
+                        .GetName()
+                        .Version
+                        ?.ToString() ??
+                        string.Empty
+                )
+                CompilationMeasurements.SetProperty("generator.protocol.version", WorkerProtocol.Version.ToString())
+            }
+            let grantText = Environment.GetEnvironmentVariable("GSHARP_WORKER_GRANT")
+            CompilationMeasurements.Count(
+                "generator.worker_grant",
+                if int32.TryParse(grantText, out var grant) && grant > 0 {
+                    grant
+                } else {
+                    1
+                }
+            )
             // The .NET runtime does NOT auto-expand @response files for arbitrary
             // console apps, so — like gsc — gsgen expands them itself. The SDK
             // invokes `dotnet gsgen.dll @file.rsp`.
@@ -55,7 +115,10 @@ shared class GsgenProgram {
             // an empty manifest (so MSBuild's orphan cleanup still has a fresh,
             // empty owned-file list) and exit immediately.
             if parsed.AnalyzerPaths.Count == 0 && parsed.CsFiles.Count == 0 {
+                using let output = CompilationMeasurements.BeginPhase("generator.output")
+                CleanOrphans(parsed.OutDir, Array.Empty[string]())
                 WriteManifest(parsed.ManifestPath, Array.Empty[string]())
+                CompilationMeasurements.Count("generator.output_files", 0)
                 return 0
             }
             parsed.ValidateGsFilesExist()
@@ -63,18 +126,41 @@ shared class GsgenProgram {
             parsed.ValidateAdditionalFilesExist()
             let generatedGsFiles = List[(HintName string, GSharpSource string)]()
             var result GeneratorHostResult? = nil
-            if parsed.AnalyzerPaths.Count > 0 {
-                result = RunHost(parsed)
+            using let discovery = GeneratorRunner.Discover(parsed.AnalyzerPaths)
+            contexts = discovery.LoadContexts
+            // Analyzer-only assemblies must not trigger source parsing, G#
+            // reference loading, or projection. Empty *output* is not a skip key.
+            let metadataRefs = if discovery.Generators.Count > 0 || parsed.CsFiles.Count > 0 {
+                BuildMetadataReferences(parsed.References, metadataCache)
+            } else {
+                Array.Empty[MetadataReference]()
+            }
+            if discovery.Generators.Count > 0 {
+                // Default() includes the host's loaded assembly surface. Keep
+                // implicit-reference generation one-shot as that surface grows.
+                stableReferences = parsed.References.Any(File.Exists)
+                result = RunHost(parsed, discovery, metadataRefs)
                 generatedGsFiles.AddRange(result.GeneratedGsFiles)
+            } else {
+                result = GeneratorHostRunner.Empty(discovery.Failures)
             }
             if parsed.CsFiles.Count > 0 {
-                generatedGsFiles.AddRange(TranslateForeignCSharp(parsed))
+                generatedGsFiles.AddRange(TranslateForeignCSharp(parsed, metadataRefs))
             }
-            let written = WriteGeneratedFiles(parsed.OutDir, generatedGsFiles)
-            CleanOrphans(parsed.OutDir, written)
-            WriteManifest(parsed.ManifestPath, written)
             if result != nil {
                 EmitDiagnostics(stdout, result)
+                if result.HostDiagnostics.Count > 0 || result.GeneratorDiagnostics.Any(
+                    (diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error
+                ) {
+                    return 1
+                }
+            }
+            {
+                using let output = CompilationMeasurements.BeginPhase("generator.output")
+                let written = WriteGeneratedFiles(parsed.OutDir, generatedGsFiles)
+                CleanOrphans(parsed.OutDir, written)
+                WriteManifest(parsed.ManifestPath, written)
+                CompilationMeasurements.Count("generator.output_files", written.Count)
             }
             return 0
         } catch (ex Exception) {
@@ -85,11 +171,24 @@ shared class GsgenProgram {
         }
     }
 
-    private func RunHost(parsed GsgenArgs) GeneratorHostResult {
-        let syntaxTrees = parsed.GsFiles.Select(GsSyntaxTree.Load).ToArray()
+    private func RunHost(
+        parsed GsgenArgs,
+        discovery GeneratorDiscovery,
+        metadataRefs IReadOnlyList[MetadataReference]
+    ) GeneratorHostResult {
+        var syntaxTrees[]GsSyntaxTree
+        {
+            using let sourceLoading = CompilationMeasurements.BeginPhase("generator.source_loading")
+            syntaxTrees = parsed.GsFiles.Select(GsSyntaxTree.Load).ToArray()
+            CompilationMeasurements.Count("generator.source_files", syntaxTrees.Length)
+        }
         // (a) the G# reference resolver the Compilation binds imports against.
-        let resolver = GsReferenceResolver.WithReferences(parsed.References)
-        let metadataRefs = BuildMetadataReferences(parsed.References)
+        var resolver GsReferenceResolver
+        {
+            using let referenceSetup = CompilationMeasurements.BeginPhase("generator.reference_setup")
+            resolver = GsReferenceResolver.WithReferences(parsed.References)
+        }
+        using let referenceLifetime = resolver
         let compilation = Compilation(resolver, syntaxTrees)
         // Issue #2223: forward the project's non-source inputs (.axaml) and the
         // MSBuild options file/options-driven generators (e.g. Avalonia) read.
@@ -98,17 +197,11 @@ shared class GsgenProgram {
             .Select((spec AdditionalFileSpec) -> cast[AdditionalText](HostAdditionalText(spec.Path, spec.Metadata)))
             .ToList()
         let optionsProvider = HostAnalyzerConfigOptionsProvider(parsed.GlobalOptions)
-        return GeneratorHostRunner.RunFromAnalyzerPaths(
-            compilation,
-            metadataRefs,
-            parsed.AnalyzerPaths,
-            additionalTexts,
-            optionsProvider
-        )
+        return GeneratorHostRunner.RunDiscovered(compilation, metadataRefs, discovery, additionalTexts, optionsProvider)
     }
 
     /// The metadata references the host's C# stub/generated/foreign code binds
-    /// against. Filter to files that exist so `CreateFromFile` never throws.
+    /// against. Filter to files that exist before reading their metadata images.
     /// Issue #2215: augmented with the host's own trusted-platform (BCL)
     /// assemblies as a fallback for any name the caller didn't enumerate — the
     /// same "explicit wins, host BCL fills gaps" policy (cref:GsReferenceResolver.WithReferences)
@@ -133,11 +226,14 @@ shared class GsgenProgram {
     /// MVVM's `[ObservableProperty]` backing fields) to the G#
     /// `object` placeholder even though reference/user types resolved
     /// fine (they never go through `SpecialType`).
-    private func BuildMetadataReferences(referencePaths IReadOnlyList[string]) IReadOnlyList[MetadataReference] {
+    private func BuildMetadataReferences(
+        referencePaths IReadOnlyList[string],
+        metadataCache MetadataReferenceCache?
+    ) IReadOnlyList[MetadataReference] {
+        using let phase = CompilationMeasurements.BeginPhase("generator.metadata_setup")
         let explicitPaths = referencePaths.Where(File.Exists).ToArray()
         if explicitPaths.Length > 0 {
-            return explicitPaths.Select((p string) -> cast[MetadataReference](MetadataReference.CreateFromFile(p)))
-                .ToList()
+            return explicitPaths.Select((path string) -> ReadMetadataReference(path, metadataCache)).ToList()
         }
         let seenFileNames = HashSet[string](StringComparer.OrdinalIgnoreCase)
         let all = List[string]()
@@ -146,7 +242,15 @@ shared class GsgenProgram {
                 all.Add(host)
             }
         }
-        return all.Select((p string) -> cast[MetadataReference](MetadataReference.CreateFromFile(p))).ToList()
+        return all.Select((path string) -> ReadMetadataReference(path, metadataCache)).ToList()
+    }
+
+    private func ReadMetadataReference(path string, cache MetadataReferenceCache?) MetadataReference {
+        if cache != nil {
+            return cache.GetReference(path)
+        }
+        CompilationMeasurements.Count("generator.metadata_images_created")
+        return MetadataReference.CreateFromFile(path)
     }
 
     /// Issue #2214 / ADR-0145 extension: translates each "foreign" `.cs`
@@ -157,8 +261,9 @@ shared class GsgenProgram {
     /// Nerdbank.GitVersioning's `ThisAssembly.cs`) consumable by gsc: it is
     /// translated once here and folded into `@(Compile)` as an ordinary
     /// `.g.gs` by the SDK's existing manifest-fold target.
-    private func TranslateForeignCSharp(parsed GsgenArgs) IReadOnlyList[(HintName string, GSharpSource string)] {
-        let metadataRefs = BuildMetadataReferences(parsed.References)
+    private func TranslateForeignCSharp(parsed GsgenArgs, metadataRefs IReadOnlyList[MetadataReference]) IReadOnlyList[
+        (HintName string, GSharpSource string)
+    ] {
         let docs = parsed
             .CsFiles
             .Select(
@@ -239,7 +344,9 @@ shared class GsgenProgram {
         } else {
             string.Join(Environment.NewLine, written) + Environment.NewLine
         }
-        WriteIfDifferent(manifestPath, content)
+        // The manifest is also the successful-run stamp for MSBuild. Its
+        // timestamp must advance even when the owned file list does not change.
+        File.WriteAllText(manifestPath, content)
     }
 
     private func WriteIfDifferent(path string, content string) {

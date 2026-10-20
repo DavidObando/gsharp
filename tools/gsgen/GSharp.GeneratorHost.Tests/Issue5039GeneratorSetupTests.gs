@@ -1,0 +1,615 @@
+// <copyright file="Issue5039GeneratorSetupTests.gs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.GeneratorHost.Tests
+
+import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.GeneratorHost
+import GSharp.Gsgen.Cli
+import GSharp.Workers
+import GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation
+import GsSourceText = GSharp.Core.CodeAnalysis.Text.SourceText
+import GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree
+import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
+import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.Immutable
+import System.Diagnostics
+import System.IO
+import System.Linq
+import System.Reflection
+import System.Runtime.CompilerServices
+import System.Runtime.Loader
+import System.Text
+import System.Threading
+import Xunit
+
+/// Real analyzer loading and repeated host requests for issue #5039.
+open class Issue5039GeneratorSetupTests : IDisposable {
+    private let directory string = Path.Combine(Path.GetTempPath(), "gsgen-5039", Guid.NewGuid().ToString("N"))
+
+    init() {
+        Directory.CreateDirectory(directory)
+    }
+
+    func Dispose() {
+        Collect()
+        Directory.Delete(directory, recursive: true)
+    }
+
+    @Fact
+    func AnalyzerWithoutGenerators_SkipsProjectionAndReferences_AndDeletesOrphans() {
+        let gs = Write("Input.gs", "package App\nclass Foo {}")
+        let badReference = Write("NotAnAssembly.dll", "not a PE image")
+        let output = Path.Combine(directory, "output")
+        Directory.CreateDirectory(output)
+        let stale = Path.Combine(output, "stale.g.gs")
+        File.WriteAllText(stale, "class Stale {}")
+        let manifest = Path.Combine(directory, "manifest")
+        let stdout = StringWriter()
+        using let measurements = CompilationMeasurements.Start("gsgen-test")
+        let exit = GsgenProgram.Run(
+            []string{
+                "/gs:$gs",
+                "/analyzer:${typeof(GsgenProgram).Assembly.Location}",
+                "/r:$badReference",
+                "/out:$output",
+                "/manifest:$manifest"
+            },
+            stdout
+        )
+        Assert.Equal(0, exit)
+        Assert.Equal(string.Empty, stdout.ToString())
+        Assert.Equal(string.Empty, File.ReadAllText(manifest))
+        Assert.False(File.Exists(stale))
+        Assert.Equal(1, measurements.GetCounter("generator.analyzer_paths"))
+        Assert.Equal(0, measurements.GetCounter("generator.metadata_images_created"))
+        Assert.Equal(0, measurements.GetCounter("generator.source_files"))
+    }
+
+    @Fact
+    func AnalyzerWithoutGenerators_DoesNotBindTheLazyGlobalScope() {
+        let compilation = GsCompilation(GsSyntaxTree.Parse(GsSourceText.From("package App\nclass Foo {}")))
+        let scopeField = typeof(GsCompilation).GetField(
+            "globalScope",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        ) ??
+            throw InvalidOperationException("Compilation's lazy scope field was not found.")
+        Assert.Null(scopeField.GetValue(compilation))
+        let result = GeneratorHostRunner.RunFromAnalyzerPaths(
+            compilation,
+            Array.Empty[MetadataReference](),
+            []string{typeof(GsgenProgram).Assembly.Location}
+        )
+        Assert.Empty(result.Failures)
+        Assert.Empty(result.GeneratedGsFiles)
+        Assert.Null(scopeField.GetValue(compilation))
+    }
+
+    @Fact
+    func AnalyzerWithoutGenerators_StillTranslatesForeignCSharp() {
+        let gs = Write("Input.gs", "package App\nclass Foo {}")
+        let cs = Write(
+            "ThisAssembly.cs",
+            "namespace App { internal static class ThisAssembly { public const string Version = \"v1\"; } }"
+        )
+        let args = Arguments(gs, typeof(GsgenProgram).Assembly.Location)
+        args.Add("/csfile:$cs")
+        let stdout = StringWriter()
+        Assert.Equal(0, GsgenProgram.Run(args.ToArray(), stdout))
+        let generated = File.ReadAllText(Assert.Single(GeneratedFiles()))
+        Assert.Contains("ThisAssembly", generated)
+        Assert.Contains("\"v1\"", generated)
+    }
+
+    @Fact
+    func EmptyManifest_DoesNotSuppressDiagnostics_OrLaterGeneratedPart() {
+        using let measurements = CompilationMeasurements.Start("gsgen-test")
+        let generator = CompileGenerator("v1")
+        let gs = Write("Input.gs", "package App\npartial class Foo {}")
+        let args = Arguments(gs, generator)
+        let cache = MetadataReferenceCache()
+        let first = Run(args, cache)
+        Assert.Contains("warning PROBE5039", first)
+        Assert.Empty(GeneratedFiles())
+        Assert.Equal(string.Empty, File.ReadAllText(Path.Combine(directory, "manifest")))
+
+        File.WriteAllText(gs, "package App\n@Obsolete\npartial class Foo {}")
+        let second = Run(args, cache)
+        Assert.Contains("warning PROBE5039", second)
+        let generated = Assert.Single(GeneratedFiles())
+        Assert.Contains("prop Greeting string", File.ReadAllText(generated))
+        let contents = File.ReadAllBytes(generated)
+        let timestamp = File.GetLastWriteTimeUtc(generated)
+        Assert.Contains("warning PROBE5039", Run(args, cache))
+        Assert.Equal(contents, File.ReadAllBytes(generated))
+        Assert.Equal(timestamp, File.GetLastWriteTimeUtc(generated))
+
+        File.WriteAllText(gs, "package App\npartial class Foo {}")
+        Assert.Contains("warning PROBE5039", Run(args, cache))
+        Assert.Empty(GeneratedFiles())
+        Assert.False(File.Exists(generated))
+        Assert.True(measurements.GetCounter("generator.generated_tree_reuses") > 0)
+        Assert.True(measurements.GetCounter("generator.stub_tree_reuses") > 0)
+    }
+
+    @Fact
+    func ErrorDiagnostics_PreserveLastGoodFilesAndManifest_AndRepeatOnTheNextRequest() {
+        let generator = CompileGenerator("good")
+        let gs = Write("Input.gs", "package App\n@Obsolete\npartial class Foo {}")
+        let args = Arguments(gs, generator)
+        let cache = MetadataReferenceCache()
+        Run(args, cache)
+        let generated = Assert.Single(GeneratedFiles())
+        let contents = File.ReadAllBytes(generated)
+        let manifest = Path.Combine(directory, "manifest")
+        let manifestContents = File.ReadAllBytes(manifest)
+        let stamp = File.GetLastWriteTimeUtc(manifest)
+        Collect()
+        CompileDll(
+            GeneratorSource.Replace("__VERSION__", "bad").Replace(
+                "DiagnosticSeverity.Warning",
+                "DiagnosticSeverity.Error"
+            ),
+            generator,
+            "Generator"
+        )
+        for var request = 0; request < 2; request++ {
+            let stdout = StringWriter()
+            Assert.Equal(1, GsgenProgram.Run(args.ToArray(), stdout, cache))
+            Assert.Contains("error PROBE5039: bad", stdout.ToString())
+            Assert.Equal(contents, File.ReadAllBytes(generated))
+            Assert.Equal(manifestContents, File.ReadAllBytes(manifest))
+            Assert.Equal(stamp, File.GetLastWriteTimeUtc(manifest))
+        }
+    }
+
+    @Fact
+    func RepeatedRequests_InvalidateAdditionalFilesOptionsReferencesAndGeneratorContents() {
+        using let measurements = CompilationMeasurements.Start("gsgen-test")
+        let generator = CompileGenerator("v1")
+        let gs = Write("Input.gs", "package App\n@Obsolete\npartial class Foo {}")
+        let additional = Write("Input.txt", "first")
+        let reference = Path.Combine(directory, "Contract.dll")
+        CompileDll(
+            "namespace Contract { public static class Marker { public const string Value = \"one\"; } }",
+            reference,
+            "Contract"
+        )
+        let args = Arguments(gs, generator)
+        args.Add("/r:$reference")
+        args.Add("/additionalfile:$additional")
+        let cache = MetadataReferenceCache()
+        Assert.Contains("v1|first|one|on", Run(args, cache))
+        Assert.Contains("v1|first|one|on", File.ReadAllText(Assert.Single(GeneratedFiles())))
+
+        File.WriteAllText(additional, "next")
+        Assert.Contains("v1|next|one|on", Run(args, cache))
+        Assert.Contains("v1|next|one|on", File.ReadAllText(Assert.Single(GeneratedFiles())))
+
+        args.Add("/globaloption:Emit=off")
+        Assert.Contains("v1|next|one|off", Run(args, cache))
+        Assert.Empty(GeneratedFiles())
+        args.RemoveAt(args.Count - 1)
+
+        Collect()
+        var timestamp = File.GetLastWriteTimeUtc(reference)
+        CompileDll(
+            "namespace Contract { public static class Marker { public const string Value = \"two\"; } }",
+            reference,
+            "Contract"
+        )
+        File.SetLastWriteTimeUtc(reference, timestamp)
+        Assert.Contains("v1|next|two|on", Run(args, cache))
+        Assert.Contains("v1|next|two|on", File.ReadAllText(Assert.Single(GeneratedFiles())))
+
+        Collect()
+        timestamp = File.GetLastWriteTimeUtc(generator)
+        CompileGenerator("v2")
+        File.SetLastWriteTimeUtc(generator, timestamp)
+        Assert.Contains("v2|next|two|on", Run(args, cache))
+        Assert.Contains("v2|next|two|on", File.ReadAllText(Assert.Single(GeneratedFiles())))
+        Assert.True(measurements.GetCounter("generator.metadata_cache_hits") > 0)
+    }
+
+    @Fact
+    func Discovery_LoadContextsAreCollectible() {
+        let generator = CompileGenerator("v1")
+        let context = DiscoverContext(generator)
+        Collect()
+        Assert.False(context.IsAlive, "Discovery retained the analyzer's collectible load context.")
+    }
+
+    @Fact
+    func RepeatedRequests_ReloadChangedGeneratorDependency_WithUnchangedGeneratorIdentity() {
+        let dependency = Path.Combine(directory, "Dependency.dll")
+        CompileDll(
+            "namespace Dependency { public static class Marker { public static string Value => \"one\"; } }",
+            dependency,
+            "Dependency"
+        )
+        let generator = Path.Combine(directory, "Generator.dll")
+        CompileDll(
+            GeneratorSource.Replace("\"__VERSION__|\"", "Dependency.Marker.Value + \"|\""),
+            generator,
+            "Generator",
+            dependency
+        )
+        let gs = Write("Input.gs", "package App\n@Obsolete\npartial class Foo {}")
+        let args = Arguments(gs, generator)
+        let cache = MetadataReferenceCache()
+        Assert.Contains("one|||on", Run(args, cache))
+        Collect()
+        CompileDll(
+            "namespace Dependency { public static class Marker { public static string Value => \"two\"; } }",
+            dependency,
+            "Dependency"
+        )
+        Assert.Contains("two|||on", Run(args, cache))
+        Assert.Contains("two|||on", File.ReadAllText(Assert.Single(GeneratedFiles())))
+    }
+
+    @Fact
+    func AnalyzerLocalFrameworkCopy_UsesTheHostsRoslynContractIdentity() {
+        let generator = CompileGenerator("v1")
+        File.Copy(
+            typeof(ImmutableArray[int32]).Assembly.Location,
+            Path.Combine(directory, "System.Collections.Immutable.dll")
+        )
+        let gs = Write("Input.gs", "package App\n@Obsolete\npartial class Foo {}")
+        let stdout = Run(Arguments(gs, generator), MetadataReferenceCache())
+        Assert.Contains("warning PROBE5039", stdout)
+        Assert.DoesNotContain("GS9203", stdout)
+        Assert.Contains("v1|||on", File.ReadAllText(Assert.Single(GeneratedFiles())))
+    }
+
+    @Fact
+    func AnalyzersInOneDirectory_ShareTheirDependencyClosure() {
+        let dependency = Path.Combine(directory, "Dependency.dll")
+        CompileDll(
+            "namespace Dependency { public static class Marker { private static int value; public static int Next() => ++value; } }",
+            dependency,
+            "Dependency"
+        )
+        let source = GeneratorSource.Replace("\"__VERSION__|\"", "Dependency.Marker.Next().ToString() + \"|\"")
+        let first = Path.Combine(directory, "First.dll")
+        let second = Path.Combine(directory, "Second.dll")
+        CompileDll(
+            source.Replace("\"Foo.g.cs\"", "\"First.g.cs\"").Replace("Greeting =>", "First =>"),
+            first,
+            "First",
+            dependency
+        )
+        CompileDll(
+            source.Replace("\"Foo.g.cs\"", "\"Second.g.cs\"").Replace("Greeting =>", "Second =>"),
+            second,
+            "Second",
+            dependency
+        )
+        let gs = Write("Input.gs", "package App\n@Obsolete\npartial class Foo {}")
+        let args = Arguments(gs, first)
+        args.Add("/analyzer:$second")
+        Run(args, MetadataReferenceCache())
+        let generated = GeneratedFiles().Select(File.ReadAllText).ToArray()
+        Assert.Equal(2, generated.Length)
+        Assert.Contains(generated, (text string) -> text.Contains("1|||on", StringComparison.Ordinal))
+        Assert.Contains(generated, (text string) -> text.Contains("2|||on", StringComparison.Ordinal))
+    }
+
+    @Fact
+    func LoadFailures_AreReported_WhenNoProjectionOrOutputExists() {
+        let gs = Write("Input.gs", "package App\nclass Foo {}")
+        let invalid = Write("Invalid.dll", "not an assembly")
+        let missing = Path.Combine(directory, "Missing.dll")
+        let args = Arguments(gs, invalid)
+        args.Add("/analyzer:$missing")
+        let stdout = StringWriter()
+        Assert.Equal(0, GsgenProgram.Run(args.ToArray(), stdout))
+        Assert.Contains("warning GS9203", stdout.ToString())
+        Assert.Contains("Invalid.dll", stdout.ToString())
+        Assert.Contains("Missing.dll", stdout.ToString())
+        Assert.Empty(GeneratedFiles())
+    }
+
+    @Fact
+    func Worker_RerunsGenerators_AndPreservesConsoleDiagnosticsFailuresAndVersionChanges() {
+        let generator = CompileGenerator("v1")
+        let gs = Write("Input.gs", "package App\npartial class Foo {}")
+        let args = Arguments(gs, generator)
+        using let worker = GeneratorWorker(directory)
+        let first = worker.Run(args.ToArray())
+        Assert.Equal(0, first.ExitCode)
+        Assert.False(first.Retire)
+        Assert.Contains("warning PROBE5039", first.Stdout)
+        Assert.Empty(GeneratedFiles())
+
+        File.WriteAllText(gs, "package App\n@Obsolete\npartial class Foo {}")
+        let second = worker.Run(args.ToArray())
+        Assert.Equal(0, second.ExitCode)
+        Assert.False(second.Retire)
+        Assert.Contains("v1|||on", File.ReadAllText(Assert.Single(GeneratedFiles())))
+
+        let failed = worker.Run([]string{"/gs:missing.gs", "/analyzer:$generator", "/out:output"})
+        Assert.Equal(1, failed.ExitCode)
+        Assert.Contains("error GS9200", failed.Stdout)
+        Assert.False(failed.Retire)
+
+        CompileDll(
+            GeneratorSource.Replace("__VERSION__", "v2").Replace(
+                "var inputs =",
+                "System.Console.WriteLine(\"generator console output\"); System.Console.WriteLine(new string('x', 16383) + \"😀\"); System.Console.Write(\"flush\"); System.Console.Out.Flush(); System.Console.WriteLine(\"-continued\"); var inputs ="
+            ),
+            generator,
+            "Generator"
+        )
+        let changed = worker.Run(args.ToArray())
+        Assert.Equal(0, changed.ExitCode)
+        Assert.False(changed.Retire)
+        Assert.Contains("generator console output", changed.Stdout)
+        Assert.Contains(string.Empty.PadRight(16383, 'x') + "😀", changed.Stdout)
+        Assert.Contains("flush-continued", changed.Stdout)
+        Assert.Contains("v2|||on", changed.Stdout)
+        Assert.Contains("v2|||on", File.ReadAllText(Assert.Single(GeneratedFiles())))
+    }
+
+    @Fact
+    func Worker_AnalyzerRetainingItsLoadContext_RetiresAfterReturningCompleteOutput() {
+        let generator = Path.Combine(directory, "Generator.dll")
+        CompileDll(
+            GeneratorSource.Replace("__VERSION__", "retained").Replace(
+                "var inputs =",
+                "System.AppDomain.CurrentDomain.ProcessExit += (s, e) => System.GC.KeepAlive(this); var inputs ="
+            ),
+            generator,
+            "Generator"
+        )
+        let gs = Write("Input.gs", "package App\n@Obsolete\npartial class Foo {}")
+        using let worker = GeneratorWorker(directory)
+        let result = worker.Run(Arguments(gs, generator).ToArray())
+        Assert.Equal(0, result.ExitCode)
+        Assert.Contains("retained|||on", result.Stdout)
+        Assert.Contains("retained|||on", File.ReadAllText(Assert.Single(GeneratedFiles())))
+        Assert.True(result.Retire, "A retained analyzer context must not enter the next request.")
+        Assert.True(worker.WaitForExit())
+    }
+
+    @Fact
+    func Worker_CancellationDuringGeneratorExecution_AllowsAFreshHostToRestart() {
+        let generator = Path.Combine(directory, "Generator.dll")
+        CompileDll(
+            GeneratorSource.Replace("__VERSION__", "before").Replace(
+                "var inputs =",
+                "System.Console.WriteLine(\"generator started\"); System.Threading.Thread.Sleep(60000); var inputs ="
+            ),
+            generator,
+            "Generator"
+        )
+        let gs = Write("Input.gs", "package App\n@Obsolete\npartial class Foo {}")
+        let args = Arguments(gs, generator)
+        {
+            using let worker = GeneratorWorker(directory)
+            worker.Begin(args.ToArray())
+            Assert.Equal(WorkerProtocol.Stdout, worker.Reader.ReadByte())
+            Assert.True(worker.Reader.ReadBoolean())
+            Assert.Equal("generator started", worker.Reader.ReadString())
+            worker.Kill()
+            Assert.True(worker.WaitForExit())
+        }
+        CompileGenerator("after")
+        using let restarted = GeneratorWorker(directory)
+        let result = restarted.Run(args.ToArray())
+        Assert.Equal(0, result.ExitCode)
+        Assert.Contains("after|||on", result.Stdout)
+        Assert.Contains("after|||on", File.ReadAllText(Assert.Single(GeneratedFiles())))
+    }
+
+    private class GeneratorWorker : IDisposable {
+        private let directory string
+        private let process Process
+        private let writer BinaryWriter
+        private let identity string
+        private let timeout CancellationTokenSource = CancellationTokenSource(TimeSpan.FromMinutes(2))
+        private let cancel CancellationTokenRegistration
+
+        init(directory string) {
+            this.directory = directory
+            let start = ProcessStartInfo("dotnet"){
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = directory
+            }
+            start.ArgumentList.Add(typeof(GsgenProgram).Assembly.Location)
+            start.ArgumentList.Add("--generator-worker")
+            process = Process.Start(start) ?? throw InvalidOperationException("Cannot launch generator worker.")
+            cancel = timeout.Token.Register(Kill)
+            process.ErrorDataReceived += (_sender object, _event DataReceivedEventArgs) -> { }
+            process.BeginErrorReadLine()
+            Reader = BinaryReader(process.StandardOutput.BaseStream, Encoding.UTF8)
+            writer = BinaryWriter(process.StandardInput.BaseStream, Encoding.UTF8)
+            Assert.Equal(WorkerProtocol.Version, Reader.ReadInt32())
+            identity = Reader.ReadString()
+        }
+
+        prop Reader BinaryReader {
+            get;
+        }
+
+        func Begin(arguments[]string) {
+            let environment = Dictionary[string, string](StringComparer.Ordinal)
+            for entry DictionaryEntry in Environment.GetEnvironmentVariables() {
+                environment.Add(cast[string](entry.Key), cast[string](entry.Value))
+            }
+            WorkerProtocol.WriteRequest(writer, identity, directory, arguments, environment, workerGrant: 1)
+            Assert.Equal(WorkerProtocol.Accepted, Reader.ReadByte())
+        }
+
+        func Run(arguments[]string)(ExitCode int32, Stdout string, Retire bool) {
+            Begin(arguments)
+            let stdout = StringBuilder()
+            while true {
+                let kind = Reader.ReadByte()
+                if kind == WorkerProtocol.Stdout {
+                    let complete = Reader.ReadBoolean()
+                    stdout.Append(Reader.ReadString())
+                    if complete {
+                        stdout.AppendLine()
+                    }
+                } else if kind == WorkerProtocol.Stderr {
+                    Reader.ReadBoolean()
+                    Assert.Fail("Unexpected worker stderr: " + Reader.ReadString())
+                } else {
+                    Assert.Equal(WorkerProtocol.Completed, kind)
+                    let exitCode = Reader.ReadInt32()
+                    let retire = Reader.ReadBoolean()
+                    Reader.ReadInt64()
+                    Reader.ReadInt64()
+                    return (exitCode, stdout.ToString(), retire)
+                }
+            }
+        }
+
+        func WaitForExit() bool -> process.WaitForExit(10000)
+
+        func Kill() {
+            if !process.HasExited {
+                process.Kill(entireProcessTree: true)
+            }
+        }
+
+        func Dispose() {
+            Kill()
+            process.WaitForExit()
+            cancel.Dispose()
+            timeout.Dispose()
+            writer.Dispose()
+            Reader.Dispose()
+            process.Dispose()
+        }
+    }
+
+    private func Write(name string, source string) string {
+        let path = Path.Combine(directory, name)
+        File.WriteAllText(path, source)
+        return path
+    }
+
+    private func Arguments(gs string, analyzer string) List[string] {
+        let args = List[string]{
+            "/gs:$gs",
+            "/analyzer:$analyzer",
+            "/out:${Path.Combine(directory, "output")}",
+            "/manifest:${Path.Combine(directory, "manifest")}"
+        }
+        args.AddRange(References.Select((reference string) -> "/r:$reference"))
+        return args
+    }
+
+    private func GeneratedFiles()[]string {
+        let output = Path.Combine(directory, "output")
+        return if Directory.Exists(output) {
+            Directory.GetFiles(output, "*.g.gs")
+        } else {
+            Array.Empty[string]()
+        }
+    }
+
+    private func Run(args List[string], cache MetadataReferenceCache) string {
+        let stdout = StringWriter()
+        let exit = GsgenProgram.Run(args.ToArray(), stdout, cache)
+        Assert.True(exit == 0, stdout.ToString())
+        return stdout.ToString()
+    }
+
+    private func CompileGenerator(version string) string {
+        let path = Path.Combine(directory, "Generator.dll")
+        // C# is the Roslyn analyzer input, not repository implementation source.
+        CompileDll(GeneratorSource.Replace("__VERSION__", version), path, "Generator")
+        return path
+    }
+
+    shared {
+        private prop References[]string -> (
+            AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string ?? string.Empty
+        ).Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+
+        private func CompileDll(source string, path string, name string, dependency string? = nil) {
+            let references = References.Select(
+                (reference string) -> cast[MetadataReference](MetadataReference.CreateFromFile(reference))
+            )
+                .ToList()
+            if dependency != nil {
+                references.Add(MetadataReference.CreateFromFile(dependency))
+            }
+            let compilation = CSharpCompilation.Create(
+                name,
+                []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(source)},
+                references,
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            )
+            using let image = MemoryStream()
+            let emitted = compilation.Emit(image)
+            Assert.True(emitted.Success, string.Join("\n", emitted.Diagnostics))
+            File.WriteAllBytes(path, image.ToArray())
+        }
+
+        @MethodImpl(MethodImplOptions.NoInlining)
+        private func DiscoverContext(path string) WeakReference {
+            using let discovery = GeneratorRunner.Discover([]string{path})
+            Assert.Empty(discovery.Failures)
+            Assert.Single(discovery.Generators)
+            // Incremental generators are wrapped by a host-owned Roslyn type.
+            let context = Assert.Single(
+                AssemblyLoadContext.All.Where(
+                    (candidate AssemblyLoadContext) -> candidate.Assemblies.Any(
+                        (assembly System.Reflection.Assembly) -> assembly.Location == path
+                    )
+                )
+            )
+            Assert.True(context.IsCollectible)
+            return WeakReference(context)
+        }
+
+        private func Collect() {
+            GC.Collect()
+            GC.WaitForPendingFinalizers()
+            GC.Collect()
+        }
+
+        private const GeneratorSource string = `
+using System.Linq;
+using Microsoft.CodeAnalysis;
+
+[Generator]
+public sealed class ProbeGenerator : IIncrementalGenerator
+{
+    public void Initialize(IncrementalGeneratorInitializationContext context)
+    {
+        var inputs = context.CompilationProvider.Combine(context.AdditionalTextsProvider.Collect())
+            .Combine(context.AnalyzerConfigOptionsProvider);
+        context.RegisterSourceOutput(inputs, (spc, input) =>
+        {
+            var compilation = input.Left.Left;
+            var files = input.Left.Right;
+            input.Right.GlobalOptions.TryGetValue("build_property.Emit", out var option);
+            option = option ?? "on";
+            var additional = files.IsEmpty ? "" : files[0].GetText().ToString();
+            var marker = compilation.GetTypeByMetadataName("Contract.Marker");
+            var value = (marker?.GetMembers("Value").FirstOrDefault() as IFieldSymbol)?.ConstantValue as string ?? "";
+            var message = "__VERSION__|" + additional + "|" + value + "|" + option;
+            spc.ReportDiagnostic(Diagnostic.Create(
+                new DiagnosticDescriptor("PROBE5039", "probe", "{0}", "Tests", DiagnosticSeverity.Warning, true),
+                Location.None, message));
+            var type = compilation.GetTypeByMetadataName("App.Foo");
+            if (option != "off" && type != null && type.GetAttributes().Length != 0)
+                spc.AddSource("Foo.g.cs", "namespace App { partial class Foo { public string Greeting => \"" + message + "\"; } }");
+        });
+    }
+}
+`
+    }
+}

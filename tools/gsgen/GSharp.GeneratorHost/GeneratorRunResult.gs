@@ -5,6 +5,7 @@
 package GSharp.GeneratorHost
 
 import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
 import Microsoft.CodeAnalysis.Text
 import System
 import System.Collections.Generic
@@ -17,14 +18,17 @@ class GeneratorRunResult {
     /// @param documents The generated C# documents.
     /// @param generatorDiagnostics The diagnostics reported by the generators.
     /// @param failures Generators that threw or analyzer assemblies that failed to load.
+    /// @param inputCompilation The immutable generator input reused for back-translation, or none.
     init(
         documents IReadOnlyList[GeneratedCsDocument],
         generatorDiagnostics IReadOnlyList[Diagnostic],
-        failures IReadOnlyList[GeneratorFailure]
+        failures IReadOnlyList[GeneratorFailure],
+        inputCompilation CSharpCompilation? = nil
     ) {
         Documents = documents
         GeneratorDiagnostics = generatorDiagnostics
         Failures = failures
+        InputCompilation = inputCompilation
     }
 
     /// Gets the generated C# documents (hint name + source text).
@@ -41,6 +45,11 @@ class GeneratorRunResult {
     prop Failures IReadOnlyList[GeneratorFailure] {
         get;
     }
+
+    /// Gets the immutable Roslyn input, not a G# scope or a final compilation.
+    prop InputCompilation CSharpCompilation? {
+        get;
+    }
 }
 
 /// One generated C# document produced by a Roslyn source generator: its
@@ -50,9 +59,11 @@ class GeneratedCsDocument {
     /// Initializes a new instance of the (cref:GeneratedCsDocument) class.
     /// @param hintName The generator-assigned hint name (e.g. `Foo.g.cs`).
     /// @param sourceText The generated C# source text.
-    init(hintName string, sourceText SourceText) {
+    /// @param syntaxTree The already parsed generator tree, or none for a foreign document.
+    init(hintName string, sourceText SourceText, syntaxTree SyntaxTree? = nil) {
         HintName = hintName
         SourceText = sourceText
+        SyntaxTree = syntaxTree
     }
 
     /// Gets the generator-assigned hint name.
@@ -62,6 +73,11 @@ class GeneratedCsDocument {
 
     /// Gets the generated C# source text.
     prop SourceText SourceText {
+        get;
+    }
+
+    /// Gets the generator's immutable tree when available.
+    prop SyntaxTree SyntaxTree? {
         get;
     }
 }

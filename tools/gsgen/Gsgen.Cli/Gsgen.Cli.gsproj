@@ -11,6 +11,9 @@
 
   <ItemGroup>
     <ProjectReference Include="../GSharp.GeneratorHost/GSharp.GeneratorHost.gsproj" />
+    <Compile Include="../../../src/Compiler/WorkerProtocol.gs" Link="WorkerProtocol.gs" />
+    <Compile Include="../../../src/Compiler/WorkerServer.gs" Link="WorkerServer.gs" />
+    <InternalsVisibleTo Include="GSharp.GSharp.GeneratorHost.Tests" />
   </ItemGroup>
 
 </Project>
