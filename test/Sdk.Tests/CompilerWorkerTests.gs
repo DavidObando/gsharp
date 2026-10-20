@@ -71,6 +71,41 @@ open class CompilerWorkerTests : IDisposable {
     }
 
     @Fact
+    func WorkerCrashPreservesBothDiagnosticStreamsAndTheirTails() {
+        let (analyzer, _marker) = CreateHelperAnalyzer(background: false, crash: true)
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { }")
+        let output = List[string]()
+        let errors = List[string]()
+        Assert.Throws[IOException](
+            () -> Run(
+                directory,
+                []string{"/out:result.dll", "/target:library", "/gsanalyzer:" + analyzer, "input.gs"},
+                output,
+                errors,
+                out var _exit
+            )
+        )
+        Assert.Contains("crash stdout", output)
+        Assert.Contains("stdout tail", output)
+        Assert.Contains("crash stderr", errors)
+        Assert.Contains("stderr tail", errors)
+        Assert.DoesNotContain(messages, (line string) -> line.Contains("worker completed"))
+        Assert.True(
+            Run(
+                directory,
+                []string{"/out:next.dll", "/target:library", "input.gs"},
+                List[string](),
+                List[string](),
+                out var next
+            )
+        )
+        Assert.Equal(0, next)
+        let accepted = messages.Where((m string) -> m.Contains("accepted request")).ToArray()
+        Assert.Equal(2, accepted.Length)
+        Assert.NotEqual(accepted[0], accepted[1])
+    }
+
+    @Fact
     func NormalRetirementTerminatesOwnedHelperDescendants() {
         let (analyzer, marker) = CreateHelperAnalyzer(background: true)
         File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { }")
@@ -421,6 +456,83 @@ open class CompilerWorkerTests : IDisposable {
             }
         )
         Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(5))
+    }
+
+    @Fact
+    func SubprocessDeadlineIncludesInheritedOutputAfterRootExit() {
+        let marker = Path.Combine(directory, "orphan.pid")
+        let ready = Path.Combine(directory, "orphan.ready")
+        File.WriteAllText(
+            Path.Combine(directory, "orphan.gs"),
+            "import System\nimport System.IO\nimport System.Reflection\nimport System.Diagnostics\nimport System.Threading\n" +
+                "func Main(args[]string) {\nif args.Length > 0 {\n" +
+                "File.WriteAllText(\"${EscapeSource(ready)}\", \"ready\")\nThread.Sleep(Timeout.Infinite)\nreturn\n}\n" +
+                "File.WriteAllText(\"${EscapeSource(marker)}.root\", Environment.ProcessId.ToString())\n" +
+                "let start = ProcessStartInfo(\"dotnet\"){UseShellExecute = false}\n" +
+                "start.ArgumentList.Add(Assembly.GetExecutingAssembly().Location)\nstart.ArgumentList.Add(\"child\")\n" +
+                "using let child = Process.Start(start) ?? throw Exception(\"child startup failed\")\n" +
+                "File.WriteAllText(\"${EscapeSource(marker)}\", child.Id.ToString())\n" +
+                "if !SpinWait.SpinUntil(() -> File.Exists(\"${EscapeSource(ready)}\"), 5000) { throw Exception(\"child not ready\") }\n}"
+        )
+        let (toolExit, diagnostics) = Standalone(
+            directory,
+            []string{"/out:orphan.dll", "/target:exe", "/targetframework:net10.0", "orphan.gs"}
+        )
+        Assert.True(toolExit == 0, diagnostics)
+        let start = ProcessStartInfo("dotnet"){
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }
+        start.ArgumentList.Add(Path.Combine(directory, "orphan.dll"))
+        let cleanup = () -> {
+            if File.Exists(marker + ".root") {
+                try {
+                    using let root = Process.GetProcessById(int32.Parse(File.ReadAllText(marker + ".root")))
+                    Assert.True(root.HasExited, "The fixture must time out after root exit, not during startup.")
+                } catch (ex ArgumentException) {
+                    // The fixture root already exited and was reaped.
+
+                }
+            }
+            if File.Exists(marker) {
+                try {
+                    using let child = Process.GetProcessById(int32.Parse(File.ReadAllText(marker)))
+                    if !child.HasExited {
+                        child.Kill(entireProcessTree: true)
+                        Assert.True(child.WaitForExit(1000))
+                    }
+                } catch (ex ArgumentException) {
+                    // The precisely identified fixture child already exited.
+
+                }
+            }
+        }
+        let operation = Task.Run(
+            () -> {
+                try {
+                    RunProcess(start, 2000, cleanup)
+                    return false
+                } catch (ex TimeoutException) {
+                    return true
+                }
+            }
+        )
+        try {
+            Assert.True(operation.Wait(5000), "Root exit bypassed the subprocess output deadline.")
+            Assert.True(operation.Result)
+            Assert.True(File.Exists(marker))
+            try {
+                using let child = Process.GetProcessById(int32.Parse(File.ReadAllText(marker)))
+                Assert.True(child.HasExited, "Timeout cleanup left the fixture's output-owning child alive.")
+            } catch (ex ArgumentException) {
+                // The precisely identified fixture child already exited.
+
+            }
+        } finally {
+            cleanup()
+            operation.Wait(5000)
+        }
     }
 
     @Fact
@@ -806,24 +918,14 @@ open class CompilerWorkerTests : IDisposable {
         }
         let flag = "--roundtrip"
         let start = WorkerProcessClient.CreateStartInfo(Path.Combine(toolDirectory, "arguments.dll"), flag, pipeName)
-        using let child = Process.Start(start) ?? throw InvalidOperationException("Cannot start argument probe.")
-        let stdout = child.StandardOutput.ReadToEndAsync()
-        let stderr = child.StandardError.ReadToEndAsync()
-        try {
-            Assert.True(child.WaitForExit(10000), "The argument probe did not exit.")
-            Assert.True(child.ExitCode == 0, stderr.GetAwaiter().GetResult())
-            let lines = stdout.GetAwaiter().GetResult().Split([]char{'\r', '\n'}, StringSplitOptions.RemoveEmptyEntries)
-            Assert.Equal(child.Id.ToString(), lines[0])
-            Assert.Equal(
-                []string{flag, pipeName},
-                lines.Skip(1).Select((line string) -> Encoding.UTF8.GetString(Convert.FromBase64String(line)))
-            )
-        } finally {
-            if !child.HasExited {
-                child.Kill(entireProcessTree: true)
-                child.WaitForExit()
-            }
-        }
+        let result = RunProcess(start, 10000)
+        Assert.True(result.Exit == 0, result.Stderr)
+        let lines = result.Stdout.Split([]char{'\r', '\n'}, StringSplitOptions.RemoveEmptyEntries)
+        Assert.Equal(result.ProcessId.ToString(), lines[0])
+        Assert.Equal(
+            []string{flag, pipeName},
+            lines.Skip(1).Select((line string) -> Encoding.UTF8.GetString(Convert.FromBase64String(line)))
+        )
     }
 
     @Theory
@@ -949,7 +1051,7 @@ open class CompilerWorkerTests : IDisposable {
         Assert.Equal(0, restarted)
     }
 
-    private func CreateHelperAnalyzer(background bool)(Analyzer string, Marker string) {
+    private func CreateHelperAnalyzer(background bool, crash bool = false)(Analyzer string, Marker string) {
         let marker = Path.Combine(directory, "helper.pid")
         let escaped = EscapeSource(marker)
         let helperBody = if background {
@@ -974,6 +1076,13 @@ open class CompilerWorkerTests : IDisposable {
         } else {
             "process.WaitForExit()"
         }
+        let crashAction = if crash {
+            "Console.WriteLine(\"crash stdout\")\nConsole.Write(\"stdout tail\")\n" +
+                "Console.Error.WriteLine(\"crash stderr\")\nConsole.Error.Write(\"stderr tail\")\n" +
+                "Console.Out.Flush()\nConsole.Error.Flush()\nEnvironment.Exit(73)\n"
+        } else {
+            ""
+        }
         File.WriteAllText(
             Path.Combine(directory, "analyzer.gs"),
             "import System\nimport System.IO\nimport System.Diagnostics\nimport System.Threading\n" +
@@ -983,7 +1092,7 @@ open class CompilerWorkerTests : IDisposable {
                 "override prop SupportedDiagnostics ImmutableArray[DiagnosticDescriptor] -> ImmutableArray[DiagnosticDescriptor].Empty\n" +
                 "override func Initialize(context AnalysisContext) {\n" +
                 "let start = ProcessStartInfo(\"dotnet\", \"\\\"$helper\\\"\"){UseShellExecute = false}\n" +
-                "using let process = Process.Start(start) ?? throw Exception(\"helper startup failed\")\n$wait\n}\n}"
+                "using let process = Process.Start(start) ?? throw Exception(\"helper startup failed\")\n$wait\n$crashAction}\n}"
         )
         let analyzer = Path.Combine(directory, "analyzer.dll")
         let (analyzerExit, analyzerDiagnostics) = Standalone(
@@ -1034,7 +1143,7 @@ open class CompilerWorkerTests : IDisposable {
             for argument in[]string{"msbuild", project, "-t:Build", "-m:2", "-nr:false", "-v:normal", "-nologo"} {
                 start.ArgumentList.Add(argument)
             }
-            let (exit, stdout, stderr) = RunProcess(start)
+            let (exit, stdout, stderr, _pid) = RunProcess(start)
             return (exit, stdout + stderr)
         }
 
@@ -1097,30 +1206,36 @@ open class CompilerWorkerTests : IDisposable {
             for argument in WithReferences(arguments, referenceDirectory) {
                 start.ArgumentList.Add(argument)
             }
-            let (exit, stdout, stderr) = RunProcess(start)
+            let (exit, stdout, stderr, _pid) = RunProcess(start)
             let lines = (stdout + stderr).Replace("\r\n", "\n").TrimEnd('\n')
             return (exit, lines)
         }
 
-        private func RunProcess(start ProcessStartInfo, timeoutMilliseconds int32 = 30000)(
-            Exit int32,
-            Stdout string,
-            Stderr string
-        ) {
+        private func RunProcess(
+            start ProcessStartInfo,
+            timeoutMilliseconds int32 = 30000,
+            cleanupDescendants(() -> void)? = nil
+        )(Exit int32, Stdout string, Stderr string, ProcessId int32) {
+            using let deadline = CancellationTokenSource(timeoutMilliseconds)
             using let child = Process.Start(start) ?? throw InvalidOperationException("Cannot start subprocess.")
-            let stdout = child.StandardOutput.ReadToEndAsync()
-            let stderr = child.StandardError.ReadToEndAsync()
-            if !child.WaitForExit(timeoutMilliseconds) {
-                try {
-                    child.Kill(entireProcessTree: true)
-                } catch (ex InvalidOperationException) {
-                    // The subprocess exited after the timed wait.
-
+            let stdout = child.StandardOutput.ReadToEndAsync(deadline.Token)
+            let stderr = child.StandardError.ReadToEndAsync(deadline.Token)
+            var completed = false
+            try {
+                child.WaitForExitAsync(deadline.Token).GetAwaiter().GetResult()
+                let output = stdout.GetAwaiter().GetResult()
+                let errors = stderr.GetAwaiter().GetResult()
+                completed = true
+                return (child.ExitCode, output, errors, child.Id)
+            } catch (ex OperationCanceledException) when deadline.IsCancellationRequested {
+                throw TimeoutException("Subprocess ${child.Id} exceeded its $timeoutMilliseconds ms deadline.", ex)
+            } finally {
+                if !completed {
+                    WorkerProcessClient.Kill(child)
+                    cleanupDescendants?.Invoke()
+                    child.WaitForExit(1000)
                 }
-                child.WaitForExit()
-                throw TimeoutException("Subprocess ${child.Id} exceeded its $timeoutMilliseconds ms deadline.")
             }
-            return (child.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult())
         }
     }
 }

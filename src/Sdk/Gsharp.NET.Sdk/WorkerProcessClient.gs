@@ -45,6 +45,7 @@ internal class WorkerProcessClient : IDisposable {
         lock gate {
             exitCode = 1
             var completedExchange = false
+            var requestStarted = false
             idleTimer?.Change(Timeout.Infinite, Timeout.Infinite)
             try {
                 cancellation.ThrowIfCancellationRequested()
@@ -82,6 +83,7 @@ internal class WorkerProcessClient : IDisposable {
                     let fence = "\u001egsharp-" + Guid.NewGuid().ToString("N") + "\u001f"
                     nativeOut?.Begin(fence)
                     nativeError?.Begin(fence)
+                    requestStarted = true
                     WorkerProtocol.WriteRequest(
                         writer ?? throw InvalidOperationException("Worker input is unavailable."),
                         requestedIdentity,
@@ -137,7 +139,6 @@ internal class WorkerProcessClient : IDisposable {
                     .ComponentModel
                     .Win32Exception {
                     let detail = nativeOut?.FailureMessage() ?? nativeError?.FailureMessage() ?? ex.Message
-                    Dispose()
                     cancellation.ThrowIfCancellationRequested()
                     throw IOException("Worker request transport failed: $detail", ex)
                 }
@@ -152,7 +153,18 @@ internal class WorkerProcessClient : IDisposable {
                         Timeout.Infinite
                     )
                 } else {
-                    Dispose()
+                    try {
+                        if requestStarted {
+                            StopProcess()
+                            try {
+                                nativeOut?.DrainFailure(stdout)
+                            } finally {
+                                nativeError?.DrainFailure(stderr)
+                            }
+                        }
+                    } finally {
+                        Dispose()
+                    }
                 }
             }
         }
@@ -234,22 +246,30 @@ internal class WorkerProcessClient : IDisposable {
         containedProcess = child.Id
     }
 
+    private func StopProcess() {
+        let child = process
+        if child != nil {
+            if containedProcess == child.Id && Path.DirectorySeparatorChar != '\\' {
+                containedProcess = 0
+                KillOwnedGroup(-child.Id, 9)
+            }
+            Kill(child)
+            child.WaitForExit()
+        }
+    }
+
     func Dispose() {
         lock gate {
             idleTimer?.Dispose()
             idleTimer = nil
             lastActivity = 0
+            StopProcess()
             let child = process
             process = nil
             identity = nil
             toolPath = nil
             workerEnvironment = nil
             if child != nil {
-                if containedProcess == child.Id && Path.DirectorySeparatorChar != '\\' {
-                    KillOwnedGroup(-child.Id, 9)
-                }
-                Kill(child)
-                child.WaitForExit()
                 nativeOut?.Dispose()
                 nativeError?.Dispose()
                 child.Dispose()

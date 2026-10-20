@@ -63,6 +63,23 @@ internal class WorkerDiagnosticCapture : IDisposable {
         return captured.Length != 0
     }
 
+    internal func DrainFailure(report(string) -> void) {
+        reader.Join(1000)
+        var captured[]string
+        lock gate {
+            if line.Length > 0 {
+                lines.Add(line.ToString())
+                line.Clear()
+            }
+            captured = lines.ToArray()
+            lines.Clear()
+            count = 0
+        }
+        for text in captured {
+            report(text)
+        }
+    }
+
     private func Read() {
         try {
             while true {
