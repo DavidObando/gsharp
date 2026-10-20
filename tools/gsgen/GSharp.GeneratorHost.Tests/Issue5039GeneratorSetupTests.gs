@@ -475,6 +475,97 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         Assert.True(worker.WaitForExit(), "A disconnected owner must not leave a blocked generator host alive.")
     }
 
+    @Fact
+    func Worker_InheritedHelperOutput_IsFramedAndPreservesBothStreams() {
+        let helper = CompileHelper(
+            "System.Console.WriteLine(\"helper-output\"); System.Console.Error.WriteLine(\"helper-error\");"
+        )
+        let generator = Path.Combine(directory, "Generator.dll")
+        CompileDll(
+            GeneratorSource.Replace("__VERSION__", "helper").Replace(
+                "var inputs =",
+                "using (var child = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(\"dotnet\") { UseShellExecute = false, ArgumentList = { " +
+                    SymbolDisplay.FormatLiteral(helper, true) + " } })) { child.WaitForExit(); } var inputs ="
+            ),
+            generator,
+            "Generator"
+        )
+        let gs = Write("Input.gs", "package App\n@Obsolete\npartial class Foo {}")
+        using let worker = GeneratorWorker(directory)
+        for var request = 0; request < 2; request++ {
+            let result = worker.Run(Arguments(gs, generator).ToArray(), allowStderr: true)
+            Assert.Equal(0, result.ExitCode)
+            Assert.Contains("helper-output", result.Stdout)
+            Assert.Contains("helper-error", result.Stderr)
+            Assert.Contains("helper|||on", result.Stdout)
+            Assert.False(result.Retire)
+        }
+    }
+
+    @Fact
+    func Worker_NormalRetirement_StopsGeneratorDescendants() {
+        let helper = CompileHelper("System.Threading.Thread.Sleep(60000);")
+        let pidFile = Path.Combine(directory, "helper.pid")
+        let generator = Path.Combine(directory, "Generator.dll")
+        CompileDll(
+            GeneratorSource.Replace("__VERSION__", "retire").Replace(
+                "var inputs =",
+                "System.AppDomain.CurrentDomain.ProcessExit += (s, e) => System.GC.KeepAlive(this); using (var child = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(\"dotnet\") { UseShellExecute = false, ArgumentList = { " +
+                    SymbolDisplay.FormatLiteral(helper, true) +
+                    " } })) { System.IO.File.WriteAllText(" +
+                    SymbolDisplay.FormatLiteral(pidFile, true) + ", child.Id.ToString()); } var inputs ="
+            ),
+            generator,
+            "Generator"
+        )
+        let gs = Write("Input.gs", "package App\n@Obsolete\npartial class Foo {}")
+        using let worker = GeneratorWorker(directory)
+        try {
+            let result = worker.Run(Arguments(gs, generator).ToArray())
+            Assert.Equal(0, result.ExitCode)
+            Assert.True(result.Retire)
+            Assert.True(worker.WaitForExit())
+            if FindHelper(pidFile) is {} child {
+                using let owned = child
+                Assert.True(owned.WaitForExit(10000), "Normal worker retirement left its helper alive.")
+            }
+        } finally {
+            if FindHelper(pidFile) is {} child {
+                using let owned = child
+                if !owned.HasExited {
+                    owned.Kill(entireProcessTree: true)
+                }
+                owned.WaitForExit()
+            }
+        }
+    }
+
+    private func CompileHelper(body string) string {
+        let helper = Path.Combine(directory, "Helper.dll")
+        CompileDll(
+            "public static class Helper { public static void Main() { " + body + " } }",
+            helper,
+            "Helper",
+            outputKind: OutputKind.ConsoleApplication
+        )
+        File.Copy(
+            Path.ChangeExtension(typeof(GsgenProgram).Assembly.Location, ".runtimeconfig.json"),
+            Path.ChangeExtension(helper, ".runtimeconfig.json")
+        )
+        return helper
+    }
+
+    private func FindHelper(pidFile string) Process? {
+        if !File.Exists(pidFile) {
+            return nil
+        }
+        try {
+            return Process.GetProcessById(int32.Parse(File.ReadAllText(pidFile)))
+        } catch (ex ArgumentException) {
+            return nil
+        }
+    }
+
     private class GeneratorWorker : IDisposable {
         private let directory string
         private let process Process
@@ -620,7 +711,13 @@ open class Issue5039GeneratorSetupTests : IDisposable {
             AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string ?? string.Empty
         ).Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
 
-        private func CompileDll(source string, path string, name string, dependency string? = nil) {
+        private func CompileDll(
+            source string,
+            path string,
+            name string,
+            dependency string? = nil,
+            outputKind OutputKind = OutputKind.DynamicallyLinkedLibrary
+        ) {
             let references = References.Select(
                 (reference string) -> cast[MetadataReference](MetadataReference.CreateFromFile(reference))
             )
@@ -632,7 +729,7 @@ open class Issue5039GeneratorSetupTests : IDisposable {
                 name,
                 []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(source)},
                 references,
-                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                CSharpCompilationOptions(outputKind)
             )
             using let image = MemoryStream()
             let emitted = compilation.Emit(image)
