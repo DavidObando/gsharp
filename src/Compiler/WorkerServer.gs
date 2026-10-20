@@ -88,8 +88,18 @@ internal shared class WorkerServer {
     private func EstablishProcessLifetime() {
         if OperatingSystem.IsWindows() {
             job = CreateJobObject(IntPtr.Zero, IntPtr.Zero)
-            if job == IntPtr.Zero || AssignProcessToJobObject(job, GetCurrentProcessHandle()) == 0 {
-                throw IOException("Cannot contain compiler worker descendants in a Windows job.")
+            let limits = JobExtendedLimits{Basic: JobBasicLimits{Flags: uint32(0x2000)}}
+            let size = Marshal.SizeOf[JobExtendedLimits]()
+            let buffer = Marshal.AllocHGlobal(size)
+            try {
+                Marshal.StructureToPtr(limits, buffer, false)
+                if job == IntPtr.Zero ||
+                    SetInformationJobObject(job, 9, buffer, uint32(size)) == 0 ||
+                    AssignProcessToJobObject(job, GetCurrentProcessHandle()) == 0 {
+                    throw IOException("Cannot contain compiler worker descendants in a Windows job.")
+                }
+            } finally {
+                Marshal.FreeHGlobal(buffer)
             }
         } else if CreateSession() < 0 && GetProcessGroup() != Environment.ProcessId {
             throw IOException("Cannot create the compiler worker's process group.")
@@ -151,6 +161,42 @@ internal shared class WorkerServer {
         }
         return false
     }
+
+    @StructLayout(LayoutKind.Sequential)
+    private struct JobBasicLimits {
+        var ProcessTime int64
+        var JobTime int64
+        var Flags uint32
+        var MinimumWorkingSet UIntPtr
+        var MaximumWorkingSet UIntPtr
+        var ActiveProcessLimit uint32
+        var Affinity UIntPtr
+        var PriorityClass uint32
+        var SchedulingClass uint32
+    }
+
+    @StructLayout(LayoutKind.Sequential)
+    private struct JobIoCounters {
+        var ReadOperations uint64
+        var WriteOperations uint64
+        var OtherOperations uint64
+        var ReadBytes uint64
+        var WriteBytes uint64
+        var OtherBytes uint64
+    }
+
+    @StructLayout(LayoutKind.Sequential)
+    private struct JobExtendedLimits {
+        var Basic JobBasicLimits
+        var Io JobIoCounters
+        var ProcessMemory UIntPtr
+        var JobMemory UIntPtr
+        var PeakProcessMemory UIntPtr
+        var PeakJobMemory UIntPtr
+    }
+
+    @DllImport("kernel32.dll", SetLastError: true)
+    private func SetInformationJobObject(job IntPtr, kind int32, information IntPtr, length uint32) int32;
 
     @StructLayout(LayoutKind.Sequential)
     private struct JobAccounting {

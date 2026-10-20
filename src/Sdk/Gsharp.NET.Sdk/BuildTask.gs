@@ -406,10 +406,7 @@ open class BuildTask : Task, ICancelableTask {
             .Register(
             () -> {
                 try {
-                    // netstandard2.0 (this task's TFM) lacks Process.Kill(bool);
-                    // gsc.dll doesn't spawn grandchildren, so killing it directly
-                    // is sufficient to stop the compile.
-                    proc!!.Kill()
+                    WorkerProcessClient.Kill(proc!!)
                 } catch (InvalidOperationException) {
                     // Process already exited.
 

@@ -8,6 +8,7 @@ import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.IO.Pipes
+import System.Runtime.InteropServices
 import System.Text
 import System.Threading
 import System.Threading.Tasks
@@ -27,6 +28,7 @@ internal class WorkerProcessClient : IDisposable {
     private var protocol NamedPipeServerStream?
     private var nativeOut WorkerDiagnosticCapture?
     private var nativeError WorkerDiagnosticCapture?
+    private var containedProcess int32
 
     internal func TryRun(
         path string,
@@ -235,6 +237,7 @@ internal class WorkerProcessClient : IDisposable {
         identity = requestedIdentity
         toolPath = path
         workerEnvironment = environment
+        containedProcess = child.Id
     }
 
     func Dispose() {
@@ -248,6 +251,9 @@ internal class WorkerProcessClient : IDisposable {
             toolPath = nil
             workerEnvironment = nil
             if child != nil {
+                if containedProcess == child.Id && Path.DirectorySeparatorChar != '\\' {
+                    KillOwnedGroup(-child.Id, 9)
+                }
                 Kill(child)
                 child.WaitForExit()
                 nativeOut?.Dispose()
@@ -260,12 +266,15 @@ internal class WorkerProcessClient : IDisposable {
             writer = nil
             nativeOut = nil
             nativeError = nil
+            containedProcess = 0
             protocol?.Dispose()
             protocol = nil
         }
     }
 
     shared {
+        @DllImport("libc", EntryPoint: "kill", SetLastError: true)
+        private func KillOwnedGroup(group int32, signal int32) int32;
         private let RegistrationGate object = SystemObject()
 
         internal func CreateProtocolPipeName() string {
@@ -309,7 +318,7 @@ internal class WorkerProcessClient : IDisposable {
             }
         }
 
-        private func Kill(child Process) {
+        internal func Kill(child Process) {
             try {
                 if !child.HasExited {
                     let killTree = typeof(Process).GetMethod("Kill", []Type{typeof(bool)})
