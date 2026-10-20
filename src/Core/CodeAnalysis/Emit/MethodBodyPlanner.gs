@@ -824,23 +824,10 @@ internal class MethodBodyPlanner {
                         if decl.ConstantValue != nil {
                             break
                         }
-                        if !locals.ContainsKey(decl.Variable) {
-                            locals[decl.Variable] = localTypes.Count
-                            // Issue #491 (ADR-0060 follow-up): a ref-aliasing local's IL
-                            // slot is a managed pointer `T&`, not the pointee `T`.
-                            // Recording the slot type as ByRefTypeSymbol routes encoding
-                            // through the byref local-sig path (EncodeLocalVariableType).
-                            if decl.Variable is LocalVariableSymbol lvs && lvs.RefKind != RefKind.None {
-                                localTypes.Add(ByRefTypeSymbol.Get(lvs.Type))
-                            } else {
-                                localTypes.Add(decl.Variable.Type)
-                            }
-                        }
+                        RegisterLocal(decl.Variable, locals, localTypes)
                     }
                     case lbl is BoundLabelStatement {
-                        if !labels.ContainsKey(lbl.Label) {
-                            labels[lbl.Label] = il.DefineLabel()
-                        }
+                        RegisterLabel(lbl.Label, labels, il)
                     }
                     case fx is BoundFixedStatement {
                         if fx.Body is BoundBlockStatement fxBlock {
@@ -912,14 +899,10 @@ internal class MethodBodyPlanner {
             } else {
                 switch s {
                     case g is BoundGotoStatement {
-                        if !labels.ContainsKey(g.Label) {
-                            labels[g.Label] = il.DefineLabel()
-                        }
+                        RegisterLabel(g.Label, labels, il)
                     }
                     case cg is BoundConditionalGotoStatement {
-                        if !labels.ContainsKey(cg.Label) {
-                            labels[cg.Label] = il.DefineLabel()
-                        }
+                        RegisterLabel(cg.Label, labels, il)
                     }
                     case fx is BoundFixedStatement {
                         if fx.Body is BoundBlockStatement fxBlock {
@@ -1102,6 +1085,93 @@ internal class MethodBodyPlanner {
     }
 
     shared {
+        /// Allocates only body-owned slots and labels. The caller must first prove primitive-body eligibility.
+        func CollectIndependentLocalsAndLabels(
+            body BoundBlockStatement,
+            locals Dictionary[VariableSymbol, int32],
+            localTypes List[TypeSymbol],
+            labels Dictionary[BoundLabel, LabelHandle],
+            il InstructionEncoder
+        ) {
+            CollectIndependentStatements(body.Statements, locals, localTypes, labels, il, pass: 1)
+            CollectIndependentStatements(body.Statements, locals, localTypes, labels, il, pass: 2)
+        }
+
+        private func CollectIndependentStatements(
+            statements ImmutableArray[BoundStatement],
+            locals Dictionary[VariableSymbol, int32],
+            localTypes List[TypeSymbol],
+            labels Dictionary[BoundLabel, LabelHandle],
+            il InstructionEncoder,
+            pass int32
+        ) {
+            for statement in statements {
+                switch statement {
+                    case block is BoundBlockStatement {
+                        CollectIndependentStatements(block.Statements, locals, localTypes, labels, il, pass)
+                    }
+                    case declaration is BoundVariableDeclaration {
+                        if declaration.Variable is not LocalVariableSymbol{RefKind: RefKind.None} &&
+                            declaration.Variable is not ParameterSymbol{RefKind: RefKind.None} {
+                            throw InvalidOperationException(
+                                "Independent local planning cannot allocate shared or by-ref storage."
+                            )
+                        }
+                        if pass == 1 && declaration.ConstantValue == nil {
+                            RegisterLocal(declaration.Variable, locals, localTypes)
+                        }
+                    }
+                    case label is BoundLabelStatement {
+                        if pass == 1 {
+                            RegisterLabel(label.Label, labels, il)
+                        }
+                    }
+                    case branch is BoundGotoStatement {
+                        if pass == 2 {
+                            RegisterLabel(branch.Label, labels, il)
+                        }
+                    }
+                    case branch is BoundConditionalGotoStatement {
+                        if pass == 2 {
+                            RegisterLabel(branch.Label, labels, il)
+                        }
+                    }
+                    case BoundExpressionStatement, BoundReturnStatement { }
+                    default {
+                        throw InvalidOperationException("Unexpected independent statement '${statement.Kind}'.")
+                    }
+                }
+            }
+        }
+
+        private func RegisterLocal(
+            variable VariableSymbol,
+            locals Dictionary[VariableSymbol, int32],
+            localTypes List[TypeSymbol]
+        ) {
+            if locals.ContainsKey(variable) {
+                return
+            }
+            locals[variable] = localTypes.Count
+            localTypes.Add(
+                if variable is LocalVariableSymbol local && local.RefKind != RefKind.None {
+                    ByRefTypeSymbol.Get(local.Type)
+                } else {
+                    variable.Type
+                }
+            )
+        }
+
+        private func RegisterLabel(
+            label BoundLabel,
+            labels Dictionary[BoundLabel, LabelHandle],
+            il InstructionEncoder
+        ) {
+            if !labels.ContainsKey(label) {
+                labels[label] = il.DefineLabel()
+            }
+        }
+
         /// Converts the per-method `locals` dictionary used during IL emit
         /// into a stable, slot-ordered list suitable for the Portable PDB
         /// `LocalVariable` table. Compiler-generated names (synthesized by

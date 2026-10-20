@@ -490,10 +490,10 @@ open class Compilation {
             .Where((d Diagnostic) -> !d.IsError)
             .ToImmutableArray()
         try {
-            using let stream = File.Create(program.PackageName + ".dll")
+            using let staged = MemoryStream()
             EmitAssembly(
                 program,
-                stream,
+                staged,
                 References,
                 asyncRewriteResult: lowered.AsyncRewriteResult,
                 iteratorRewriteResult: lowered.IteratorRewriteResult,
@@ -502,7 +502,13 @@ open class Compilation {
                 pdbStream: nil,
                 embeddedResources: EmbeddedResources
             )
-        } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
+            WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+            using let stream = File.Create(program.PackageName + ".dll")
+            staged.Position = 0
+            staged.CopyTo(stream)
+        } catch (ex Exception) when !(ex is OutOfMemoryException) &&
+            !(ex is StackOverflowException) &&
+            !(ex is OperationCanceledException) {
             if Environment.GetEnvironmentVariable("GS_DEBUG_STACK") != nil {
                 Console.Error.WriteLine(ex.ToString())
             }
@@ -669,11 +675,15 @@ open class Compilation {
             .Where((d Diagnostic) -> !d.IsError)
             .ToImmutableArray()
         try {
+            using let stagedPe = MemoryStream()
+            using let stagedPdb = MemoryStream()
+            using let stagedReference = MemoryStream()
+            using let stagedDocumentation = MemoryStream()
             if peStream != nil {
                 using let measurement = CompilationMeasurements.BeginPhase("emit.implementation")
                 EmitAssembly(
                     program,
-                    peStream,
+                    stagedPe,
                     References,
                     assemblyName,
                     assemblyVersion,
@@ -682,7 +692,11 @@ open class Compilation {
                     iteratorRewriteResult: lowered.IteratorRewriteResult,
                     asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult,
                     debugInformation: DebugInformation,
-                    pdbStream: pdbStream,
+                    pdbStream: if pdbStream == nil {
+                        nil
+                    } else {
+                        stagedPdb
+                    },
                     targetFrameworkMoniker: targetFrameworkMoniker,
                     embeddedResources: EmbeddedResources
                 )
@@ -694,7 +708,7 @@ open class Compilation {
                 // pointing at a sidecar that doesn't describe this PE.
                 EmitAssembly(
                     program,
-                    refStream,
+                    stagedReference,
                     References,
                     assemblyName,
                     assemblyVersion,
@@ -709,9 +723,17 @@ open class Compilation {
             }
             if docStream != nil {
                 using let measurement = CompilationMeasurements.BeginPhase("documentation.emit")
-                DocumentationFileEmitter.Emit(docStream, assemblyName ?? program.PackageName, program)
+                DocumentationFileEmitter.Emit(stagedDocumentation, assemblyName ?? program.PackageName, program)
             }
-        } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
+            WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+            using let publication = CompilationMeasurements.BeginPhase("emit.publication")
+            PublishArtifact(stagedPe, peStream)
+            PublishArtifact(stagedPdb, pdbStream)
+            PublishArtifact(stagedReference, refStream)
+            PublishArtifact(stagedDocumentation, docStream)
+        } catch (ex Exception) when !(ex is OutOfMemoryException) &&
+            !(ex is StackOverflowException) &&
+            !(ex is OperationCanceledException) {
             // 6.2 SilentEmitFailure invariant: widen the catch to all non-fatal
             // exceptions so that any emit-time failure (regardless of exception
             // type) produces a structured GS9998 diagnostic anchored at the
@@ -772,7 +794,8 @@ open class Compilation {
             assemblyVersion,
             targetFrameworkMoniker,
             embeddedResources,
-            Optimize
+            Optimize,
+            WorkBudget
         )
     }
 
@@ -780,6 +803,13 @@ open class Compilation {
         success,
         ApplySourceSuppressions(diagnostics)
     )
+
+    private func PublishArtifact(staged MemoryStream, destination Stream?) {
+        if destination != nil && staged.Length > 0 {
+            staged.Position = 0
+            staged.CopyTo(destination)
+        }
+    }
 
     private func PrepareReferencesForBinding(assemblyName string?) {
         if References == nil {

@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.Emit
 
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Lowering.Async
 import GSharp.Core.CodeAnalysis.Symbols
 import System
@@ -57,6 +58,84 @@ internal class FunctionEmitter {
     private let remaps GenericRemapState
     private let signatures SignatureEncoder
     private let memberRefs ImportedMemberRefFactory
+    private let independentBodies Dictionary[FunctionSymbol, IndependentMethodBody] = Dictionary[
+        FunctionSymbol,
+        IndependentMethodBody
+    ]()
+
+    internal func PrepareIndependentBodies(budget CompilationWorkBudget) {
+        if this.emitCtx.MetadataOnly || budget.MaxWorkers <= 1 {
+            return
+        }
+        using let planning = CompilationMeasurements.BeginPhase("emit.method-bodies.planning")
+        let bodies = this.emitCtx.Program.Functions.ToBuilder()
+        for pair in this.outer.lambdaBodies {
+            bodies[pair.Key] = pair.Value
+        }
+        let candidates = bodies
+            .Where(
+            (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) ->
+            !this.independentBodies.ContainsKey(pair.Key) &&
+                (this.cache.MethodHandles.ContainsKey(pair.Key) || this.cache.FunctionHandles.ContainsKey(pair.Key)) &&
+                !this
+                .outer
+                .stateMachines
+                .IteratorKickoffBodies
+                .ContainsKey(pair.Key) &&
+                !this
+                .outer
+                .closures
+                .ClosureInvokeToInfo
+                .ContainsKey(pair.Key) &&
+                IndependentMethodBody.CanPrepare(pair.Key, pair.Value)
+        )
+            .OrderBy(
+            (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) -> pair.Key,
+            SymbolSourceOrderComparer.Instance
+        )
+            .ToArray()
+        CompilationMeasurements.Count("emit.method-bodies.eligible", candidates.Length)
+        if candidates.Length < 2 {
+            return
+        }
+        let largestBody = candidates.Max(
+            (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) ->
+            if pair.Key.Declaration?.Body is {} body {
+                cast[int64](body.Span.Length)
+            } else {
+                cast[int64](pair.Value.Statements.Length) * 64
+            }
+        )
+        if candidates.Length < 8 && largestBody < 8192 {
+            return
+        }
+        let work = candidates.Select(
+            (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) ->
+            IndependentMethodBody(this.outer, pair.Key, pair.Value)
+        )
+            .ToArray()
+        planning?.Dispose()
+        using let instructions = CompilationMeasurements.BeginPhase("emit.method-bodies.instructions")
+        budget.Run(
+            work.Length,
+            (index int32) -> work[index].Emit(),
+            workspaceBytes: Math.Max(100663296, largestBody * 128)
+        )
+        CompilationMeasurements.Count("emit.method-bodies.observed-workers", budget.LastObservedWorkers)
+        if budget.LastObservedWorkers > 1 {
+            CompilationMeasurements.Count("emit.method-bodies.parallel-batches")
+        }
+        budget.CancellationToken.ThrowIfCancellationRequested()
+        for var index = 0; index < work.Length; index++ {
+            this.independentBodies.Add(candidates[index].Key, work[index])
+            CompilationMeasurements.Count("emit.method-bodies.completed")
+            CompilationMeasurements.Count("emit.method-bodies.il-bytes", work[index].Il.Offset)
+            CompilationMeasurements.Count(
+                "emit.method-bodies.buffered-sequence-points",
+                work[index].BufferedSequencePointCount
+            )
+        }
+    }
 
     init(outer ReflectionMetadataEmitter) {
         this.outer = outer ?? throw ArgumentNullException("outer")
@@ -280,6 +359,21 @@ internal class FunctionEmitter {
         asyncPlan AsyncStateMachinePlan?,
         isEntryPoint bool
     ) FunctionBodyEmissionResult {
+        if this.independentBodies.Remove(function, out var independent) {
+            let signature = independent.Session.BuildLocalsSignature()
+            let offset = this
+                .emitCtx
+                .MethodBodyStream
+                .AddMethodBody(independent.Il, maxStack: independent.MaxStack, localVariablesSignature: signature)
+            return FunctionBodyEmissionResult(
+                offset,
+                independent.ResolveSequencePoints(this.emitCtx.Pdb),
+                MethodBodyPlanner.CollectLocalInfo(independent.Session.Locals),
+                MethodBodyPlanner.CollectLocalConstantInfo(independent.Session.ConstValues),
+                independent.Il.Offset,
+                signature
+            )
+        }
         // Phase 4 emit parity (F1): generic functions are emitted with a
         // type-erased signature — each open type parameter is encoded as
         // System.Object via EncodeTypeSymbol. Call sites insert the box /

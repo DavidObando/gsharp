@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Emit
 
 import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Lowering
 import GSharp.Core.CodeAnalysis.Lowering.Async
 import GSharp.Core.CodeAnalysis.Lowering.Iterators
@@ -44,6 +45,7 @@ internal class ReflectionMetadataEmitter {
     // via constructor injection.
     // PR-E-11: widened to internal so the promoted MethodBodyEmitter can read it.
     internal let emitCtx EmitContext
+    private var workBudget CompilationWorkBudget = CompilationWorkBudget()
 
     // PR-E-2: every key→handle dictionary (assemblyRefs, typeRefs, typeSpecs,
     // methodRefs, methodSpecs, methodSpecsWithSymbolArgs, ctorRefs, fieldRefs,
@@ -205,7 +207,7 @@ internal class ReflectionMetadataEmitter {
     // Each lambda's synthetic FunctionSymbol is registered alongside user
     // functions in functionsByPackage so it gets a MethodDef row, and its
     // body is emitted via the same EmitFunction path.
-    private let lambdaBodies Dictionary[FunctionSymbol, BoundBlockStatement] = Dictionary[
+    internal let lambdaBodies Dictionary[FunctionSymbol, BoundBlockStatement] = Dictionary[
         FunctionSymbol,
         BoundBlockStatement
     ]()
@@ -839,6 +841,7 @@ internal class ReflectionMetadataEmitter {
         iteratorRewriteResult IteratorRewriteResult? = nil,
         asyncIteratorRewriteResult AsyncIteratorRewriteResult? = nil
     ) {
+        using let planningPhase = CompilationMeasurements.BeginPhase("emit.planning")
         this.InitializePortablePdb()
         this.RegisterRewriteResults(asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult)
         let lambdaLiterals = this.SynthesizeClosuresAndStateMachines()
@@ -847,8 +850,10 @@ internal class ReflectionMetadataEmitter {
         let aggregateTypes = this.DiscoverAndOrderAggregateTypes(generatedTypes)
         let fieldRows = this.PlanFieldRows(aggregateTypes)
         let methodRows = this.PlanMethodRows(aggregateTypes)
-        this.EmitUserTypeDefinitionsAndEarlyMethods(aggregateTypes, fieldRows, methodRows)
         let packageMethods = this.PlanPackageAndStateMachineMethods(generatedTypes, aggregateTypes, methodRows)
+        planningPhase?.Dispose()
+        this.functions.PrepareIndependentBodies(this.workBudget)
+        this.EmitUserTypeDefinitionsAndEarlyMethods(aggregateTypes, fieldRows, methodRows)
         let programTypeDefinitions = this.EmitProgramAndStateMachineTypeDefinitions(
             aggregateTypes,
             fieldRows,
@@ -1156,6 +1161,7 @@ internal class ReflectionMetadataEmitter {
     }
 
     private func SynthesizeClosuresAndStateMachines() List[BoundFunctionLiteralExpression] {
+        using let planningPhase = CompilationMeasurements.BeginPhase("emit.discovery")
         // Pre-assign FieldDefinitionHandles for user struct fields. Struct
         // TypeDefs are emitted between <Module> and the per-package <Program>
         // types so the field/method-row ranges fall out correctly:
@@ -1204,11 +1210,51 @@ internal class ReflectionMetadataEmitter {
         let zeroCaptureLiterals = List[BoundFunctionLiteralExpression]()
         for literal in lambdaLiterals {
             if literal.CapturedVariables.Length == 0 && !this.closures.ClosureInfos.ContainsKey(literal) {
-                let body = cast[BoundBlockStatement](Lowerer.Lower(literal.Body))
-                this.lambdaBodies[literal.Function] = body
                 zeroCaptureLiterals.Add(literal)
             }
         }
+        using let loweringPhase = CompilationMeasurements.BeginPhase("lowering.emit-lambdas")
+        let localJobs = List[int32]()
+        let bodies = [zeroCaptureLiterals.Count]BoundBlockStatement?
+        var largestBody int64 = 0
+        for var index = 0; index < zeroCaptureLiterals.Count; index++ {
+            let literal = zeroCaptureLiterals[index]
+            if literal.Function.TypeParameters.IsDefaultOrEmpty && IndependentMethodBody.IsLocal(literal.Body) {
+                if this.emitCtx.MetadataOnly {
+                    bodies[index] = literal.Body
+                    CompilationMeasurements.Count("emit.reference.lambda-lowering-skipped")
+                } else {
+                    localJobs.Add(index)
+                    largestBody = Math.Max(
+                        largestBody,
+                        literal.Syntax?.Span.Length ?? literal.Body.Syntax?.Span.Length ?? 0
+                    )
+                }
+            } else {
+                bodies[index] = Lowerer.Lower(literal.Body)
+            }
+        }
+        this.workBudget.Run(
+            localJobs.Count,
+            (index int32) -> {
+                let slot = localJobs[index]
+                bodies[slot] = Lowerer.Lower(zeroCaptureLiterals[slot].Body)
+            },
+            workspaceBytes: Math.Max(100663296, largestBody * 128),
+            allowParallel: localJobs.Count >= 8 || largestBody >= 8192
+        )
+        CompilationMeasurements.Count("lowering.emit-lambdas.completed", localJobs.Count)
+        CompilationMeasurements.Count("lowering.emit-lambdas.observed-workers", this.workBudget.LastObservedWorkers)
+        if this.workBudget.LastObservedWorkers > 1 {
+            CompilationMeasurements.Count("lowering.emit-lambdas.parallel-batches")
+        }
+        for var index = 0; index < zeroCaptureLiterals.Count; index++ {
+            this.lambdaBodies[zeroCaptureLiterals[index].Function] = Invariant.Required(
+                bodies[index],
+                "joined lowering produced its body"
+            )
+        }
+        loweringPhase?.Dispose()
         // Issue #4223: promoting a callee to carry extra enclosing type
         // parameters (UserTokenResolver.TryPromoteNonCapturingGenericLambda)
         // can in turn require its CALLER — another zero-capture local
@@ -3953,6 +3999,7 @@ internal class ReflectionMetadataEmitter {
     }
 
     private func BuildPortablePdbAndDebugDirectory(entryHandle MethodDefinitionHandle) DebugArtifacts {
+        using let measurement = CompilationMeasurements.BeginPhase("emit.debug-directory")
         // 7. Build the Portable PDB blob FIRST so we can wire its content id
         // (CodeView), SHA-256 checksum (PdbChecksum), and — when embedded —
         // the blob itself into the PE's DebugDirectory. PortablePdbEmitter
@@ -4032,6 +4079,7 @@ internal class ReflectionMetadataEmitter {
         mvidFixup ReservedBlob[GuidHandle],
         debugArtifacts DebugArtifacts
     ) {
+        using let measurement = CompilationMeasurements.BeginPhase("emit.serialization")
         let pdbBlob BlobBuilder? = debugArtifacts.PdbBlob
         let debugDirectory = debugArtifacts.DebugDirectory
         let isEmbedded = debugArtifacts.IsEmbedded
@@ -4086,6 +4134,7 @@ internal class ReflectionMetadataEmitter {
             contentId = peBuilder.Serialize(peBlob)
         }
         mvidFixup.CreateWriter().WriteGuid(contentId.Guid)
+        this.workBudget.CancellationToken.ThrowIfCancellationRequested()
         peBlob.WriteContentTo(peStream)
         // 10. Phase 4–7 PDB sidecar routing. Embedded format suppresses the
         // sidecar — the blob already lives in the PE. Portable format writes
@@ -4241,6 +4290,15 @@ internal class ReflectionMetadataEmitter {
             )
         }
 
+        /// Plans the proven primitive body without accessing the coordinator or metadata.
+        func PlanIndependent(body BoundBlockStatement) -> MethodBodyPlanner.CollectIndependentLocalsAndLabels(
+            body,
+            this.locals,
+            this.localTypes,
+            this.labels,
+            this.Il
+        )
+
         /// Encodes the collected locals into a standalone signature (default when there are none).
         /// @returns The locals signature handle, or `default` when no locals were collected.
         func BuildLocalsSignature() StandaloneSignatureHandle {
@@ -4273,10 +4331,16 @@ internal class ReflectionMetadataEmitter {
             asyncFieldMap AsyncStateMachineFieldMap? = nil,
             asyncPlan AsyncStateMachinePlan? = nil,
             iteratorEmitCtx StateMachineEmitter.IteratorEmitContext? = nil,
-            enclosingClosure ClosureEmitter.ClosureInfo? = nil
+            enclosingClosure ClosureEmitter.ClosureInfo? = nil,
+            isolated bool = false,
+            recordLocalSequencePoint((int32, SyntaxNode?) -> void)? = nil
         ) MethodBodyEmitter {
             return MethodBodyEmitter(
-                this.outer,
+                if isolated {
+                    nil
+                } else {
+                    this.outer
+                },
                 this.Il,
                 this.locals,
                 parameters,
@@ -4300,7 +4364,8 @@ internal class ReflectionMetadataEmitter {
                 enclosingClosure: enclosingClosure,
                 stackAllocResultSlots: this.stackAllocResultSlots,
                 hasFixedReturns: this.hasFixedReturns,
-                fixedReturnSlot: this.fixedReturnSlot
+                fixedReturnSlot: this.fixedReturnSlot,
+                recordLocalSequencePoint: recordLocalSequencePoint
             )
         }
 
@@ -4817,9 +4882,11 @@ internal class ReflectionMetadataEmitter {
             assemblyVersion string? = nil,
             targetFrameworkMoniker string? = nil,
             embeddedResources IReadOnlyList[(Name string, Data[]uint8, IsPublic bool)]? = nil,
-            optimize bool = true
+            optimize bool = true,
+            workBudget CompilationWorkBudget? = nil
         ) {
             let emitter = ReflectionMetadataEmitter(program, references, assemblyName, metadataOnly, embeddedResources)
+            emitter.workBudget = workBudget ?? CompilationWorkBudget()
             emitter.emitCtx.AssemblyVersionOverride = assemblyVersion
             emitter.emitCtx.TargetFrameworkMoniker = targetFrameworkMoniker
             emitter.emitCtx.Optimize = optimize
