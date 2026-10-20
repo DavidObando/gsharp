@@ -1,0 +1,548 @@
+package GSharp.Sdk.Tests
+
+import GSharp.Compiler
+import GSharp.Core.CodeAnalysis.Symbols
+import Gsharp.NET.Sdk.Tools
+import System
+import System.Collections.Generic
+import System.Diagnostics
+import System.IO
+import System.Linq
+import System.Reflection.Metadata
+import System.Reflection.PortableExecutable
+import System.Runtime.CompilerServices
+import System.Security
+import System.Text
+import System.Threading
+import Xunit
+
+/// Exercises the real compiler process, not a simulated compilation callback.
+open class CompilerWorkerTests : IDisposable {
+    private let directory string = Path.Combine(
+        Environment.CurrentDirectory,
+        "TestArtifacts",
+        "compiler-worker-" + Guid.NewGuid().ToString("N")
+    )
+    private let messages List[string] = List[string]()
+    private let client WorkerProcessClient = WorkerProcessClient()
+
+    init() {
+        Directory.CreateDirectory(directory)
+    }
+
+    func Dispose() {
+        client.Dispose()
+        Directory.Delete(directory, recursive: true)
+        GC.SuppressFinalize(this)
+    }
+
+    @Fact
+    func SharedGenericDefinitionDoesNotKeepPrivateReferenceContextAlive() {
+        let assembly = CacheSharedGenericOverPrivateType()
+        for var i = 0; i < 5 && assembly.IsAlive; i++ {
+            GC.Collect()
+            GC.WaitForPendingFinalizers()
+            GC.Collect()
+        }
+        Assert.False(assembly.IsAlive, "A host generic definition must not retain a private metadata context.")
+    }
+
+    @Fact
+    func LiveImportedSymbolsKeepContextSensitiveCanonicalIdentity() {
+        let paths = Directory.GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location) ?? ".", "*.dll")
+        using let firstContext = ReferenceResolver.WithReferences(paths)
+        using let secondContext = ReferenceResolver.WithReferences(paths)
+        Assert.True(firstContext.TryResolveType("System.Text.StringBuilder", out var firstType))
+        Assert.True(secondContext.TryResolveType("System.Text.StringBuilder", out var secondType))
+        let first = ImportedTypeSymbol.Get(typeof(Func[_, _]).MakeGenericType(firstType, typeof(int32)))
+        let otherContext = ImportedTypeSymbol.Get(typeof(Func[_, _]).MakeGenericType(secondType, typeof(int32)))
+        GC.Collect()
+        GC.WaitForPendingFinalizers()
+        Assert.Same(first, ImportedTypeSymbol.Get(typeof(Func[_, _]).MakeGenericType(firstType, typeof(int32))))
+        Assert.NotSame(first, otherContext)
+    }
+
+    @Fact
+    func ReusedRequestsMatchStandaloneBytesAndDiagnostics() {
+        for var i = 0; i < 6; i++ {
+            let project = Path.Combine(
+                directory,
+                if i % 2 == 0 {
+                    "first"
+                } else {
+                    "second"
+                }
+            )
+            Directory.CreateDirectory(project)
+            let source = Path.Combine(project, "input.gs")
+            let body = if i == 3 {
+                "open class Sample { func Value() int32 -> " + "".PadLeft(40000) + "missingName }"
+            } else {
+                "open class Sample { func Value() int32 -> $i }"
+            }
+            File.WriteAllText(source, body)
+            let arguments = []string{
+                "/out:result.dll",
+                "/target:library",
+                "/assemblyname:WorkerIsolation",
+                "/deterministic",
+                "/debug:portable",
+                "/refout:reference.dll",
+                "/doc:result.xml",
+                if i % 2 == 0 {
+                    "/optimize+"
+                } else {
+                    "/optimize-"
+                },
+                if i % 2 == 0 {
+                    "/nullability:platform-types"
+                } else {
+                    "/nullability:oblivious"
+                },
+                "input.gs"
+            }
+            let (standaloneExit, standaloneDiagnostics) = Standalone(project, arguments)
+            let expected = Dictionary[string, []uint8]()
+            if standaloneExit == 0 {
+                for name in[]string{"result.dll", "result.pdb", "reference.dll", "result.xml"} {
+                    let path = Path.Combine(project, name)
+                    Assert.True(File.Exists(path), path)
+                    expected.Add(name, File.ReadAllBytes(path))
+                    File.Delete(path)
+                }
+            }
+            let output = List[string]()
+            let errors = List[string]()
+            Assert.True(Run(project, arguments, output, errors, out var workerExit))
+            Assert.Equal(standaloneExit, workerExit)
+            Assert.Equal(standaloneDiagnostics, string.Join("\n", output.Concat(errors)))
+            if standaloneExit == 0 {
+                for entry in expected {
+                    Assert.Equal[uint8](entry.Value, File.ReadAllBytes(Path.Combine(project, entry.Key)))
+                }
+            }
+        }
+        Assert.Equal(6, messages.Count((m string) -> m.Contains("worker completed:")))
+        let pids = messages
+            .Where((m string) -> m.Contains("worker completed:"))
+            .Select((m string) -> m.Split(',')[0])
+            .Distinct()
+            .ToArray()
+        Assert.Single(pids)
+    }
+
+    @Fact
+    func AnalyzerRequestsRetireWithoutDroppingTheirDiagnostics() {
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { }")
+        File.WriteAllText(Path.Combine(directory, "invalid-analyzer.dll"), "not an assembly")
+        let output = List[string]()
+        let errors = List[string]()
+        Assert.True(
+            Run(
+                directory,
+                []string{"/out:result.dll", "/target:library", "/gsanalyzer:invalid-analyzer.dll", "input.gs"},
+                output,
+                errors,
+                out var failure
+            )
+        )
+        Assert.NotEqual(0, failure)
+        Assert.Contains(output, (line string) -> line.Contains("GS9301"))
+        Assert.Contains("retire=True", messages.Last())
+        let firstProcess = messages.Last().Split(',')[0]
+        Assert.True(
+            Run(
+                directory,
+                []string{"/out:result.dll", "/target:library", "input.gs"},
+                List[string](),
+                List[string](),
+                out var success
+            )
+        )
+        Assert.Equal(0, success)
+        Assert.NotEqual(firstProcess, messages.Last().Split(',')[0])
+    }
+
+    @Fact
+    func RequestLimitRetiresAndRestartsWorker() {
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { }")
+        let arguments = []string{"/out:result.dll", "/target:library", "input.gs"}
+        for var i = 0; i < 17; i++ {
+            Assert.True(Run(directory, arguments, List[string](), List[string](), out var exit))
+            Assert.Equal(0, exit)
+        }
+        let completed = messages.Where((m string) -> m.Contains("worker completed:")).ToArray()
+        Assert.Equal(17, completed.Length)
+        Assert.Contains("retire=True", completed[15])
+        Assert.NotEqual(completed[0].Split(',')[0], completed[16].Split(',')[0])
+    }
+
+    @Fact
+    func UnavailableProtocolIsExplicitFallbackNotCompilationSuccess() {
+        let output = List[string]()
+        Assert.False(
+            client.TryRun(
+                CompilerPath(),
+                "--help",
+                directory,
+                []string{"/out:never.dll"},
+                1,
+                CancellationToken.None,
+                (line string) -> output.Add(line),
+                (line string) -> output.Add(line),
+                (line string) -> messages.Add(line),
+                out var exit
+            )
+        )
+        Assert.NotEqual(0, exit)
+        Assert.Contains(messages, (message string) -> message.Contains("using standalone tool"))
+        Assert.False(File.Exists(Path.Combine(directory, "never.dll")))
+    }
+
+    @Fact
+    func SameAssemblyNameWithChangedReferenceContentsDoesNotReuseOldTypes() {
+        let api = Path.Combine(directory, "api.gs")
+        let consumer = Path.Combine(directory, "input.gs")
+        File.WriteAllText(consumer, "import R\nopen class Sample { func Get() int32 -> Value.Get() }")
+        for var i = 0; i < 3; i++ {
+            let returnType = if i == 1 {
+                "string"
+            } else {
+                "int32"
+            }
+            let value = if i == 1 {
+                "\"changed\""
+            } else {
+                "42"
+            }
+            File.WriteAllText(api, "package R\nopen class Value { shared { func Get() $returnType -> $value } }")
+            let (apiExit, apiDiagnostics) = Standalone(
+                directory,
+                []string{"/out:api.dll", "/assemblyname:SameReference", "/target:library", "api.gs"}
+            )
+            Assert.True(apiExit == 0, apiDiagnostics)
+            let arguments = []string{"/out:result.dll", "/target:library", "/r:api.dll", "input.gs"}
+            let (expectedExit, expectedDiagnostics) = Standalone(directory, arguments)
+            Assert.Equal(
+                if i == 1 {
+                    1
+                } else {
+                    0
+                },
+                expectedExit
+            )
+            let output = List[string]()
+            let errors = List[string]()
+            Assert.True(Run(directory, arguments, output, errors, out var exit))
+            Assert.Equal(expectedExit, exit)
+            Assert.Equal(expectedDiagnostics, string.Join("\n", output.Concat(errors)))
+        }
+    }
+
+    @Fact
+    func ChangedToolPayloadStartsANewWorker() {
+        let toolDirectory = Path.Combine(directory, "tool")
+        Directory.CreateDirectory(toolDirectory)
+        for path in Directory.GetFiles(Path.GetDirectoryName(CompilerPath()) ?? ".") {
+            File.Copy(path, Path.Combine(toolDirectory, Path.GetFileName(path)))
+        }
+        let tool = Path.Combine(toolDirectory, "gsc.dll")
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { }")
+        let arguments = []string{"/out:result.dll", "/target:library", "input.gs"}
+        Assert.True(Run(directory, arguments, List[string](), List[string](), out var first, tool))
+        Assert.Equal(0, first)
+        File.WriteAllText(Path.Combine(toolDirectory, "version-marker.json"), "{}")
+        Assert.True(Run(directory, arguments, List[string](), List[string](), out var second, tool))
+        Assert.Equal(0, second)
+        let completed = messages.Where((m string) -> m.Contains("worker completed:")).ToArray()
+        Assert.Equal(2, completed.Length)
+        Assert.NotEqual(completed[0].Split(',')[0], completed[1].Split(',')[0])
+    }
+
+    @Fact
+    func RealBuildTaskReusesItsBuildLifetimeWorkerAndPreservesFailure() {
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { func Get() int32 -> 42 }")
+        let compiler = SecurityElement.Escape(CompilerPath())
+        let taskAssembly = SecurityElement.Escape(typeof(BuildTask).Assembly.Location)
+        let runtime = SecurityElement.Escape(Path.GetDirectoryName(typeof(object).Assembly.Location) ?? ".")
+        let basePath = SecurityElement.Escape(directory)
+        let project = Path.Combine(directory, "worker.proj")
+        let prefix =
+        "<Project><UsingTask AssemblyFile=\"$taskAssembly\" TaskName=\"Gsharp.NET.Sdk.Tools.BuildTask\"/>" +
+            "<ItemGroup><Sources Include=\"input.gs\"/><Refs Include=\"$runtime/*.dll\"/></ItemGroup>" +
+            "<Target Name=\"Build\">"
+        for name in[]string{"first", "second"} {
+            let xml = prefix +
+                "<BuildTask GsharpCompilerFullPath=\"$compiler\" OutputPath=\".\" OutputName=\"$name\" " +
+                "TempOutputPath=\".\" TargetFramework=\"net10.0\" BasePath=\"$basePath\" OutputType=\"Library\" " +
+                "Compile=\"@(Sources)\" References=\"@(Refs)\" ResponseFilePath=\"./$name.rsp\" " +
+                "UseSharedCompilation=\"true\" WorkerGrant=\"1\" Deterministic=\"true\"/>" +
+                "</Target></Project>"
+            File.WriteAllText(Path.Combine(directory, "$name.proj"), xml)
+        }
+        File.WriteAllText(
+            project,
+            "<Project><Target Name=\"Build\">" +
+                "<MSBuild Projects=\"first.proj;second.proj\" Targets=\"Build\" BuildInParallel=\"false\"/>" +
+                "</Target></Project>"
+        )
+        let (exit, log) = BuildProject(project, directory)
+        Assert.True(exit == 0, log)
+        let completed = log.Split('\n').Where((line string) -> line.Contains("worker completed:")).ToArray()
+        Assert.Equal(2, completed.Length)
+        Assert.Equal(completed[0].Split(',')[0], completed[1].Split(',')[0])
+        Assert.True(File.Exists(Path.Combine(directory, "first.dll")))
+        Assert.True(File.Exists(Path.Combine(directory, "second.dll")))
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { func Get() int32 -> missing }")
+        let (failure, diagnostics) = BuildProject(project, directory)
+        Assert.NotEqual(0, failure)
+        Assert.Contains("error GS", diagnostics)
+        Assert.DoesNotContain("using standalone", diagnostics)
+    }
+
+    @Fact
+    func NullabilityModesDoNotCarryOverBetweenRequests() {
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { func Get() string -> nil }")
+        for var i = 0; i < 3; i++ {
+            let arguments = []string{
+                "/out:result.dll",
+                "/target:library",
+                if i == 1 {
+                    "/nullability:oblivious"
+                } else {
+                    "/nullability:platform-types"
+                },
+                "input.gs"
+            }
+            let (expected, diagnostics) = Standalone(directory, arguments)
+            Assert.Equal(
+                if i == 1 {
+                    0
+                } else {
+                    1
+                },
+                expected
+            )
+            let output = List[string]()
+            let errors = List[string]()
+            Assert.True(Run(directory, arguments, output, errors, out var actual))
+            Assert.Equal(expected, actual)
+            Assert.Equal(diagnostics, string.Join("\n", output.Concat(errors)))
+        }
+    }
+
+    @Fact
+    func TargetFrameworkReferenceIdentityIsIsolated() {
+        let packages = Environment.GetEnvironmentVariable("NUGET_PACKAGES") ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".nuget",
+            "packages"
+        )
+        let netstandard = Path.Combine(packages, "netstandard.library", "2.0.3", "build", "netstandard2.0", "ref")
+        Assert.True(Directory.Exists(netstandard), netstandard)
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { func Get() string -> \"value\" }")
+        for var i = 0; i < 3; i++ {
+            let referenceDirectory = if i == 1 {
+                netstandard
+            } else {
+                Path.GetDirectoryName(typeof(object).Assembly.Location) ?? "."
+            }
+            let arguments = []string{
+                "/out:result.dll",
+                "/target:library",
+                "/deterministic",
+                if i == 1 {
+                    "/targetframework:netstandard2.0"
+                } else {
+                    "/targetframework:net10.0"
+                },
+                "input.gs"
+            }
+            let (exit, diagnostics) = Standalone(directory, arguments, referenceDirectory)
+            Assert.True(exit == 0, diagnostics)
+            let expected = File.ReadAllBytes(Path.Combine(directory, "result.dll"))
+            let output = List[string]()
+            let errors = List[string]()
+            Assert.True(
+                Run(directory, arguments, output, errors, out var actual, referenceDirectory: referenceDirectory)
+            )
+            Assert.Equal(0, actual)
+            Assert.Equal[uint8](expected, File.ReadAllBytes(Path.Combine(directory, "result.dll")))
+            using let stream = File.OpenRead(Path.Combine(directory, "result.dll"))
+            using let pe = PEReader(stream)
+            let metadata = pe.GetMetadataReader()
+            let names = metadata
+                .AssemblyReferences
+                .Select(
+                (handle AssemblyReferenceHandle) -> metadata.GetString(metadata.GetAssemblyReference(handle).Name)
+            )
+                .ToArray()
+            Assert.Contains(
+                if i == 1 {
+                    "netstandard"
+                } else {
+                    "System.Private.CoreLib"
+                },
+                names
+            )
+        }
+    }
+
+    @Fact
+    func EnvironmentChangesRestartTheWorker() {
+        let name = "GSHARP_WORKER_TEST_" + Guid.NewGuid().ToString("N")
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { }")
+        let arguments = []string{"/out:result.dll", "/target:library", "input.gs"}
+        try {
+            for value in[]string{"first", "second"} {
+                Environment.SetEnvironmentVariable(name, value)
+                Assert.True(Run(directory, arguments, List[string](), List[string](), out var exit))
+                Assert.Equal(0, exit)
+            }
+        } finally {
+            Environment.SetEnvironmentVariable(name, nil)
+        }
+        let completed = messages.Where((m string) -> m.Contains("worker completed:")).ToArray()
+        Assert.Equal(2, completed.Length)
+        Assert.NotEqual(completed[0].Split(',')[0], completed[1].Split(',')[0])
+    }
+
+    @Fact
+    func CancellationAndWorkerLossDoNotRetryAcceptedRequests() {
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "open class Sample { }")
+        let arguments = []string{"/out:result.dll", "/target:library", "input.gs"}
+        using let cancellation = CancellationTokenSource()
+        Assert.Throws[OperationCanceledException](
+            () -> client.TryRun(
+                CompilerPath(),
+                "--compiler-worker",
+                directory,
+                WithReferences(arguments),
+                1,
+                cancellation.Token,
+                (_line string) -> { },
+                (_line string) -> { },
+                (line string) -> {
+                    if line.Contains("accepted request") {
+                        cancellation.Cancel()
+                    }
+                },
+                out var _exit
+            )
+        )
+        Assert.True(Run(directory, arguments, List[string](), List[string](), out var restarted))
+        Assert.Equal(0, restarted)
+        Assert.Throws[IOException](
+            () -> client.TryRun(
+                CompilerPath(),
+                "--compiler-worker",
+                directory,
+                arguments,
+                1,
+                CancellationToken.None,
+                (_line string) -> { },
+                (_line string) -> { },
+                (line string) -> {
+                    if line.Contains("accepted request") {
+                        client.Dispose()
+                    }
+                },
+                out var _exit
+            )
+        )
+        Assert.True(Run(directory, arguments, List[string](), List[string](), out restarted))
+        Assert.Equal(0, restarted)
+    }
+
+    private func Run(
+        project string,
+        arguments[]string,
+        output List[string],
+        errors List[string],
+        out exitCode int32,
+        tool string? = nil,
+        referenceDirectory string? = nil
+    ) bool -> client
+        .TryRun(
+        tool ?? CompilerPath(),
+        "--compiler-worker",
+        project,
+        WithReferences(arguments, referenceDirectory),
+        1,
+        CancellationToken.None,
+        (line string) -> output.Add(line),
+        (line string) -> errors.Add(line),
+        (line string) -> messages.Add(line),
+        out exitCode
+    )
+
+    shared {
+        private func BuildProject(project string, directory string)(Exit int32, Log string) {
+            let start = ProcessStartInfo("dotnet"){
+                WorkingDirectory = directory,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            }
+            for argument in[]string{"msbuild", project, "-t:Build", "-m:2", "-nr:false", "-v:normal", "-nologo"} {
+                start.ArgumentList.Add(argument)
+            }
+            using let child = Process.Start(start) ?? throw InvalidOperationException("Cannot start MSBuild.")
+            let stdout = child.StandardOutput.ReadToEnd()
+            let stderr = child.StandardError.ReadToEnd()
+            Assert.True(child.WaitForExit(30000))
+            return (child.ExitCode, stdout + stderr)
+        }
+
+        @MethodImpl(MethodImplOptions.NoInlining)
+        private func CacheSharedGenericOverPrivateType() WeakReference {
+            let references = Directory.GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location) ?? ".", "*.dll")
+            Assert.NotEmpty(references)
+            using let resolver = ReferenceResolver.WithReferences(references)
+            Assert.True(resolver.TryResolveType("System.Text.StringBuilder", out var type))
+            let constructed = typeof(List[_]).MakeGenericType(type)
+            Assert.Same(typeof(List[_]).Assembly, constructed.Assembly)
+            Assert.Same(ImportedTypeSymbol.Get(constructed), ImportedTypeSymbol.Get(constructed))
+            let function = typeof(Func[_, _]).MakeGenericType(type, typeof(int32))
+            Assert.Same(ImportedTypeSymbol.Get(function), ImportedTypeSymbol.Get(function))
+            return WeakReference(type.Assembly)
+        }
+
+        private func WithReferences(arguments[]string, directory string? = nil)[]string -> arguments.Concat(
+            Directory
+                .GetFiles(directory ?? Path.GetDirectoryName(typeof(object).Assembly.Location) ?? ".", "*.dll")
+                .OrderBy((path string) -> path, StringComparer.Ordinal)
+                .Select((path string) -> "/r:" + path)
+        )
+            .ToArray()
+
+        private func CompilerPath() string {
+            let configuration = Directory.GetParent(Path.GetDirectoryName(typeof(Program).Assembly.Location) ?? ".")
+            let path = Path.Combine(configuration?.FullName ?? ".", "Compiler", "gsc.dll")
+            Assert.True(File.Exists(path), path)
+            return path
+        }
+
+        private func Standalone(directory string, arguments[]string, referenceDirectory string? = nil)(
+            Exit int32,
+            Diagnostics string
+        ) {
+            let start = ProcessStartInfo("dotnet"){
+                UseShellExecute = false,
+                WorkingDirectory = directory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            }
+            start.ArgumentList.Add(CompilerPath())
+            for argument in WithReferences(arguments, referenceDirectory) {
+                start.ArgumentList.Add(argument)
+            }
+            using let child = Process.Start(start) ?? throw InvalidOperationException("Cannot start compiler.")
+            let stdout = child.StandardOutput.ReadToEnd()
+            let stderr = child.StandardError.ReadToEnd()
+            Assert.True(child.WaitForExit(30000))
+            let lines = (stdout + stderr).Replace("\r\n", "\n").TrimEnd('\n')
+            return (child.ExitCode, lines)
+        }
+    }
+}

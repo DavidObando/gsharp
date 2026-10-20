@@ -4,6 +4,8 @@
     <Language>Gsharp</Language>
     <TargetRuntime>Managed</TargetRuntime>
     <WarningLevel>4</WarningLevel>
+    <GSharpUseSharedCompilation Condition=" '$(GSharpUseSharedCompilation)' == '' ">false</GSharpUseSharedCompilation>
+    <GSharpWorkerGrant Condition=" '$(GSharpWorkerGrant)' == '' ">1</GSharpWorkerGrant>
 
     <!-- Resolve gsc and the build task. In a packed Gsharp.NET.Sdk NuGet these
          sit alongside this .props in ../tools/. -->

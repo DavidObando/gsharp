@@ -635,6 +635,8 @@
          otherwise surfaces as a FileNotFoundException/TypeLoadException deep in
          member enumeration (issue #340). -->
     <BuildTask
+        UseSharedCompilation="$(GSharpUseSharedCompilation)"
+        WorkerGrant="$(GSharpWorkerGrant)"
         GsharpCompilerFullPath="$(GsharpCompilerFullPath)"
         OutputPath="$(IntermediateOutputPath)"
         OutputName="$(TargetName)"
