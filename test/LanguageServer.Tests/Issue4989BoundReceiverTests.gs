@@ -735,19 +735,24 @@ func Run(h Holder, Items int32) string {
     }
 
     @Theory
-    @InlineData("slice[string]", "int32", typeof([]int32), false)
-    @InlineData("readonly slice[string]", "int32", typeof([]int32), false)
-    @InlineData("slice[string]", "System.Range", typeof([]System.Range), false)
-    @InlineData("readonly slice[string]", "System.Range", typeof([]System.Range), false)
-    @InlineData("slice[string]", "int32", typeof([]int32), true)
-    @InlineData("readonly slice[string]", "int32", typeof([]int32), true)
-    @InlineData("slice[string]", "System.Range", typeof([]System.Range), true)
-    @InlineData("readonly slice[string]", "System.Range", typeof([]System.Range), true)
+    @InlineData("slice[string]", "int32", typeof([]int32), false, "0")
+    @InlineData("readonly slice[string]", "int32", typeof([]int32), false, "0")
+    @InlineData("slice[string]", "System.Range", typeof([]System.Range), false, "0")
+    @InlineData("readonly slice[string]", "System.Range", typeof([]System.Range), false, "0")
+    @InlineData("slice[string]", "int32", typeof([]int32), true, "0")
+    @InlineData("readonly slice[string]", "int32", typeof([]int32), true, "0")
+    @InlineData("slice[string]", "System.Range", typeof([]System.Range), true, "0")
+    @InlineData("readonly slice[string]", "System.Range", typeof([]System.Range), true, "0")
+    @InlineData("slice[string]", "int32", typeof([]int32), true, "^1")
+    @InlineData("readonly slice[string]", "int32", typeof([]int32), true, "^1")
+    @InlineData("slice[string]", "System.Range", typeof([]System.Range), true, "^1")
+    @InlineData("readonly slice[string]", "System.Range", typeof([]System.Range), true, "^1")
     func Issue5035_NestedNativeSliceArgument_KeepsParameterOwnership(
         nativeType string,
         elementType string,
         parameterType Type,
-        propertyArgument bool
+        propertyArgument bool,
+        indexText string
     ) {
         let source = `package Repro
 class Holder {
@@ -770,9 +775,9 @@ func Run(h Holder, Items []ELEMENT_TYPE, other Other) {
         ).Replace(
             "ARGUMENT",
             if propertyArgument {
-                "other.Values[0]"
+                "other.Values[" + indexText + "]"
             } else {
-                "Items[0]"
+                "Items[" + indexText + "]"
             }
         )
         let root = Path.Combine(
@@ -818,9 +823,9 @@ func Run(h Holder, Items []ELEMENT_TYPE, other Other) {
             }
             let declarationText = name + " []" + elementType
             let outerText = if propertyArgument {
-                "Items[other.Values[0]]"
+                "Items[other.Values[" + indexText + "]]"
             } else {
-                "Items[Items[0]]"
+                "Items[Items[" + indexText + "]]"
             }
             let uri = DocumentUri.FromFileSystemPath(path)!!
             Assert.Same(parameter, SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "Items[0]", 0)))
@@ -830,8 +835,8 @@ func Run(h Holder, Items []ELEMENT_TYPE, other Other) {
                 } else {
                     occurrence + 1
                 }
-                let position = LanguageServerTestHelpers.PositionOf(source, name + "[0]", use)
-                let argument = TokenAt(content, source, name + "[0]", use)
+                let position = LanguageServerTestHelpers.PositionOf(source, name + "[" + indexText + "]", use)
+                let argument = TokenAt(content, source, name + "[" + indexText + "]", use)
                 Assert.Same(expectedSymbol, SemanticLookup.ResolveSymbol(compilation, argument))
                 if propertyArgument {
                     Assert.Same(values, BoundSemantics.GetSymbol(compilation, argument))

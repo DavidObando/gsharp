@@ -275,15 +275,12 @@ shared class BoundSemantics {
     }
 
     private func OwnedIndexAnchor(expression ExpressionSyntax, anchored BoundExpression) BoundExpression? {
-        var current = anchored
-        while !OwnsIndexAnchor(expression, current) {
-            let argument = CapturedIndexArgument(current)
-            if argument == nil || object.ReferenceEquals(argument, current) {
-                return nil
-            }
-            current = argument
+        if OwnsIndexAnchor(expression, anchored) {
+            return anchored
         }
-        return current
+        // A verified retained argument has stronger provenance than a raw
+        // syntax anchor. Its enclosing syntax must not reassign its ownership.
+        return CapturedIndexArgument(anchored)
     }
 
     private func CapturedIndexArgument(anchored BoundExpression) BoundExpression? {
