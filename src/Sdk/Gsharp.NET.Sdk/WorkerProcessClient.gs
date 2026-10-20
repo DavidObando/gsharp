@@ -227,12 +227,13 @@ internal class WorkerProcessClient : IDisposable {
 
         internal func Get(engine IBuildEngine4, key string) WorkerProcessClient {
             lock RegistrationGate {
-                let existing = engine.GetRegisteredTaskObject(
-                    key,
-                    RegisteredTaskObjectLifetime.Build
-                ) as WorkerProcessClient
-                if existing != nil {
+                let registered = engine.GetRegisteredTaskObject(key, RegisteredTaskObjectLifetime.Build)
+                if registered is WorkerProcessClient existing {
                     return existing
+                }
+                if registered != nil {
+                    let previous = engine.UnregisterTaskObject(key, RegisteredTaskObjectLifetime.Build)
+                    (previous as IDisposable)?.Dispose()
                 }
                 let client = WorkerProcessClient()
                 engine.RegisterTaskObject(key, client, RegisteredTaskObjectLifetime.Build, allowEarlyCollection: false)
