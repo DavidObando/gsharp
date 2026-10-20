@@ -151,6 +151,9 @@ class Issue5070ImportedMetadataTests {
         Assert.Throws[InvalidOperationException](
             () -> ClrTypeUtilities.FindMetadataDefinition(typeof(object), dynamic, All)
         )
+        using let fixture = CSharpFixture("public interface Empty {}")
+        let empty = fixture.Load().GetType("Empty")!!
+        Assert.Null(ClrTypeUtilities.FindMetadataDefinition(empty, dynamic, All))
     }
 
     @Fact

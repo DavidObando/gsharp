@@ -69,8 +69,26 @@ shared class ClrTypeUtilities {
         safeEnumeration bool = false
     ) MemberInfo? {
         CompilationMeasurements.Count("metadata.definition-requests")
-        let token = member.MetadataToken
-        let module = member.Module
+        var token int32
+        var module Module
+        try {
+            token = member.MetadataToken
+            module = member.Module
+        } catch (exception Exception) when exception is InvalidOperationException ||
+            exception is NotSupportedException {
+            // An empty original enumeration never asked a tokenless member for its identity.
+            CompilationMeasurements.Count("metadata.definition-scans")
+            for candidate in EnumerateMetadataDefinitions(type, member, flags, safeEnumeration) {
+                CompilationMeasurements.Count("metadata.definition-members")
+                if candidate.MetadataToken == member.MetadataToken && object.ReferenceEquals(
+                    candidate.Module,
+                    member.Module
+                ) {
+                    return candidate
+                }
+            }
+            return nil
+        }
         let kind = member.MemberType
         let name = if member is MethodBase {
             string.Empty
@@ -89,20 +107,7 @@ shared class ClrTypeUtilities {
             return cached
         }
         CompilationMeasurements.Count("metadata.definition-scans")
-        let candidates IEnumerable[MemberInfo] = switch member {
-            case _ is ConstructorInfo: if safeEnumeration {
-                SafeGetConstructors(type, flags)
-            } else {
-                type.GetConstructors(flags)
-            }
-            case _ is MethodInfo: if safeEnumeration {
-                SafeGetMethods(type, flags)
-            } else {
-                type.GetMethods(flags)
-            }
-            default: type.GetMember(name, kind, flags)
-        }
-        for candidate in candidates {
+        for candidate in EnumerateMetadataDefinitions(type, member, flags, safeEnumeration) {
             CompilationMeasurements.Count("metadata.definition-members")
             if candidate.MetadataToken == token && object.ReferenceEquals(candidate.Module, module) {
                 if cache.TryAdd(key, candidate) {
@@ -112,6 +117,25 @@ shared class ClrTypeUtilities {
             }
         }
         return nil
+    }
+
+    private func EnumerateMetadataDefinitions(
+        type Type,
+        member MemberInfo,
+        flags BindingFlags,
+        safeEnumeration bool
+    ) IEnumerable[MemberInfo] -> switch member {
+        case _ is ConstructorInfo: if safeEnumeration {
+            SafeGetConstructors(type, flags)
+        } else {
+            type.GetConstructors(flags)
+        }
+        case _ is MethodInfo: if safeEnumeration {
+            SafeGetMethods(type, flags)
+        } else {
+            type.GetMethods(flags)
+        }
+        default: type.GetMember(member.Name, member.MemberType, flags)
     }
 
     /// Returns whether two (cref:Type)s refer to the same logical CLR
