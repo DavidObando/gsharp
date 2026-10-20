@@ -412,6 +412,7 @@ open class Issue5039GeneratorSetupTests : IDisposable {
     @InlineData("stdout")
     @InlineData("stderr")
     @InlineData("encoding")
+    @InlineData("finalizer")
     func Worker_ConsoleMutation_DoesNotSuppressTheNextRequestsDiagnostics(mode string) {
         let mutation = if mode == "stdout" {
             "System.Console.SetOut(System.IO.TextWriter.Null); "
@@ -420,12 +421,17 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         } else {
             "System.Console.OutputEncoding = System.Text.Encoding.Unicode; "
         }
+        let generatorSource = GeneratorSource.Replace("__VERSION__", "mutated")
+        let source = if mode == "finalizer" {
+            generatorSource.Replace(
+                "public void Initialize",
+                "~ProbeGenerator() { System.Console.SetOut(System.IO.TextWriter.Null); } public void Initialize"
+            )
+        } else {
+            generatorSource.Replace("var inputs =", mutation + "var inputs =")
+        }
         let generator = Path.Combine(directory, "Generator.dll")
-        CompileDll(
-            GeneratorSource.Replace("__VERSION__", "mutated").Replace("var inputs =", mutation + "var inputs ="),
-            generator,
-            "Generator"
-        )
+        CompileDll(source, generator, "Generator")
         let gs = Write("Input.gs", "package App\npartial class Foo {}")
         let args = Arguments(gs, generator).ToArray()
         using let worker = GeneratorWorker(directory)
