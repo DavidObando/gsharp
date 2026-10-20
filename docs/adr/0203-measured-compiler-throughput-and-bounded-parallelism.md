@@ -621,7 +621,10 @@ Optional measurements count scanned and skipped trees separately.
 The October 20 comparison used the fixed compiler `c7b82dcb` and Oahu
 `9db7f232` workloads above. Both tool variants used the verified
 `0.5.7-perf2189.s2` benchmark bootstrap from `4e1a4430`; only their rebuilt
-Core DLL/PDB payloads differed. The production `0.5.7` pin did not change.
+Core DLL/PDB payloads differed. The production pin was `0.5.7` during this
+comparison. This change was later rebased onto the separate published
+`0.5.179` pin update (#5059). Current-pin validation is separate from the
+original controlled samples, which retain their original inputs and payloads.
 Each variant received one warmup and three alternating measured rebuilds,
 with restore excluded, four MSBuild nodes and the existing opt-in four-worker
 settings. All samples were retained.
