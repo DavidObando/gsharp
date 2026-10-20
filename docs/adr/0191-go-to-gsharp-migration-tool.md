@@ -715,6 +715,40 @@ carrier only with independent witnesses.
 
 #### 6.3 Deferred control effects and concurrent neighbors
 
+**G# already supports goroutines, channels and `select`.** ADR-0174 supplies
+native launch, suspension and channel/select machinery. The
+[channel runtime](../../src/Sdk/Gsharp.Runtime.Channels/ChannelOps.gs)
+already provides nil-channel waits and closed-and-drained receives;
+[select](../../src/Sdk/Gsharp.Runtime.Channels/SelectWaiter.gs) handles nil
+arms. The deferral is a **go2gs admission/evidence boundary**, not missing
+language capability or a claim that G# cannot model Go concurrency.
+
+The first text/value profile avoids combining its initial lowering with
+these additional translation obligations:
+
+- **Launch and lifetime:** preserve Go callee/receiver/argument evaluation in
+  the caller before scheduling, rather than moving operands into a spawned
+  block. Go launch does not implicitly join at caller return. G# already has
+  [free launches](../../src/Sdk/Gsharp.Runtime.Channels/GoroutineRuntime.gs);
+  inserting a [structured scope](../../src/Sdk/Gsharp.Runtime.Channels/ScopeFrame.gs)
+  would add joining, sibling cancellation and child-failure propagation.
+  Choose the mapping from source lifetime/synchronization, not syntax alone.
+- **Failure isolation:** native free goroutines fail fast by default, while
+  scoped failures propagate at scope exit. These mechanisms do not establish
+  Go's per-goroutine panic/defer/recover mapping. A parent's recovery must
+  not recover a child's panic; translated unwinding and unrecovered failure
+  need their own witnesses.
+- **Suspending call edges:** reuse G#'s
+  [inference and declared suspension ABI](../../src/Core/CodeAnalysis/Binding/Suspension/SuspensionInference.gs).
+  The translator must still plan function/delegate/interface signatures,
+  context propagation and foreign callback boundaries. A compiling call that
+  falls back to blocking is not proof of the selected Go mapping.
+- **Channel and memory evidence:** native primitives remain the implementation
+  basis, but generated code must prove Go nil/closed/buffered behavior, zero
+  values and faults, select operand/assignment timing and ready-arm choice,
+  and race-free publication/synchronization. Native tests alone do not test
+  the translator's value, control-flow and compatibility lowering.
+
 The first executable profile rejects `go`, channel types/creation/send/receive/
 range, `select`, synchronization/atomic/context APIs, callbacks and foreign
 calls. Report `concurrency-boundary` at the originating site and dependent
@@ -722,17 +756,12 @@ call edges; reject even an unused channel declaration or unreachable launch.
 Do not lower a goroutine synchronously, replace nil-channel blocking with a
 null exception, or use arbitrary worker blocking as a fallback.
 
-Later concurrency admission needs an explicit suspension contract across
-direct functions, function values/delegates, interface slots, callbacks and
-foreign calls. Inventory every potentially suspending edge and reject edges
-without a witnessed ABI. Native ADR-0174 machinery is reusable, not a promise
-that arbitrary Go callable boundaries already match. Future witnesses must
-cover caller-side launch callee/argument evaluation before scheduling;
-nil, closed and buffered channels; send/close faults; closed-and-drained
-receives; select operand/assignment timing and ready-arm choice; publication,
-atomics and race-free synchronization under the Go memory model. Goroutine
-lifetime, cancellation, blocking I/O and shutdown need explicit mappings.
-Any new language-wide suspension ABI requires a separate ADR.
+Admit concurrency in a later profile once its explicit mappings pass the
+ordered verification stages and independent original-Go/JIT/NativeAOT
+witnesses. This is not a prerequisite for the first scalar/text slice and
+does not imply a new scheduler or rewriting G#'s built-in concurrency.
+Unmapped call edges remain blocked; any genuinely new language-wide
+suspension ABI still requires a separate ADR.
 
 Maps, explicit `panic`, `defer`, `recover`, and iterator-function control
 effects likewise produce `deferred-semantics`, not placeholder helpers.
