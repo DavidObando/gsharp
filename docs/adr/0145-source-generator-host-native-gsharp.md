@@ -198,7 +198,9 @@ back-translation, but never reuses the pre-generator G# scope as the final
 scope. An empty output manifest does not bypass generation or diagnostics.
 The worker checks analyzer unload probes after collection and retires if any
 remain alive. Request count, idle time, retained managed memory, and working
-set also bound worker lifetime.
+set also bound worker lifetime. Console channel and encoding changes, including
+those made by finalizers, force retirement: public writer replacement cannot
+reset the runtime's private redirection state safely for another request.
 
 ### G. Language-server integration — a persistent `gsgen serve` sidecar
 
