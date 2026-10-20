@@ -1120,15 +1120,11 @@ class Lowerer : BoundTreeRewriter {
         // variable declaration is moved into an outer scope so its handle
         // is still in scope in the finally.
         //
-        // We skip the wrap when the loop body itself contains a yield or
-        // await: in those cases the enclosing function is rewritten as an
-        // iterator or async state machine, and that pipeline does not yet
-        // generally handle protected regions around its suspension points.
-        // Avoiding the wrap here preserves the pre-existing behavior for
-        // those callers while still adding Dispose coverage for the common
-        // case (plain foreach over an enumerable).
+        // The state-machine planners must see this region before allocating
+        // suspension states. Their resume dispatch and finally guards keep
+        // the enumerator alive across yield/await and dispose it on exit.
         let disposeCall BoundExpression? = TryBuildEnumeratorDisposeCall(enumeratorSymbol)
-        if disposeCall != nil && !BodyContainsYieldOrAwait(node.Body) {
+        if disposeCall != nil {
             // Outer block:
             //   var $enum = coll.GetEnumerator();
             //   try { ... loop body ... } finally { $enum.Dispose(); }
@@ -1238,21 +1234,6 @@ class Lowerer : BoundTreeRewriter {
         }
         stmts.Add(BoundReturnStatement(nil, retExpr))
         return BoundBlockStatement(nil, stmts.ToImmutable())
-    }
-
-    private class YieldOrAwaitDetector : BoundTreeWalker {
-        prop Found bool {
-            get;
-            private set;
-        }
-
-        protected override func VisitYieldStatement(node BoundYieldStatement) {
-            this.Found = true
-        }
-
-        protected override func VisitAwaitExpression(node BoundAwaitExpression) {
-            this.Found = true
-        }
     }
 
     shared {
@@ -1399,12 +1380,6 @@ class Lowerer : BoundTreeRewriter {
                 }
             }
             return nil
-        }
-
-        private func BodyContainsYieldOrAwait(body BoundStatement) bool {
-            let walker = YieldOrAwaitDetector()
-            walker.Visit(body)
-            return walker.Found
         }
 
         private func TryBuildGetEnumeratorCall(

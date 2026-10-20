@@ -33,6 +33,13 @@ shared class AsyncIteratorMoveNextBodyBuilder {
         private let awaiterPoolFields Dictionary[Type, FieldSymbol]
         private let awaitTryDispatch TryDispatchPlan
         private let yieldTryDispatch IteratorTryDispatchPlan
+        // Await registration can reenter MoveNext and change the shared state.
+        // Finally guards must keep the state of their own invocation.
+        private let invocationState LocalVariableSymbol = LocalVariableSymbol(
+            "<>ai_invocationState",
+            isReadOnly: false,
+            TypeSymbol.Int32
+        )
 
         // Labels for yield resume points
         private let yieldResumeLabels Dictionary[int32, BoundLabel] = Dictionary[int32, BoundLabel]()
@@ -42,6 +49,7 @@ shared class AsyncIteratorMoveNextBodyBuilder {
 
         private let awaitResumeAfterLabels Dictionary[int32, BoundLabel] = Dictionary[int32, BoundLabel]()
         private let exitLabel BoundLabel = BoundLabel("<>ai_exit")
+        private let yieldResultLabel BoundLabel = BoundLabel("<>ai_yieldResult")
         private let endOfBodyLabel BoundLabel = BoundLabel("<>ai_end")
 
         init(
@@ -90,6 +98,9 @@ shared class AsyncIteratorMoveNextBodyBuilder {
 
         func BuildBody() BoundBlockStatement {
             let stmts = ImmutableArray.CreateBuilder[BoundStatement]()
+            stmts.Add(
+                BoundVariableDeclaration(nil, invocationState, Literal(StateMachineStates.NotStartedOrRunningState))
+            )
             // try {
             //   state dispatch
             //   user body (with yield + await rewritten)
@@ -113,6 +124,11 @@ shared class AsyncIteratorMoveNextBodyBuilder {
             stmts.Add(tryStmt)
             // return; (after try/catch)
             stmts.Add(BoundReturnStatement(nil, nil))
+            // Publish only after suspension guards have run. An inline
+            // consumer continuation can reenter MoveNext or DisposeAsync.
+            stmts.Add(BoundLabelStatement(nil, yieldResultLabel))
+            stmts.Add(Stmt(EmitPromiseSetResult(true)))
+            stmts.Add(BoundReturnStatement(nil, nil))
             return BoundBlockStatement(nil, stmts.ToImmutable())
         }
 
@@ -133,7 +149,7 @@ shared class AsyncIteratorMoveNextBodyBuilder {
             stmts.Add(BoundLabelStatement(nil, endOfBodyLabel))
             stmts.Add(Stmt(WriteField(stateField, Literal(StateMachineStates.FinishedState))))
             stmts.Add(Stmt(EmitPromiseSetResult(false)))
-            // Exit label (for suspension return paths).
+            // Exit label for await suspension.
             stmts.Add(BoundLabelStatement(nil, exitLabel))
             return BoundBlockStatement(nil, stmts.ToImmutable())
         }
@@ -265,7 +281,12 @@ shared class AsyncIteratorMoveNextBodyBuilder {
         }
 
         private func WriteField(field FieldSymbol, value BoundExpression) BoundExpression {
-            return BoundFieldAssignmentExpression(nil, thisParameter, smClass, field, value)
+            let storedValue BoundExpression = if object.ReferenceEquals(field, stateField) {
+                BoundAssignmentExpression(nil, invocationState, value)
+            } else {
+                value
+            }
+            return BoundFieldAssignmentExpression(nil, thisParameter, smClass, field, storedValue)
         }
 
         /// Walks the user body, replacing yields, awaits, variable accesses (hoisted to fields),
@@ -331,10 +352,7 @@ shared class AsyncIteratorMoveNextBodyBuilder {
                 stmts.Add(BuildContext.Stmt(ctx.WriteField(ctx.currentField, rewrittenExpr)))
                 // this.<>1__state = yieldState;
                 stmts.Add(BuildContext.Stmt(ctx.WriteField(ctx.stateField, BuildContext.Literal(yieldState))))
-                // this.<>v__promiseOfValueOrEnd.SetResult(true);
-                stmts.Add(BuildContext.Stmt(ctx.EmitPromiseSetResult(true)))
-                // return;
-                stmts.Add(BoundGotoStatement(nil, ctx.exitLabel))
+                stmts.Add(BoundGotoStatement(nil, ctx.yieldResultLabel))
                 // yieldResumeK:
                 stmts.Add(BoundLabelStatement(nil, ctx.yieldResumeLabels[yieldState]))
                 // this.<>1__state = -1;
@@ -475,7 +493,7 @@ shared class AsyncIteratorMoveNextBodyBuilder {
             private func AddSuspendedState(condition BoundExpression?, state int32) BoundExpression {
                 let equalsState = BoundBinaryExpression(
                     nil,
-                    ctx.ReadField(ctx.stateField),
+                    BoundVariableExpression(nil, ctx.invocationState),
                     Invariant.Required(
                         BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
                         "int32 equality operator exists for async iterator state dispatch",
