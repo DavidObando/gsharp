@@ -7681,6 +7681,15 @@ class Binder {
             references ReferenceResolver?,
             cache BoundBodyCache?,
             dirtyTrees ImmutableHashSet[SyntaxTree]?
+        ) BoundProgram -> BindProgram(globalScope, references, cache, dirtyTrees, workBudget: nil)
+
+        /// Binds bodies using one request-owned worker budget after declarations have completed.
+        func BindProgram(
+            globalScope BoundGlobalScope,
+            references ReferenceResolver?,
+            cache BoundBodyCache?,
+            dirtyTrees ImmutableHashSet[SyntaxTree]?,
+            workBudget CompilationWorkBudget?
         ) BoundProgram {
             let parentScope = CreateParentScope(
                 globalScope,
@@ -7731,59 +7740,38 @@ class Binder {
             }
             let functionBodies = ImmutableDictionary.CreateBuilder[FunctionSymbol, BoundBlockStatement]()
             let diagnostics = ImmutableArray.CreateBuilder[Diagnostic]()
+            for member in GetDeclaredBodyFunctions(globalScope) {
+                let function = member.Function
+                if function.Declaration?.Body != nil && HasInferredRichAnonymousReturn(function, parentScope) {
+                    functionBodies[function] = BindDeclaredFunctionBody(
+                        cache,
+                        dirtyTrees,
+                        parentScope,
+                        function,
+                        member.Owner,
+                        diagnostics
+                    )
+                }
+            }
+            // Declarations, field initializers, and rich inferred returns are complete.
+            // Workers cannot reach synthesis registries; dependent bodies retain their established order.
+            let independentBodies = BindIndependentBodies(
+                globalScope,
+                parentScope,
+                functionBodies,
+                cache,
+                dirtyTrees,
+                workBudget
+            )
             var scope_ BoundGlobalScope? = globalScope
             while scope_ != nil {
                 for function in scope_.Functions {
-                    if HasInferredRichAnonymousReturn(function, parentScope) {
-                        functionBodies[function] = BindDeclaredFunctionBody(
-                            cache,
-                            dirtyTrees,
-                            parentScope,
-                            function,
-                            owner: nil,
-                            diagnostics
-                        )
-                    }
-                }
-                scope_ = scope_.Previous
-            }
-            // BindProgram requires a global scope; the earlier null-tolerant rehydration checks make flow analysis conservative.
-            for structSym in globalScope.Structs {
-                for method in structSym.Methods {
-                    if HasInferredRichAnonymousReturn(method, parentScope) {
-                        functionBodies[method] = BindDeclaredFunctionBody(
-                            cache,
-                            dirtyTrees,
-                            parentScope,
-                            method,
-                            structSym,
-                            diagnostics
-                        )
-                    }
-                }
-            }
-            for ifaceSym in globalScope.Interfaces {
-                for method in ifaceSym
-                    .Methods
-                    .Concat(ifaceSym.StaticMethods)
-                    .Concat(ifaceSym.PrivateMethods)
-                    .Concat(ifaceSym.StaticPrivateMethods) {
-                    if method?.Declaration?.Body != nil && HasInferredRichAnonymousReturn(method, parentScope) {
-                        functionBodies[method] = BindDeclaredFunctionBody(
-                            cache,
-                            dirtyTrees,
-                            parentScope,
-                            method,
-                            owner: nil,
-                            diagnostics
-                        )
-                    }
-                }
-            }
-            scope_ = globalScope
-            while scope_ != nil {
-                for function in scope_.Functions {
                     if functionBodies.ContainsKey(function) {
+                        continue
+                    }
+                    if independentBodies.TryGetValue(function, out var independent) {
+                        functionBodies.Add(function, independent.Body)
+                        AppendBodyDiagnostics(diagnostics, independent.Diagnostics, function)
                         continue
                     }
                     // ADR-0086 / issue #727: P/Invoke functions have no managed
@@ -7816,6 +7804,11 @@ class Binder {
                 }
                 for method in structSym.Methods {
                     if functionBodies.ContainsKey(method) {
+                        continue
+                    }
+                    if independentBodies.TryGetValue(method, out var independent) {
+                        functionBodies.Add(method, independent.Body)
+                        AppendBodyDiagnostics(diagnostics, independent.Diagnostics, method)
                         continue
                     }
                     if parentScope.GetLatestRichAnonymousObjectPlans().TryGetValue(structSym, out var richPlan) &&
@@ -8211,6 +8204,14 @@ class Binder {
                     if method.IsExtension {
                         continue
                     }
+                    if functionBodies.ContainsKey(method) {
+                        continue
+                    }
+                    if independentBodies.TryGetValue(method, out var independent) {
+                        functionBodies.Add(method, independent.Body)
+                        AppendBodyDiagnostics(diagnostics, independent.Diagnostics, method)
+                        continue
+                    }
                     // ADR-0086 / issue #1203: a bodyless `shared`-block method (a
                     // static `@DllImport` P/Invoke extern) has no managed body to
                     // bind. Register an empty synthetic block so the emitter still
@@ -8553,6 +8554,123 @@ class Binder {
         } &&
             parentScope
             .GetRichAnonymousClassMap().ContainsKey(anonymous)
+
+        private func GetDeclaredBodyFunctions(globalScope BoundGlobalScope) List[
+            (Function FunctionSymbol, Owner StructSymbol?)
+        ] {
+            let result = List[(Function FunctionSymbol, Owner StructSymbol?)]()
+            var declarations BoundGlobalScope? = globalScope
+            while declarations != nil {
+                for function in declarations.Functions {
+                    result.Add((function, default(StructSymbol?)))
+                }
+                declarations = declarations.Previous
+            }
+            for owner in globalScope.Structs {
+                for method in owner.Methods.Concat(owner.StaticMethods) {
+                    if !method.IsExtension {
+                        result.Add((method, owner))
+                    }
+                }
+            }
+            for owner in globalScope.Interfaces {
+                for method in owner
+                    .Methods
+                    .Concat(owner.StaticMethods)
+                    .Concat(owner.PrivateMethods)
+                    .Concat(owner.StaticPrivateMethods) {
+                    result.Add((method, default(StructSymbol?)))
+                }
+            }
+            return result
+        }
+
+        private func BindIndependentBodies(
+            globalScope BoundGlobalScope,
+            parentScope BoundScope,
+            boundBodies ImmutableDictionary[FunctionSymbol, BoundBlockStatement].Builder,
+            cache BoundBodyCache?,
+            dirtyTrees ImmutableHashSet[SyntaxTree]?,
+            budget CompilationWorkBudget?
+        ) Dictionary[FunctionSymbol, BodyBindResult] {
+            let results = Dictionary[FunctionSymbol, BodyBindResult]()
+            if budget == nil || budget.MaxWorkers <= 1 {
+                return results
+            }
+            let jobs = List[(Function FunctionSymbol, Owner StructSymbol?)]()
+            let seen = HashSet[FunctionSymbol]()
+            var largestBody int64 = 0
+            let add = func (function FunctionSymbol, owner StructSymbol?) {
+                if owner != nil && parentScope.GetLatestRichAnonymousObjectPlans().TryGetValue(owner, out var plan) &&
+                    plan
+                    .MethodBodies
+                    .ContainsKey(function) {
+                    return
+                }
+                if !boundBodies.ContainsKey(function) && seen.Add(function) && function.Declaration?.Body != nil {
+                    jobs.Add((function, owner))
+                    largestBody = Math.Max(largestBody, function.Declaration!!.Body!!.Span.Length)
+                }
+            }
+            var declarationsScope BoundGlobalScope? = globalScope
+            while declarationsScope != nil {
+                for function in declarationsScope.Functions {
+                    add(function, nil)
+                }
+                declarationsScope = declarationsScope.Previous
+            }
+            for owner in globalScope.Structs {
+                for method in owner.Methods {
+                    add(method, owner)
+                }
+                for method in owner.StaticMethods {
+                    if !method.IsExtension {
+                        add(method, owner)
+                    }
+                }
+            }
+            // Cold scheduling and eligibility checks cost more than binding a few small bodies.
+            if jobs.Count < 8 && largestBody < 8192 {
+                return results
+            }
+            largestBody = 0
+            for var index = jobs.Count - 1; index >= 0; index-- {
+                let function = jobs[index].Function
+                if !IndependentBodyClassifier.CanBind(function) {
+                    jobs.RemoveAt(index)
+                } else {
+                    largestBody = Math.Max(largestBody, function.Declaration!!.Body!!.Span.Length)
+                }
+            }
+            CompilationMeasurements.Count("bodies.independent", jobs.Count)
+            let outputs = [jobs.Count]BodyBindResult
+            let mode = NullabilityOptions.Mode
+            let checks = NullabilityOptions.PlatformNilChecksEnabled
+            budget.Run(
+                jobs.Count,
+                (index int32) -> {
+                    using let nullabilityScope = NullabilityOptions.Enter(mode, checks)
+                    let job = jobs[index]
+                    let bodyDiagnostics = ImmutableArray.CreateBuilder[Diagnostic]()
+                    let body = BindDeclaredFunctionBody(
+                        cache,
+                        dirtyTrees,
+                        parentScope.CreateIndependentBodyScope(),
+                        job.Function,
+                        job.Owner,
+                        bodyDiagnostics
+                    )
+                    outputs[index] = BodyBindResult(body, bodyDiagnostics.ToImmutable())
+                },
+                workspaceBytes: Math.Max(100663296, largestBody * 128),
+                allowParallel: jobs.Count >= 8 || largestBody >= 8192
+            )
+            CompilationMeasurements.Count("bodies.workers.active", budget.LastObservedWorkers)
+            for var index = 0; index < jobs.Count; index++ {
+                results.Add(jobs[index].Function, outputs[index])
+            }
+            return results
+        }
 
         private func BindDeclaredFunctionBody(
             cache BoundBodyCache?,

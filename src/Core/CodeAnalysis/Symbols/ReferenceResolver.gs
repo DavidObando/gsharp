@@ -1335,7 +1335,18 @@ class ReferenceResolver : IDisposable {
         /// the runtime context rather than a metadata-only context.
         /// @param referencePaths Paths to runtime assemblies.
         /// @returns A resolver over the loaded assemblies and host BCL.
-        func WithRuntimeReferences(referencePaths IEnumerable[string]?) ReferenceResolver {
+        func WithRuntimeReferences(referencePaths IEnumerable[string]?) ReferenceResolver -> WithRuntimeReferences(
+            referencePaths,
+            default(ImmutableArray[Assembly])
+        )
+
+        /// Freezes host candidates before compiler workers can load additional implementation dependencies.
+        internal func CaptureHostAssemblies() ImmutableArray[Assembly] -> BuildHostAssemblies()
+
+        internal func WithRuntimeReferences(
+            referencePaths IEnumerable[string]?,
+            hostSnapshot ImmutableArray[Assembly]
+        ) ReferenceResolver {
             let runtimeContext = DriverReferenceLoadContext()
             let runtimeAssemblies = List[Assembly]()
             if referencePaths != nil {
@@ -1371,7 +1382,11 @@ class ReferenceResolver : IDisposable {
                 runtimeNames.Add(assembly.GetName().FullName)
             }
             let assemblies = ImmutableArray.CreateBuilder[Assembly]()
-            for assembly in BuildHostAssemblies() {
+            for assembly in if hostSnapshot.IsDefault {
+                BuildHostAssemblies()
+            } else {
+                hostSnapshot
+            } {
                 if !runtimeNames.Contains(assembly.GetName().FullName) {
                     assemblies.Add(assembly)
                 }

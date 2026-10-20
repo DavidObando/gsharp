@@ -99,6 +99,8 @@ gsc @app.rsp
 | `/embed-` | Disable source embedding. |
 | `/embed:true`, `/embed:false` | Enable or disable source embedding. Also accepts `1`, `0`, `on`, `off`, `yes`, and `no`. |
 | `/log:<file>` | Write compiler diagnostic logging to the specified file. |
+| `--workers:<1..32>` | Opt into bounded file parsing and independent primitive/local body binding. Defaults to 1. The SDK passes the actual MSBuild grant, not a second pool. |
+| `--worker-memory-mib:<MiB>` | Concurrent workspace estimate budget; minimum 256, default 1024. Larger inputs reduce concurrency. This is not a total process memory limit. |
 | `/?`, `/help`, `--help` | Show compiler help. |
 
 Unsupported values for `/target:<value>`, `/debug:<value>`, and boolean switches are errors. Missing required values, such as `/doc` without a path or `/globaloption` without `key=value`, are also errors. Although the help text shows `/implicitimports[+|-]`, the parser accepts `/implicitimports` and `/implicitimports:<bool>` but rejects `/implicitimports+` and `/implicitimports-`; use `/noimplicitimports` or `/implicitimports:false` to disable it.

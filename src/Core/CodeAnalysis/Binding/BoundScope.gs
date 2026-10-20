@@ -96,6 +96,21 @@ class BoundScope {
     private var richAnonymousObjectPlans Dictionary[RichAnonymousObjectBindingKey, RichAnonymousObjectPlan]?
     private var latestRichAnonymousObjectPlans Dictionary[StructSymbol, RichAnonymousObjectPlan]?
     private var structuralAdapterRegistry StructuralAdapterRegistry?
+    private var independentBodyRoot bool
+
+    /// Creates a worker boundary over canonical declarations. Synthesis remains coordinator-owned.
+    internal func CreateIndependentBodyScope() BoundScope -> BoundScope(this){independentBodyRoot = true}
+
+    private prop SynthesisParent BoundScope? {
+        get {
+            if independentBodyRoot {
+                throw System.InvalidOperationException(
+                    "An independent body worker cannot access coordinator synthesis state."
+                )
+            }
+            return Parent
+        }
+    }
 
     // Issues #4089/#4090: the declaration-phase queue of G#-declared generic
     // TYPE-CLAUSE constraint checks, and the latch that says a check must be
@@ -1503,7 +1518,7 @@ class BoundScope {
     /// #2224), walking to the root of this scope's chain so every scope in
     /// one bind pass shares the same cache instance.
     /// @returns The shared (cref:AnonymousTypeCache) for this scope's chain.
-    internal func GetAnonymousTypeCache() AnonymousTypeCache -> if Parent != nil {
+    internal func GetAnonymousTypeCache() AnonymousTypeCache -> if SynthesisParent != nil {
         Parent!!.GetAnonymousTypeCache()
     } else {
         (
@@ -1520,7 +1535,7 @@ class BoundScope {
     /// to the root of this scope's chain so every scope in one bind pass
     /// shares the same cache instance — mirrors (cref:GetAnonymousTypeCache).
     /// @returns The shared (cref:SynthesizedRefDelegateCache) for this scope's chain.
-    internal func GetSynthesizedRefDelegateCache() SynthesizedRefDelegateCache -> if Parent != nil {
+    internal func GetSynthesizedRefDelegateCache() SynthesizedRefDelegateCache -> if SynthesisParent != nil {
         Parent!!.GetSynthesizedRefDelegateCache()
     } else {
         (
@@ -1537,7 +1552,7 @@ class BoundScope {
     /// pass's cache so shapes unify across the two binding passes.
     /// @param cache The cache to share.
     internal func InstallSynthesizedRefDelegateCache(cache SynthesizedRefDelegateCache) {
-        if Parent != nil {
+        if SynthesisParent != nil {
             Parent!!.InstallSynthesizedRefDelegateCache(cache)
             return
         }
@@ -1613,7 +1628,7 @@ class BoundScope {
     internal func GetRichAnonymousClassMap() Dictionary[
         AnonymousClassExpressionSyntax,
         StructSymbol
-    ] -> if Parent != nil {
+    ] -> if SynthesisParent != nil {
         Parent!!.GetRichAnonymousClassMap()
     } else {
         (
@@ -1628,7 +1643,7 @@ class BoundScope {
     internal func GetRichAnonymousObjectPlans() Dictionary[
         RichAnonymousObjectBindingKey,
         RichAnonymousObjectPlan
-    ] -> if Parent != nil {
+    ] -> if SynthesisParent != nil {
         Parent!!.GetRichAnonymousObjectPlans()
     } else {
         (
@@ -1643,7 +1658,7 @@ class BoundScope {
     internal func GetLatestRichAnonymousObjectPlans() Dictionary[
         StructSymbol,
         RichAnonymousObjectPlan
-    ] -> if Parent != nil {
+    ] -> if SynthesisParent != nil {
         Parent!!.GetLatestRichAnonymousObjectPlans()
     } else {
         (
@@ -1655,7 +1670,7 @@ class BoundScope {
         )!!
     }
 
-    internal func GetStructuralAdapterRegistry() StructuralAdapterRegistry -> if Parent != nil {
+    internal func GetStructuralAdapterRegistry() StructuralAdapterRegistry -> if SynthesisParent != nil {
         Parent!!.GetStructuralAdapterRegistry()
     } else {
         (
@@ -1675,7 +1690,7 @@ class BoundScope {
     /// @returns The shared pending-check queue for this scope's chain.
     internal func GetPendingUserGenericConstraintChecks() List[
         Binder.PendingUserGenericConstraintCheck
-    ] -> if Parent != nil {
+    ] -> if SynthesisParent != nil {
         Parent!!.GetPendingUserGenericConstraintChecks()
     } else {
         (
@@ -1710,7 +1725,7 @@ class BoundScope {
     /// scope's whole chain.
     /// @param value Whether checks must be queued.
     internal func SetDeferUserGenericConstraintChecks(value bool) {
-        if Parent != nil {
+        if SynthesisParent != nil {
             Parent!!.SetDeferUserGenericConstraintChecks(value)
         } else {
             deferUserGenericConstraintChecks = value

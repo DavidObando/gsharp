@@ -174,6 +174,22 @@ open class BuildTask : Task, ICancelableTask {
         set -> _workerGrant = value
     }
 
+    /// Gets or sets the requested within-project concurrency. Defaults to sequential execution.
+    private var maxWorkers int32 = 1
+
+    prop MaxWorkers int32 {
+        get -> maxWorkers
+        set -> maxWorkers = value
+    }
+
+    /// Gets or sets the concurrent workspace budget in MiB. This is not a total process heap limit.
+    private var workerMemoryBudgetMiB int32 = 1024
+
+    prop WorkerMemoryBudgetMiB int32 {
+        get -> workerMemoryBudgetMiB
+        set -> workerMemoryBudgetMiB = value
+    }
+
     /// Gets the generated gsc command-line arguments for design-time builds.
     private var _commandLineArgs[]ITaskItem = Array.Empty[ITaskItem]()!!
 
@@ -214,7 +230,11 @@ open class BuildTask : Task, ICancelableTask {
             )
             return false
         }
-        let args = List[string]{QuoteIfNeeded("/out:${Path.Combine(outputPath, outputName)}.dll")}
+        let args = List[string]{
+            QuoteIfNeeded("/out:${Path.Combine(outputPath, outputName)}.dll"),
+            "--workers:${this.MaxWorkers}",
+            "--worker-memory-mib:${this.WorkerMemoryBudgetMiB}"
+        }
         if !string.IsNullOrEmpty(outputName) {
             args.Add(QuoteIfNeeded("/assemblyname:$outputName"))
         }
@@ -327,6 +347,23 @@ open class BuildTask : Task, ICancelableTask {
         if ParseBool(this.SkipCompilerExecution) {
             return true
         }
+        var acquired WorkerCoreLease
+        try {
+            acquired = WorkerCoreLease.Acquire(
+                this.BuildEngine,
+                this.MaxWorkers,
+                this.WorkerMemoryBudgetMiB,
+                this.cts.Token
+            )
+        } catch (ex OperationCanceledException) {
+            return false
+        } catch (ex ArgumentException) {
+            this.Log.LogError(ex.Message)
+            return false
+        }
+        using let coreLease = acquired
+        this.WorkerGrant = coreLease.Grant
+        args[1] = "--workers:${coreLease.Grant}"
         if !string.IsNullOrEmpty(this.ResponseFilePath) {
             Directory.CreateDirectory(Path.GetDirectoryName(this.ResponseFilePath) ?? ".")
             File.WriteAllLines(this.ResponseFilePath, args, Encoding.UTF8)
@@ -395,6 +432,9 @@ open class BuildTask : Task, ICancelableTask {
             RedirectStandardError = true,
             WorkingDirectory = this.BasePath ?? Environment.CurrentDirectory
         }
+        psi.EnvironmentVariables["GSHARP_WORKER_GRANT"] = coreLease.Grant.ToString(
+            System.Globalization.CultureInfo.InvariantCulture
+        )
         using let proc = Process.Start(psi)
         // Issue #1667: Cancel() only requests cancellation via cts; without
         // this registration the child gsc process is never signaled and

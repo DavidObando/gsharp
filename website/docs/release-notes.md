@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Opt-in bounded compiler workers** (issue #5041, ADR-0203). `GSharpMaxWorkers` (default 1) requests one MSBuild core grant shared across compiler phases and reusable requests; unsupported hosts stay sequential. File parsing and proven primitive/local bodies run independently, then publish results and diagnostics in their established order. Inferred signatures and shared synthesis remain coordinator-owned. `GSharpWorkerMemoryBudgetMiB` bounds workspace concurrency estimates, not the total process heap. Direct compiler users can select `--workers:N` and `--worker-memory-mib:N`. Other bodies remain sequential; no general workload speedup is promised.
+
 - **Candidate lookup indexes and opt-in compiler measurements** (issue #5040). Alias collision and unknown-arity nested lookup use name/arity and canonical-owner candidate buckets instead of scanning every alias. Imported extension metadata and record-shape classification reuse context-sensitive indexes, including negative results. Persisted reference indexes reject changed reference contents even when assembly identities match. Set `GSHARP_MEASURE_PHASES` to a JSON path for nested phase timings, process counters, and input/cache metrics without changing diagnostics.
 
 - **Suspending `for … in` loops dispose their enumerators** (issue #5037). Loop cleanup now survives `yield` and `await`: exhaustion, early consumer disposal, `break`, `return`, and exceptions release acquired disposable enumerators. Nested iterator cleanup runs inside-out even when an inner enumerator's `Dispose` throws.

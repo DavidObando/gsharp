@@ -594,6 +594,58 @@ separate PRs. Full stage-2 certification is not made a new PR requirement.
 
 ## Consequences
 
+### Initial bounded-worker implementation (#5041)
+
+The initial implementation remains opt-in (`GSharpMaxWorkers=1` by default).
+One SDK task lease calls `IBuildEngine9.RequestCores(requestedTotal)` once,
+then releases the returned total in `Dispose`, including cancellation and
+failure paths. The first request includes the task's implicit core and does
+not block. Unsupported hosts use one worker. A reusable process receives a
+fresh grant per request, not a process-lifetime core allocation.
+
+`CompilationWorkBudget` is shared by sequential phases. Its indexed work
+runner owns at most the granted number of active operations, joins every
+operation before returning, rethrows failures in input order, and rejects
+nested or overlapping use. It bounds workspace concurrency using a 256 MiB
+reserve, 96 MiB per worker, and larger source/body estimates. This is not
+a hard limit on total heap, retained output, or third-party generator threads.
+The default workspace budget is 1024 MiB. Processor count also caps workers.
+The compiler exposes `--workers:N` and `--worker-memory-mib:N`.
+Cold microbenchmarks showed scheduling overhead on tiny inputs. Parsing
+stays sequential below four files and 64 KiB. Body eligibility is not
+computed below eight candidates when every body is smaller than 8 KiB.
+Larger phases still obey the shared grant and workspace limits.
+
+Parsing owns one lexer/parser/tree per input slot. Body binding first
+completes declarations, field initializers, and rich inferred return bodies.
+The inferred-return pass includes static members and uses the same canonical
+declarations as the later body pass. Host assembly candidates are captured
+before workers run, so runtime scheduling dependencies cannot change the
+implicit reference universe or its PDB metadata.
+The first worker eligibility proof accepts only primitive operations over
+parameters and body-owned locals. Calls, imported member access, type
+construction, lambdas, anonymous objects, adapters, generics and unknown
+syntax remain coordinator-owned. These are explicit concurrency limits, not
+claims of general body independence.
+Instance-member scopes also stay coordinator-owned. Their implicit receiver
+and inherited pseudo-bindings require the binder's scope reader before
+their parameters can be proved lookup-visible. Free/static functions retain
+the primitive/local worker path.
+
+Each eligible body owns its binder context, diagnostics, scopes and lowered
+result, but keeps the original canonical symbols. A scope boundary fails
+loudly if a worker reaches anonymous/delegate/adapter/rich-object registries
+or the deferred-constraint queue. The coordinator does not mutate declarations
+while workers run. It then merges each result and its diagnostics at the
+original binding position. Other bodies retain their established order and
+synthesized identities. Suspension inference and reference-safety analyses
+remain after the joined body barrier.
+
+Widening eligibility requires proving the additional shared state safe; it
+must not replace this proof with a syntax denylist or concurrent dictionaries.
+Full-workload measurements and default promotion remain separate acceptance
+work, as specified above.
+
 The work prioritizes measured bottlenecks and preserves the existing
 compiler and SDK architecture. Small sequential improvements can land
 before the larger concurrency work. A stable phase model makes later
