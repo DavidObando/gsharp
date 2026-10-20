@@ -454,6 +454,27 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         Assert.Contains("after|||on", File.ReadAllText(Assert.Single(GeneratedFiles())))
     }
 
+    @Fact
+    func Worker_OwnerDisconnectDuringGeneratorExecution_StopsTheHost() {
+        let generator = Path.Combine(directory, "Generator.dll")
+        CompileDll(
+            GeneratorSource.Replace("__VERSION__", "owner").Replace(
+                "var inputs =",
+                "System.Console.WriteLine(\"generator started\"); System.Threading.Thread.Sleep(60000); var inputs ="
+            ),
+            generator,
+            "Generator"
+        )
+        let gs = Write("Input.gs", "package App\n@Obsolete\npartial class Foo {}")
+        using let worker = GeneratorWorker(directory)
+        worker.Begin(Arguments(gs, generator).ToArray())
+        Assert.Equal(WorkerProtocol.Stdout, worker.Reader.ReadByte())
+        Assert.True(worker.Reader.ReadBoolean())
+        Assert.Equal("generator started", worker.Reader.ReadString())
+        worker.DisconnectOwner()
+        Assert.True(worker.WaitForExit(), "A disconnected owner must not leave a blocked generator host alive.")
+    }
+
     private class GeneratorWorker : IDisposable {
         private let directory string
         private let process Process
@@ -534,6 +555,8 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         }
 
         func WaitForExit() bool -> process.WaitForExit(10000)
+
+        func DisconnectOwner() -> writer.Dispose()
 
         func Kill() {
             if !process.HasExited {
