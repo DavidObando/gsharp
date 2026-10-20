@@ -56,7 +56,8 @@ class CompilationMeasurements : IDisposable {
             Id = Interlocked.Increment(&owner.nextId)
             ParentId = parent?.Id
             Name = name
-            StartMilliseconds = Stopwatch.GetElapsedTime(processOrigin, started).TotalMilliseconds
+            StartMilliseconds = Stopwatch.GetElapsedTime(CompilationMeasurements.processOrigin, started)
+                .TotalMilliseconds
             using let process = Process.GetCurrentProcess()
             cpu = process.TotalProcessorTime
             owner.active.Value = this
