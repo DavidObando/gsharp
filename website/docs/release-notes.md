@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Semantic models share declaration and body ownership discovery** (issue #5072, ADR-0169). A compilation partitions canonical declarations and body roots once instead of rediscovering them for every queried file. Detailed syntax maps remain lazy per tree, including language-server queries. Declaration-less and top-level bodies retain multi-tree ownership, and body-only edits receive fresh indexes. Opt-in measurements distinguish created models, queried indexes and global discovery visits.
+
 - **The compiler now builds with the published G# SDK 0.5.179** (issue #2189). The bootstrap pin moves from 0.5.7 to the release containing the measured compiler lookup, generator setup and bounded-worker improvements. The analyzer-testing package follows the same pin. This separate pin update builds the repository with that released compiler; its CI provides stage-2 verification under the N-1 rule.
 
 - **Declaration discovery skips impossible anonymous-object walks** (issue #5055, ADR-0203). Parsing records whether each source tree can contain an anonymous object. Generator projection and compilation avoid the full-tree rich-anonymous declaration search for other trees, while keeping the existing synthesis order where needed. Core profiles eliminated 700 walks per declaration pass and reduced projection/declaration allocations by 667/410 MiB; the three-pair compiler and Oahu rebuild comparison did not demonstrate a build-speed gain. Declaration scopes remain request-owned, and generated partials still bind afresh; generator execution, diagnostics and SDK success stamps are unchanged.

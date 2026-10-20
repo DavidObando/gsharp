@@ -5,13 +5,17 @@
 package GSharp.Core.Tests.CodeAnalysis
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
+import System.Reflection
+import System.Threading.Tasks
 import Xunit
 
 /// Covers the ADR-0169 (cref:SemanticModel) (syntax→symbol,
@@ -137,6 +141,122 @@ open class Adr0169SemanticModelTests {
             .ToList()
         Assert.Contains(declaredSymbols, (v VariableSymbol) -> v.Name == "total")
         Assert.Contains(declaredSymbols, (v VariableSymbol) -> v.Name == "left")
+    }
+
+    @Fact
+    func OwnershipDiscovery_IsShared_AndOtherTreesDetailedIndexesStayLazy() {
+        let trees = Enumerable
+            .Range(0, 3)
+            .Select(
+            (i int32) -> SyntaxTree.Parse(
+                SourceText.From("package App\nfunc F${i}(value int32) int32 { return value + ${i} }", "file${i}.gs")
+            )
+        )
+            .ToArray()
+        let compilation = Compilation(trees){IsLibrary = true}
+        let functions = compilation.BoundProgram.Functions
+        Assert.Equal(3, functions.Count)
+        using let measurements = CompilationMeasurements.Start("semantic-test")
+        let models = trees.Select((tree SyntaxTree) -> compilation.GetSemanticModel(tree)).ToArray()
+        Assert.Equal(int64(0), measurements.GetCounter("semantic.index.builds"))
+        Assert.Equal(int64(0), measurements.GetCounter("semantic.function.visits"))
+        let first = NodesOfType[FunctionDeclarationSyntax](trees[0]).Single()
+        let canonical = functions.Keys.Single((f FunctionSymbol) -> object.ReferenceEquals(f.Declaration, first))
+        Assert.Same(canonical, models[0].GetDeclaredSymbol(first))
+        Assert.Equal(int64(1), measurements.GetCounter("semantic.index.builds"))
+        Assert.Equal(int64(1), measurements.GetCounter("semantic.index.bodies"))
+        for i in Enumerable.Range(1, 2) {
+            let declaration = NodesOfType[FunctionDeclarationSyntax](trees[i]).Single()
+            Assert.NotNull(models[i].GetDeclaredSymbol(declaration))
+        }
+        Assert.Same(canonical, models[0].GetDeclaredSymbol(first))
+        Assert.Equal(int64(3), measurements.GetCounter("semantic.index.builds"))
+        Assert.Equal(int64(functions.Count), measurements.GetCounter("semantic.function.visits"))
+        Assert.Equal(int64(functions.Count), measurements.GetCounter("semantic.declaration_function.visits"))
+        Assert.Equal(int64(1), measurements.GetCounter("semantic.ownership.builds"))
+    }
+
+    @Fact
+    func ConcurrentQueries_PublishOneOwnershipSnapshot_AndOneIndexPerTree() {
+        let tree = SyntaxTree.Parse(SourceText.From(Source, "app.gs"))
+        let otherTree = SyntaxTree.Parse(SourceText.From("package App\nfunc Other() int32 { return 42 }", "other.gs"))
+        let compilation = Compilation(tree, otherTree)
+        let functions = compilation.BoundProgram.Functions
+        let declaration = NodesOfType[FunctionDeclarationSyntax](tree).First(
+            (f FunctionDeclarationSyntax) -> f.Identifier.Text == "Add"
+        )
+        let canonical = functions.Keys.Single((f FunctionSymbol) -> object.ReferenceEquals(f.Declaration, declaration))
+        using let measurements = CompilationMeasurements.Start("semantic-concurrent-test")
+        Parallel.For(
+            0,
+            24,
+            (i int32) -> {
+                if i % 2 == 0 {
+                    Assert.Same(canonical, compilation.GetSemanticModel(tree).GetDeclaredSymbol(declaration))
+                } else {
+                    let other = NodesOfType[FunctionDeclarationSyntax](otherTree).Single()
+                    Assert.NotNull(compilation.GetSemanticModel(otherTree).GetDeclaredSymbol(other))
+                }
+            }
+        )
+        Assert.Equal(int64(1), measurements.GetCounter("semantic.ownership.builds"))
+        Assert.Equal(int64(2), measurements.GetCounter("semantic.index.builds"))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func DeclarationlessRoots_KeepAllTrees_AndUnanchoredSymbolDeclarations(topLevel bool) {
+        let firstTree = SyntaxTree.Parse(
+            SourceText.From("package App\nfunc First(value int32) int32 { return value }", "first.gs")
+        )
+        let secondTree = SyntaxTree.Parse(
+            SourceText.From("package App\nfunc Second() int32 { var local = 2; return local }", "generated.g.gs")
+        )
+        let compilation = Compilation(firstTree, secondTree){IsLibrary = true}
+        let program = compilation.BoundProgram
+        Assert.Empty(program.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        let first = program.Functions.Keys.Single((f FunctionSymbol) -> f.Name == "First")
+        let second = program.Functions.Keys.Single((f FunctionSymbol) -> f.Name == "Second")
+        let parameter = first.Parameters.Single()
+        // A bound-graph fixture, not a driver test: the first tree appears only in a symbol.
+        // The only syntax anchors belong to the generated second tree.
+        let reference = BoundVariableExpression(nil, parameter)
+        let root = BoundBlockStatement(
+            nil,
+            ImmutableArray.Create[BoundStatement](BoundExpressionStatement(nil, reference), program.Functions[second])
+        )
+        let synthetic = FunctionSymbol("synthesized", ImmutableArray[ParameterSymbol].Empty, TypeSymbol.Void)
+        let functions = if topLevel {
+            ImmutableDictionary[FunctionSymbol, BoundBlockStatement].Empty
+        } else {
+            ImmutableDictionary[FunctionSymbol, BoundBlockStatement].Empty.Add(synthetic, root)
+        }
+        let replacement = BoundProgram(
+            program.EntryPointPackage,
+            program.Packages,
+            program.Diagnostics,
+            functions,
+            nil,
+            if topLevel {
+                root
+            } else {
+                BoundBlockStatement(nil, ImmutableArray[BoundStatement].Empty)
+            }
+        )
+        let field = Assert.IsAssignableFrom[FieldInfo](
+            typeof(Compilation).GetField("boundProgram", BindingFlags.NonPublic | BindingFlags.Instance)
+        )
+        field.SetValue(compilation, replacement)
+        Assert.Same(
+            parameter,
+            compilation.GetSemanticModel(firstTree).GetDeclaredSymbol(parameter.DeclaringSyntaxNodes.Single())
+        )
+        let secondModel = compilation.GetSemanticModel(secondTree)
+        let boundBody = program.Functions[second]
+        Assert.Same(boundBody, secondModel.GetBoundNode(boundBody.Syntax!!))
+        let local = boundBody.Statements.OfType[BoundVariableDeclaration]().Single().Variable
+        Assert.Same(local, secondModel.GetDeclaredSymbol(local.DeclaringSyntaxNodes.Single()))
     }
 
     @Fact

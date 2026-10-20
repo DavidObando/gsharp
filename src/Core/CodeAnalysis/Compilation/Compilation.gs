@@ -32,6 +32,7 @@ open class Compilation {
         SyntaxTree,
         SemanticModel
     ]()
+    private let semanticOwnership Lazy[SemanticModel.OwnershipIndex]
     private var globalScope BoundGlobalScope?
     private var boundProgram BoundProgram?
     private var diagnosticSuppressions DiagnosticSuppressionMap?
@@ -52,6 +53,10 @@ open class Compilation {
     init(references ReferenceResolver?, syntaxTrees ...SyntaxTree) {
         SyntaxTrees = syntaxTrees.ToImmutableArray()
         References = references
+        semanticOwnership = Lazy[SemanticModel.OwnershipIndex](
+            () -> SemanticModel.OwnershipIndex(this),
+            LazyThreadSafetyMode.ExecutionAndPublication
+        )
         ImplicitSystemImport = true
         EmbeddedResources = ImmutableArray[(Name string, Data[]uint8, IsPublic bool)].Empty
         debugInformation = CloneDebugInformation(nil)
@@ -379,6 +384,8 @@ open class Compilation {
         }
         return semanticModels.GetValue(syntaxTree, (tree SyntaxTree) -> SemanticModel(this, tree))
     }
+
+    internal prop SemanticOwnership SemanticModel.OwnershipIndex -> semanticOwnership.Value
 
     /// Emits a tree for this program to the specified writer.
     /// @param writer The writer.

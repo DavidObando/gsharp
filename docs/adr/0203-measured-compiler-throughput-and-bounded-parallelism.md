@@ -594,6 +594,55 @@ separate PRs. Full stage-2 certification is not made a new PR requirement.
 
 ## Consequences
 
+### Compilation-owned semantic discovery (#5072)
+
+Semantic models and the bound program were already cached. The remaining
+repetition was inside each queried tree's initial index: all global declarations,
+parameters and function ownership were rediscovered before tree filtering.
+One compilation-owned immutable partition now serves those lazy per-tree
+indexes. Detailed bound traversal remains lazy. Declaration-less and top-level
+roots retain multi-tree ownership, including declarations on unanchored symbol
+references. Canonical symbols, containment and first-win mappings are unchanged.
+
+Opt-in reports distinguish model objects created (`semantic.models.created`)
+from indexes actually used (`semantic.index.builds`). They count declaration
+visits, function visits in declaration and body discovery, ownership-walker
+record visits, detailed record visits and detailed body roots. Record visits
+follow the existing walk's dispatch, which can record a root twice; they are not
+unique node counts. `semantic.ownership` and `semantic.index` report time and
+process-inclusive allocation separately. Analyzer totals include these spans
+and must not be added to them. The illustrative 700 × 9099 loop count is not a
+measurement or throughput claim.
+
+The October 20 comparison uses the same current Core source at `68acf272`
+and the published `0.5.179` bootstrap on both sides. The real driver uses
+704 source inputs and 173 explicit references (176 including implicit resolver
+inputs). The interactive host uses the same 702 committed Core files on both
+sides, without the two generated version/assembly-attribute inputs. One warmup
+and three alternating pairs use instrumentation off. Separate untimed probes
+observe 704 created models but only **67 queried indexes**. Both global function
+passes fall from 613,720 visits to 9,160; declaration visits fall from 2,123,364
+to 31,692. Detailed record visits fall from 1,757,793 to 158,973, with 24,061
+additional one-time ownership record visits.
+
+| Uninstrumented observation | Baseline median (range) | Changed median (range) |
+| --- | ---: | ---: |
+| Core compiler/analyzer process, seconds | 50.435 (49.477–51.181) | 48.157 (47.217–57.254) |
+| First single-tree declaration query, milliseconds | 45.517 (45.189–52.246) | 85.512 (66.763–88.574) |
+| First query allocated bytes, median | 8,467,960 | 12,413,192 |
+
+The wall ranges overlap, so this does not demonstrate an end-to-end speedup.
+The slower changed sample is retained. First-query latency increases by
+39.996 ms (87.9%) and allocations by 3,945,232 bytes (46.6%). This tradeoff
+requires a landing decision; it is not an implicitly accepted interaction
+regression. All 20 fresh-process samples preserve nonempty implementation/
+reference DLL, PDB and XML bytes, ordered diagnostics and query oracles.
+Separate instrumented phase/allocation observations include per-visit counter
+overhead and must not be presented as uninstrumented allocation savings.
+Preliminary mixed-Debug artifacts from an incomplete ad hoc validation solution
+are excluded; direct per-project Release builds and loaded-consumer hashes
+provide the corrected evidence.
+
 ### Local declaration discovery reduction (#5055)
 
 The generator projection and compiler keep separate declaration scopes.

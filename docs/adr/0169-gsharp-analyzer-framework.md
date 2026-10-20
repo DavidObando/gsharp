@@ -178,6 +178,23 @@ corpus cannot reach a row, by a snippet translation test.
   and `SyntaxNode.Parent` (backed by a lazily built per-tree parent index) —
   the Roslyn `Parent` idiom analyzers pattern-match with.
 
+### Semantic-model discovery ownership (issue #5072)
+
+Each compilation lazily publishes one immutable partition of declaration and
+body ownership. It preserves canonical symbols, declaration traversal order and
+idempotent member containment. A model builds its detailed syntax maps only on
+its first query, using its tree's declarations and body roots. Bound traversal
+keeps the existing first-win syntax mapping and local/pattern symbol discovery.
+
+An explicit function declaration determines the same tree boundary as before.
+Declaration-less bodies and top-level statements can span trees: their ownership
+walk considers every visited syntax anchor and symbol declaration, not only
+`FirstAnchoredSyntax` or a property's provenance. This walk does not construct
+other trees' detailed indexes. Both lazy layers use execution-and-publication
+initialization. A new compilation owns new partitions and models, including
+body-only edits that reuse the global scope. No source-symbol partition is
+process-global.
+
 ### Execution: `GSharpAnalyzerDriver`, in-process in `gsc`
 
 A driver runs after binding over the same `Compilation` used for emit

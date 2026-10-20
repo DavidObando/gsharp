@@ -11,6 +11,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Concurrent
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
 import System.Reflection
 import System.Threading
@@ -28,6 +29,7 @@ class SemanticModel {
     internal init(compilation Compilation, syntaxTree SyntaxTree) {
         this.compilation = compilation
         this.syntaxTree = syntaxTree
+        CompilationMeasurements.Count("semantic.models.created")
         index = Lazy[SemanticModel.Index](
             () -> BuildIndex(compilation, syntaxTree),
             LazyThreadSafetyMode.ExecutionAndPublication
@@ -153,23 +155,93 @@ class SemanticModel {
         DeclaredBySyntax Dictionary[SyntaxNode, Symbol]
     ) : IEquatable[SemanticModel.Index] { }
 
-    /// Records the outermost bound node per syntax node (first-win in a
-    /// pre-order walk) and harvests local/pattern variable declarations from
-    /// symbol-valued bound-node properties.
-    private class IndexingWalker : BoundTreeWalker {
-        private let tree SyntaxTree
-        private let boundBySyntax Dictionary[SyntaxNode, BoundNode]
-        private let declaredBySyntax Dictionary[SyntaxNode, Symbol]
+    /// Partitions source ownership once, without building other trees' detailed indexes.
+    internal class OwnershipIndex {
+        private data class Bucket(
+            Declarations ImmutableArray[KeyValuePair[SyntaxNode, Symbol]],
+            Bodies ImmutableArray[BoundNode]
+        ) : IEquatable[Bucket] { }
 
-        init(
-            tree SyntaxTree,
-            boundBySyntax Dictionary[SyntaxNode, BoundNode],
-            declaredBySyntax Dictionary[SyntaxNode, Symbol]
-        ) {
-            this.tree = tree
-            this.boundBySyntax = boundBySyntax
-            this.declaredBySyntax = declaredBySyntax
+        private class BucketBuilder {
+            let Declarations Dictionary[SyntaxNode, Symbol] = Dictionary[SyntaxNode, Symbol](
+                ReferenceEqualityComparer.Instance
+            )
+            let Bodies List[BoundNode] = List[BoundNode]()
         }
+
+        private let buckets ImmutableDictionary[SyntaxTree, Bucket]
+
+        internal init(compilation Compilation) {
+            let program = compilation.BoundProgram
+            let globalScope = compilation.GlobalScope
+            using let measurement = CompilationMeasurements.BeginPhase("semantic.ownership")
+            CompilationMeasurements.Count("semantic.ownership.builds")
+            let builders = Dictionary[SyntaxTree, BucketBuilder](ReferenceEqualityComparer.Instance)
+            for symbol in SemanticModel.EnumerateDeclaredSymbols(program, globalScope) {
+                CompilationMeasurements.Count("semantic.declaration.visits")
+                for declaration in symbol.DeclaringSyntaxNodes {
+                    GetBuilder(builders, declaration.SyntaxTree).Declarations.TryAdd(declaration, symbol)
+                }
+            }
+            for (function, body) in program.Functions {
+                CompilationMeasurements.Count("semantic.function.visits")
+                if function.Declaration is {} declaration {
+                    GetBuilder(builders, declaration.SyntaxTree).Bodies.Add(body)
+                } else {
+                    AddUnownedBody(builders, body)
+                }
+            }
+            AddUnownedBody(builders, program.Statement)
+            let result = ImmutableDictionary.CreateBuilder[SyntaxTree, Bucket](ReferenceEqualityComparer.Instance)
+            for pair in builders {
+                result.Add(
+                    pair.Key,
+                    Bucket(pair.Value.Declarations.ToImmutableArray(), pair.Value.Bodies.ToImmutableArray())
+                )
+            }
+            buckets = result.ToImmutable()
+        }
+
+        internal func GetDeclarations(tree SyntaxTree) ImmutableArray[
+            KeyValuePair[SyntaxNode, Symbol]
+        ] -> if buckets.TryGetValue(tree, out var bucket) {
+            bucket.Declarations
+        } else {
+            ImmutableArray[KeyValuePair[SyntaxNode, Symbol]].Empty
+        }
+
+        internal func GetBodies(tree SyntaxTree) ImmutableArray[BoundNode] -> if buckets.TryGetValue(
+            tree,
+            out var bucket
+        ) {
+            bucket.Bodies
+        } else {
+            ImmutableArray[BoundNode].Empty
+        }
+
+        shared {
+            private func GetBuilder(builders Dictionary[SyntaxTree, BucketBuilder], tree SyntaxTree) BucketBuilder {
+                if !builders.TryGetValue(tree, out var builder) {
+                    builder = BucketBuilder()
+                    builders.Add(tree, builder)
+                }
+                return builder
+            }
+
+            private func AddUnownedBody(builders Dictionary[SyntaxTree, BucketBuilder], body BoundNode) {
+                // Accessors, synthesized bodies and top-level code can have no declaration.
+                // FirstAnchoredSyntax is provenance, not proof that every anchor has that tree.
+                let walker = OwnershipWalker()
+                walker.Visit(body)
+                for tree in walker.Trees {
+                    GetBuilder(builders, tree).Bodies.Add(body)
+                }
+            }
+        }
+    }
+
+    private abstract class RecordingWalker : BoundTreeWalker {
+        protected open func Record(node BoundNode?);
 
         override func Visit(node BoundNode?) {
             Record(node)
@@ -190,10 +262,57 @@ class SemanticModel {
             Record(node)
             base.VisitPattern(node)
         }
+    }
 
-        private func Record(node BoundNode?) {
+    private class OwnershipWalker : RecordingWalker {
+        let Trees HashSet[SyntaxTree] = HashSet[SyntaxTree](ReferenceEqualityComparer.Instance)
+        private let measure bool = CompilationMeasurements.IsEnabled
+
+        protected override func Record(node BoundNode?) {
             if node == nil {
                 return
+            }
+            if measure {
+                CompilationMeasurements.Count("semantic.ownership.record_visits")
+            }
+            if node.Syntax is {} syntax {
+                Trees.Add(syntax.SyntaxTree)
+            }
+            for getter in SemanticModel.GetAccessors(node.GetType()).SymbolProperties {
+                if getter(node) is Symbol symbol {
+                    for declaration in symbol.DeclaringSyntaxNodes {
+                        Trees.Add(declaration.SyntaxTree)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Records the outermost bound node per syntax node (first-win in a
+    /// pre-order walk) and harvests local/pattern variable declarations from
+    /// symbol-valued bound-node properties.
+    private class IndexingWalker : RecordingWalker {
+        private let tree SyntaxTree
+        private let boundBySyntax Dictionary[SyntaxNode, BoundNode]
+        private let declaredBySyntax Dictionary[SyntaxNode, Symbol]
+        private let measure bool = CompilationMeasurements.IsEnabled
+
+        init(
+            tree SyntaxTree,
+            boundBySyntax Dictionary[SyntaxNode, BoundNode],
+            declaredBySyntax Dictionary[SyntaxNode, Symbol]
+        ) {
+            this.tree = tree
+            this.boundBySyntax = boundBySyntax
+            this.declaredBySyntax = declaredBySyntax
+        }
+
+        protected override func Record(node BoundNode?) {
+            if node == nil {
+                return
+            }
+            if measure {
+                CompilationMeasurements.Count("semantic.index.record_visits")
             }
             if node.Syntax is {} syntax && object.ReferenceEquals(syntax.SyntaxTree, tree) &&
                 !boundBySyntax.ContainsKey(syntax) {
@@ -218,26 +337,25 @@ class SemanticModel {
         ]()
 
         private func BuildIndex(compilation Compilation, tree SyntaxTree) SemanticModel.Index {
+            let ownership = compilation.SemanticOwnership
+            using let measurement = CompilationMeasurements.BeginPhase("semantic.index")
+            CompilationMeasurements.Count("semantic.index.builds")
             let boundBySyntax = Dictionary[SyntaxNode, BoundNode](ReferenceEqualityComparer.Instance)
             let declaredBySyntax = Dictionary[SyntaxNode, Symbol](ReferenceEqualityComparer.Instance)
-            let program = compilation.BoundProgram
-            let globalScope = compilation.GlobalScope
-            for symbol in EnumerateDeclaredSymbols(program, globalScope) {
-                RecordDeclarations(symbol, tree, declaredBySyntax)
+            for declaration in ownership.GetDeclarations(tree) {
+                declaredBySyntax.Add(declaration.Key, declaration.Value)
             }
             let walker = IndexingWalker(tree, boundBySyntax, declaredBySyntax)
-            for (function, body) in program.Functions {
-                if function.Declaration is {} declaration && !object.ReferenceEquals(declaration.SyntaxTree, tree) {
-                    continue
-                }
+            for body in ownership.GetBodies(tree) {
+                CompilationMeasurements.Count("semantic.index.bodies")
                 walker.Visit(body)
             }
-            walker.Visit(program.Statement)
             return SemanticModel.Index(boundBySyntax, declaredBySyntax)
         }
 
         private func EnumerateDeclaredSymbols(program BoundProgram, globalScope BoundGlobalScope) sequence[Symbol] {
             for function in program.Functions.Keys {
+                CompilationMeasurements.Count("semantic.declaration_function.visits")
                 yield function
                 for parameter in function.Parameters {
                     yield parameter

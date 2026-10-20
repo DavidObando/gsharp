@@ -4,10 +4,12 @@
 
 package GSharp.LanguageServer.Tests
 
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.LanguageServer
+import System
 import System.Collections.Generic
 import System.IO
 import System.Linq
@@ -36,6 +38,42 @@ open class IncrementalSemanticModelTests {
         // incremental build must keep identical.
         Assert.Same(comp1.GlobalScope, comp2.ReusedGlobalScope)
         AssertModelsEquivalent(comp2)
+    }
+
+    @Fact
+    func BodyOnlyEdit_CoreSemanticIndex_UsesTheNewTreeAndBody() {
+        let project = NewProject()
+        let before = project.GetCompilation()
+        let oldTree = before.SyntaxTrees.Single((tree SyntaxTree) -> tree.Text.FileName == FileA)
+        let oldModel = before.GetSemanticModel(oldTree)
+        let oldDeclaration = DescendantsOfType[FunctionDeclarationSyntax](oldTree.Root).Single(
+            (declaration FunctionDeclarationSyntax) -> declaration.Identifier.Text == "Get"
+        )
+        Assert.NotNull(oldModel.GetDeclaredSymbol(oldDeclaration))
+        project.UpdateFile(
+            FileA,
+            SourceA.Replace("return local", "var editedLocal = local + 1\n        return editedLocal")
+        )
+        let after = project.GetCompilation()
+        Assert.Same(before.GlobalScope, after.ReusedGlobalScope)
+        let tree = after.SyntaxTrees.Single((candidate SyntaxTree) -> candidate.Text.FileName == FileA)
+        let model = after.GetSemanticModel(tree)
+        Assert.NotSame(oldTree, tree)
+        Assert.NotSame(oldModel, model)
+        let function = after
+            .BoundProgram
+            .Functions
+            .Single((pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) -> pair.Key.Name == "Get")
+        let local = function
+            .Value
+            .Descendants()
+            .OfType[BoundVariableDeclaration]()
+            .Single((declaration BoundVariableDeclaration) -> declaration.Variable.Name == "editedLocal")
+        let declaration = local.Variable.DeclaringSyntaxNodes.Single()
+        Assert.Same(tree, declaration.SyntaxTree)
+        Assert.Same(local.Variable, model.GetDeclaredSymbol(declaration))
+        Assert.Same(local, model.GetBoundNode(local.Syntax!!))
+        Assert.Throws[ArgumentException](() -> after.GetSemanticModel(oldTree))
     }
 
     @Fact
