@@ -58,12 +58,14 @@ internal shared class WorkerServer {
                 retained >= WorkerProtocol.MaxRetainedBytes ||
                 workingSet >= WorkerProtocol.MaxWorkingSetBytes ||
                 !(canReuse?.Invoke() ?? true)
-            output.Write(WorkerProtocol.Completed)
-            output.Write(exitCode)
-            output.Write(retire)
-            output.Write(retained)
-            output.Write(workingSet)
-            output.Flush()
+            lock output {
+                output.Write(WorkerProtocol.Completed)
+                output.Write(exitCode)
+                output.Write(retire)
+                output.Write(retained)
+                output.Write(workingSet)
+                output.Flush()
+            }
             if retire {
                 return 0
             }
