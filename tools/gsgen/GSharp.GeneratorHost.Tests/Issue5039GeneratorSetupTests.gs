@@ -371,7 +371,7 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         CompileDll(
             GeneratorSource.Replace("__VERSION__", "v2").Replace(
                 "var inputs =",
-                "System.Console.WriteLine(\"generator console output\"); System.Console.WriteLine(new string('x', 16383) + \"😀\"); System.Console.Write(\"flush\"); System.Console.Out.Flush(); System.Console.WriteLine(\"-continued\"); var inputs ="
+                "System.Console.OutputEncoding = System.Text.Encoding.UTF8; System.Console.WriteLine(\"generator console output\"); System.Console.WriteLine(new string('x', 16383) + \"😀\"); System.Console.Write(\"flush\"); System.Console.Out.Flush(); System.Console.WriteLine(\"-continued\"); var inputs ="
             ),
             generator,
             "Generator"
@@ -651,6 +651,8 @@ open class Issue5039GeneratorSetupTests : IDisposable {
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
                 WorkingDirectory = startupDirectory ?? directory
             }
             start.ArgumentList.Add(typeof(GsgenProgram).Assembly.Location)
