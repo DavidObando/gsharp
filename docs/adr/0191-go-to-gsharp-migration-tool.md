@@ -592,6 +592,9 @@ does not authorize CLR string emission, since byte length/index/order differ
 from UTF-16 operations. Proof-based representation optimization is deferred.
 
 The selected direction is a general-purpose immutable byte-string type.
+The dedicated [ADR-0204](0204-immutable-bytestring-values.md) proposes its
+handwritten examples, library/language comparison, ownership, encoding and
+cost contracts. It remains Proposed and does not make the facility available.
 Its dedicated ADR must compare an ordinary library type with integrated
 language spelling, byte literals and byte/code-point iteration. Library-only
 is not preselected for speed; language integration should earn its complexity
@@ -621,16 +624,17 @@ share their owner; concatenation may reuse empty operands or own new storage.
 Equality/order/hash consume byte content, not slice descriptor identity,
 culture, normalization or UTF-16 units.
 
-**Candidate operation surface.** These signatures make the semantic operations
-concrete; they are unavailable API sketches, not a settled source or binary
-contract. The dedicated design may expose operators, iteration or literals
-instead of requiring method calls everywhere. The initial representable
+**Candidate operation surface.** The dedicated ADR-0204 now owns the proposed
+public surface, including ordinary exceptions rather than paired value/error
+returns. These aligned signatures remain unavailable sketches, not a settled
+source or binary contract. The dedicated design includes operators, iteration
+and literals instead of requiring method calls everywhere. The initial representable
 storage domain uses `int32` lengths/indices. Instance operations below use
 `value: bytestring`; static operations use the type name.
 
 ```text
-bytestring.FromBytesCopy(source: readonly slice[uint8]) -> bytestring
-value.ToBytesCopy() -> slice[uint8]
+ByteString.CopyFrom(source: readonly slice[uint8]) -> bytestring
+value.ToSlice() -> slice[uint8]
 value.Length -> int32
 value.IsEmpty -> bool
 value[index: int32] -> uint8
@@ -642,15 +646,12 @@ value.GetHashCode() -> int32
 value.StartsWith(prefix: bytestring) -> bool
 value.EndsWith(suffix: bytestring) -> bool
 value.IndexOf(needle: bytestring) -> int32
-bytestring.FromCodePoints(source: readonly slice[int32], policy: CodePointPolicy)
-    -> (value: bytestring?, error: EncodingError?)
-value.DecodeCodePoints(policy: Utf8DecodePolicy)
-    -> (points: slice[int32]?, error: EncodingError?)
-value.DecodeNextUtf8(offset: int32, policy: Utf8DecodePolicy)
-    -> (hasValue: bool, codePoint: int32, nextOffset: int32, error: EncodingError?)
-value.DecodeUtf8(policy: Utf8DecodePolicy) -> (text: string?, error: EncodingError?)
-bytestring.EncodeUtf8(text: string, policy: Utf16EncodePolicy)
-    -> (value: bytestring?, error: EncodingError?)
+ByteString.FromCodePoints(source: readonly slice[int32], policy: CodePointEncoding)
+    -> bytestring
+value.DecodeCodePoints(policy: Utf8Decoding) -> slice[int32]
+value.DecodeUtf8Scalars(policy: Utf8Decoding) -> ByteString.Utf8Enumerable
+value.DecodeUtf8(policy: Utf8Decoding) -> string
+ByteString.EncodeUtf8(text: string, policy: Utf16Encoding) -> bytestring
 ```
 
 `+`, `==`, `!=` and ordering operators may forward to these ordinary methods
@@ -664,35 +665,34 @@ Go's private hash or remain stable between processes.
 
 **Encoding policies and Go selection.** Encoding is always explicit; there
 is no implicit UTF-8-validity requirement or unspecified decoder default.
-`Strict` rejects malformed input at its first byte/code-unit/element offset.
-An error result contains no partial decoded/encoded value. Success contains
-a present result and no error, including empty results.
-For step decoding, an error leaves the offset unchanged and has no value.
-Offsets outside `[0, Length]` are library argument errors. At `Length`,
-`DecodeNextUtf8` returns no value, no error and the unchanged offset.
+`Strict` rejects malformed input with an encoding exception and an input
+byte/code-unit/element offset. Eager conversion returns no partial value.
+Lazy scalar enumeration can yield a valid prefix, then throws at the first
+failed decoding position; it does not report that failure as end-of-sequence.
+ADR-0204 specifies those source-independent exception and enumeration contracts.
 
-`Utf8DecodePolicy.ReplaceInvalidByte` emits U+FFFD and advances **one byte**
+`Utf8Decoding.ReplaceInvalidByte` emits U+FFFD and advances **one byte**
 for each invalid encoding, including truncated/overlong sequences and encoded
-surrogates. A valid U+FFFD encoding advances three bytes. A successful step
-exposes the starting byte offset through its input and returns the next offset.
+surrogates. A valid U+FFFD encoding advances three bytes. Each scalar item
+exposes its starting byte offset, scalar value and byte width.
 String range saves its source once and uses this explicit policy.
 `DecodeCodePoints` uses the same policy for Go `[]rune` conversion.
 Its result is writable algorithm data in `slice[int32]`, not the source string
 representation. Go `rune` is unrestricted `int32`; `System.Text.Rune`, which
 represents a valid Unicode scalar, cannot replace it.
 
-`CodePointPolicy.ReplaceInvalidCodePoint` encodes negative values, surrogate
+`CodePointEncoding.ReplaceInvalidCodePoint` encodes negative values, surrogate
 values and values above U+10FFFF as U+FFFD; go2gs selects it for Go
 `string([]rune)` conversion. `Strict` rejects those values instead.
-`Utf16EncodePolicy.ReplaceUnpairedCodeUnit` replaces each unpaired surrogate
+`Utf16Encoding.ReplaceUnpairedCodeUnit` replaces each unpaired surrogate
 on CLR-text import; paired surrogates encode their scalar normally.
 No policy normalizes Unicode. If a reusable implementation lacks the exact
 Go-selected policy, a small compatibility shim must supply it with independent
 witnesses, or the operation stays blocked. Do not silently use a BCL decoder's
 different replacement grouping.
 
-`FromBytesCopy` and `FromCodePoints` snapshot mutable input.
-`ToBytesCopy` and successful `DecodeCodePoints` return independent writable
+`CopyFrom` and `FromCodePoints` snapshot mutable input.
+`ToSlice` and successful `DecodeCodePoints` return independent writable
 storage, including **non-nil empty slices** for empty input. The Go lowering
 maps nil byte/code-point slices to empty `bytestring` before calling these
 non-null library APIs. No mutable conversion can change an existing value or
@@ -706,14 +706,14 @@ Go `unicode.ToLower` remains a narrow compatibility call over `int32` with
 pinned Go source/table hashes and `unicode.Version`; it is not culture-sensitive
 casing, full case folding or a presumed match to .NET tables.
 
-One **unavailable library-route sketch** illustrates ordinary G# composition;
-it does not select that route over a future accepted native spelling/literal.
-It is not a compiling sample for today's SDK:
+One **unavailable library-route sketch** illustrates ordinary G# composition.
+ADR-0204 compares it with integrated spelling/literals; neither route is
+accepted or compiling with today's SDK:
 
 ```gsharp
 type bytestring = Gsharp.Values.ByteString
 let input = slice[uint8]{0x41, 0xff, 0}
-let text = bytestring.FromBytesCopy(input.AsReadOnly())
+let text = bytestring.CopyFrom(input.AsReadOnly())
 input[0] = 0x42
 let length int64 = int64(text.Length)
 let prefix = text.Subslice(0, 1)
