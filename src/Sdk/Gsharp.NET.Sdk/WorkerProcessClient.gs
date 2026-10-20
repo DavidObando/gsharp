@@ -38,6 +38,7 @@ internal class WorkerProcessClient : IDisposable {
     ) bool {
         lock gate {
             exitCode = 1
+            var completedExchange = false
             idleTimer?.Change(Timeout.Infinite, Timeout.Infinite)
             try {
                 cancellation.ThrowIfCancellationRequested()
@@ -112,6 +113,7 @@ internal class WorkerProcessClient : IDisposable {
                                 if retire {
                                     Dispose()
                                 }
+                                completedExchange = true
                                 return true
                             }
                             default {
@@ -120,16 +122,19 @@ internal class WorkerProcessClient : IDisposable {
                         }
                     }
                 } catch (ex Exception) when ex is IOException ||
+                    ex is InvalidDataException ||
+                    ex is FormatException ||
+                    ex is DecoderFallbackException ||
                     ex is InvalidOperationException ||
                     ex is System
                     .ComponentModel
                     .Win32Exception {
                     Dispose()
                     cancellation.ThrowIfCancellationRequested()
-                    throw IOException("Worker request transport failed.", ex)
+                    throw IOException("Worker request transport failed: ${ex.Message}", ex)
                 }
             } finally {
-                if process?.HasExited == false {
+                if completedExchange && process?.HasExited == false {
                     lastActivity = Stopwatch.GetTimestamp()
                     idleTimer?.Dispose()
                     idleTimer = Timer(
