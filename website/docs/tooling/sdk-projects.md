@@ -74,8 +74,10 @@ this interface use one worker. Compiler phases reuse the same budget, rather
 than creating independent full-machine pools.
 
 The compiler parses files independently and publishes trees in input order.
-Body workers currently accept only proven primitive operations on parameters
-and body-owned locals. Other bodies, inferred signatures and synthesis stay
+Body workers currently accept only proven primitive operations in free or
+static functions, using parameters and body-owned locals. Instance-member
+scopes stay coordinator-owned because their implicit receiver and inherited
+pseudo-bindings need the binder's shared scope reader. Other bodies, inferred signatures and synthesis stay
 on the coordinator. Diagnostics and bodies merge in their original order;
 whole-program analyses run after the body barrier.
 

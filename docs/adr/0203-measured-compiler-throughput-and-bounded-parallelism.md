@@ -627,6 +627,10 @@ parameters and body-owned locals. Calls, imported member access, type
 construction, lambdas, anonymous objects, adapters, generics and unknown
 syntax remain coordinator-owned. These are explicit concurrency limits, not
 claims of general body independence.
+Instance-member scopes also stay coordinator-owned. Their implicit receiver
+and inherited pseudo-bindings require the binder's scope reader before
+their parameters can be proved lookup-visible. Free/static functions retain
+the primitive/local worker path.
 
 Each eligible body owns its binder context, diagnostics, scopes and lowered
 result, but keeps the original canonical symbols. A scope boundary fails

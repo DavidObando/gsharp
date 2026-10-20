@@ -11,6 +11,7 @@ internal shared class IndependentBodyClassifier {
         if function
             .Declaration
             ?.Body is not{} body ||
+            function.ThisParameter != nil ||
             function.IsAsyncOrSuspending ||
             function.IsReturnTypeInferred ||
             !function

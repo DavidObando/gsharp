@@ -10,6 +10,32 @@ import Xunit
 
 class Issue5041WorkBudgetTests {
     @Theory
+    @InlineData(`func Same($this int32) bool -> $this == $this`, false)
+    @InlineData("func Same(x int32) int32 -> x", false)
+    @InlineData("shared { func Same(x int32) int32 -> x }", true)
+    func ImplicitReceiverScopesRemainCoordinatorOwned(member string, eligible bool) {
+        let compilation = Compilation(SyntaxTree.Parse("package Receivers\nclass Holder {\n" + member + "\n}"))
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        let holder = Assert.Single(compilation.GlobalScope.Structs)
+        let methods = if holder.Methods.IsEmpty {
+            holder.StaticMethods
+        } else {
+            holder.Methods
+        }
+        let method = Assert.Single(methods)
+        Assert.Equal(eligible, IndependentBodyClassifier.CanBind(method))
+        if member.Contains(`$this`, StringComparison.Ordinal) {
+            Assert.Empty(compilation.BoundProgram.Diagnostics)
+            let returned = Assert.IsType[BoundReturnStatement](
+                Assert.Single(compilation.BoundProgram.Functions[method].Statements)
+            )
+            let comparison = Assert.IsType[BoundBinaryExpression](returned.Expression)
+            Assert.Same(holder, comparison.Left.Type)
+            Assert.Same(holder, comparison.Right.Type)
+        }
+    }
+
+    @Theory
     @InlineData("return _ == _")
     @InlineData("_ = 0\nreturn true")
     func DiscardReferencesCannotProveAnEnclosingMemberPrimitive(body string) {
