@@ -57,7 +57,7 @@ open class CompilerWorkerTests : IDisposable {
             )
         )
         Assert.Equal(0, exit)
-        Assert.Contains("helper-stdout 😀", output)
+        Assert.Contains("helper-stdout é", output)
         Assert.Contains("helper-stderr", errors)
         Assert.True(
             Run(
@@ -135,11 +135,11 @@ open class CompilerWorkerTests : IDisposable {
             Assert.IsType[IOException](failure)
         }
         if mode != "loggerfailure" {
-            Assert.Contains("crash stdout 😀", output)
-            Assert.Contains("stdout tail 😀", output)
+            Assert.Contains("crash stdout é", output)
+            Assert.Contains("stdout tail é", output)
         }
-        Assert.Contains("crash stderr 😀", errors)
-        Assert.Contains("stderr tail 😀", errors)
+        Assert.Contains("crash stderr é", errors)
+        Assert.Contains("stderr tail é", errors)
         Assert.DoesNotContain(messages, (line string) -> line.Contains("worker completed"))
         Assert.True(
             Run(
@@ -160,9 +160,9 @@ open class CompilerWorkerTests : IDisposable {
     func StartupFailurePreservesDiagnosticsWithoutReportingACompilationOrHidingFallback() {
         File.WriteAllText(
             Path.Combine(directory, "startup.gs"),
-            "import System\nfunc Main() {\nConsole.OutputEncoding = System.Text.Encoding.UTF8\n" +
-                "Console.WriteLine(\"startup stdout 😀\")\nConsole.Write(\"stdout tail 😀\")\n" +
-                "Console.Error.WriteLine(\"startup stderr 😀\")\nConsole.Error.Write(\"stderr tail 😀\")\n" +
+            "import System\nfunc Main() {\n" +
+                "Console.WriteLine(\"startup stdout é\")\nConsole.Write(\"stdout tail é\")\n" +
+                "Console.Error.WriteLine(\"startup stderr é\")\nConsole.Error.Write(\"stderr tail é\")\n" +
                 "Console.Out.Flush()\nConsole.Error.Flush()\nEnvironment.Exit(42)\n}"
         )
         let (toolExit, diagnostics) = Standalone(
@@ -186,10 +186,10 @@ open class CompilerWorkerTests : IDisposable {
         Assert.Empty(output)
         Assert.Empty(errors)
         Assert.Contains(messages, (line string) -> line.Contains("unavailable; using standalone"))
-        Assert.Contains("G# worker startup stdout: startup stdout 😀", messages)
-        Assert.Contains("G# worker startup stdout: stdout tail 😀", messages)
-        Assert.Contains("G# worker startup stderr: startup stderr 😀", messages)
-        Assert.Contains("G# worker startup stderr: stderr tail 😀", messages)
+        Assert.Contains("G# worker startup stdout: startup stdout é", messages)
+        Assert.Contains("G# worker startup stdout: stdout tail é", messages)
+        Assert.Contains("G# worker startup stderr: startup stderr é", messages)
+        Assert.Contains("G# worker startup stderr: stderr tail é", messages)
         Assert.DoesNotContain(messages, (line string) -> line.Contains("accepted request"))
         Assert.DoesNotContain(messages, (line string) -> line.Contains("worker completed"))
         Assert.False(File.Exists(Path.Combine(directory, "result.dll")))
@@ -1105,7 +1105,9 @@ open class CompilerWorkerTests : IDisposable {
             Path.Combine(directory, "console.gs"),
             "import System\nimport System.IO\nimport System.Reflection\n" +
                 "func Main(args[]string) {\nif args.Length == 2 {\n" +
-                "Console.WriteLine(Console.OutputEncoding.CodePage.ToString())\nConsole.WriteLine(\"résumé\")\nreturn\n}\n" +
+                "Console.WriteLine(Console.OutputEncoding.CodePage.ToString())\n" +
+                "if args[0] == \"--unicode\" {\nConsole.WriteLine(\"résumé😀\")\nConsole.Error.WriteLine(\"stderr 😀\")\n" +
+                "} else { Console.WriteLine(\"résumé\") }\nreturn\n}\n" +
                 "try {\nlet assembly = Assembly.LoadFrom(\"${EscapeSource(typeof(CompilerWorkerTests).Assembly.Location)}\")\n" +
                 "let method = assembly.GetType(\"GSharp.Sdk.Tests.CompilerWorkerTests\")!!.GetMethod(\"VerifyWindowsConsoleParity\")!!\n" +
                 "method.Invoke(nil, []object{args[0], args[1], Assembly.GetExecutingAssembly().Location})\n" +
@@ -1130,11 +1132,22 @@ open class CompilerWorkerTests : IDisposable {
         }
         start.ArgumentList.Add(Path.Combine(directory, "console.dll"))
         if Path.DirectorySeparatorChar != '\\' {
-            start.ArgumentList.Add("--encoding")
+            start.ArgumentList.Add("--unicode")
             start.ArgumentList.Add("unused")
             let portable = RunProcess(start)
             Assert.True(portable.Exit == 0, portable.Stderr)
-            Assert.Contains("résumé", portable.Stdout)
+            Assert.Contains("résumé😀", portable.Stdout)
+            Assert.Contains("stderr 😀", portable.Stderr)
+            let mismatchedStart = WorkerProcessClient.CreateStartInfo(
+                Path.Combine(directory, "console.dll"),
+                "--unicode",
+                "unused"
+            )
+            mismatchedStart.StandardOutputEncoding = Encoding.Unicode
+            mismatchedStart.StandardErrorEncoding = Encoding.Unicode
+            let mismatched = RunProcess(mismatchedStart)
+            Assert.NotEqual(portable.Stdout, mismatched.Stdout)
+            Assert.NotEqual(portable.Stderr, mismatched.Stderr)
             return
         }
         for argument in[]string{CompilerPath(), directory, marker} {
@@ -1276,8 +1289,8 @@ open class CompilerWorkerTests : IDisposable {
             "File.WriteAllText(\"${escaped}.new\", Environment.ProcessId.ToString())\n" +
                 "File.Move(\"${escaped}.new\", \"$escaped\")\nThread.Sleep(Timeout.Infinite)"
         } else {
-            "Console.OutputEncoding = System.Text.Encoding.UTF8\nConsole.Out.Write(\"helper-\")\nConsole.Out.Flush()\n" +
-                "Console.Out.WriteLine(\"stdout 😀\")\nConsole.Error.WriteLine(\"helper-stderr\")"
+            "Console.Out.Write(\"helper-\")\nConsole.Out.Flush()\n" +
+                "Console.Out.WriteLine(\"stdout é\")\nConsole.Error.WriteLine(\"helper-stderr\")"
         }
         File.WriteAllText(
             Path.Combine(directory, "helper.gs"),
@@ -1300,9 +1313,8 @@ open class CompilerWorkerTests : IDisposable {
             "Thread.Sleep(Timeout.Infinite)"
         }
         let crashAction = if failureMode.Length > 0 {
-            "Console.OutputEncoding = System.Text.Encoding.UTF8\n" +
-                "Console.WriteLine(\"crash stdout 😀\")\nConsole.Write(\"stdout tail 😀\")\n" +
-                "Console.Error.WriteLine(\"crash stderr 😀\")\nConsole.Error.Write(\"stderr tail 😀\")\n" +
+            "Console.WriteLine(\"crash stdout é\")\nConsole.Write(\"stdout tail é\")\n" +
+                "Console.Error.WriteLine(\"crash stderr é\")\nConsole.Error.Write(\"stderr tail é\")\n" +
                 "Console.Out.Flush()\nConsole.Error.Flush()\n" +
                 "File.WriteAllText(\"${EscapeSource(Path.Combine(directory, "failure.ready"))}\", \"ready\")\n$termination\n"
         } else {
@@ -1414,55 +1426,71 @@ open class CompilerWorkerTests : IDisposable {
             Assert.True(AllocConsole() != 0)
             try {
                 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)
-                Console.OutputEncoding = Encoding.GetEncoding(437)
-                let inherited = RunProcess(WorkerProcessClient.CreateStartInfo(probe, "--encoding", "unused"))
-                Assert.Equal("437\nrésumé", inherited.Stdout.Replace("\r\n", "\n").TrimEnd('\n'))
-                let detachedStart = WorkerProcessClient.CreateStartInfo(probe, "--encoding", "unused")
-                detachedStart.CreateNoWindow = true
-                let detached = RunProcess(detachedStart)
-                Assert.NotEqual(inherited.Stdout, detached.Stdout)
+                for codePage in[]int32{437, 65001} {
+                    Console.OutputEncoding = Encoding.GetEncoding(codePage)
+                    let flag = if codePage == 437 {
+                        "--encoding"
+                    } else {
+                        "--unicode"
+                    }
+                    let text = if codePage == 437 {
+                        "résumé"
+                    } else {
+                        "résumé😀"
+                    }
+                    let inherited = RunProcess(WorkerProcessClient.CreateStartInfo(probe, flag, "unused"))
+                    Assert.Equal("${codePage}\n$text", inherited.Stdout.Replace("\r\n", "\n").TrimEnd('\n'))
+                    if codePage == 437 {
+                        let mismatchedStart = WorkerProcessClient.CreateStartInfo(probe, flag, "unused")
+                        mismatchedStart.StandardOutputEncoding = Encoding.UTF8
+                        let mismatched = RunProcess(mismatchedStart)
+                        Assert.NotEqual(inherited.Stdout, mismatched.Stdout)
+                    } else {
+                        Assert.Equal("stderr 😀", inherited.Stderr.TrimEnd('\r', '\n'))
+                    }
 
-                let source = "résumé.gs"
-                File.WriteAllText(
-                    Path.Combine(directory, source),
-                    "open class Sample { func Get() int32 -> missingName }"
-                )
-                let arguments = WithReferences([]string{"/out:result.dll", "/target:library", source})
-                let start = ProcessStartInfo("dotnet"){
-                    UseShellExecute = false,
-                    WorkingDirectory = directory,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                }
-                start.ArgumentList.Add(compiler)
-                for argument in arguments {
-                    start.ArgumentList.Add(argument)
-                }
-                let expected = RunProcess(start)
-                Assert.Equal(1, expected.Exit)
-                let expectedDiagnostics = (expected.Stdout + expected.Stderr).Replace("\r\n", "\n").TrimEnd('\n')
-                Assert.Contains(source, expectedDiagnostics)
-                using let worker = WorkerProcessClient()
-                let output = List[string]()
-                let errors = List[string]()
-                let messages = List[string]()
-                Assert.True(
-                    worker.TryRun(
-                        compiler,
-                        "--compiler-worker",
-                        directory,
-                        arguments,
-                        1,
-                        CancellationToken.None,
-                        (line string) -> output.Add(line),
-                        (line string) -> errors.Add(line),
-                        (line string) -> messages.Add(line),
-                        out var exit
+                    let source = text + ".gs"
+                    File.WriteAllText(
+                        Path.Combine(directory, source),
+                        "open class Sample { func Get() int32 -> missingName }"
                     )
-                )
-                Assert.Equal(expected.Exit, exit)
-                Assert.Equal(expectedDiagnostics, string.Join("\n", output.Concat(errors)))
-                Assert.Single(messages.Where((line string) -> line.Contains("worker completed")))
+                    let arguments = WithReferences([]string{"/out:result.dll", "/target:library", source})
+                    let start = ProcessStartInfo("dotnet"){
+                        UseShellExecute = false,
+                        WorkingDirectory = directory,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    }
+                    start.ArgumentList.Add(compiler)
+                    for argument in arguments {
+                        start.ArgumentList.Add(argument)
+                    }
+                    let expected = RunProcess(start)
+                    Assert.Equal(1, expected.Exit)
+                    let expectedDiagnostics = (expected.Stdout + expected.Stderr).Replace("\r\n", "\n").TrimEnd('\n')
+                    Assert.Contains(source, expectedDiagnostics)
+                    using let worker = WorkerProcessClient()
+                    let output = List[string]()
+                    let errors = List[string]()
+                    let messages = List[string]()
+                    Assert.True(
+                        worker.TryRun(
+                            compiler,
+                            "--compiler-worker",
+                            directory,
+                            arguments,
+                            1,
+                            CancellationToken.None,
+                            (line string) -> output.Add(line),
+                            (line string) -> errors.Add(line),
+                            (line string) -> messages.Add(line),
+                            out var exit
+                        )
+                    )
+                    Assert.Equal(expected.Exit, exit)
+                    Assert.Equal(expectedDiagnostics, string.Join("\n", output.Concat(errors)))
+                    Assert.Single(messages.Where((line string) -> line.Contains("worker completed")))
+                }
             } finally {
                 FreeConsole()
             }
