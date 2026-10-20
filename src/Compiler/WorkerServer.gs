@@ -13,6 +13,10 @@ internal shared class WorkerServer {
         let identity = WorkerProtocol.ToolIdentity(toolPath)
         using let input = BinaryReader(Console.OpenStandardInput(), Encoding.UTF8)
         using let output = BinaryWriter(Console.OpenStandardOutput(), Encoding.UTF8)
+        using let stdout = WorkerOutput(output, WorkerProtocol.Stdout)
+        using let stderr = WorkerOutput(output, WorkerProtocol.Stderr)
+        Console.SetOut(stdout)
+        Console.SetError(stderr)
         output.Write(WorkerProtocol.Version)
         output.Write(identity)
         output.Flush()
@@ -43,54 +47,38 @@ internal shared class WorkerServer {
             }
             output.Write(WorkerProtocol.Accepted)
             output.Flush()
-            let exitCode = Compile(output, directory, arguments, environment, grant, compile)
-            GC.Collect()
-            GC.WaitForPendingFinalizers()
-            var retained = GC.GetTotalMemory(forceFullCollection: true)
-            var reusable = canReuse?.Invoke() ?? true
-            if !reusable {
-                // Collectible load contexts can require a second finalizer cycle.
-                // Retry once; persistent analyzer roots still retire the worker.
-                GC.WaitForPendingFinalizers()
-                GC.Collect()
-                retained = GC.GetTotalMemory(forceFullCollection: false)
-                reusable = canReuse?.Invoke() ?? true
-            }
-            using let process = Process.GetCurrentProcess()
-            let workingSet = process.WorkingSet64
-            let retire = request == WorkerProtocol.MaxRequests ||
-                retained >= WorkerProtocol.MaxRetainedBytes ||
-                workingSet >= WorkerProtocol.MaxWorkingSetBytes ||
-                !reusable
-            lock output {
-                output.Write(WorkerProtocol.Completed)
-                output.Write(exitCode)
-                output.Write(retire)
-                output.Write(retained)
-                output.Write(workingSet)
-                output.Flush()
-            }
-            if retire {
+            if RunRequest(
+                output,
+                stdout,
+                stderr,
+                directory,
+                arguments,
+                environment,
+                grant,
+                compile,
+                canReuse,
+                request
+            ) {
                 return 0
             }
         }
         return 0
     }
 
-    private func Compile(
+    private func RunRequest(
         output BinaryWriter,
+        stdout WorkerOutput,
+        stderr WorkerOutput,
         directory string,
         arguments[]string,
         environment Dictionary[string, string],
         grant int32,
-        compile([]string) -> int32
-    ) int32 {
+        compile([]string) -> int32,
+        canReuse(() -> bool)?,
+        request int32
+    ) bool {
         let oldDirectory = Environment.CurrentDirectory
         let oldEnvironment = Environment.GetEnvironmentVariables()
-        let oldOut = Console.Out
-        let oldError = Console.Error
-        using let stdout = WorkerOutput(output, WorkerProtocol.Stdout)
-        using let stderr = WorkerOutput(output, WorkerProtocol.Stderr)
         try {
             for entry DictionaryEntry in oldEnvironment {
                 Environment.SetEnvironmentVariable(cast[string](entry.Key), nil)
@@ -100,14 +88,38 @@ internal shared class WorkerServer {
             }
             Environment.SetEnvironmentVariable("GSHARP_WORKER_GRANT", grant.ToString())
             Environment.CurrentDirectory = directory
-            Console.SetOut(stdout)
-            Console.SetError(stderr)
-            return compile(arguments)
-        } finally {
+            let exitCode = compile(arguments)
+            GC.Collect()
+            GC.WaitForPendingFinalizers()
+            var retained = GC.GetTotalMemory(forceFullCollection: true)
+            GC.WaitForPendingFinalizers()
+            var reusable = canReuse?.Invoke() ?? true
+            if !reusable {
+                // Collectible load contexts can require a second finalizer cycle.
+                // Retry once; persistent analyzer roots still retire the worker.
+                GC.Collect()
+                GC.WaitForPendingFinalizers()
+                retained = GC.GetTotalMemory(forceFullCollection: false)
+                reusable = canReuse?.Invoke() ?? true
+            }
+            using let process = Process.GetCurrentProcess()
+            let workingSet = process.WorkingSet64
+            let retire = request == WorkerProtocol.MaxRequests ||
+                retained >= WorkerProtocol.MaxRetainedBytes ||
+                workingSet >= WorkerProtocol.MaxWorkingSetBytes ||
+                !reusable
             stdout.Complete()
             stderr.Complete()
-            Console.SetOut(oldOut)
-            Console.SetError(oldError)
+            lock output {
+                output.Write(WorkerProtocol.Completed)
+                output.Write(exitCode)
+                output.Write(retire)
+                output.Write(retained)
+                output.Write(workingSet)
+                output.Flush()
+            }
+            return retire
+        } finally {
             Environment.CurrentDirectory = oldDirectory
             for entry DictionaryEntry in Environment.GetEnvironmentVariables() {
                 Environment.SetEnvironmentVariable(cast[string](entry.Key), nil)
