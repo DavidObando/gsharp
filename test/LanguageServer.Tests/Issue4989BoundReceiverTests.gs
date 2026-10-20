@@ -25,6 +25,47 @@ import Xunit
 /// symbol lookup on `s.LoadAsync()` resolve to the interface member, never to
 /// a same-named member of one implementation.
 open class Issue4989BoundReceiverTests {
+    @Fact
+    func Issue5035_BareConstantPrefix_PreservesExactMethodAndRange() {
+        const source = `package Repro
+class Holder {
+    shared {
+        const Value int32 = 1
+        func Run() {
+            let competing = System.Text.StringBuilder().ToString()
+            let indexed = Value.ToString()[^1]
+            let control = Holder.Value.ToString()[^1]
+        }
+    }
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let method = typeof(int32).GetMethod("ToString", Type.EmptyTypes)
+        Assert.Equal(
+            method,
+            BoundSemantics.GetImportedMember(compilation, TokenAt(content, source, "ToString()[^1]", 1))
+        )
+        Assert.Equal(
+            method,
+            BoundSemantics.GetImportedMember(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+        )
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]"),
+            "ToString",
+            "func (int32) ToString() string"
+        )
+        AssertIndexedHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ToString()[^1]", 1),
+            "ToString",
+            "func (int32) ToString() string"
+        )
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)

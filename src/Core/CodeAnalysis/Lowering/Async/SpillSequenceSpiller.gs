@@ -1135,6 +1135,13 @@ shared class SpillSequenceSpiller {
             if innerSpill != nil {
                 locals.AddRange(innerSpill.Locals)
                 sideEffects.AddRange(innerSpill.SideEffects)
+                // This closed spill ran on the exact recorded operand. Await its
+                // exact returned value after its own locals/effects, not a value
+                // discovered by scanning an arbitrary block or replacement.
+                if object.ReferenceEquals(awaitExpr.LogicalCompletionOperand, awaitExpr.Expression) &&
+                    object.ReferenceEquals(innerExpr, innerSpill.Value) {
+                    awaitNode.RecordLogicalCompletion(innerExpr)
+                }
             }
             if awaitExpr.Type == TypeSymbol.Void {
                 sideEffects.Add(BoundExpressionStatement(nil, awaitNode))

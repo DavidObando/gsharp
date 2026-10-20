@@ -232,6 +232,14 @@ one exact-operand receipt, retained only across verified same-selected-operation
 copies. Readers/inference cross that receipt without a logical receiver step;
 authored calls to the same runtime wait API receive no receipt or reclassification.
 
+Completion receipt transfer also verifies the operand: it must be unchanged or a
+same-selected-operation copy at the original syntax, with its actual callable,
+closed owner and method arguments retained. The outer completion's identity alone
+does not prove this. The closed spill producer may separately retain a receipt on
+the exact value returned by spilling the recorded operand, alongside that result's
+own locals/effects; generic copies never scan blocks or follow arbitrary variables.
+Constant folding preserves the field read's syntax even without static qualifiers.
+
 Representation-changing constant folding retains the actual selected source
 field read (its `FieldSymbol` and effective closed owner), not just a literal
 value or member name. A verified fold carries that semantic association to

@@ -49,7 +49,10 @@ abstract class BoundExpression : BoundNode {
         if this is BoundAwaitExpression awaited && copy is BoundAwaitExpression completed && object.ReferenceEquals(
             LogicalCompletionOperand,
             awaited.Expression
-        ) {
+        ) &&
+            awaited
+            .Expression
+            .IsSameSelectedOperationCopy(completed.Expression) {
             completed.RecordLogicalCompletion(completed.Expression)
         } else if this is BoundImportedCallExpression call &&
             copy is BoundImportedCallExpression completedCall &&
@@ -66,10 +69,16 @@ abstract class BoundExpression : BoundNode {
             SameSelectedCall(copy) &&
             call
             .ArgumentRefKinds
-            .Equals(completedCall.ArgumentRefKinds) {
+            .Equals(completedCall.ArgumentRefKinds) && call.Arguments[0].IsSameSelectedOperationCopy(
+            completedCall.Arguments[0]
+        ) {
             completedCall.RecordLogicalCompletion(completedCall.Arguments[0])
         }
     }
+
+    private func IsSameSelectedOperationCopy(copy BoundExpression) bool ->
+    object.ReferenceEquals(this, copy) ||
+        (Syntax != nil && object.ReferenceEquals(Syntax, copy.Syntax) && SameSelectedCall(copy))
 
     internal prop StaticQualifierType TypeSymbol? {
         get;
@@ -208,6 +217,60 @@ abstract class BoundExpression : BoundNode {
             call
             .TypeArgumentSymbols
             .Equals(replacement.TypeArgumentSymbols)
+        case call is BoundImportedInstanceCallExpression when copy is BoundImportedInstanceCallExpression replacement:
+        object.ReferenceEquals(call.Method, replacement.Method) && object.ReferenceEquals(
+            call.Receiver.Type,
+            replacement.Receiver.Type
+        ) &&
+            object.ReferenceEquals(
+            call.ConstrainedReceiverTypeParameter,
+            replacement.ConstrainedReceiverTypeParameter
+        ) &&
+            object.ReferenceEquals(call.ConstrainedInterfaceType, replacement.ConstrainedInterfaceType) &&
+            call.IsNonVirtualBaseCall == replacement.IsNonVirtualBaseCall &&
+            call
+            .TypeArgumentSymbols
+            .Equals(replacement.TypeArgumentSymbols) && call.ArgumentRefKinds.Equals(replacement.ArgumentRefKinds)
+        case call is BoundUserInstanceCallExpression when copy is BoundUserInstanceCallExpression replacement:
+        object.ReferenceEquals(call.Method, replacement.Method) && object.ReferenceEquals(
+            call.Receiver.Type,
+            replacement.Receiver.Type
+        ) &&
+            object.ReferenceEquals(
+            call.ConstrainedReceiverTypeParameter,
+            replacement.ConstrainedReceiverTypeParameter
+        ) &&
+            object.ReferenceEquals(call.ConstrainedInterfaceType, replacement.ConstrainedInterfaceType) &&
+            call
+            .MethodTypeArguments
+            .Equals(replacement.MethodTypeArguments)
+        case call is BoundBaseClassCallExpression when copy is BoundBaseClassCallExpression replacement:
+        object.ReferenceEquals(call.BaseClass, replacement.BaseClass) && object.ReferenceEquals(
+            call.Method,
+            replacement.Method
+        ) &&
+            object.ReferenceEquals(call.Property, replacement.Property) &&
+            call.IsSetterAccessor == replacement.IsSetterAccessor &&
+            call
+            .MethodTypeArguments
+            .Equals(replacement.MethodTypeArguments)
+        case call is BoundBaseInterfaceCallExpression when copy is BoundBaseInterfaceCallExpression replacement:
+        object.ReferenceEquals(call.Interface, replacement.Interface) && object.ReferenceEquals(
+            call.Method,
+            replacement.Method
+        )
+        case call is BoundClrStaticCallExpression when copy is BoundClrStaticCallExpression replacement:
+        object.ReferenceEquals(call.Method, replacement.Method) && call.ArgumentRefKinds.Equals(
+            replacement.ArgumentRefKinds
+        )
+        case call is BoundIndirectCallExpression when copy is BoundIndirectCallExpression replacement:
+        object.ReferenceEquals(call.FunctionType, replacement.FunctionType) && object.ReferenceEquals(
+            call.Target,
+            replacement.Target
+        ) &&
+            call
+            .ArgumentRefKinds
+            .Equals(replacement.ArgumentRefKinds)
         default: false
     }
 

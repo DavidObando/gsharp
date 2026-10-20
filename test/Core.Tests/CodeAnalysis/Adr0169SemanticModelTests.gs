@@ -7,6 +7,7 @@ package GSharp.Core.Tests.CodeAnalysis
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Lowering.Async
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
@@ -20,6 +21,157 @@ import Xunit
 /// syntax→bound-node, syntax→type queries), (cref:Symbol.DeclaringSyntaxNodes),
 /// and (cref:GSharpSyntaxWalker).
 open class Adr0169SemanticModelTests {
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func CompletionReceipt_RejectsUnrelatedVirtualOperandReplacement(blocking bool, sameSelected bool) {
+        let source = `package Query
+class Holder {
+    shared {
+        suspend func First(value int32) string -> "first"
+        suspend func Second(value int32) string -> "second"
+    }
+}
+CALLER_OPEN
+    let first = Holder.First(1)[^1]
+    let second = Holder.Second(2)[^1]
+CALLER_CLOSE
+`.Replace(
+            "CALLER_OPEN",
+            if blocking {
+                ""
+            } else {
+                "suspend func Run() {"
+            }
+        )
+            .Replace(
+            "CALLER_CLOSE",
+            if blocking {
+                ""
+            } else {
+                "}"
+            }
+        )
+        let (_, model, tree) = CreateQualifierModel(source)
+        let original = CompletionInitializer(model, tree, "first")
+        let other = CompletionInitializer(model, tree, "second")
+        let operand = Assert.IsType[BoundCallExpression](original.LogicalCompletionOperand)
+        let otherCall = Assert.IsType[BoundCallExpression](other.LogicalCompletionOperand)
+        Assert.Same(operand.Type, otherCall.Type)
+        let positive = QualifierChildRewriter().Apply(original)
+        Assert.NotSame(original, positive)
+        Assert.NotNull(positive.LogicalCompletionOperand)
+        let replacement = BoundCallExpression(
+            if sameSelected {
+                otherCall.Syntax
+            } else {
+                operand.Syntax
+            },
+            if sameSelected {
+                operand.Function
+            } else {
+                otherCall.Function
+            },
+            operand.Arguments,
+            operand.ReturnType,
+            operand.IsConditionalElided
+        ){
+            StaticGenericOwnerType = operand.StaticGenericOwnerType,
+            StaticGenericInterfaceOwnerType = operand.StaticGenericInterfaceOwnerType,
+            MethodTypeArguments = operand.MethodTypeArguments
+        }
+        Assert.Same(operand.Type, replacement.Type)
+        let changed = CompletionOperandReplacementRewriter(operand, replacement).Apply(original)
+        Assert.NotSame(original, changed)
+        Assert.Null(changed.LogicalCompletionOperand)
+        Assert.Same(operand, original.LogicalCompletionOperand)
+    }
+
+    @Fact
+    func CompletionReceipt_ActualNestedAwaitSpill_RetainsExactReturnedCall() {
+        const source = `package Query
+class Holder {
+    shared {
+        suspend func Inner(value int32) string -> "inner"
+        suspend func Outer(value string) string -> value
+    }
+}
+suspend func Run() {
+    let result = Holder.Outer(Holder.Inner(1))
+}
+`
+        let (compilation, _, _) = CreateQualifierModel(source)
+        let body = compilation
+            .BoundProgram
+            .Functions
+            .Single((entry KeyValuePair[FunctionSymbol, BoundBlockStatement]) -> entry.Key.Name == "Run")
+            .Value
+        let original = body
+            .DescendantsAndSelf()
+            .OfType[BoundAwaitExpression]()
+            .Single((a BoundAwaitExpression) -> a.Expression is BoundCallExpression{Function: {Name: "Outer"}})
+        let originalCall = Assert.IsType[BoundCallExpression](original.LogicalCompletionOperand)
+        let spilled = SpillSequenceSpiller.Rewrite(body)
+        let completion = spilled
+            .DescendantsAndSelf()
+            .OfType[BoundAwaitExpression]()
+            .Single((a BoundAwaitExpression) -> a.Expression is BoundCallExpression{Function: {Name: "Outer"}})
+        let returned = Assert.IsType[BoundCallExpression](completion.Expression)
+        Assert.NotSame(originalCall, returned)
+        Assert.Same(originalCall.Function, returned.Function)
+        Assert.IsType[BoundVariableExpression](returned.Arguments[0])
+        Assert.Same(returned, completion.LogicalCompletionOperand)
+        Assert.Same(originalCall, original.LogicalCompletionOperand)
+    }
+
+    @Fact
+    func BareConstantFold_RetainsNameAnchorWithoutInventingStaticQualifier() {
+        const source = `package Query
+class Holder {
+    shared {
+        const Value int32 = 1
+        func Run() { let first = Value.ToString() }
+    }
+}
+`
+        let (_, model, tree) = CreateQualifierModel(source)
+        let root = QualifierInitializer(tree, "first")
+        let call = Assert.IsType[BoundImportedInstanceCallExpression](model.GetBoundNode(root))
+        let literal = Assert.IsType[BoundLiteralExpression](call.Receiver)
+        Assert.Same(root.LeftPart, literal.Syntax)
+        Assert.Same(literal, model.GetBoundNode(root.LeftPart))
+        Assert.Null(literal.StaticQualifierType)
+        Assert.Null(literal.StaticMemberSyntax)
+    }
+
+    private func CompletionInitializer(model SemanticModel, tree SyntaxTree, name string) BoundExpression {
+        let plan = Assert.IsType[BoundBlockExpression](model.GetBoundNode(QualifierInitializer(tree, name)))
+        return Assert.IsAssignableFrom[BoundExpression](
+            Assert.IsType[BoundVariableDeclaration](plan.Statements[0]).Initializer
+        )
+    }
+
+    private class CompletionOperandReplacementRewriter : BoundTreeRewriter {
+        private let target BoundExpression
+        private let replacement BoundExpression
+
+        init(target BoundExpression, replacement BoundExpression) {
+            this.target = target
+            this.replacement = replacement
+        }
+
+        func Apply(node BoundExpression) BoundExpression -> RewriteExpression(node)
+
+        protected override func RewriteCallExpression(node BoundCallExpression) BoundExpression ->
+        if object.ReferenceEquals(node, target) {
+            replacement
+        } else {
+            base.RewriteCallExpression(node)
+        }
+    }
+
     @Fact
     func AuthoredBlockingWait_InAsyncCaller_RemainsTheSelectedRuntimeCall() {
         const source = `package Query
