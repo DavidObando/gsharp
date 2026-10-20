@@ -10,7 +10,7 @@ import System.Threading.Tasks
 
 /// Serial compiler host. Process isolation is the cancellation boundary.
 internal shared class WorkerServer {
-    internal func Run(toolPath string, compile([]string) -> int32) int32 {
+    internal func Run(toolPath string, compile([]string) -> int32, canReuse(() -> bool)? = nil) int32 {
         let identity = WorkerProtocol.ToolIdentity(toolPath)
         using let input = BinaryReader(Console.OpenStandardInput(), Encoding.UTF8)
         using let output = BinaryWriter(Console.OpenStandardOutput(), Encoding.UTF8)
@@ -56,7 +56,8 @@ internal shared class WorkerServer {
             let workingSet = process.WorkingSet64
             let retire = request == WorkerProtocol.MaxRequests ||
                 retained >= WorkerProtocol.MaxRetainedBytes ||
-                workingSet >= WorkerProtocol.MaxWorkingSetBytes
+                workingSet >= WorkerProtocol.MaxWorkingSetBytes ||
+                !(canReuse?.Invoke() ?? true)
             output.Write(WorkerProtocol.Completed)
             output.Write(exitCode)
             output.Write(retire)
@@ -115,6 +116,8 @@ internal shared class WorkerServer {
         private let output BinaryWriter
         private let kind uint8
         private let line StringBuilder = StringBuilder()
+        private var hasFragment bool
+        private var carriageReturn bool
 
         init(output BinaryWriter, kind uint8) {
             this.output = output
@@ -125,12 +128,19 @@ internal shared class WorkerServer {
 
         override func Write(value char) {
             lock output {
-                if value == '\n' {
-                    Emit()
-                } else if value != '\r' {
+                if value == '\r' {
+                    Emit(completeLine: true)
+                    carriageReturn = true
+                } else if value == '\n' {
+                    if !carriageReturn {
+                        Emit(completeLine: true)
+                    }
+                    carriageReturn = false
+                } else {
+                    carriageReturn = false
                     line.Append(value)
                     if line.Length >= 16384 {
-                        Flush()
+                        Emit(completeLine: false)
                     }
                 }
             }
@@ -138,17 +148,19 @@ internal shared class WorkerServer {
 
         override func Flush() {
             lock output {
-                if line.Length > 0 {
-                    Emit()
+                if line.Length > 0 || hasFragment {
+                    Emit(completeLine: true)
                 }
             }
         }
 
-        private func Emit() {
+        private func Emit(completeLine bool) {
             output.Write(kind)
+            output.Write(completeLine)
             output.Write(line.ToString())
             output.Flush()
             line.Clear()
+            hasFragment = !completeLine
         }
     }
 }
