@@ -69,14 +69,16 @@ describe('shared lexical parity cases through the TextMate engine', () => {
     const loaded = (await registry.loadGrammar('source.gsharp'))!;
     let stack = INITIAL;
     const scopes: string[][] = [];
-    for (const line of source.split('\n')) {
+    const lines = source.split(/(\r\n|\r|\n)/);
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 2) {
+      const line = lines[lineIndex];
       const result = loaded.tokenizeLine(line, stack);
       for (const token of result.tokens) {
         for (let i = token.startIndex; i < Math.min(token.endIndex, line.length); i++) {
           scopes.push(token.scopes);
         }
       }
-      scopes.push([]);
+      for (let i = 0; i < (lines[lineIndex + 1]?.length ?? 0); i++) scopes.push([]);
       stack = result.ruleStack;
     }
     const categories: Record<string, RegExp> = {

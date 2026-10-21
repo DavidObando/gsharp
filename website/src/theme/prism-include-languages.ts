@@ -12,11 +12,26 @@ import siteConfig from '@generated/docusaurus.config';
 import type * as PrismNamespace from 'prismjs';
 import type {Optional} from 'utility-types';
 
-// A nullable array element type precedes its initializer, not a ternary arm.
-const nullableArrayType = /(?:\[[^\]\r\n]*\]\s*)+\$?[\p{L}_][\p{L}\p{Nd}_]*(?:\s*\.\s*\$?[\p{L}_][\p{L}\p{Nd}_]*|\s*\[[^\]\r\n]*\])*\s*\?(?=\s*\{)/u;
-const conditionalQuestion = /(?<!\?)\?(?![?.\[]|\s*[),\]}:])/u;
-const nullableArrayTypeAt = new RegExp(`^${nullableArrayType.source}`, 'u');
-const conditionalQuestionAt = new RegExp(`^${conditionalQuestion.source}`, 'u');
+const identifier = /\$?[\p{L}_][\p{L}\p{Nd}_]*/uy;
+
+function wordAt(source: string, index: number): string {
+  identifier.lastIndex = index;
+  return identifier.exec(source)?.[0] ?? '';
+}
+
+function skipTrivia(source: string, index: number): number {
+  while (index < source.length) {
+    if (/\s/.test(source[index])) index++;
+    else if (source.startsWith('//', index)) {
+      index += 2;
+      while (index < source.length && !/[\r\n]/.test(source[index])) index++;
+    } else if (source.startsWith('/*', index)) {
+      const close = source.indexOf('*/', index + 2);
+      index = close < 0 ? source.length : close + 2;
+    } else break;
+  }
+  return index;
+}
 
 function quoteMode(source: string, index: number): string {
   return source[index] === '"' && source[index - 1] === 'b' &&
@@ -31,12 +46,8 @@ function balancedPattern(start: RegExp): RegExp {
     start.lastIndex = this.lastIndex;
     let match: RegExpExecArray | null;
     while ((match = start.exec(source))) {
-      if (match[0].startsWith('/') || (match[0].startsWith('[') && match[0].endsWith('?'))) {
-        this.lastIndex = start.lastIndex;
-        return match;
-      }
       const first = match.index + (match[0] === '${' ? 1 : 0);
-      const closing: Record<string, string> = {'{': '}', '[': ']', '(': ')', '?': ':'};
+      const closing: Record<string, string> = {'{': '}', '[': ']', '(': ')'};
       const stack = [closing[source[first]] ?? quoteMode(source, first)];
       let i = first + 1;
       for (; i < source.length && stack.length; i++) {
@@ -50,24 +61,10 @@ function balancedPattern(start: RegExp): RegExp {
             stack.push('}');
             i++;
           } else if (top !== '`' && /[\r\n]/.test(c)) break;
-        } else if (c === '/' && source[i + 1] === '/') {
-          const newline = source.indexOf('\n', i + 2);
-          i = newline < 0 ? source.length : newline;
-        } else if (c === '/' && source[i + 1] === '*') {
-          const close = source.indexOf('*/', i + 2);
-          i = close < 0 ? source.length : close + 1;
+        } else if (c === '/' && /[/*]/.test(source[i + 1] ?? '')) {
+          i = skipTrivia(source, i) - 1;
         } else if (c === '"' || c === "'" || c === '`') {
           stack.push(quoteMode(source, i));
-        } else if (source[first] === '?' && (c === '[' || c === '?')) {
-          const arrayType = c === '[' ? nullableArrayTypeAt.exec(source.slice(i)) : null;
-          if (arrayType) {
-            i += arrayType[0].length - 1;
-          } else if (c === '[') {
-            stack.push(']');
-          } else if (top === ':' && conditionalQuestionAt.test(source.slice(i)) &&
-            source[i - 1] !== '?') {
-            stack.push(':');
-          }
         } else if ('{[('.includes(c)) {
           stack.push(c === '{' ? '}' : c === '[' ? ']' : ')');
         } else if (c === top) {
@@ -86,30 +83,122 @@ function balancedPattern(start: RegExp): RegExp {
   return pattern;
 }
 
+function groupEnd(source: string, index: number): number {
+  const group = balancedPattern(/["'`([{]/gu);
+  group.lastIndex = index;
+  const match = group.exec(source);
+  return match?.index === index ? group.lastIndex : index;
+}
+
+// Read a type only in a type position (Parser.TypeClauses), never infer it
+// from the operator that follows '?'. Delimited type arguments remain opaque.
+function typeEnd(source: string, index: number): number {
+  const start = index;
+  let signatureEnd = start;
+  while (index < source.length) {
+    index = skipTrivia(source, index);
+    if (source[index] === '*') {
+      index++;
+      continue;
+    }
+    if (source[index] === '[') {
+      const end = groupEnd(source, index);
+      if (end === index) return start;
+      index = skipTrivia(source, end);
+      if (source[index] === '?' && source[index + 1] !== '?') index++;
+      continue;
+    }
+    const word = wordAt(source, index);
+    const afterWord = skipTrivia(source, index + word.length);
+    const nextWord = wordAt(source, afterWord);
+    if ((word === 'readonly' && ['managed', 'slice'].includes(nextWord)) ||
+      (word === 'async' && (['func', 'sequence'].includes(nextWord) || source[afterWord] === '(')) ||
+      (['in', 'out'].includes(word) && nextWord === 'chan')) {
+      index = afterWord;
+      continue;
+    }
+    if (word) {
+      index += word.length;
+      while (true) {
+        const next = skipTrivia(source, index);
+        if (source[next] === '[') {
+          const end = groupEnd(source, next);
+          if (end === next) return start;
+          index = end;
+        } else if (source[next] === '.' && wordAt(source, skipTrivia(source, next + 1))) {
+          index = skipTrivia(source, next + 1);
+          index += wordAt(source, index).length;
+        } else break;
+      }
+      if (!['func', 'unmanaged'].includes(word)) {
+        const suffix = skipTrivia(source, index);
+        return source[suffix] === '?' && !/[?.]/.test(source[suffix + 1] ?? '')
+          ? suffix + 1 : index;
+      }
+    }
+    index = skipTrivia(source, index);
+    if (source[index] !== '(') return signatureEnd;
+    const end = groupEnd(source, index);
+    if (end === index) return start;
+    signatureEnd = end;
+    index = skipTrivia(source, end);
+    if (source[index] === '?' && !/[?.]/.test(source[index + 1] ?? '')) return index + 1;
+    if (source.startsWith('->', index)) index += 2;
+    else if (!word) return end;
+    // Function return types can themselves be function, tuple or array types.
+  }
+  return signatureEnd;
+}
+
 function interpolationFormatPattern(): RegExp {
   const pattern = /:[\s\S]*$/g;
   pattern.exec = function(source: string): RegExpExecArray | null {
-    const opaque = balancedPattern(new RegExp(
-      `${nullableArrayType.source}|\\/\\/[^\\r\\n]*|\\/\\*[\\s\\S]*?\\*\\/|["'\`([{]|${conditionalQuestion.source}`,
-      'gu',
-    ));
     let cursor = 0;
+    let conditionals = 0;
+    let memberName = false;
     while (cursor < source.length) {
-      opaque.lastIndex = cursor;
-      const nested = opaque.exec(source);
-      const colon = source.indexOf(':', cursor);
-      if (colon < 0) break;
-      if (nested && nested.index < colon) {
-        cursor = opaque.lastIndex;
-      } else if (colon >= this.lastIndex) {
+      cursor = skipTrivia(source, cursor);
+      const word = wordAt(source, cursor);
+      if (word) {
+        cursor += word.length;
+        if (!memberName && (word === 'as' || word === 'is')) cursor = typeEnd(source, cursor);
+        else if (!memberName && word === 'object') {
+          const header = skipTrivia(source, cursor);
+          if (source[header] === ':') cursor = header + 1;
+        }
+        memberName = false;
+        continue;
+      }
+      const c = source[cursor];
+      if (c === '[') {
+        const end = typeEnd(source, cursor);
+        if (end > cursor && source[skipTrivia(source, end)] === '{') {
+          cursor = end;
+          continue;
+        }
+      }
+      if (c && '"\'`([{'.includes(c)) {
+        const end = groupEnd(source, cursor);
+        if (end === cursor) break;
+        cursor = end;
+        memberName = false;
+        continue;
+      }
+      memberName = c === '.';
+      if (c === '?') {
+        if (source[cursor + 1] === '?' || source[cursor + 1] === '.') {
+          memberName = source[cursor + 1] === '.';
+          cursor++;
+        } else if (source[cursor + 1] !== '[') conditionals++;
+      } else if (c === ':' && conditionals) conditionals--;
+      else if (c === ':' && cursor >= this.lastIndex) {
         const result = /:[\s\S]*$/g;
-        result.lastIndex = colon;
+        result.lastIndex = cursor;
         const match = result.exec(source);
         this.lastIndex = source.length;
         return match;
-      } else {
-        cursor = colon + 1;
-      }
+      } else if (c === ':') break;
+      cursor++;
     }
     this.lastIndex = 0;
     return null;
@@ -318,7 +407,7 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
   if (stringInside && stringInside.interpolation) {
     stringInside.interpolation.inside = {
       'interpolation-punctuation': {
-        pattern: /^\$\{?|\}$/,
+        pattern: /^\$\{|\}$/,
         alias: 'punctuation',
       },
       format: {

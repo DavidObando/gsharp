@@ -113,7 +113,9 @@
         "0": { "name": "punctuation.definition.interpolation.end.gsharp" }
       },
       "patterns": [
-        { "include": "#interpolation-nullable-array-type" },
+        { "include": "#interpolation-type-context" },
+        { "include": "#interpolation-member-name" },
+        { "include": "#interpolation-object-header" },
         { "include": "#interpolation-conditional" },
         { "include": "#interpolation-format" },
         { "include": "#interpolation-alignment" },
@@ -123,19 +125,51 @@
         { "include": "source.gsharp" }
       ]
     },
-    "interpolation-nullable-array-type": {
-      "begin": "(?=(?:\\[[^\\]\\r\\n]*\\]\\s*)+\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*(?:\\s*\\.\\s*\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*|\\s*\\[[^\\]\\r\\n]*\\])*\\s*\\?(?=\\s*\\{))",
-      "end": "(?<=\\?)",
+    "interpolation-type-context": {
+      "comment": "Read complete types after as/is and before array initializers. Oniguruma subroutines protect nested generic, tuple and function types without a fixed depth.",
+      "match": "(?<w>(?:\\s|/\\*.*?\\*/|//[^\\r\\n]*)*){0}(?<n>\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*){0}(?<a>\\[\\g<w>(?:\\g<t>(?:,\\g<w>\\g<t>)*)?\\g<w>\\]){0}(?<p>\\(\\g<w>(?:(?:\\g<n>\\s+)?\\g<t>(?:,\\g<w>(?:\\g<n>\\s+)?\\g<t>)*)?\\g<w>\\)){0}(?<t>(?:(?:\\[\\g<w>(?:[0-9][0-9a-zA-Z_]*|(?:,\\g<w>)*)\\g<w>\\]|\\*)\\g<w>(?:\\?(?!\\?))?\\g<w>)*(?:(?:readonly|async|in|out)\\s+)*(?:func\\g<w>\\g<p>(?:\\g<w>\\g<t>)?|unmanaged(?:\\g<a>)?\\g<w>\\g<p>\\g<w>->\\g<w>\\g<t>|\\g<p>(?:\\g<w>->\\g<w>\\g<t>)?|\\g<n>(?:\\g<w>\\g<a>)?(?:\\g<w>\\.\\g<w>\\g<n>(?:\\g<w>\\g<a>)?)*)\\g<w>(?:\\?(?![?.])\\g<w>)?){0}(?:(?<![\\p{L}\\p{Nd}_$])(?:as|is)(?![\\p{L}\\p{Nd}_])\\g<w>\\g<t>|(?=\\[)\\g<t>(?=\\{))",
+      "captures": {
+        "0": {
+          "patterns": [
+            { "include": "source.gsharp" }
+          ]
+        }
+      }
+    },
+    "interpolation-object-header": {
+      "begin": "(?<![\\p{L}\\p{Nd}_$])(object)(?![\\p{L}\\p{Nd}_])",
+      "beginCaptures": {
+        "1": { "name": "keyword.other.gsharp" }
+      },
+      "end": "(?<=:)|(?=\\S)",
+      "applyEndPatternLast": true,
       "patterns": [
-        { "include": "source.gsharp" }
+        { "include": "#comments" },
+        {
+          "name": "punctuation.separator.gsharp",
+          "match": ":"
+        }
+      ]
+    },
+    "interpolation-member-name": {
+      "begin": "\\?\\.|(?<!\\.)\\.(?![.0-9])",
+      "end": "(?=\\S)",
+      "applyEndPatternLast": true,
+      "patterns": [
+        { "include": "#comments" },
+        { "include": "#escaped-identifiers" },
+        { "include": "#function-calls" },
+        { "include": "#identifiers" }
       ]
     },
     "interpolation-conditional": {
       "name": "meta.conditional.interpolation.gsharp",
-      "begin": "(?<!\\?)\\?(?![?.\\[]|\\s*[),\\]}:])",
+      "begin": "(?<!\\?)\\?(?![?.\\[])",
       "end": ":",
       "patterns": [
-        { "include": "#interpolation-nullable-array-type" },
+        { "include": "#interpolation-type-context" },
+        { "include": "#interpolation-member-name" },
+        { "include": "#interpolation-object-header" },
         { "include": "#interpolation-conditional" },
         { "include": "#interpolation-nested-braces" },
         { "include": "#interpolation-nested-parentheses" },
@@ -159,8 +193,6 @@
       "begin": "\\{",
       "end": "\\}",
       "patterns": [
-        { "include": "#interpolation-nullable-array-type" },
-        { "include": "#interpolation-conditional" },
         { "include": "#interpolation-nested-braces" },
         { "include": "#interpolation-nested-parentheses" },
         { "include": "#interpolation-nested-brackets" },
@@ -171,8 +203,6 @@
       "begin": "\\(",
       "end": "\\)",
       "patterns": [
-        { "include": "#interpolation-nullable-array-type" },
-        { "include": "#interpolation-conditional" },
         { "include": "#interpolation-nested-braces" },
         { "include": "#interpolation-nested-parentheses" },
         { "include": "#interpolation-nested-brackets" },
@@ -183,8 +213,6 @@
       "begin": "\\[",
       "end": "\\]",
       "patterns": [
-        { "include": "#interpolation-nullable-array-type" },
-        { "include": "#interpolation-conditional" },
         { "include": "#interpolation-nested-braces" },
         { "include": "#interpolation-nested-parentheses" },
         { "include": "#interpolation-nested-brackets" },

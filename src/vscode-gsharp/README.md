@@ -50,6 +50,9 @@ grammar to synchronize. The website registers its G# Prism grammar in
 `src/test/grammar-cases.json` lexical regression cases.
 Interpolation cases cover byte literals, nullable array elements, nested dollar
 escapes, and literal `$${...}` openers. Optional `absent` spans reject incorrect scopes.
+Type contexts protect nested generic nullable suffixes from conditional scanning.
+Anonymous-class header colons stay in expressions. Line comments accept CR, LF,
+and CRLF line endings.
 
 Lexical highlighting recognizes reserved/contextual words, escaped and Unicode
 identifiers, literal forms, interpolation, annotations, and operators. Contextual
