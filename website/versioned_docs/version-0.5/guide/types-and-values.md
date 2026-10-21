@@ -87,7 +87,7 @@ Console.WriteLine(p == q)
 
 ## Classes and interfaces
 
-Classes are reference-like and support primary constructors, explicit `init` constructors, fields, methods, properties, events, inheritance, and `shared` members. Classes are sealed by default for inheritance unless marked `open`. Methods that can be overridden are marked `open`; overriding methods use `override`. 
+Classes are reference-like and support primary constructors, explicit `init` constructors, fields, methods, properties, events, inheritance, and `shared` members. Classes are sealed by default for inheritance unless marked `open`. Methods that can be overridden are marked `open`; overriding methods use `override`.
 Interfaces define method, property, and event signatures. Interface methods may carry a body — a **default-interface method** (DIM). Classes implementing the interface inherit the default unless they declare their own override. A body-less (abstract) interface method is terminated by `;` — the universal no-body marker for `func` declarations (matching P/Invoke); a method with a `{ … }` body takes no `;`.
 
 ```gsharp
@@ -209,4 +209,4 @@ class Button {
 
 ## Generics and variance
 
-G# uses bracketed generics: declarations such as `class Box[T any] { ... }` and instantiations such as `Box[int32]`. Type parameters can use `in` and `out` variance markers and named constraints. The implementation supports metadata specs and inference, but some open or partially constructed generic shapes are erased to `object` in emit paths. 
+G# uses bracketed generics: declarations such as `class Box[T any] { ... }` and instantiations such as `Box[int32]`. Type parameters can use `in` and `out` variance markers and named constraints. The implementation supports metadata specs and inference, but some open or partially constructed generic shapes are erased to `object` in emit paths.

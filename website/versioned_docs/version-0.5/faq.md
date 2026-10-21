@@ -68,11 +68,11 @@ This is a recent change — earlier docs described G# as having no parameter def
 
 ## How do generics work?
 
-G# supports generic functions and types with bracketed CLR generic syntax, such as `func Id[T any](x T) T` and `Box[int32]`. The implementation emits **reified CLR generic metadata** end-to-end: user-declared generic types/methods carry `GenericParam` rows, signatures over `T` encode `Var`/`MVar`, closed CLR generics over an in-scope type parameter (`List[T]`) emit honest `GenericInstantiation` blobs, and open-bearing delegates (`func(T) U`) dispatch through reified `Func`N::Invoke` MemberRefs. Type-argument inference is implemented for supported cases. Variance markers `in` and `out` are available where the CLR supports them, especially interfaces. 
+G# supports generic functions and types with bracketed CLR generic syntax, such as `func Id[T any](x T) T` and `Box[int32]`. The implementation emits **reified CLR generic metadata** end-to-end: user-declared generic types/methods carry `GenericParam` rows, signatures over `T` encode `Var`/`MVar`, closed CLR generics over an in-scope type parameter (`List[T]`) emit honest `GenericInstantiation` blobs, and open-bearing delegates (`func(T) U`) dispatch through reified `Func`N::Invoke` MemberRefs. Type-argument inference is implemented for supported cases. Variance markers `in` and `out` are available where the CLR supports them, especially interfaces.
 
 ## What is the difference between structs, classes, data structs, data classes, and inline value classes?
 
-A `struct` is value-like, while a `class` is reference-like and can participate in class inheritance when marked `open`. A `data struct` is a value aggregate with synthesized structural equality and copy/update ergonomics; `data class` provides the reference-typed counterpart. An `inline struct` is a one-field readonly value wrapper for newtype-style modeling. 
+A `struct` is value-like, while a `class` is reference-like and can participate in class inheritance when marked `open`. A `data struct` is a value aggregate with synthesized structural equality and copy/update ergonomics; `data class` provides the reference-typed counterpart. An `inline struct` is a one-field readonly value wrapper for newtype-style modeling.
 
 ## How do I call .NET libraries?
 
