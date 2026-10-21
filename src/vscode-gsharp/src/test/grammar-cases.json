@@ -191,5 +191,8 @@
   {"name":"typeof primary keeps type suffix inside argument delimiters","source":"\"${typeof(List[int32?]?):G}\"","tokens":[["int32","type"],["G","format"]],"format":":G"},
   {"name":"generic intrinsic primary keeps pointer type arguments balanced","source":"unsafe { let result = \"${cast[*int32](pointer):G}\" }","tokens":[["int32","type"],["G","format"]],"format":":G"},
   {"name":"stackalloc primary keeps its simple element type before format","source":"unsafe { let result = \"${stackalloc [4]int32:G}\" }","tokens":[["int32","type"],["G","format"]],"format":":G"},
+  {"name":"nullable whole array composite conversion retains format","source":"\"${[]?object(value):G}\"","tokens":[["G","format"]],"format":":G"},
+  {"name":"nullable array element composite conversion allows separated arguments","source":"\"${[]string? (value):G}\"","tokens":[["string","type"],["G","format"]],"format":":G"},
+  {"name":"composite conversion shares nested type tails across argument trivia","source":"\"${[,]?List[string?]? /* conversion */\n(value):G}\"","tokens":[["string","type"],["/* conversion */","comment"],["G","format"]],"format":":G"},
   {"name":"comments suppress language tokens","source":"// class $if 0o17\n/* readonly managed */","tokens":[["class","comment"],["readonly","comment"]]}
 ]

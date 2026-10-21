@@ -363,8 +363,9 @@ function expressionEnd(source: string, cursor: number, patternOperand = false): 
       const prefix = groupEnd(source, cursor);
       let end = typeEnd(source, cursor);
       if (end === cursor) end = typeEnd(source, skipTrivia(source, prefix));
-      if (end > cursor && source[skipTrivia(source, end)] === '{') {
+      if (end > cursor && ['{', '('].includes(source[skipTrivia(source, end)])) {
         cursor = end;
+        operand = 'name';
         continue;
       }
     }

@@ -89,7 +89,8 @@ return modifiers. Optional `if let` annotations enter the same type reader
 before returning to the initializer expression. Pattern operands reuse
 expression scanning through the next combinator, including calls and nested
 parenthesized patterns.
-Creation headers reuse type tails (including runtime array dimensions), while
+Creation headers reuse type tails, including runtime array dimensions.
+Composite conversion arguments may follow the target type across trivia;
 completed receivers keep index/call suffixes in expression context.
 Before asserting an ambiguous interpolation's scopes, check its expression kind
 and `InterpolatedStringSegment.Format` with the compiler's `SyntaxTree.Parse`;
