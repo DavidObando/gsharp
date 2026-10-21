@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Generic member owners preserve swapped arguments** (issue #5092). Field and property access through source generic receivers such as `Cursor[B, A]` emits verifiable IL without collapsing the arguments. Nested argument types and composed generic base owners retain the receiver's exact construction.
+
 - **Source-declared pattern enumerator properties** (issue #5088). `for value in source` accepts a public readable instance `Current` property on a source-declared enumerator, as it already does for imported enumerators. Generic element types and mutable value-enumerator state are preserved.
 
 - **Allocation-free byte-string UTF-8 scalar iteration** (issue #5087, ADR-0204). `value.DecodeUtf8Scalars(policy)` returns concrete value-type `ByteString.Utf8Enumerable` with an independent value enumerator. Each `Utf8Item` reports its scalar value, relative byte offset and consumed byte length. Strict iteration is lazy and repeats failures at the same sequence start; replacement advances exactly one malformed byte. Logical substring bounds, BOM, embedded NUL and non-BMP scalars are preserved. Eager decoding shares the scalar decision without per-scalar strings. Code-point collections, Go translation and release/pin adoption remain deferred.

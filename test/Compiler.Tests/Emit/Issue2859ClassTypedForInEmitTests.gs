@@ -36,6 +36,66 @@ import Xunit
 /// name-keyed.
 open class Issue2859ClassTypedForInEmitTests {
     @Theory
+    @InlineData("public var Current A", "Current = First", "B", "Second", "")
+    @InlineData("prop Current A -> First", "", "B", "Second", "")
+    @InlineData("public var Current A", "Current = First", "[]B", "[]B{Second}", "[0]")
+    @InlineData("prop Current A -> First", "", "[]B", "[]B{Second}", "[0]")
+    func Issue5092_SwappedReceiverArgumentsPreserveCurrentOwner(
+        currentMember string,
+        update string,
+        elementType string,
+        firstArgument string,
+        elementAccess string
+    ) {
+        let source = `package i5092swapped
+import System
+struct Cursor[A, B](First A, Second B, Index int32) {
+` + currentMember + `
+    func MoveNext() bool {
+        Index += 1
+` + update + `
+        return Index <= 1
+    }
+    func GetEnumerator() Cursor[` + elementType + `, A] -> Cursor[` + elementType + `, A](` + firstArgument + `, First, 0)
+    func Take() ` + elementType + ` {
+        for value in this {
+            return value
+        }
+        return default(` + elementType + `)
+    }
+}
+func Main() {
+    Console.WriteLine(Cursor[string, int32]("left", 42, 0).Take()` + elementAccess + `)
+    Console.WriteLine(Cursor[int32, string](7, "right", 0).Take()` + elementAccess + `)
+}`
+        Assert.Equal("42\nright\n".ReplaceLineEndings(Environment.NewLine), CompileAndRun(source))
+    }
+
+    @Fact
+    func Issue5092_SwappedReceiverPreservesComposedBaseOwners() {
+        const source = `package i5092base
+import System
+open class Owner[A, B](First A, Second B) {
+    prop Value A -> First
+}
+open class Middle[A, B](first B, second []A) : Owner[B, []A](first, second) {}
+class Leaf[A, B](first B, second []A) : Middle[A, B](first, second) {
+    func Take(value Leaf[B, A]) A {
+        Console.WriteLine(value.First)
+        Console.WriteLine(value.Second[0])
+        return value.Value
+    }
+}
+func Main() {
+    let left = Leaf[string, int32](42, []string{"left"})
+    let right = Leaf[int32, string]("right", []int32{7})
+    Console.WriteLine(left.Take(right))
+    Console.WriteLine(right.Take(left))
+}`
+        Assert.Equal("right\n7\nright\n42\nleft\n42\n".ReplaceLineEndings(Environment.NewLine), CompileAndRun(source))
+    }
+
+    @Theory
     @InlineData("public var Current int32 = 3")
     @InlineData("prop Current int32 -> 3")
     func Issue5088_ExplicitInterfaceCurrentDoesNotHideOrdinaryCurrent(currentMember string) {
