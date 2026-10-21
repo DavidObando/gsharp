@@ -23,6 +23,191 @@ import Xunit
 /// and (cref:GSharpSyntaxWalker).
 open class Adr0169SemanticModelTests {
     @Fact
+    func DeferCompletion_CapturedOperand_PublishesAwaitInInferredCaller() {
+        const source = `package Query
+suspend func Cleanup() {}
+func Run() {
+    defer Cleanup()
+    defer Gsharp.Concurrency.Blocking.Wait(System.Threading.Tasks.ValueTask())
+}
+`
+        let (compilation, _, tree) = CreateQualifierModel(source)
+        let run = compilation.GlobalScope.Functions.Single((f FunctionSymbol) -> f.Name == "Run")
+        Assert.Equal("Inferred", run.SuspendingKind.ToString())
+        let body = compilation.BoundProgram.Functions[run]
+        let capture = body
+            .DescendantsAndSelf()
+            .OfType[BoundVariableDeclaration]()
+            .Single(
+            (d BoundVariableDeclaration) -> d.Initializer is BoundCallExpression call && call.Function.Name == "Cleanup"
+        )
+        let selected = Assert.IsType[BoundCallExpression](capture.Initializer)
+        let syntax = tree.Root.DescendantNodes().OfType[DeferStatementSyntax]().First().Expression
+        Assert.Same(syntax, selected.Syntax)
+        let completed = Assert.Single(body.DescendantsAndSelf().OfType[BoundAwaitExpression]())
+        let read = Assert.IsType[BoundVariableExpression](completed.Expression)
+        Assert.Same(capture.Variable, read.Variable)
+        Assert.Same(read, completed.LogicalCompletionOperand)
+        Assert.Same(syntax, completed.Syntax)
+        Assert.Contains(
+            body.DescendantsAndSelf().OfType[BoundTryStatement](),
+            (t BoundTryStatement) -> t.FinallyBlock?.DescendantsAndSelf().Contains(completed) == true
+        )
+        let authored = Assert.Single(
+            body
+                .DescendantsAndSelf()
+                .OfType[BoundImportedCallExpression]()
+                .Where(
+                (c BoundImportedCallExpression) -> c.Function.Method.DeclaringType?.FullName ==
+                "Gsharp.Concurrency.Blocking" && c.Function.Method.Name == "Wait"
+            )
+        )
+        Assert.Null(authored.LogicalCompletionOperand)
+        Assert.NotSame(read.Variable, Assert.IsType[BoundVariableExpression](authored.Arguments[0]).Variable)
+    }
+
+    @Theory
+    @InlineData(0)
+    @InlineData(1)
+    @InlineData(2)
+    func ImplicitConversion_PropertyAndCompletionCopies_RetainExactReceiver(mode int32) {
+        let receiver = switch mode {
+            case 0: "Text"
+            case 1: "(this.Text)"
+            default: "Make()"
+        }
+        let source = `package Query
+suspend func Make() string -> "text"
+func (value object) Tag() int32 -> 0
+class Holder {
+    prop Text string { get; set; }
+    CALLERfunc Run() {
+        scope {
+            let first = RECEIVER.Tag()
+            let authored = cast[object](RECEIVER).Tag()
+        }
+    }
+}
+`.Replace("RECEIVER", receiver).Replace(
+            "CALLER",
+            if mode == 2 {
+                "async "
+            } else {
+                ""
+            }
+        )
+        let (compilation, model, tree) = CreateQualifierModel(source)
+        let owner = compilation.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Holder")
+        let syntax = QualifierInitializer(tree, "first")
+        let call = Assert.IsType[BoundCallExpression](model.GetBoundNode(syntax))
+        let conversion = Assert.IsType[BoundConversionExpression](call.Arguments[0])
+        let value = conversion.Expression
+        Assert.Same(syntax.RightPart, call.Syntax)
+        Assert.Same(TypeSymbol.String, value.Type)
+        if mode == 2 {
+            let completion = Assert.IsType[BoundAwaitExpression](value)
+            let selected = Assert.IsType[BoundCallExpression](completion.Expression)
+            Assert.Same(selected, completion.LogicalCompletionOperand)
+            Assert.Same(syntax.LeftPart, selected.Syntax)
+            Assert.Equal("Make", selected.Function.Name)
+            let context = compilation
+                .BoundProgram
+                .Functions[owner.Methods.Single((f FunctionSymbol) -> f.Name == "Run")]
+                .DescendantsAndSelf()
+                .OfType[BoundVariableDeclaration]()
+                .Single((d BoundVariableDeclaration) -> d.Variable.Name == "ctx")
+                .Variable
+            Assert.Same(context, Assert.IsType[BoundVariableExpression](Assert.Single(selected.Arguments)).Variable)
+        } else {
+            let field = Assert.IsType[BoundFieldAccessExpression](value)
+            let property = owner.Properties.Single((p PropertySymbol) -> p.Name == "Text")
+            Assert.Same(property.BackingField, field.Field)
+            Assert.Same(property, TypeMemberModel.PropertyForBackingField(field.StructType, field.Field))
+        }
+        Assert.Same(value, conversion.ImplicitConversionOperand)
+        let authoredSyntax = QualifierInitializer(tree, "authored")
+        let authored = Assert.IsType[BoundConversionExpression](
+            Assert.IsType[BoundCallExpression](model.GetBoundNode(authoredSyntax)).Arguments[0]
+        )
+        Assert.Null(authored.ImplicitConversionOperand)
+        Assert.Same(TypeSymbol.Object, model.GetTypeInfo(authoredSyntax.LeftPart).Type)
+        Assert.Same(call.Function, model.GetSymbolInfo(syntax).Symbol)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(syntax).Type)
+    }
+
+    @Fact
+    func ImplicitConversion_EquivalentOperandProof_RejectsForeignStorageAndChangedCompletion() {
+        const source = `package Query
+class Box { prop Text string { get; set; } prop Other string { get; set; } }
+class Foreign { prop Text string { get; set; } }
+func (value object) Tag() int32 -> 0
+func Read(box Box) { let propertyRead = box.Text.Tag() }
+suspend func Make() string -> "text"
+suspend func Other() string -> "other"
+async func Run() { scope { let completed = Make().Tag() let other = Other().Tag() } }
+`
+        let (compilation, model, tree) = CreateQualifierModel(source)
+        let conversion = Assert.IsType[BoundConversionExpression](
+            Assert.IsType[BoundCallExpression](model.GetBoundNode(QualifierInitializer(tree, "propertyRead")))
+                .Arguments[0]
+        )
+        let property = Assert.IsType[BoundPropertyAccessExpression](conversion.Expression)
+        let box = compilation.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Box")
+        let foreign = compilation.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Foreign")
+        let storage = BoundFieldAccessExpression(
+            property.Syntax,
+            property.Receiver,
+            property.StructType,
+            property.Property.BackingField!!
+        )
+        let copied = Assert.IsType[BoundConversionExpression](
+            CompletionOperandReplacementRewriter(property, storage).Apply(conversion)
+        )
+        Assert.Same(storage, copied.ImplicitConversionOperand)
+        let replacements = []BoundExpression{
+            BoundFieldAccessExpression(
+                property.Syntax,
+                property.Receiver,
+                box,
+                box.Properties.Single((p PropertySymbol) -> p.Name == "Other").BackingField!!
+            ),
+            BoundFieldAccessExpression(
+                property.Syntax,
+                property.Receiver,
+                foreign,
+                foreign.Properties.Single((p PropertySymbol) -> p.Name == "Text").BackingField!!
+            )
+        }
+        for replacement in replacements {
+            let changed = Assert.IsType[BoundConversionExpression](
+                CompletionOperandReplacementRewriter(property, replacement).Apply(conversion)
+            )
+            Assert.Null(changed.ImplicitConversionOperand)
+        }
+        let completed = Assert.IsType[BoundConversionExpression](
+            Assert.IsType[BoundCallExpression](model.GetBoundNode(QualifierInitializer(tree, "completed"))).Arguments[0]
+        )
+        let awaited = Assert.IsType[BoundAwaitExpression](completed.Expression)
+        let selected = Assert.IsType[BoundCallExpression](awaited.Expression)
+        let other = Assert.IsType[BoundCallExpression](
+            Assert.IsType[BoundAwaitExpression](
+                Assert.IsType[BoundConversionExpression](
+                    Assert.IsType[BoundCallExpression](model.GetBoundNode(QualifierInitializer(tree, "other")))
+                        .Arguments[0]
+                )
+                    .Expression
+            )
+                .Expression
+        )
+        let different = BoundCallExpression(selected.Syntax, other.Function, selected.Arguments, selected.ReturnType)
+        let changed = Assert.IsType[BoundConversionExpression](
+            CompletionOperandReplacementRewriter(selected, different).Apply(completed)
+        )
+        Assert.Null(Assert.IsType[BoundAwaitExpression](changed.Expression).LogicalCompletionOperand)
+        Assert.Null(changed.ImplicitConversionOperand)
+    }
+
+    @Fact
     func ImplicitConversion_LoweredExtensionReceiver_KeepsOriginalOperandAndPublicQueries() {
         const source = `package Query
 func Make(value int32) string -> "text"
@@ -641,11 +826,11 @@ class Holder {
 
         func Apply(node BoundExpression) BoundExpression -> RewriteExpression(node)
 
-        protected override func RewriteCallExpression(node BoundCallExpression) BoundExpression ->
+        protected override func RewriteExpression(node BoundExpression) BoundExpression ->
         if object.ReferenceEquals(node, target) {
             replacement
         } else {
-            base.RewriteCallExpression(node)
+            base.RewriteExpression(node)
         }
     }
 

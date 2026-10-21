@@ -93,9 +93,72 @@ abstract class BoundExpression : BoundNode {
         }
     }
 
-    private func IsSameSelectedOperationCopy(copy BoundExpression) bool ->
-    object.ReferenceEquals(this, copy) ||
-        (Syntax != nil && object.ReferenceEquals(Syntax, copy.Syntax) && SameSelectedCall(copy))
+    private func IsSameSelectedOperationCopy(copy BoundExpression) bool {
+        if object.ReferenceEquals(this, copy) {
+            return true
+        }
+        if LogicalCompletionOperand != nil || copy.LogicalCompletionOperand != nil {
+            return IsSameLogicalCompletionCopy(copy)
+        }
+        if Syntax == nil || !object.ReferenceEquals(Syntax, copy.Syntax) {
+            return false
+        }
+        if this is BoundPropertyAccessExpression property && copy is BoundFieldAccessExpression storage {
+            return object.ReferenceEquals(property.Type, storage.Type) && object.ReferenceEquals(
+                property.StructType,
+                storage.StructType
+            ) &&
+                object.ReferenceEquals(property.InterfaceType, storage.InterfaceType) && object.ReferenceEquals(
+                property.Receiver,
+                storage.Receiver
+            ) &&
+                object.ReferenceEquals(
+                property.Property,
+                TypeMemberModel.PropertyForBackingField(storage.StructType, storage.Field)
+            )
+        }
+        return SameSelectedCall(copy)
+    }
+
+    private func IsSameLogicalCompletionCopy(copy BoundExpression) bool {
+        if LogicalCompletionOperand == nil || copy.LogicalCompletionOperand == nil || !object.ReferenceEquals(
+            Syntax,
+            copy.Syntax
+        ) ||
+            !object.ReferenceEquals(Type, copy.Type) {
+            return false
+        }
+        if this is BoundAwaitExpression awaited && copy is BoundAwaitExpression completed {
+            return object.ReferenceEquals(LogicalCompletionOperand, awaited.Expression) && object.ReferenceEquals(
+                copy.LogicalCompletionOperand,
+                completed.Expression
+            ) &&
+                object.ReferenceEquals(awaited.AwaiterTypeSymbol, completed.AwaiterTypeSymbol) &&
+                awaited
+                .Expression
+                .IsSameSelectedOperationCopy(completed.Expression)
+        }
+        if this is BoundImportedCallExpression call &&
+            copy is BoundImportedCallExpression completedCall &&
+            call
+            .Arguments
+            .Length == 1 &&
+            completedCall
+            .Arguments
+            .Length == 1 {
+            return object.ReferenceEquals(LogicalCompletionOperand, call.Arguments[0]) && object.ReferenceEquals(
+                copy.LogicalCompletionOperand,
+                completedCall.Arguments[0]
+            ) &&
+                SameSelectedCall(copy) &&
+                call
+                .ArgumentRefKinds
+                .Equals(completedCall.ArgumentRefKinds) && call.Arguments[0].IsSameSelectedOperationCopy(
+                completedCall.Arguments[0]
+            )
+        }
+        return false
+    }
 
     internal prop StaticQualifierType TypeSymbol? {
         get;

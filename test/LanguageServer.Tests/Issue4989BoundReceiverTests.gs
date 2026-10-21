@@ -2028,6 +2028,62 @@ func Run(memory MEMORY_TYPE) string {
     }
 
     @Theory
+    @InlineData(0)
+    @InlineData(1)
+    @InlineData(2)
+    func Issue5035_PropertyAndCompletionReceivers_KeepStringCompletions(mode int32) {
+        let receiver = switch mode {
+            case 0: "Text"
+            case 1: "(this.Text)"
+            default: "Make()"
+        }
+        let source = `package Repro
+suspend func Make() string -> "text"
+func (value object) Tag() int32 -> 0
+class Holder {
+    prop Text string { get; set; }
+    CALLERfunc Run() {
+        scope {
+            let first = RECEIVER.Tag()
+            let authored = cast[object](RECEIVER).Tag()
+        }
+    }
+}
+`.Replace("RECEIVER", receiver).Replace(
+            "CALLER",
+            if mode == 2 {
+                "async "
+            } else {
+                ""
+            }
+        )
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        for occurrence in[]int32{1, 2} {
+            let accessor = Assert.IsType[AccessorExpressionSyntax](
+                TokenAt(content, source, "Tag()", occurrence).Parent?.Parent
+            )
+            let expected = if occurrence == 1 {
+                TypeSymbol.String
+            } else {
+                TypeSymbol.Object
+            }
+            Assert.Same(expected, BoundSemantics.GetExpressionType(compilation, accessor.LeftPart))
+            let completions = CompletionComputer.ComputeCompletions(
+                content,
+                LanguageServerTestHelpers.PositionOf(source, "Tag()", occurrence)
+            )
+            if occurrence == 1 {
+                Assert.Contains(completions, (item CompletionItem) -> item.Label == "Substring")
+            } else {
+                Assert.DoesNotContain(completions, (item CompletionItem) -> item.Label == "Substring")
+            }
+        }
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func Issue5035_LoweredExtensionReceiver_PreservesConversionAndCompletions(authored bool) {

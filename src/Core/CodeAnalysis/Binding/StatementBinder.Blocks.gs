@@ -847,14 +847,31 @@ internal partial class StatementBinder {
                 ){MethodTypeArguments = call.MethodTypeArguments}
             }
             case call is BoundImportedCallExpression {
-                return BoundImportedCallExpression(
-                    nil,
+                let captureStart = prefix.Count
+                let arguments = CaptureArguments(call.Arguments, prefix)
+                let copy = BoundImportedCallExpression(
+                    call.Syntax,
                     call.Function,
-                    CaptureArguments(call.Arguments, prefix),
+                    arguments,
                     call.ArgumentRefKinds,
                     call.TypeArgumentSymbols,
                     call.StaticContainerType
                 )
+                // This closed capture created exactly this assignment and read.
+                // A generic operand replacement cannot prove that value origin.
+                if call.Arguments.Length == 1 && object.ReferenceEquals(
+                    call.LogicalCompletionOperand,
+                    call.Arguments[0]
+                ) &&
+                    prefix.Count == captureStart +
+                    1 &&
+                    prefix[captureStart] is BoundVariableDeclaration captured &&
+                    object.ReferenceEquals(captured.Initializer, call.LogicalCompletionOperand) &&
+                    arguments[0] is BoundVariableExpression read &&
+                    object.ReferenceEquals(captured.Variable, read.Variable) {
+                    copy.RecordLogicalCompletion(read)
+                }
+                return copy
             }
             case call is BoundImportedInstanceCallExpression {
                 return BoundImportedInstanceCallExpression(

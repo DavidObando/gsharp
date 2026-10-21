@@ -255,6 +255,19 @@ verified same-selected-operation copy at the original non-nil call syntax,
 preserving source/target types, checkedness and the conversion's own syntax.
 Authored casts and different, foreign-syntax or nil-syntax replacement calls
 gain no conversion provenance.
+The same checked equivalent-operation decision recognizes a property-to-storage
+copy only through the canonical exact property/backing-field association, with
+the original receiver, effective owner, read type and syntax. An implicit
+completion copy must retain both direct-operand receipts, logical type and
+wrapper syntax, and recursively prove its original selected operand; synthetic
+nil wrapper syntax is not authority for a nil-syntax call or an authored await.
+
+Defer capture may separately retain a compiler completion receipt at its closed
+capture producer: the original recorded operand is the exact initializer of the
+new capture declaration, whose exact variable is the returned captured read.
+The deferred completion retains its original syntax and awaits that read after
+inference. Generic copy validation never follows variables or scans blocks to
+infer this association; authored waits acquire no receipt.
 
 Public bound/type queries promote an exact physical completion operand to its
 verified logical completion, including a direct physical syntax-index hit.
