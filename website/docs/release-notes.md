@@ -529,6 +529,11 @@ Before moving an application to a different compiler version, pin the intended S
 
 ### Fixed
 
+- Aligned VS Code and Visual Studio TextMate highlighting with website Prism
+  for escaped and Unicode names, contextual intrinsics and reference/slice
+  vocabulary, numeric and character literals, and nested string interpolation.
+  Shared regression cases exercise both tokenizers.
+
 - **Property writes through tuple elements update the stored struct** (issue #5023). `tuple.Item1.Value = "v"` previously changed a copy and silently lost the update. Tuple-element receivers now keep their storage through nested tuples, field and array chains, explicit address/dereference pairs, compound assignments, control-flow right-hand sides, and suspension. Receiver components run once, before the right-hand side; read-only storage remains protected. Native and CLR ref-returning owners are captured once for writes and diagnosed if their managed address would have to survive suspension; non-suspending opaque borrows retain their once-captured address. Capturable array/reference owners stop borrowed-address propagation. Conditional and nested-field borrows preserve the selected storage across suspension without retaining a managed pointer.
 
 - **The SDK's assembly-info task and four compiler helpers no longer assert values the C# null-tested** (issue [#4932](https://github.com/DavidObando/gsharp/issues/4932)). The cut-over turned C# code that passed a value on and then checked it for null into a `!!` assertion before the check, so these places threw a NullReferenceException where 0.4 did not:

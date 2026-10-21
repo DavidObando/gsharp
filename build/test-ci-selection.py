@@ -42,6 +42,13 @@ def job(text, name):
 
 
 class SelectionTests(unittest.TestCase):
+    def test_shared_lexical_cases_select_both_editor_and_website_consumers(self):
+        plan = selection("src/vscode-gsharp/src/test/grammar-cases.json")
+        self.assertFalse(plan["full"])
+        self.assertIn("vscode-extension", plan["jobs"])
+        self.assertIn("visual-studio-extension", plan["jobs"])
+        self.assertEqual(plan["docs_jobs"], ["build", "visual"])
+
     def test_prose_and_website_do_not_select_product_jobs(self):
         for path in ("README.md", "docs/guide.md", "tools/cs2gs/README.md", "website/docs/intro.md",
                      "website/src/pages/index.tsx", "website/package.json"):

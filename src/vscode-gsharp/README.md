@@ -42,6 +42,63 @@ Language feature settings take effect after running **GSharp: Restart Language S
 Formatting is canonical and option-free: 4 spaces, K&R braces, and a fixed
 120-column width. Format-on-save is enabled for G# by default.
 
+### Syntax highlighting and semantic tokens
+
+Visual Studio packages the VS Code TextMate grammar directly; it has no separate
+grammar to synchronize. The website registers its G# Prism grammar in
+`website/src/theme/prism-include-languages.ts`. Both engines run the shared
+`src/test/grammar-cases.json` lexical regression cases.
+Interpolation cases cover byte literals, nullable array elements, nested dollar
+escapes, and literal `$${...}` openers. Optional `absent` spans reject incorrect scopes;
+`format` suffixes also reject format scopes anywhere in the expression.
+Persistent type-head/tail states protect nested generic nullable suffixes across
+physical lines. Member contexts consume exactly one name, including after trivia.
+Pattern primaries distinguish discard, constant, and `var` bindings from types;
+`not`/`and`/`or` introduce the appropriate next primary rather than a nullable name.
+List patterns do not consume an element-type name; parenthesized patterns retain
+their conditional arms while nullable tuple types retain their suffix.
+Adjacent `?(` invokes any postfix receiver, including indexed and call results;
+whitespace-separated `? (` remains conditional. Nested index expressions retain
+their own conditional delimiters. Named tuple array elements remain types, while
+property suffixes and relational operands preserve following pattern combinators.
+Completed literals and `!!` keep postfix context; unary `!` does not. Function
+parameter modifiers are distinct from tuple element names and ordinary types
+named `ref`/`out`/`in`. Constant-pattern operands use expression context, including
+signs and exponents. Value-receiver pointer arrows preserve member context;
+lambda heads and function-type return arrows retain their own contexts.
+Anonymous-class header colons stay in expressions. Line comments accept CR, LF,
+and CRLF line endings.
+
+Lexical highlighting recognizes reserved/contextual words, escaped and Unicode
+identifiers, literal forms, interpolation, annotations, and operators. Contextual
+words can still be ordinary names. Declaration/call scopes and Prism's PascalCase
+type convention are lexical hints, not symbol resolution. Neither grammar can
+determine overloads, shadowing, extension ownership, imported nullability, or
+whether a name denotes a type, property, or local in every context. The language
+server's semantic tokens supply symbol-aware editor classifications; Prism has
+no language server. Imported platform types (`T!`) are display notation, not new
+source syntax.
+
+Run the shared cases with `npm run test:unit -- --runInBand grammar.test.ts` here
+and `node --test --test-name-pattern=Prism tests/content.test.mjs` in `website`.
+The editor tests use the real TextMate/Oniguruma tokenizer, not JavaScript regex
+approximations.
+Type prefixes share comment/newline-aware pending states. Function types and
+function literals share parameter/return stages; only literals accept `ref`
+return modifiers. Optional `if let` annotations enter the same type reader
+before returning to the initializer expression. Pattern operands reuse
+expression scanning through the next combinator, including calls and nested
+parenthesized patterns.
+Creation headers reuse type tails, including runtime array dimensions.
+Composite conversion arguments may follow the target type across trivia;
+completed receivers keep index/call suffixes in expression context.
+Before asserting an ambiguous interpolation's scopes, check its expression kind
+and `InterpolatedStringSegment.Format` with the compiler's `SyntaxTree.Parse`;
+two agreeing highlighters do not establish the language's parse.
+The compiler currently loses enclosing unsafe context for bare-name pointer
+arrows inside interpolation (#5110); pointer regressions use compiler-accepted
+call, index and qualified receivers instead of asserting an invented parse.
+
 ## Commands
 
 | Command | Description |
