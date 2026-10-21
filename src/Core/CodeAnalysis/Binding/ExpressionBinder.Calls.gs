@@ -1120,7 +1120,16 @@ internal partial class ExpressionBinder {
                 }
                 clrType = importedClass!!.ClassType
             } else {
-                return false
+                let resolved = lookupTypeToken(syntax.Identifier)
+                if resolved == TypeSymbol.Error {
+                    result = BoundErrorExpression(syntax)
+                    return true
+                }
+                if resolved is ImportedTypeSymbol{ClrType: not nil} importedType {
+                    clrType = importedType.ClrType
+                } else {
+                    return false
+                }
             }
         }
         if clrType is not Type resolvedClrType {

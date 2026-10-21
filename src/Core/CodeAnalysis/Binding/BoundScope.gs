@@ -552,6 +552,9 @@ class BoundScope {
     /// @param name The unqualified identifier.
     /// @returns Whether ordinary lookup must take precedence over a native alias.
     func HasImportedTypeName(name string) bool {
+        if SubmissionImports is {} submissions && submissions.TryResolveType(References!!, name, -1, out _) {
+            return true
+        }
         for import_ in EnumerateImports() {
             if (import_.IsAlias && import_.Name == name) || References!!.HasTypeNameAtAnyArity(
                 import_.Target + "." + name

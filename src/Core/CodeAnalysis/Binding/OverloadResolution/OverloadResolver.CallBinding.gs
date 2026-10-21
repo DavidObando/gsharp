@@ -518,6 +518,21 @@ internal partial class OverloadResolver {
         ) {
             return true
         }
+        if Scope.SubmissionImports is {} submissions {
+            if submissions.TryFindFunctionContainer(Scope.References!!, name, out _) {
+                return true
+            }
+            if submissions.TryFindGlobalVariable(Scope.References!!, name, out _, out var declared) &&
+                declared is {} previous &&
+                (
+                previous.Type is FunctionPointerTypeSymbol || MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                    previous.Type,
+                    out _
+                )
+            ) {
+                return true
+            }
+        }
         if HasEnclosingMemberCallableCandidate(name) {
             return true
         }

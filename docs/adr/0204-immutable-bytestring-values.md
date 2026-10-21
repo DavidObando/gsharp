@@ -180,6 +180,9 @@ alias or an erased `object` container.
 Follow ADR-0190's ordinary-name precedence for `bytestring`: a visible user
 type or explicit type alias wins. An escaped `$bytestring` is always ordinary
 lookup. Only an unshadowed spelling resolves the recognized runtime type.
+These rules include types imported from earlier REPL submissions; earlier
+functions and callable globals also retain ordinary call precedence over
+native conversion syntax.
 Qualified `Gsharp.Values.ByteString` is always available when imported
 namespace/type names do not obscure that qualification.
 

@@ -87,6 +87,7 @@ class ByteStringLanguageTests {
     @InlineData("let value string = b\"text\"", "GS0155")
     @InlineData("let value bytestring = nil", "GS0155")
     @InlineData("var value $$bytestring", "GS0113")
+    @InlineData("let value = $$bytestring()", "GS0130")
     func InvalidByteStringUsesFailAtTheSource(statement string, diagnostic string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let (code, output) = fixture.TryCompile(
@@ -210,6 +211,14 @@ default: 0
         }
 
         func Programs() sequence[[]object] {
+            yield[]object{`package ByteDefaultConstruction
+import System
+func Main() {
+    let empty = bytestring()
+    Console.WriteLine(empty == b"")
+    Console.WriteLine(empty.Length)
+    Console.WriteLine(empty == Gsharp.Values.ByteString())
+}`, "True\n0\nTrue\n"}
             yield[]object{`package ByteNul
 import System
 func Main() {
@@ -230,11 +239,14 @@ func Main() {
             yield[]object{`package ByteCallable
 import System
 func bytestring(value object) int32 -> 42
+func bytestring() int32 -> 17
 func Main() {
     let values = []bytestring{b"x"}
     Console.WriteLine(bytestring(values[0]))
     Console.WriteLine($bytestring(values[0]))
-}`, "42\n42\n"}
+    Console.WriteLine(bytestring())
+    Console.WriteLine($bytestring())
+}`, "42\n42\n17\n17\n"}
             yield[]object{`package ByteProtocol
 import System
 func ReadPayload(packet bytestring) bytestring {
