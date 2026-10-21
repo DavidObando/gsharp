@@ -35,6 +35,62 @@ import Xunit
 /// Each fact uses a UNIQUE package name because the in-process type caches are
 /// name-keyed.
 open class Issue2859ClassTypedForInEmitTests {
+    @Theory
+    @InlineData("public var Current int32 = 3")
+    @InlineData("prop Current int32 -> 3")
+    func Issue5088_ExplicitInterfaceCurrentDoesNotHideOrdinaryCurrent(currentMember string) {
+        let source = `package i5088explicit
+import System
+interface ICurrent {
+    prop Current int32 { get; }
+}
+struct Cursor(Index int32) : ICurrent {
+    private prop (ICurrent) Current int32 -> 99
+` + currentMember + `
+    func MoveNext() bool {
+        Index += 1
+        return Index <= 2
+    }
+}
+struct Values {
+    func GetEnumerator() Cursor -> Cursor(0)
+}
+func Main() {
+    for value in default(Values) {
+        Console.WriteLine(value)
+    }
+}`
+        Assert.Equal("3\n3\n".ReplaceLineEndings(Environment.NewLine), CompileAndRun(source))
+    }
+
+    @Theory
+    @InlineData("prop Current T -> Item", "")
+    @InlineData("public var Current T", "Current = Item")
+    func Issue5088_NestedSelfConstructionReadsCurrentAtItsExactElementType(currentMember string, update string) {
+        let source = `package i5088nested
+import System
+struct Cursor[T](Item T, Index int32) {
+` + currentMember + `
+    func MoveNext() bool {
+        Index += 1
+` + update + `
+        return Index <= 1
+    }
+    func GetEnumerator() Cursor[[]T] -> Cursor[[]T]([]T{Item}, 0)
+    func Take()[]T {
+        for value in this {
+            return value
+        }
+        return default([]T)
+    }
+}
+func Main() {
+    Console.WriteLine(Cursor[int32](42, 0).Take()[0])
+    Console.WriteLine(Cursor[string]("right", 0).Take()[0])
+}`
+        Assert.Equal("42\nright\n".ReplaceLineEndings(Environment.NewLine), CompileAndRun(source))
+    }
+
     @Fact
     func Issue5088_SourceCurrentProperty_PreservesValueCursorStateAndEvaluationCounts() {
         const source = `package i5088state

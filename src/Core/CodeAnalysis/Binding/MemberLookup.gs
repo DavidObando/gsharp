@@ -3605,22 +3605,30 @@ internal class MemberLookup {
         /// @param elementType The construction-substituted element type.
         /// @returns Whether the enumerator exposes a public readable `Current`.
         func TryGetUserEnumeratorCurrent(type StructSymbol, out current Symbol?, out elementType TypeSymbol?) bool {
-            current = TypeMemberModel.LookupMember(
-                type,
-                "Current",
-                MemberQuery.Instance(MemberKinds.Field | MemberKinds.Property)
-            )
+            current = nil
             elementType = nil
-            switch current {
-                case property is PropertySymbol when !property.IsStatic &&
-                    !property.IsIndexer &&
-                    property.HasGetter &&
-                    property.GetterAccessibility == Accessibility.Public {
-                    elementType = type.SubstituteMemberType(property.Type)
+            for owner in type.GetHierarchy() {
+                if owner.TryGetField("Current", out var field) {
+                    current = field
+                    if field!!.Accessibility != Accessibility.Public {
+                        return false
+                    }
+                    elementType = field!!.Type
                     return true
                 }
-                case field is FieldSymbol when field.Accessibility == Accessibility.Public {
-                    elementType = type.SubstituteMemberType(field.Type)
+                for property in owner.Properties {
+                    if property.Name != "Current" ||
+                        property.IsStatic ||
+                        property.IsIndexer ||
+                        property.HasExplicitInterfaceClause ||
+                        property.ExplicitInterfaceClauseTarget != nil {
+                        continue
+                    }
+                    current = property
+                    if !property.HasGetter || property.GetterAccessibility != Accessibility.Public {
+                        return false
+                    }
+                    elementType = property.Type
                     return true
                 }
             }

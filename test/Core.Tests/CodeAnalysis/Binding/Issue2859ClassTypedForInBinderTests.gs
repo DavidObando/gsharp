@@ -23,6 +23,30 @@ import Xunit
 /// GS0116, otherwise the fix would have degraded a real diagnostic into
 /// silently broken lowering.
 open class Issue2859ClassTypedForInBinderTests {
+    // Issue #5092 tracks the pre-existing swapped-owner emission defect.
+    @Theory
+    @InlineData("prop Current A -> First", "")
+    @InlineData("public var Current A", "Current = First")
+    func Issue5088_SelfConstructedEnumeratorReportsCurrentTypeExactlyOnce(currentMember string, update string) {
+        let source = `package i5088swap
+struct Cursor[A, B](First A, Second B, Index int32) {
+` + currentMember + `
+    func MoveNext() bool {
+        Index += 1
+` + update + `
+        return Index <= 1
+    }
+    func GetEnumerator() Cursor[B, A] -> Cursor[B, A](Second, First, 0)
+    func Take() B {
+        for value in this {
+            return value
+        }
+        return default(B)
+    }
+}`
+        Assert.Empty(GetDiagnostics(source))
+    }
+
     @Theory
     @InlineData("prop Current int32 { set { } }")
     @InlineData("prop Current int32 { private get -> 1; set { } }")
