@@ -692,6 +692,49 @@ The stream path already lowers once for implementation and reference output.
 No build-time improvement is claimed, and no lowered state is cached across
 invocations or changed options.
 
+### Local overload parameter preparation (#5071)
+
+The resolver already materializes its candidates once. Initial untimed profiles
+on `e608468e`, built with published SDK `0.5.179`, found expanded fallback in
+113 of 25,251 Core requests (0.45%) and 26 of 1,594 Oahu.Core requests (1.63%).
+Those profiles used owned, hash-verified copies of the fixed workloads above.
+The normal passes evaluated 78,176 and 6,205 candidates; expanded passes evaluated
+244 and 36. This does not justify cross-form preparation storage or a shared
+inference engine.
+
+Normal-form evaluation retains the raw parameter array it already reads for
+ABI-count normalization. It reuses that array for raw declaration checks and
+applicability only while the candidate remains the identical member.
+Closing a generic method still requires its substituted parameter vector.
+Expanded evaluation normalizes the ABI count against its own already-read
+vector. Callback inputs and order, separate inference and constraints, mapping,
+conversion classification, ranking and load-failure retry remain unchanged.
+No inferred answer, final symbol or parameter vector crosses requests or forms.
+The existing metadata-definition mechanism remains authoritative.
+
+Matched untimed candidate profiles retained the same request, candidate,
+inference, conversion, optional/params-query and per-form symbolic callback counts.
+The measured parameter-array reads at the changed sites were:
+
+| Read site | Core baseline → candidate | Oahu.Core baseline → candidate |
+| --- | ---: | ---: |
+| Normal applicability | 69,077 → 12,744 | 5,121 → 761 |
+| Explicit normal raw declaration check | 4,902 → 0 | 52 → 0 |
+| ABI-count normalization, including unchanged ranking | 78,992 → 78,814 | 6,247 → 6,241 |
+
+These sites removed 61,413 Core reads and 4,418 Oahu.Core reads.
+All eight nonempty implementation/reference DLL, PDB and XML outputs matched
+byte-for-byte, as did the exact diagnostics and publication logs.
+An initial candidate overlay misplaced the ranking counter. Those original
+profiles are retained but excluded from normalization comparisons; the replacement
+profiles use the corrected counter location.
+
+This is a small local work reduction, not a demonstrated throughput improvement.
+No timed comparison ran. Single process-inclusive allocation records include
+counter instrumentation and runtime variation, so their differences do not
+establish production-allocation savings. Counter instrumentation stays separate
+from the production implementation.
+
 ### Local declaration discovery reduction (#5055)
 
 The generator projection and compiler keep separate declaration scopes.

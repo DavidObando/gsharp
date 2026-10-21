@@ -5302,10 +5302,9 @@ internal shared class ClrOverloadResolution {
             // violations drop the candidate silently (matches C# §7.5.2 "if
             // type inference fails, the method is not applicable").
             var candidate = rawCandidate
-            let ignoredTrailingParameters = NormalizeIgnoredTrailingParameterCount(
-                rawCandidate,
-                trailingParameterCountToIgnore?(rawCandidate) ?? 0
-            )
+            let ignoredCount = trailingParameterCountToIgnore?(rawCandidate) ?? 0
+            let rawParameters = rawCandidate.GetParameters()
+            let ignoredTrailingParameters = Math.Clamp(ignoredCount, 0, rawParameters.Length)
             // Issue #1325: when a candidate must be closed over a
             // same-compilation user value type — erased to a `System.Object`
             // placeholder — live-reflection `MakeGenericMethod` rejects the
@@ -5330,7 +5329,7 @@ internal shared class ClrOverloadResolution {
                     let explicitTypeArgsArray = explicitTypeArgs.ToArray()
                     try {
                         closed = gmi.MakeGenericMethod(explicitTypeArgsArray)
-                        if gmi.GetParameters().Any(
+                        if rawParameters.Any(
                             (p ParameterInfo) -> p
                                 .ParameterType
                                 .ContainsGenericParameters &&
@@ -5589,7 +5588,12 @@ internal shared class ClrOverloadResolution {
                 }
                 candidate = cast[T](cast[MethodBase](closed!!))
             }
-            var parameters = candidate.GetParameters()
+            // Closing a generic method changes its parameter types, not the raw declaration.
+            var parameters = if object.ReferenceEquals(candidate, rawCandidate) {
+                rawParameters
+            } else {
+                candidate.GetParameters()
+            }
             if ignoredTrailingParameters > 0 {
                 parameters = parameters[.. ^ignoredTrailingParameters]
             }
@@ -6074,9 +6078,10 @@ internal shared class ClrOverloadResolution {
             candidate = cast[T](cast[MethodBase](closed!!))
         }
         var parameters = candidate.GetParameters()
-        let ignoredTrailingParameters = NormalizeIgnoredTrailingParameterCount(
-            candidate,
-            trailingParameterCountToIgnore?(candidate) ?? 0
+        let ignoredTrailingParameters = Math.Clamp(
+            trailingParameterCountToIgnore?(candidate) ?? 0,
+            0,
+            parameters.Length
         )
         if ignoredTrailingParameters > 0 {
             parameters = parameters[.. ^ignoredTrailingParameters]
