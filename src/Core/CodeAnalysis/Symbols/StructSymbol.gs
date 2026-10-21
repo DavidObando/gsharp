@@ -1644,16 +1644,14 @@ class StructSymbol : TypeSymbol {
 
     /// Walks this type and its base-class chain looking for a constructed
     /// generic ancestor whose definition satisfies
-    /// [`declaringDefinitionPredicate`](paramref), composing the
-    /// type-argument substitution across each inheritance hop so the returned
-    /// symbol carries fully-resolved type arguments in this type's context.
-    /// @remarks A deeper base's type arguments are expressed in terms of a shallower
-    /// base's type parameters (e.g. for `Derived : Mid[int32] : Base[T]`
-    /// the `Base` instantiation is written `Base[Mid.T]`), so each
-    /// argument is resolved through the running substitution accumulated from
-    /// the more-derived levels. Looking up `Base` therefore yields the
-    /// fully-closed `Base[int32]`. Returns `null` when no
-    /// matching generic base exists. The walk includes the receiver itself.
+    /// [`declaringDefinitionPredicate`](paramref). The returned symbol
+    /// carries fully-resolved type arguments in this type's context.
+    /// @remarks (cref:BaseClass) projects each inheritance hop through the
+    /// receiver's simultaneous substitution, including nested argument types.
+    /// Keep that construction unchanged: substituting again can collapse swapped
+    /// parameters or substitute an outer parameter twice (issue #5092).
+    /// Returns `null` when no matching generic base exists.
+    /// The walk includes the receiver itself.
     /// @param declaringDefinitionPredicate Predicate matched against each ancestor's definition (or itself
     /// when non-generic).
     /// @returns The constructed generic base instantiation, or null.
@@ -1661,58 +1659,20 @@ class StructSymbol : TypeSymbol {
         if declaringDefinitionPredicate == nil {
             return nil
         }
-        var running Dictionary[TypeParameterSymbol, TypeSymbol]? = nil
         for c in GetHierarchy() {
-            // A constructed nested receiver already carries the argument shape
-            // needed by its TypeSpec. Keep it verbatim: rebuilding a generic
-            // nested type whose open enclosing arguments are implicit would
-            // mistake its own arguments for the flattened enclosing slots.
-            let isConstructedNested = c.IsConstructedNestedType ||
-                (
-                c.Definition != nil && !c.TypeArguments.IsDefaultOrEmpty && !CollectEnclosingTypeParameters(
-                    c
-                ).IsDefaultOrEmpty
-            )
-            if isConstructedNested && declaringDefinitionPredicate(c.Definition ?? c) {
+            let cDef = c.Definition ?? c
+            if !declaringDefinitionPredicate(cDef) {
+                continue
+            }
+            if c.IsConstructedNestedType || (c.Definition != nil && !c.TypeArguments.IsDefaultOrEmpty) {
                 return c
             }
-            // Compose this level's type-argument mapping into the running
-            // substitution before testing the predicate so a matching base's
-            // arguments are already resolved in this type's context.
-            let cDef = c.Definition ?? c
-            if c.Definition != nil &&
-                !c
-                .TypeArguments
-                .IsDefaultOrEmpty &&
-                !c.Definition!!
-                .TypeParameters
-                .IsDefaultOrEmpty {
-                let defParams = c.Definition!!.TypeParameters
-                let count = Math.Min(defParams.Length, c.TypeArguments.Length)
-                for var i = 0; i < count; i++ {
-                    var arg = c.TypeArguments[i]
-                    if arg is TypeParameterSymbol tpArg && running != nil && running.TryGetValue(
-                        tpArg,
-                        out var resolved
-                    ) {
-                        arg = resolved
-                    }
-                    running ??= Dictionary[TypeParameterSymbol, TypeSymbol]()
-                    running!![defParams[i]] = arg
-                }
-            }
-            if cDef.TypeParameters.IsDefaultOrEmpty || !declaringDefinitionPredicate(cDef) {
+            if cDef.TypeParameters.IsDefaultOrEmpty {
                 continue
             }
             let tps = cDef.TypeParameters
             let args = ImmutableArray.CreateBuilder[TypeSymbol](tps.Length)
-            for tp in tps {
-                if running != nil && running.TryGetValue(tp, out var concrete) {
-                    args.Add(concrete)
-                } else {
-                    args.Add(tp)
-                }
-            }
+            args.AddRange[TypeParameterSymbol](tps)
             return Construct(cDef, args.MoveToImmutable())!!
         }
         return nil

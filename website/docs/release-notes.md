@@ -16,7 +16,7 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
-- **The repository compiler uses published SDK 0.5.199** (issue #2189). The bootstrap pin and matching analyzer-testing package move from 0.5.179 to the new release. This pin update uses the ordinary managed SDK; experimental NativeAOT and ReadyToRun toolchains remain outside the published package and await human review. The separate pin PR's CI provides N-1 stage-2 verification.
+- **Generic member owners preserve swapped arguments** (issue #5092). Field and property access through source generic receivers such as `Cursor[B, A]` emits verifiable IL without collapsing the arguments. Nested argument types and composed generic base owners retain the receiver's exact construction.
 
 - **Source-declared pattern enumerator properties** (issue #5088). `for value in source` accepts a public readable instance `Current` property on a source-declared enumerator, as it already does for imported enumerators. Generic element types and mutable value-enumerator state are preserved.
 
@@ -29,6 +29,8 @@ The published **0.4.591** release is the version used by the website's installat
 - **CLR overload applicability reuses local raw parameter arrays** (issue #5071, ADR-0203). Normal-form preparation retains its raw declaration parameters, while closed generic candidates still read their substituted signatures. Expanded applicability normalizes the ABI-only count against its own parameter vector. Inference, constraints, callbacks and fallback order remain separate between forms. This is a small reflection-work reduction, not a demonstrated compiler throughput improvement.
 
 - **Imported metadata readers reuse raw declaration facts** (issue #5070, ADR-0203). Open-member token lookups and raw nullable/context attribute decoding share weak, actual-reflection-object caches. Receiver-specific nullability, module identity and direct versus signature-filtered load behavior remain unchanged. Failed attribute reads remain retryable, and host generic definitions do not retain private reference contexts. Fixed Core/Oahu.Core profiles reduced definition scans from 47,484/3,724 to 389/96 with identical emitted bytes and diagnostics. Direct compiler median times were 40.952 → 41.940 seconds for Core and 4.385 → 3.950 seconds for Oahu.Core, with overlapping ranges; no general throughput improvement is claimed.
+
+- **The repository compiler uses published SDK 0.5.199** (issue #2189). The bootstrap pin and matching analyzer-testing package move from 0.5.179 to the new release. This pin update uses the ordinary managed SDK; experimental NativeAOT and ReadyToRun toolchains remain outside the published package and await human review. The separate pin PR's CI provides N-1 stage-2 verification.
 
 - **The compiler now builds with the published G# SDK 0.5.179** (issue #2189). The bootstrap pin moves from 0.5.7 to the release containing the measured compiler lookup, generator setup and bounded-worker improvements. The analyzer-testing package follows the same pin. This separate pin update builds the repository with that released compiler; its CI provides stage-2 verification under the N-1 rule.
 
