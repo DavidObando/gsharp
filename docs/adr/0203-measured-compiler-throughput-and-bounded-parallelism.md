@@ -826,6 +826,27 @@ must not replace this proof with a syntax denylist or concurrent dictionaries.
 Full-workload measurements and default promotion remain separate acceptance
 work, as specified above.
 
+### Canonical declaration readers and scalar bodies (#5056)
+
+Ordered alias readers retain immutable snapshots of canonical symbols.
+The cache key includes both the scope's immutable alias map and its parent's
+snapshot identity. An ancestor declaration or alias override therefore
+invalidates descendant readers without copying declarations into every block.
+Struct readers reuse the same snapshot across scopes with no local aliases.
+Static-import readers compare import contents and canonical struct snapshots,
+not counts alone. These caches belong to the scope chain, not the process.
+
+The coordinator warms the declaration reader before dispatching bodies.
+The additional worker proof admits scalar string/character operations and
+top-level source-enum constants and switches. It resolves enum names through
+the existing lexical source-type reader in the body's package and file
+context. Explicit import aliases, nested enums, generic owner contexts, calls,
+receivers, inference and synthesis remain outside this proof.
+Workers retain the original enum identities; they do not construct independent
+declaration worlds or publish synthesized symbols. The existing shared request
+budget, ordered diagnostics merge and whole-program analysis barriers remain
+unchanged.
+
 ### Method-local emission boundary (#5042)
 
 Emission keeps closure and state-machine discovery ordered, including

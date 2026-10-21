@@ -5,7 +5,11 @@
 package GSharp.Core.Tests.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Core.CodeAnalysis.Syntax
+import System
+import System.Linq
 import Xunit
 
 // Issue #1647: BoundScope used to eagerly copy the parent's ENTIRE symbolKeys,
@@ -15,6 +19,85 @@ import Xunit
 // that must be preserved now that those collections are kept per-scope and
 // aggregated lazily via the Parent chain.
 open class BoundScopeChildScopePerformanceTests {
+    @Fact
+    func StructSnapshotInvalidatesWhenNestedAliasIsPromotedInAnAncestor() {
+        let compilation = Compilation(
+            SyntaxTree.Parse("package Readers\nclass Container { class Item {} }\nclass Item {}\nclass Last {}")
+        )
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        let nested = Assert.Single(
+            compilation.GlobalScope.Structs,
+            (type StructSymbol) -> type.Name == "Item" && type.ContainingType != nil
+        )
+        let top = Assert.Single(
+            compilation.GlobalScope.Structs,
+            (type StructSymbol) -> type.Name == "Item" && type.ContainingType == nil
+        )
+        let last = Assert.Single(compilation.GlobalScope.Structs, (type StructSymbol) -> type.Name == "Last")
+        let parent = BoundScope(nil)
+        Assert.True(parent.TryDeclareTypeAlias("Item", nested))
+        let child = BoundScope(parent)
+        Assert.True(child.TryDeclareTypeAlias("Last", last))
+        let before = child.GetDeclaredStructs()
+        Assert.Equal([]StructSymbol{nested, last}, before)
+        Assert.True(parent.TryDeclareTypeAlias("Item", top))
+        Assert.Equal([]StructSymbol{top, nested, last}, child.GetDeclaredStructs())
+        Assert.Equal([]StructSymbol{nested, last}, before)
+        Assert.Same(top, child.GetDeclaredTypeAliases()["Item"])
+    }
+
+    @Fact
+    func StaticImportReadersInvalidateAcrossEqualSizedDeclarationScopes() {
+        let tree = SyntaxTree.Parse(
+            "package Readers\nimport Readers.First\nimport Readers.Second\nclass First {}\nclass Second {}"
+        )
+        let compilation = Compilation(tree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        let imports = tree.Root.Members.OfType[ImportSyntax]().ToArray()
+        Assert.Equal(2, imports.Length)
+        let types = compilation.GlobalScope.Structs.ToDictionary((type StructSymbol) -> type.Name)
+        let first = BoundScope(nil)
+        first.TryDeclareTypeAlias("First", types["First"])
+        first.TryImport(ImportSymbol("Readers.First", "Readers.First", imports[0]))
+        first.SetCurrentReferencingSyntaxTree(tree)
+        let second = BoundScope(nil)
+        second.TryDeclareTypeAlias("Second", types["Second"])
+        second.TryImport(ImportSymbol("Readers.Second", "Readers.Second", imports[1]))
+        second.SetCurrentReferencingSyntaxTree(tree)
+        let context = BinderContext(first)
+        Assert.Same(types["First"], Assert.Single(context.GetStaticImportTypes()))
+        context.RootScope = BoundScope(second)
+        Assert.Same(types["Second"], Assert.Single(context.GetStaticImportTypes()))
+    }
+
+    @Fact
+    func StructReadersShareCanonicalSnapshotUntilAncestorDeclarationsChange() {
+        let compilation = Compilation(
+            SyntaxTree.Parse("package Readers\nclass First {}\nclass Second {}\nclass Third {}")
+        )
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        let types = compilation.GlobalScope.Structs.ToDictionary((type StructSymbol) -> type.Name)
+        let parent = BoundScope(nil)
+        Assert.True(parent.TryDeclareTypeAlias("First", types["First"]))
+        let child = BoundScope(parent)
+        Assert.True(child.TryDeclareTypeAlias("Second", types["Second"]))
+        let reader = BoundScope(BoundScope(child))
+        let before = reader.GetDeclaredStructs()
+        Assert.Equal([]StructSymbol{types["First"], types["Second"]}, before)
+        Assert.True(before.Equals(reader.GetDeclaredStructs()))
+        let allocated = GC.GetAllocatedBytesForCurrentThread()
+        for var index = 0; index < 128; index++ {
+            reader.GetDeclaredStructs()
+        }
+        Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - allocated, 0L, 4096L)
+        Assert.True(parent.TryDeclareTypeAlias("Third", types["Third"]))
+        let after = reader.GetDeclaredStructs()
+        Assert.Equal([]StructSymbol{types["First"], types["Third"], types["Second"]}, after)
+        Assert.False(before.Equals(after))
+        Assert.True(after.Equals(child.GetDeclaredStructs()))
+        Assert.Equal([]StructSymbol{types["First"], types["Second"]}, before)
+    }
+
     @Fact
     func TryLookupSymbol_ChildDeclaration_ShadowsParent() {
         let parent = BoundScope(nil, ReferenceResolver.Default())

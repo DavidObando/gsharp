@@ -9,6 +9,42 @@ import System.Threading
 import Xunit
 
 class Issue5041WorkBudgetTests {
+    @Fact
+    func LexicalNestedEnumDoesNotMasqueradeAsAGlobalScalarConstant() {
+        let compilation = Compilation(
+            SyntaxTree.Parse(
+                "package Scalars\nenum Token { Good }\nclass Holder {\nenum Token { Good }\nshared {\nfunc Value() bool -> Token.Good == Token.Good\n}\n}"
+            )
+        )
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        let scope_ = BoundScope(nil)
+        for pair in compilation.GlobalScope.TypeAliases {
+            scope_.TryRedeclareTypeAlias(pair.Key, pair.Value)
+        }
+        let holder = Assert.Single(compilation.GlobalScope.Structs)
+        Assert.False(IndependentBodyClassifier.CanBind(Assert.Single(holder.StaticMethods), scope_))
+    }
+
+    @Theory
+    @InlineData("func Value(c char) bool -> c >= 'a' && c <= 'z'", true)
+    @InlineData(
+        "func Value(text string) Token { switch text { case \"ok\" { return Token.Good } default { return Token.Bad } } }",
+        true
+    )
+    @InlineData("func Value(token Token) int32 -> switch token { case Token.Good, Token.Bad: 1 default: 0 }", true)
+    @InlineData("func Value(Token int32) bool -> Token.Good == Token.Good", false)
+    @InlineData("func Value(token Token) bool -> Value(token)", false)
+    func ScalarBodiesReadCanonicalEnumsWithoutOpeningSynthesis(source string, eligible bool) {
+        let compilation = Compilation(SyntaxTree.Parse("package Scalars\nenum Token { Good, Bad }\n" + source))
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        let scope_ = BoundScope(nil)
+        for pair in compilation.GlobalScope.TypeAliases {
+            scope_.TryRedeclareTypeAlias(pair.Key, pair.Value)
+        }
+        let function = Assert.Single(compilation.GlobalScope.Functions)
+        Assert.Equal(eligible, IndependentBodyClassifier.CanBind(function, scope_))
+    }
+
     @Theory
     @InlineData(`func Same($this int32) bool -> $this == $this`, false)
     @InlineData("func Same(x int32) int32 -> x", false)
