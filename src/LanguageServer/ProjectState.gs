@@ -181,8 +181,8 @@ open class ProjectState {
     /// @returns The parsed (cref:SyntaxTree), or null if the file could not be read.
     func AddFileFromDisk(filePath string) SyntaxTree? {
         try {
-            let text = File.ReadAllText(filePath)
-            return UpdateFile(filePath, text, File.ReadAllBytes(filePath))
+            let source = SourceText.Load(filePath)
+            return UpdateFile(filePath, source.ToString(), source.RawBytes)
         } catch (IOException) {
             return nil
         } catch (UnauthorizedAccessException) {

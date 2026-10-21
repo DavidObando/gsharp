@@ -210,6 +210,12 @@ default: 0
         }
 
         func Programs() sequence[[]object] {
+            yield[]object{`package ByteNul
+import System
+func Main() {
+    Console.WriteLine("${b"` + "\u0000" + `"[0]}")
+    Console.WriteLine("${b"\0"[0]}")
+}`, "0\n0\n"}
             yield[]object{`package ByteArrayConversion
 import System
 func Main() {

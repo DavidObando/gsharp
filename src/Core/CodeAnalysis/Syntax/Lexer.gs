@@ -1032,7 +1032,7 @@ class Lexer {
     private func SkipInterpolationNestedLiteral(quote char, interpolate bool = true) bool {
         position++ // consume opening delimiter
         if quote == '"' {
-            while Current != '\u0000' && Current != '\r' && Current != '\n' {
+            while position < end && (!interpolate || Current != '\u0000') && Current != '\r' && Current != '\n' {
                 if Current == '\\' && Lookahead != '\u0000' {
                     position += 2 // skip escaped character
                     continue

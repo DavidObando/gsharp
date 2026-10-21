@@ -100,8 +100,8 @@ internal shared class Program {
             var original string
             var sourceText SourceText
             try {
-                original = File.ReadAllText(path)
-                sourceText = SourceText.From(original, path, File.ReadAllBytes(path))
+                sourceText = SourceText.Load(path)
+                original = sourceText.ToString()
             } catch (ex Exception) when ex is IOException || ex is UnauthorizedAccessException {
                 Console.Error.WriteLine("gsfmt: $path: ${ex.Message}")
                 failed = true

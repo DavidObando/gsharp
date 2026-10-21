@@ -8013,6 +8013,7 @@ type sealed class GSharp.Core.CodeAnalysis.Text.SourceText : System.Object
   method public String get_FileName()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Text.TextLine> get_Lines()
   method public static GSharp.Core.CodeAnalysis.Text.SourceText From(String text, String fileName = "", Byte[] rawBytes = null)
+  method public static GSharp.Core.CodeAnalysis.Text.SourceText Load(String filePath)
   method public virtual override String ToString()
   property public Byte[] RawBytes { get; }
   property public Char Item[Int32] { get; }

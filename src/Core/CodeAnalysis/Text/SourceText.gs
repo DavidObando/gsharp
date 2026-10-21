@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.Text
 
 import System
 import System.Collections.Immutable
+import System.IO
 import System.Text
 
 /// The source text of the compilation target. Represents the document.
@@ -103,6 +104,16 @@ class SourceText {
     func ToString(span TextSpan) string -> ToString(span.Start, span.Length)
 
     shared {
+        /// Loads and decodes one byte snapshot, retaining it for encoding validation and source checksums.
+        /// @param filePath The source file path.
+        /// @returns A source document decoded with BOM detection.
+        func Load(filePath string) SourceText {
+            let bytes = File.ReadAllBytes(filePath)
+            using let stream = MemoryStream(bytes, writable: false)
+            using let reader = StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true)
+            return From(reader.ReadToEnd(), filePath, bytes)
+        }
+
         private func ValidateEncoding(bytes[]?uint8) bool {
             if bytes == nil {
                 return true

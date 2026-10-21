@@ -349,6 +349,8 @@ literal escapes/scalars or lossy on-disk source decoding. Loading a file with
 byte literals checks its original BOM-selected encoding strictly once per source document,
 including all interpolation-hole parsers;
 ordinary files without byte literals retain their existing loader behavior.
+File loaders decode and retain one byte buffer, including BOM detection, so parsing
+and encoding validation cannot observe different disk reads.
 The REPL's existing compiled submission path uses the same bound imported call,
 not a separate string-based interpreter representation.
 
