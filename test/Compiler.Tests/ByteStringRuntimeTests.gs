@@ -15,6 +15,22 @@ import System.Threading.Tasks
 import Xunit
 
 class ByteStringRuntimeTests {
+    @Fact
+    func Utf8DecodingAllocatesResultStorageRatherThanOneStringPerScalar() {
+        let value = ByteString.FromLiteral(String('4', 16_384))
+        let expected = String('D', 8192)
+        value.DecodeUtf8(Utf8Decoding.Strict)
+        value.DecodeUtf8(Utf8Decoding.ReplaceInvalidByte)
+        let before = GC.GetAllocatedBytesForCurrentThread()
+        let strict = value.DecodeUtf8(Utf8Decoding.Strict)
+        let replacement = value.DecodeUtf8(Utf8Decoding.ReplaceInvalidByte)
+        let allocated = GC.GetAllocatedBytesForCurrentThread() - before
+        Assert.Equal(expected, strict)
+        Assert.Equal(expected, replacement)
+        // Allow builder chunks and returned strings, but not a temporary string per ASCII scalar.
+        Assert.True(allocated < 98_304, "UTF-8 decoding allocated " + allocated.ToString() + " bytes.")
+    }
+
     @Theory
     @InlineData("", "")
     @InlineData("007F", "\0\u007F")

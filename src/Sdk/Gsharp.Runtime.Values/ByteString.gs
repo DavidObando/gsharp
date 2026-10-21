@@ -171,6 +171,7 @@ struct ByteString : IEquatable[ByteString], IComparable[ByteString], IEnumerable
     /// Decodes UTF-8 with an explicit policy, without normalization or BOM stripping.
     /// Strict failures throw (cref:ByteStringEncodingException) at the malformed sequence's first byte.
     /// Offsets are relative to this value. No partial string is returned.
+    /// Invalid policies throw (cref:ArgumentOutOfRangeException), including on empty input.
     /// @param policy The required malformed-input policy.
     /// @returns The decoded CLR string, preserving embedded NUL and BOM characters.
     func DecodeUtf8(policy Utf8Decoding) string {
@@ -178,6 +179,7 @@ struct ByteString : IEquatable[ByteString], IComparable[ByteString], IEnumerable
             throw ArgumentOutOfRangeException("policy")
         }
         let result = StringBuilder()
+        let buffer = [2]char
         var cursor = 0
         while cursor < Length {
             let source = cast[ReadOnlySpan[uint8]](Owner.AsSpan(offset + cursor, Length - cursor))
@@ -190,7 +192,8 @@ struct ByteString : IEquatable[ByteString], IComparable[ByteString], IEnumerable
                 result.Append('\uFFFD')
                 cursor++
             } else {
-                result.Append(scalar.ToString())
+                let written = scalar.EncodeToUtf16(buffer.AsSpan())
+                result.Append(buffer, 0, written)
                 cursor += consumed
             }
         }
@@ -278,6 +281,7 @@ struct ByteString : IEquatable[ByteString], IComparable[ByteString], IEnumerable
         /// Encodes CLR text as UTF-8 without normalization or BOM insertion.
         /// Strict failures throw (cref:ByteStringEncodingException) at the first unpaired UTF-16 code unit.
         /// No partial value is returned. Null CLR text throws (cref:ArgumentNullException).
+        /// Invalid policies throw (cref:ArgumentOutOfRangeException), including on empty input.
         /// @param text The non-null CLR string to encode.
         /// @param policy The required unpaired-surrogate policy.
         /// @returns An immutable byte string, preserving embedded NUL and BOM characters.
