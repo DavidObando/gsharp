@@ -1,4 +1,38 @@
 <Project>
    <!-- Disable test targets for non-test projects -->
   <Import Project="$(MSBuildThisFileDirectory)notest.targets" Condition="'$(IsTestProject)' != 'true'" />
+
+  <!-- The pinned SDK does not track compiler contents as a compilation input.
+       Track tool closures before reusing repository outputs for SDK publication. -->
+  <Target Name="_GsharpTrackRepositoryBuildTools"
+          BeforeTargets="CoreCompile;_GsharpRunSourceGenerators"
+          DependsOnTargets="ResolveReferences;_GsharpResolveAnalyzers"
+          Condition="'$(Language)' == 'Gsharp' and '$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <_GsharpRepositoryBuildTool Include="$([System.IO.Path]::GetDirectoryName('$(GsharpCompilerFullPath)'))/**/*;
+                                           $([System.IO.Path]::GetDirectoryName('$(GsgenToolFullPath)'))/**/*;
+                                           $(GsharpToolFullPath);
+                                           @(GsharpCodeAnalyzer);
+                                           @(GsharpAnalyzer)" />
+    </ItemGroup>
+    <GetFileHash Files="@(_GsharpRepositoryBuildTool)" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="_GsharpRepositoryBuildToolHash" />
+    </GetFileHash>
+    <PropertyGroup>
+      <_GsharpRepositoryBuildToolsCache>$(IntermediateOutputPath)repository-build-tools.cache</_GsharpRepositoryBuildToolsCache>
+    </PropertyGroup>
+    <MakeDir Directories="$(IntermediateOutputPath)" />
+    <WriteLinesToFile File="$(_GsharpRepositoryBuildToolsCache)"
+                      Lines="@(_GsharpRepositoryBuildToolHash->'%(FullPath)|%(FileHash)');
+                             @(Compile->'SOURCE:%(FullPath)');
+                             @(ReferencePathWithRefAssemblies->'REFERENCE:%(FullPath)');
+                             @(GsharpCodeAnalyzer->'ANALYZER:%(FullPath)')"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <PropertyGroup>
+      <MSBuildAllProjects>$(MSBuildAllProjects);$(_GsharpRepositoryBuildToolsCache)</MSBuildAllProjects>
+    </PropertyGroup>
+    <ItemGroup>
+      <FileWrites Include="$(_GsharpRepositoryBuildToolsCache)" />
+    </ItemGroup>
+  </Target>
 </Project>

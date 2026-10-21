@@ -37,4 +37,6 @@
     <InternalsVisibleTo Include="GSharp.Formatting.Tests" />
   </ItemGroup>
 
+  <Import Project="../../../build/sdk-publish.targets" Condition="'$(ImportDirectoryBuildProps)' != 'false'" />
+
 </Project>

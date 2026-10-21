@@ -218,7 +218,9 @@ class MatrixAndGraphTests(unittest.TestCase):
             return (path.parent / value.replace("\\", "/")).resolve()
 
         references = {resolve(node.attrib["Include"]) for node in tree.iter("ProjectReference")}
-        invoked = {resolve(node.attrib["Projects"]) for node in tree.iter("MSBuild")}
+        # The native reference walker only invokes projects from ProjectReference.
+        invoked = {resolve(node.attrib["Projects"]) for node in tree.iter("MSBuild")
+                   if node.attrib["Projects"] != "@(_MSBuildProjectReferenceExistent)"}
         self.assertTrue(invoked)
         self.assertFalse(invoked - references, f"pack tools missing from restore graph: {invoked - references}")
 

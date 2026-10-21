@@ -1,0 +1,44 @@
+<Project>
+  <PropertyGroup>
+    <_GsharpSdkPublishDirOverridden Condition="'$(PublishDir)' != ''">true</_GsharpSdkPublishDirOverridden>
+  </PropertyGroup>
+  <!-- Build and Publish use the same project instance and global properties.
+       Only the publish destination changes after Build completes. -->
+  <Target Name="_GsharpPrepareSdkPublish">
+    <PropertyGroup>
+      <_GsharpSdkPublishCompatible Condition="'$(TargetFramework)' == '$(GsharpCompilerPackageTargetFramework)' and
+                                             '$(SelfContained)' != 'true' and
+                                             '$(PublishReadyToRun)' != 'true' and
+                                             '$(PublishSingleFile)' != 'true' and
+                                             '$(PublishAot)' != 'true' and
+                                             '$(PublishTrimmed)' != 'true' and
+                                             '$(_GsharpSdkPublishDirOverridden)' != 'true' and
+                                             '$(NoBuild)' != 'true' and
+                                             '$(BuildProjectReferences)' != 'false' and
+                                             '$(ImportDirectoryBuildProps)' != 'false'">true</_GsharpSdkPublishCompatible>
+    </PropertyGroup>
+    <Message Importance="High" Condition="'$(_GsharpSdkPublishCompatible)' != 'true'"
+             Text="SDK staging uses an isolated Publish graph for $(MSBuildProjectName): TargetFramework=$(TargetFramework), package framework=$(GsharpCompilerPackageTargetFramework), SelfContained=$(SelfContained), PublishReadyToRun=$(PublishReadyToRun), PublishSingleFile=$(PublishSingleFile), PublishAot=$(PublishAot), PublishTrimmed=$(PublishTrimmed), PublishDir=$(PublishDir), NoBuild=$(NoBuild), BuildProjectReferences=$(BuildProjectReferences)." />
+  </Target>
+
+  <Target Name="_GsharpSetSdkPublishDir" DependsOnTargets="Build">
+    <PropertyGroup>
+      <PublishDir>$([MSBuild]::NormalizeDirectory('$(IntermediateOutputPath)', 'sdk-publish'))</PublishDir>
+    </PropertyGroup>
+    <RemoveDir Directories="$(PublishDir)" Condition="Exists('$(PublishDir)')" />
+  </Target>
+
+  <Target Name="_GsharpPublishSdkPayload"
+          Condition="'$(_GsharpSdkPublishCompatible)' == 'true'"
+          DependsOnTargets="_GsharpSetSdkPublishDir;Publish">
+    <ItemGroup>
+      <_GsharpSdkPublishPayload Include="$(PublishDir)**/*" />
+    </ItemGroup>
+    <Error Condition="'@(_GsharpSdkPublishPayload)' == ''"
+           Text="SDK publish output is empty under '$(PublishDir)'." />
+  </Target>
+
+  <Target Name="_GsharpGetSdkPublishPayload"
+          DependsOnTargets="_GsharpPrepareSdkPublish;_GsharpPublishSdkPayload"
+          Returns="@(_GsharpSdkPublishPayload)" />
+</Project>

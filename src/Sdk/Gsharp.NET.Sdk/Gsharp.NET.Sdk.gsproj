@@ -27,7 +27,7 @@
 
     <!-- TFM used to publish the gsc compiler payload into the NuGet. The host
          dotnet must have a runtime for this TFM installed for the SDK to work. -->
-    <GsharpCompilerPackageTargetFramework>net10.0</GsharpCompilerPackageTargetFramework>
+    <GsharpCompilerPackageTargetFramework Condition="'$(GsharpCompilerPackageTargetFramework)' == ''">net10.0</GsharpCompilerPackageTargetFramework>
   </PropertyGroup>
 
   <ItemGroup>
@@ -115,23 +115,23 @@
     </ItemGroup>
   </Target>
 
-  <!-- Publish the gsc compiler (and its full closure) into a staging dir, then
-       pack everything under tools/compiler/. We must use Publish (not Build) so
-       the framework-dependent app's full file set lands in one place.
-
-       The publish is routed into an SDK-local OutDir (and matching obj dir) so
-       it does not race with the regular Compiler build node — both ran against
-       the shared OutputPath defined in build/gsharp.build.props, which caused
-       intermittent CI failures while two MSBuild nodes wrote
-       gsc.runtimeconfig.json concurrently. -->
-  <Target Name="PackGsharpCompiler" BeforeTargets="_GetPackageFiles">
+  <!-- Publish in the normal reference instance after Build, with a separate
+       destination. Incompatible publish settings retain isolated build outputs. -->
+  <Target Name="PackGsharpCompiler" BeforeTargets="_GetPackageFiles" DependsOnTargets="ResolveProjectReferences">
     <PropertyGroup>
       <_GsharpCompilerPublishDir>$(IntermediateOutputPath)gsc-publish\</_GsharpCompilerPublishDir>
       <_GsharpCompilerStagingOutDir>$(IntermediateOutputPath)gsc-staging\bin\</_GsharpCompilerStagingOutDir>
     </PropertyGroup>
-    <RemoveDir Directories="$(_GsharpCompilerPublishDir)" Condition="Exists('$(_GsharpCompilerPublishDir)')" />
-    <MSBuild Projects="$(MSBuildThisFileDirectory)../../Compiler/Compiler.gsproj" Targets="Publish" Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsharpCompilerPublishDir);BaseOutputPath=$(_GsharpCompilerStagingOutDir);GsharpObjRoot=$(IntermediateOutputPath)gsc-staging-obj;SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
-    <ItemGroup>
+    <MSBuild Projects="@(_MSBuildProjectReferenceExistent)"
+             Targets="_GsharpGetSdkPublishPayload"
+             Properties="%(_MSBuildProjectReferenceExistent.SetConfiguration);%(_MSBuildProjectReferenceExistent.SetPlatform);%(_MSBuildProjectReferenceExistent.SetTargetFramework)"
+             RemoveProperties="%(_MSBuildProjectReferenceExistent.GlobalPropertiesToRemove)$(_GlobalPropertiesToRemoveFromProjectReferences)"
+             Condition="'$(ImportDirectoryBuildProps)' != 'false' and '%(_MSBuildProjectReferenceExistent.Filename)' == 'Compiler' and '%(_MSBuildProjectReferenceExistent.BuildReference)' == 'true'">
+      <Output TaskParameter="TargetOutputs" ItemName="_GsharpCompilerPayload" />
+    </MSBuild>
+    <RemoveDir Directories="$(_GsharpCompilerPublishDir)" Condition="'@(_GsharpCompilerPayload)' == '' and Exists('$(_GsharpCompilerPublishDir)')" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)../../Compiler/Compiler.gsproj" Targets="Publish" Condition="'@(_GsharpCompilerPayload)' == ''" Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsharpCompilerPublishDir);BaseOutputPath=$(_GsharpCompilerStagingOutDir);GsharpObjRoot=$(IntermediateOutputPath)gsc-staging-obj;SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
+    <ItemGroup Condition="'@(_GsharpCompilerPayload)' == ''">
       <_GsharpCompilerPayload Include="$(_GsharpCompilerPublishDir)**\*" />
     </ItemGroup>
     <Error Condition="'@(_GsharpCompilerPayload)' == ''" Text="gsc compiler publish output is empty under '$(_GsharpCompilerPublishDir)'." />
@@ -140,14 +140,21 @@
     </ItemGroup>
   </Target>
 
-  <Target Name="PackGsharpFormatter" BeforeTargets="_GetPackageFiles">
+  <Target Name="PackGsharpFormatter" BeforeTargets="_GetPackageFiles" DependsOnTargets="ResolveProjectReferences">
     <PropertyGroup>
       <_GsharpFormatterPublishDir>$(IntermediateOutputPath)gsfmt-publish\</_GsharpFormatterPublishDir>
       <_GsharpFormatterStagingOutDir>$(IntermediateOutputPath)gsfmt-staging\bin\</_GsharpFormatterStagingOutDir>
     </PropertyGroup>
-    <RemoveDir Directories="$(_GsharpFormatterPublishDir)" Condition="Exists('$(_GsharpFormatterPublishDir)')" />
-    <MSBuild Projects="$(MSBuildThisFileDirectory)../../Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj" Targets="Publish" Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsharpFormatterPublishDir);BaseOutputPath=$(_GsharpFormatterStagingOutDir);GsharpObjRoot=$(IntermediateOutputPath)gsfmt-staging-obj;SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
-    <ItemGroup>
+    <MSBuild Projects="@(_MSBuildProjectReferenceExistent)"
+             Targets="_GsharpGetSdkPublishPayload"
+             Properties="%(_MSBuildProjectReferenceExistent.SetConfiguration);%(_MSBuildProjectReferenceExistent.SetPlatform);%(_MSBuildProjectReferenceExistent.SetTargetFramework)"
+             RemoveProperties="%(_MSBuildProjectReferenceExistent.GlobalPropertiesToRemove)$(_GlobalPropertiesToRemoveFromProjectReferences)"
+             Condition="'$(ImportDirectoryBuildProps)' != 'false' and '%(_MSBuildProjectReferenceExistent.Filename)' == 'Gsfmt.Cli' and '%(_MSBuildProjectReferenceExistent.BuildReference)' == 'true'">
+      <Output TaskParameter="TargetOutputs" ItemName="_GsharpFormatterPayload" />
+    </MSBuild>
+    <RemoveDir Directories="$(_GsharpFormatterPublishDir)" Condition="'@(_GsharpFormatterPayload)' == '' and Exists('$(_GsharpFormatterPublishDir)')" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)../../Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj" Targets="Publish" Condition="'@(_GsharpFormatterPayload)' == ''" Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsharpFormatterPublishDir);BaseOutputPath=$(_GsharpFormatterStagingOutDir);GsharpObjRoot=$(IntermediateOutputPath)gsfmt-staging-obj;SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
+    <ItemGroup Condition="'@(_GsharpFormatterPayload)' == ''">
       <_GsharpFormatterPayload Include="$(_GsharpFormatterPublishDir)**\*" />
     </ItemGroup>
     <Error Condition="'@(_GsharpFormatterPayload)' == ''" Text="gsfmt publish output is empty under '$(_GsharpFormatterPublishDir)'." />
@@ -161,14 +168,21 @@
        pack everything under tools/gsgen/. Mirrors PackGsharpCompiler. The publish
        closure is large today (it drags in MSBuildWorkspace via the translator);
        a follow-up will trim it via a project split. -->
-  <Target Name="PackGsgen" BeforeTargets="_GetPackageFiles">
+  <Target Name="PackGsgen" BeforeTargets="_GetPackageFiles" DependsOnTargets="ResolveProjectReferences">
     <PropertyGroup>
       <_GsgenPublishDir>$(IntermediateOutputPath)gsgen-publish\</_GsgenPublishDir>
       <_GsgenStagingOutDir>$(IntermediateOutputPath)gsgen-staging\bin\</_GsgenStagingOutDir>
     </PropertyGroup>
-    <RemoveDir Directories="$(_GsgenPublishDir)" Condition="Exists('$(_GsgenPublishDir)')" />
-    <MSBuild Projects="$(MSBuildThisFileDirectory)../../../tools/gsgen/Gsgen.Cli/Gsgen.Cli.gsproj" Targets="Publish" Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsgenPublishDir);BaseOutputPath=$(_GsgenStagingOutDir);GsharpObjRoot=$(IntermediateOutputPath)gsgen-staging-obj;SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
-    <ItemGroup>
+    <MSBuild Projects="@(_MSBuildProjectReferenceExistent)"
+             Targets="_GsharpGetSdkPublishPayload"
+             Properties="%(_MSBuildProjectReferenceExistent.SetConfiguration);%(_MSBuildProjectReferenceExistent.SetPlatform);%(_MSBuildProjectReferenceExistent.SetTargetFramework)"
+             RemoveProperties="%(_MSBuildProjectReferenceExistent.GlobalPropertiesToRemove)$(_GlobalPropertiesToRemoveFromProjectReferences)"
+             Condition="'$(ImportDirectoryBuildProps)' != 'false' and '%(_MSBuildProjectReferenceExistent.Filename)' == 'Gsgen.Cli' and '%(_MSBuildProjectReferenceExistent.BuildReference)' == 'true'">
+      <Output TaskParameter="TargetOutputs" ItemName="_GsgenPayload" />
+    </MSBuild>
+    <RemoveDir Directories="$(_GsgenPublishDir)" Condition="'@(_GsgenPayload)' == '' and Exists('$(_GsgenPublishDir)')" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)../../../tools/gsgen/Gsgen.Cli/Gsgen.Cli.gsproj" Targets="Publish" Condition="'@(_GsgenPayload)' == ''" Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsgenPublishDir);BaseOutputPath=$(_GsgenStagingOutDir);GsharpObjRoot=$(IntermediateOutputPath)gsgen-staging-obj;SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
+    <ItemGroup Condition="'@(_GsgenPayload)' == ''">
       <_GsgenPayload Include="$(_GsgenPublishDir)**\*" />
     </ItemGroup>
     <Error Condition="'@(_GsgenPayload)' == ''" Text="gsgen publish output is empty under '$(_GsgenPublishDir)'." />

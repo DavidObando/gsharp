@@ -6,9 +6,13 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
+import re
+import subprocess
 import tempfile
 import unittest
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -19,6 +23,240 @@ packer = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(packer)
 
 GENERATED = 'Sdk="Gsharp.NET.Sdk/0.4.1129"'
+
+
+class SdkPublishGraphTests(unittest.TestCase):
+    """Run the repository pack targets against a small native SDK graph."""
+
+    def setUp(self) -> None:
+        self.workspace = tempfile.TemporaryDirectory()
+        self.addCleanup(self.workspace.cleanup)
+        self.root = Path(self.workspace.name)
+        write(self.root / "Directory.Build.props", """<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GsharpCompilerPackageTargetFramework>net10.0</GsharpCompilerPackageTargetFramework>
+    <BaseOutputPath>$(MSBuildThisFileDirectory)out/$(Configuration)/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)obj/$(MSBuildProjectName)/</BaseIntermediateOutputPath>
+    <OutputPath>$(BaseOutputPath)$(MSBuildProjectName)/</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <IntermediateOutputPath Condition="'$(GsharpObjRoot)' != ''">$(GsharpObjRoot)/$(MSBuildProjectName)/</IntermediateOutputPath>
+    <NuGetAudit>false</NuGetAudit>
+  </PropertyGroup>
+</Project>""")
+        write(self.root / "Directory.Build.targets", "<Project/>")
+        write(self.root / "Shared/Shared.csproj", '<Project Sdk="Microsoft.NET.Sdk"/>')
+        write(self.root / "Shared/Value.cs", "public class Value { public static int Number => 42; }")
+        products = {
+            "Compiler": "src/Compiler/Compiler.gsproj",
+            "Gsfmt.Cli": "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj",
+            "Gsgen.Cli": "tools/gsgen/Gsgen.Cli/Gsgen.Cli.gsproj",
+        }
+        for name, relative in products.items():
+            product = REPO / relative
+            imports = [node for node in ET.parse(product).getroot().findall("Import")
+                       if node.get("Project", "").endswith("sdk-publish.targets")]
+            self.assertEqual(1, len(imports), relative)
+            imported = imports[0]
+            imported.set("Project", str((product.parent / imported.attrib["Project"]).resolve()))
+            import_xml = ET.tostring(imported, encoding="unicode")
+            write(self.root / f"{name}/{name}.csproj", f"""<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Shared/Shared.csproj"/>
+    <None Include="nested/payload.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"/>
+  </ItemGroup>
+  {import_xml}
+</Project>""")
+            write(self.root / f"{name}/Program.cs", "System.Console.WriteLine(Value.Number);")
+            write(self.root / f"{name}/nested/payload.txt", name)
+        source = ET.parse(REPO / "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj").getroot()
+        driver = ET.Element("Project", {"Sdk": "Microsoft.NET.Sdk"})
+        properties = ET.SubElement(driver, "PropertyGroup")
+        for name, value in (("GeneratePackageOnBuild", "true"), ("IncludeBuildOutput", "false"),
+                            ("SuppressDependenciesWhenPacking", "true")):
+            ET.SubElement(properties, name).text = value
+        references = ET.SubElement(driver, "ItemGroup")
+        target_names = ("PackGsharpCompiler", "PackGsharpFormatter", "PackGsgen")
+        for name, target_name in zip(("Compiler", "Gsfmt.Cli", "Gsgen.Cli"), target_names):
+            child = str(self.root / name / f"{name}.csproj")
+            ET.SubElement(references, "ProjectReference", {
+                "Include": child, "ReferenceOutputAssembly": "false",
+                "SkipGetTargetFrameworkProperties": "true",
+            })
+            target = source.find(f"./Target[@Name='{target_name}']")
+            assert target is not None
+            for task in target.findall("MSBuild"):
+                if task.get("Targets") == "Publish":
+                    task.set("Projects", child)
+            driver.append(target)
+        ET.SubElement(ET.SubElement(driver, "ItemGroup"), "ProjectReferenceTargets",
+                      {"Include": "Stage", "Targets": "Build"})
+        stage = ET.SubElement(driver, "Target", {
+            "Name": "Stage", "DependsOnTargets": "Build;" + ";".join(target_names),
+        })
+        ET.SubElement(stage, "WriteLinesToFile", {
+            "File": "$(MSBuildProjectDirectory)/manifest.txt",
+            "Lines": "@(_GsharpCompilerPayload);@(_GsharpFormatterPayload);@(_GsgenPayload)",
+            "Overwrite": "true",
+        })
+        write(self.root / "Driver/Driver.csproj", ET.tostring(driver, encoding="unicode"))
+
+    def dotnet(self, *args: str, success: bool = True) -> str:
+        env = dict(os.environ, MSBUILDDISABLENODEREUSE="1",
+                   DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER="1")
+        result = subprocess.run(
+            ["dotnet", *args, "-m:1", "-nr:false", "-p:UseSharedCompilation=false"],
+            cwd=self.root, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=120)
+        if success:
+            self.assertEqual(0, result.returncode, result.stdout[-12000:])
+        else:
+            self.assertNotEqual(0, result.returncode, result.stdout[-12000:])
+        return result.stdout
+
+    def stage(self, configuration: str = "Release", *properties: str) -> str:
+        return self.dotnet("msbuild", "Driver/Driver.csproj", "-restore", "-graph",
+                           "-t:Stage", f"-p:Configuration={configuration}", "-v:normal", *properties)
+
+    def test_cold_changed_noop_and_publish_closure_use_the_reference_build(self) -> None:
+        first = self.stage()
+        # Shared, three apps, and Driver each compile once, not once per publish graph.
+        self.assertEqual(5, len(re.findall(r"^\s*CoreCompile:", first, re.MULTILINE)), first)
+        self.assertNotIn("staging-obj", first)
+        manifest = (self.root / "Driver/manifest.txt").read_text().splitlines()
+        self.assertTrue(manifest)
+        for name in ("Compiler", "Gsfmt.Cli", "Gsgen.Cli"):
+            files = [Path(line) for line in manifest if f"/{name}/" in line]
+            self.assertTrue(files, manifest)
+            names = {path.name for path in files}
+            self.assertTrue({f"{name}.dll", f"{name}.pdb", f"{name}.deps.json",
+                             f"{name}.runtimeconfig.json", "Shared.dll", "Shared.pdb",
+                             "payload.txt"}.issubset(names), names)
+            self.assertTrue(all(path.is_file() for path in files))
+            payload = next(path for path in files if path.name == "payload.txt")
+            self.assertEqual("nested", payload.parent.name)
+            self.assertEqual(name, payload.read_text())
+        packages = list((self.root / "out/Release/Driver").glob("*.nupkg"))
+        self.assertEqual(1, len(packages))
+        with zipfile.ZipFile(packages[0]) as archive:
+            entries = {str(Path(name)): name for name in archive.namelist()}
+            for folder, name in (("compiler", "Compiler"), ("formatter", "Gsfmt.Cli"),
+                                 ("gsgen", "Gsgen.Cli")):
+                self.assertEqual(name.encode(), archive.read(entries[f"tools/{folder}/payload.txt"]))
+                for suffix in (".dll", ".pdb", ".runtimeconfig.json", ".deps.json"):
+                    self.assertIn(f"tools/{folder}/{name}{suffix}", entries)
+        normal = self.root / "out/Release/Shared/Shared.dll"
+        before = normal.read_bytes()
+        write(self.root / "Shared/Value.cs", "public class Value { public static int Number => 43; }")
+        changed = self.stage()
+        self.assertNotEqual(before, normal.read_bytes())
+        for line in manifest:
+            if line.endswith("/Shared.dll"):
+                self.assertEqual(normal.read_bytes(), Path(line).read_bytes())
+        compiler = next(line for line in manifest if line.endswith("/Compiler.dll"))
+        result = subprocess.run(["dotnet", compiler], cwd=self.root, capture_output=True,
+                                text=True, timeout=30)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("43", result.stdout.strip())
+        self.assertNotIn("staging-obj", changed)
+        noop = self.stage()
+        self.assertNotIn("staging-obj", noop)
+        self.assertNotIn("csc.dll", noop)
+        # Remove obsolete publication files without writing into the build output.
+        obsolete = next(Path(line).parent for line in manifest if line.endswith("/Compiler.dll")) / "obsolete.dll"
+        obsolete.write_text("stale")
+        self.stage()
+        self.assertFalse(obsolete.exists())
+        self.assertFalse((normal.parent / "obsolete.dll").exists())
+        flagged = self.stage("Release", "-p:Version=2.0.0")
+        self.assertEqual(5, len(re.findall(r"^\s*CoreCompile:", flagged, re.MULTILINE)), flagged)
+        self.assertNotIn("staging-obj", flagged)
+        self.assertNotIn("csc.dll", self.stage("Release", "-p:Version=2.0.0"))
+        release = normal.read_bytes()
+        self.stage("Debug")
+        self.assertEqual(release, normal.read_bytes())
+        debug = (self.root / "Driver/manifest.txt").read_text().splitlines()
+        self.assertTrue(debug)
+        self.assertTrue(all("/Debug/" in line for line in debug), debug)
+
+    def test_direct_pack_target_builds_then_stages(self) -> None:
+        output = self.dotnet("msbuild", "Driver/Driver.csproj", "-restore",
+                             "-t:PackGsharpCompiler", "-p:Configuration=Debug", "-v:normal")
+        self.assertNotIn("staging-obj", output)
+        self.assertTrue((self.root / "obj/Compiler/Debug/sdk-publish/Compiler.dll").is_file())
+
+    def test_different_publish_settings_do_not_reuse_the_normal_graph(self) -> None:
+        for prop, value in (("TargetFramework", "net9.0"), ("SelfContained", "true"),
+                            ("PublishReadyToRun", "true"), ("PublishSingleFile", "true"),
+                            ("PublishAot", "true"), ("PublishTrimmed", "true"),
+                            ("PublishDir", str(self.root / "custom-publish")),
+                            ("NoBuild", "true"), ("BuildProjectReferences", "false")):
+            with self.subTest(prop=prop):
+                output = self.dotnet("msbuild", "Compiler/Compiler.csproj",
+                                     "-t:_GsharpGetSdkPublishPayload", f"-p:{prop}={value}",
+                                     "-getTargetResult:_GsharpGetSdkPublishPayload")
+                self.assertEqual([], json.loads(output[output.index("{"):])[
+                    "TargetResults"]["_GsharpGetSdkPublishPayload"]["Items"])
+
+    def test_incompatible_publish_context_uses_the_isolated_graph(self) -> None:
+        write(self.root / "Compiler/Compiler.csproj",
+              (self.root / "Compiler/Compiler.csproj").read_text().replace(
+                  "<OutputType>Exe</OutputType>", "<OutputType>Exe</OutputType><PublishSingleFile>true</PublishSingleFile>"))
+        output = self.stage()
+        self.assertIn("SDK staging uses an isolated Publish graph for Compiler:", output)
+        self.assertIn("gsc-staging", output)
+        self.assertTrue((self.root / "Driver/manifest.txt").read_text().strip())
+
+    def test_empty_publish_fails_instead_of_falling_back(self) -> None:
+        compiler = self.root / "Compiler/Compiler.csproj"
+        compiler.write_text(compiler.read_text().replace("</Project>", """
+  <Target Name="RemovePublication" AfterTargets="Publish" Condition="'$(_GsharpSdkPublishCompatible)' == 'true'">
+    <RemoveDir Directories="$(PublishDir)"/>
+  </Target>
+</Project>"""))
+        output = self.dotnet("msbuild", "Driver/Driver.csproj", "-restore", "-graph",
+                             "-t:Stage", "-p:Configuration=Release", success=False)
+        self.assertIn("SDK publish output is empty", output)
+
+    def test_compiler_contents_and_input_membership_invalidate_repository_outputs(self) -> None:
+        tool = self.root / "tools/compiler.dll"
+        write(tool, "compiler version one")
+        write(self.root / "tools/generator.dll", "generator")
+        write(self.root / "tools/task.dll", "task")
+        write(self.root / "Input.gs", "input")
+        write(self.root / "Removed.gs", "removed input")
+        write(self.root / "Inputs.proj", f"""<Project DefaultTargets="Build">
+  <PropertyGroup>
+    <Language>Gsharp</Language>
+    <IsTestProject>true</IsTestProject>
+    <IntermediateOutputPath>obj/inputs/</IntermediateOutputPath>
+    <GsharpCompilerFullPath>$(MSBuildProjectDirectory)/tools/compiler.dll</GsharpCompilerFullPath>
+    <GsgenToolFullPath>$(MSBuildProjectDirectory)/tools/generator.dll</GsgenToolFullPath>
+    <GsharpToolFullPath>$(MSBuildProjectDirectory)/tools/task.dll</GsharpToolFullPath>
+  </PropertyGroup>
+  <ItemGroup><Compile Include="Input.gs;Removed.gs"/></ItemGroup>
+  <Import Project="{REPO / 'build/gsharp.build.targets'}"/>
+  <Target Name="ResolveReferences"/>
+  <Target Name="_GsharpResolveAnalyzers"/>
+  <Target Name="Build" DependsOnTargets="CoreCompile"/>
+  <Target Name="CoreCompile" Inputs="$(MSBuildAllProjects);@(Compile)" Outputs="obj/inputs/result.dll">
+    <Message Text="COMPILING_REPOSITORY_INPUTS" Importance="High"/>
+    <WriteLinesToFile File="obj/inputs/result.dll" Lines="built" Overwrite="true"/>
+  </Target>
+</Project>""")
+        self.assertIn("COMPILING_REPOSITORY_INPUTS", self.dotnet("msbuild", "Inputs.proj"))
+        self.assertNotIn("COMPILING_REPOSITORY_INPUTS", self.dotnet("msbuild", "Inputs.proj"))
+        timestamp = tool.stat()
+        tool.write_text("compiler version two")
+        os.utime(tool, ns=(timestamp.st_atime_ns, timestamp.st_mtime_ns))
+        self.assertIn("COMPILING_REPOSITORY_INPUTS", self.dotnet("msbuild", "Inputs.proj"))
+        self.assertNotIn("COMPILING_REPOSITORY_INPUTS", self.dotnet("msbuild", "Inputs.proj"))
+        inputs = self.root / "Inputs.proj"
+        timestamp = inputs.stat()
+        inputs.write_text(inputs.read_text().replace("Input.gs;Removed.gs", "Input.gs"))
+        os.utime(inputs, ns=(timestamp.st_atime_ns, timestamp.st_mtime_ns))
+        self.assertIn("COMPILING_REPOSITORY_INPUTS", self.dotnet("msbuild", "Inputs.proj"))
 
 
 def project(sdk_attribute: str, body: str = "") -> str:
