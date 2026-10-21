@@ -22,12 +22,22 @@ enum Utf8Decoding {
     ReplaceInvalidByte
 }
 
-/// Identifies the encoding and offset unit of a failed text conversion.
+/// Selects how signed code-point input handles invalid Unicode scalars.
+enum CodePointEncoding {
+    /// Reject the first negative, surrogate or out-of-range value.
+    Strict,
+    /// Encode each invalid element as U+FFFD.
+    ReplaceInvalidCodePoint
+}
+
+/// Identifies the input kind and offset unit of a failed conversion.
 enum ByteStringInputKind {
     /// UTF-8 input, with offsets measured in bytes.
     Utf8,
     /// UTF-16 input, with offsets measured in code units.
-    Utf16
+    Utf16,
+    /// Signed code-point input, with offsets measured in input elements.
+    CodePoints
 }
 
 /// A decoded Unicode scalar and its byte range relative to the input value.
@@ -54,7 +64,7 @@ struct Utf8Item {
     }
 }
 
-/// Reports the first malformed input in a strict text conversion or scalar iteration.
+/// Reports the first invalid input in a strict conversion or scalar iteration.
 sealed class ByteStringEncodingException : Exception {
     internal init(inputKind ByteStringInputKind, offset int32) : base(
         "Invalid " + inputKind.ToString() + " input at offset " + offset.ToString() + "."
@@ -63,7 +73,7 @@ sealed class ByteStringEncodingException : Exception {
         Offset = offset
     }
 
-    /// Gets the input encoding and offset unit.
+    /// Gets the input kind and offset unit.
     prop InputKind ByteStringInputKind {
         get;
     }

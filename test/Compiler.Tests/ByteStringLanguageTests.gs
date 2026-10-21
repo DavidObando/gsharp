@@ -17,6 +17,63 @@ import Xunit
 
 class ByteStringLanguageTests {
     @Fact
+    func CodePointCollectionsBindVerifyAndRunWithIndependentCSharpContracts() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = fixture.CompileCSharp(`using System;
+using Gsharp.Values;
+namespace CodePointInteropContract;
+public static class CodePointContract {
+    public static ByteString Encode(ReadOnlySlice<int> source, CodePointEncoding policy) =>
+        ByteString.FromCodePoints(source, policy);
+    public static Slice<int> Decode(ByteString value, Utf8Decoding policy) =>
+        value.DecodeCodePoints(policy);
+    public static string InvalidPoint() {
+        try {
+            ByteString.FromCodePoints(ReadOnlySlice<int>.FromArray(new[] { 65, -1, 0xD800 }),
+                CodePointEncoding.Strict);
+            return "accepted";
+        } catch (ByteStringEncodingException error) { return $"{error.InputKind}:{error.Offset}"; }
+    }
+    public static string InvalidBytes(ByteString value) {
+        try { value.DecodeCodePoints(Utf8Decoding.Strict); return "accepted"; }
+        catch (ByteStringEncodingException error) { return $"{error.InputKind}:{error.Offset}"; }
+    }
+}`, "CodePointContract")
+        let assembly = fixture.Compile(`package CodePointInterop
+import System
+import Gsharp.Values
+import CodePointInteropContract
+func Main() {
+    var points = slice[int32]{-1, 0, 65279, 128512, 65533, -1}
+    let view readonly slice[int32] = points[1..5]
+    let encoded bytestring = ByteString.FromCodePoints(view, CodePointEncoding.Strict)
+    points[1] = 65
+    Console.WriteLine(encoded == b"\0\xEF\xBB\xBF😀\xEF\xBF\xBD")
+    Console.WriteLine(CodePointContract.Encode(view, CodePointEncoding.Strict) == b"A\xEF\xBB\xBF😀\xEF\xBF\xBD")
+    Console.WriteLine(CodePointContract.Encode(points[4..], CodePointEncoding.ReplaceInvalidCodePoint) == b"\xEF\xBF\xBD\xEF\xBF\xBD")
+    var first slice[int32] = encoded.DecodeCodePoints(Utf8Decoding.Strict)
+    var second = CodePointContract.Decode(encoded, Utf8Decoding.ReplaceInvalidByte)
+    first[0] = 66
+    second[1] = 67
+    for point in first { Console.WriteLine(point) }
+    for point in second { Console.WriteLine(point) }
+    for point in b"\xFF\x41\xE2\x82\xEF\xBF\xBD"[1..].DecodeCodePoints(Utf8Decoding.ReplaceInvalidByte) {
+        Console.WriteLine(point)
+    }
+    Console.WriteLine(CodePointContract.InvalidPoint())
+    Console.WriteLine(CodePointContract.InvalidBytes(b"\xFF\x41\xC2\xA2\xE2\x82"[1..]))
+    let empty = b"".DecodeCodePoints(Utf8Decoding.Strict)
+    Console.WriteLine(empty == default(Slice[int32]))
+    Console.WriteLine(empty.Length)
+}`, "codepoint-interop", true, "/reference:" + reference)
+        IlVerifier.Verify(assembly, []string{reference})
+        Assert.Equal(
+            "True\nTrue\nTrue\n66\n65279\n128512\n65533\n0\n67\n128512\n65533\n65\n65533\n65533\n65533\nCodePoints:1\nUtf8:3\nFalse\n0\n",
+            fixture.Run(assembly)
+        )
+    }
+
+    @Fact
     func Utf8ScalarForeachBindsVerifiesAndRunsThroughIndependentCSharp() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let reference = fixture.CompileCSharp(`using System;
