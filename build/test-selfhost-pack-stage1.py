@@ -61,13 +61,22 @@ class SdkPublishGraphTests(unittest.TestCase):
             imported.set("Project", str((product.parent / imported.attrib["Project"]).resolve()))
             import_xml = ET.tostring(imported, encoding="unicode")
             write(self.root / f"{name}/{name}.csproj", f"""<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <PropertyGroup><OutputType>Exe</OutputType><UseAppHost>true</UseAppHost></PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Shared/Shared.csproj"/>
     <None Include="nested/payload.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"/>
     <None Include="de/Tool.resources.dll;fr/Tool.resources.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"/>
+    <None Include="apphost;nested/apphost" CopyToPublishDirectory="PreserveNewest"/>
   </ItemGroup>
   {import_xml}
+  <Target Name="CopyAppHostFixtures" AfterTargets="Build">
+    <PropertyGroup>
+      <_FixtureAppHost>$(TargetDir)$(TargetName)</_FixtureAppHost>
+      <_FixtureAppHost Condition="!Exists('$(_FixtureAppHost)')">$(TargetDir)$(TargetName).exe</_FixtureAppHost>
+    </PropertyGroup>
+    <Copy SourceFiles="$(_FixtureAppHost)" DestinationFiles="$(MSBuildProjectDirectory)/apphost"/>
+    <Copy SourceFiles="$(_FixtureAppHost)" DestinationFiles="$(MSBuildProjectDirectory)/nested/apphost"/>
+  </Target>
 </Project>""")
             write(self.root / f"{name}/Program.cs", "System.Console.WriteLine(Value.Number);")
             write(self.root / f"{name}/nested/payload.txt", name)
@@ -130,10 +139,33 @@ class SdkPublishGraphTests(unittest.TestCase):
         packages = list((self.root / f"out/{configuration}/Driver").glob("*.nupkg"))
         self.assertEqual(1, len(packages))
         with zipfile.ZipFile(packages[0]) as archive:
-            entries = {packer.entry_name(name): name for name in archive.namelist()}
+            names = [name for name in archive.namelist() if not name.endswith("/")]
+            entries = {packer.entry_name(name): name for name in names}
+            self.assertEqual(len(names), len(entries), "duplicate normalized package paths")
+            manifest = (self.root / "Driver/manifest.txt").read_text().splitlines()
             for folder, name in (("compiler", "Compiler"), ("formatter", "Gsfmt.Cli"),
                                  ("gsgen", "Gsgen.Cli")):
+                published = [Path(line).parent for line in manifest if Path(line).name == name + ".dll"]
+                self.assertEqual(1, len(published), manifest)
+                expected = {f"tools/{folder}/" + path.relative_to(published[0]).as_posix(): path
+                            for path in published[0].rglob("*") if path.is_file()}
+                self.assertTrue(expected)
+                self.assertEqual(set(expected), {key for key in entries if key.startswith(f"tools/{folder}/")})
+                for key, path in expected.items():
+                    self.assertEqual(path.read_bytes(), archive.read(entries[key]), key)
                 self.assertEqual(name.encode(), archive.read(entries[f"tools/{folder}/nested/payload.txt"]))
+                for relative in ("apphost", "nested/apphost"):
+                    key = f"tools/{folder}/{relative}"
+                    self.assertEqual(1, sum(packer.entry_name(item) == key for item in names))
+                    self.assertEqual((self.root / name / relative).read_bytes(),
+                                     archive.read(entries[key]))
+                    self.assertNotIn(key + "/apphost", entries)
+                apphost = self.root / f"out/{configuration}/{name}/{name}"
+                if not apphost.exists():
+                    apphost = apphost.with_name(name + ".exe")
+                self.assertEqual(apphost.read_bytes(),
+                                 archive.read(entries[f"tools/{folder}/{apphost.name}"]))
+                self.assertNotIn(f"tools/{folder}/{apphost.name}/{apphost.name}", entries)
                 for culture in ("de", "fr"):
                     self.assertEqual(f"{name}:{culture}".encode(),
                                      archive.read(entries[f"tools/{folder}/{culture}/Tool.resources.dll"]))

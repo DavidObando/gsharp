@@ -189,7 +189,8 @@
   </Target>
 
   <!-- MSBuild target outputs do not preserve reserved RecursiveDir metadata.
-       Derive package paths from explicit roots for both publication paths. -->
+       Derive relative directories from explicit roots for both publication paths.
+       NuGet appends filenames, including extensionless apphosts, to these directories. -->
   <Target Name="_GsharpPackPublishedSdkPayloads" BeforeTargets="_GetPackageFiles"
           DependsOnTargets="PackGsharpCompiler;PackGsharpFormatter;PackGsgen">
     <ItemGroup>
@@ -209,8 +210,11 @@
       <_GsharpSdkPackagePayload Update="@(_GsharpSdkPackagePayload)">
         <GsharpSdkRelativePath>$([MSBuild]::MakeRelative('%(GsharpSdkPublishRoot)', '%(FullPath)'))</GsharpSdkRelativePath>
       </_GsharpSdkPackagePayload>
-      <None Include="@(_GsharpSdkPackagePayload)" Pack="true" Visible="false">
-        <PackagePath>%(_GsharpSdkPackagePayload.GsharpSdkPackagePrefix)%(_GsharpSdkPackagePayload.GsharpSdkRelativePath)</PackagePath>
+      <_GsharpSdkPackagePayload Update="@(_GsharpSdkPackagePayload)">
+        <GsharpSdkRelativeDirectory>$([System.IO.Path]::GetDirectoryName('%(GsharpSdkRelativePath)'))</GsharpSdkRelativeDirectory>
+      </_GsharpSdkPackagePayload>
+      <None Include="%(_GsharpSdkPackagePayload.FullPath)" Pack="true" Visible="false">
+        <PackagePath>%(_GsharpSdkPackagePayload.GsharpSdkPackagePrefix)%(_GsharpSdkPackagePayload.GsharpSdkRelativeDirectory)/</PackagePath>
       </None>
     </ItemGroup>
   </Target>
