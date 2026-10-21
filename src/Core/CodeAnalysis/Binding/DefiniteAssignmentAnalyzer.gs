@@ -220,7 +220,7 @@ internal shared class DefiniteAssignmentAnalyzer {
     /// function from a point the outer CFG never sees (issue #1642), throw
     /// paths terminate without requiring assignment, and normal fall-through
     /// paths are merged and returned. Returns null when the region never
-    /// completes normally.
+    /// completes normally. The region only reads its initial assignment set.
     private func AnalyzeRegion(
         regionBody BoundStatement,
         initialAssigned HashSet[VariableSymbol],
@@ -245,13 +245,12 @@ internal shared class DefiniteAssignmentAnalyzer {
             (WhenTrue HashSet[VariableSymbol], WhenFalse HashSet[VariableSymbol])
         ]()
         for b in graph.Blocks {
-            entryAssigned[b] = if b.IsStart {
-                HashSet[VariableSymbol](initialAssigned)
-            } else {
-                default(HashSet[VariableSymbol]?)
-            }
+            entryAssigned[b] = nil
             exitAssigned[b] = nil
         }
+        // Published entry, exit and conditional states remain unchanged.
+        // Reuse only the scratch set or a state removed from its dictionary.
+        var scratch = HashSet[VariableSymbol]()
         var changed = true
         var safety = 0
         while changed && safety++ < 10000 {
@@ -260,42 +259,46 @@ internal shared class DefiniteAssignmentAnalyzer {
                 if block.IsEnd {
                     continue
                 }
-                var entry HashSet[VariableSymbol]?
+                scratch.Clear()
                 if block.IsStart {
-                    entry = HashSet[VariableSymbol](initialAssigned)
+                    scratch.UnionWith(initialAssigned)
                 } else {
-                    entry = nil
+                    var hasEntry = false
                     for incoming in block.Incoming {
                         let predExit HashSet[VariableSymbol]? = EdgeExit(incoming, exitAssigned, conditionalExits)
                         if predExit == nil {
                             continue
                         }
-                        entry = if entry == nil {
-                            HashSet[VariableSymbol](predExit)
+                        if !hasEntry {
+                            scratch.UnionWith(predExit)
+                            hasEntry = true
                         } else {
-                            Intersect(entry, predExit)
+                            scratch.IntersectWith(predExit)
                         }
                     }
                     // Wait until at least one reachable predecessor has been
                     // simulated. Seeding an unvisited loop cycle with the
                     // function-entry state can permanently intersect away
                     // assignments made before the loop.
-                    if entry == nil {
+                    if !hasEntry {
                         continue
                     }
                 }
                 let prevEntry HashSet[VariableSymbol]? = entryAssigned[block]
-                if prevEntry == nil || !SetsEqual(prevEntry, entry) {
-                    entryAssigned[block] = entry
+                if prevEntry == nil || !SetsEqual(prevEntry, scratch) {
+                    entryAssigned[block] = scratch
+                    scratch = prevEntry ?? HashSet[VariableSymbol]()
                     changed = true
                 }
                 let currentEntry HashSet[VariableSymbol]? = entryAssigned[block]
                 if currentEntry == nil {
                     continue
                 }
+                scratch.Clear()
+                scratch.UnionWith(currentEntry)
                 let exit = SimulateBlock(
                     block,
-                    HashSet[VariableSymbol](currentEntry),
+                    scratch,
                     outParams,
                     function,
                     nil,
@@ -306,10 +309,13 @@ internal shared class DefiniteAssignmentAnalyzer {
                 let prevExit HashSet[VariableSymbol]? = exitAssigned[block]
                 if prevExit == nil || !SetsEqual(prevExit, exit) {
                     exitAssigned[block] = exit
+                    scratch = prevExit ?? HashSet[VariableSymbol]()
                     changed = true
                 }
                 if block.Statements.LastOrDefault() is BoundConditionalGotoStatement conditionalGoto {
-                    let beforeCondition = HashSet[VariableSymbol](currentEntry)
+                    scratch.Clear()
+                    scratch.UnionWith(currentEntry)
+                    let beforeCondition = scratch
                     for var i = 0; i < block.Statements.Count - 1; i++ {
                         ProcessStatement(
                             block.Statements[i],
@@ -346,10 +352,12 @@ internal shared class DefiniteAssignmentAnalyzer {
                 if block.IsStart || block.IsEnd {
                     continue
                 }
-                let entry = entryAssigned[block] ?? HashSet[VariableSymbol](initialAssigned)
+                let entry = entryAssigned[block] ?? initialAssigned
+                scratch.Clear()
+                scratch.UnionWith(entry)
                 SimulateBlock(
                     block,
-                    HashSet[VariableSymbol](entry),
+                    scratch,
                     outParams,
                     function,
                     diagnostics,
@@ -365,8 +373,7 @@ internal shared class DefiniteAssignmentAnalyzer {
                     if endBranch.From.Statements.LastOrDefault()?.Kind == BoundNodeKind.ThrowStatement {
                         continue
                     }
-                    let exit = EdgeExit(endBranch, exitAssigned, conditionalExits) ??
-                        HashSet[VariableSymbol](initialAssigned)
+                    let exit = EdgeExit(endBranch, exitAssigned, conditionalExits) ?? initialAssigned
                     for op in outParams {
                         if !exit.Contains(op) {
                             diagnostics.ReportOutParameterNotAssigned(
@@ -385,7 +392,7 @@ internal shared class DefiniteAssignmentAnalyzer {
         var anyNormal = false
         for endBranch in graph.End.Incoming {
             let fromBlock = endBranch.From
-            let exit = EdgeExit(endBranch, exitAssigned, conditionalExits) ?? HashSet[VariableSymbol](initialAssigned)
+            let exit = EdgeExit(endBranch, exitAssigned, conditionalExits) ?? initialAssigned
             let lastStatement = fromBlock.Statements.LastOrDefault()
             if lastStatement?.Kind == BoundNodeKind.ThrowStatement {
                 continue
@@ -719,7 +726,7 @@ internal shared class DefiniteAssignmentAnalyzer {
                 ProcessExpression(awaitForRange.Stream, assigned, diagnostics, pointerAliases, tracked, flowContext)
                 AnalyzeRegion(
                     awaitForRange.Body,
-                    HashSet[VariableSymbol](assigned),
+                    assigned,
                     outParams,
                     function,
                     diagnostics,
@@ -759,7 +766,7 @@ internal shared class DefiniteAssignmentAnalyzer {
         tracked HashSet[VariableSymbol],
         methodExitLabel BoundLabel?
     ) {
-        let preTry = HashSet[VariableSymbol](assigned)
+        let preTry = assigned
         let tryExit HashSet[VariableSymbol]? = AnalyzeRegion(
             tryStmt.TryBlock,
             preTry,
@@ -813,7 +820,7 @@ internal shared class DefiniteAssignmentAnalyzer {
         if tryStmt.FinallyBlock != nil {
             let finallyExit HashSet[VariableSymbol]? = AnalyzeRegion(
                 tryStmt.FinallyBlock,
-                HashSet[VariableSymbol](assigned),
+                assigned,
                 outParams,
                 function,
                 diagnostics,
@@ -891,7 +898,7 @@ internal shared class DefiniteAssignmentAnalyzer {
             }
             let armExit HashSet[VariableSymbol]? = AnalyzeRegion(
                 arm.Body,
-                HashSet[VariableSymbol](assigned),
+                assigned,
                 outParams,
                 function,
                 diagnostics,
@@ -1026,7 +1033,7 @@ internal shared class DefiniteAssignmentAnalyzer {
                     )
                     let exit HashSet[VariableSymbol]? = AnalyzeRegion(
                         BoundBlockStatement(block.Syntax, statements),
-                        HashSet[VariableSymbol](assigned),
+                        assigned,
                         context.OutParams,
                         context.Function,
                         diagnostics,
@@ -1617,7 +1624,7 @@ internal shared class DefiniteAssignmentAnalyzer {
                 {
                     let exit HashSet[VariableSymbol]? = AnalyzeRegion(
                         BoundBlockStatement(block.Syntax, block.Statements),
-                        HashSet[VariableSymbol](assigned),
+                        assigned,
                         context.OutParams,
                         context.Function,
                         diagnostics,
