@@ -210,6 +210,25 @@ default: 0
         }
 
         func Programs() sequence[[]object] {
+            yield[]object{`package ByteArrayConversion
+import System
+func Main() {
+    let inferred = []bytestring{b"x", b"\xFF"}
+    let fixed = [2]bytestring
+    let boxed object = inferred[1]
+    Console.WriteLine(bytestring(boxed) == b"\xFF")
+    Console.WriteLine(bytestring?(boxed) == b"\xFF")
+    Console.WriteLine(inferred[0] == b"x")
+    Console.WriteLine(fixed[1] == b"")
+}`, "True\nTrue\nTrue\nTrue\n"}
+            yield[]object{`package ByteCallable
+import System
+func bytestring(value object) int32 -> 42
+func Main() {
+    let values = []bytestring{b"x"}
+    Console.WriteLine(bytestring(values[0]))
+    Console.WriteLine($bytestring(values[0]))
+}`, "42\n42\n"}
             yield[]object{`package ByteProtocol
 import System
 func ReadPayload(packet bytestring) bytestring {

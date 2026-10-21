@@ -496,6 +496,7 @@ class Binder {
             lambdas,
             bindTypeClause: BindTypeClause,
             lookupType: LookupType,
+            lookupTypeToken: (identifier SyntaxToken) -> LookupType(identifier, -1),
             resolveClrTypeForGenericArg: ResolveClrTypeForGenericArg,
             reportObsoleteUseIfApplicable: ReportObsoleteUseIfApplicable,
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
@@ -4155,14 +4156,7 @@ class Binder {
             syntax.Identifier is {Text: "bytestring"} byteStringName &&
             binderCtx
             .CanUseIntrinsicAlias($scope, byteStringName, function) {
-            if !ByteStringTypes.TryResolveDefinition($scope.References!!, out var byteStringType) {
-                Diagnostics.ReportByteStringRuntime(byteStringName.Location)
-                return nil
-            }
-            return ApplyArraySuffix(
-                syntax,
-                TypeSymbol.FromClrTypeWithoutNullability(byteStringType, NullabilityFreeReason.ResolvedTypeName)
-            )
+            return ApplyArraySuffix(syntax, LookupType(byteStringName, -1)!!)
         }
         if !syntax.HasQualifier &&
             syntax.HasTypeArguments &&
@@ -5980,6 +5974,21 @@ class Binder {
         if KnownAttributes.TryGetObsolete(symbol.Attributes, out var message, out var isError) {
             Diagnostics.ReportObsoleteUse(location, displayName, message, isError)
         }
+    }
+
+    private func LookupType(identifier SyntaxToken, preferredArity int32) TypeSymbol? {
+        if preferredArity <= 0 && identifier.Text == "bytestring" && binderCtx.CanUseIntrinsicAlias(
+            $scope,
+            identifier,
+            function
+        ) {
+            if !ByteStringTypes.TryResolveDefinition($scope.References!!, out var byteStringType) {
+                Diagnostics.ReportByteStringRuntime(identifier.Location)
+                return TypeSymbol.Error
+            }
+            return TypeSymbol.FromClrTypeWithoutNullability(byteStringType, NullabilityFreeReason.ResolvedTypeName)
+        }
+        return LookupType(identifier.ValueText, preferredArity)
     }
 
     private func LookupType(name string) TypeSymbol? -> LookupType(name, preferredArity: -1)

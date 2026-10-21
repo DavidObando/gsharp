@@ -14,11 +14,49 @@ import System
 import System.Collections.Generic
 import System.IO
 import System.Linq
+import System.Reflection
+import System.Text
 import System.Text.RegularExpressions
 import System.Threading
 import Xunit
 
 open class ReplLayoutTests {
+    @Theory
+    @InlineData(true)
+    @InlineData(false)
+    func ScreenLoadPreservesByteLiteralSourceEncoding(valid bool) {
+        let path = Path.Combine(Environment.CurrentDirectory, "bytestring-load-" + Guid.NewGuid().ToString("N") + ".gs")
+        let prefix = Encoding.UTF8.GetBytes("b\"")
+        let payload = if valid {
+            Encoding.UTF8.GetBytes("\uFFFD")
+        } else {
+            []uint8{0xFF}
+        }
+        let suffix = Encoding.UTF8.GetBytes("\".Length")
+        File.WriteAllBytes(path, prefix.Concat(payload).Concat(suffix).ToArray())
+        try {
+            using let engine = EmittedSessionEngine()
+            using let screen = ReplScreen(engine)
+            typeof(ReplScreen).GetMethod("RunCommand", BindingFlags.Instance | BindingFlags.NonPublic)!!.Invoke(
+                screen,
+                []object{"load " + path}
+            )
+            let cell = Assert.Single(engine.Cells)
+            Assert.True(cell.HasError == !valid, string.Join("; ", cell.Diagnostics))
+            if valid {
+                Assert.Equal(3, cell.Value)
+            } else {
+                let diagnostic = Assert.Single(cell.Diagnostics)
+                Assert.Equal("GS0628", diagnostic.Id)
+                Assert.Equal(0, diagnostic.Location.Span.Start)
+                Assert.Equal(2, diagnostic.Location.Span.Length)
+                Assert.Equal(path, diagnostic.Location.FileName)
+            }
+        } finally {
+            File.Delete(path)
+        }
+    }
+
     @Fact
     func Editor_RenderLines_PlacesCursor() {
         let ed = MultilineEditor()

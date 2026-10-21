@@ -376,8 +376,8 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 
 | Code | Severity | Meaning | Remedy |
 | --- | --- | --- | --- |
-| GS0627 | Error | Native byte strings require a matching immutable `Gsharp.Runtime.Values` runtime. | Reference the matching SDK runtime; no text or mutable-array fallback occurs. |
-| GS0628 | Error | Malformed exact-byte escape/scalar or lossy source-file decoding. | Use exact `\xHH` bytes or valid scalar escapes and valid source encoding. |
+| GS0627 | Error | Native byte strings require a matching immutable `Gsharp.Runtime.Values` runtime. | Reference the matching SDK runtime; CLR text and mutable arrays are never fallback representations. |
+| GS0628 | Error | A byte literal has a malformed escape/scalar, or its source file was decoded with replacement. | Use exact `\xHH` byte escapes or valid scalar escapes and save source in a valid BOM-selected Unicode encoding. |
 
 ### Native slice diagnostics (GS0600–GS0603)
 

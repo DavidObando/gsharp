@@ -8,9 +8,39 @@ import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Immutable
+import System.Reflection
+import System.Text
 import Xunit
 
 class ByteStringLexerTests {
+    @Fact
+    func InterpolationHolesShareTheDocumentEncodingValidation() {
+        const text = `let a = "${b"a".Length}${b"b".Length}${b"c".Length}"`
+        let source = SourceText.From(text, rawBytes: Encoding.UTF8.GetBytes(text))
+        let validation = cast[Lazy[bool]](
+            typeof(SourceText).GetField("encodingIsValid", BindingFlags.Instance | BindingFlags.NonPublic)!!.GetValue(
+                source
+            )!!
+        )
+        Assert.False(validation.IsValueCreated)
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        Assert.True(validation.IsValueCreated)
+        Assert.True(validation.Value)
+        let invalid = SourceText.From(text, rawBytes: []uint8{0xFF})
+        let rejected = SyntaxTree.Parse(invalid)
+        Assert.Equal(3, rejected.Diagnostics.Length)
+        for var i = 0; i < rejected.Diagnostics.Length; i++ {
+            let diagnostic = rejected.Diagnostics[i]
+            Assert.Equal("GS0628", diagnostic.Id)
+            Assert.Equal(
+                text.IndexOf("b\"" + char(int32('a') + i), StringComparison.Ordinal),
+                diagnostic.Location.Span.Start
+            )
+            Assert.Equal(2, diagnostic.Location.Span.Length)
+        }
+    }
+
     @Theory
     @InlineData("b\"\\xFF\\x80\\0\\n\\r\\t\\\\\\\"$$x$${y}\"", "FF80000A0D095C222478247B797D")
     @InlineData("b\"\\u00E9\\U0001F600\\u0000\"", "C3A9F09F988000")

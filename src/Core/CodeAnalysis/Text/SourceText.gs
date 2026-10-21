@@ -4,16 +4,20 @@
 
 package GSharp.Core.CodeAnalysis.Text
 
+import System
 import System.Collections.Immutable
+import System.Text
 
 /// The source text of the compilation target. Represents the document.
 class SourceText {
     private let text string
+    private let encodingIsValid Lazy[bool]
 
     private init(text string, fileName string, rawBytes[]?uint8) {
         this.text = text
         FileName = fileName
         RawBytes = rawBytes
+        encodingIsValid = Lazy[bool](() -> ValidateEncoding(rawBytes))
         Lines = ParseLines(this, text)
     }
 
@@ -25,6 +29,8 @@ class SourceText {
     prop RawBytes[]?uint8 {
         get;
     }
+
+    internal prop IsEncodingValid bool -> encodingIsValid.Value
 
     /// Gets the set of lines contained by this document.
     prop Lines ImmutableArray[TextLine] {
@@ -97,6 +103,28 @@ class SourceText {
     func ToString(span TextSpan) string -> ToString(span.Start, span.Length)
 
     shared {
+        private func ValidateEncoding(bytes[]?uint8) bool {
+            if bytes == nil {
+                return true
+            }
+            var encoding Encoding = UTF8Encoding(false, true)
+            if bytes.Length >= 4 && bytes[0] == 0xFF && bytes[1] == 0xFE && bytes[2] == 0 && bytes[3] == 0 {
+                encoding = UTF32Encoding(false, false, true)
+            } else if bytes.Length >= 4 && bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0xFE && bytes[3] == 0xFF {
+                encoding = UTF32Encoding(true, false, true)
+            } else if bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
+                encoding = UnicodeEncoding(false, false, true)
+            } else if bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
+                encoding = UnicodeEncoding(true, false, true)
+            }
+            try {
+                encoding.GetCharCount(bytes)
+                return true
+            } catch (_ DecoderFallbackException) {
+                return false
+            }
+        }
+
         /// Creates a source text document from a string.
         /// @param text The string to wrap with a source text.
         /// @param fileName Optional. The file name associated to this source text.

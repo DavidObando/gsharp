@@ -89,7 +89,7 @@ internal partial class OverloadResolver {
     // `Op[T]` can coexist — mirroring the #1051 disambiguation already used by
     // the type-reference and struct-literal paths. A negative arity means "no
     // preference" and falls back to the arity-0 type.
-    private let lookupTypeWithArity(string, int32) -> TypeSymbol?
+    private let lookupTypeWithArity(SyntaxToken, int32) -> TypeSymbol?
 
     private let reportObsoleteUseIfApplicable(TextLocation, Symbol, string) -> void
     private let tryBindClrConstructorCall OverloadResolver_TryBindClrConstructorCallDelegate
@@ -236,7 +236,7 @@ internal partial class OverloadResolver {
         ) -> BoundExpression?,
         bindTypeClause(TypeClauseSyntax) -> TypeSymbol?,
         lookupType(string) -> TypeSymbol?,
-        lookupTypeWithArity(string, int32) -> TypeSymbol?,
+        lookupTypeWithArity(SyntaxToken, int32) -> TypeSymbol?,
         reportObsoleteUseIfApplicable(TextLocation, Symbol, string) -> void,
         tryBindClrConstructorCall OverloadResolver_TryBindClrConstructorCallDelegate,
         tryBindIntrinsicCall OverloadResolver_TryBindIntrinsicCallDelegate,

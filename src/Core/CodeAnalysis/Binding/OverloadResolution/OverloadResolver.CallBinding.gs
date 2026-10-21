@@ -790,7 +790,11 @@ internal partial class OverloadResolver {
             tryBindClrConstructorCall(syntax, out var clrCtorCall) {
             return clrCtorCall!!
         }
-        let conversionType = lookupTypeWithArity(syntax.Identifier.ValueText, ctorPreferredArity)
+        let conversionType = if hasNonConstructorCallable {
+            nil
+        } else {
+            lookupTypeWithArity(syntax.Identifier, ctorPreferredArity)
+        }
         let hasSingleInlineOutArgument = syntax
             .Arguments
             .Count == 1 &&
@@ -876,7 +880,7 @@ internal partial class OverloadResolver {
         // primary constructor is also positionally constructible —
         // `Entry(1, 2)` lowers to a struct literal initializing its fields.
         if !hasNonConstructorCallable &&
-            lookupTypeWithArity(syntax.Identifier.ValueText, ctorPreferredArity) is StructSymbol classType &&
+            lookupTypeWithArity(syntax.Identifier, ctorPreferredArity) is StructSymbol classType &&
             (
             classType.IsClass ||
                 classType.IsInline ||

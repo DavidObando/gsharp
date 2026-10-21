@@ -35,6 +35,7 @@ BlockExpression
 BlockStatement
 BreakKeyword
 BreakStatement
+ByteStringToken
 CallExpression
 CaseKeyword
 CatchClause

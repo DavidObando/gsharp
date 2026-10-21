@@ -30,7 +30,6 @@ class Lexer {
     private var start int32
     private var kind SyntaxKind
     private var value object?
-    private var byteStringSourceChecked bool
 
     // Issue #1677: set by ReadIdentifierOrKeyword when it determines the token is a plain
     // identifier (not a keyword). Lex() reuses this interned string instead of substringing
@@ -656,7 +655,7 @@ class Lexer {
                             position++
                         }
                         if consumed != count {
-                            Diagnostics.ReportByteStringLiteral(
+                            Diagnostics.ReportInvalidByteStringLiteral(
                                 TextLocation(text, TextSpan(scalarStart, position - scalarStart)),
                                 "The escape requires exactly $count hexadecimal digits."
                             )
@@ -668,7 +667,7 @@ class Lexer {
                         }
                     }
                     default {
-                        Diagnostics.ReportByteStringLiteral(
+                        Diagnostics.ReportInvalidByteStringLiteral(
                             TextLocation(text, TextSpan(scalarStart, Math.Min(position, end) - scalarStart)),
                             "Unknown byte-string escape."
                         )
@@ -683,7 +682,7 @@ class Lexer {
                 }
             }
             if scalar > 0x10FFFF || (scalar >= 0xD800 && scalar <= 0xDFFF) {
-                Diagnostics.ReportByteStringLiteral(
+                Diagnostics.ReportInvalidByteStringLiteral(
                     TextLocation(text, TextSpan(scalarStart, position - scalarStart)),
                     "Expected a Unicode scalar; use a byte escape for arbitrary data."
                 )
@@ -699,28 +698,8 @@ class Lexer {
     }
 
     private func ValidateByteStringSourceEncoding() {
-        if byteStringSourceChecked {
-            return
-        }
-        byteStringSourceChecked = true
-        if text.RawBytes is not{} bytes {
-            return
-        }
-        // Validate the loader's original encoding once, before trusting repaired text.
-        var encoding Encoding = UTF8Encoding(false, true)
-        if bytes.Length >= 4 && bytes[0] == 0xFF && bytes[1] == 0xFE && bytes[2] == 0 && bytes[3] == 0 {
-            encoding = UTF32Encoding(false, false, true)
-        } else if bytes.Length >= 4 && bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0xFE && bytes[3] == 0xFF {
-            encoding = UTF32Encoding(true, false, true)
-        } else if bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
-            encoding = UnicodeEncoding(false, false, true)
-        } else if bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
-            encoding = UnicodeEncoding(true, false, true)
-        }
-        try {
-            encoding.GetCharCount(bytes)
-        } catch (_ DecoderFallbackException) {
-            Diagnostics.ReportByteStringLiteral(
+        if !text.IsEncodingValid {
+            Diagnostics.ReportInvalidByteStringLiteral(
                 TextLocation(text, TextSpan(start, 2)),
                 "The source file contains invalid encoded characters; byte literals cannot use repaired source text."
             )

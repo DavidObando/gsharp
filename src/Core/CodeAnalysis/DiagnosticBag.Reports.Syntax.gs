@@ -31,7 +31,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     func ReportUnterminatedString(location TextLocation) -> Report(location, DiagnosticDescriptors.UnterminatedString)
 
     /// Reports malformed exact-byte literal syntax.
-    func ReportByteStringLiteral(location TextLocation, reason string) -> Report(
+    func ReportInvalidByteStringLiteral(location TextLocation, reason string) -> Report(
         location,
         DiagnosticDescriptors.InvalidByteStringLiteral,
         reason

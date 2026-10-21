@@ -346,7 +346,8 @@ exact byte escapes without decoding them.
 Compiler recognition validates the nominal type and its required signatures.
 GS0627 reports missing/incompatible runtime support; GS0628 reports malformed
 literal escapes/scalars or lossy on-disk source decoding. Loading a file with
-byte literals checks its original BOM-selected encoding strictly once per lexer;
+byte literals checks its original BOM-selected encoding strictly once per source document,
+including all interpolation-hole parsers;
 ordinary files without byte literals retain their existing loader behavior.
 The REPL's existing compiled submission path uses the same bound imported call,
 not a separate string-based interpreter representation.

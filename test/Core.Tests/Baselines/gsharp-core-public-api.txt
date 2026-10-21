@@ -913,6 +913,7 @@ type enum GSharp.Core.CodeAnalysis.Syntax.SyntaxKind : Int32
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind BlockStatement = 161
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind BreakKeyword = 72
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind BreakStatement = 179
+  field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind ByteStringToken = 282
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind CallExpression = 135
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind CaseKeyword = 73
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind CatchClause = 203
@@ -3390,6 +3391,7 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportByRefCannotEscape(GSharp.Core.CodeAnalysis.Text.TextLocation location, String reason)
   method public Void ReportByRefLikeEscape(GSharp.Core.CodeAnalysis.Text.TextLocation location, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, String reason)
   method public Void ReportByRefLikeInterpolationUnsupported(GSharp.Core.CodeAnalysis.Text.TextLocation location, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type)
+  method public Void ReportByteStringRuntime(GSharp.Core.CodeAnalysis.Text.TextLocation location)
   method public Void ReportCannotAssign(GSharp.Core.CodeAnalysis.Text.TextLocation location, String name)
   method public Void ReportCannotAssignReadOnlySpanElement(GSharp.Core.CodeAnalysis.Text.TextLocation location, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type)
   method public Void ReportCannotAssignToInParameter(GSharp.Core.CodeAnalysis.Text.TextLocation location, String parameterName)
@@ -3537,6 +3539,7 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportInvalidAbstractProperty(GSharp.Core.CodeAnalysis.Text.TextLocation location, String propertyName)
   method public Void ReportInvalidArrayLength(GSharp.Core.CodeAnalysis.Text.TextLocation location, String text)
   method public Void ReportInvalidBreakOrContinue(GSharp.Core.CodeAnalysis.Text.TextLocation location, String text)
+  method public Void ReportInvalidByteStringLiteral(GSharp.Core.CodeAnalysis.Text.TextLocation location, String reason)
   method public Void ReportInvalidCharEscape(GSharp.Core.CodeAnalysis.Text.TextLocation location, Char escapeChar)
   method public Void ReportInvalidCompoundAssignmentOperatorShape(GSharp.Core.CodeAnalysis.Text.TextLocation location, String operatorName)
   method public Void ReportInvalidIncrementDecrementTarget(GSharp.Core.CodeAnalysis.Text.TextLocation location, String operatorText)

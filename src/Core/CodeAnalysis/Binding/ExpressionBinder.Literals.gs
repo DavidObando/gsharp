@@ -3263,9 +3263,12 @@ internal partial class ExpressionBinder {
                 "a non-nested array literal has an element type identifier",
                 expression: "syntax.ElementTypeIdentifier"
             )
-            elementType = lookupType(elementTypeIdentifier.ValueText)
+            elementType = lookupTypeToken(elementTypeIdentifier)
             if elementType == nil {
                 Diagnostics.ReportUndefinedType(elementTypeIdentifier.Location, elementTypeIdentifier.ValueText)
+                return BoundErrorExpression(nil)
+            }
+            if elementType == TypeSymbol.Error {
                 return BoundErrorExpression(nil)
             }
             // ADR-0186 §9: an array element is a nested position, so it stays
@@ -3468,12 +3471,15 @@ internal partial class ExpressionBinder {
         syntax StackAllocExpressionSyntax,
         targetType TypeSymbol? = nil
     ) BoundExpression {
-        let elementType TypeSymbol? = lookupType(syntax.ElementTypeIdentifier.ValueText)
+        let elementType TypeSymbol? = lookupTypeToken(syntax.ElementTypeIdentifier)
         if elementType == nil {
             Diagnostics.ReportUndefinedType(
                 syntax.ElementTypeIdentifier.Location,
                 syntax.ElementTypeIdentifier.ValueText
             )
+            return BoundErrorExpression(nil)
+        }
+        if elementType == TypeSymbol.Error {
             return BoundErrorExpression(nil)
         }
         // The element type must be unmanaged: the buffer is raw, contiguous,
