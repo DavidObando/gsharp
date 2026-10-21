@@ -83,6 +83,14 @@ Run the shared cases with `npm run test:unit -- --runInBand grammar.test.ts` her
 and `node --test --test-name-pattern=Prism tests/content.test.mjs` in `website`.
 The editor tests use the real TextMate/Oniguruma tokenizer, not JavaScript regex
 approximations.
+Type prefixes share comment/newline-aware pending states. Function types and
+function literals share parameter/return stages; only literals accept `ref`
+return modifiers. Optional `if let` annotations enter the same type reader
+before returning to the initializer expression. Pattern operands reuse
+expression scanning through the next combinator, including calls and nested
+parenthesized patterns.
+Creation headers reuse type tails (including runtime array dimensions), while
+completed receivers keep index/call suffixes in expression context.
 Before asserting an ambiguous interpolation's scopes, check its expression kind
 and `InterpolatedStringSegment.Format` with the compiler's `SyntaxTree.Parse`;
 two agreeing highlighters do not establish the language's parse.

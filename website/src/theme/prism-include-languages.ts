@@ -140,7 +140,7 @@ function typeListEnd(source: string, index: number, depth: number, tuple = false
     if (source[end] !== ',') return index;
     cursor = skipTrivia(source, end + 1);
   }
-  return close === ')' && source[cursor] === close ? cursor + 1 : index;
+  return (close === ')' || count > 0) && source[cursor] === close ? cursor + 1 : index;
 }
 
 // Read a type only in a type position (Parser.TypeClauses), never infer it
@@ -149,7 +149,6 @@ function typeEnd(source: string, index: number, depth = 0, pointers = true): num
   const start = index;
   // ponytail: bound speculative type depth; deeper input falls back to balanced expression scanning.
   if (depth > 128) return start;
-  let signatureEnd = start;
   let managedPointer = false;
   while (index < source.length) {
     index = skipTrivia(source, index);
@@ -198,18 +197,31 @@ function typeEnd(source: string, index: number, depth = 0, pointers = true): num
       }
     }
     index = skipTrivia(source, index);
-    if (source[index] !== '(') return signatureEnd;
+    if (source[index] !== '(') return start;
     pointers = word === 'unmanaged' || managedPointer || (!word && pointers);
     const end = typeListEnd(source, index, depth, !word, pointers, !!word);
     if (end === index) return start;
-    signatureEnd = end;
     index = skipTrivia(source, end);
     if (source[index] === '?' && !/[?.]/.test(source[index + 1] ?? '')) return index + 1;
     if (source.startsWith('->', index)) index += 2;
     else if (!word) return end;
-    // Function return types can themselves be function, tuple or array types.
+    const result = signatureReturnEnd(source, index, depth + 1, pointers);
+    return result > skipTrivia(source, index) ? result : end;
   }
-  return signatureEnd;
+  return start;
+}
+
+function signatureReturnEnd(source: string, index: number, depth = 0, pointers = true, literal = false): number {
+  index = skipTrivia(source, index);
+  if (literal && wordAt(source, index) === 'ref') {
+    let next = skipTrivia(source, index + 3);
+    if (wordAt(source, next) === 'readonly') {
+      const after = skipTrivia(source, next + 8);
+      if (typeEnd(source, after, depth, pointers) > after) next = after;
+    }
+    if (typeEnd(source, next, depth, pointers) > next) index = next;
+  }
+  return typeEnd(source, index, depth, pointers);
 }
 
 function patternTypeEnd(source: string, index: number): number {
@@ -252,7 +264,11 @@ function patternEnd(source: string, index: number): number {
         designation = false;
         continue;
       }
-      return index;
+      const end = expressionEnd(source, index, true);
+      if (end <= index) return index;
+      index = end;
+      designation = false;
+      continue;
     }
     const relational = /^(?:<=?|>=?|==|!=)/.exec(source.slice(index));
     if (relational) {
@@ -272,9 +288,10 @@ function patternEnd(source: string, index: number): number {
         index = end;
         designation = true;
       } else {
-        const group = '[('.includes(source[index] ?? '\0') ? groupEnd(source, index) : index;
-        if (group <= index) return index;
-        index = group;
+        const operand = '[('.includes(source[index] ?? '\0')
+          ? groupEnd(source, index) : expressionEnd(source, index, true);
+        if (operand <= index) return index;
+        index = operand;
         designation = false;
       }
     } else if ('("\'`[{'.includes(source[index] ?? '\0')) {
@@ -307,27 +324,45 @@ function expressionEnd(source: string, cursor: number, patternOperand = false): 
     const word = wordAt(source, cursor);
     if (word) {
       if (patternOperand && !memberName && !conditionals && (word === 'and' || word === 'or')) return cursor;
+      const start = cursor;
       cursor += word.length;
       if (!memberName && word === 'as') {
         cursor = typeEnd(source, cursor);
         operand = 'value';
+      } else if (!memberName && word === 'let') {
+        const name = skipTrivia(source, cursor);
+        cursor = skipTrivia(source, name + wordAt(source, name).length);
+        cursor = typeEnd(source, cursor);
+        operand = 'none';
       } else if (!memberName && word === 'is') {
         cursor = patternEnd(source, cursor);
         operand = 'value';
+      } else if (!memberName && word === 'func' && source[skipTrivia(source, cursor)] === '(') {
+        const parameters = groupEnd(source, skipTrivia(source, cursor));
+        cursor = signatureReturnEnd(source, parameters, 0, true, true);
+        operand = 'none';
+      } else if (!memberName && (['map', 'chan'].includes(word) ||
+        (word === 'readonly' && ['managed', 'slice'].includes(wordAt(source, skipTrivia(source, cursor)))))) {
+        const end = typeEnd(source, start);
+        const next = skipTrivia(source, end);
+        if (end > start && (source[next] === '{' || source[next] === '(')) cursor = end;
+        operand = 'name';
       } else if (!memberName && word === 'object') {
         const header = skipTrivia(source, cursor);
         if (source[header] === ':') cursor = header + 1;
         operand = 'name';
       } else {
-        operand = memberName || ['nil', 'true', 'false'].includes(word) ? 'value' : 'name';
-        if (word === 'async' && source[skipTrivia(source, cursor)] === '(') operand = 'none';
+        operand = memberName || ['nil', 'true', 'false'].includes(word) ? 'value'
+          : !word.startsWith('$') && keywords.test(word) ? 'none' : 'name';
       }
       memberName = false;
       continue;
     }
     const c = source[cursor];
-    if (c === '[') {
-      const end = typeEnd(source, cursor);
+    if (c === '[' && operand === 'none') {
+      const prefix = groupEnd(source, cursor);
+      let end = typeEnd(source, cursor);
+      if (end === cursor) end = typeEnd(source, skipTrivia(source, prefix));
       if (end > cursor && source[skipTrivia(source, end)] === '{') {
         cursor = end;
         continue;

@@ -123,6 +123,9 @@
         { "include": "#interpolation-postfix" },
         { "include": "#interpolation-type-context" },
         { "include": "#interpolation-expression-member-name" },
+        { "include": "#interpolation-binding" },
+        { "include": "#interpolation-function-literal" },
+        { "include": "#interpolation-creation" },
         { "include": "#interpolation-nullable-call" },
         { "include": "#interpolation-object-header" },
         { "include": "#interpolation-conditional" },
@@ -147,7 +150,7 @@
         },
         { "include": "#interpolation-pattern" },
         {
-          "begin": "(?=\\[(?:\\s|/\\*.*?\\*/)*(?:[0-9][0-9a-zA-Z_]*|(?:,(?:\\s|/\\*.*?\\*/)*)*)?(?:\\s|/\\*.*?\\*/)*\\])",
+          "begin": "(?=\\[)",
           "end": "(\\?(?![?.\\[]))|(?=\\S)",
           "endCaptures": { "1": { "name": "keyword.operator.gsharp" } },
           "applyEndPatternLast": true,
@@ -170,13 +173,19 @@
       "patterns": [
         { "include": "#comments" },
         { "include": "#interpolation-function-type" },
+        { "include": "#interpolation-type-prefix" },
         {
-          "match": "(?:readonly(?=\\s+(?:managed|slice)\\b)|async(?=\\s+(?:func\\b|sequence\\b|\\())|(?:in|out)(?=\\s+chan\\b))|\\*|\\?(?![?.\\[])",
+          "match": "\\?(?![?.\\[])",
           "captures": { "0": { "patterns": [{ "include": "source.gsharp" }] } }
         },
         { "include": "#interpolation-nested-brackets" },
         { "include": "#interpolation-nested-parentheses" }
       ]
+    },
+    "interpolation-type-prefix": {
+      "comment": "Contextual prefixes share trivia handling. An unfinished physical line keeps the head pending; a non-head token ends it normally.",
+      "match": "(?:readonly(?=(?:\\s|/\\*.*?\\*/)*(?:(?:managed|slice)\\b|/\\*|//|$))|async(?=(?:\\s|/\\*.*?\\*/)*(?:func\\b|sequence\\b|\\(|/\\*|//|$))|(?:in|out)(?=(?:\\s|/\\*.*?\\*/)*(?:chan\\b|/\\*|//|$)))|\\*",
+      "captures": { "0": { "patterns": [{ "include": "source.gsharp" }] } }
     },
     "interpolation-pattern-type-head": {
       "begin": "\\G",
@@ -187,13 +196,14 @@
         { "include": "#comments" },
         { "include": "#interpolation-pattern-type-parentheses" },
         {
-          "begin": "\\[(?=(?:\\s|/\\*.*?\\*/)*(?:[0-9][0-9a-zA-Z_]*|(?:,(?:\\s|/\\*.*?\\*/)*)*)?(?:\\s|/\\*.*?\\*/)*\\])",
+          "begin": "\\[(?=(?:\\s|/\\*.*?\\*/)*(?:[0-9][0-9a-zA-Z_]*|(?:,(?:\\s|/\\*.*?\\*/)*)*)?(?:\\s|/\\*.*?\\*/)*(?:\\]|/\\*|//|$))",
           "end": "\\]",
           "patterns": [{ "include": "source.gsharp" }]
         },
         { "include": "#interpolation-function-type" },
+        { "include": "#interpolation-type-prefix" },
         {
-          "match": "(?:readonly(?=\\s+(?:managed|slice)\\b)|async(?=\\s+(?:func\\b|sequence\\b|\\())|(?:in|out)(?=\\s+chan\\b))|\\*|\\?(?![?.\\[])",
+          "match": "\\?(?![?.\\[])(?=(?:\\s|/\\*.*?\\*/)*(?:[\\[(*$\\p{L}_]|/\\*|//|$))",
           "captures": { "0": { "patterns": [{ "include": "source.gsharp" }] } }
         }
       ]
@@ -208,7 +218,7 @@
           "begin": "(?<![\\p{L}\\p{Nd}_$])(?:not|and|or|var|nil|true|false)\\b|(?<![\\p{L}\\p{Nd}_$])_(?![\\p{L}\\p{Nd}_])(?!(?:\\s|/\\*.*?\\*/)*[.(])|(?=[0-9\"'`])",
           "beginCaptures": { "0": { "patterns": [{ "include": "source.gsharp" }] } },
           "end": "(?=[:}])",
-          "patterns": [{ "include": "#interpolation-expression" }]
+          "patterns": [{ "include": "#interpolation-pattern-body" }]
         },
         { "include": "#interpolation-pattern-type-parentheses" },
         { "include": "source.gsharp" }
@@ -233,25 +243,72 @@
       ]
     },
     "interpolation-function-type": {
-      "begin": "(?<![\\p{L}\\p{Nd}_$])(?:func\\b|unmanaged\\b(?=(?:\\s|/\\*.*?\\*/)*(?:[\\[(]|$)))",
+      "begin": "(?<![\\p{L}\\p{Nd}_$])(?:func\\b|unmanaged\\b(?=(?:\\s|/\\*.*?\\*/)*(?:[\\[(]|/\\*|//|$)))",
       "beginCaptures": { "0": { "name": "keyword.other.gsharp" } },
+      "end": "(?=\\S)",
+      "applyEndPatternLast": true,
+      "patterns": [
+        { "include": "#interpolation-signature-parameters" },
+        { "include": "#comments" },
+        { "include": "#interpolation-type-clause" },
+        { "include": "#interpolation-type-tail" }
+      ]
+    },
+    "interpolation-signature-parameters": {
+      "begin": "\\G",
+      "end": "(?<=\\))|(?=\\S)",
+      "applyEndPatternLast": true,
+      "patterns": [
+        { "include": "#comments" },
+        { "include": "#interpolation-nested-brackets" },
+        { "include": "#interpolation-nested-parentheses" }
+      ]
+    },
+    "interpolation-type-clause": {
+      "begin": "(?!(?:as|is)\\b)(?=[\\[(*$\\p{L}_])",
       "end": "(\\?(?![?.\\[]))|(?=\\S)",
       "endCaptures": { "1": { "name": "keyword.operator.gsharp" } },
       "applyEndPatternLast": true,
       "patterns": [
-        {
-          "begin": "\\G",
-          "end": "(?<=\\))|(?=\\S)",
-          "applyEndPatternLast": true,
-          "patterns": [
-            { "include": "#comments" },
-            { "include": "#interpolation-nested-brackets" },
-            { "include": "#interpolation-nested-parentheses" }
-          ]
-        },
+        { "include": "#interpolation-type-head" },
+        { "include": "#interpolation-type-tail" }
+      ]
+    },
+    "interpolation-function-literal": {
+      "begin": "(?<![\\p{L}\\p{Nd}_$])func\\b",
+      "beginCaptures": { "0": { "name": "keyword.other.gsharp" } },
+      "end": "(?=\\S)",
+      "applyEndPatternLast": true,
+      "patterns": [
+        { "include": "#interpolation-signature-parameters" },
         { "include": "#comments" },
         {
-          "begin": "(?!(?:as|is)\\b)(?=[\\[(*$\\p{L}_])",
+          "match": "(?:ref|readonly)(?=(?:\\s|/\\*.*?\\*/)*(?:[\\[(*$\\p{L}_]|/\\*|//|$))",
+          "name": "keyword.other.gsharp"
+        },
+        { "include": "#interpolation-type-clause" }
+      ]
+    },
+    "interpolation-binding": {
+      "begin": "(?<![\\p{L}\\p{Nd}_$])let\\b",
+      "beginCaptures": { "0": { "name": "keyword.other.gsharp" } },
+      "end": "(?=\\S)",
+      "applyEndPatternLast": true,
+      "patterns": [
+        {
+          "begin": "\\G",
+          "end": "(\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*)|(?=\\S)",
+          "endCaptures": { "1": { "name": "variable.other.gsharp" } },
+          "patterns": [{ "include": "#comments" }]
+        },
+        { "include": "#comments" },
+        { "include": "#interpolation-type-clause" }
+      ]
+    },
+    "interpolation-creation": {
+      "patterns": [
+        {
+          "begin": "(?=(?<![\\p{L}\\p{Nd}_$])(?:map|chan)\\b)",
           "end": "(\\?(?![?.\\[]))|(?=\\S)",
           "endCaptures": { "1": { "name": "keyword.operator.gsharp" } },
           "applyEndPatternLast": true,
@@ -260,7 +317,25 @@
             { "include": "#interpolation-type-tail" }
           ]
         },
-        { "include": "#interpolation-type-tail" }
+        {
+          "begin": "(?<![\\p{L}\\p{Nd}_$])readonly\\b",
+          "beginCaptures": { "0": { "name": "keyword.other.gsharp" } },
+          "end": "(?=\\S)",
+          "applyEndPatternLast": true,
+          "patterns": [
+            { "include": "#comments" },
+            {
+              "begin": "(?=(?:managed|slice)\\b)",
+              "end": "(\\?(?![?.\\[]))|(?=\\S)",
+              "endCaptures": { "1": { "name": "keyword.operator.gsharp" } },
+              "applyEndPatternLast": true,
+              "patterns": [
+                { "include": "#interpolation-type-head" },
+                { "include": "#interpolation-type-tail" }
+              ]
+            }
+          ]
+        }
       ]
     },
     "interpolation-pattern": {
@@ -269,10 +344,13 @@
       "beginCaptures": { "1": { "name": "keyword.other.gsharp" } },
       "end": "(?=\\S)",
       "applyEndPatternLast": true,
+      "patterns": [{ "include": "#interpolation-pattern-body" }]
+    },
+    "interpolation-pattern-body": {
       "patterns": [
         { "include": "#comments" },
         {
-          "begin": "<=?|>=?|==|!=|(?=[+!~0-9\"'`\\-])",
+          "begin": "<=?|>=?|==|!=|(?=[+!~0-9\"'`?*/%&|^\\-])",
           "beginCaptures": { "0": { "name": "keyword.operator.gsharp" } },
           "end": "(?=(?<![\\p{L}\\p{Nd}_$])(?:and|or)\\b)|(?=[:}])",
           "patterns": [{ "include": "#interpolation-expression" }]
@@ -292,7 +370,7 @@
         { "include": "#characters" },
         { "include": "#numbers" },
         {
-          "begin": "(?!(?:as|is|not|and|or|var|when)\\b)(?=\\[(?=(?:\\s|/\\*.*?\\*/)*(?:[0-9][0-9a-zA-Z_]*|(?:,(?:\\s|/\\*.*?\\*/)*)*)?(?:\\s|/\\*.*?\\*/)*\\])|[(*$\\p{L}_])",
+          "begin": "(?!(?:as|is|not|and|or|var|when)\\b)(?=\\[(?=(?:\\s|/\\*.*?\\*/)*(?:[0-9][0-9a-zA-Z_]*|(?:,(?:\\s|/\\*.*?\\*/)*)*)?(?:\\s|/\\*.*?\\*/)*(?:\\]|/\\*|//|$))|[(*$\\p{L}_])",
           "end": "(\\?(?![?.\\[])(?=(?:\\s|/\\*.*?\\*/)*(?:[{}\\]),:;?+*/%&|^<>=!\\-]|\\$?[\\p{L}_]|$)))(?:\\s+((?!(?:as|is|not|and|or|when)\\b)\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*))?|((?!(?:as|is|not|and|or|when)\\b)\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*)|(?=\\S)",
           "endCaptures": {
             "1": { "name": "keyword.operator.gsharp" },
@@ -302,7 +380,12 @@
           "applyEndPatternLast": true,
           "patterns": [
             { "include": "#interpolation-pattern-type-head" },
-            { "include": "#interpolation-type-tail" }
+            { "include": "#interpolation-type-tail" },
+            {
+              "begin": "(?=\\()",
+              "end": "(?=(?<![\\p{L}\\p{Nd}_$])(?:and|or)\\b)|(?=[:}])",
+              "patterns": [{ "include": "#interpolation-expression" }]
+            }
           ]
         },
         { "include": "#interpolation-nested-brackets" },
@@ -324,7 +407,7 @@
           "patterns": [{ "include": "#interpolation-postfix-tail" }]
         },
         {
-          "begin": "(?<=[\\p{L}\\p{Nd}_\\)])(?<!(?<![\\p{L}\\p{Nd}_$])async)(?=\\s|[\\[(]|\\?(?=[\\[(])|/\\*|//)",
+          "begin": "(?<=[\\p{L}\\p{Nd}_\\)])(?<!(?<![\\p{L}\\p{Nd}_$])async)(?<!(?<![\\p{L}\\p{Nd}_$])if)(?<!(?<![\\p{L}\\p{Nd}_$])switch)(?<!(?<![\\p{L}\\p{Nd}_$])throw)(?<!(?<![\\p{L}\\p{Nd}_$])await)(?=\\s|[\\[(]|\\?(?=[\\[(])|/\\*|//)",
           "end": "(?=\\S)",
           "applyEndPatternLast": true,
           "patterns": [

@@ -130,6 +130,13 @@ test('Prism distinguishes function parameter modifiers from singleton named tupl
   }
 });
 
+test('Prism retains the empty bracket guard when accepting trailing type commas', () => {
+  registerGrammar();
+  const highlight = (type) => Prism.highlight(`"${'${'}value as ${type}? ?? fallback:G}"`, Prism.languages.gsharp, 'gsharp');
+  assert.match(highlight('List[int32,]'), /class="token format\b/);
+  assert.doesNotMatch(highlight('List[]'), /class="token format\b/);
+});
+
 test('release metadata and installation stay aligned', () => {
   assert.equal(release.docsVersion, versions[0]);
   assert.equal(release.tag, `v${release.version}`);
