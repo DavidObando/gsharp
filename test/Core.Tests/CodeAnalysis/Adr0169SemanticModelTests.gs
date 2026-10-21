@@ -22,6 +22,101 @@ import Xunit
 /// syntax→bound-node, syntax→type queries), (cref:Symbol.DeclaringSyntaxNodes),
 /// and (cref:GSharpSyntaxWalker).
 open class Adr0169SemanticModelTests {
+    @Fact
+    func ImplicitConversion_LoweredExtensionReceiver_KeepsOriginalOperandAndPublicQueries() {
+        const source = `package Query
+func Make(value int32) string -> "text"
+func (value object) Tag() int32 -> 0
+class Holder {
+    prop Value int32 { get; set; }
+    func Run() {
+        let first = Make(this.Value).Tag()
+        let authored = cast[object](Make(this.Value)).Tag()
+    }
+}
+`
+        let (compilation, model, tree) = CreateQualifierModel(source)
+        let owner = compilation.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Holder")
+        let backing = owner.Properties.Single((p PropertySymbol) -> p.Name == "Value").BackingField
+        for name in[]string{"first", "authored"} {
+            let syntax = QualifierInitializer(tree, name)
+            let extension = Assert.IsType[BoundCallExpression](model.GetBoundNode(syntax))
+            let conversion = Assert.IsType[BoundConversionExpression](extension.Arguments[0])
+            let selected = Assert.IsType[BoundCallExpression](conversion.Expression)
+            Assert.Same(syntax.RightPart, extension.Syntax)
+            Assert.NotSame(extension.Syntax, selected.Syntax)
+            Assert.Same(backing, Assert.IsType[BoundFieldAccessExpression](selected.Arguments[0]).Field)
+            Assert.Equal("Make", selected.Function.Name)
+            Assert.Same(TypeSymbol.Object, conversion.Type)
+            Assert.Same(TypeSymbol.String, selected.Type)
+            Assert.Same(selected.Function, model.GetSymbolInfo(selected.Syntax!!).Symbol)
+            Assert.Same(TypeSymbol.String, model.GetTypeInfo(selected.Syntax!!).Type)
+            Assert.Same(extension.Function, model.GetSymbolInfo(syntax).Symbol)
+            Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(syntax).Type)
+            if name == "authored" {
+                Assert.Null(conversion.ImplicitConversionOperand)
+                Assert.Same(syntax.LeftPart, conversion.Syntax)
+                Assert.Same(TypeSymbol.Object, model.GetTypeInfo(syntax.LeftPart).Type)
+            } else {
+                Assert.Same(syntax.LeftPart, selected.Syntax)
+                Assert.Same(selected, conversion.ImplicitConversionOperand)
+            }
+        }
+    }
+
+    @Fact
+    func ImplicitConversion_CopyRejectsDifferentForeignAndNilCallOperands() {
+        const source = `package Query
+func Make(value int32) string -> "text"
+func Other(value int32) string -> "other"
+func (value object) Tag() int32 -> 0
+let first = Make(1).Tag()
+let foreign = Make(2).Tag()
+let different = Other(3).Tag()
+let authored = cast[object](Make(4)).Tag()
+`
+        let (_, model, tree) = CreateQualifierModel(source)
+        let original = Assert.IsType[BoundConversionExpression](
+            Assert.IsType[BoundCallExpression](model.GetBoundNode(QualifierInitializer(tree, "first"))).Arguments[0]
+        )
+        let operand = Assert.IsType[BoundCallExpression](original.Expression)
+        Assert.Same(operand, original.ImplicitConversionOperand)
+        let positive = Assert.IsType[BoundConversionExpression](QualifierChildRewriter().Apply(original))
+        Assert.NotSame(original, positive)
+        Assert.NotSame(operand, positive.Expression)
+        Assert.Same(operand.Syntax, positive.Expression.Syntax)
+        Assert.Same(positive.Expression, positive.ImplicitConversionOperand)
+        let foreignSyntax = QualifierInitializer(tree, "foreign").LeftPart
+        let other = Assert.IsType[BoundCallExpression](
+            Assert.IsType[BoundConversionExpression](
+                Assert.IsType[BoundCallExpression](model.GetBoundNode(QualifierInitializer(tree, "different")))
+                    .Arguments[0]
+            )
+                .Expression
+        )
+        let replacements = []BoundExpression{
+            BoundCallExpression(operand.Syntax, other.Function, operand.Arguments, operand.ReturnType),
+            BoundCallExpression(foreignSyntax, operand.Function, operand.Arguments, operand.ReturnType),
+            BoundCallExpression(nil, operand.Function, operand.Arguments, operand.ReturnType)
+        }
+        for replacement in replacements {
+            Assert.Same(operand.Type, replacement.Type)
+            let changed = Assert.IsType[BoundConversionExpression](
+                CompletionOperandReplacementRewriter(operand, replacement).Apply(original)
+            )
+            Assert.Same(replacement, changed.Expression)
+            Assert.Null(changed.ImplicitConversionOperand)
+        }
+        let authored = Assert.IsType[BoundConversionExpression](
+            Assert.IsType[BoundCallExpression](model.GetBoundNode(QualifierInitializer(tree, "authored"))).Arguments[0]
+        )
+        let copiedAuthored = Assert.IsType[BoundConversionExpression](QualifierChildRewriter().Apply(authored))
+        Assert.NotSame(authored, copiedAuthored)
+        Assert.Null(authored.ImplicitConversionOperand)
+        Assert.Null(copiedAuthored.ImplicitConversionOperand)
+        Assert.Same(authored.Syntax, copiedAuthored.Syntax)
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)

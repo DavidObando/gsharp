@@ -20,10 +20,27 @@ abstract class BoundExpression : BoundNode {
     }
 
     /// Gets or sets the source operand of a binder-created implicit conversion.
-    /// This binding-time provenance is not a tree child or a lowering contract.
+    /// This non-child provenance survives only verified same-operation copies.
     internal prop ImplicitConversionOperand BoundExpression? {
         get;
         set;
+    }
+
+    internal func CopyImplicitConversionTo(copy BoundConversionExpression) {
+        if this is not BoundConversionExpression conversion || !object.ReferenceEquals(
+            ImplicitConversionOperand,
+            conversion.Expression
+        ) ||
+            copy.ImplicitConversionOperand != nil ||
+            !object.ReferenceEquals(Syntax, copy.Syntax) || !object.ReferenceEquals(Type, copy.Type) ||
+            conversion.IsChecked != copy.IsChecked ||
+            !object.ReferenceEquals(conversion.Expression.Type, copy.Expression.Type) ||
+            !conversion
+            .Expression
+            .IsSameSelectedOperationCopy(copy.Expression) {
+            return
+        }
+        copy.ImplicitConversionOperand = copy.Expression
     }
 
     internal prop LogicalCompletionOperand BoundExpression? {

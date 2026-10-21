@@ -250,6 +250,11 @@ erase an established outer expression/conversion query.
 Receiver type normalization recognizes the binder's exact implicit-conversion
 operand receipt with the original queried syntax; early call anchors must not
 turn an argument conversion into the receiver's logical type or peel authored casts.
+Conversion copies retain that receipt only for its exact direct operand or a
+verified same-selected-operation copy at the original non-nil call syntax,
+preserving source/target types, checkedness and the conversion's own syntax.
+Authored casts and different, foreign-syntax or nil-syntax replacement calls
+gain no conversion provenance.
 
 Public bound/type queries promote an exact physical completion operand to its
 verified logical completion, including a direct physical syntax-index hit.

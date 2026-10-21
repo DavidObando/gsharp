@@ -2027,6 +2027,74 @@ func Run(memory MEMORY_TYPE) string {
         Assert.Equal(typeof(int32), BoundSemantics.GetExpressionType(compilation, indexSyntax)?.ClrType)
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5035_LoweredExtensionReceiver_PreservesConversionAndCompletions(authored bool) {
+        let source = `package Repro
+func Make(value int32) string -> "text"
+func (value object) Tag() int32 -> 0
+class Holder {
+    prop Value int32 { get; set; }
+    func Run() {
+        let plain = Make(1).Tag()
+        let lowered = RECEIVER.Tag()
+    }
+}
+`.Replace(
+            "RECEIVER",
+            if authored {
+                "cast[object](Make(this.Value))"
+            } else {
+                "Make(this.Value)"
+            }
+        )
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let model = compilation.GetSemanticModel(content.SyntaxTree)
+        let plain = Assert.IsType[AccessorExpressionSyntax](TokenAt(content, source, "Tag()", 1).Parent?.Parent)
+        Assert.Same(TypeSymbol.String, BoundSemantics.GetExpressionType(compilation, plain.LeftPart))
+        Assert.Contains(
+            CompletionComputer.ComputeCompletions(content, LanguageServerTestHelpers.PositionOf(source, "Tag()", 1)),
+            (item CompletionItem) -> item.Label == "Substring"
+        )
+        let accessor = Assert.IsType[AccessorExpressionSyntax](TokenAt(content, source, "Tag()", 2).Parent?.Parent)
+        let call = Assert.IsType[BoundCallExpression](model.GetBoundNode(accessor))
+        let converted = Assert.IsType[BoundConversionExpression](call.Arguments[0])
+        let selected = Assert.IsType[BoundCallExpression](converted.Expression)
+        let owner = compilation.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Holder")
+        Assert.Same(
+            owner.Properties.Single((p PropertySymbol) -> p.Name == "Value").BackingField,
+            Assert.IsType[BoundFieldAccessExpression](selected.Arguments[0]).Field
+        )
+        Assert.Same(accessor.RightPart, call.Syntax)
+        Assert.NotSame(call.Syntax, selected.Syntax)
+        Assert.Same(TypeSymbol.String, model.GetTypeInfo(selected.Syntax!!).Type)
+        Assert.Same(selected.Function, model.GetSymbolInfo(selected.Syntax!!).Symbol)
+        let expected = if authored {
+            TypeSymbol.Object
+        } else {
+            TypeSymbol.String
+        }
+        Assert.Same(expected, BoundSemantics.GetExpressionType(compilation, accessor.LeftPart))
+        let items = CompletionComputer.ComputeCompletions(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Tag()", 2)
+        )
+        if authored {
+            Assert.Same(TypeSymbol.Object, model.GetTypeInfo(accessor.LeftPart).Type)
+            Assert.DoesNotContain(items, (item CompletionItem) -> item.Label == "Substring")
+        } else {
+            Assert.Same(accessor.LeftPart, selected.Syntax)
+            Assert.Contains(
+                items,
+                (item CompletionItem) -> item.Label == "Substring" && item.Kind == CompletionItemKind.Method
+            )
+        }
+    }
+
     @Fact
     func Issue5035_CompositeReceiver_PreservesOriginalConversionContext() {
         const source = `package Repro

@@ -753,7 +753,9 @@ abstract class BoundTreeRewriter {
         if expression == node.Expression {
             return node
         }
-        return BoundConversionExpression(node.Syntax, node.Type, expression, node.IsChecked)
+        let copy = BoundConversionExpression(node.Syntax, node.Type, expression, node.IsChecked)
+        node.CopyImplicitConversionTo(copy)
+        return copy
     }
 
     /// Rewrites a bound await expression (Phase 5.1).
