@@ -247,7 +247,7 @@ internal shared class TypeClauseCompletions {
                 InsertText: snippet,
                 InsertTextFormat: InsertTextFormat.Snippet,
                 SortText: SortPrefix + sortKey,
-                FilterText: "async",
+                FilterText: label,
                 Documentation: MarkupContent{Kind: MarkupKind.Markdown, Value: documentation}
             }
         )

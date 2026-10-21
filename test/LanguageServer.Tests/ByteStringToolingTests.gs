@@ -42,6 +42,7 @@ class ByteStringToolingTests {
         let items = CompletionComputer.ComputeCompletions(LanguageServerTestHelpers.Content(source), Position(0, 15))
         let item = Assert.Single(items, (item CompletionItem) -> item.Label == "bytestring")
         Assert.Equal("bytestring", item.InsertText)
+        Assert.Equal("bytestring", item.FilterText)
         const literal = "let bytes = b\"\\xFF$$literal\"\n"
         let hover = HoverComputer.ComputeHover(
             LanguageServerTestHelpers.Content(literal),
