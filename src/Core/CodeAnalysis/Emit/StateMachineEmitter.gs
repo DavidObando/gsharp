@@ -888,7 +888,7 @@ internal class StateMachineEmitter {
                                 kickoffSmType,
                                 stateField,
                                 initialThreadField,
-                                if plan.ReturnsEnumerable {
+                                if IteratorRewriter.ReturnsEnumerable(plan.Function.Type) {
                                     -2
                                 } else {
                                     0

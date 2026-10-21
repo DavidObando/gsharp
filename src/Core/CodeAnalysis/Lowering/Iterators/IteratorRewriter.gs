@@ -129,14 +129,14 @@ shared class IteratorRewriter {
         body BoundBlockStatement,
         @NotNullWhen(true) out plan IteratorStateMachinePlan?
     ) bool {
-        let elementType TypeSymbol? = GetIteratorElementType(function.Type, out var returnsEnumerable)
+        let elementType TypeSymbol? = GetIteratorElementType(function.Type, out _)
         if !IteratorDetection.ContainsYield(body) || AsyncIteratorDetection.IsAsyncIteratorFunction(function, body) ||
             elementType == nil {
             plan = nil
             return false
         }
         let spilledBody = SpillSequenceSpiller.RewriteIteratorBlocks(body)
-        plan = BuildPlan(function, spilledBody, elementType, returnsEnumerable)
+        plan = BuildPlan(function, spilledBody, elementType)
         return true
     }
 
@@ -148,6 +148,10 @@ shared class IteratorRewriter {
         if TryBuildPlan(function, body, out var plan) {
             plans.Add(plan)
         }
+    }
+
+    internal func ReturnsEnumerable(type TypeSymbol) bool {
+        return GetIteratorElementType(type, out var returnsEnumerable) != nil && returnsEnumerable
     }
 
     private func GetIteratorElementType(type TypeSymbol, out returnsEnumerable bool) TypeSymbol? {
@@ -208,8 +212,7 @@ shared class IteratorRewriter {
     private func BuildPlan(
         function FunctionSymbol,
         body BoundStatement,
-        elementType TypeSymbol,
-        returnsEnumerable bool
+        elementType TypeSymbol
     ) IteratorStateMachinePlan {
         // Collect yields and assign states.
         let yieldCollector = IteratorRewriter.YieldStateCollector()
@@ -217,7 +220,7 @@ shared class IteratorRewriter {
         let yieldStates = yieldCollector.States
         // Collect hoisted locals (locals that are live across yield points).
         let hoistedLocals = CollectHoistedLocals(body)
-        return IteratorStateMachinePlan(function, body, elementType, yieldStates, hoistedLocals, returnsEnumerable)
+        return IteratorStateMachinePlan(function, body, elementType, yieldStates, hoistedLocals)
     }
 
     private func CollectHoistedLocals(body BoundStatement) ImmutableArray[VariableSymbol] {
@@ -256,15 +259,13 @@ class IteratorStateMachinePlan {
         body BoundStatement,
         elementType TypeSymbol,
         yieldStates ImmutableDictionary[BoundYieldStatement, int32],
-        hoistedLocals ImmutableArray[VariableSymbol],
-        returnsEnumerable bool
+        hoistedLocals ImmutableArray[VariableSymbol]
     ) {
         Function = function
         Body = body
         ElementType = elementType
         YieldStates = yieldStates
         HoistedLocals = hoistedLocals
-        ReturnsEnumerable = returnsEnumerable
     }
 
     /// Gets the original iterator function.
@@ -279,11 +280,6 @@ class IteratorStateMachinePlan {
 
     /// Gets the element type produced by this iterator.
     prop ElementType TypeSymbol {
-        get;
-    }
-
-    /// Gets whether the function returns an enumerable rather than a direct enumerator.
-    prop ReturnsEnumerable bool {
         get;
     }
 
