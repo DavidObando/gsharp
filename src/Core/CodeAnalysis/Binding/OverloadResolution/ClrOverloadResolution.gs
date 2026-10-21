@@ -9403,18 +9403,14 @@ internal shared class ClrOverloadResolution {
         try {
             let openDefinition = constructedDeclaringType.GetGenericTypeDefinition()
             const Flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static
-            let members IEnumerable[MethodBase] = if rawCandidate is ConstructorInfo {
-                cast[IEnumerable[MethodBase]](ClrTypeUtilities.SafeGetConstructors(openDefinition, Flags))
-            } else {
-                cast[IEnumerable[MethodBase]](ClrTypeUtilities.SafeGetMethods(openDefinition, Flags))
-            }
-            let token = rawCandidate.MetadataToken
-            let module = rawCandidate.Module
-            for member in members {
-                if member.MetadataToken == token && member.Module == module {
-                    return member.GetParameters()
-                }
-            }
+            return (
+                ClrTypeUtilities.FindMetadataDefinition(
+                    openDefinition,
+                    rawCandidate,
+                    Flags,
+                    safeEnumeration: true
+                ) as MethodBase
+            )?.GetParameters()
         } catch (InvalidOperationException) {
             // A dynamic or otherwise token-less member: fall back to the
             // slot-blind answer above.
