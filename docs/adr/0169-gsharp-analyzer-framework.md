@@ -180,20 +180,28 @@ corpus cannot reach a row, by a snippet translation test.
 
 ### Semantic-model discovery ownership (issue #5072)
 
-Each compilation lazily publishes one immutable partition of declaration and
-body ownership. It preserves canonical symbols, declaration traversal order and
-idempotent member containment. A model builds its detailed syntax maps only on
-its first query, using its tree's declarations and body roots. Bound traversal
-keeps the existing first-win syntax mapping and local/pattern symbol discovery.
+Each compilation lazily publishes one immutable partition of compact declaration
+facts and body roots. It preserves canonical symbols, declaration traversal order
+and idempotent member containment. Only a queried tree builds declaration and
+bound-node dictionaries. Its ordered declaration facts enter the map with
+first-win insertion; bound traversal keeps the existing local/pattern discovery.
 
 An explicit function declaration determines the same tree boundary as before.
-Declaration-less bodies and top-level statements can span trees: their ownership
-walk considers every visited syntax anchor and symbol declaration, not only
-`FirstAnchoredSyntax` or a property's provenance. This walk does not construct
-other trees' detailed indexes. Both lazy layers use execution-and-publication
-initialization. A new compilation owns new partitions and models, including
-body-only edits that reuse the global scope. No source-symbol partition is
-process-global.
+The existing syntax-anchoring traversal records compact facts for declaration-less
+and top-level roots: actual anchor trees and references to nodes with public
+symbol readers. One type-only reader cache serves capture and semantic queries.
+Capture does not evaluate those readers. After `BoundProgram` completes, the
+compilation partition reads their current symbols and declarations, including
+inferred results and symbols repointed after a body-only edit. A first anchor
+or property's provenance never proves that all body facts belong to one tree.
+
+Re-anchoring invalidates prior root facts; replacement roots start without them.
+A root missing producer facts uses the same collector without changing anchors.
+Facts can live with a cached body because they describe its nodes, not final
+declaration ownership. Compilation partitions and detailed maps are never reused
+across compilations. They use execution-and-publication initialization and private,
+constructor-only partition publication. No source-symbol partition is
+process-global. Producer overhead must be measured even when no model is queried.
 
 ### Execution: `GSharpAnalyzerDriver`, in-process in `gsc`
 

@@ -600,9 +600,36 @@ Semantic models and the bound program were already cached. The remaining
 repetition was inside each queried tree's initial index: all global declarations,
 parameters and function ownership were rediscovered before tree filtering.
 One compilation-owned immutable partition now serves those lazy per-tree
-indexes. Detailed bound traversal remains lazy. Declaration-less and top-level
-roots retain multi-tree ownership, including declarations on unanchored symbol
-references. Canonical symbols, containment and first-win mappings are unchanged.
+indexes. It stores ordered declaration facts, not declaration dictionaries for
+unqueried trees. Detailed maps and bound traversal remain lazy. Declaration-less
+and top-level roots retain multi-tree ownership, including declarations on
+unanchored symbol references. Canonical symbols, containment and first-win
+mappings are unchanged.
+
+#### Producer/consumer contract
+
+`SyntaxAnchoringWalker` collects compact body facts during its existing
+coordinator-owned, post-worker traversal. Capture records actual anchor trees
+and references to nodes with symbol-valued properties. It reuses the same
+type-only property-reader cache as semantic queries and **does not evaluate**
+symbol getters or declarations. The compilation partition evaluates those
+readers only after the current `BoundProgram` completes. This preserves inferred
+property results and current declarations after incremental symbol repointing.
+No final referenced-declaration tree set is cached on a reusable body.
+
+Root facts describe nodes already owned by the body. Every re-anchoring call
+invalidates old facts before visiting; new/replacement roots have no copied
+facts. Roots without producer facts run the same collector once without changing
+syntax. Neither path guesses ownership from `FirstAnchoredSyntax`, a property,
+or a containing type. Explicit function declarations keep the established tree
+boundary. The index publishes private constructor-only buckets of immutable
+fact arrays; only a requested tree creates first-win syntax dictionaries.
+No query-count threshold, mode flag or alternative detail-index pipeline exists.
+
+Capture adds producer work even to compilations without semantic-model users.
+Validation must measure binding plus query time/allocation and a no-consumer
+compilation, not only move work outside a first-query timer. Producer record,
+deferred symbol-node and fallback record counts distinguish those costs.
 
 Opt-in reports distinguish model objects created (`semantic.models.created`)
 from indexes actually used (`semantic.index.builds`). They count declaration
@@ -614,7 +641,9 @@ process-inclusive allocation separately. Analyzer totals include these spans
 and must not be added to them. The illustrative 700 × 9099 loop count is not a
 measurement or throughput claim.
 
-The October 20 comparison uses the same current Core source at `68acf272`
+#### Preserved rejected candidate `d8add21d8`
+
+The initial October 20 comparison uses the same current Core source at `68acf272`
 and the published `0.5.179` bootstrap on both sides. The real driver uses
 704 source inputs and 173 explicit references (176 including implicit resolver
 inputs). The interactive host uses the same 702 committed Core files on both
@@ -642,6 +671,8 @@ overhead and must not be presented as uninstrumented allocation savings.
 Preliminary mixed-Debug artifacts from an incomplete ad hoc validation solution
 are excluded; direct per-project Release builds and loaded-consumer hashes
 provide the corrected evidence.
+These measurements belong to the initial, regressing candidate. They do not
+validate the later compact producer-facts revision or resolve its landing gate.
 
 ### Local declaration discovery reduction (#5055)
 

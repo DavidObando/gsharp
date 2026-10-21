@@ -9,11 +9,9 @@ import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import System
-import System.Collections.Concurrent
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
-import System.Reflection
 import System.Threading
 
 /// Per-tree semantic queries over a bound compilation: syntax → symbol,
@@ -145,11 +143,6 @@ class SemanticModel {
         }
     }
 
-    private data class BoundNodeAccessors(
-        SymbolProperties[](BoundNode) -> object?,
-        BoundNodeProperties[](BoundNode) -> object?
-    ) : IEquatable[BoundNodeAccessors] { }
-
     private data class Index(
         BoundBySyntax Dictionary[SyntaxNode, BoundNode],
         DeclaredBySyntax Dictionary[SyntaxNode, Symbol]
@@ -157,19 +150,28 @@ class SemanticModel {
 
     /// Partitions source ownership once, without building other trees' detailed indexes.
     internal class OwnershipIndex {
-        private data class Bucket(
-            Declarations ImmutableArray[KeyValuePair[SyntaxNode, Symbol]],
-            Bodies ImmutableArray[BoundNode]
-        ) : IEquatable[Bucket] { }
+        private class Bucket {
+            init(declarations ImmutableArray[KeyValuePair[SyntaxNode, Symbol]], bodies ImmutableArray[BoundNode]) {
+                Declarations = declarations
+                Bodies = bodies
+            }
 
-        private class BucketBuilder {
-            let Declarations Dictionary[SyntaxNode, Symbol] = Dictionary[SyntaxNode, Symbol](
-                ReferenceEqualityComparer.Instance
-            )
-            let Bodies List[BoundNode] = List[BoundNode]()
+            prop Declarations ImmutableArray[KeyValuePair[SyntaxNode, Symbol]] {
+                get;
+            }
+            prop Bodies ImmutableArray[BoundNode] {
+                get;
+            }
         }
 
-        private let buckets ImmutableDictionary[SyntaxTree, Bucket]
+        private class BucketBuilder {
+            let Declarations List[KeyValuePair[SyntaxNode, Symbol]] = List[KeyValuePair[SyntaxNode, Symbol]]()
+            let Bodies List[BoundNode] = List[BoundNode]()
+            var LastBodyOrdinal int32 = -1
+        }
+
+        // Only this constructor writes the dictionary; published buckets contain immutable fact arrays.
+        private let buckets Dictionary[SyntaxTree, Bucket]
 
         internal init(compilation Compilation) {
             let program = compilation.BoundProgram
@@ -180,26 +182,30 @@ class SemanticModel {
             for symbol in SemanticModel.EnumerateDeclaredSymbols(program, globalScope) {
                 CompilationMeasurements.Count("semantic.declaration.visits")
                 for declaration in symbol.DeclaringSyntaxNodes {
-                    GetBuilder(builders, declaration.SyntaxTree).Declarations.TryAdd(declaration, symbol)
+                    GetBuilder(builders, declaration.SyntaxTree).Declarations.Add(
+                        KeyValuePair[SyntaxNode, Symbol](declaration, symbol)
+                    )
                 }
             }
+            var ordinal = 0
             for (function, body) in program.Functions {
                 CompilationMeasurements.Count("semantic.function.visits")
                 if function.Declaration is {} declaration {
-                    GetBuilder(builders, declaration.SyntaxTree).Bodies.Add(body)
+                    AddBody(builders, declaration.SyntaxTree, body, ordinal)
                 } else {
-                    AddUnownedBody(builders, body)
+                    AddUnownedBody(builders, body, ordinal)
                 }
+                ordinal++
             }
-            AddUnownedBody(builders, program.Statement)
-            let result = ImmutableDictionary.CreateBuilder[SyntaxTree, Bucket](ReferenceEqualityComparer.Instance)
+            AddUnownedBody(builders, program.Statement, ordinal)
+            let result = Dictionary[SyntaxTree, Bucket](builders.Count, ReferenceEqualityComparer.Instance)
             for pair in builders {
                 result.Add(
                     pair.Key,
                     Bucket(pair.Value.Declarations.ToImmutableArray(), pair.Value.Bodies.ToImmutableArray())
                 )
             }
-            buckets = result.ToImmutable()
+            buckets = result
         }
 
         internal func GetDeclarations(tree SyntaxTree) ImmutableArray[
@@ -228,13 +234,39 @@ class SemanticModel {
                 return builder
             }
 
-            private func AddUnownedBody(builders Dictionary[SyntaxTree, BucketBuilder], body BoundNode) {
-                // Accessors, synthesized bodies and top-level code can have no declaration.
-                // FirstAnchoredSyntax is provenance, not proof that every anchor has that tree.
-                let walker = OwnershipWalker()
-                walker.Visit(body)
-                for tree in walker.Trees {
-                    GetBuilder(builders, tree).Bodies.Add(body)
+            private func AddBody(
+                builders Dictionary[SyntaxTree, BucketBuilder],
+                tree SyntaxTree,
+                body BoundNode,
+                ordinal int32
+            ) {
+                let builder = GetBuilder(builders, tree)
+                // Several facts can name one tree. Keep each root once at its original position.
+                if builder.LastBodyOrdinal != ordinal {
+                    builder.Bodies.Add(body)
+                    builder.LastBodyOrdinal = ordinal
+                }
+            }
+
+            private func AddUnownedBody(
+                builders Dictionary[SyntaxTree, BucketBuilder],
+                body BoundBlockStatement,
+                ordinal int32
+            ) {
+                let facts = body.GetSourceOwnership()
+                for tree in facts.SyntaxTrees {
+                    AddBody(builders, tree, body, ordinal)
+                }
+                CompilationMeasurements.Count("semantic.ownership.symbol-node-visits", facts.SymbolNodes.Length)
+                // Evaluate current getters only after BoundProgram completes, including inference and cache repointing.
+                for node in facts.SymbolNodes {
+                    for getter in BoundNodeAccessors.Get(node.GetType()).SymbolProperties {
+                        if getter(node) is Symbol symbol {
+                            for declaration in symbol.DeclaringSyntaxNodes {
+                                AddBody(builders, declaration.SyntaxTree, body, ordinal)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -261,30 +293,6 @@ class SemanticModel {
         override func VisitPattern(node BoundPattern?) {
             Record(node)
             base.VisitPattern(node)
-        }
-    }
-
-    private class OwnershipWalker : RecordingWalker {
-        let Trees HashSet[SyntaxTree] = HashSet[SyntaxTree](ReferenceEqualityComparer.Instance)
-        private let measure bool = CompilationMeasurements.IsEnabled
-
-        protected override func Record(node BoundNode?) {
-            if node == nil {
-                return
-            }
-            if measure {
-                CompilationMeasurements.Count("semantic.ownership.record_visits")
-            }
-            if node.Syntax is {} syntax {
-                Trees.Add(syntax.SyntaxTree)
-            }
-            for getter in SemanticModel.GetAccessors(node.GetType()).SymbolProperties {
-                if getter(node) is Symbol symbol {
-                    for declaration in symbol.DeclaringSyntaxNodes {
-                        Trees.Add(declaration.SyntaxTree)
-                    }
-                }
-            }
         }
     }
 
@@ -327,15 +335,6 @@ class SemanticModel {
     }
 
     shared {
-        /// Cached, per-bound-node-type accessors for public instance properties
-        /// whose values are (cref:Symbol)s or nested (cref:BoundNode)s.
-        /// Mirrors the cached child-accessor pattern used by
-        /// (cref:SyntaxNode.GetChildren).
-        private let AccessorCache ConcurrentDictionary[Type, BoundNodeAccessors] = ConcurrentDictionary[
-            Type,
-            BoundNodeAccessors
-        ]()
-
         private func BuildIndex(compilation Compilation, tree SyntaxTree) SemanticModel.Index {
             let ownership = compilation.SemanticOwnership
             using let measurement = CompilationMeasurements.BeginPhase("semantic.index")
@@ -343,7 +342,7 @@ class SemanticModel {
             let boundBySyntax = Dictionary[SyntaxNode, BoundNode](ReferenceEqualityComparer.Instance)
             let declaredBySyntax = Dictionary[SyntaxNode, Symbol](ReferenceEqualityComparer.Instance)
             for declaration in ownership.GetDeclarations(tree) {
-                declaredBySyntax.Add(declaration.Key, declaration.Value)
+                declaredBySyntax.TryAdd(declaration.Key, declaration.Value)
             }
             let walker = IndexingWalker(tree, boundBySyntax, declaredBySyntax)
             for body in ownership.GetBodies(tree) {
@@ -409,24 +408,6 @@ class SemanticModel {
             }
         }
 
-        private func GetAccessors(boundNodeType Type) BoundNodeAccessors -> AccessorCache.GetOrAdd(
-            boundNodeType,
-            (type Type) -> {
-                let symbolGetters = List[(BoundNode) -> object?]()
-                let boundGetters = List[(BoundNode) -> object?]()
-                for property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance) {
-                    if property.GetIndexParameters().Length != 0 {
-                        continue
-                    }
-                    let getterProperty = property
-                    if typeof(Symbol).IsAssignableFrom(property.PropertyType) {
-                        symbolGetters.Add((node BoundNode) -> getterProperty.GetValue(node))
-                    } else if typeof(BoundNode).IsAssignableFrom(property.PropertyType) {
-                        boundGetters.Add((node BoundNode) -> getterProperty.GetValue(node))
-                    }
-                }
-                return BoundNodeAccessors(symbolGetters.ToArray(), boundGetters.ToArray())
-            }
-        )
+        private func GetAccessors(boundNodeType Type) BoundNodeAccessors -> BoundNodeAccessors.Get(boundNodeType)
     }
 }

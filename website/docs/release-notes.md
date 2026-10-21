@@ -16,7 +16,7 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
-- **Semantic models share declaration and body ownership discovery** (issue #5072, ADR-0169). A compilation partitions canonical declarations and body roots once instead of rediscovering them for every queried file. Detailed syntax maps remain lazy per tree, including language-server queries. Declaration-less and top-level bodies retain multi-tree ownership, and body-only edits receive fresh indexes. Opt-in measurements distinguish created models, queried indexes and global discovery visits.
+- **Semantic models share declaration and body ownership discovery** (issue #5072, ADR-0169). A compilation partitions compact canonical declaration facts and body roots once instead of rediscovering them for every queried file. Only queried trees build syntax dictionaries. The existing anchoring pass captures body facts without evaluating symbol getters; the completed compilation reads current declarations, preserving inferred results and body-only edits. Declaration-less and top-level bodies retain multi-tree ownership. Opt-in measurements distinguish producer work, created models, queried indexes, global discovery and missing-fact fallbacks.
 
 - **The compiler now builds with the published G# SDK 0.5.179** (issue #2189). The bootstrap pin moves from 0.5.7 to the release containing the measured compiler lookup, generator setup and bounded-worker improvements. The analyzer-testing package follows the same pin. This separate pin update builds the repository with that released compiler; its CI provides stage-2 verification under the N-1 rule.
 

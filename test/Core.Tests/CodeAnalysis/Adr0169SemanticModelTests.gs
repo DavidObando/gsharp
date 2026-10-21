@@ -203,6 +203,104 @@ open class Adr0169SemanticModelTests {
         Assert.Equal(int64(2), measurements.GetCounter("semantic.index.builds"))
     }
 
+    @Fact
+    func ProducerFacts_DoNotBuildSemanticMaps_AndFirstQueryAvoidsDeepDiscovery() {
+        let left = SyntaxTree.Parse(
+            SourceText.From("package App\nclass Left { prop Value int32 { get { return 1 } } }", "left.gs")
+        )
+        let right = SyntaxTree.Parse(
+            SourceText.From("package App\nclass Right { prop Value int32 { get { return 2 } } }", "right.gs")
+        )
+        using let measurements = CompilationMeasurements.Start("semantic-producer-test")
+        let compilation = Compilation(left, right){IsLibrary = true}
+        let program = compilation.BoundProgram
+        Assert.Empty(program.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.True(measurements.GetCounter("semantic.ownership.fact-roots.captured") >= int64(2))
+        Assert.Equal(int64(0), measurements.GetCounter("semantic.ownership.builds"))
+        Assert.Equal(int64(0), measurements.GetCounter("semantic.index.builds"))
+        let property = program.Structs.Single((s StructSymbol) -> s.Name == "Left").Properties.Single()
+        let declaration = property.DeclaringSyntaxNodes.Single()
+        Assert.Same(left, declaration.SyntaxTree)
+        Assert.Same(property, compilation.GetSemanticModel(left).GetDeclaredSymbol(declaration))
+        let body = program
+            .Functions
+            .Single(
+            (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) -> object.ReferenceEquals(
+                pair.Key.AssociatedSymbol,
+                property
+            )
+        )
+            .Value
+        let statement = body.Statements.OfType[BoundReturnStatement]().Single()
+        Assert.Same(statement, compilation.GetSemanticModel(left).GetBoundNode(statement.Syntax!!))
+        Assert.Equal(int64(1), measurements.GetCounter("semantic.index.builds"))
+        Assert.True(measurements.GetCounter("semantic.ownership.fact-roots.reused") >= int64(2))
+        Assert.Equal(int64(0), measurements.GetCounter("semantic.ownership.fallback-record-visits"))
+    }
+
+    @Fact
+    func ProducerFacts_DeferComputedSymbolGetters_UntilCompletedProgram() {
+        let firstTree = SyntaxTree.Parse(SourceText.From("package App\nclass Before { }", "before.gs"))
+        let secondTree = SyntaxTree.Parse(SourceText.From("package App\nclass After { }", "after.gs"))
+        let compilation = Compilation(firstTree, secondTree){IsLibrary = true}
+        let program = compilation.BoundProgram
+        let before = program.Structs.Single((s StructSymbol) -> s.Name == "Before")
+        let after = program.Structs.Single((s StructSymbol) -> s.Name == "After")
+        let function = FunctionSymbol("inferred", ImmutableArray[ParameterSymbol].Empty, before)
+        let call = BoundCallExpression(nil, function, ImmutableArray[BoundExpression].Empty)
+        let body = BoundBlockStatement(nil, ImmutableArray.Create[BoundStatement](BoundExpressionStatement(nil, call)))
+        // A bound-graph fixture: the real Type getter follows the function's inferred return.
+        SyntaxAnchoringWalker.Anchor(body, firstTree.Root)
+        function.SetRichAnonymousReturnType(after)
+        ReplaceBoundProgram(
+            compilation,
+            BoundProgram(
+                program.EntryPointPackage,
+                program.Packages,
+                program.Diagnostics,
+                ImmutableDictionary[FunctionSymbol, BoundBlockStatement].Empty.Add(function, body),
+                nil,
+                BoundBlockStatement(nil, ImmutableArray[BoundStatement].Empty)
+            )
+        )
+        Assert.Same(after, compilation.GetSemanticModel(secondTree).GetDeclaredSymbol(after.Declaration!!))
+        Assert.Null(compilation.GetSemanticModel(firstTree).GetDeclaredSymbol(before.Declaration!!))
+    }
+
+    @Fact
+    func Reanchoring_InvalidatesFactsCollectedBeforeSyntaxWasAssigned() {
+        let firstTree = SyntaxTree.Parse(SourceText.From("package App\nfunc First() int32 { return 1 }", "first.gs"))
+        let secondTree = SyntaxTree.Parse(
+            SourceText.From("package App\nfunc Second(value int32) int32 { return value }", "second.gs")
+        )
+        let compilation = Compilation(firstTree, secondTree){IsLibrary = true}
+        let program = compilation.BoundProgram
+        let parameter = program.Functions.Keys.Single((f FunctionSymbol) -> f.Name == "Second").Parameters.Single()
+        let body = BoundBlockStatement(
+            nil,
+            ImmutableArray.Create[BoundStatement](
+                BoundExpressionStatement(nil, BoundVariableExpression(nil, parameter))
+            )
+        )
+        let _ = body.GetSourceOwnership()
+        let anchor = NodesOfType[FunctionDeclarationSyntax](firstTree).Single()
+        // This anchor suppresses producer collection, so invalidation must permit the same collector's fallback.
+        SyntaxAnchoringWalker.Anchor(body, anchor)
+        let owner = FunctionSymbol("synthesized", ImmutableArray[ParameterSymbol].Empty, TypeSymbol.Void)
+        ReplaceBoundProgram(
+            compilation,
+            BoundProgram(
+                program.EntryPointPackage,
+                program.Packages,
+                program.Diagnostics,
+                ImmutableDictionary[FunctionSymbol, BoundBlockStatement].Empty.Add(owner, body),
+                nil,
+                BoundBlockStatement(nil, ImmutableArray[BoundStatement].Empty)
+            )
+        )
+        Assert.Same(body, compilation.GetSemanticModel(firstTree).GetBoundNode(anchor))
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)
@@ -244,10 +342,7 @@ open class Adr0169SemanticModelTests {
                 BoundBlockStatement(nil, ImmutableArray[BoundStatement].Empty)
             }
         )
-        let field = Assert.IsAssignableFrom[FieldInfo](
-            typeof(Compilation).GetField("boundProgram", BindingFlags.NonPublic | BindingFlags.Instance)
-        )
-        field.SetValue(compilation, replacement)
+        ReplaceBoundProgram(compilation, replacement)
         Assert.Same(
             parameter,
             compilation.GetSemanticModel(firstTree).GetDeclaredSymbol(parameter.DeclaringSyntaxNodes.Single())
@@ -300,6 +395,13 @@ open class Adr0169SemanticModelTests {
     }
 
     shared {
+        private func ReplaceBoundProgram(compilation Compilation, program BoundProgram) {
+            let field = Assert.IsAssignableFrom[FieldInfo](
+                typeof(Compilation).GetField("boundProgram", BindingFlags.NonPublic | BindingFlags.Instance)
+            )
+            field.SetValue(compilation, program)
+        }
+
         private const Source string = `package App
 import System
 

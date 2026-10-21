@@ -77,6 +77,46 @@ open class IncrementalSemanticModelTests {
     }
 
     @Fact
+    func BodyOnlyEdit_CachedAccessorFacts_ResolveRepointedCrossFileField() {
+        const fields = "package P\nclass Shared {\n    shared { var V int32 = 1 }\n}\n" +
+            "func Touch(n int32) int32 { return n }\n"
+        const accessor = "package P\nclass Reader {\n    prop Value int32 { get { return Shared.V } }\n}\n"
+        let project = ProjectState("/test/project.gsproj")
+        project.UpdateFile(FileA, fields)
+        project.UpdateFile(FileB, accessor)
+        let before = project.GetCompilation()
+        let oldTree = before.SyntaxTrees.Single((tree SyntaxTree) -> tree.Text.FileName == FileA)
+        let beforeProgram = before.BoundProgram
+        let field = beforeProgram.Structs.Single((s StructSymbol) -> s.Name == "Shared").StaticFields.Single()
+        let beforeBody = beforeProgram
+            .Functions
+            .Single(
+            (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) ->
+            pair.Key.MethodKind == MethodKind.PropertyGet && pair.Key.AssociatedSymbol?.Name == "Value"
+        )
+            .Value
+        Assert.Same(field, before.GetSemanticModel(oldTree).GetDeclaredSymbol(field.DeclaringSyntaxNodes.Single()))
+        project.UpdateFile(FileA, fields.Replace("return n", "return n + 1"))
+        let after = project.GetCompilation()
+        Assert.Same(before.GlobalScope, after.ReusedGlobalScope)
+        let afterProgram = after.BoundProgram
+        let afterBody = afterProgram
+            .Functions
+            .Single(
+            (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) ->
+            pair.Key.MethodKind == MethodKind.PropertyGet && pair.Key.AssociatedSymbol?.Name == "Value"
+        )
+            .Value
+        Assert.Same(beforeBody, afterBody)
+        Assert.Same(field, afterProgram.Structs.Single((s StructSymbol) -> s.Name == "Shared").StaticFields.Single())
+        let tree = after.SyntaxTrees.Single((candidate SyntaxTree) -> candidate.Text.FileName == FileA)
+        let declaration = field.DeclaringSyntaxNodes.Single()
+        Assert.NotSame(oldTree, tree)
+        Assert.Same(tree, declaration.SyntaxTree)
+        Assert.Same(field, after.GetSemanticModel(tree).GetDeclaredSymbol(declaration))
+    }
+
+    @Fact
     func BodyOnlyEdit_ReusesUnchangedFiles_AndRecomputesEditedFile() {
         let project = NewProject()
         let comp1 = project.GetCompilation()

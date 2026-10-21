@@ -4,6 +4,7 @@
 
 package GSharp.Core.CodeAnalysis.Binding
 
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Syntax
 
 /// Fills the (cref:BoundNode.Syntax) anchor of every statement,
@@ -16,6 +17,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 /// sequence points. Idempotent: an existing anchor is never replaced.
 internal class SyntaxAnchoringWalker : BoundTreeWalker {
     private var anchor SyntaxNode?
+    private var ownership BoundSourceOwnership.Collector?
 
     /// ```xmldoc
     /// <inheritdoc />
@@ -47,6 +49,7 @@ internal class SyntaxAnchoringWalker : BoundTreeWalker {
         } else {
             anchor = node.Syntax
         }
+        ownership?.Record(node)
         visitBase(node)
         anchor = saved
     }
@@ -60,7 +63,20 @@ internal class SyntaxAnchoringWalker : BoundTreeWalker {
             if body == nil {
                 return
             }
-            SyntaxAnchoringWalker{anchor: fallbackAnchor}.Visit(body)
+            let block = body as BoundBlockStatement
+            block?.InvalidateSourceOwnership()
+            let ownership = if block != nil && !(fallbackAnchor is FunctionDeclarationSyntax) {
+                BoundSourceOwnership.Collector()
+            } else {
+                default(BoundSourceOwnership.Collector?)
+            }
+            SyntaxAnchoringWalker{anchor: fallbackAnchor, ownership: ownership}.Visit(body)
+            if block != nil && ownership != nil {
+                let facts = ownership.Complete()
+                block.SetSourceOwnership(facts)
+                CompilationMeasurements.Count("semantic.ownership.fact-roots.captured")
+                CompilationMeasurements.Count("semantic.ownership.producer-record-visits", facts.RecordVisits)
+            }
         }
     }
 }
