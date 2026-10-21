@@ -191,7 +191,7 @@ Import `Gsharp.Values` for the nominal type and policies.
 a valid encoded U+FFFD consumes three bytes. No normalization or BOM
 insertion/stripping occurs. NUL remains content.
 Strict conversions throw `ByteStringEncodingException` with `InputKind`
-(`ByteStringInputKind.Utf8` or `.Utf16`) and zero-based `Offset` relative to
+(`ByteStringInputKind.Utf8` or `.Utf16` for text) and zero-based `Offset` relative to
 the input value. They return no partial result. See the
 [text-boundary reference](../ref/spec.md#explicit-utf-8-text-boundaries) for
 policy and exception details.
@@ -212,8 +212,21 @@ Concrete enumeration copies no buffers and allocates nothing per scalar.
 Strict `MoveNext` may yield a valid prefix before throwing; retries report
 the same failure without advancing. The factory validates the policy, not
 the bytes. Default/empty values enumerate empty, repeated enumeration starts
-fresh, and enumerator copies advance independently. Code-point collections
-remain deferred.
+fresh, and enumerator copies advance independently.
+
+For mutable algorithm data, call `value.DecodeCodePoints(policy)` to get an
+independent native `slice[int32]`. Empty input returns a present empty slice,
+not nil. `ByteString.FromCodePoints(points, CodePointEncoding.Strict)` snapshots
+a `readonly slice[int32]` as UTF-8. The input accepts any signed integer:
+strict encoding rejects negatives, surrogates and values above U+10FFFF at
+the first invalid element's logical index (`InputKind.CodePoints`).
+`CodePointEncoding.ReplaceInvalidCodePoint` encodes each invalid element as
+U+FFFD. Decoding uses the existing UTF-8 policies and byte offsets
+(`InputKind.Utf8`), not output element indices. Neither operation normalizes
+content; both require explicit valid policies, including for empty input.
+Keep the input stable while encoding; later mutations cannot change the
+published bytes. These eager conversions allocate result storage and return
+no partial result on strict failure.
 
 Visible user types/aliases named `bytestring` win ordinary lookup;
 `$bytestring` never selects the native alias. A byte literal always has the

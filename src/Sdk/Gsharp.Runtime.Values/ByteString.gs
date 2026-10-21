@@ -185,6 +185,22 @@ struct ByteString : IEquatable[ByteString], IComparable[ByteString], IEnumerable
         return result.ToString()
     }
 
+    /// Decodes UTF-8 into independent mutable native-slice storage.
+    /// Strict failures throw (cref:ByteStringEncodingException) with Utf8 input kind at the malformed sequence's first byte.
+    /// Byte offsets are relative to this value. No partial slice is returned.
+    /// Replacement consumes one malformed byte per U+FFFD, without normalization or BOM stripping.
+    /// Invalid policies throw (cref:ArgumentOutOfRangeException), including on empty input.
+    /// @param policy The required malformed-input policy.
+    /// @returns The decoded scalars, with a present empty slice for empty input.
+    func DecodeCodePoints(policy Utf8Decoding) Slice[int32] {
+        var scalars = DecodeUtf8Scalars(policy).GetEnumerator()
+        let result = List[int32]()
+        while scalars.MoveNext() {
+            result.Add(scalars.Current.Value)
+        }
+        return Slice[int32].FromArray(result.ToArray())
+    }
+
     /// Lazily decodes scalars with byte offsets relative to this value.
     /// Strict failures throw (cref:ByteStringEncodingException) at MoveNext, after any valid prefix.
     /// Repeated MoveNext calls report the same failure without advancing.
@@ -350,6 +366,36 @@ struct ByteString : IEquatable[ByteString], IComparable[ByteString], IEnumerable
             } catch (ex EncoderFallbackException) {
                 throw ByteStringEncodingException(ByteStringInputKind.Utf16, ex.Index)
             }
+        }
+
+        /// Encodes signed code points as UTF-8, snapshotting the supplied logical view.
+        /// Callers must keep input stable during encoding. No normalization or BOM insertion occurs.
+        /// Strict failures throw (cref:ByteStringEncodingException) with CodePoints input kind at the first invalid element.
+        /// Element indices are relative to the supplied view. No partial value is returned.
+        /// Invalid policies throw (cref:ArgumentOutOfRangeException), including on empty or default input.
+        /// @param source The signed code points, which need not be valid Unicode scalars.
+        /// @param policy The required invalid-code-point policy.
+        /// @returns An immutable byte string. Each invalid element becomes U+FFFD under replacement.
+        func FromCodePoints(source ReadOnlySlice[int32], policy CodePointEncoding) ByteString {
+            if policy != CodePointEncoding.Strict && policy != CodePointEncoding.ReplaceInvalidCodePoint {
+                throw ArgumentOutOfRangeException("policy")
+            }
+            if source.IsEmpty {
+                return default(ByteString)
+            }
+            let result = ArrayBufferWriter[uint8]()
+            for var i = 0; i < source.Length; i++ {
+                var value = source[i]
+                if !Rune.IsValid(value) {
+                    if policy == CodePointEncoding.Strict {
+                        throw ByteStringEncodingException(ByteStringInputKind.CodePoints, i)
+                    }
+                    value = Rune.ReplacementChar.Value
+                }
+                let written = Rune(value).EncodeToUtf8(result.GetSpan(4))
+                result.Advance(written)
+            }
+            return ByteString(result.WrittenSpan.ToArray(), 0, result.WrittenCount)
         }
 
         /// Copies a readonly view without adopting writable sibling storage.

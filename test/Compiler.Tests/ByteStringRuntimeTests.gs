@@ -15,6 +15,161 @@ import System.Threading.Tasks
 import Xunit
 
 class ByteStringRuntimeTests {
+    @Fact
+    func CodePointCollectionsPreserveExactScalarBoundariesAndContents() {
+        let points = []int32{
+            0,
+            127,
+            128,
+            2047,
+            2048,
+            55295,
+            57344,
+            65535,
+            65536,
+            1114111,
+            65533,
+            65279,
+            128512,
+            101,
+            769
+        }
+        let hex = "007FC280DFBFE0A080ED9FBFEE8080EFBFBFF0908080F48FBFBFEFBFBDEFBBBFF09F988065CC81"
+        let source = ReadOnlySlice[int32].FromArray(points)
+        Assert.Equal(Convert.FromHexString(hex), ByteString.FromCodePoints(source, CodePointEncoding.Strict).ToArray())
+        Assert.Equal(
+            Convert.FromHexString(hex),
+            ByteString.FromCodePoints(source, CodePointEncoding.ReplaceInvalidCodePoint).ToArray()
+        )
+        let value = ByteString.FromLiteral("FF" + hex + "FF").Subslice(1, 1 + hex.Length / 2)
+        Assert.Equal(points, value.DecodeCodePoints(Utf8Decoding.Strict).ToArray())
+        Assert.Equal(points, value.DecodeCodePoints(Utf8Decoding.ReplaceInvalidByte).ToArray())
+    }
+
+    @Theory
+    @InlineData(-2147483648)
+    @InlineData(-1)
+    @InlineData(55296)
+    @InlineData(56319)
+    @InlineData(56320)
+    @InlineData(57343)
+    @InlineData(1114112)
+    @InlineData(2147483647)
+    func CodePointCollectionsRejectFirstInvalidLogicalElementAndReplaceEach(invalid int32) {
+        let source = ReadOnlySlice[int32].FromArray([]int32{-1, 128512, invalid, -1, 0, -1}).Subslice(1, 5)
+        var result = ByteString.FromLiteral("FF")
+        let error = Assert.Throws[ByteStringEncodingException](
+            func () {
+                result = ByteString.FromCodePoints(source, CodePointEncoding.Strict)
+            }
+        )
+        Assert.Equal(ByteStringInputKind.CodePoints, error.InputKind)
+        Assert.Equal(1, error.Offset)
+        Assert.Equal([]uint8{255}, result.ToArray())
+        Assert.Equal(
+            Convert.FromHexString("F09F9880EFBFBDEFBFBD00"),
+            ByteString.FromCodePoints(source, CodePointEncoding.ReplaceInvalidCodePoint).ToArray()
+        )
+        let atZero = Assert.Throws[ByteStringEncodingException](
+            func () {
+                ByteString.FromCodePoints(source.Subslice(1, 2), CodePointEncoding.Strict)
+            }
+        )
+        Assert.Equal(ByteStringInputKind.CodePoints, atZero.InputKind)
+        Assert.Equal(0, atZero.Offset)
+    }
+
+    @Theory
+    @InlineData("E282EFBFBDF09F9880", 65533, 65533, 65533, 128512)
+    @InlineData("EDA08041", 65533, 65533, 65533, 65)
+    @InlineData("F4908080", 65533, 65533, 65533, 65533)
+    @InlineData("C0AF8041", 65533, 65533, 65533, 65)
+    func CodePointCollectionsDecodeOneMalformedByteAtATime(hex string, a int32, b int32, c int32, d int32) {
+        let value = ByteString.FromLiteral("FF41C2A2" + hex + "FF").Subslice(1, 4 + hex.Length / 2)
+        var result = Slice[int32].FromArray([]int32{42})
+        let error = Assert.Throws[ByteStringEncodingException](
+            func () {
+                result = value.DecodeCodePoints(Utf8Decoding.Strict)
+            }
+        )
+        Assert.Equal(ByteStringInputKind.Utf8, error.InputKind)
+        Assert.Equal(3, error.Offset)
+        Assert.Equal([]int32{42}, result.ToArray())
+        Assert.Equal([]int32{65, 162, a, b, c, d}, value.DecodeCodePoints(Utf8Decoding.ReplaceInvalidByte).ToArray())
+        let bounded = ByteString.FromLiteral("FF41E282ACFF").Subslice(1, 3)
+        Assert.Equal([]int32{65, 65533}, bounded.DecodeCodePoints(Utf8Decoding.ReplaceInvalidByte).ToArray())
+        let boundedError = Assert.Throws[ByteStringEncodingException](
+            func () {
+                bounded.DecodeCodePoints(Utf8Decoding.Strict)
+            }
+        )
+        Assert.Equal(ByteStringInputKind.Utf8, boundedError.InputKind)
+        Assert.Equal(1, boundedError.Offset)
+    }
+
+    @Fact
+    func CodePointCollectionsSnapshotViewsAndReturnIndependentWritableResults() {
+        let owner = []int32{-1, 65, 128512, 0, -1}
+        let writable = Slice[int32].FromArray(owner).Subslice(1, 4)
+        let value = ByteString.FromCodePoints(writable.AsReadOnly(), CodePointEncoding.Strict)
+        owner[1] = 66
+        writable[1] = -1
+        Assert.Equal(Convert.FromHexString("41F09F988000"), value.ToArray())
+        let first = value.DecodeCodePoints(Utf8Decoding.Strict)
+        let second = value.DecodeCodePoints(Utf8Decoding.ReplaceInvalidByte)
+        first[0] = 67
+        second[1] = 68
+        Assert.Equal([]int32{67, 128512, 0}, first.ToArray())
+        Assert.Equal([]int32{65, 68, 0}, second.ToArray())
+        Assert.Equal(Convert.FromHexString("41F09F988000"), value.ToArray())
+        Assert.Equal([]int32{65, 128512, 0}, value.DecodeCodePoints(Utf8Decoding.Strict).ToArray())
+    }
+
+    @Fact
+    func CodePointCollectionsKeepEmptyResultsPresentAndValidateAllPolicies() {
+        for source in[]ReadOnlySlice[int32]{
+            default(ReadOnlySlice[int32]),
+            ReadOnlySlice[int32].FromArray(Array.Empty[int32]()),
+            ReadOnlySlice[int32].FromArray([]int32{-1}).Subslice(1, 1)
+        } {
+            Assert.Equal(ByteString.Empty, ByteString.FromCodePoints(source, CodePointEncoding.Strict))
+            Assert.Equal(ByteString.Empty, ByteString.FromCodePoints(source, CodePointEncoding.ReplaceInvalidCodePoint))
+            for policy in[]int32{-1, 2, int32.MaxValue} {
+                let error = Assert.Throws[ArgumentOutOfRangeException](
+                    func () {
+                        ByteString.FromCodePoints(source, cast[CodePointEncoding](policy))
+                    }
+                )
+                Assert.Equal("policy", error.ParamName)
+            }
+        }
+        for value in[]ByteString{default(ByteString), ByteString.Empty, ByteString.FromLiteral("FF").Subslice(1, 1)} {
+            for policy in[]Utf8Decoding{Utf8Decoding.Strict, Utf8Decoding.ReplaceInvalidByte} {
+                let result = value.DecodeCodePoints(policy)
+                Assert.Equal(0, result.Length)
+                Assert.NotEqual(default(Slice[int32]), result)
+            }
+        }
+        for value in[]ByteString{default(ByteString), ByteString.Empty, ByteString.FromLiteral("FF41")} {
+            for policy in[]int32{-1, 2, int32.MaxValue} {
+                let error = Assert.Throws[ArgumentOutOfRangeException](
+                    func () {
+                        value.DecodeCodePoints(cast[Utf8Decoding](policy))
+                    }
+                )
+                Assert.Equal("policy", error.ParamName)
+            }
+        }
+        let nonempty = Assert.Throws[ArgumentOutOfRangeException](
+            func () {
+                ByteString.FromCodePoints(ReadOnlySlice[int32].FromArray([]int32{-1}), cast[CodePointEncoding](2))
+            }
+        )
+        Assert.Equal("policy", nonempty.ParamName)
+        Assert.Equal(0, int32(ByteStringInputKind.Utf8))
+        Assert.Equal(1, int32(ByteStringInputKind.Utf16))
+    }
+
     @Theory
     @InlineData(
         "007FC280DFBFE0A080ED9FBFEE8080EFBFBFF0908080F48FBFBF",

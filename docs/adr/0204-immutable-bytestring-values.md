@@ -2,11 +2,12 @@
 
 - **Status**: Accepted
 - **Date**: 2026-10-20
-- **Phase**: Core, explicit UTF-8 text conversion and scalar iteration implemented; code-point collections deferred
+- **Phase**: Core, explicit UTF-8 text conversion, scalar iteration and code-point collections implemented
 - **Issue**: [#5065](https://github.com/DavidObando/gsharp/issues/5065)
 - **Core implementation**: [#5068](https://github.com/DavidObando/gsharp/issues/5068)
 - **Text conversion**: [#5080](https://github.com/DavidObando/gsharp/issues/5080)
 - **Scalar iteration**: [#5087](https://github.com/DavidObando/gsharp/issues/5087)
+- **Code-point collections**: [#5095](https://github.com/DavidObando/gsharp/issues/5095)
 - **Related**: [ADR-0191](0191-go-to-gsharp-migration-tool.md),
   [ADR-0190](0190-native-slices-and-clr-array-interoperability.md),
   [ADR-0187](0187-first-class-index-range-and-runtime-declarations.md),
@@ -46,9 +47,8 @@ ordinary methods/operators, native `bytestring` spelling and exact-byte
 
 The development implementation covers the core surface in section 4, native
 spelling and literals in section 5, their compiler/tooling integration, and
-section 6's explicit UTF-8 text conversions and lazy scalar iteration.
-Code-point collection APIs remain deferred; examples using those APIs are
-forward-looking. This is not a claim of a
+section 6's explicit UTF-8 text conversions, lazy scalar iteration and
+code-point collections. This is not a claim of a
 published SDK, complete witness-matrix certification, or Go translation readiness.
 No compiler, runtime, SDK pin, existing literal or migration profile changes
 in the design PR.
@@ -393,11 +393,11 @@ ByteString.Utf8Enumerable.Enumerator.Current -> Utf8Item
 ```
 
 No method has a policy default. `EncodeUtf8` rejects a null CLR argument
-with `ArgumentNullException` (`text`). All three methods reject invalid policies
+with `ArgumentNullException` (`text`). All five methods reject invalid policies
 with `ArgumentOutOfRangeException` (`policy`), including on empty input.
 `DecodeUtf8Scalars` checks the policy at the factory call, without decoding bytes.
 
-The following code-point collection APIs remain deferred:
+The implemented code-point collection APIs also require explicit policies:
 
 ```text
 CodePointEncoding = Strict | ReplaceInvalidCodePoint
@@ -428,13 +428,14 @@ callers can validate or replace invalid values explicitly.
 | Code-point strict | Reject negative values, surrogate values and values above U+10FFFF at their input element index. |
 | Replace invalid code point | Each invalid element becomes U+FFFD; valid values retain their encoding. |
 
-Strict text conversions and scalar iteration throw `ByteStringEncodingException`, a sealed
+Strict conversions and scalar iteration throw `ByteStringEncodingException`, a sealed
 `System.Exception` subclass in `Gsharp.Values`. Its get-only `InputKind`
-property has public enum type `ByteStringInputKind`, with exactly `Utf8` and
-`Utf16` members. Its get-only `Offset: int32` is the zero-based first failing
-byte or UTF-16 code-unit offset, respectively. Construction is internal:
-callers catch the exception and inspect these properties. No element-input
-kind is reserved for deferred APIs. Offsets are relative to the input value,
+property has public enum type `ByteStringInputKind`: `Utf8 = 0`, `Utf16 = 1`
+and appended `CodePoints = 2`. Its get-only `Offset: int32` is the zero-based
+first failing byte, UTF-16 code unit or input element index, respectively.
+Construction is internal: callers catch the exception and inspect these
+properties. `DecodeCodePoints` reports malformed UTF-8 as `Utf8`, not
+`CodePoints` or an output element index. Offsets are relative to the input value,
 including substrings, not its backing owner. Eager operations return no partial
 value. Invalid policy enum values throw `ArgumentOutOfRangeException`.
 These are ordinary exceptions under ADR-0005, not a Go error-return protocol.
@@ -452,8 +453,13 @@ backing owner's offset. UTF-8 BOM bytes decode to U+FEFF; encoding does not
 insert a BOM and decoding does not strip one.
 
 `DecodeCodePoints` returns independent mutable `slice[int32]` data.
-`FromCodePoints` snapshots its input. Empty results remain present empty
-values. BCL Rune/encoding routines may be implementation building blocks,
+Separate calls do not share mutable result storage. Empty decoding returns
+a present empty slice, not default/nil. It consumes the existing scalar
+enumerator, without a second UTF-8 decoder. `FromCodePoints` snapshots its
+input's logical view. Callers keep the input stable during encoding, as for
+`CopyFrom`; concurrent mutation has no atomic-snapshot guarantee.
+Empty/default readonly views encode to ordinary empty byte strings.
+BCL Rune/encoding routines may be implementation building blocks,
 but only if they satisfy the selected policy, error offset and progress
 rules. Different replacement grouping is not a permitted optimization.
 
@@ -482,6 +488,12 @@ UTF-16 buffer, not a temporary string per scalar. The scalar allocation test
 warms both policies, then measures 64 passes over an 8192-byte bounded view:
 zero allocated bytes on the concrete path. This is a measured regression
 budget, not a throughput claim or full witness-matrix certification.
+
+`FromCodePoints` uses a growing byte buffer and copies its written bytes into
+private immutable storage. `DecodeCodePoints` collects the existing scalar
+enumerator's values and returns an independent array-backed native slice.
+Both paths are linear with standard-library checked buffer growth plus result
+storage; neither promises zero allocation or an exact allocation budget.
 
 Substring retention is explicit, not an automatic heuristic based on owner
 size. Users can call `Detach` before caching a small long-lived token.
