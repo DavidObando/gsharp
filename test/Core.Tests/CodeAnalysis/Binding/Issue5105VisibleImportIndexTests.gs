@@ -5,7 +5,11 @@ import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import System.Collections.Concurrent
+import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
+import System.Reflection
 import System.Threading.Tasks
 import Xunit
 
@@ -108,6 +112,48 @@ class Issue5105VisibleImportIndexTests {
         Assert.Equal(256L, measurements.GetCounter("imports.view-entries"))
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func HistoricalImportScopesCacheOnlyTheRequestedView(withTree bool) {
+        let scopes = List[BoundScope]()
+        let expected = List[ImportSymbol]()
+        var parent BoundScope? = nil
+        for var index = 0; index < 128; index++ {
+            let scope_ = BoundScope(parent)
+            let import_ = ImportSymbol("History$index", "History$index", nil)
+            Assert.True(scope_.TryImport(import_))
+            scopes.Add(scope_)
+            expected.Add(import_)
+            parent = scope_
+        }
+        let reader = BoundScope(parent)
+        if withTree {
+            reader.SetCurrentReferencingSyntaxTree(Parse("current.gs", ""))
+        }
+        using let measurements = CompilationMeasurements.Start("historical-import-test")
+        let before = reader.GetDeclaredImports()
+        Assert.Equal(expected, before)
+        Assert.Equal(128, RetainedViewEntries(scopes))
+        Assert.Equal(128L, measurements.GetCounter("imports.indexed"))
+        Assert.Equal(1L, measurements.GetCounter("imports.views-built"))
+        Assert.Equal(128L, measurements.GetCounter("imports.view-entries"))
+        for var repeat = 0; repeat < 8; repeat++ {
+            Assert.True(before.Equals(reader.GetDeclaredImports()))
+        }
+        Assert.Equal(1L, measurements.GetCounter("imports.views-built"))
+        let added = ImportSymbol("Added", "Added", nil)
+        Assert.True(scopes[64].TryImport(added))
+        expected.Insert(65, added)
+        let after = reader.GetDeclaredImports()
+        Assert.Equal(expected, after)
+        Assert.Equal(129, RetainedViewEntries(scopes))
+        Assert.Equal(2L, measurements.GetCounter("imports.views-built"))
+        Assert.Equal(257L, measurements.GetCounter("imports.view-entries"))
+        Assert.Equal(128, before.Length)
+        Assert.DoesNotContain(added, before)
+    }
+
     @Fact
     func IndependentReadersKeepConcurrentTreeViewsSeparate() {
         let left = Parse("left.gs", "import api = System.Text")
@@ -207,6 +253,28 @@ namespace Fallback5105 { public class Thing {} public class Thing<T> {} }`)
     }
 
     shared {
+        private func RetainedViewEntries(scopes IEnumerable[BoundScope]) int32 {
+            const flags = BindingFlags.Instance | BindingFlags.NonPublic
+            let indexField = typeof(BoundScope).GetField("cachedImportIndex", flags)!!
+            let withoutTreeField = typeof(VisibleImportIndex).GetField("withoutTree", flags)!!
+            let byTreeField = typeof(VisibleImportIndex).GetField("visibleByTree", flags)!!
+            var entries = 0
+            for scope_ in scopes {
+                let index = Assert.IsType[VisibleImportIndex](indexField.GetValue(scope_))
+                let withoutTree = Assert.IsType[ImmutableArray[ImportSymbol]](withoutTreeField.GetValue(index))
+                if !withoutTree.IsDefault {
+                    entries += withoutTree.Length
+                }
+                let byTree = Assert.IsType[ConcurrentDictionary[SyntaxTree, ImmutableArray[ImportSymbol]]](
+                    byTreeField.GetValue(index)
+                )
+                for view in byTree.Values {
+                    entries += view.Length
+                }
+            }
+            return entries
+        }
+
         private func Parse(fileName string, source string) SyntaxTree -> SyntaxTree.Parse(
             SourceText.From(source, fileName)
         )

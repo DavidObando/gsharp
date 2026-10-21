@@ -13,7 +13,7 @@ internal class VisibleImportIndex {
     // Incremental binding creates a new scope chain after it re-points import declarations.
     private let ownByTree ImmutableDictionary[SyntaxTree, ImmutableArray[ImportSymbol]]
     private let implicitImports ImmutableArray[ImportSymbol]
-    private let withoutTree ImmutableArray[ImportSymbol]
+    private var withoutTree ImmutableArray[ImportSymbol]
     private let visibleByTree ConcurrentDictionary[SyntaxTree, ImmutableArray[ImportSymbol]] =
     ConcurrentDictionary[SyntaxTree, ImmutableArray[ImportSymbol]]()
 
@@ -43,7 +43,6 @@ internal class VisibleImportIndex {
             (pair KeyValuePair[SyntaxTree, ImmutableArray[ImportSymbol].Builder]) -> pair.Value.ToImmutable()
         )
         implicitImports = implicitBuilder.ToImmutable()
-        withoutTree = (parent?.GetVisibleImports(nil) ?? ImmutableArray[ImportSymbol].Empty).AddRange(implicitImports)
         CompilationMeasurements.Count("imports.indexed", imports.Length)
     }
 
@@ -56,20 +55,40 @@ internal class VisibleImportIndex {
 
     internal func GetVisibleImports(tree SyntaxTree?) ImmutableArray[ImportSymbol] {
         if tree == nil {
+            if withoutTree.IsDefault {
+                ImmutableInterlocked.InterlockedInitialize(&withoutTree, BuildVisibleImports(nil))
+            }
             return withoutTree
         }
         if visibleByTree.TryGetValue(tree, out var cached) {
             return cached
         }
-        let own = if ownByTree.TryGetValue(tree, out var imports) {
-            imports
-        } else {
-            implicitImports
+        return visibleByTree.GetOrAdd(tree, BuildVisibleImports(tree))
+    }
+
+    private func BuildVisibleImports(tree SyntaxTree?) ImmutableArray[ImportSymbol] {
+        // Flatten only this index. Historical ancestors retain segments, not cumulative views.
+        let segments = Stack[ImmutableArray[ImportSymbol]]()
+        var count = 0
+        var current VisibleImportIndex? = this
+        while current != nil {
+            let own = if tree != nil && current.ownByTree.TryGetValue(tree, out var imports) {
+                imports
+            } else {
+                current.implicitImports
+            }
+            if !own.IsDefaultOrEmpty {
+                segments.Push(own)
+                count += own.Length
+            }
+            current = current.Parent
         }
-        let inherited = Parent?.GetVisibleImports(tree) ?? ImmutableArray[ImportSymbol].Empty
-        let visible = inherited.AddRange(own)
+        let builder = ImmutableArray.CreateBuilder[ImportSymbol](count)
+        while segments.Count > 0 {
+            builder.AddRange(segments.Pop())
+        }
         CompilationMeasurements.Count("imports.views-built")
-        CompilationMeasurements.Count("imports.view-entries", own.Length)
-        return visibleByTree.GetOrAdd(tree, visible)
+        CompilationMeasurements.Count("imports.view-entries", count)
+        return builder.MoveToImmutable()
     }
 }
