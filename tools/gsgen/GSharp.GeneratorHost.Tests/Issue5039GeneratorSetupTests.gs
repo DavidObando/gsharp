@@ -108,6 +108,32 @@ open class Issue5039GeneratorSetupTests : IDisposable {
     }
 
     @Fact
+    func GeneratedTranslation_SourceCensusSkipsMetadataTypes_AndPreservesHomonymsAndNullableAliases() {
+        let generator = Path.Combine(directory, "Generator.dll")
+        CompileDll(
+            GeneratorSource.Replace(
+                "public string Greeting =>",
+                "public global::System.Uri? Address => null; public string Greeting =>"
+            )
+                .Replace("__VERSION__", "census"),
+            generator,
+            "Generator"
+        )
+        let gs = Write("Input.gs", "package App\nclass Uri {}\n@Obsolete\npartial class Foo {}")
+        using let measurements = CompilationMeasurements.Start("gsgen-test")
+        Run(Arguments(gs, generator), MetadataReferenceCache())
+        let generated = File.ReadAllText(Assert.Single(GeneratedFiles()))
+        Assert.Contains("partial class Foo", generated)
+        Assert.Contains("System.Uri", generated)
+        Assert.DoesNotContain("prop Address Uri?", generated)
+        Assert.Contains("? -> nil", generated)
+        Assert.Contains("census|||on", generated)
+        let visited = measurements.GetCounter("translation.source_census.types_visited")
+        Assert.InRange(visited, 1, 32)
+        Assert.Equal(1, measurements.GetCounter("translation.import_semantic_model_reuses"))
+    }
+
+    @Fact
     func EmptyManifest_DoesNotSuppressDiagnostics_OrLaterGeneratedPart() {
         using let measurements = CompilationMeasurements.Start("gsgen-test")
         let generator = CompileGenerator("v1")
@@ -136,6 +162,87 @@ open class Issue5039GeneratorSetupTests : IDisposable {
         Assert.False(File.Exists(generated))
         Assert.True(measurements.GetCounter("generator.generated_tree_reuses") > 0)
         Assert.True(measurements.GetCounter("generator.stub_tree_reuses") > 0)
+    }
+
+    @Fact
+    func Projection_SkipsImpossibleAnonymousDeclarationWalks_AndRebindsGeneratedPartAfterEdits() {
+        let generator = CompileGenerator("projection")
+        let source = `package App
+@Obsolete
+partial class Foo {
+    func Read() string -> Greeting
+    func Number() int32 -> __BODY__
+}
+`
+        let gs = Write("Input.gs", source.Replace("__BODY__", "17"))
+        let other = Write("Other.gs", "package App\nclass Other {}")
+        let args = Arguments(gs, generator)
+        args.Add("/gs:$other")
+        let cache = MetadataReferenceCache()
+        for body in[]string{"17", "(object { func Value() int32 -> 17 }).Value()", "18"} {
+            File.WriteAllText(gs, source.Replace("__BODY__", body))
+            using let measurements = CompilationMeasurements.Start("gsgen-test")
+            Assert.Contains("warning PROBE5039: projection", Run(args, cache))
+            let generated = Assert.Single(GeneratedFiles())
+            Assert.Contains("prop Greeting string", File.ReadAllText(generated))
+            let scanned = measurements.GetCounter("declarations.rich-anonymous.scanned-trees")
+            let skipped = measurements.GetCounter("declarations.rich-anonymous.skipped-trees")
+            // A projection's incomplete partial scope must not become the final scope.
+            let combined = GsCompilation(GsSyntaxTree.Load(gs), GsSyntaxTree.Load(other), GsSyntaxTree.Load(generated)){
+                IsLibrary = true
+            }
+            using let image = MemoryStream()
+            let emitted = combined.Emit(image)
+            Assert.True(emitted.Success, string.Join("\n", emitted.Diagnostics))
+            Assert.True(image.Length > 0)
+            let runtime = AssemblyLoadContext("projection-" + Guid.NewGuid().ToString("N"), isCollectible: true)
+            try {
+                image.Position = 0
+                let assembly = runtime.LoadFromStream(image)
+                let type = assembly.GetType("App.Foo") ?? throw InvalidOperationException("Generated Foo is missing.")
+                let instance = Activator.CreateInstance(type)
+                Assert.Equal(
+                    if body == "18" {
+                        18
+                    } else {
+                        17
+                    },
+                    type.GetMethod("Number")?.Invoke(instance, nil)
+                )
+                Assert.Equal("projection|||on", type.GetMethod("Read")?.Invoke(instance, nil))
+            } finally {
+                runtime.Unload()
+            }
+            Assert.Equal(
+                if body == "17" || body == "18" {
+                    0L
+                } else {
+                    1L
+                },
+                scanned
+            )
+            Assert.True(skipped > 0)
+        }
+    }
+
+    @Theory
+    @InlineData(`(object { func Value() int32 -> 23 }).Value()`)
+    @InlineData(`"${(object { func Value() int32 -> 23 }).Value()}"`)
+    func Projection_KeepsAnonymousDeclarations_InOrdinaryAndInterpolationParsers(body string) {
+        let compilation = GsCompilation(GsSyntaxTree.Parse(`package App
+class Container {
+    func Read() -> __BODY__
+}
+`.Replace("__BODY__", body))){IsLibrary = true}
+        using let measurements = CompilationMeasurements.Start("gsgen-test")
+        let stub = GsToCSharpProjection.ProjectToCSharp(compilation)
+        Assert.Contains("class Container", stub)
+        Assert.Equal(2, compilation.GlobalScope.Structs.Length)
+        using let image = MemoryStream()
+        let emitted = compilation.Emit(image)
+        Assert.True(emitted.Success, string.Join("\n", emitted.Diagnostics))
+        Assert.True(image.Length > 0)
+        Assert.Equal(1, measurements.GetCounter("declarations.rich-anonymous.scanned-trees"))
     }
 
     @Fact

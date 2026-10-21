@@ -6792,15 +6792,23 @@ class Binder {
             let richAnonymousClasses = List[
                 (Node AnonymousClassExpressionSyntax, Declaration StructDeclarationSyntax)
             ]()
-            for tree in syntaxTrees {
-                CollectRichAnonymousObjectDeclarations(
-                    tree.Root,
-                    tree,
-                    richAnonymousClasses,
-                    binder.Diagnostics,
-                    &anonClassCounter,
-                    enclosingTypeParameters: ImmutableArray[TypeParameterListSyntax].Empty
-                )
+            {
+                using let discovery = CompilationMeasurements.BeginPhase("declarations.rich-anonymous-discovery")
+                for tree in syntaxTrees {
+                    if !tree.MayContainAnonymousClasses {
+                        CompilationMeasurements.Count("declarations.rich-anonymous.skipped-trees")
+                        continue
+                    }
+                    CompilationMeasurements.Count("declarations.rich-anonymous.scanned-trees")
+                    CollectRichAnonymousObjectDeclarations(
+                        tree.Root,
+                        tree,
+                        richAnonymousClasses,
+                        binder.Diagnostics,
+                        &anonClassCounter,
+                        enclosingTypeParameters: ImmutableArray[TypeParameterListSyntax].Empty
+                    )
+                }
             }
             let structDeclarations = PartialTypeMerger
                 .MergeStructs(
@@ -8659,13 +8667,25 @@ class Binder {
             largestBody = 0
             for var index = jobs.Count - 1; index >= 0; index-- {
                 let function = jobs[index].Function
-                if !IndependentBodyClassifier.CanBind(function) {
+                let previousPackage = parentScope.SetCurrentDeclaringPackage(
+                    jobs[index].Owner?.PackageName ?? function.Package?.Name
+                )
+                let previousTree = parentScope.SetCurrentReferencingSyntaxTree(function.Declaration!!.SyntaxTree)
+                var eligible bool
+                try {
+                    eligible = IndependentBodyClassifier.CanBind(function, parentScope)
+                } finally {
+                    parentScope.SetCurrentReferencingSyntaxTree(previousTree)
+                    parentScope.SetCurrentDeclaringPackage(previousPackage)
+                }
+                if !eligible {
                     jobs.RemoveAt(index)
                 } else {
                     largestBody = Math.Max(largestBody, function.Declaration!!.Body!!.Span.Length)
                 }
             }
             CompilationMeasurements.Count("bodies.independent", jobs.Count)
+            parentScope.GetDeclaredStructs()
             let outputs = [jobs.Count]BodyBindResult
             let mode = NullabilityOptions.Mode
             let checks = NullabilityOptions.PlatformNilChecksEnabled

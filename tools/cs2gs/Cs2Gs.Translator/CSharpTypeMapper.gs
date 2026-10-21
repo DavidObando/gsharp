@@ -20,6 +20,7 @@ import Microsoft.CodeAnalysis.CSharp.Syntax
 import Microsoft.CodeAnalysis.Operations
 import Cs2Gs.Translator.Analyzers
 import GSharp.Core.CodeAnalysis
+import CompilationMeasurements = GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements
 import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Diagnostics.CodeAnalysis
@@ -595,12 +596,13 @@ class CSharpTypeMapper {
     /// translated import set.
     /// @param imports Imports collected from the active and merged source trees.
     /// @param contributingTrees Source trees whose declarations contribute to the emitted document.
-    /// @param compilation The source compilation.
+    /// @param context The active document's bound translation context.
     internal func ReserveImportNames(
         imports IEnumerable[ImportDirective],
         contributingTrees IEnumerable[Microsoft.CodeAnalysis.SyntaxTree],
-        compilation Compilation
+        context TranslationContext
     ) {
+        let compilation = context.Compilation
         let names = this.nameAllocator ?? EmittedNameAllocator.For(compilation)
         let importedNamespaces = HashSet[INamespaceSymbol](SymbolEqualityComparer.Default)
         let mappedMethods = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
@@ -742,7 +744,17 @@ class CSharpTypeMapper {
         // also map types absent from syntax. Pre-scan only those emitted shapes
         // so future bare names reserve alias candidates before first use.
         for tree in contributingTrees {
-            let semanticModel = compilation.GetSemanticModel(tree)
+            let semanticModel = if tree == context
+                .SemanticModel
+                .SyntaxTree &&
+                !context
+                .SemanticModel
+                .IgnoresAccessibility {
+                CompilationMeasurements.Count("translation.import_semantic_model_reuses")
+                context.SemanticModel
+            } else {
+                compilation.GetSemanticModel(tree)
+            }
             for node in tree.GetRoot().DescendantNodes() {
                 if node is Microsoft
                     .CodeAnalysis
@@ -2984,7 +2996,7 @@ class CSharpTypeMapper {
         /// @returns Simple name to the full names declared under it.
         private func BuildSourceSimpleNames(compilation Compilation, nested bool) Dictionary[string, HashSet[string]] {
             let names = Dictionary[string, HashSet[string]]()
-            for type in EnumerateAllNamedTypes(compilation.GlobalNamespace) {
+            for type in EnumerateSourceNamedTypes(compilation) {
                 if (type.ContainingType != nil) != nested || !type.Locations.Any(
                     (location Location) -> location.IsInSource
                 ) {
@@ -3001,10 +3013,29 @@ class CSharpTypeMapper {
 
         private func BuildSourceDeclaredTypeNames(compilation Compilation, names EmittedNameAllocator) HashSet[
             string
-        ] -> EnumerateAllNamedTypes(compilation.GlobalNamespace)
+        ] -> EnumerateSourceNamedTypes(compilation)
             .Where((type INamedTypeSymbol) -> type.Locations.Any((location Location) -> location.IsInSource))
             .Select((type INamedTypeSymbol) -> names.GetName(type)!!)
             .ToHashSet(StringComparer.Ordinal)
+
+        // The merged global namespace includes every metadata type, but only
+        // source-bearing assemblies can contribute a source-name collision.
+        private func EnumerateSourceNamedTypes(compilation Compilation) sequence[INamedTypeSymbol] {
+            for type in EnumerateAllNamedTypes(compilation.Assembly.GlobalNamespace) {
+                yield type
+            }
+            for reference in compilation.References.OfType[CompilationReference]() {
+                let aliases = reference.Properties.Aliases
+                if !aliases.IsDefaultOrEmpty && !aliases.Contains("global") {
+                    continue
+                }
+                if compilation.GetAssemblyOrModuleSymbol(reference) is IAssemblySymbol assembly {
+                    for type in EnumerateAllNamedTypes(assembly.GlobalNamespace) {
+                        yield type
+                    }
+                }
+            }
+        }
 
         private func EnumerateAllNamedTypes(ns INamespaceSymbol) sequence[INamedTypeSymbol] {
             for member in ns.GetMembers() {
@@ -3021,6 +3052,7 @@ class CSharpTypeMapper {
         }
 
         private func EnumerateNamedTypeAndNested(type INamedTypeSymbol) sequence[INamedTypeSymbol] {
+            CompilationMeasurements.Count("translation.source_census.types_visited")
             yield type
             for nested in type.GetTypeMembers() {
                 for deeper in EnumerateNamedTypeAndNested(nested) {

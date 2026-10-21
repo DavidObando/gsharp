@@ -9,6 +9,70 @@ import System.Text.Json
 import Xunit
 
 class Issue5041BoundedDriverTests {
+    @Fact
+    func CanonicalEnumReadersPreserveOutputsAndParticipateInBodyWorkers() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let functions = string.Concat(
+            Enumerable.Range(0, 32).Select(
+                (index int32) -> "func Classify$index(text string) Token {\nswitch text {\n" + string.Concat(
+                    Enumerable.Range(0, 32).Select((arm int32) -> "case \"word$arm\" { return Token.Word }\n")
+                ) +
+                    "default { return Token.Other }\n}\n}\n"
+            )
+        )
+        let source = "package ScalarWorkers\nimport System\nenum Token { Word, Other }\n" + functions + `func Rank(token Token) int32 -> switch token { case Token.Word, Token.Other: 7 default: 0 }
+func Main() {
+    Console.WriteLine(Classify0("word12") == Token.Word)
+    Console.WriteLine(Classify31("missing") == Token.Other)
+    Console.WriteLine(Rank(Classify1("word0")))
+}`
+        let report = Path.Combine(fixture.Directory, "scalar-phases.json")
+        let reference = Path.Combine(fixture.Directory, "scalar.ref.dll")
+        let runtime = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
+        let previous = Environment.GetEnvironmentVariable("GSHARP_MEASURE_PHASES")
+        let previousGrant = Environment.GetEnvironmentVariable("GSHARP_WORKER_GRANT")
+        try {
+            Environment.SetEnvironmentVariable("GSHARP_WORKER_GRANT", nil)
+            Environment.SetEnvironmentVariable("GSHARP_MEASURE_PHASES", report)
+            var implementation[]uint8 = Array.Empty[uint8]()
+            var referenceImage[]uint8 = Array.Empty[uint8]()
+            var pdb[]uint8 = Array.Empty[uint8]()
+            for workers in[]int32{1, 2, 4, 8, 4, 2} {
+                let dll = fixture.Compile(
+                    source,
+                    "scalars",
+                    true,
+                    "/deterministic+",
+                    "/debug:portable",
+                    "/refout:" + reference,
+                    "/r:" + typeof(object).Assembly.Location,
+                    "/r:" + typeof(Console).Assembly.Location,
+                    "/r:" + Path.Combine(runtime, "System.Runtime.dll"),
+                    "--workers:$workers"
+                )
+                Assert.Equal("True\nTrue\n7\n", fixture.Run(dll))
+                if workers == 1 {
+                    implementation = File.ReadAllBytes(dll)
+                    referenceImage = File.ReadAllBytes(reference)
+                    pdb = File.ReadAllBytes(Path.ChangeExtension(dll, ".pdb"))
+                } else {
+                    Assert.Equal(implementation, File.ReadAllBytes(dll))
+                    Assert.Equal(referenceImage, File.ReadAllBytes(reference))
+                    Assert.Equal(pdb, File.ReadAllBytes(Path.ChangeExtension(dll, ".pdb")))
+                    if Environment.ProcessorCount > 1 {
+                        using let measurements = JsonDocument.Parse(File.ReadAllText(report))
+                        let counters = measurements.RootElement.GetProperty("Counters")
+                        Assert.Equal(33, counters.GetProperty("bodies.independent").GetInt32())
+                        Assert.True(counters.GetProperty("bodies.workers.active").GetInt32() > 1)
+                    }
+                }
+            }
+        } finally {
+            Environment.SetEnvironmentVariable("GSHARP_MEASURE_PHASES", previous)
+            Environment.SetEnvironmentVariable("GSHARP_WORKER_GRANT", previousGrant)
+        }
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)

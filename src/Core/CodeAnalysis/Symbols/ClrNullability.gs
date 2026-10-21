@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Symbols
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Compilation
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
@@ -41,6 +42,21 @@ shared class ClrNullability {
         MethodInfo,
         []string
     ]()
+
+    private class RawFlags {
+        internal let Value ImmutableArray[uint8]
+
+        internal init(value ImmutableArray[uint8]) {
+            Value = value
+        }
+    }
+
+    private let AttributesCache ConditionalWeakTable[ICustomAttributeProvider, IList[CustomAttributeData]] =
+    ConditionalWeakTable[ICustomAttributeProvider, IList[CustomAttributeData]]()
+    private let NullableFlagsCache ConditionalWeakTable[ICustomAttributeProvider, RawFlags] =
+    ConditionalWeakTable[ICustomAttributeProvider, RawFlags]()
+    private let NullableContextCache ConditionalWeakTable[ICustomAttributeProvider, RawFlags] =
+    ConditionalWeakTable[ICustomAttributeProvider, RawFlags]()
 
     /// Returns the GSharp (cref:TypeSymbol) for a property's
     /// declared type, with reference-type nullability applied (both
@@ -329,54 +345,69 @@ shared class ClrNullability {
     internal func ReadNullableFlags(declaration ICustomAttributeProvider, enclosingMember MemberInfo?) ImmutableArray[
         uint8
     ] {
-        let attrs IList[CustomAttributeData]? = SafeGetCustomAttributesData(declaration)
-        if attrs != nil {
-            for ad in attrs {
-                if ad.AttributeType?.FullName != NullableAttributeFullName || ad.ConstructorArguments.Count != 1 {
-                    continue
-                }
-                let arg = ad.ConstructorArguments[0]
-                // Single-byte scalar form: [Nullable(1)] or [Nullable(2)]
-                if arg.Value is uint8 b {
-                    return ImmutableArray.Create(b)
-                }
-                // Array form: [Nullable(new byte[] { 1, 1, 2 })]
-                if arg.Value is ReadOnlyCollection[CustomAttributeTypedArgument]arr {
-                    let builder = ImmutableArray.CreateBuilder[uint8](arr.Count)
-                    for elem in arr {
-                        if elem.Value is uint8 eb {
-                            builder.Add(eb)
-                        }
-                    }
-                    return if builder.Count > 0 {
-                        builder.ToImmutable()
-                    } else {
-                        ImmutableArray[uint8].Empty
-                    }
-                }
-            }
+        CompilationMeasurements.Count("metadata.contract-requests")
+        let own = ReadRawNullableFlags(declaration, context: false)
+        if !own.IsDefault {
+            return own
         }
-        // Fall back to the surrounding NullableContextAttribute.
         for var member MemberInfo? = enclosingMember; member != nil; member = member!!.DeclaringType {
-            let contextAttrs IList[CustomAttributeData]? = SafeGetCustomAttributesData(member)
-            if contextAttrs == nil {
-                continue
-            }
-            for ad in contextAttrs {
-                if ad
-                    .AttributeType
-                    ?.FullName == NullableContextAttributeFullName &&
-                    ad
-                    .ConstructorArguments
-                    .Count == 1 &&
-                    ad
-                    .ConstructorArguments[0]
-                    .Value is uint8 ctxByte {
-                    return ImmutableArray.Create(ctxByte)
-                }
+            let context = ReadRawNullableFlags(member, context: true)
+            if !context.IsDefault {
+                return context
             }
         }
         return ImmutableArray[uint8].Empty
+    }
+
+    private func ReadRawNullableFlags(declaration ICustomAttributeProvider, context bool) ImmutableArray[uint8] {
+        let cache = if context {
+            NullableContextCache
+        } else {
+            NullableFlagsCache
+        }
+        if cache.TryGetValue(declaration, out var cached) {
+            return cached.Value
+        }
+        let attrs IList[CustomAttributeData]? = SafeGetCustomAttributesData(declaration)
+        if attrs == nil {
+            // Failed metadata reads remain retryable, unlike a successfully decoded absence.
+            return default(ImmutableArray[uint8])
+        }
+        CompilationMeasurements.Count(
+            if context {
+                "metadata.context-decodes"
+            } else {
+                "metadata.nullable-decodes"
+            }
+        )
+        var flags = default(ImmutableArray[uint8])
+        let attributeName = if context {
+            NullableContextAttributeFullName
+        } else {
+            NullableAttributeFullName
+        }
+        for ad in attrs {
+            if ad.AttributeType?.FullName != attributeName || ad.ConstructorArguments.Count != 1 {
+                continue
+            }
+            let arg = ad.ConstructorArguments[0]
+            if arg.Value is uint8 b {
+                flags = ImmutableArray.Create(b)
+                break
+            }
+            if !context && arg.Value is ReadOnlyCollection[CustomAttributeTypedArgument]arr {
+                let builder = ImmutableArray.CreateBuilder[uint8](arr.Count)
+                for elem in arr {
+                    if elem.Value is uint8 eb {
+                        builder.Add(eb)
+                    }
+                }
+                flags = builder.ToImmutable()
+                break
+            }
+        }
+        cache.GetValue(declaration, (_ ICustomAttributeProvider) -> RawFlags(flags))
+        return flags
     }
 
     /// Counts the number of bytes the C# compiler emits for [`type`](paramref)
@@ -1119,11 +1150,11 @@ shared class ClrNullability {
         }
         try {
             const All = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly
-            for candidate in declaringType.GetGenericTypeDefinition().GetMember(member.Name, member.MemberType, All) {
-                if candidate is TMember open_ && open_.MetadataToken == member.MetadataToken {
-                    return open_
-                }
-            }
+            return ClrTypeUtilities.FindMetadataDefinition(
+                declaringType.GetGenericTypeDefinition(),
+                member,
+                All
+            ) as TMember
         } catch (exception Exception) when exception is TypeLoadException ||
             exception is NotSupportedException ||
             exception is FileNotFoundException {
@@ -1145,20 +1176,12 @@ shared class ClrNullability {
             return definition
         }
         let openType = declaringType.GetGenericTypeDefinition()
-        let candidates = if definition is ConstructorInfo {
-            openType.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-                .Cast[MethodBase]()
+        let flags = if definition is ConstructorInfo {
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
         } else {
-            cast[IEnumerable[MethodBase]](
-                openType.GetMethods(
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static
-                )
-            )
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static
         }
-        return candidates.FirstOrDefault(
-            (candidate MethodBase) -> candidate.MetadataToken == definition.MetadataToken
-        ) ??
-            definition
+        return ClrTypeUtilities.FindMetadataDefinition(openType, definition, flags) as MethodBase ?? definition
     }
 
     private func TryGetBoolAttributeValue(parameter ParameterInfo, attributeFullName string, out value bool) bool {
@@ -1212,11 +1235,21 @@ shared class ClrNullability {
     }
 
     private func SafeGetCustomAttributesData(provider ICustomAttributeProvider) IList[CustomAttributeData]? {
+        CompilationMeasurements.Count("metadata.attribute-requests")
+        if AttributesCache.TryGetValue(provider, out var cached) {
+            return cached
+        }
         try {
-            return switch provider {
+            CompilationMeasurements.Count("metadata.attribute-reads")
+            let attrs = switch provider {
                 case mi is MemberInfo: mi.GetCustomAttributesData()?.ToList()
                 case pi is ParameterInfo: pi.GetCustomAttributesData()?.ToList()
                 default: default(List[CustomAttributeData]?)
+            }
+            return if attrs == nil {
+                default(IList[CustomAttributeData]?)
+            } else {
+                AttributesCache.GetValue(provider, (_ ICustomAttributeProvider) -> attrs)
             }
         } catch {
             return nil

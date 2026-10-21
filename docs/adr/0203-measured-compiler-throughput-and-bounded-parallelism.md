@@ -594,6 +594,186 @@ separate PRs. Full stage-2 certification is not made a new PR requirement.
 
 ## Consequences
 
+### Imported metadata facts (#5070)
+
+Open CLR declaration lookups share a weak, target-type-owned cache of successful
+token matches. Each hit checks the actual module object. The key includes the
+original member kind, flags, name scope and reflection view. Direct reflection
+retains its existing load-failure behavior; signature-filtered callers reuse
+the existing member arrays. A scan stops at its original first match.
+The cache stores only members enumerated from its target, never a foreign
+request's module or constructed generic arguments under a live host type.
+
+The nullability funnel also reuses successful attribute reads and immutable
+raw `Nullable` and `NullableContext` bytes under weak actual-provider keys.
+Successful absence is cached; failed attribute reads remain retryable.
+Receiver substitution, ambient nullability options, tuple names, by-ref storage,
+default-value lifts and flow contracts retain their existing readers and rules.
+No final `TypeSymbol` is cached by this mechanism.
+
+Opt-in counters distinguish definition requests, scans, inspected members and
+successful cache entries, plus contract requests, attribute reads and raw
+nullable/context decodes. Entries distinguish reflection views and are not a
+count of unique logical members across contexts. These counters describe work,
+not a measured build-speed gain.
+
+The October 20 comparison rebuilt baseline `68acf272c` and candidate `7a38e2e69`
+with published SDK `0.5.179` and .NET SDK `10.0.400`. It does not compare the
+candidate against the older `4e1a4430` private SDK. Separate owned copies replayed
+the fixed Core `c7b82dcb` and Oahu.Core `9db7f232` inputs through explicit compiler
+paths. Missing captured AssemblyInfo, resource and analyzer inputs were rebuilt
+with the published SDK in those copies. Oahu dependency references were rebuilt
+with the current-source baseline and shared by both variants. Source Link maps
+the owned paths to the pinned repository commits. The manifest hashes source,
+reference, resource, Source Link, analyzer and toolchain files.
+
+The twenty successful fresh-process requests comprise two excluded warmups,
+three alternating measured pairs and two separate profiles per workload.
+Timed requests disable measurements. Options retain four workers, a 1024 MiB
+budget, optimization, deterministic output, portable PDB, reference output and
+XML documentation. These are direct compiler requests, not solution rebuilds.
+One earlier excluded warmup failed on the missing captured analyzer image.
+Its log and original manifest are retained; no successful sample was discarded.
+
+| Direct compiler wall time, seconds | Baseline median (range) | Candidate median (range) |
+| --- | ---: | ---: |
+| Core | 40.952 (40.390–41.855) | 41.940 (40.431–42.308) |
+| Oahu.Core | 4.385 (4.175–4.400) | 3.950 (3.931–4.319) |
+
+Core's candidate median is 2.4% slower: this does not demonstrate a Core
+throughput gain. Oahu.Core's candidate median is 9.9% lower in these three
+pairs, not a general compiler or solution-build speedup. Both ranges overlap.
+The shared-desktop samples do not establish confidence intervals.
+
+Separate untimed profiles record the actual metadata work:
+
+| Counter | Core baseline → candidate | Oahu.Core baseline → candidate |
+| --- | ---: | ---: |
+| Definition requests | 47,484 → 47,484 | 3,724 → 3,724 |
+| Distinct successful reflection-view keys / entries | 389 → 389 | 96 → 96 |
+| Member-array scans | 47,484 → 389 | 3,724 → 96 |
+| Members inspected | 361,857 → 8,355 | 10,353 → 1,514 |
+| Contract requests | 99,687 → 99,687 | 10,088 → 10,088 |
+| Raw attribute reads | 244,939 → 10,140 | 21,693 → 2,670 |
+| Nullable decodes | 99,687 → 6,532 | 10,088 → 1,804 |
+| NullableContext decodes | 132,507 → 3,288 | 10,750 → 857 |
+
+The instrumented compilation allocation observations were 15,305.9 → 15,098.3
+MiB for Core and 1,028.2 → 1,006.4 MiB for Oahu.Core. Their nested body phases
+were 9,447.9 → 9,282.0 MiB and 592.4 → 571.8 MiB respectively.
+These are single process-inclusive observations, not retained memory.
+Counter overhead is included and counter frequencies differ; the baseline
+overlay also records distinct keys. They are not exact uninstrumented
+production-allocation savings. Do not add nested phases.
+
+Every successful request produced nonempty implementation DLL, reference DLL,
+portable PDB and XML output. All four matched byte-for-byte across variants,
+warmups, samples and profiles for each workload. Exact diagnostics also matched,
+including the captured Core closure's existing GS9100 warning without suppression.
+No output normalization or byte masking was needed. This establishes metadata
+work reuse with unchanged output, not a general throughput improvement.
+
+### Local declaration discovery reduction (#5055)
+
+The generator projection and compiler keep separate declaration scopes.
+Those scopes contain mutable symbols and bound initializers; generated partials
+require a fresh binding pass. No live scope crosses the host boundary.
+The existing reference metadata index is content-validated, but exporting and
+transporting it is not adopted without a measured benefit.
+
+Both declaration passes previously searched every syntax node for rich anonymous
+objects, even when the parser constructed none. Anonymous-expression construction
+now records a conservative presence summary on its owning syntax tree.
+Trees without anonymous expressions skip this discovery walk. Other trees keep
+the existing walk, generic context and synthesis order. Interpolation subparsers
+record against the same tree. Speculative parsing can cause an extra walk, never
+a missing declaration. A new parse owns a new summary, so source edits and
+membership changes cannot reuse stale absence.
+
+This local reduction does not cache projection or generation results.
+References, options, generator bytes, additional files and their metadata still
+flow through the existing driver and SDK invalidation paths. Empty generator
+output never suppresses execution or diagnostics. Last-good output, retries,
+orphan cleanup and task-owned success stamps retain their existing authority.
+Optional measurements count scanned and skipped trees separately.
+
+The October 20 comparison used the fixed compiler `c7b82dcb` and Oahu
+`9db7f232` workloads above. Both tool variants used the verified
+`0.5.7-perf2189.s2` benchmark bootstrap from `4e1a4430`; only their rebuilt
+Core DLL/PDB payloads differed. The production pin was `0.5.7` during this
+comparison. This change was later rebased onto the separate published
+`0.5.179` pin update (#5059). Current-pin validation is separate from the
+original controlled samples, which retain their original inputs and payloads.
+Each variant received one warmup and three alternating measured rebuilds,
+with restore excluded, four MSBuild nodes and the existing opt-in four-worker
+settings. All samples were retained.
+
+| Rebuild wall time, seconds | Baseline median (range) | Changed median (range) |
+| --- | ---: | ---: |
+| Compiler product graph | 57.683 (57.358-59.256) | 57.995 (57.672-58.286) |
+| Complete Oahu solution | 30.530 (30.449-31.406) | 30.731 (30.382-31.767) |
+
+There is no demonstrated build-speed gain. The changed medians were 0.5%
+and 0.7% slower, with overlapping ranges. The desktop remained shared;
+recorded load rose during Oahu runs. No sample was removed as an outlier.
+
+Separate untimed real-driver profiles measured the local reduction:
+
+| Request or phase | Baseline seconds / allocated MiB | Changed seconds / allocated MiB |
+| --- | ---: | ---: |
+| Core generator request | 10.721 / 3734.0 | 10.411 / 3065.8 |
+| Core generator projection, nested in that request | 7.397 / 3088.1 | 7.093 / 2420.9 |
+| Core compiler declarations | 7.276 / 3079.1 | 7.290 / 2669.1 |
+| Oahu UI generator request | 5.795 / 496.8 | 6.707 / 500.0 |
+| Oahu UI generator projection, nested in that request | 0.505 / 173.4 | 0.436 / 169.5 |
+
+These are single process-inclusive observations, not timing medians or retained
+memory. Do not add nested rows. Core avoided 700 whole-tree discovery walks
+in each declaration pass. Its projection allocated 667.3 MiB less (21.6%);
+compiler declarations allocated 409.9 MiB less (13.3%). Oahu UI avoided
+16 walks. All seven Core generators still ran with zero documents; Oahu UI
+still ran 17 generators and produced 36 documents. The slower changed Oahu UI
+request is retained, not credited as a latency improvement.
+
+All captured implementation/copied/reference DLLs, PDBs, XML files and manifests
+matched byte-for-byte. Oahu's 38 nonempty generated G# files also matched.
+This is an allocation and work reduction, not cross-stage declaration reuse:
+parsing, semantic declarations and reference import still run separately in
+`gsgen` and `gsc`. Their remaining duplication stays outside this local change.
+
+### Generated-document translation work reduction (#5054)
+
+Back-translation retains the immutable Roslyn input/generated trees and metadata
+references from generator setup. Import reservation now uses the active document's
+semantic model instead of rebinding that tree through a second model. A model
+that ignores accessibility retains the prior separate-model path.
+Source-name censuses visit the current assembly and globally visible
+compilation references, not metadata-only assemblies whose types cannot have
+source locations. Reference aliases and source-symbol rebinding remain inputs.
+Per-document alias state, translation order, diagnostics and output publication
+are unchanged. This reduction adds no cache, worker pool or SDK bypass.
+
+On the pinned Oahu workload, same-bootstrap unmodified/fixed host payloads differed
+only in the translator DLL, PDB and XML. One warmup per variant preceded alternating
+timed rebuilds; separate instrumented builds measured the actual reusable-worker
+translation request. The existing opt-in four-worker, four-node configuration
+and the compiler payload stayed fixed.
+
+| October 20 follow-up | Before | Fixed |
+| --- | ---: | ---: |
+| Complete Oahu rebuild median, three pairs | 32.710 s | 29.146 s |
+| Oahu.UI translation median, three separate actual-worker probes | 3.601 s | 3.191 s |
+| Translation allocations, median process delta | 251.9 MB | 79.6 MB |
+| No-op median, two runs per variant | 3.464 s | 3.477 s |
+
+All 38 generated filenames and contents matched across full builds, including
+Oahu.UI's 36 documents. No-op logs contained no compiler or generator task.
+These shared-desktop samples are not confidence intervals or a general speedup
+promise. Separate cold-host phase probes were noisy and had a slower fixed median
+(3.406 s versus 3.671 s), despite the same allocation reduction. Their latency
+does not establish a cold translation improvement. Nested phase costs are not
+additive; timed solution rebuilds had instrumentation disabled.
+
 ### Initial bounded-worker implementation (#5041)
 
 The initial implementation remains opt-in (`GSharpMaxWorkers=1` by default).
@@ -645,6 +825,27 @@ Widening eligibility requires proving the additional shared state safe; it
 must not replace this proof with a syntax denylist or concurrent dictionaries.
 Full-workload measurements and default promotion remain separate acceptance
 work, as specified above.
+
+### Canonical declaration readers and scalar bodies (#5056)
+
+Ordered alias readers retain immutable snapshots of canonical symbols.
+The cache key includes both the scope's immutable alias map and its parent's
+snapshot identity. An ancestor declaration or alias override therefore
+invalidates descendant readers without copying declarations into every block.
+Struct readers reuse the same snapshot across scopes with no local aliases.
+Static-import readers compare import contents and canonical struct snapshots,
+not counts alone. These caches belong to the scope chain, not the process.
+
+The coordinator warms the declaration reader before dispatching bodies.
+The additional worker proof admits scalar string/character operations and
+top-level source-enum constants and switches. It resolves enum names through
+the existing lexical source-type reader in the body's package and file
+context. Explicit import aliases, nested enums, generic owner contexts, calls,
+receivers, inference and synthesis remain outside this proof.
+Workers retain the original enum identities; they do not construct independent
+declaration worlds or publish synthesized symbols. The existing shared request
+budget, ordered diagnostics merge and whole-program analysis barriers remain
+unchanged.
 
 ### Method-local emission boundary (#5042)
 

@@ -1436,15 +1436,14 @@ internal partial class DeclarationBinder {
             if openBaseDefinition == nil {
                 return nil
             }
-            for candidate in ClrTypeUtilities.SafeGetConstructors(
-                openBaseDefinition,
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
-            ) {
-                if candidate.MetadataToken == bestCtor.MetadataToken && candidate.Module == bestCtor.Module {
-                    return candidate.GetParameters()
-                }
-            }
-            return nil
+            return (
+                ClrTypeUtilities.FindMetadataDefinition(
+                    openBaseDefinition,
+                    bestCtor,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+                    safeEnumeration: true
+                ) as ConstructorInfo
+            )?.GetParameters()
         }
 
         /// Issue #3984: substitutes the base type's symbolic type arguments into

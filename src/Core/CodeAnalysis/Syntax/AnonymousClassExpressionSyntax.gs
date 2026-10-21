@@ -44,6 +44,7 @@ class AnonymousClassExpressionSyntax : ExpressionSyntax {
         members ImmutableArray[SyntaxNode],
         closeBraceToken SyntaxToken
     ) : base(syntaxTree) {
+        syntaxTree.RecordAnonymousClassExpression()
         DataKeyword = dataKeyword
         ObjectKeyword = objectKeyword
         BaseColonToken = baseColonToken

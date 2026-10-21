@@ -7386,16 +7386,17 @@ internal class MemberLookup {
             if ClrTypeUtilities.AreSame(genericMethod.DeclaringType, openDeclaringType) {
                 return genericMethod
             }
-            let token = genericMethod.MetadataToken
-            let module = genericMethod.Module
             const bindingFlags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static
-            for candidate in openDeclaringType.GetMethods(bindingFlags) {
-                if candidate.MetadataToken == token && object.ReferenceEquals(candidate.Module, module) {
-                    return if candidate.IsGenericMethodDefinition || !candidate.IsGenericMethod {
-                        candidate
-                    } else {
-                        candidate.GetGenericMethodDefinition()
-                    }
+            let candidate = ClrTypeUtilities.FindMetadataDefinition(
+                openDeclaringType,
+                genericMethod,
+                bindingFlags
+            ) as MethodInfo
+            if candidate != nil {
+                return if candidate.IsGenericMethodDefinition || !candidate.IsGenericMethod {
+                    candidate
+                } else {
+                    candidate.GetGenericMethodDefinition()
                 }
             }
             return nil
