@@ -1657,8 +1657,8 @@ class Lowerer : BoundTreeRewriter {
                 .Parameters
                 .Length == 0 &&
                 userMoveNext!!.Type == TypeSymbol.Bool &&
-                userEnumerator
-                .TryGetField("Current", out var currentField) {
+                MemberLookup
+                .TryGetUserEnumeratorCurrent(userEnumerator, out var currentMember, out var currentType) {
                 moveNextCallFactory = (receiver BoundExpression) -> {
                     return BoundUserInstanceCallExpression(
                         nil,
@@ -1668,7 +1668,20 @@ class Lowerer : BoundTreeRewriter {
                     )
                 }
                 currentAccessFactory = (receiver BoundExpression) -> {
-                    return BoundFieldAccessExpression(nil, receiver, userEnumerator, currentField!!)
+                    return if currentMember is PropertySymbol property {
+                        cast[BoundExpression](
+                            BoundPropertyAccessExpression(nil, receiver, userEnumerator, property, currentType, nil)
+                        )
+                    } else {
+                        BoundFieldAccessExpression(
+                            nil,
+                            receiver,
+                            userEnumerator,
+                            cast[FieldSymbol](currentMember!!),
+                            currentType,
+                            nil
+                        )
+                    }
                 }
                 return true
             }

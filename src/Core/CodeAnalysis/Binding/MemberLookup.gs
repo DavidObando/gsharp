@@ -3564,17 +3564,7 @@ internal class MemberLookup {
 
         /// Probes a user-defined (cref:StructSymbol) for the
         /// duck-typed enumerable shape (`GetEnumerator() → MoveNext() / Current`).
-        /// @remarks Issue #2859: the enumerator returned by `GetEnumerator()` does not
-        /// have to be a user-declared type. The overwhelmingly common shape — the
-        /// one cs2gs emits for every C# class that implements
-        /// `IEnumerable<T>` — returns an imported
-        /// `IEnumerator[T]` (or a BCL struct enumerator such as
-        /// `List[T].Enumerator`). Those enumerators expose `Current` as a
-        /// property rather than a field, so the user-declared probe below cannot
-        /// see them; before this fix `for x in userList` fell through to the
-        /// indexer probe and reported `GS0116`. The lowerer's
-        /// `TryBuildMoveNextAndCurrent` already handles CLR enumerators, so
-        /// accepting them here is all that was missing.
+        /// @remarks The returned enumerator can be source-declared or imported.
         /// @param type The user struct symbol to probe.
         /// @param elementType The element (cref:TypeSymbol), on success.
         /// @returns `true` when the duck-typed shape matches.
@@ -3600,14 +3590,49 @@ internal class MemberLookup {
                     .Parameters
                     .Length == 0 &&
                     moveNext!!.Type == TypeSymbol.Bool &&
-                    enumeratorType.TryGetField("Current", out var currentField) {
-                    elementType = currentField!!.Type
+                    TryGetUserEnumeratorCurrent(enumeratorType, out _, out elementType) {
                     return true
                 }
                 return false
             }
             return effectiveEnumeratorType != nil &&
                 TryGetClrEnumeratorElementType(effectiveEnumeratorType, out elementType)
+        }
+
+        /// Resolves the readable instance `Current` member shared by pattern binding and lowering.
+        /// @param type The source enumerator type.
+        /// @param current The selected field or property.
+        /// @param elementType The construction-substituted element type.
+        /// @returns Whether the enumerator exposes a public readable `Current`.
+        func TryGetUserEnumeratorCurrent(type StructSymbol, out current Symbol?, out elementType TypeSymbol?) bool {
+            current = nil
+            elementType = nil
+            for owner in type.GetHierarchy() {
+                if owner.TryGetField("Current", out var field) {
+                    current = field
+                    if field!!.Accessibility != Accessibility.Public {
+                        return false
+                    }
+                    elementType = field!!.Type
+                    return true
+                }
+                for property in owner.Properties {
+                    if property.Name != "Current" ||
+                        property.IsStatic ||
+                        property.IsIndexer ||
+                        property.HasExplicitInterfaceClause ||
+                        property.ExplicitInterfaceClauseTarget != nil {
+                        continue
+                    }
+                    current = property
+                    if !property.HasGetter || property.GetterAccessibility != Accessibility.Public {
+                        return false
+                    }
+                    elementType = property.Type
+                    return true
+                }
+            }
+            return false
         }
 
         /// Issue #889: resolves the (cref:FunctionTypeSymbol) shape of any

@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **Source-declared pattern enumerator properties** (issue #5088). `for value in source` accepts a public readable instance `Current` property on a source-declared enumerator, as it already does for imported enumerators. Generic element types and mutable value-enumerator state are preserved.
+
 - **Allocation-free byte-string UTF-8 scalar iteration** (issue #5087, ADR-0204). `value.DecodeUtf8Scalars(policy)` returns concrete value-type `ByteString.Utf8Enumerable` with an independent value enumerator. Each `Utf8Item` reports its scalar value, relative byte offset and consumed byte length. Strict iteration is lazy and repeats failures at the same sequence start; replacement advances exactly one malformed byte. Logical substring bounds, BOM, embedded NUL and non-BMP scalars are preserved. Eager decoding shares the scalar decision without per-scalar strings. Code-point collections, Go translation and release/pin adoption remain deferred.
 
 - **Explicit byte-string UTF-8 text boundaries** (issue #5080, ADR-0204). `ByteString.EncodeUtf8` and `DecodeUtf8` require explicit strict or replacement policies. Strict failures report `ByteStringEncodingException.InputKind` (`Utf8`/`Utf16`) and the first malformed sequence's byte offset or unpaired surrogate's code-unit offset. Offsets are relative to the input value, including substrings. Replacement decoding advances exactly one invalid byte; replacement encoding handles each unpaired code unit. No implicit conversion, normalization or BOM insertion/stripping occurs. Code-point collections and release/pin adoption remain deferred.

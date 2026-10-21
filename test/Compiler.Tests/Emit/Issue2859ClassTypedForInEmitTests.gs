@@ -35,6 +35,135 @@ import Xunit
 /// Each fact uses a UNIQUE package name because the in-process type caches are
 /// name-keyed.
 open class Issue2859ClassTypedForInEmitTests {
+    @Theory
+    @InlineData("public var Current int32 = 3")
+    @InlineData("prop Current int32 -> 3")
+    func Issue5088_ExplicitInterfaceCurrentDoesNotHideOrdinaryCurrent(currentMember string) {
+        let source = `package i5088explicit
+import System
+interface ICurrent {
+    prop Current int32 { get; }
+}
+struct Cursor(Index int32) : ICurrent {
+    private prop (ICurrent) Current int32 -> 99
+` + currentMember + `
+    func MoveNext() bool {
+        Index += 1
+        return Index <= 2
+    }
+}
+struct Values {
+    func GetEnumerator() Cursor -> Cursor(0)
+}
+func Main() {
+    for value in default(Values) {
+        Console.WriteLine(value)
+    }
+}`
+        Assert.Equal("3\n3\n".ReplaceLineEndings(Environment.NewLine), CompileAndRun(source))
+    }
+
+    @Theory
+    @InlineData("prop Current T -> Item", "")
+    @InlineData("public var Current T", "Current = Item")
+    func Issue5088_NestedSelfConstructionReadsCurrentAtItsExactElementType(currentMember string, update string) {
+        let source = `package i5088nested
+import System
+struct Cursor[T](Item T, Index int32) {
+` + currentMember + `
+    func MoveNext() bool {
+        Index += 1
+` + update + `
+        return Index <= 1
+    }
+    func GetEnumerator() Cursor[[]T] -> Cursor[[]T]([]T{Item}, 0)
+    func Take()[]T {
+        for value in this {
+            return value
+        }
+        return default([]T)
+    }
+}
+func Main() {
+    Console.WriteLine(Cursor[int32](42, 0).Take()[0])
+    Console.WriteLine(Cursor[string]("right", 0).Take()[0])
+}`
+        Assert.Equal("42\nright\n".ReplaceLineEndings(Environment.NewLine), CompileAndRun(source))
+    }
+
+    @Fact
+    func Issue5088_SourceCurrentProperty_PreservesValueCursorStateAndEvaluationCounts() {
+        const source = `package i5088state
+import System
+
+class Counts(Gets int32, Moves int32, Reads int32) {}
+
+struct Cursor(Index int32, Reads int32, Counts Counts) {
+    prop Current int32 {
+        get {
+            Reads += 1
+            Counts.Reads += 1
+            return Index * 10 + Reads
+        }
+    }
+    func MoveNext() bool {
+        Counts.Moves += 1
+        Index += 1
+        return Index <= 3
+    }
+}
+
+struct Values(Counts Counts) {
+    func GetEnumerator() Cursor {
+        Counts.Gets += 1
+        return Cursor(0, 0, Counts)
+    }
+}
+
+func Main() {
+    let counts = Counts(0, 0, 0)
+    for value in Values(counts) {
+        Console.WriteLine(value)
+    }
+    Console.WriteLine(counts.Gets)
+    Console.WriteLine(counts.Moves)
+    Console.WriteLine(counts.Reads)
+}`
+        Assert.Equal("11\n22\n33\n1\n4\n3\n".ReplaceLineEndings(Environment.NewLine), CompileAndRun(source))
+    }
+
+    @Fact
+    func Issue5088_GenericSourceCurrentProperty_PreservesConstructedAndOpenElementTypes() {
+        const source = `package i5088generic
+import System
+
+class Item(Value int32) {}
+struct Cursor[T](Item T, Index int32) {
+    prop Current T -> Item
+    func MoveNext() bool {
+        Index += 1
+        return Index <= 2
+    }
+}
+struct Values[T](Item T) {
+    func GetEnumerator() Cursor[T] -> Cursor[T](Item, 0)
+}
+func First[T](values Values[T]) T {
+    for item in values {
+        return item
+    }
+    return default(T)
+}
+func Main() {
+    for item in Values[Item](Item(7)) {
+        Console.WriteLine(item.Value)
+    }
+    Console.WriteLine(First[Item](Values[Item](Item(9))).Value)
+    Console.WriteLine(First[int32](Values[int32](42)))
+}`
+        Assert.Equal("7\n7\n9\n42\n".ReplaceLineEndings(Environment.NewLine), CompileAndRun(source))
+    }
+
     @Fact
     func EndToEnd_ForIn_SameAssemblyClassImplementingIEnumerable_Runs() {
         // The reported defect: iterating a class-typed source whose
@@ -256,9 +385,15 @@ func Main() {
                 psi.ArgumentList.Add(rtConfig)
                 psi.ArgumentList.Add(dllPath)
                 using let proc = Process.Start(psi) ?? throw InvalidOperationException("Failed to start dotnet exec")
-                let stdout = proc.StandardOutput.ReadToEnd()
-                let stderr = proc.StandardError.ReadToEnd()
-                Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out")
+                let stdoutTask = proc.StandardOutput.ReadToEndAsync()
+                let stderrTask = proc.StandardError.ReadToEndAsync()
+                let exited = proc.WaitForExit(30_000)
+                if !exited {
+                    proc.Kill(entireProcessTree: true)
+                }
+                Assert.True(exited, "dotnet exec timed out")
+                let stdout = stdoutTask.GetAwaiter().GetResult()
+                let stderr = stderrTask.GetAwaiter().GetResult()
                 Assert.True(proc.ExitCode == 0, (`exited ` + "${proc.ExitCode}" + `
 stdout:
 ` + "$stdout" + `
