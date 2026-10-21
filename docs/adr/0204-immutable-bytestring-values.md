@@ -2,9 +2,10 @@
 
 - **Status**: Accepted
 - **Date**: 2026-10-20
-- **Phase**: Core implementation; encoding and scalar APIs deferred
+- **Phase**: Core and explicit UTF-8 text conversion implemented; scalar APIs deferred
 - **Issue**: [#5065](https://github.com/DavidObando/gsharp/issues/5065)
 - **Core implementation**: [#5068](https://github.com/DavidObando/gsharp/issues/5068)
+- **Text conversion**: [#5080](https://github.com/DavidObando/gsharp/issues/5080)
 - **Related**: [ADR-0191](0191-go-to-gsharp-migration-tool.md),
   [ADR-0190](0190-native-slices-and-clr-array-interoperability.md),
   [ADR-0187](0187-first-class-index-range-and-runtime-declarations.md),
@@ -43,8 +44,8 @@ ordinary methods/operators, native `bytestring` spelling and exact-byte
 `b"..."` literals. Keep encoding explicit and keep `string` unchanged.**
 
 The development implementation covers the core surface in section 4, native
-spelling and literals in section 5, and their compiler/tooling integration.
-Section 6's encoding/scalar APIs remain a separate implementation chunk;
+spelling and literals in section 5, their compiler/tooling integration, and
+section 6's explicit UTF-8 text conversions. Scalar APIs remain deferred;
 examples using those APIs are forward-looking. This is not a claim of a
 published SDK, complete witness-matrix certification, or Go translation readiness.
 No compiler, runtime, SDK pin, existing literal or migration profile changes
@@ -373,16 +374,25 @@ index wrapper or new loop grammar.
 ### 6. Encoding and code-point algorithms
 
 Encoding is opt-in. There is no global decoder default and no implicit
-byte-string/CLR-string conversion. Proposed public policy enums live beside
-ByteString in `Gsharp.Values` and are equally usable by C#.
+byte-string/CLR-string conversion. The implemented public policy enums live
+beside ByteString in `Gsharp.Values` and are equally usable by C#.
 
 ```text
 Utf8Decoding = Strict | ReplaceInvalidByte
 Utf16Encoding = Strict | ReplaceUnpairedCodeUnit
-CodePointEncoding = Strict | ReplaceInvalidCodePoint
 
 ByteString.EncodeUtf8(text: string, policy: Utf16Encoding) -> bytestring
 value.DecodeUtf8(policy: Utf8Decoding) -> string
+```
+
+Neither method has a policy default. `EncodeUtf8` rejects a null CLR argument
+with `ArgumentNullException` (`text`). Both methods reject invalid policies
+with `ArgumentOutOfRangeException` (`policy`), including on empty input.
+
+The following scalar/collection APIs remain deferred:
+
+```text
+CodePointEncoding = Strict | ReplaceInvalidCodePoint
 ByteString.FromCodePoints(source: readonly slice[int32],
                          policy: CodePointEncoding) -> bytestring
 value.DecodeCodePoints(policy: Utf8Decoding) -> slice[int32]
@@ -405,9 +415,15 @@ callers can validate or replace invalid values explicitly.
 | Code-point strict | Reject negative values, surrogate values and values above U+10FFFF at their input element index. |
 | Replace invalid code point | Each invalid element becomes U+FFFD; valid values retain their encoding. |
 
-Strict eager operations throw a proposed `ByteStringEncodingException` with
-input kind and first failing byte/code-unit/element offset; they return no
-partial value. Invalid policy enum values throw `ArgumentOutOfRangeException`.
+Strict eager text conversions throw `ByteStringEncodingException`, a sealed
+`System.Exception` subclass in `Gsharp.Values`. Its get-only `InputKind`
+property has public enum type `ByteStringInputKind`, with exactly `Utf8` and
+`Utf16` members. Its get-only `Offset: int32` is the zero-based first failing
+byte or UTF-16 code-unit offset, respectively. Construction is internal:
+callers catch the exception and inspect these properties. No element-input
+kind is reserved for deferred APIs. Offsets are relative to the input value,
+including substrings, not its backing owner. Eager operations return no partial
+value. Invalid policy enum values throw `ArgumentOutOfRangeException`.
 These are ordinary exceptions under ADR-0005, not a Go error-return protocol.
 
 Lazy strict enumeration can yield a valid prefix before failing at `MoveNext`.

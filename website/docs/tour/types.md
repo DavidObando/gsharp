@@ -158,9 +158,8 @@ func Main() {
 ## Immutable byte strings
 
 **Development capability:** `bytestring` is an immutable arbitrary-byte value,
-not a CLR text string or a promise that its bytes are valid UTF-8. This core
-requires a matching compiler/runtime; explicit encoding APIs are not implemented
-yet. Ordinary `string` remains `System.String`.
+not a CLR text string or a promise that its bytes are valid UTF-8. This capability
+requires a matching compiler/runtime. Ordinary `string` remains `System.String`.
 
 ```gsharp
 func Payload(packet bytestring) bytestring {
@@ -182,6 +181,20 @@ to copy a retained substring into compact storage.
 `ReadOnlySpan[uint8]`; `ToArray()`, `ToSlice()` and `CopyTo` copy to independent
 writable storage. There is no implicit text conversion or public backing view.
 `ToString()` is a bounded escaped diagnostic, not decoded text.
+
+Text boundaries require explicit policies:
+`ByteString.EncodeUtf8(text, Utf16Encoding.Strict)` encodes CLR text;
+`value.DecodeUtf8(Utf8Decoding.Strict)` decodes complete shortest-form scalars.
+Import `Gsharp.Values` for the nominal type and policies.
+`ReplaceUnpairedCodeUnit` replaces each unpaired UTF-16 surrogate.
+`ReplaceInvalidByte` emits U+FFFD for each invalid byte, advancing one byte;
+a valid encoded U+FFFD consumes three bytes. No normalization or BOM
+insertion/stripping occurs. NUL remains content.
+Strict conversions throw `ByteStringEncodingException` with `InputKind`
+(`ByteStringInputKind.Utf8` or `.Utf16`) and zero-based `Offset` relative to
+the input value. They return no partial result. See the
+[text-boundary reference](../ref/spec.md#explicit-utf-8-text-boundaries) for
+policy and exception details. Scalar iteration remains deferred.
 
 Visible user types/aliases named `bytestring` win ordinary lookup;
 `$bytestring` never selects the native alias. A byte literal always has the

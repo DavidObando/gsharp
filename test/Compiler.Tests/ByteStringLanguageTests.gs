@@ -16,6 +16,51 @@ import System.Text
 import Xunit
 
 class ByteStringLanguageTests {
+    @Fact
+    func Utf8BoundariesBindVerifyAndInteroperateWithIndependentCSharpContracts() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = fixture.CompileCSharp(`using System;
+using Gsharp.Values;
+namespace Utf8InteropContract;
+public static class Utf8Contract {
+    public static ByteString Encode() =>
+        ByteString.EncodeUtf8("\0\uFEFFé\U0001F600", Utf16Encoding.Strict);
+    public static string Decode(ByteString value) => value.DecodeUtf8(Utf8Decoding.ReplaceInvalidByte);
+    public static string Failure(ByteString value) {
+        try { return value.DecodeUtf8(Utf8Decoding.Strict); }
+        catch (ByteStringEncodingException error) {
+            return $"{error.InputKind}:{error.Offset}";
+        }
+    }
+    public static string NullText() {
+        try { ByteString.EncodeUtf8(null!, Utf16Encoding.Strict); return "accepted"; }
+        catch (ArgumentNullException error) { return error.ParamName!; }
+    }
+    public static string Unpaired() {
+        try { ByteString.EncodeUtf8("A\uD800", Utf16Encoding.Strict); return "accepted"; }
+        catch (ByteStringEncodingException error) {
+            return $"{error.InputKind}:{error.Offset}";
+        }
+    }
+}`, "Utf8Contract")
+        let assembly = fixture.Compile(`package Utf8Interop
+import System
+import Gsharp.Values
+import Utf8InteropContract
+func Main() {
+    Console.WriteLine(Utf8Contract.Encode() == b"\0\xEF\xBB\xBFé😀")
+    Console.WriteLine(ByteString.EncodeUtf8("Aé😀", Utf16Encoding.Strict) == b"Aé😀")
+    Console.WriteLine(b"é😀".DecodeUtf8(Utf8Decoding.Strict) == "é😀")
+    Console.WriteLine(Utf8Contract.Decode(b"\xE2\x82\xEF\xBF\xBD") == "\uFFFD\uFFFD\uFFFD")
+    Console.WriteLine(Utf8Contract.Failure(b"\xFF\x41\xE2\x82"[1..]))
+    Console.WriteLine(Utf8Contract.NullText())
+    Console.WriteLine(Utf8Contract.Unpaired())
+    Console.WriteLine(b"".DecodeUtf8(Utf8Decoding.Strict).Length)
+}`, "utf8-interop", true, "/reference:" + reference)
+        IlVerifier.Verify(assembly, []string{reference})
+        Assert.Equal("True\nTrue\nTrue\nTrue\nUtf8:1\ntext\nUtf16:1\n0\n", fixture.Run(assembly))
+    }
+
     @Theory
     @MemberData("Programs")
     func ByteProgramsVerifyAndExecute(source string, expected string) {
