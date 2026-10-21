@@ -1000,6 +1000,10 @@ The dedicated Proposed [ADR-0205](0205-type-preserving-interface-values.md)
 compares these candidates and recommends a finite-evidence category. It keeps
 receiver-mode acceptance separate. Its merge does not accept new semantics,
 implement this execution contract or admit a Go family.
+[Proposed ADR-0206](0206-explicit-snapshot-and-selected-location-receivers.md)
+addresses that separate receiver gate with explicit slot modes, capture timing
+and typed location witnesses. Neither proposal's merge admits Go method values
+or changes ordinary G# calls.
 
 The comparison must cover:
 
