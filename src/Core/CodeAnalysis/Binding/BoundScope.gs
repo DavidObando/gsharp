@@ -23,6 +23,7 @@ class BoundScope {
     private var functions ImmutableDictionary[string, ImmutableArray[FunctionSymbol].Builder].Builder?
     private var functionKeys ImmutableArray[string].Builder?
     private var imports ImmutableArray[ImportSymbol].Builder?
+    private var cachedImportIndex VisibleImportIndex?
     private var typeAliases ImmutableDictionary[string, TypeSymbol]?
     private var aliasCandidates ImmutableDictionary[string, ImmutableDictionary[string, TypeSymbol]] =
     ImmutableDictionary[string, ImmutableDictionary[string, TypeSymbol]].Empty
@@ -949,7 +950,7 @@ class BoundScope {
 
     /// Gets an immutable array of all the declared imports.
     /// @returns The declared imports.
-    func GetDeclaredImports() ImmutableArray[ImportSymbol] -> EnumerateImports().ToImmutableArray()
+    func GetDeclaredImports() ImmutableArray[ImportSymbol] -> EnumerateImports()
 
     /// Gets the imports declared directly in <em>this</em> scope only — unlike
     /// (cref:GetDeclaredImports), this does not walk (cref:Parent).
@@ -2646,20 +2647,27 @@ class BoundScope {
         return type != nil
     }
 
-    private func EnumerateImports() sequence[ImportSymbol] {
-        if Parent != nil {
-            for import_ in Parent!!.EnumerateImports() {
-                yield import_
-            }
+    private func EnumerateImports() ImmutableArray[ImportSymbol] -> GetImportIndex()?.GetVisibleImports(
+        GetCurrentReferencingSyntaxTree()
+    ) ??
+        ImmutableArray[ImportSymbol].Empty
+
+    private func GetImportIndex() VisibleImportIndex? {
+        let parentIndex = Parent?.GetImportIndex()
+        if imports == nil {
+            return parentIndex
         }
-        if imports != nil {
-            let referencingTree SyntaxTree? = GetCurrentReferencingSyntaxTree()
-            for import_ in imports!! {
-                let declaration = import_.Declaration
-                if declaration == nil || (referencingTree != nil && declaration.SyntaxTree == referencingTree) {
-                    yield import_
-                }
-            }
+        let cached = cachedImportIndex
+        if cached != nil && cached.OwnCount == imports!!.Count && object.ReferenceEquals(cached.Parent, parentIndex) {
+            return cached
+        }
+        // Empty lexical scopes share their ancestor's index. Import additions replace the affected snapshots.
+        let built = VisibleImportIndex(parentIndex, imports!!.ToImmutable())
+        let previous = Interlocked.CompareExchange(&cachedImportIndex, built, cached)
+        return if object.ReferenceEquals(previous, cached) {
+            built
+        } else {
+            previous
         }
     }
 
