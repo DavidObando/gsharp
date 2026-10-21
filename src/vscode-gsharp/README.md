@@ -57,9 +57,10 @@ Pattern primaries distinguish discard, constant, and `var` bindings from types;
 `not`/`and`/`or` introduce the appropriate next primary rather than a nullable name.
 List patterns do not consume an element-type name; parenthesized patterns retain
 their conditional arms while nullable tuple types retain their suffix.
-Nullable conversion/delegate calls require adjacent `?(`. Generic-call candidates
-validate type arguments rather than treating expression indices as types; their
-states persist across physical lines.
+Adjacent `?(` invokes any postfix receiver, including indexed and call results;
+whitespace-separated `? (` remains conditional. Nested index expressions retain
+their own conditional delimiters. Named tuple array elements remain types, while
+property suffixes and relational operands preserve following pattern combinators.
 Anonymous-class header colons stay in expressions. Line comments accept CR, LF,
 and CRLF line endings.
 
@@ -77,6 +78,9 @@ Run the shared cases with `npm run test:unit -- --runInBand grammar.test.ts` her
 and `node --test --test-name-pattern=Prism tests/content.test.mjs` in `website`.
 The editor tests use the real TextMate/Oniguruma tokenizer, not JavaScript regex
 approximations.
+Before asserting an ambiguous interpolation's scopes, check its expression kind
+and `InterpolatedStringSegment.Format` with the compiler's `SyntaxTree.Parse`;
+two agreeing highlighters do not establish the language's parse.
 
 ## Commands
 

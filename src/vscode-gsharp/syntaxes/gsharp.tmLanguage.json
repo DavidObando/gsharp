@@ -272,6 +272,12 @@
       "patterns": [
         { "include": "#comments" },
         {
+          "begin": "<=?|>=?|==|!=",
+          "beginCaptures": { "0": { "name": "keyword.operator.gsharp" } },
+          "end": "(?=(?<![\\p{L}\\p{Nd}_$])(?:and|or)\\b)|(?=[:}])",
+          "patterns": [{ "include": "#interpolation-expression" }]
+        },
+        {
           "match": "(?<![\\p{L}\\p{Nd}_$])(?:not|and|or|is|nil|true|false)\\b|(?<![\\p{L}\\p{Nd}_$])_(?![\\p{L}\\p{Nd}_])(?!(?:\\s|/\\*.*?\\*/)*[.(])",
           "captures": { "0": { "patterns": [{ "include": "source.gsharp" }] } }
         },
@@ -304,104 +310,9 @@
       ]
     },
     "interpolation-nullable-call": {
-      "patterns": [
-        {
-          "match": "(?<![\\p{L}\\p{Nd}_$])(\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*)(\\?)(?=\\()",
-          "captures": {
-            "1": { "patterns": [{ "include": "source.gsharp" }] },
-            "2": { "name": "keyword.operator.gsharp" }
-          }
-        },
-        {
-          "comment": "Generic candidates use persistent type-argument states. On an expression token, resume expression scanning without consuming ? as a nullable-call suffix.",
-          "begin": "(?<![\\p{L}\\p{Nd}_$])(\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*)(?:\\s|/\\*.*?\\*/)*\\[",
-          "beginCaptures": { "0": { "patterns": [{ "include": "source.gsharp" }] } },
-          "end": "\\](\\?(?=\\())?|(?=[:}])",
-          "endCaptures": { "1": { "name": "keyword.operator.gsharp" } },
-          "patterns": [{ "include": "#interpolation-call-type-list" }]
-        }
-      ]
-    },
-    "interpolation-call-type-list": {
-      "patterns": [
-        { "include": "#comments" },
-        {
-          "begin": "(?:\\G|,)(?=(?:\\s|/\\*.*?\\*/)*(?!(?:func|unmanaged|async)\\b)\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*(?:\\s|/\\*.*?\\*/)*\\()",
-          "end": "(?=[:}])",
-          "patterns": [{ "include": "#interpolation-expression" }]
-        },
-        {
-          "begin": "\\G(?=(?:\\s|/\\*.*?\\*/)*(?!(?:as|is|nil|true|false)\\b)(?:[\\[(*$\\p{L}_]|$))|,",
-          "end": "(\\?(?![?.\\[]))|(?=\\S)",
-          "endCaptures": { "1": { "name": "keyword.operator.gsharp" } },
-          "applyEndPatternLast": true,
-          "patterns": [
-            { "include": "#interpolation-call-type-head" },
-            { "include": "#interpolation-call-type-tail" }
-          ]
-        },
-        {
-          "begin": "(?=\\S)(?![\\])])",
-          "end": "(?=[:}])",
-          "patterns": [{ "include": "#interpolation-expression" }]
-        }
-      ]
-    },
-    "interpolation-call-type-head": {
-      "begin": "\\G",
-      "end": "((?!(?:as|is|nil|true|false)\\b)\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*)|(?<=\\))|(?=\\S)",
-      "endCaptures": { "1": { "patterns": [{ "include": "source.gsharp" }] } },
-      "applyEndPatternLast": true,
-      "patterns": [
-        { "include": "#comments" },
-        {
-          "begin": "\\*(?!(?:\\s|/\\*.*?\\*/)*func\\b)|\\[(?!(?:\\s|/\\*.*?\\*/)*(?:[0-9][0-9a-zA-Z_]*|(?:,(?:\\s|/\\*.*?\\*/)*)*)?(?:\\s|/\\*.*?\\*/)*\\])",
-          "beginCaptures": { "0": { "patterns": [{ "include": "source.gsharp" }] } },
-          "end": "(?=[:}])",
-          "patterns": [{ "include": "#interpolation-expression" }]
-        },
-        {
-          "begin": "\\(",
-          "end": "\\)|(?=[:}])",
-          "patterns": [
-            {
-              "begin": "(?:\\G|,)(?:\\s|/\\*.*?\\*/)*((?!(?:func|map|chan|sequence|async)\\b|unmanaged\\b(?:\\s|/\\*.*?\\*/)*[\\[(])\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*)(?:\\s|/\\*.*?\\*/)+(?=[(*$\\p{L}_]|\\[(?:\\s|/\\*.*?\\*/)*(?:\\]|[0-9,]))",
-              "beginCaptures": { "1": { "name": "variable.other.gsharp" } },
-              "end": "(\\?(?![?.\\[]))|(?=\\S)",
-              "endCaptures": { "1": { "name": "keyword.operator.gsharp" } },
-              "applyEndPatternLast": true,
-              "patterns": [
-                { "include": "#interpolation-call-type-head" },
-                { "include": "#interpolation-call-type-tail" }
-              ]
-            },
-            { "include": "#interpolation-call-type-list" }
-          ]
-        },
-        { "include": "#interpolation-type-head-body" }
-      ]
-    },
-    "interpolation-call-type-tail": {
-      "patterns": [
-        { "include": "#comments" },
-        {
-          "begin": "\\[",
-          "end": "\\]|(?=[:}])",
-          "patterns": [{ "include": "#interpolation-call-type-list" }]
-        },
-        { "include": "#interpolation-member-name" },
-        {
-          "begin": "->",
-          "beginCaptures": { "0": { "name": "keyword.operator.gsharp" } },
-          "end": "(\\?(?![?.\\[]))|(?=\\S)",
-          "endCaptures": { "1": { "name": "keyword.operator.gsharp" } },
-          "applyEndPatternLast": true,
-          "patterns": [
-            { "include": "#interpolation-call-type-head" },
-            { "include": "#interpolation-call-type-tail" }
-          ]
-        }
-      ]
+      "comment": "ParsePostfixChain accepts adjacent ?( after any postfix receiver, not just a name or a generic call.",
+      "name": "keyword.operator.gsharp",
+      "match": "(?<=[\\p{L}\\p{Nd}_\\])}\"'`!])\\?(?=\\()"
     },
     "interpolation-postfix": {
       "comment": "An index after an operand is not an array type prefix, including when separated by comments or a physical newline.",

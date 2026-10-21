@@ -116,9 +116,9 @@ function typeListEnd(source: string, index: number, depth: number, tuple = false
   while (cursor < source.length && source[cursor] !== close) {
     if (source.startsWith('...', cursor) && close === ')') cursor += 3;
     let end = typeEnd(source, cursor, depth + 1, pointers);
-    if (end <= cursor) return index;
-    end = skipTrivia(source, end);
-    if (source[end] !== ',' && source[end] !== close && close === ')') {
+    if (end > cursor) end = skipTrivia(source, end);
+    if (end <= cursor || (source[end] !== ',' && source[end] !== close)) {
+      if (close !== ')') return index;
       const name = wordAt(source, cursor);
       if (!typeName(name)) return index;
       cursor = skipTrivia(source, cursor + name.length);
@@ -233,6 +233,12 @@ function patternEnd(source: string, index: number): number {
       continue;
     }
     if (!primary) {
+      if (designation && source[index] === '{') {
+        const end = groupEnd(source, index);
+        if (end === index) return index;
+        index = end;
+        continue;
+      }
       if (designation && word && !['is', 'as', 'not', 'when'].includes(word)) {
         index += word.length;
         designation = false;
@@ -240,7 +246,11 @@ function patternEnd(source: string, index: number): number {
       }
       return index;
     }
-    if (word === 'var') {
+    const relational = /^(?:<=?|>=?|==|!=)/.exec(source.slice(index));
+    if (relational) {
+      index = expressionEnd(source, index + relational[0].length, true);
+      designation = false;
+    } else if (word === 'var') {
       index = skipTrivia(source, index + word.length);
       index += wordAt(source, index).length;
       designation = false;
@@ -273,71 +283,67 @@ function patternEnd(source: string, index: number): number {
   return index;
 }
 
-function nullableCallEnd(source: string, index: number): number {
-  let end = index;
-  const next = skipTrivia(source, end);
-  if (source[next] === '[') {
-    end = typeListEnd(source, next, 0);
-    if (end <= next) return index;
+function postfixCallAt(source: string, index: number): boolean {
+  // ParsePostfixChain permits adjacent ?( after every postfix receiver.
+  return source.startsWith('?(', index) && /[\p{L}\p{Nd}_\])}"'`!]/u.test(source[index - 1] ?? '');
+}
+
+function expressionEnd(source: string, cursor: number, patternOperand = false): number {
+  let memberName = false;
+  let conditionals = 0;
+  while (cursor < source.length) {
+    cursor = skipTrivia(source, cursor);
+    const word = wordAt(source, cursor);
+    if (word) {
+      if (patternOperand && !memberName && !conditionals && (word === 'and' || word === 'or')) return cursor;
+      cursor += word.length;
+      if (!memberName && word === 'as') cursor = typeEnd(source, cursor);
+      else if (!memberName && word === 'is') cursor = patternEnd(source, cursor);
+      else if (!memberName && word === 'object') {
+        const header = skipTrivia(source, cursor);
+        if (source[header] === ':') cursor = header + 1;
+      }
+      memberName = false;
+      continue;
+    }
+    const c = source[cursor];
+    if (c === '[') {
+      const end = typeEnd(source, cursor);
+      if (end > cursor && source[skipTrivia(source, end)] === '{') {
+        cursor = end;
+        continue;
+      }
+    }
+    if (c && '"\'`([{'.includes(c)) {
+      const end = groupEnd(source, cursor);
+      if (end === cursor) break;
+      cursor = end;
+      memberName = false;
+      continue;
+    }
+    memberName = c === '.';
+    if (c === '?') {
+      if (source[cursor + 1] === '?' || source[cursor + 1] === '.') {
+        memberName = source[cursor + 1] === '.';
+        cursor++;
+      } else if (source[cursor + 1] !== '[' && !postfixCallAt(source, cursor)) conditionals++;
+    } else if (c === ':' && conditionals) conditionals--;
+    else if (c === ':' || (patternOperand && c && ',;})]'.includes(c))) return cursor;
+    cursor++;
   }
-  // Both token boundaries are adjacent, just as ParseNullableTypeCallExpression
-  // and LooksLikeGenericCallSite require. An expression index is not a type-argument list.
-  return source.startsWith('?(', end) ? groupEnd(source, end + 1) : index;
+  return cursor;
 }
 
 function interpolationFormatPattern(): RegExp {
   const pattern = /:[\s\S]*$/g;
   pattern.exec = function(source: string): RegExpExecArray | null {
-    let cursor = 0;
-    let conditionals = 0;
-    let memberName = false;
-    while (cursor < source.length) {
-      cursor = skipTrivia(source, cursor);
-      const word = wordAt(source, cursor);
-      if (word) {
-        cursor += word.length;
-        if (!memberName && word === 'as') cursor = typeEnd(source, cursor);
-        else if (!memberName && word === 'is') cursor = patternEnd(source, cursor);
-        else {
-          if (!memberName && word === 'object') {
-            const header = skipTrivia(source, cursor);
-            if (source[header] === ':') cursor = header + 1;
-          }
-          cursor = nullableCallEnd(source, cursor);
-        }
-        memberName = false;
-        continue;
-      }
-      const c = source[cursor];
-      if (c === '[') {
-        const end = typeEnd(source, cursor);
-        if (end > cursor && source[skipTrivia(source, end)] === '{') {
-          cursor = end;
-          continue;
-        }
-      }
-      if (c && '"\'`([{'.includes(c)) {
-        const end = groupEnd(source, cursor);
-        if (end === cursor) break;
-        cursor = end;
-        memberName = false;
-        continue;
-      }
-      memberName = c === '.';
-      if (c === '?') {
-        if (source[cursor + 1] === '?' || source[cursor + 1] === '.') {
-          memberName = source[cursor + 1] === '.';
-          cursor++;
-        } else if (source[cursor + 1] !== '[') conditionals++;
-      } else if (c === ':' && conditionals) conditionals--;
-      else if (c === ':' && cursor >= this.lastIndex) {
-        const result = /:[\s\S]*$/g;
-        result.lastIndex = cursor;
-        const match = result.exec(source);
-        this.lastIndex = source.length;
-        return match;
-      } else if (c === ':') break;
-      cursor++;
+    const cursor = expressionEnd(source, 0);
+    if (source[cursor] === ':' && cursor >= this.lastIndex) {
+      const result = /:[\s\S]*$/g;
+      result.lastIndex = cursor;
+      const match = result.exec(source);
+      this.lastIndex = source.length;
+      return match;
     }
     this.lastIndex = 0;
     return null;
