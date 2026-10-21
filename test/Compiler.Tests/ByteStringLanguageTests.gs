@@ -17,6 +17,68 @@ import Xunit
 
 class ByteStringLanguageTests {
     @Fact
+    func Utf8ScalarForeachBindsVerifiesAndRunsThroughIndependentCSharp() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = fixture.CompileCSharp(`using System;
+using System.Text;
+using Gsharp.Values;
+namespace ScalarInteropContract;
+public static class ScalarContract {
+    public static string Items(ByteString value, Utf8Decoding policy) {
+        var result = new StringBuilder();
+        foreach (Utf8Item item in value.DecodeUtf8Scalars(policy))
+            result.Append($"{item.ByteOffset}:{item.Value}:{item.ByteLength};");
+        return result.ToString();
+    }
+    public static string Fault(ByteString value) {
+        var iterator = value.DecodeUtf8Scalars(Utf8Decoding.Strict).GetEnumerator();
+        var result = new StringBuilder();
+        iterator.MoveNext();
+        result.Append($"{iterator.Current.ByteOffset}:{iterator.Current.Value}:{iterator.Current.ByteLength};");
+        for (int retry = 0; retry < 2; retry++) {
+            try { result.Append(iterator.MoveNext() ? "advanced;" : "eof;"); }
+            catch (ByteStringEncodingException error) {
+                result.Append($"{error.InputKind}:{error.Offset};");
+            }
+        }
+        return result.ToString();
+    }
+}`, "ScalarContract")
+        let assembly = fixture.Compile(`package ScalarInterop
+import System
+import Gsharp.Values
+import ScalarInteropContract
+func Main() {
+    let value = b"\xFF\xEF\xBB\xBF\0Aé😀\xEF\xBF\xBD\xE2\x82"[1..]
+    for item in value.DecodeUtf8Scalars(Utf8Decoding.ReplaceInvalidByte) {
+        Console.WriteLine("${item.ByteOffset}:${item.Value}:${item.ByteLength}")
+    }
+    Console.WriteLine(ScalarContract.Items(value, Utf8Decoding.ReplaceInvalidByte))
+    Console.WriteLine(ScalarContract.Items(b"\xFFé😀\xFF"[1..7], Utf8Decoding.Strict))
+    Console.WriteLine(ScalarContract.Fault(b"\xFF\x41\xE2\x82"[1..]))
+    var iterator = b"A\xFF".DecodeUtf8Scalars(Utf8Decoding.Strict).GetEnumerator()
+    Console.WriteLine(iterator.MoveNext())
+    for var retry = 0; retry < 2; retry++ {
+        try {
+            Console.WriteLine(iterator.MoveNext())
+        } catch (error ByteStringEncodingException) {
+            Console.WriteLine("${error.InputKind}:${error.Offset}")
+        }
+    }
+    for item in default(ByteString.Utf8Enumerable) {
+        Console.WriteLine("unexpected")
+    }
+}`, "scalar-interop", true, "/reference:" + reference)
+        IlVerifier.Verify(assembly, []string{reference})
+        Assert.Equal(
+            "0:65279:3\n3:0:1\n4:65:1\n5:233:2\n7:128512:4\n11:65533:3\n14:65533:1\n15:65533:1\n" +
+                "0:65279:3;3:0:1;4:65:1;5:233:2;7:128512:4;11:65533:3;14:65533:1;15:65533:1;\n" +
+                "0:233:2;2:128512:4;\n0:65:1;Utf8:1;Utf8:1;\nTrue\nUtf8:1\nUtf8:1\n",
+            fixture.Run(assembly)
+        )
+    }
+
+    @Fact
     func Utf8BoundariesBindVerifyAndInteroperateWithIndependentCSharpContracts() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let reference = fixture.CompileCSharp(`using System;

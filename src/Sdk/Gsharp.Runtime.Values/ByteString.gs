@@ -175,29 +175,27 @@ struct ByteString : IEquatable[ByteString], IComparable[ByteString], IEnumerable
     /// @param policy The required malformed-input policy.
     /// @returns The decoded CLR string, preserving embedded NUL and BOM characters.
     func DecodeUtf8(policy Utf8Decoding) string {
+        var scalars = DecodeUtf8Scalars(policy).GetEnumerator()
+        let result = StringBuilder()
+        let buffer = [2]char
+        while scalars.MoveNext() {
+            let written = Rune(scalars.Current.Value).EncodeToUtf16(buffer.AsSpan())
+            result.Append(buffer, 0, written)
+        }
+        return result.ToString()
+    }
+
+    /// Lazily decodes scalars with byte offsets relative to this value.
+    /// Strict failures throw (cref:ByteStringEncodingException) at MoveNext, after any valid prefix.
+    /// Repeated MoveNext calls report the same failure without advancing.
+    /// Invalid policies throw (cref:ArgumentOutOfRangeException) immediately, including on empty input.
+    /// @param policy The required malformed-input policy.
+    /// @returns A concrete value enumerable without buffer copies or per-scalar allocations.
+    func DecodeUtf8Scalars(policy Utf8Decoding) Utf8Enumerable {
         if policy != Utf8Decoding.Strict && policy != Utf8Decoding.ReplaceInvalidByte {
             throw ArgumentOutOfRangeException("policy")
         }
-        let result = StringBuilder()
-        let buffer = [2]char
-        var cursor = 0
-        while cursor < Length {
-            let source = cast[ReadOnlySpan[uint8]](Owner.AsSpan(offset + cursor, Length - cursor))
-            let status = Rune.DecodeFromUtf8(source, out var scalar, out var consumed)
-            if status != OperationStatus.Done {
-                if policy == Utf8Decoding.Strict {
-                    throw ByteStringEncodingException(ByteStringInputKind.Utf8, cursor)
-                }
-                // ADR-0204 replaces one byte, not the BCL's malformed-sequence grouping.
-                result.Append('\uFFFD')
-                cursor++
-            } else {
-                let written = scalar.EncodeToUtf16(buffer.AsSpan())
-                result.Append(buffer, 0, written)
-                cursor += consumed
-            }
-        }
-        return result.ToString()
+        return Utf8Enumerable(this, policy)
     }
 
     /// Gets a value enumerator that yields bytes, not storage references.
@@ -260,6 +258,58 @@ struct ByteString : IEquatable[ByteString], IComparable[ByteString], IEnumerable
 
         /// Releases no resources.
         func Dispose() { }
+    }
+
+    /// Enumerates UTF-8 scalars without decoding until MoveNext.
+    struct Utf8Enumerable {
+        private let value ByteString
+        private let policy Utf8Decoding
+
+        internal init(value ByteString, policy Utf8Decoding) {
+            this.value = value
+            this.policy = policy
+        }
+
+        /// Gets an independent value enumerator.
+        func GetEnumerator() Enumerator -> Enumerator(value, policy)
+
+        /// Enumerates scalar values within the byte string's logical bounds.
+        struct Enumerator {
+            private let value ByteString
+            private let policy Utf8Decoding
+            private var cursor int32
+            private var current Utf8Item
+
+            internal init(value ByteString, policy Utf8Decoding) {
+                this.value = value
+                this.policy = policy
+                cursor = 0
+                current = default(Utf8Item)
+            }
+
+            /// Gets the last successfully decoded scalar and its input byte range.
+            prop Current Utf8Item -> current
+
+            /// Advances one scalar, or one malformed byte under replacement.
+            func MoveNext() bool {
+                if cursor >= value.Length {
+                    return false
+                }
+                let source = cast[ReadOnlySpan[uint8]](value.Owner.AsSpan(value.offset + cursor, value.Length - cursor))
+                let status = Rune.DecodeFromUtf8(source, out var scalar, out var consumed)
+                if status != OperationStatus.Done {
+                    if policy == Utf8Decoding.Strict {
+                        throw ByteStringEncodingException(ByteStringInputKind.Utf8, cursor)
+                    }
+                    // ADR-0204 replaces one byte, not the BCL's malformed-sequence grouping.
+                    consumed = 1
+                    scalar = Rune.ReplacementChar
+                }
+                current = Utf8Item(cursor, scalar.Value, consumed)
+                cursor += consumed
+                return true
+            }
+        }
     }
 
     private class LiteralStorage {

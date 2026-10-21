@@ -140,7 +140,7 @@ even when that spelling is shadowed. Missing/incompatible runtime support
 diagnoses GS0627.
 
 These are value expressions, not metadata/attribute/optional-parameter
-constants or constant patterns. Release/pin adoption and scalar APIs remain
+constants or constant patterns. Release/pin adoption and code-point collections remain
 separate from this development capability; see ADR-0204.
 
 #### Explicit UTF-8 text boundaries
@@ -167,7 +167,38 @@ empty inputs. Null CLR text throws `ArgumentNullException` (`text`).
 There is no normalization, implicit conversion or BOM insertion/stripping.
 Embedded NUL remains content. Encoded U+FFFD consumes three valid bytes.
 Default/empty byte strings decode to `""`; empty text encodes to an empty value.
-Code-point collections, scalar enumeration and their policies remain deferred.
+Code-point collections and their construction policy remain deferred.
+
+#### Lazy UTF-8 scalar iteration
+
+`value.DecodeUtf8Scalars(policy: Utf8Decoding)` returns value-type
+`ByteString.Utf8Enumerable`. Its `GetEnumerator()` returns concrete value-type
+`ByteString.Utf8Enumerable.Enumerator`, with `MoveNext(): bool` and get-only
+`Current: Utf8Item`. `Utf8Item` lives in `Gsharp.Values` and has get-only
+`ByteOffset: int32`, `Value: int32` and `ByteLength: int32` properties.
+Its constructor is internal. Each yielded `Value` is one valid Unicode scalar.
+`ByteOffset` is relative to this byte string, not the backing owner.
+`ByteLength` counts consumed input bytes: valid U+FFFD consumes three bytes;
+each malformed byte under `ReplaceInvalidByte` consumes exactly one.
+
+The policy is required and invalid values throw `ArgumentOutOfRangeException`
+(`policy`) immediately, even for empty input. Byte validation is lazy.
+`Strict` accepts only shortest-form scalar UTF-8 and throws
+`ByteStringEncodingException` (`InputKind.Utf8`) at the malformed sequence's
+starting byte. `MoveNext` may yield a valid prefix first. The fault cursor
+does not advance: subsequent calls throw at the same offset, never return
+false or continue past it. Use eager `DecodeUtf8` when partial consumption
+is unsuitable.
+
+Iteration preserves BOM as U+FEFF, NUL, non-BMP scalars and normalization form.
+It never consumes bytes beyond a substring's logical end, even if its owner
+contains completing continuation bytes. Default/empty enumerable and enumerator
+values enumerate empty. Re-enumeration starts fresh; copied value enumerators
+have independent cursors. `Current` describes the last successful item; no
+meaningful value is promised before the first success or after completion.
+The concrete pattern exposes no collection interfaces or mutable backing view.
+Direct C#/G# enumeration needs no boxing, buffer copying, decoded collection
+or per-scalar allocation. Eager decoding uses the same decoding decision.
 
 ### Boolean and nil literals
 

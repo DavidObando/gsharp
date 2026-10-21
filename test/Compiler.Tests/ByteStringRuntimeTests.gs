@@ -15,6 +15,138 @@ import System.Threading.Tasks
 import Xunit
 
 class ByteStringRuntimeTests {
+    @Theory
+    @InlineData(
+        "007FC280DFBFE0A080ED9FBFEE8080EFBFBFF0908080F48FBFBF",
+        "0:0:1,1:127:1,2:128:2,4:2047:2,6:2048:3,9:55295:3,12:57344:3,15:65535:3,18:65536:4,22:1114111:4"
+    )
+    @InlineData(
+        "41C3A9E282ACF09F9880EFBBBF00EFBFBD65CC81",
+        "0:65:1,1:233:2,3:8364:3,6:128512:4,10:65279:3,13:0:1,14:65533:3,17:101:1,18:769:2"
+    )
+    func Utf8ScalarsHaveExactValuesOffsetsAndWidths(hex string, expected string) {
+        let value = ByteString.FromLiteral("FF" + hex + "FF").Subslice(1, 1 + hex.Length / 2)
+        Assert.Equal(expected, ScalarItems(value.DecodeUtf8Scalars(Utf8Decoding.Strict)))
+        Assert.Equal(expected, ScalarItems(value.DecodeUtf8Scalars(Utf8Decoding.ReplaceInvalidByte)))
+    }
+
+    @Theory
+    @InlineData("80", "3:65533:1")
+    @InlineData("BF", "3:65533:1")
+    @InlineData("C0AF", "3:65533:1,4:65533:1")
+    @InlineData("C1BF", "3:65533:1,4:65533:1")
+    @InlineData("C2", "3:65533:1")
+    @InlineData("C241", "3:65533:1,4:65:1")
+    @InlineData("E080AF", "3:65533:1,4:65533:1,5:65533:1")
+    @InlineData("EDA080", "3:65533:1,4:65533:1,5:65533:1")
+    @InlineData("EDBFBF", "3:65533:1,4:65533:1,5:65533:1")
+    @InlineData("E282", "3:65533:1,4:65533:1")
+    @InlineData("E28241", "3:65533:1,4:65533:1,5:65:1")
+    @InlineData("F0808080", "3:65533:1,4:65533:1,5:65533:1,6:65533:1")
+    @InlineData("F4908080", "3:65533:1,4:65533:1,5:65533:1,6:65533:1")
+    @InlineData("F5808080", "3:65533:1,4:65533:1,5:65533:1,6:65533:1")
+    @InlineData("FF", "3:65533:1")
+    @InlineData("F09F98", "3:65533:1,4:65533:1,5:65533:1")
+    @InlineData("F0908041", "3:65533:1,4:65533:1,5:65533:1,6:65:1")
+    @InlineData("E282EFBFBDF09F9880C2A2", "3:65533:1,4:65533:1,5:65533:3,8:128512:4,12:162:2")
+    func Utf8ScalarsReplaceOneByteAndRepeatStrictFailure(hex string, expected string) {
+        let value = ByteString.FromLiteral("FF41C2A2" + hex + "FF").Subslice(1, 4 + hex.Length / 2)
+        Assert.Equal(
+            "0:65:1,1:162:2," + expected,
+            ScalarItems(value.DecodeUtf8Scalars(Utf8Decoding.ReplaceInvalidByte))
+        )
+        var iterator = value.DecodeUtf8Scalars(Utf8Decoding.Strict).GetEnumerator()
+        Assert.True(iterator.MoveNext())
+        Assert.Equal("0:65:1", ScalarItem(iterator.Current))
+        Assert.True(iterator.MoveNext())
+        Assert.Equal("1:162:2", ScalarItem(iterator.Current))
+        for var retry = 0; retry < 3; retry++ {
+            let error = Assert.Throws[ByteStringEncodingException](
+                func () {
+                    iterator.MoveNext()
+                }
+            )
+            Assert.Equal(ByteStringInputKind.Utf8, error.InputKind)
+            Assert.Equal(3, error.Offset)
+        }
+    }
+
+    @Theory
+    @InlineData(2, "0:65:1,1:65533:1")
+    @InlineData(3, "0:65:1,1:65533:1,2:65533:1")
+    func Utf8ScalarsNeverCompleteASequenceOutsideTheView(length int32, expected string) {
+        let value = ByteString.FromLiteral("FF41E282ACFF").Subslice(1, 1 + length)
+        Assert.Equal(expected, ScalarItems(value.DecodeUtf8Scalars(Utf8Decoding.ReplaceInvalidByte)))
+        var iterator = value.DecodeUtf8Scalars(Utf8Decoding.Strict).GetEnumerator()
+        Assert.True(iterator.MoveNext())
+        Assert.Equal("0:65:1", ScalarItem(iterator.Current))
+        for var retry = 0; retry < 2; retry++ {
+            let error = Assert.Throws[ByteStringEncodingException](
+                func () {
+                    iterator.MoveNext()
+                }
+            )
+            Assert.Equal(ByteStringInputKind.Utf8, error.InputKind)
+            Assert.Equal(1, error.Offset)
+        }
+    }
+
+    @Fact
+    func Utf8ScalarsAreRepeatableWithIndependentValueCursorsAndEmptyDefaults() {
+        Assert.False(default(ByteString.Utf8Enumerable).GetEnumerator().MoveNext())
+        Assert.False(default(ByteString.Utf8Enumerable.Enumerator).MoveNext())
+        for value in[]ByteString{default(ByteString), ByteString.Empty, ByteString.FromLiteral("FF").Subslice(1, 1)} {
+            Assert.Equal("", ScalarItems(value.DecodeUtf8Scalars(Utf8Decoding.Strict)))
+            Assert.Equal("", ScalarItems(value.DecodeUtf8Scalars(Utf8Decoding.ReplaceInvalidByte)))
+        }
+        let scalars = ByteString.FromLiteral("41C2A2").DecodeUtf8Scalars(Utf8Decoding.Strict)
+        var first = scalars.GetEnumerator()
+        Assert.True(first.MoveNext())
+        var copy = first
+        Assert.True(first.MoveNext())
+        Assert.Equal("1:162:2", ScalarItem(first.Current))
+        Assert.Equal("0:65:1", ScalarItem(copy.Current))
+        Assert.False(first.MoveNext())
+        Assert.False(first.MoveNext())
+        Assert.True(copy.MoveNext())
+        Assert.Equal("1:162:2", ScalarItem(copy.Current))
+        Assert.False(copy.MoveNext())
+        Assert.Equal("0:65:1,1:162:2", ScalarItems(scalars))
+        Assert.Equal("0:65:1,1:162:2", ScalarItems(scalars))
+    }
+
+    @Fact
+    func Utf8ScalarsRejectInvalidPoliciesAtTheFactoryEvenForEmptyInput() {
+        for policy in[]int32{-1, 2, int32.MaxValue} {
+            for value in[]ByteString{default(ByteString), ByteString.Empty, ByteString.FromLiteral("41FF")} {
+                let error = Assert.Throws[ArgumentOutOfRangeException](
+                    func () {
+                        value.DecodeUtf8Scalars(cast[Utf8Decoding](policy))
+                    }
+                )
+                Assert.Equal("policy", error.ParamName)
+            }
+        }
+    }
+
+    @Fact
+    func Utf8ScalarsConcreteEnumerationAllocatesNoStorageAfterWarmup() {
+        let value = ByteString.FromLiteral("FF" + String('4', 16_384) + "FF").Subslice(1, 8193)
+        for var warmup = 0; warmup < 100; warmup++ {
+            SumScalars(value, Utf8Decoding.Strict)
+            SumScalars(value, Utf8Decoding.ReplaceInvalidByte)
+        }
+        let before = GC.GetAllocatedBytesForCurrentThread()
+        var total = 0
+        for var repeat = 0; repeat < 32; repeat++ {
+            total += SumScalars(value, Utf8Decoding.Strict)
+            total += SumScalars(value, Utf8Decoding.ReplaceInvalidByte)
+        }
+        let allocated = GC.GetAllocatedBytesForCurrentThread() - before
+        Assert.Equal(8192 * 68 * 64, total)
+        Assert.Equal(0L, allocated)
+    }
+
     @Fact
     func Utf8DecodingAllocatesResultStorageRatherThanOneStringPerScalar() {
         let value = ByteString.FromLiteral(String('4', 16_384))
@@ -318,6 +450,25 @@ class ByteStringRuntimeTests {
     }
 
     shared {
+        private func ScalarItem(item Utf8Item) string ->
+        item.ByteOffset.ToString() + ":" + item.Value.ToString() + ":" + item.ByteLength.ToString()
+
+        private func ScalarItems(items ByteString.Utf8Enumerable) string {
+            let result = List[string]()
+            for item in items {
+                result.Add(ScalarItem(item))
+            }
+            return String.Join(",", result)
+        }
+
+        private func SumScalars(value ByteString, policy Utf8Decoding) int32 {
+            var result = 0
+            for item in value.DecodeUtf8Scalars(policy) {
+                result += item.Value
+            }
+            return result
+        }
+
         private func Owner(value ByteString) object? -> typeof(ByteString).GetField(
             "owner",
             BindingFlags.Instance | BindingFlags.NonPublic
