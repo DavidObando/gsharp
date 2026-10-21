@@ -363,7 +363,9 @@ class BlockingTool {
             UseShellExecute = false,
             ArgumentList = { typeof(BlockingTool).Assembly.Location, "child" }
         });
-        File.WriteAllText(@"__PID__", child.Id.ToString());
+        // Publish only after the PID file is complete (issue #5061).
+        File.WriteAllText(@"__PID__.new", child.Id.ToString());
+        File.Move(@"__PID__.new", @"__PID__");
         Thread.Sleep(60000);
     }
 }`.Replace("__PID__", pidFile.Replace("\"", "\"\"")), "BlockingTool", executable: true)
