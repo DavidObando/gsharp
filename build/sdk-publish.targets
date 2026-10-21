@@ -6,6 +6,16 @@
        Only the publish destination changes after Build completes. -->
   <Target Name="_GsharpPrepareSdkPublish">
     <PropertyGroup>
+      <!-- Match the default in Microsoft.NET.Sdk.BeforeCommon.targets.
+           Compare the effective directory after Directory.Build.targets imports. -->
+      <_GsharpSdkDefaultPublishDir>$(OutputPath)$(PublishDirName)\</_GsharpSdkDefaultPublishDir>
+      <_GsharpSdkDefaultPublishDir Condition="'$(AppendRuntimeIdentifierToOutputPath)' != 'true' and
+                                             '$(RuntimeIdentifier)' != '' and
+                                             '$(_UsingDefaultRuntimeIdentifier)' != 'true'">$(OutputPath)$(RuntimeIdentifier)\$(PublishDirName)\</_GsharpSdkDefaultPublishDir>
+      <_GsharpSdkDefaultPublishDir>$([MSBuild]::NormalizeDirectory('$(_GsharpSdkDefaultPublishDir)'))</_GsharpSdkDefaultPublishDir>
+      <_GsharpSdkEffectivePublishDir>$([MSBuild]::NormalizeDirectory('$(PublishDir)'))</_GsharpSdkEffectivePublishDir>
+      <_GsharpSdkPublishDestinationCompatible Condition="'$(UseArtifactsOutput)' != 'true' and
+                                                        $([System.String]::CompareOrdinal('$(_GsharpSdkDefaultPublishDir)', '$(_GsharpSdkEffectivePublishDir)')) == 0">true</_GsharpSdkPublishDestinationCompatible>
       <_GsharpSdkPublishCompatible Condition="'$(TargetFramework)' == '$(GsharpCompilerPackageTargetFramework)' and
                                              '$(SelfContained)' != 'true' and
                                              '$(PublishReadyToRun)' != 'true' and
@@ -13,12 +23,13 @@
                                              '$(PublishAot)' != 'true' and
                                              '$(PublishTrimmed)' != 'true' and
                                              '$(_GsharpSdkPublishDirOverridden)' != 'true' and
+                                             '$(_GsharpSdkPublishDestinationCompatible)' == 'true' and
                                              '$(NoBuild)' != 'true' and
                                              '$(BuildProjectReferences)' != 'false' and
                                              '$(ImportDirectoryBuildProps)' != 'false'">true</_GsharpSdkPublishCompatible>
     </PropertyGroup>
     <Message Importance="High" Condition="'$(_GsharpSdkPublishCompatible)' != 'true'"
-             Text="SDK staging uses an isolated Publish graph for $(MSBuildProjectName): TargetFramework=$(TargetFramework), package framework=$(GsharpCompilerPackageTargetFramework), SelfContained=$(SelfContained), PublishReadyToRun=$(PublishReadyToRun), PublishSingleFile=$(PublishSingleFile), PublishAot=$(PublishAot), PublishTrimmed=$(PublishTrimmed), PublishDir=$(PublishDir), NoBuild=$(NoBuild), BuildProjectReferences=$(BuildProjectReferences)." />
+             Text="SDK staging uses an isolated Publish graph for $(MSBuildProjectName): TargetFramework=$(TargetFramework), package framework=$(GsharpCompilerPackageTargetFramework), SelfContained=$(SelfContained), PublishReadyToRun=$(PublishReadyToRun), PublishSingleFile=$(PublishSingleFile), PublishAot=$(PublishAot), PublishTrimmed=$(PublishTrimmed), PublishDir=$(PublishDir), default PublishDir=$(_GsharpSdkDefaultPublishDir), UseArtifactsOutput=$(UseArtifactsOutput), NoBuild=$(NoBuild), BuildProjectReferences=$(BuildProjectReferences)." />
   </Target>
 
   <Target Name="_GsharpSetSdkPublishDir" DependsOnTargets="Build">
@@ -32,7 +43,9 @@
           Condition="'$(_GsharpSdkPublishCompatible)' == 'true'"
           DependsOnTargets="_GsharpSetSdkPublishDir;Publish">
     <ItemGroup>
-      <_GsharpSdkPublishPayload Include="$(PublishDir)**/*" />
+      <_GsharpSdkPublishPayload Include="$(PublishDir)**/*">
+        <GsharpSdkPublishRoot>$(PublishDir)</GsharpSdkPublishRoot>
+      </_GsharpSdkPublishPayload>
     </ItemGroup>
     <Error Condition="'@(_GsharpSdkPublishPayload)' == ''"
            Text="SDK publish output is empty under '$(PublishDir)'." />

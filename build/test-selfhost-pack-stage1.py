@@ -65,16 +65,20 @@ class SdkPublishGraphTests(unittest.TestCase):
   <ItemGroup>
     <ProjectReference Include="../Shared/Shared.csproj"/>
     <None Include="nested/payload.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"/>
+    <None Include="de/Tool.resources.dll;fr/Tool.resources.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"/>
   </ItemGroup>
   {import_xml}
 </Project>""")
             write(self.root / f"{name}/Program.cs", "System.Console.WriteLine(Value.Number);")
             write(self.root / f"{name}/nested/payload.txt", name)
+            for culture in ("de", "fr"):
+                write(self.root / f"{name}/{culture}/Tool.resources.dll", f"{name}:{culture}")
         source = ET.parse(REPO / "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj").getroot()
         driver = ET.Element("Project", {"Sdk": "Microsoft.NET.Sdk"})
         properties = ET.SubElement(driver, "PropertyGroup")
         for name, value in (("GeneratePackageOnBuild", "true"), ("IncludeBuildOutput", "false"),
-                            ("SuppressDependenciesWhenPacking", "true")):
+                            ("SuppressDependenciesWhenPacking", "true"),
+                            ("TreatWarningsAsErrors", "true"), ("NoPackageAnalysis", "true")):
             ET.SubElement(properties, name).text = value
         references = ET.SubElement(driver, "ItemGroup")
         target_names = ("PackGsharpCompiler", "PackGsharpFormatter", "PackGsgen")
@@ -90,6 +94,9 @@ class SdkPublishGraphTests(unittest.TestCase):
                 if task.get("Targets") == "Publish":
                     task.set("Projects", child)
             driver.append(target)
+        producer = source.find("./Target[@Name='_GsharpPackPublishedSdkPayloads']")
+        assert producer is not None
+        driver.append(producer)
         ET.SubElement(ET.SubElement(driver, "ItemGroup"), "ProjectReferenceTargets",
                       {"Include": "Stage", "Targets": "Build"})
         stage = ET.SubElement(driver, "Target", {
@@ -119,6 +126,21 @@ class SdkPublishGraphTests(unittest.TestCase):
         return self.dotnet("msbuild", "Driver/Driver.csproj", "-restore", "-graph",
                            "-t:Stage", f"-p:Configuration={configuration}", "-v:normal", *properties)
 
+    def assert_package_paths(self, configuration: str = "Release") -> None:
+        packages = list((self.root / f"out/{configuration}/Driver").glob("*.nupkg"))
+        self.assertEqual(1, len(packages))
+        with zipfile.ZipFile(packages[0]) as archive:
+            entries = {packer.entry_name(name): name for name in archive.namelist()}
+            for folder, name in (("compiler", "Compiler"), ("formatter", "Gsfmt.Cli"),
+                                 ("gsgen", "Gsgen.Cli")):
+                self.assertEqual(name.encode(), archive.read(entries[f"tools/{folder}/nested/payload.txt"]))
+                for culture in ("de", "fr"):
+                    self.assertEqual(f"{name}:{culture}".encode(),
+                                     archive.read(entries[f"tools/{folder}/{culture}/Tool.resources.dll"]))
+                for suffix in (".dll", ".pdb", ".runtimeconfig.json", ".deps.json"):
+                    self.assertIn(f"tools/{folder}/{name}{suffix}", entries)
+                self.assertNotIn(f"tools/{folder}/Tool.resources.dll", entries)
+
     def test_cold_changed_noop_and_publish_closure_use_the_reference_build(self) -> None:
         first = self.stage()
         # Shared, three apps, and Driver each compile once, not once per publish graph.
@@ -137,15 +159,7 @@ class SdkPublishGraphTests(unittest.TestCase):
             payload = next(path for path in files if path.name == "payload.txt")
             self.assertEqual("nested", payload.parent.name)
             self.assertEqual(name, payload.read_text())
-        packages = list((self.root / "out/Release/Driver").glob("*.nupkg"))
-        self.assertEqual(1, len(packages))
-        with zipfile.ZipFile(packages[0]) as archive:
-            entries = {str(Path(name)): name for name in archive.namelist()}
-            for folder, name in (("compiler", "Compiler"), ("formatter", "Gsfmt.Cli"),
-                                 ("gsgen", "Gsgen.Cli")):
-                self.assertEqual(name.encode(), archive.read(entries[f"tools/{folder}/payload.txt"]))
-                for suffix in (".dll", ".pdb", ".runtimeconfig.json", ".deps.json"):
-                    self.assertIn(f"tools/{folder}/{name}{suffix}", entries)
+        self.assert_package_paths()
         normal = self.root / "out/Release/Shared/Shared.dll"
         before = normal.read_bytes()
         write(self.root / "Shared/Value.cs", "public class Value { public static int Number => 43; }")
@@ -207,6 +221,20 @@ class SdkPublishGraphTests(unittest.TestCase):
         self.assertIn("SDK staging uses an isolated Publish graph for Compiler:", output)
         self.assertIn("gsc-staging", output)
         self.assertTrue((self.root / "Driver/manifest.txt").read_text().strip())
+        self.assert_package_paths()
+
+    def test_late_publish_directory_override_uses_isolated_graphs(self) -> None:
+        write(self.root / "Directory.Build.targets", """<Project>
+  <PropertyGroup>
+    <PublishDir>$(MSBuildProjectDirectory)/user-publication/</PublishDir>
+  </PropertyGroup>
+</Project>""")
+        output = self.stage()
+        for name in ("Compiler", "Gsfmt.Cli", "Gsgen.Cli"):
+            self.assertIn(f"SDK staging uses an isolated Publish graph for {name}:", output)
+            self.assertFalse((self.root / name / "user-publication").exists())
+            self.assertFalse((self.root / f"obj/{name}/Release/sdk-publish").exists())
+        self.assert_package_paths()
 
     def test_empty_publish_fails_instead_of_falling_back(self) -> None:
         compiler = self.root / "Compiler/Compiler.csproj"
@@ -224,6 +252,8 @@ class SdkPublishGraphTests(unittest.TestCase):
         write(tool, "compiler version one")
         write(self.root / "tools/generator.dll", "generator")
         write(self.root / "tools/task.dll", "task")
+        alternate = self.root / "tools/alternate.dll"
+        write(alternate, "another existing entrypoint")
         write(self.root / "Input.gs", "input")
         write(self.root / "Removed.gs", "removed input")
         write(self.root / "Inputs.proj", f"""<Project DefaultTargets="Build">
@@ -242,11 +272,22 @@ class SdkPublishGraphTests(unittest.TestCase):
   <Target Name="Build" DependsOnTargets="CoreCompile"/>
   <Target Name="CoreCompile" Inputs="$(MSBuildAllProjects);@(Compile)" Outputs="obj/inputs/result.dll">
     <Message Text="COMPILING_REPOSITORY_INPUTS" Importance="High"/>
-    <WriteLinesToFile File="obj/inputs/result.dll" Lines="built" Overwrite="true"/>
+    <WriteLinesToFile File="obj/inputs/result.dll" Lines="COMPILER:$(GsharpCompilerFullPath);GENERATOR:$(GsgenToolFullPath)" Overwrite="true"/>
   </Target>
 </Project>""")
         self.assertIn("COMPILING_REPOSITORY_INPUTS", self.dotnet("msbuild", "Inputs.proj"))
         self.assertNotIn("COMPILING_REPOSITORY_INPUTS", self.dotnet("msbuild", "Inputs.proj"))
+        unchanged = {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                     for path in (self.root / "tools").iterdir()}
+        for selector in ("GsharpCompilerFullPath", "GsgenToolFullPath"):
+            output = self.dotnet("msbuild", "Inputs.proj", f"-p:{selector}={alternate}")
+            self.assertIn("COMPILING_REPOSITORY_INPUTS", output, selector)
+            self.assertIn(str(alternate), (self.root / "obj/inputs/result.dll").read_text())
+            self.assertNotIn("COMPILING_REPOSITORY_INPUTS",
+                             self.dotnet("msbuild", "Inputs.proj", f"-p:{selector}={alternate}"))
+            self.assertIn("COMPILING_REPOSITORY_INPUTS", self.dotnet("msbuild", "Inputs.proj"))
+        self.assertEqual(unchanged, {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                                    for path in (self.root / "tools").iterdir()})
         timestamp = tool.stat()
         tool.write_text("compiler version two")
         os.utime(tool, ns=(timestamp.st_atime_ns, timestamp.st_mtime_ns))

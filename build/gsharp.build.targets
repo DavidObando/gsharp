@@ -23,7 +23,10 @@
     </PropertyGroup>
     <MakeDir Directories="$(IntermediateOutputPath)" />
     <WriteLinesToFile File="$(_GsharpRepositoryBuildToolsCache)"
-                      Lines="@(_GsharpRepositoryBuildToolHash->'%(FullPath)|%(FileHash)');
+                      Lines="COMPILER:$(GsharpCompilerFullPath);
+                             GENERATOR:$(GsgenToolFullPath);
+                             TASK:$(GsharpToolFullPath);
+                             @(_GsharpRepositoryBuildToolHash->'%(FullPath)|%(FileHash)');
                              @(Compile->'SOURCE:%(FullPath)');
                              @(ReferencePathWithRefAssemblies->'REFERENCE:%(FullPath)');
                              @(GsharpCodeAnalyzer->'ANALYZER:%(FullPath)')"
