@@ -129,14 +129,14 @@ shared class IteratorRewriter {
         body BoundBlockStatement,
         @NotNullWhen(true) out plan IteratorStateMachinePlan?
     ) bool {
-        let elementType TypeSymbol? = GetIteratorElementType(function.Type)
+        let elementType TypeSymbol? = GetIteratorElementType(function.Type, out var returnsEnumerable)
         if !IteratorDetection.ContainsYield(body) || AsyncIteratorDetection.IsAsyncIteratorFunction(function, body) ||
             elementType == nil {
             plan = nil
             return false
         }
         let spilledBody = SpillSequenceSpiller.RewriteIteratorBlocks(body)
-        plan = BuildPlan(function, spilledBody, elementType)
+        plan = BuildPlan(function, spilledBody, elementType, returnsEnumerable)
         return true
     }
 
@@ -150,11 +150,13 @@ shared class IteratorRewriter {
         }
     }
 
-    private func GetIteratorElementType(type TypeSymbol) TypeSymbol? {
+    private func GetIteratorElementType(type TypeSymbol, out returnsEnumerable bool) TypeSymbol? {
+        returnsEnumerable = false
         var type = type
         // ADR-0186 §9: see PlatformTypeSymbol.StripTopLevel.
         type = PlatformTypeSymbol.StripTopLevel(type)
         if type is SequenceTypeSymbol seq {
+            returnsEnumerable = true
             return seq.ElementType
         }
         // Issue #810: prefer the symbolic type argument when the function's
@@ -178,6 +180,7 @@ shared class IteratorRewriter {
                 .OpenDefinition
                 .FullName == "System.Collections.Generic.IEnumerator`1"
         ) {
+            returnsEnumerable = imported.OpenDefinition.FullName == "System.Collections.Generic.IEnumerable`1"
             return imported.TypeArguments[0]
         }
         let clr Type? = type?.ClrType
@@ -188,6 +191,7 @@ shared class IteratorRewriter {
             let def = clr.GetGenericTypeDefinition()
             if def.FullName == "System.Collections.Generic.IEnumerable`1" ||
                 def.FullName == "System.Collections.Generic.IEnumerator`1" {
+                returnsEnumerable = def.FullName == "System.Collections.Generic.IEnumerable`1"
                 return TypeSymbol.FromClrTypeWithoutNullability(
                     clr.GetGenericArguments()[0],
                     NullabilityFreeReason.TypeStructure
@@ -195,6 +199,7 @@ shared class IteratorRewriter {
             }
         }
         if clr.FullName == "System.Collections.IEnumerable" || clr.FullName == "System.Collections.IEnumerator" {
+            returnsEnumerable = clr.FullName == "System.Collections.IEnumerable"
             return TypeSymbol.FromClrTypeWithoutNullability(typeof(object), NullabilityFreeReason.TypeLiteral)
         }
         return nil
@@ -203,7 +208,8 @@ shared class IteratorRewriter {
     private func BuildPlan(
         function FunctionSymbol,
         body BoundStatement,
-        elementType TypeSymbol
+        elementType TypeSymbol,
+        returnsEnumerable bool
     ) IteratorStateMachinePlan {
         // Collect yields and assign states.
         let yieldCollector = IteratorRewriter.YieldStateCollector()
@@ -211,7 +217,7 @@ shared class IteratorRewriter {
         let yieldStates = yieldCollector.States
         // Collect hoisted locals (locals that are live across yield points).
         let hoistedLocals = CollectHoistedLocals(body)
-        return IteratorStateMachinePlan(function, body, elementType, yieldStates, hoistedLocals)
+        return IteratorStateMachinePlan(function, body, elementType, yieldStates, hoistedLocals, returnsEnumerable)
     }
 
     private func CollectHoistedLocals(body BoundStatement) ImmutableArray[VariableSymbol] {
@@ -250,13 +256,15 @@ class IteratorStateMachinePlan {
         body BoundStatement,
         elementType TypeSymbol,
         yieldStates ImmutableDictionary[BoundYieldStatement, int32],
-        hoistedLocals ImmutableArray[VariableSymbol]
+        hoistedLocals ImmutableArray[VariableSymbol],
+        returnsEnumerable bool
     ) {
         Function = function
         Body = body
         ElementType = elementType
         YieldStates = yieldStates
         HoistedLocals = hoistedLocals
+        ReturnsEnumerable = returnsEnumerable
     }
 
     /// Gets the original iterator function.
@@ -271,6 +279,11 @@ class IteratorStateMachinePlan {
 
     /// Gets the element type produced by this iterator.
     prop ElementType TypeSymbol {
+        get;
+    }
+
+    /// Gets whether the function returns an enumerable rather than a direct enumerator.
+    prop ReturnsEnumerable bool {
         get;
     }
 

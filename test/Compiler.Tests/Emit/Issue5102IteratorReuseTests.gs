@@ -154,6 +154,75 @@ open class Issue5102IteratorReuseTests(output ITestOutputHelper) {
         )
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func DeclaredIteratorProtocols_PreserveDirectAndEnumerableKickoffs(generic bool) {
+        WithProbe(
+            (probe Type) -> {
+                let events = List[string]()
+                let argument = []int32{3}
+                let directName = if generic {
+                    "DirectTyped"
+                } else {
+                    "DirectObject"
+                }
+                let direct = cast[IEnumerator](probe.GetMethod(directName)!!.Invoke(nil, []object{events, argument})!!)
+                Assert.Empty(events)
+                argument[0] = 4
+                Assert.True(direct.MoveNext())
+                Assert.Equal(34, cast[int32](direct.Current))
+                Assert.Equal[string]([]string{"direct"}, events)
+                Assert.True(direct.MoveNext())
+                Assert.Equal(35, cast[int32](direct.Current))
+                Assert.False(direct.MoveNext())
+                cast[IDisposable](direct).Dispose()
+
+                events.Clear()
+                let neverStarted = cast[IEnumerator](
+                    probe.GetMethod(directName)!!.Invoke(nil, []object{events, argument})!!
+                )
+                cast[IDisposable](neverStarted).Dispose()
+                Assert.False(neverStarted.MoveNext())
+                Assert.Empty(events)
+
+                let nestedName = if generic {
+                    "NestedDirectTyped"
+                } else {
+                    "NestedDirectObject"
+                }
+                let nested = cast[IEnumerator](probe.GetMethod(nestedName)!!.Invoke(nil, []object{events})!!)
+                Assert.Empty(events)
+                Assert.True(nested.MoveNext())
+                Assert.Equal(40, cast[int32](nested.Current))
+                Assert.Equal[string]([]string{"nested"}, events)
+                Assert.True(nested.MoveNext())
+                Assert.Equal(50, cast[int32](nested.Current))
+                Assert.False(nested.MoveNext())
+                cast[IDisposable](nested).Dispose()
+
+                events.Clear()
+                let enumerableName = if generic {
+                    "EnumerableTyped"
+                } else {
+                    "EnumerableObject"
+                }
+                let enumerable = cast[IEnumerable](
+                    probe.GetMethod(enumerableName)!!.Invoke(nil, []object{events, 12})!!
+                )
+                Assert.Empty(events)
+                let first = enumerable.GetEnumerator()
+                Assert.Same(enumerable, first)
+                Assert.Empty(events)
+                Assert.True(first.MoveNext())
+                Assert.Equal(12, cast[int32](first.Current))
+                Assert.False(first.MoveNext())
+                cast[IDisposable](first).Dispose()
+                Assert.Equal[string]([]string{"enumerable"}, events)
+            }
+        )
+    }
+
     @Fact
     func FirstEnumeration_AllocatesOneFrameInsteadOfTwo() {
         WithProbe(
@@ -239,6 +308,7 @@ open class Issue5102IteratorReuseTests(output ITestOutputHelper) {
 
         private const Source string = `package Issue5102
 import System
+import System.Collections
 import System.Collections.Generic
 
 struct Counter {
@@ -247,6 +317,20 @@ struct Counter {
         yield Value
         Value = Value + 1
         yield Value
+    }
+
+    func DirectTyped(events List[string], argument []int32) IEnumerator[int32] {
+        events.Add("direct")
+        yield Value + argument[0]
+        Value = Value + 1
+        yield Value + argument[0]
+    }
+
+    func DirectObject(events List[string], argument []int32) IEnumerator {
+        events.Add("direct")
+        yield Value + argument[0]
+        Value = Value + 1
+        yield Value + argument[0]
     }
 }
 
@@ -267,6 +351,18 @@ class Outer[T] {
             yield value
             value = next
             yield value
+        }
+
+        func DirectTyped[V IComparable[V]](value V, next V, events List[string]) IEnumerator[V] {
+            events.Add("nested")
+            yield value
+            yield next
+        }
+
+        func DirectObject[V IComparable[V]](value V, next V, events List[string]) IEnumerator {
+            events.Add("nested")
+            yield value
+            yield next
         }
     }
 }
@@ -320,6 +416,40 @@ shared class Probe {
         using let iterator = inner.Values[int32](60, 61).GetEnumerator()
         if iterator.MoveNext() { return iterator.Current }
         return -1
+    }
+
+    func DirectTyped(events List[string], argument []int32) IEnumerator[int32] {
+        var counter = Counter{Value: 30}
+        let result = counter.DirectTyped(events, argument)
+        counter.Value = 90
+        return result
+    }
+
+    func DirectObject(events List[string], argument []int32) IEnumerator {
+        var counter = Counter{Value: 30}
+        let result = counter.DirectObject(events, argument)
+        counter.Value = 90
+        return result
+    }
+
+    func NestedDirectTyped(events List[string]) IEnumerator[int32] {
+        var inner = Outer[string].Inner[bool]{Value: "owner"}
+        return inner.DirectTyped[int32](40, 50, events)
+    }
+
+    func NestedDirectObject(events List[string]) IEnumerator {
+        var inner = Outer[string].Inner[bool]{Value: "owner"}
+        return inner.DirectObject[int32](40, 50, events)
+    }
+
+    func EnumerableTyped(events List[string], value int32) IEnumerable[int32] {
+        events.Add("enumerable")
+        yield value
+    }
+
+    func EnumerableObject(events List[string], value int32) IEnumerable {
+        events.Add("enumerable")
+        yield value
     }
 }`
     }

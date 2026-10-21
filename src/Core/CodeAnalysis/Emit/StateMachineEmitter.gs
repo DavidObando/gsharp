@@ -888,7 +888,11 @@ internal class StateMachineEmitter {
                                 kickoffSmType,
                                 stateField,
                                 initialThreadField,
-                                -2,
+                                if plan.ReturnsEnumerable {
+                                    -2
+                                } else {
+                                    0
+                                },
                                 parameterFields,
                                 replayFields,
                                 plan.Function.Parameters,
