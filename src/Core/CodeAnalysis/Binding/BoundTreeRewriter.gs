@@ -1,6 +1,9 @@
 // <copyright file="BoundTreeRewriter.cs" company="GSharp">
+
 // Copyright (C) GSharp Authors. All rights reserved.
+
 // </copyright>
+
 
 package GSharp.Core.CodeAnalysis.Binding
 
@@ -584,11 +587,17 @@ abstract class BoundTreeRewriter {
             return node
         }
         // ADR-0186 §4: `IsChecked` and `PlatformCheckMessage` are both
+
         // carried through. Dropping the message would not break anything the
+
         // compiler can observe — the check still emits — which is exactly why
+
         // it is easy to lose: the only symptom is an unattributed
+
         // `NullReferenceException` inside an async body, an iterator or a
+
         // lambda, i.e. precisely the frames where attribution matters most.
+
         return BoundUnaryExpression(node.Syntax, node.Op, operand, node.IsChecked, node.PlatformCheckMessage)
     }
 
@@ -602,6 +611,12 @@ abstract class BoundTreeRewriter {
             return node
         }
         return BoundBinaryExpression(node.Syntax, left, node.Op, right, node.IsChecked)
+    }
+
+    private func CompleteSelectedCallCopy(original BoundExpression, copy BoundExpression) BoundExpression {
+        original.CopyStaticQualifierTo(copy)
+        original.CopyLogicalCompletionTo(copy)
+        return copy
     }
 
     /// Rewrites a call expression.
@@ -628,19 +643,25 @@ abstract class BoundTreeRewriter {
             return node
         }
         // Issue #1644: preserve the set-after-construction generic-owner properties
+
         // (#1209 / #1433) so the emitter still parents the call at the construction's
+
         // TypeSpec instead of a bare open-generic MethodDef.
-        return BoundCallExpression(
-            node.Syntax,
-            node.Function,
-            builder.MoveToImmutable(),
-            node.ReturnType,
-            node.IsConditionalElided
-        ){
-            StaticGenericOwnerType = node.StaticGenericOwnerType,
-            StaticGenericInterfaceOwnerType = node.StaticGenericInterfaceOwnerType,
-            MethodTypeArguments = node.MethodTypeArguments
-        }
+
+        return CompleteSelectedCallCopy(
+            node,
+            BoundCallExpression(
+                node.Syntax,
+                node.Function,
+                builder.MoveToImmutable(),
+                node.ReturnType,
+                node.IsConditionalElided
+            ){
+                StaticGenericOwnerType = node.StaticGenericOwnerType,
+                StaticGenericInterfaceOwnerType = node.StaticGenericInterfaceOwnerType,
+                MethodTypeArguments = node.MethodTypeArguments
+            }
+        )
     }
 
     /// ADR-0122 §9 / issue #1035: rewrites a function-pointer `calli`
@@ -698,8 +719,10 @@ abstract class BoundTreeRewriter {
             return node
         }
         // Issue #3525: the imported-CLR-interface shape carries a MethodInfo
+
         // (ClrMethod) instead of a FunctionSymbol (InterfaceMethod).
-        return if node.InterfaceMethod != nil {
+
+        let copy = if node.InterfaceMethod != nil {
             BoundConstrainedStaticCallExpression(
                 node.Syntax,
                 node.TypeParameter,
@@ -719,6 +742,7 @@ abstract class BoundTreeRewriter {
                 node.TypeArgumentSymbols
             )
         }
+        return CompleteSelectedCallCopy(node, copy)
     }
 
     /// Rewrites a conversion expression.
@@ -729,7 +753,9 @@ abstract class BoundTreeRewriter {
         if expression == node.Expression {
             return node
         }
-        return BoundConversionExpression(node.Syntax, node.Type, expression, node.IsChecked)
+        let copy = BoundConversionExpression(node.Syntax, node.Type, expression, node.IsChecked)
+        node.CopyImplicitConversionTo(copy)
+        return copy
     }
 
     /// Rewrites a bound await expression (Phase 5.1).
@@ -740,7 +766,9 @@ abstract class BoundTreeRewriter {
         if expression == node.Expression {
             return node
         }
-        return BoundAwaitExpression(node.Syntax, expression, node.Type, node.AwaiterTypeSymbol)
+        let copy = BoundAwaitExpression(node.Syntax, expression, node.Type, node.AwaiterTypeSymbol)
+        node.CopyImplicitCompletionTo(copy)
+        return copy
     }
 
     /// Rewrites a bound switch expression.
@@ -1008,8 +1036,11 @@ abstract class BoundTreeRewriter {
             return node
         }
         // The go statement's syntax is its stable identity: the emitter finds
+
         // the closure synthesized for it by that syntax when a state-machine
+
         // rewrite has rebuilt the node (ADR-0174 D4 makes that the common case).
+
         return BoundGoStatement(node.Syntax, expression, sink, resultCell, node.ResultType, node.LexicalEnclosingType)
     }
 
@@ -1199,13 +1230,16 @@ abstract class BoundTreeRewriter {
         if builder == nil {
             return node
         }
-        return BoundImportedCallExpression(
-            node.Syntax,
-            node.Function,
-            builder.MoveToImmutable(),
-            node.ArgumentRefKinds,
-            node.TypeArgumentSymbols,
-            node.StaticContainerType
+        return CompleteSelectedCallCopy(
+            node,
+            BoundImportedCallExpression(
+                node.Syntax,
+                node.Function,
+                builder.MoveToImmutable(),
+                node.ArgumentRefKinds,
+                node.TypeArgumentSymbols,
+                node.StaticContainerType
+            )
         )
     }
 
@@ -1281,7 +1315,9 @@ abstract class BoundTreeRewriter {
             }
         }
         // Issue #1016: runtime-length form has no element initialisers; rewrite
+
         // the length expression instead.
+
         if node.LengthExpression != nil {
             let newLength = RewriteExpression(node.LengthExpression)
             return if newLength == node.LengthExpression {
@@ -1462,7 +1498,9 @@ abstract class BoundTreeRewriter {
         for var i = 0; i < node.Initializers.Length; i++ {
             let init = node.Initializers[i]
             // Discard constructor-owned copies before a rewrite can extract
+
             // their evaluation into side effects outside the constructor.
+
             let constructorOwnsValue = init.IsDeclarationInitializer &&
                 node
                 .StructType
@@ -1649,7 +1687,7 @@ abstract class BoundTreeRewriter {
             node
         } else {
             BoundClrPropertyAccessExpression(
-                nil,
+                node.Syntax,
                 receiver,
                 node.Member,
                 node.Type,
@@ -1748,8 +1786,11 @@ abstract class BoundTreeRewriter {
             return node
         }
         // Issue #2388: preserve whichever of Method (imported CLR type) /
+
         // Function (nullable-lifted same-compilation struct operator) the
+
         // original node carried — exactly one is non-null.
+
         return if node.Function != nil {
             BoundClrBinaryOperatorExpression(
                 node.Syntax,
@@ -1913,12 +1954,17 @@ abstract class BoundTreeRewriter {
             return node
         }
         // Preserve every call-site property while replacing only receiver and
+
         // arguments. The return-type override carries async Task lifting (#502);
+
         // constrained metadata controls generic-interface dispatch (#1052); and
+
         // method type arguments are the authoritative bind-time substitution
+
         // when emit-time structural re-inference is impossible (#1931).
+
         return BoundUserInstanceCallExpression(
-            nil,
+            node.Syntax,
             receiver,
             node.Method,
             builder?.ToImmutable() ?? node.Arguments,
@@ -1951,7 +1997,7 @@ abstract class BoundTreeRewriter {
             return node
         }
         return BoundBaseInterfaceCallExpression(
-            nil,
+            node.Syntax,
             receiver,
             node.Interface,
             node.Method,
@@ -1982,7 +2028,7 @@ abstract class BoundTreeRewriter {
             return node
         }
         return BoundBaseClassCallExpression(
-            nil,
+            node.Syntax,
             receiver,
             node.BaseClass,
             node.Method,
@@ -1998,9 +2044,13 @@ abstract class BoundTreeRewriter {
     /// @returns The rewritten node.
     protected open func RewriteFieldAccessExpression(node BoundFieldAccessExpression) BoundExpression {
         // ADR-0053: static field access has no receiver (null). This also covers
+
         // the interface static-field read form (ADR-0089 / #1030, InterfaceType
+
         // != null), which likewise has a null Receiver — nothing to rewrite, so
+
         // returning the original node here can never drop InterfaceType (issue #1644).
+
         if node.Receiver == nil {
             return node
         }
@@ -2009,7 +2059,7 @@ abstract class BoundTreeRewriter {
             node
         } else {
             BoundFieldAccessExpression(
-                nil,
+                node.Syntax,
                 receiver,
                 Invariant.Required(
                     node.StructType,
@@ -2053,11 +2103,17 @@ abstract class BoundTreeRewriter {
             return node
         }
         // Issue #1644 / ADR-0089 #1030: an interface static field write is built
+
         // with (syntax, field, interfaceType, value) — Receiver/StructType are
+
         // both null and InterfaceType carries the owning (possibly constructed)
+
         // interface. Reconstruct via that constructor instead of the
+
         // variable-receiver one, or the emitter/interpreter lose the interface
+
         // static routing and mis-codegen/crash.
+
         return if node.InterfaceType != nil {
             BoundFieldAssignmentExpression(nil, node.Field, node.InterfaceType, value, node.ResultType)
         } else {
@@ -2088,7 +2144,7 @@ abstract class BoundTreeRewriter {
             node
         } else {
             BoundPropertyAccessExpression(
-                nil,
+                node.Syntax,
                 receiver,
                 node.StructType,
                 node.Property,
@@ -2110,10 +2166,15 @@ abstract class BoundTreeRewriter {
         }
         let value = RewriteExpression(node.Value)
         // receiver is null for a STATIC property assignment -- the line above
+
         // produces null for exactly that shape, and the constructor's receiver
+
         // parameter is nullable to accept it. The early return only covers the
+
         // case where the value is also unchanged, so asserting here (as this
+
         // line briefly did) crashed any rewrite of a static property's RHS.
+
         return if receiver == node.Receiver && value == node.Value {
             node
         } else {
@@ -2317,6 +2378,7 @@ abstract class BoundTreeRewriter {
             )
         }
         // Issue #368: rewrite the forwarded handler arguments as well.
+
         var handler InterpolatedStringHandlerInfo? = node.Handler
         if handler != nil && !handler.ForwardedArguments.IsDefaultOrEmpty {
             var forwarded ImmutableArray[BoundExpression].Builder? = nil

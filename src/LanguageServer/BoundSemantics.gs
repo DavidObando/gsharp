@@ -26,8 +26,9 @@ import System.Reflection
 ///
 /// A member-access chain such as `a.B.C()` parses right-nested and the
 /// binder anchors only the outermost accessor, to the bound node of the final
-/// member. The other segments are reached through that node's receiver chain:
-/// segment `k` of `n` segments is `n - 1 - k` receivers down. A receiver read
+/// member. The other segments are reached through that node's receiver chain.
+/// Each index adds a target step, not a member step. Index arguments are
+/// independent expressions and never form part of that chain. A receiver read
 /// carries the variable's flow type, so after `guard let s = store` the
 /// receiver `s` is the declared `IStore`, never the type of a value assigned
 /// on one branch.
@@ -66,6 +67,7 @@ shared class BoundSemantics {
         let member MemberInfo? = switch Unwrap(FindReferencedNode(model, token)) {
             case instanceCall is BoundImportedInstanceCallExpression: instanceCall.Method
             case staticCall is BoundImportedCallExpression: staticCall.Function?.Method
+            case constrained is BoundConstrainedStaticCallExpression: constrained.ClrMethod
             case property is BoundClrPropertyAccessExpression: property.Member
             default: default(MemberInfo?)
         }
@@ -163,31 +165,55 @@ shared class BoundSemantics {
         }
     }
 
-    /// Finds the bound node for [`expression`](paramref). An expression that
-    /// is a segment of a member-access chain is reached from the chain's
-    /// anchored outermost accessor through the receiver chain.
+    /// Keeps the original query as provenance while normalizing receiver steps.
+    /// Prefers reachable outer flow context and retains inner anchors when an
+    /// outer write target or index cannot supply the queried expression.
     private func FindBoundExpression(
         model GSharp.Core.CodeAnalysis.SemanticModel,
         expression ExpressionSyntax
     ) BoundExpression? {
         var root ExpressionSyntax = expression
-        while root.Parent is AccessorExpressionSyntax accessor &&
-            (object.ReferenceEquals(accessor.LeftPart, root) || object.ReferenceEquals(accessor.RightPart, root)) {
-            root = accessor
+        let anchors = Stack[(Syntax ExpressionSyntax, Node BoundExpression)]()
+        while true {
+            if GetBoundAnchor(model, root) is {} anchored {
+                anchors.Push((root, anchored))
+            }
+            let parent = ReceiverParent(root)
+            if parent == nil {
+                break
+            }
+            root = parent
         }
+        while anchors.Count > 0 {
+            let (syntax, node) = anchors.Pop()
+            if FindFromAnchor(syntax, node, expression) is {} found {
+                return PeelConversions(found, expression)
+            }
+        }
+        return nil
+    }
+
+    private func ReceiverParent(expression ExpressionSyntax) ExpressionSyntax? -> switch expression.Parent {
+        case accessor is AccessorExpressionSyntax when object.ReferenceEquals(accessor.LeftPart, expression) ||
+            object.ReferenceEquals(accessor.RightPart, expression): accessor
+        case index is IndexExpressionSyntax when object.ReferenceEquals(index.Target, expression): index
+        default: default(ExpressionSyntax?)
+    }
+
+    private func FindFromAnchor(
+        root ExpressionSyntax,
+        anchored BoundExpression,
+        expression ExpressionSyntax
+    ) BoundExpression? {
         if object.ReferenceEquals(root, expression) {
-            return PeelConversions(model.GetBoundNode(expression) as BoundExpression, expression)
+            return anchored
         }
         let segments = List[ExpressionSyntax]()
-        var current ExpressionSyntax = root
-        while current is AccessorExpressionSyntax link {
-            segments.Add(link.LeftPart)
-            current = link.RightPart
-        }
-        segments.Add(current)
+        AddReceiverSegments(root, segments)
+        let terminal = TerminalSegment(expression)
         var index = -1
         for var i = 0; i < segments.Count; i++ {
-            if object.ReferenceEquals(segments[i], expression) {
+            if object.ReferenceEquals(segments[i], terminal) {
                 index = i
                 break
             }
@@ -195,39 +221,478 @@ shared class BoundSemantics {
         if index < 0 {
             return nil
         }
-        var node BoundExpression? = PeelConversions(
-            model.GetBoundNode(root) as BoundExpression,
+        return ReadReceiverSegments(segments, anchored, index, expression)
+    }
+
+    private func ReadReceiverSegments(
+        segments List[ExpressionSyntax],
+        anchored BoundExpression,
+        index int32,
+        expression ExpressionSyntax,
+        captureEnvironment Dictionary[VariableSymbol, BoundExpression]? = nil
+    ) BoundExpression? {
+        let lastSyntax = if index == segments.Count - 1 {
+            expression
+        } else {
             segments[segments.Count - 1]
-        )
+        }
+        var node BoundExpression? = PeelConversions(anchored, lastSyntax)
         // A `?.` hop binds its access over a synthetic capture of the receiver;
         // the walk maps each capture back to the receiver it stands for.
-        let captures = Dictionary[VariableSymbol, BoundExpression]()
+        let captures = captureEnvironment ?? Dictionary[VariableSymbol, BoundExpression]()
         for var depth = segments.Count - 1; depth > index && node != nil; depth-- {
             var member = PeelConversions(node, segments[depth])
             while member is BoundNullConditionalAccessExpression hop {
                 captures[hop.Capture] = hop.Receiver
                 member = PeelConversions(hop.WhenNotNull, segments[depth])
             }
-            member = Unwrap(member)
+            member = Unwrap(member, captures)
+            let receiverSyntax = if depth - 1 == index {
+                expression
+            } else {
+                segments[depth - 1]
+            }
             node = if member == nil {
                 default(BoundExpression?)
+            } else if segments[depth] is IndexExpressionSyntax {
+                PeelConversions(IndexTargetOf(member), receiverSyntax)
             } else {
-                PeelConversions(ReceiverOf(member), segments[depth - 1])
+                PeelConversions(ReceiverOf(member), receiverSyntax)
             }
             if node is BoundVariableExpression read && captures.TryGetValue(read.Variable, out var captured) {
-                node = PeelConversions(captured, segments[depth - 1])
+                node = PeelConversions(captured, receiverSyntax)
             }
         }
         return node
     }
 
-    /// Gets the receiver of a bound member access or call, or null when it has
-    /// none (a static member, or a node that is not a member access).
+    private func GetBoundAnchor(
+        model GSharp.Core.CodeAnalysis.SemanticModel,
+        expression ExpressionSyntax
+    ) BoundExpression? {
+        if model.GetBoundNode(expression) is BoundExpression anchored &&
+            OwnedIndexAnchor(model, expression, anchored) is {} owned {
+            return owned
+        }
+        // Generated index plans can retain the written argument as their anchor.
+        // An ordinary argument requires capture provenance, unlike a range that
+        // can directly anchor a CLR index read.
+        if TerminalSegment(expression) is IndexExpressionSyntax index && index.Indices.Count == 1 {
+            let argumentAnchor = model.GetBoundNode(index.Index) as BoundExpression
+            if argumentAnchor != nil &&
+                Unwrap(argumentAnchor) is {} read &&
+                IndexTargetOf(read, capturedOnly: index.Index is not RangeExpressionSyntax) != nil &&
+                OwnedIndexAnchor(model, expression, argumentAnchor) is {} recovered {
+                return recovered
+            }
+        }
+        return nil
+    }
+
+    private func OwnedIndexAnchor(
+        model GSharp.Core.CodeAnalysis.SemanticModel,
+        expression ExpressionSyntax,
+        anchored BoundExpression
+    ) BoundExpression? {
+        let captures = Dictionary[VariableSymbol, BoundExpression]()
+        var current = anchored
+        while Unwrap(current, captures) is {} read && IndexTargetOf(read, capturedOnly: true) is {} source {
+            if CapturedSourceOwnsIndex(model, expression, source, captures) {
+                return current
+            }
+            let argument = CapturedIndexArgument(current)
+            if argument == nil || object.ReferenceEquals(argument, current) ||
+                argument.Syntax is not ExpressionSyntax syntax ||
+                !object.ReferenceEquals(TerminalSegment(syntax), TerminalSegment(expression)) {
+                return nil
+            }
+            current = argument
+        }
+        return current
+    }
+
+    private func CapturedSourceOwnsIndex(
+        model GSharp.Core.CodeAnalysis.SemanticModel,
+        expression ExpressionSyntax,
+        source BoundExpression,
+        captures Dictionary[VariableSymbol, BoundExpression]? = nil
+    ) bool {
+        let index = TerminalSegment(expression)
+        if index is not IndexExpressionSyntax {
+            return false
+        }
+        var context = expression
+        while ReceiverParent(context) is {} parent {
+            context = parent
+        }
+        let segments = List[ExpressionSyntax]()
+        AddReceiverSegments(context, segments)
+        let end = segments.FindIndex((segment ExpressionSyntax) -> object.ReferenceEquals(segment, index))
+        if end <= 0 {
+            return false
+        }
+        segments.RemoveRange(end, segments.Count - end)
+        // Both the plan and source can inherit the argument's anchor. Prove
+        // ownership at an independently anchored runtime or canonical static boundary.
+        for var depth = 0; depth < segments.Count; depth++ {
+            let syntax = AssignmentTargetSyntaxFacts.UnwrapParentheses(segments[depth])
+            let member = Unwrap(ReadReceiverSegments(segments, source, depth, syntax, captures), captures)
+            if member != nil && object.ReferenceEquals(member.Syntax, syntax) && object.ReferenceEquals(
+                member,
+                Unwrap(model.GetBoundNode(syntax) as BoundExpression)
+            ) {
+                return true
+            }
+            if member != nil &&
+                depth > 0 &&
+                context is AccessorExpressionSyntax accessor &&
+                StaticMemberOwnsPrefix(model, accessor, segments[depth], member) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func StaticMemberOwnsPrefix(
+        model GSharp.Core.CodeAnalysis.SemanticModel,
+        root AccessorExpressionSyntax,
+        member ExpressionSyntax,
+        read BoundExpression
+    ) bool {
+        let name string? = switch member {
+            case syntax is NameExpressionSyntax: syntax.IdentifierToken.Text
+            case syntax is CallExpressionSyntax: syntax.Identifier.Text
+            default: default(string?)
+        }
+        if name == nil || !model.TryGetStaticTypeQualifier(
+            root,
+            member,
+            out var sourceType,
+            out var qualifier,
+            out var selected
+        ) ||
+            qualifier == nil ||
+            !object.ReferenceEquals(selected, read) {
+            return false
+        }
+        if sourceType is StructSymbol owner {
+            if read is BoundPropertyAccessExpression{Receiver: nil, Property: {IsStatic: true}} property &&
+                TypeMemberModel
+                .TryGetStaticPropertyIncludingInherited(owner, name, out var expectedProperty, out var propertyOwner) {
+                return object.ReferenceEquals(property.Property, expectedProperty) && object.ReferenceEquals(
+                    property.StructType,
+                    propertyOwner
+                )
+            }
+        }
+        if read is BoundFieldAccessExpression{Receiver: nil, Field: {IsStatic: true}} field {
+            return SourceStaticFieldOwnsPrefix(sourceType, name, field)
+        }
+        if read is BoundLiteralExpression folded && folded.StaticConstantFieldRead is {} foldedField {
+            return foldedField.Field.IsConst && object.Equals(folded.Value, foldedField.Field.ConstantValue) &&
+                object.ReferenceEquals(foldedField.StaticQualifierType, sourceType) && object.ReferenceEquals(
+                foldedField.StaticQualifierSyntax,
+                qualifier
+            ) &&
+                object.ReferenceEquals(foldedField.StaticMemberSyntax, member) &&
+                SourceStaticFieldOwnsPrefix(sourceType, name, foldedField)
+        }
+        if read is BoundLiteralExpression literal &&
+            literal.StaticEnumMember is {} enumMember &&
+            sourceType is EnumSymbol enumOwner {
+            return object.ReferenceEquals(enumMember.EnumType, enumOwner) && object.ReferenceEquals(
+                literal.Type,
+                enumOwner
+            ) &&
+                enumOwner.TryGetMember(name, out var selectedMember) && object.ReferenceEquals(
+                selectedMember,
+                enumMember
+            )
+        }
+        if read is BoundConstrainedStaticCallExpression constrained && sourceType is TypeParameterSymbol parameter {
+            return ConstrainedStaticOwnsPrefix(parameter, member, name, constrained)
+        }
+        if read is BoundCallExpression call && call.Function.IsStatic && sourceType != nil {
+            if sourceType is InterfaceSymbol contract &&
+                member is NameExpressionSyntax &&
+                TypeMemberModel.TryGetPropertyWithOwner(contract, name, out var property, out var propertyOwner) &&
+                property.IsStatic &&
+                property
+                .HasGetter {
+                return object.ReferenceEquals(property.GetterSymbol, call.Function) && object.ReferenceEquals(
+                    propertyOwner,
+                    contract
+                ) &&
+                    object.ReferenceEquals(call.StaticGenericInterfaceOwnerType, propertyOwner)
+            }
+            if !TypeMemberModel.GetMethods(sourceType, name, MemberQuery.InheritedStatic(MemberKinds.Method)).Any(
+                (candidate FunctionSymbol) -> object.ReferenceEquals(candidate, call.Function)
+            ) {
+                return false
+            }
+            let declaredOwner = call.Function.StaticOwnerType ?? call.Function.ContainingType
+            if sourceType is StructSymbol owner && declaredOwner is StructSymbol declaredStruct {
+                let effectiveOwner = TypeMemberModel.ResolveStaticMemberOwner(owner, declaredStruct)
+                return if call.StaticGenericOwnerType != nil {
+                    object.ReferenceEquals(call.StaticGenericOwnerType, effectiveOwner)
+                } else {
+                    effectiveOwner.Definition == nil
+                }
+            }
+            if sourceType is InterfaceSymbol contract {
+                let selectedOwner = call.StaticGenericInterfaceOwnerType ?? declaredOwner
+                return contract.SelfAndAllBaseInterfaces().Any(
+                    (candidate InterfaceSymbol) -> object.ReferenceEquals(candidate, selectedOwner) &&
+                        TypeMemberModel
+                        .GetMethods(candidate, name, MemberQuery.Static(MemberKinds.Method)).Any(
+                        (method FunctionSymbol) -> object.ReferenceEquals(method, call.Function)
+                    )
+                )
+            }
+        }
+        let clrType = if sourceType is StructSymbol inherited &&
+            read is (BoundImportedCallExpression or BoundClrPropertyAccessExpression) {
+            TypeMemberModel.GetNearestImportedBase(inherited)?.ClrType
+        } else {
+            sourceType?.ClrType
+        }
+        if read is BoundLiteralExpression literal && clrType != nil {
+            // Folded CLR fields retain the selected read/qualifier record, not FieldInfo.
+            return object.ReferenceEquals(literal.StaticQualifierType, sourceType) && object.ReferenceEquals(
+                literal.StaticQualifierSyntax,
+                qualifier
+            ) &&
+                object.ReferenceEquals(literal.StaticMemberSyntax, member)
+        }
+        if read is BoundClrPropertyAccessExpression{Receiver: nil} imported && clrType != nil {
+            const flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.FlattenHierarchy
+            let expected MemberInfo? = switch imported.Member {
+                case FieldInfo{IsStatic: true}: ClrTypeUtilities.SafeGetField(clrType, name, flags)
+                case property is PropertyInfo when(property.GetMethod ?? property.SetMethod)?.IsStatic == true:
+                ClrTypeUtilities.SafeGetProperty(clrType, name, flags)
+                default: default(MemberInfo?)
+            }
+            return expected != nil && imported.Member.Equals(expected)
+        }
+        if read is BoundImportedCallExpression{Function: {} function} && function.Method.IsStatic && clrType != nil {
+            let method = function.Method
+            let definition = if method.IsGenericMethod && !method.IsGenericMethodDefinition {
+                method.GetGenericMethodDefinition()
+            } else {
+                method
+            }
+            return ClrTypeUtilities.SafeGetMethods(
+                clrType,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.FlattenHierarchy
+            )
+                .Any((candidate MethodInfo) -> SameClrMethod(candidate, definition))
+        }
+        return false
+    }
+
+    private func SourceStaticFieldOwnsPrefix(
+        sourceType TypeSymbol?,
+        name string,
+        field BoundFieldAccessExpression
+    ) bool {
+        if field.Receiver != nil || !field.Field.IsStatic {
+            return false
+        }
+        if sourceType is StructSymbol owner && TypeMemberModel.TryGetStaticFieldIncludingInherited(
+            owner,
+            name,
+            out var expected,
+            out var declaring
+        ) {
+            return object.ReferenceEquals(field.Field, expected) && object.ReferenceEquals(field.StructType, declaring)
+        }
+        return sourceType is InterfaceSymbol contract && object.ReferenceEquals(field.InterfaceType, contract) &&
+            object.ReferenceEquals(field.Field, (contract.Definition ?? contract).GetStaticField(name))
+    }
+
+    private func ConstrainedStaticOwnsPrefix(
+        parameter TypeParameterSymbol,
+        member ExpressionSyntax,
+        name string,
+        call BoundConstrainedStaticCallExpression
+    ) bool {
+        let owner = call.StaticConstraintOwner
+        let constraint = parameter.ConstraintInterfaceType
+        if !object.ReferenceEquals(call.TypeParameter, parameter) || owner == nil || constraint == nil {
+            return false
+        }
+        if call.InterfaceMethod is {} selected && owner is InterfaceSymbol contract {
+            if !object.ReferenceEquals(owner, constraint) {
+                return false
+            }
+            if member is NameExpressionSyntax && TypeMemberModel.TryGetPropertyWithOwner(
+                contract,
+                name,
+                out var property,
+                out _
+            ) &&
+                property.IsStatic &&
+                property.HasGetter {
+                return object.ReferenceEquals(property.GetterSymbol, selected)
+            }
+            return member is CallExpressionSyntax && TypeMemberModel.GetMethods(
+                contract,
+                name,
+                MemberQuery.Static(MemberKinds.Method)
+            )
+                .Any((candidate FunctionSymbol) -> object.ReferenceEquals(candidate, selected))
+        }
+        if call.ClrMethod is {} imported && object.ReferenceEquals(call.ConstrainedInterfaceType, owner) &&
+            owner.ClrType is {} declaringType &&
+            constraint.ClrType is {} constraintType &&
+            imported
+            .IsStatic {
+            let definition = if imported.IsGenericMethod && !imported.IsGenericMethodDefinition {
+                imported.GetGenericMethodDefinition()
+            } else {
+                imported
+            }
+            return ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(
+                constraintType,
+                BindingFlags.Public | BindingFlags.Static
+            )
+                .Any(
+                (candidate MethodInfo) -> declaringType.Equals(candidate.DeclaringType) &&
+                    SameClrMethod(candidate, definition)
+            )
+        }
+        return false
+    }
+
+    private func SameClrMethod(candidate MethodInfo, selected MethodInfo) bool {
+        if candidate.Equals(selected) {
+            return true
+        }
+        try {
+            // Inherited methods differ in ReflectedType, not their closed declaration.
+            let declaringType = candidate.DeclaringType
+            return declaringType != nil && declaringType.Equals(selected.DeclaringType) && candidate.Module.Equals(
+                selected.Module
+            ) &&
+                candidate.MetadataToken == selected.MetadataToken
+        } catch (Exception) {
+            return false
+        }
+    }
+
+    private func CapturedIndexArgument(anchored BoundExpression) BoundExpression? {
+        var read = Unwrap(anchored)
+        if read is BoundDereferenceExpression dereference &&
+            dereference
+            .Operand
+            .Type is ByRefTypeSymbol &&
+            IsSynthesizedWrapper(dereference, dereference.Operand) {
+            read = Unwrap(dereference.Operand)
+        }
+        // The native index plan stores its written argument in one known
+        // operation over the first source capture. Do not scan block children.
+        if read is not BoundBlockExpression block ||
+            block
+            .Statements
+            .Length != 1 ||
+            CapturedIndexTarget(block) == nil ||
+            block.Statements[0] is not BoundVariableDeclaration capture {
+            return nil
+        }
+        let argument BoundExpression? = switch block.Expression {
+            case BoundClrIndexExpression{Target: BoundVariableExpression receiver} index when object.ReferenceEquals(
+                receiver.Variable,
+                capture.Variable
+            ) &&
+                index
+                .Arguments
+                .Length == 1: index.Arguments[0]
+            case BoundImportedInstanceCallExpression{
+                Receiver: BoundVariableExpression receiver
+            } call when object.ReferenceEquals(receiver.Variable, capture.Variable) &&
+                call
+                .Arguments
+                .Length == 1: call.Arguments[0]
+            default: default(BoundExpression?)
+        }
+        return if argument != nil && object.ReferenceEquals(argument.Syntax, block.Syntax) {
+            argument
+        } else {
+            default(BoundExpression?)
+        }
+    }
+
+    private func TerminalSegment(expression ExpressionSyntax) ExpressionSyntax {
+        var current = expression
+        while current is AccessorExpressionSyntax accessor {
+            current = accessor.RightPart
+        }
+        return current
+    }
+
+    // An implicit ref read adds no syntax step. Its operand must itself be a
+    // recognized index or guarded capture plan, never an arbitrary block.
+    private func IndexTargetOf(node BoundExpression, capturedOnly bool = false) BoundExpression? -> switch node {
+        case index is BoundIndexExpression when !capturedOnly: index.Target
+        case index is BoundClrIndexExpression when !capturedOnly: index.Target
+        case dereference is BoundDereferenceExpression when dereference
+            .Operand
+            .Type is ByRefTypeSymbol &&
+            IsSynthesizedWrapper(dereference, dereference.Operand): IndexTargetOf(dereference.Operand, capturedOnly)
+        case block is BoundBlockExpression: CapturedIndexTarget(block)
+        default: if capturedOnly {
+            default(BoundExpression?)
+        } else {
+            ReceiverOf(node)
+        }
+    }
+
+    private func CapturedIndexTarget(block BoundBlockExpression) BoundExpression? {
+        // DeclareRangeTemp emits the source capture first for index/slice
+        // blocks. Its reserved role and absent declaration exclude authored
+        // blocks and other generated capture plans.
+        const sourceCapturePrefix = "$$slice_src"
+        if !block
+            .Statements
+            .IsDefaultOrEmpty &&
+            block.Statements[0] is BoundVariableDeclaration{
+            Variable: LocalVariableSymbol{DeclaringSyntax: nil, IsReadOnly: true} capture,
+            Initializer: {} target
+        } &&
+            capture
+            .Name
+            .StartsWith(sourceCapturePrefix, StringComparison.Ordinal) && int32.TryParse(
+            capture.Name.Substring(sourceCapturePrefix.Length),
+            out _
+        ) {
+            return target
+        }
+        return nil
+    }
+
+    private func AddReceiverSegments(expression ExpressionSyntax, segments List[ExpressionSyntax]) {
+        switch expression {
+            case accessor is AccessorExpressionSyntax {
+                AddReceiverSegments(accessor.LeftPart, segments)
+                AddReceiverSegments(accessor.RightPart, segments)
+            }
+            case index is IndexExpressionSyntax {
+                AddReceiverSegments(index.Target, segments)
+                segments.Add(index)
+            }
+            default {
+                segments.Add(expression)
+            }
+        }
+    }
+
+    /// Gets a bound member's receiver, or null when it has none.
     private func ReceiverOf(node BoundExpression) BoundExpression? -> switch node {
         case userCall is BoundUserInstanceCallExpression: userCall.Receiver
         case importedCall is BoundImportedInstanceCallExpression: importedCall.Receiver
         case property is BoundPropertyReferenceOperationExpression: property.Instance
         case field is BoundFieldAccessExpression: field.Receiver
+        case tuple is BoundTupleElementAccessExpression: tuple.Receiver
         case call is BoundCallExpression when call.Function.IsExtension && call.Arguments.Length > 0: call.Arguments[0]
         case call is BoundImportedCallExpression when call
             .Arguments
@@ -267,15 +732,28 @@ shared class BoundSemantics {
 
     /// Removes the conversions and nil-unwraps the binder adds around a read
     /// without user syntax of their own, so the node reached is the read itself.
-    private func Unwrap(node BoundExpression?) BoundExpression? {
+    private func Unwrap(
+        node BoundExpression?,
+        captures Dictionary[VariableSymbol, BoundExpression]? = nil
+    ) BoundExpression? {
         var current = node
         while current != nil {
-            if current is BoundConversionExpression conversion &&
+            if current.LogicalCompletionOperand is {} operand {
+                current = operand
+            } else if current is BoundConversionExpression conversion &&
                 IsSynthesizedWrapper(conversion, conversion.Expression) {
                 current = conversion.Expression
             } else if current is BoundNullConditionalAccessExpression hop {
                 // The member a `?.` hop reads is its non-nil access.
+                if captures != nil {
+                    captures[hop.Capture] = hop.Receiver
+                }
                 current = hop.WhenNotNull
+            } else if current is BoundVariableExpression read && captures != nil && captures.TryGetValue(
+                read.Variable,
+                out var captured
+            ) {
+                current = captured
             } else if current is BoundUnaryExpression unary &&
                 unary
                 .Op
@@ -295,7 +773,19 @@ shared class BoundSemantics {
         wrapper BoundExpression,
         inner BoundExpression,
         expression ExpressionSyntax? = nil
-    ) bool -> wrapper.Syntax == nil ||
+    ) bool -> (
+        wrapper is BoundConversionExpression && object.ReferenceEquals(wrapper.ImplicitConversionOperand, inner) &&
+            (
+            expression == nil ||
+                (
+                inner.Syntax is ExpressionSyntax syntax && object.ReferenceEquals(
+                    AssignmentTargetSyntaxFacts.UnwrapParentheses(syntax),
+                    expression
+                )
+            )
+        )
+    ) ||
+        wrapper.Syntax == nil ||
         (
         wrapper.Syntax is AccessorExpressionSyntax &&
             (expression == nil || object.ReferenceEquals(inner.Syntax, expression))
@@ -306,8 +796,11 @@ shared class BoundSemantics {
     private func ReferencedSymbol(node BoundExpression) Symbol? -> switch node {
         case variable is BoundVariableExpression: variable.Variable
         case call is BoundCallOperationExpression: call.CalledFunction
+        case baseCall is BoundBaseClassCallExpression: baseCall.Method ?? cast[Symbol?](baseCall.Property)
         case property is BoundPropertyReferenceOperationExpression: property.ReferencedProperty
-        case field is BoundFieldAccessExpression: field.Field
+        case field is BoundFieldAccessExpression: ReferencedFieldSymbol(field)
+        case literal is BoundLiteralExpression when literal.StaticEnumMember != nil: literal.StaticEnumMember
+        case literal is BoundLiteralExpression: literal.StaticConstantFieldRead?.Field
         default: default(Symbol?)
     }
 
@@ -328,7 +821,10 @@ shared class BoundSemantics {
             }: staticProperty.Property
             case variable is BoundVariableExpression: variable.Variable
             case call is BoundCallExpression: call.Function
+            case constrained is BoundConstrainedStaticCallExpression: constrained.InterfaceMethod
             case userCall is BoundUserInstanceCallExpression: userCall.Method
+            case baseCall is BoundBaseClassCallExpression: baseCall.Method ?? cast[Symbol?](baseCall.Property)
+            case baseCall is BoundBaseInterfaceCallExpression: baseCall.Method
             // A read through a constructed generic interface keeps the
             // declaration's property and records the substituted type beside
             // it; show the property at that type. References still match it
@@ -339,7 +835,9 @@ shared class BoundSemantics {
                 .Property
                 .WithSignature(substitutedType, property.Property.Parameters)
             case property is BoundPropertyAccessExpression: property.Property
-            case field is BoundFieldAccessExpression: field.Field
+            case field is BoundFieldAccessExpression: ReferencedFieldSymbol(field)
+            case literal is BoundLiteralExpression when literal.StaticEnumMember != nil: literal.StaticEnumMember
+            case literal is BoundLiteralExpression: literal.StaticConstantFieldRead?.Field
             default: default(Symbol?)
         }
         // A field-like event's read binds its synthesized backing field; the
@@ -351,6 +849,18 @@ shared class BoundSemantics {
             symbol
         } else {
             default(Symbol?)
+        }
+    }
+
+    private func ReferencedFieldSymbol(field BoundFieldAccessExpression) Symbol {
+        let property = TypeMemberModel.PropertyForBackingField(field.StructType, field.Field)
+        if property == nil {
+            return field.Field
+        }
+        return if field.SubstitutedType is {} substituted && !object.ReferenceEquals(substituted, property.Type) {
+            property.WithSignature(substituted, property.Parameters)
+        } else {
+            property
         }
     }
 }

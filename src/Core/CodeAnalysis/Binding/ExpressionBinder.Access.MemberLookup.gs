@@ -370,6 +370,12 @@ internal partial class ExpressionBinder {
         if !recoveredDeclaredReceiver {
             TrackBackwardGotoNarrowingAccess(receiver, rightPart, result)
         }
+        if receiver == nil && classSymbol != nil && rightPart is (NameExpressionSyntax or CallExpressionSyntax) {
+            let owner = classSymbol.ConstructedReceiver ??
+                classSymbol.SymbolicReceiver ??
+                ImportedTypeSymbol.GetWithoutNullability(classSymbol.ClassType, NullabilityFreeReason.ResolvedTypeName)
+            RecordStaticTypeQualifier(result, owner, rightPart)
+        }
         return result
     }
 
@@ -4188,6 +4194,16 @@ internal partial class ExpressionBinder {
     /// at the call site; reports GS0333 when the named member is not a
     /// static-virtual on any constraint interface.
     private func BindTypeParameterStaticAccessorStep(
+        tpSym TypeParameterSymbol,
+        leftName NameExpressionSyntax,
+        rightPart ExpressionSyntax
+    ) BoundExpression {
+        let result = BindTypeParameterStaticAccessorStepCore(tpSym, leftName, rightPart)
+        RecordStaticTypeQualifier(result, tpSym, rightPart)
+        return result
+    }
+
+    private func BindTypeParameterStaticAccessorStepCore(
         tpSym TypeParameterSymbol,
         leftName NameExpressionSyntax,
         rightPart ExpressionSyntax

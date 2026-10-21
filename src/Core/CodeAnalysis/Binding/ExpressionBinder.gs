@@ -937,7 +937,7 @@ internal partial class ExpressionBinder {
                 return node
             }
             let baseRead = BoundFieldAccessExpression(
-                nil,
+                fieldAccess.Syntax,
                 fieldAccess.Receiver,
                 fieldAccess.StructType,
                 fieldAccess.Field,
@@ -947,7 +947,7 @@ internal partial class ExpressionBinder {
             let makeNarrowedField(TypeSymbol) -> BoundExpression = (
                 narrowedType TypeSymbol
             ) -> BoundFieldAccessExpression(
-                nil,
+                fieldAccess.Syntax,
                 fieldAccess.Receiver,
                 fieldAccess.StructType,
                 fieldAccess.Field,
@@ -976,7 +976,7 @@ internal partial class ExpressionBinder {
                 return node
             }
             let baseRead = BoundPropertyAccessExpression(
-                nil,
+                propertyAccess.Syntax,
                 propertyAccess.Receiver,
                 propertyAccess.StructType,
                 propertyAccess.Property,
@@ -1019,7 +1019,7 @@ internal partial class ExpressionBinder {
             return node
         }
         let clrBaseRead = BoundClrPropertyAccessExpression(
-            nil,
+            clrAccess.Syntax,
             clrAccess.Receiver,
             clrAccess.Member,
             clrAccess.Type,
@@ -1927,6 +1927,9 @@ internal partial class ExpressionBinder {
             return false
         }
         bound = BindAccessorStep(receiver, classSymbol: nil, rightPart: syntax)
+        if bound is {} selected && selected is not BoundErrorExpression {
+            selected.AnchorSyntax(syntax)
+        }
         return true
     }
 
@@ -2279,9 +2282,13 @@ internal partial class ExpressionBinder {
                 // Bind's first arm unconditionally returns non-null for
                 // BangBangToken (BoundUnaryOperator.cs), regardless of operandType.
                 let op = BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, declaredType)!!
-                return BoundUnaryExpression(nil, op, bareRead){IsNarrowingUnwrap = true}
+                let read = BoundUnaryExpression(nil, op, bareRead){IsNarrowingUnwrap = true}
+                read.AnchorSyntax(bareRead.Syntax)
+                return read
             }
-            return makeNarrowedNode(narrowedType)
+            let read = makeNarrowedNode(narrowedType)
+            read.AnchorSyntax(bareRead.Syntax)
+            return read
         }
 
         private func ClassifyTypeTestNarrowing(condition BoundExpression)(

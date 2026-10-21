@@ -70,7 +70,7 @@ shared class InlayHintComputer {
         hints.Add(
             InlayHint{
                 Position: Position(line, offset - text.Lines[line].Start),
-                Label: StringOrInlayHintLabelParts(": ${SymbolDisplay.ToTypeDisplayString(variable.Type)}"),
+                Label: StringOrInlayHintLabelParts(SymbolDisplay.ToTypeDisplayString(variable.Type)),
                 Kind: InlayHintKind.Type,
                 PaddingLeft: true
             }

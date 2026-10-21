@@ -178,6 +178,132 @@ corpus cannot reach a row, by a snippet translation test.
   and `SyntaxNode.Parent` (backed by a lazily built per-tree parent index) —
   the Roslyn `Parent` idiom analyzers pattern-match with.
 
+### Internal static-qualifier query (issue #5035)
+
+`SemanticModel.TryGetStaticTypeQualifier` is an **internal** Core/LS query,
+not an addition to the public analyzer API. Given an original accessor root
+and exact member syntax boundary, it returns the binder's closed qualifier
+type, original qualifier syntax boundary and selected bound read, or unknown.
+The query never interprets type-argument brackets as value indexing.
+
+The normal binder records this small, non-child provenance on the selected
+static read at its existing static-dispatch boundary. Thus the query reuses
+the **actual** canonical receiver/type-value decision, including primitive
+aliases, imports, lexical values, color-color overload decisions, enclosing
+and method type parameters, and constructed arguments/nullability. It does not
+rebuild scope, reparse type strings, maintain another primitive/type resolver,
+or reselect the member. Consumers retain the actual callable, closed owner
+and method type arguments; an open generic definition is not a substitute
+for its construction.
+
+Pre-publication child rewriting may replace a selected call. The common
+same-selected-call copy boundary retains its original provenance on the fresh
+copy, including the exact callable, closed owner and method arguments.
+Arbitrary virtual replacements, changed members and unrelated authored nodes
+do not inherit that authority. Original nodes and published snapshots are not
+repaired or mutated by copying or querying.
+
+Inference reconstruction of a callee marked suspending uses that same checked
+selected-call association, including its actual function identity and closed
+arguments. Compiler-created completion awaits carry an explicit operand
+identity; ownership traversal may cross only those marked wrappers without a
+receiver step. Authored awaits remain opaque. Logical type queries retain the
+completion's source result type rather than exposing its physical ValueTask.
+
+Bind-time known-suspending calls, inference-time completions, and implicit
+channel-operation completions use the same internal marked-await factory.
+Verified base/spill copies preserve an existing exact-operand marker. Ordinary
+authored awaits and synthesized control-flow/disposal awaits are not marked
+merely because they have no syntax or contain a call.
+
+Implicit instance-field reads keep their original name anchor through narrowing
+and verified field copies; the synthesized `this` remains synthetic. Auto-property
+storage reads resolve the unique exact canonical `PropertySymbol.BackingField`
+association in their effective closed owner, not a backing-field spelling.
+Declared/substituted member signatures remain separate from flow-narrowed read types.
+Property-to-storage lowering retains the selected property's logical substituted
+type and syntax; fresh same-member field/property/call copies keep their original
+syntax identity when rewriting a receiver.
+
+The shared fill-once syntax anchoring operation also covers implicit property
+and bare shared-member prefixes before narrowing; narrowed-read factories retain
+the original read's anchor. Compiler-created await and blocking completions share
+one exact-operand receipt, retained only across verified same-selected-operation
+copies. Readers/inference cross that receipt without a logical receiver step;
+authored calls to the same runtime wait API receive no receipt or reclassification.
+
+Completion receipt transfer also verifies the operand: it must be unchanged or a
+same-selected-operation copy at the original syntax, with its actual callable,
+closed owner and method arguments retained. The outer completion's identity alone
+does not prove this. The closed spill producer may separately retain a receipt on
+the exact value returned by spilling the recorded operand, alongside that result's
+own locals/effects; generic copies never scan blocks or follow arbitrary variables.
+Constant folding preserves the field read's syntax even without static qualifiers.
+
+Source-call factories assign the genuine member call syntax before completion
+creation and per-member lowering, including qualified/generic static, extension
+and instance call routes. Late inherited syntax anchoring is not a substitute:
+same-operation completion copies continue to reject nil-syntax replacements.
+The existing semantic-model qualified/call-shape alias remains bidirectional on
+exact syntax nodes, miss-only, so retaining the genuine early call anchor does not
+erase an established outer expression/conversion query.
+Receiver type normalization recognizes the binder's exact implicit-conversion
+operand receipt with the original queried syntax; early call anchors must not
+turn an argument conversion into the receiver's logical type or peel authored casts.
+Conversion copies retain that receipt only for its exact direct operand or a
+verified same-selected-operation copy at the original non-nil call syntax,
+preserving source/target types, checkedness and the conversion's own syntax.
+Authored casts and different, foreign-syntax or nil-syntax replacement calls
+gain no conversion provenance.
+The same checked equivalent-operation decision recognizes a property-to-storage
+copy only through the canonical exact property/backing-field association, with
+the original receiver, effective owner, read type and syntax. An implicit
+completion copy must retain both direct-operand receipts, logical type and
+wrapper syntax, and recursively prove its original selected operand; synthetic
+nil wrapper syntax is not authority for a nil-syntax call or an authored await.
+
+Defer capture may separately retain a compiler completion receipt at its closed
+capture producer: the original recorded operand is the exact initializer of the
+new capture declaration, whose exact variable is the returned captured read.
+The deferred completion retains its original syntax and awaits that read after
+inference. Generic copy validation never follows variables or scans blocks to
+infer this association; authored waits acquire no receipt.
+
+Public bound/type queries promote an exact physical completion operand to its
+verified logical completion, including a direct physical syntax-index hit.
+Already-indexed outer conversion/flow nodes remain themselves. Public symbol
+traversal may follow the same receipt across the call/accessor boundary; authored
+waits/awaits have no such edge. Canonical qualifier queries retain the separate
+exact selected physical-read index. Imported instance producers and verified
+base-call copies retain their actual original call syntax before lowering.
+
+Representation-changing constant folding retains the actual selected source
+field read (its `FieldSymbol` and effective closed owner), not just a literal
+value or member name. A verified fold carries that semantic association to
+the new literal; unrelated literals do not acquire it. Constrained static
+dispatch likewise records the exact receiver type parameter and its selected
+constraint owner/slot, retaining those identities through argument copies.
+These are internal, non-child provenance references fixed before publication.
+
+Source enum literals similarly retain the actual selected `EnumMemberSymbol`
+and its owning enum at normal lookup, never recover membership from a numeric
+value. Runtime capture ownership may finish at any independently anchored
+prefix read with exact bound-node/syntax identity; namespace/type segments are
+not runtime receivers. For an imported constraint, the selected closed
+declaring owner may be inherited: its exact slot must belong to the original
+constraint's canonical interface family, while the original type parameter,
+symbolic owner/type arguments and metadata identity remain unchanged.
+
+The existing per-tree lazy semantic index harvests these binding-time
+decisions. They are fixed before the bound program is published; a query
+does not modify project, compilation, bound or syntax state, including
+parent/tree identities. Index publication follows the existing thread-safe
+semantic-model contract. Concurrent/reentrant queries use only their own
+compilation snapshot; foreign-tree boundaries, traversal through an index
+argument, missing provenance and ambiguous reads return unknown rather than
+guessing. Existing compiler identity/type-import funnels remain authoritative;
+this adds no CLR signature-nullability producer or language/parser change.
+
 ### Execution: `GSharpAnalyzerDriver`, in-process in `gsc`
 
 A driver runs after binding over the same `Compilation` used for emit

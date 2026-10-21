@@ -24,6 +24,30 @@ import System.Linq
 /// CLR / imported member reflection is intentionally out of scope and remains
 /// behind `MemberLookup`; this layer covers user-symbol member tables only.
 shared class TypeMemberModel {
+    // Storage reads retain the canonical property association through exact
+    // backing-field identity in the effective owner, never synthesized names.
+    internal func PropertyForBackingField(type StructSymbol?, field FieldSymbol) PropertySymbol? {
+        if type == nil || field.IsStatic || field.IsEventBackingField {
+            return nil
+        }
+        var selected PropertySymbol? = nil
+        for owner in GetHierarchy(type) {
+            for property in owner.Properties {
+                if !property.IsAutoProperty || property.IsStatic || property.IsIndexer || !object.ReferenceEquals(
+                    property.BackingField,
+                    field
+                ) {
+                    continue
+                }
+                if selected != nil && !object.ReferenceEquals(selected, property) {
+                    return nil
+                }
+                selected = property
+            }
+        }
+        return selected
+    }
+
     /// Returns the ordered members used by synthesized and bound data-type
     /// deconstruction. Primary-constructor parameters are positional. Native
     /// body-form data types deconstruct their fields and then their auto

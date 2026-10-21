@@ -763,42 +763,38 @@ internal class ChannelRuntimeBinder {
     func BindBlockingWait(valueTaskCall BoundExpression, logicalType TypeSymbol) BoundExpression {
         let blocking = Required(blockingType)
         blockingClass ??= ImportedClassSymbol(blocking, declaration: nil, references: references)
+        var selected MethodInfo
+        var typeArguments = default(ImmutableArray[TypeSymbol?])
         if logicalType == TypeSymbol.Void {
-            let wait = blocking.GetMethods(BindingFlags.Public | BindingFlags.Static).Single(
+            selected = blocking.GetMethods(BindingFlags.Public | BindingFlags.Static).Single(
                 (m MethodInfo) -> m.Name == "Wait" && !m.IsGenericMethodDefinition
             )
-            let function = ImportedFunctionSymbol(
-                "Wait",
-                blockingClass!!,
-                wait,
-                declaration: nil,
-                returnTypeOverride: TypeSymbol.Void
+        } else {
+            let open_ = blocking.GetMethods(BindingFlags.Public | BindingFlags.Static).Single(
+                (m MethodInfo) -> m.Name == "Wait" && m.IsGenericMethodDefinition
             )
-            return BoundImportedCallExpression(valueTaskCall.Syntax, function, ImmutableArray.Create(valueTaskCall))
+            let (closedResult, symbolic) = ProjectElement(logicalType)
+            selected = open_.MakeGenericMethod(closedResult)
+            if symbolic {
+                typeArguments = ImmutableArray.Create[TypeSymbol?](logicalType)
+            }
         }
-        let open_ = blocking.GetMethods(BindingFlags.Public | BindingFlags.Static).Single(
-            (m MethodInfo) -> m.Name == "Wait" && m.IsGenericMethodDefinition
-        )
-        let (closedResult, symbolic) = ProjectElement(logicalType)
-        let closed = open_.MakeGenericMethod(closedResult)
         let generic = ImportedFunctionSymbol(
             "Wait",
             blockingClass!!,
-            closed,
+            selected,
             declaration: nil,
             returnTypeOverride: logicalType
         )
-        return BoundImportedCallExpression(
+        let completed = BoundImportedCallExpression(
             valueTaskCall.Syntax,
             generic,
             ImmutableArray.Create(valueTaskCall),
             argumentRefKinds: default(ImmutableArray[RefKind]),
-            typeArgumentSymbols: if symbolic {
-                ImmutableArray.Create[TypeSymbol?](logicalType)
-            } else {
-                default(ImmutableArray[TypeSymbol?])
-            }
+            typeArgumentSymbols: typeArguments
         )
+        completed.RecordLogicalCompletion(valueTaskCall)
+        return completed
     }
 
     /// ADR-0174 D7: rebinds a facade call that was bound with the
@@ -1211,7 +1207,7 @@ internal class ChannelRuntimeBinder {
             if !TryAppendImportedContext(call.Function.Method, call.Arguments, context, out var arguments) {
                 return call
             }
-            return BoundImportedCallExpression(
+            let copy = BoundImportedCallExpression(
                 call.Syntax,
                 call.Function,
                 arguments,
@@ -1219,6 +1215,8 @@ internal class ChannelRuntimeBinder {
                 call.TypeArgumentSymbols,
                 call.StaticContainerType
             )
+            call.CopyStaticQualifierTo(copy)
+            return copy
         }
 
         /// ADR-0174 D7, the cross-assembly half for instance methods (issue #4392):
@@ -1310,7 +1308,8 @@ internal class ChannelRuntimeBinder {
             syntax SyntaxNode?,
             call BoundExpression,
             resultType TypeSymbol
-        ) BoundExpression -> BoundAwaitExpression(
+        ) BoundExpression -> BoundAwaitExpression
+            .CreateImplicitCompletion(
             syntax,
             call,
             resultType,

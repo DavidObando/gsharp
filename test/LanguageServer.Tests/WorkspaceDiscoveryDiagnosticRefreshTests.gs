@@ -27,6 +27,126 @@ import Xunit
 /// to refresh diagnostics. Project-aware requests such as Go-to-Definition then work immediately,
 /// and the resulting re-pull clears the spurious diagnostics.
 open class WorkspaceDiscoveryDiagnosticRefreshTests {
+    @Fact
+    async func Issue5035_IndexedMember_ColdOpenAndRepeatedEditsKeepBoundSnapshots() {
+        let rootDir = Path.Combine(Directory.GetCurrentDirectory(), "out", "issue5035-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(rootDir)
+        let source = `package Repro
+import System
+class Example {
+    prop Address Uri -> Uri("https://example.test/path")
+    func Read() {
+        let uri = this.Address
+        let result = uri.ToString()[0]
+    }
+}
+`
+        let path = Path.Combine(rootDir, "Example.gs")
+        File.WriteAllText(path, source)
+        File.WriteAllText(Path.Combine(rootDir, "Example.gsproj"), `<Project Sdk="Gsharp.NET.Sdk">
+<PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+</Project>`)
+        let documents = DocumentContentService()
+        let workspace = WorkspaceState()
+        let server = LspServer(documents, workspace)
+        let stopped = TaskCompletionSource[bool](TaskCreationOptions.RunContinuationsAsynchronously)
+        let proceed = TaskCompletionSource[bool](TaskCreationOptions.RunContinuationsAsynchronously)
+        var scheduled = false
+        try {
+            server.TestBeforeWorkspaceDiscovery = () -> proceed.Task.GetAwaiter().GetResult()
+            server.TestAfterWorkspaceDiscovery = () -> stopped.TrySetResult(true)
+            await server.InitializeAsync(InitializeParams{RootPath: rootDir, Capabilities: PullClientCapabilities()})
+            let uri = DocumentUri.FromFileSystemPath(path)!!
+            let id = TextDocumentIdentifier{Uri: uri}
+            await server.DidOpenAsync(DidOpenTextDocumentParams{TextDocument: TextDocumentItem{Uri: uri, Text: source}})
+            Assert.Null(workspace.GetProjectForFile(path))
+            using let initialized = JsonDocument.Parse("{}")
+            server.Initialized(initialized.RootElement.Clone())
+            scheduled = true
+            proceed.TrySetResult(true)
+            await stopped.Task.WaitAsync(TimeSpan.FromSeconds(30))
+            Assert.Empty(await PullDiagnosticsAsync(server, uri))
+            Assert.True(documents.TryGet(uri.ToString(), out var snapshot))
+            let compilation = snapshot.Project!!.GetCompilation()
+            let token = SemanticLookup.FindTokenAt(
+                snapshot.SyntaxTree,
+                source.IndexOf("ToString", StringComparison.Ordinal)
+            )!!
+            var version = 1
+            for text in[]string{
+                source,
+                source.Replace("ToString()[0]", "Host[0]"),
+                source.Replace("let result =", "\n        let result ="),
+                source
+            } {
+                if version > 1 {
+                    await server.DidChangeAsync(
+                        DidChangeTextDocumentParams{
+                            TextDocument: VersionedTextDocumentIdentifier{Uri: uri, Version: version},
+                            ContentChanges: List[TextDocumentContentChangeEvent]{
+                                TextDocumentContentChangeEvent{Text: text}
+                            }
+                        }
+                    )
+                }
+                version++
+                Assert.Empty(await PullDiagnosticsAsync(server, uri))
+                let method = text.Contains("ToString()[0]", StringComparison.Ordinal)
+                let name = if method {
+                    "ToString"
+                } else {
+                    "Host"
+                }
+                let position = LanguageServerTestHelpers.PositionOf(text, name)
+                let hover = Assert.IsType[Hover](
+                    await server.HoverAsync(HoverParams{TextDocument: id, Position: position})
+                )
+                Assert.Equal(
+                    if method {
+                        "func (System.Uri) ToString() string"
+                    } else {
+                        "System.Uri.Host string { get; }"
+                    },
+                    hover.Contents.ToString().Split('\n')[1]
+                )
+                Assert.Equal(position.Line, hover.Range.Start.Line)
+                Assert.Equal(position.Character, hover.Range.Start.Character)
+                Assert.Equal(position.Line, hover.Range.End.Line)
+                Assert.Equal(position.Character + name.Length, hover.Range.End.Character)
+                Assert.True(documents.TryGet(uri.ToString(), out var current))
+                let currentCompilation = current.Project!!.GetCompilation()
+                if version > 2 {
+                    Assert.Same(compilation.GlobalScope, currentCompilation.ReusedGlobalScope)
+                }
+                let currentToken = SemanticLookup.FindTokenAt(
+                    current.SyntaxTree,
+                    text.IndexOf(name, StringComparison.Ordinal)
+                )!!
+                Parallel.For(
+                    0,
+                    8,
+                    (_ int32) -> {
+                        Assert.Equal(typeof(Uri), BoundSemantics.GetImportedMember(compilation, token)?.DeclaringType)
+                        Assert.Equal(name, BoundSemantics.GetImportedMember(currentCompilation, currentToken)?.Name)
+                        Assert.Contains(snapshot.SyntaxTree, compilation.SyntaxTrees)
+                        Assert.Equal(source, snapshot.SyntaxTree.Text.ToString())
+                        if !object.ReferenceEquals(current.SyntaxTree, snapshot.SyntaxTree) {
+                            Assert.Null(BoundSemantics.GetImportedMember(currentCompilation, token))
+                        }
+                    }
+                )
+            }
+            Assert.Equal(source, File.ReadAllText(path))
+        } finally {
+            server.Shutdown()
+            proceed.TrySetResult(true)
+            if scheduled {
+                await stopped.Task.WaitAsync(TimeSpan.FromSeconds(30))
+            }
+            Directory.Delete(rootDir, recursive: true)
+        }
+    }
+
     @Theory
     @InlineData(false, false, 0)
     @InlineData(false, false, 1)

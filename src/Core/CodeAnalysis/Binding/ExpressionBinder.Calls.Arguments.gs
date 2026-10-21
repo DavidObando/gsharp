@@ -1470,7 +1470,7 @@ internal partial class ExpressionBinder {
                 }
                 var inheritedCall = ConversionClassifier.AutoDereferenceRefReturn(
                     BoundImportedInstanceCallExpression(
-                        nil,
+                        ce,
                         inheritedCallReceiver,
                         best,
                         returnType,

@@ -19,7 +19,7 @@ let box = Box[int32]()
         let hint = Assert.Single(
             InlayHintComputer.ComputeHints(content, includeParameterNames: false, includeTypes: true)
         )
-        Assert.Equal(": Box[int32]", hint.Label.String)
+        Assert.Equal("Box[int32]", hint.Label.String)
     }
 
     @Fact
@@ -75,8 +75,23 @@ var x = greet("world")
         let hint = Assert.Single(
             InlayHintComputer.ComputeHints(content, includeParameterNames: false, includeTypes: true)
         )
-        Assert.Equal(": int32", hint.Label.String)
+        Assert.Equal("int32", hint.Label.String)
         Assert.Equal(InlayHintKind.Type, hint.Kind)
+        Assert.Equal(10, hint.Position.Character)
+    }
+
+    @Fact
+    func ComputeHints_UsesGSharpDeclarationSyntaxForSourceType() {
+        const source = `class FakeRunner {}
+let runner = FakeRunner()
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let hint = Assert.Single(
+            InlayHintComputer.ComputeHints(content, includeParameterNames: false, includeTypes: true)
+        )
+        Assert.Equal("FakeRunner", hint.Label.String)
+        Assert.True(hint.PaddingLeft)
+        Assert.Equal(1, hint.Position.Line)
         Assert.Equal(10, hint.Position.Character)
     }
 
@@ -87,7 +102,7 @@ var x = greet("world")
         let hint = Assert.Single(
             InlayHintComputer.ComputeHints(content, includeParameterNames: false, includeTypes: true)
         )
-        Assert.Equal(": System.Collections.Generic.List[string]", hint.Label.String)
+        Assert.Equal("System.Collections.Generic.List[string]", hint.Label.String)
     }
 
     @Fact

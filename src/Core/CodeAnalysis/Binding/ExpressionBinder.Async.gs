@@ -1293,7 +1293,12 @@ internal partial class ExpressionBinder {
             return call
         }
         if function != nil && (function!!.IsAsyncOrSuspending || isAsyncIteratorReturnType(function!!.Type)) {
-            return BoundAwaitExpression(nil, call, logicalType, TryGetAwaiterTypeSymbol(call.Type))
+            return BoundAwaitExpression.CreateImplicitCompletion(
+                nil,
+                call,
+                logicalType,
+                TryGetAwaiterTypeSymbol(call.Type)
+            )
         }
         if !EnsureChannelRuntime(location) {
             return BoundErrorExpression(nil)

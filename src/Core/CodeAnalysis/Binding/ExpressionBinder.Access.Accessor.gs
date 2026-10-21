@@ -303,7 +303,7 @@ internal partial class ExpressionBinder {
                     let makeNarrowedField(TypeSymbol) -> BoundExpression = (
                         narrowedType TypeSymbol
                     ) -> BoundFieldAccessExpression(
-                        nil,
+                        leftName,
                         BoundVariableExpression(nil, implicitField.Receiver),
                         implicitField.StructType,
                         implicitField.Field,
@@ -311,7 +311,7 @@ internal partial class ExpressionBinder {
                     )
                     receiver = BuildNarrowedRead(
                         BoundFieldAccessExpression(
-                            nil,
+                            leftName,
                             BoundVariableExpression(nil, implicitField.Receiver),
                             implicitField.StructType,
                             implicitField.Field
@@ -415,6 +415,7 @@ internal partial class ExpressionBinder {
                     variable is ImplicitStaticFieldVariableSymbol ||
                     variable is ImplicitPropertyVariableSymbol ||
                     variable is ImplicitStaticPropertyVariableSymbol {
+                    receiver!!.AnchorSyntax(leftName)
                     receiver = ApplyMemberNarrowing(receiver!!)
                 }
             } else if TryBindInheritedClrInstanceMemberByBareName(name, out var inheritedClrHead) {
@@ -443,6 +444,7 @@ internal partial class ExpressionBinder {
                     userInterfaceSymbol = inheritedColorInterface
                     enumSymbol = inheritedColorEnum
                 } else {
+                    inheritedClrHead?.AnchorSyntax(leftName)
                     return BindAccessorStep(inheritedClrHead, nil, rightPart)
                 }
             } else if TryResolveInterfaceInstancePropertyByBareName(name, out _, out _) &&
@@ -482,6 +484,7 @@ internal partial class ExpressionBinder {
                 // submission — e.g. `p.Sum()` where `p` was declared in an
                 // earlier cell — binds the head as the submission's static
                 // field read and continues the chain on that value.
+                submissionHead?.AnchorSyntax(leftName)
                 return BindAccessorStep(submissionHead, nil, rightPart)
             } else if binderCtx.TryLookupSourceType(
                 $scope,
@@ -1974,7 +1977,9 @@ internal partial class ExpressionBinder {
                     // member surfaces GS0204 at the member-identifier
                     // location (e.g. `Color.Red`).
                     reportObsoleteUseIfApplicable(ne.Location, member!!, "${enumSymbol.Name}.${member!!.Name}")
-                    return BoundLiteralExpression(nil, member!!.Value, enumSymbol)
+                    let literal = BoundLiteralExpression(nil, member!!.Value, enumSymbol)
+                    literal.RecordStaticEnumQualifier(enumSymbol, ne, member!!)
+                    return literal
                 }
                 Diagnostics.ReportUndefinedEnumMember(ne.Location, memberName, enumSymbol.Name)
                 return BoundErrorExpression(nil)
@@ -1988,6 +1993,15 @@ internal partial class ExpressionBinder {
     /// Resolves user struct/class static members (ADR-0053) and nested
     /// construction under the actual enclosing receiver.
     private func BindUserTypeStaticAccessorStep(structSym StructSymbol, rightPart ExpressionSyntax) BoundExpression {
+        let result = BindUserTypeStaticAccessorStepCore(structSym, rightPart)
+        RecordStaticTypeQualifier(result, structSym, rightPart)
+        return result
+    }
+
+    private func BindUserTypeStaticAccessorStepCore(
+        structSym StructSymbol,
+        rightPart ExpressionSyntax
+    ) BoundExpression {
         switch rightPart {
             case nested is AccessorExpressionSyntax {
                 // Issue #1537: the left portion may name a nested TYPE of the
@@ -2314,6 +2328,15 @@ internal partial class ExpressionBinder {
     /// @param rightPart The member being accessed.
     /// @returns The bound access, or a bound error expression.
     private func BindInterfaceStaticAccessorStep(
+        interfaceSym InterfaceSymbol,
+        rightPart ExpressionSyntax
+    ) BoundExpression {
+        let result = BindInterfaceStaticAccessorStepCore(interfaceSym, rightPart)
+        RecordStaticTypeQualifier(result, interfaceSym, rightPart)
+        return result
+    }
+
+    private func BindInterfaceStaticAccessorStepCore(
         interfaceSym InterfaceSymbol,
         rightPart ExpressionSyntax
     ) BoundExpression {
@@ -4015,7 +4038,7 @@ internal partial class ExpressionBinder {
             )
             let MakeStaticGenericCall = func (substitutedReturnOverride TypeSymbol?) BoundCallExpression {
                 let result = BoundCallExpression(
-                    nil,
+                    ce,
                     method!!,
                     finalArguments,
                     substitutedReturnOverride ?? method!!.Type
@@ -4024,6 +4047,7 @@ internal partial class ExpressionBinder {
                     StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner,
                     MethodTypeArguments = methodTypeArguments
                 }
+                RecordStaticTypeQualifier(result, ownerType, ce)
                 return result
             }
             if substitution != nil {

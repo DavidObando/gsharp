@@ -42,6 +42,29 @@ class BoundAwaitExpression : BoundExpression {
         get;
     }
 
+    internal prop ImplicitCompletionOperand BoundExpression? -> LogicalCompletionOperand
+
+    internal func RecordImplicitCompletion(operand BoundExpression) {
+        RecordLogicalCompletion(operand)
+    }
+
+    internal func CopyImplicitCompletionTo(copy BoundAwaitExpression) {
+        CopyLogicalCompletionTo(copy)
+    }
+
+    shared {
+        internal func CreateImplicitCompletion(
+            syntax SyntaxNode?,
+            operand BoundExpression,
+            logicalType TypeSymbol,
+            awaiterTypeSymbol TypeSymbol? = nil
+        ) BoundAwaitExpression {
+            let completed = BoundAwaitExpression(syntax, operand, logicalType, awaiterTypeSymbol)
+            completed.RecordImplicitCompletion(operand)
+            return completed
+        }
+    }
+
     /// Gets the symbolic awaiter type used when the operand was bound through an erased placeholder CLR
     /// type.
     prop AwaiterTypeSymbol TypeSymbol? {
