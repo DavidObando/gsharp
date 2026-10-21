@@ -18,6 +18,7 @@
   <!-- Frameworks Versions -->
   <PropertyGroup>
     <NetCoreAppTargetFramework>net10.0</NetCoreAppTargetFramework>
+    <GsharpCompilerPackageTargetFramework Condition="'$(GsharpCompilerPackageTargetFramework)' == ''">net10.0</GsharpCompilerPackageTargetFramework>
   </PropertyGroup>
 
   <!-- Package Reference Definitions -->

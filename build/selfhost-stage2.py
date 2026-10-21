@@ -137,11 +137,13 @@ ALLOWED_PROJECT_TARGETS = {
     ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpBuildTask"):
         "6f3da180f1d43bc4b0cb9e7279adea49d140b8486d0419acbdc0b33f9574d236",
     ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpCompiler"):
-        "e331e60887acd7437c2ae7dd4af82dd8e1e05a5661a86e35c42e66329c33930a",
+        "f72330dd95fa8e690855adb961b866693717f31d91f9e689f98ceb0cd5e1f2fe",
     ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpFormatter"):
-        "2d508433cdacb86d471567535a2fb526f99e5c1ed79ba638590bb6e120f53155",
+        "c7dbcc9b672d274e72e9a67e1af6a93ac3e6e8a2faba8706bff71d2a9bb0b5c2",
     ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsgen"):
-        "72c98eee85a77eb9cf5fb13d65e58e4173c0d319ca7c648779fec7504baea38a",
+        "6260906aff2a33e6700343d5c4611aa074410707a0fdbd2621bd7fad52febde3",
+    ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "_GsharpPackPublishedSdkPayloads"):
+        "ac971c74649a7130dcbb2dd538afaabaee8bf9d6d8e562d7d613d8b3acc62ad0",
     ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpHotReloadRuntime"):
         "1acb9836d2fd29a80d1afdad36b4b71ebcd0b7d87994268dc1000ad8d4c7d4bd",
     ("src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", "PackGsharpChannelsRuntime"):
