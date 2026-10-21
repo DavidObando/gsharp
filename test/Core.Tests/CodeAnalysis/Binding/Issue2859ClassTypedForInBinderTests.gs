@@ -23,6 +23,28 @@ import Xunit
 /// GS0116, otherwise the fix would have degraded a real diagnostic into
 /// silently broken lowering.
 open class Issue2859ClassTypedForInBinderTests {
+    @Theory
+    @InlineData("prop Current int32 { set { } }")
+    @InlineData("prop Current int32 { private get -> 1; set { } }")
+    @InlineData("shared { prop Current int32 -> 1 }")
+    @InlineData("prop this[index int32] int32 -> index")
+    func Issue5088_CurrentMustBeReadablePublicInstanceMember(member string) {
+        let source = `package i5088invalid
+struct Cursor {
+` + member + `
+    func MoveNext() bool -> false
+}
+struct Values {
+    func GetEnumerator() Cursor -> default(Cursor)
+}
+func Main() {
+    for value in default(Values) { }
+}`
+        let diagnostic = Assert.Single(GetDiagnostics(source))
+        Assert.Equal("GS0116", diagnostic.Id)
+        Assert.Equal("default(Values)", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
     @Fact
     func ForIn_ClassWithImportedEnumerator_Binds() {
         const source = `
