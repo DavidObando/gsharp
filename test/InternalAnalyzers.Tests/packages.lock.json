@@ -10,9 +10,9 @@
       },
       "GSharp.CodeAnalysis.Analyzers.Testing": {
         "type": "Direct",
-        "requested": "[0.5.179, )",
-        "resolved": "0.5.179",
-        "contentHash": "Jn0U8uY2s5SLOB9yYqMl8MsBPNGVpydUzPEeTwGrr5Yr2SSPLO5it92oNfD3M6QYg/T1MQbkI4lY41dbQwPbnw==",
+        "requested": "[0.5.199, )",
+        "resolved": "0.5.199",
+        "contentHash": "SPC7RUcyMYV0SCWrkLsEN7Tye+bTTx+r/nbAuArRSbjb2nOGJll3iufnjUE+0GfiKA1gqRBWqpZ4Mx4ccbLNlQ==",
         "dependencies": {
           "Microsoft.VisualStudio.Validation": "17.8.8"
         }

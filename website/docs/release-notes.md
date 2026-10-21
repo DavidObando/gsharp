@@ -16,6 +16,8 @@ The published **0.4.591** release is the version used by the website's installat
 
 ## Unreleased (0.5 line)
 
+- **The repository compiler uses published SDK 0.5.199** (issue #2189). The bootstrap pin and matching analyzer-testing package move from 0.5.179 to the new release. This pin update uses the ordinary managed SDK; experimental NativeAOT and ReadyToRun toolchains remain outside the published package and await human review. The separate pin PR's CI provides N-1 stage-2 verification.
+
 - **Source-declared pattern enumerator properties** (issue #5088). `for value in source` accepts a public readable instance `Current` property on a source-declared enumerator, as it already does for imported enumerators. Generic element types and mutable value-enumerator state are preserved.
 
 - **Allocation-free byte-string UTF-8 scalar iteration** (issue #5087, ADR-0204). `value.DecodeUtf8Scalars(policy)` returns concrete value-type `ByteString.Utf8Enumerable` with an independent value enumerator. Each `Utf8Item` reports its scalar value, relative byte offset and consumed byte length. Strict iteration is lazy and repeats failures at the same sequence start; replacement advances exactly one malformed byte. Logical substring bounds, BOM, embedded NUL and non-BMP scalars are preserved. Eager decoding shares the scalar decision without per-scalar strings. Code-point collections, Go translation and release/pin adoption remain deferred.
