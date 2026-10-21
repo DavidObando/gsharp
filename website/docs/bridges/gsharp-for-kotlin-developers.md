@@ -93,13 +93,13 @@ let length = name?.Length ?? 0
 
 This is an expression excerpt; `name` is a `string?` supplied by the surrounding program.
 
-Do not transfer assumptions about Kotlin/JVM platform types to imported .NET APIs. G# uses CLR nullable metadata, and unannotated imported reference types can require explicit absence handling. See [nullable imported references](../tour/dotnet-interop.md#nullable-imported-references) and [control flow](../tour/control-flow.md).
+G# reads CLR nullable metadata: annotated positions import as `T` or `T?`; oblivious reference positions import as platform types displayed as `T!`. Like Kotlin platform types, these permit nullable and non-null use without guaranteeing a value at runtime. Unlike a type annotation, `value!!` performs a runtime nil check. The displayed `T!` is not source syntax. See [nullable imported references](../tour/dotnet-interop.md#nullable-imported-references) and [control flow](../tour/control-flow.md).
 
 ## Data models and collections
 
 Use `data class` for reference-typed structural data and `data struct` for value-typed structural data. A plain class, a data class, and a value type are different design choices. Copy/update does not make nested mutable state deeply immutable.
 
-G# uses .NET collections. Import `System.Collections.Generic` for `List[T]` and `Dictionary[K,V]`, and `System.Linq` for LINQ operations. A `let` binding can still refer to a list whose contents change. G# slices are CLR arrays, not Kotlin read-only lists.
+G# uses .NET collections. Import `System.Collections.Generic` for `List[T]` and `Dictionary[K,V]`, and `System.Linq` for LINQ operations. A `let` binding can still refer to a list whose contents change. `[]T` is an exact CLR array. Native `slice[T]` descriptors share managed storage; `readonly slice[T]` blocks slot writes but is not deeply immutable. Neither is a Kotlin read-only list.
 
 The [interop example](../tour/dotnet-interop.md) and [Trail walkthrough](../tutorials/trail.md) show these choices in executable code.
 

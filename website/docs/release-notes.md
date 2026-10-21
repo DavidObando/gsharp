@@ -10,11 +10,13 @@ G# is pre-1.0. The repository's version base is currently `0.5`, and product ver
 
 ## Reading these notes
 
-You are reading development documentation. Select **0.4** in the version menu for the published release snapshot. Check the selected documentation version before applying a migration or copying a command.
-
-The published **0.4.591** release is the version used by the website's installation instructions and executable showcase examples. Start with [installation](getting-started/install.md), [data types](tour/types.md), [channel concurrency](extensions/go-concurrency.md), and [canonical formatting](tooling/gsfmt.md). Detailed changes and compatibility notes follow.
+The published **0.5** documentation snapshot and all current installation/download examples target **0.5.199**. Older **0.4** and **0.3** snapshots retain their own commands. Select **Next** only for development features.
 
 ## Unreleased (0.5 line)
+
+The entries below are newer than v0.5.199. Published features and migration notes follow in the release section.
+
+- **Published 0.5 website snapshot** (issues #5082, #5084). The default documentation and downloads target v0.5.199, with release-grounded guidance for native slices, platform nullability, SDK projects and editor tooling. Next retains post-tag APIs; 0.4/0.3 snapshots and original archives remain unchanged. Original 0.4.591 editor captures are explicitly historical, while current examples execute independently with the published SDK. Download generation and content comparisons normalize checkout line endings for reproducible Windows/Linux evidence.
 
 - **Byte-string code-point collections** (issue #5095, ADR-0204). `ByteString.FromCodePoints` snapshots a readonly signed-`int32` slice as UTF-8 with mandatory `CodePointEncoding.Strict` or `ReplaceInvalidCodePoint`. Strict failures report appended `ByteStringInputKind.CodePoints` and the first invalid logical input element index; existing `Utf8`/`Utf16` identities are unchanged. `DecodeCodePoints` reuses scalar decoding and returns independent mutable native slices, including present empty rather than nil results. UTF-8 errors retain byte offsets; replacement consumes one malformed byte. No normalization, implicit conversion, SDK-pin change or Go translation is included.
 
@@ -24,17 +26,34 @@ The published **0.4.591** release is the version used by the website's installat
 
 - **Allocation-free byte-string UTF-8 scalar iteration** (issue #5087, ADR-0204). `value.DecodeUtf8Scalars(policy)` returns concrete value-type `ByteString.Utf8Enumerable` with an independent value enumerator. Each `Utf8Item` reports its scalar value, relative byte offset and consumed byte length. Strict iteration is lazy and repeats failures at the same sequence start; replacement advances exactly one malformed byte. Logical substring bounds, BOM, embedded NUL and non-BMP scalars are preserved. Eager decoding shares the scalar decision without per-scalar strings. Go translation and release/pin adoption remain deferred.
 
-- **Explicit byte-string UTF-8 text boundaries** (issue #5080, ADR-0204). `ByteString.EncodeUtf8` and `DecodeUtf8` require explicit strict or replacement policies. Strict failures report `ByteStringEncodingException.InputKind` (`Utf8`/`Utf16`) and the first malformed sequence's byte offset or unpaired surrogate's code-unit offset. Offsets are relative to the input value, including substrings. Replacement decoding advances exactly one invalid byte; replacement encoding handles each unpaired code unit. No implicit conversion, normalization or BOM insertion/stripping occurs. Release/pin adoption remains deferred.
 
-- **Immutable arbitrary-byte strings** (issue #5068, ADR-0204). Native `bytestring` names `Gsharp.Values.ByteString`; `b"\xFF\0"` preserves exact bytes without changing CLR `string`. The core provides content equality/hash/order, byte indexing and ranges, pattern-based byte iteration, bytewise search/concatenation, copying mutable boundaries and explicit compact `Detach()`. Empty defaults are present values, distinct from nullable `nil`. Dollar signs in byte literals are data, not interpolation. Literal evaluation reuses private storage after initialization; formatting, hovers, completion and the code-model printer preserve byte semantics. Missing runtime support reports GS0627 and invalid literal/source encoding reports GS0628. Release adoption and the repository SDK-pin move remain separate work.
+
+- **The repository compiler uses published SDK 0.5.199** (issue #2189). The bootstrap pin and matching analyzer-testing package move from 0.5.179 to the new release. This pin update uses the ordinary managed SDK; experimental NativeAOT and ReadyToRun toolchains remain outside the published package and await human review. The separate pin PR's CI provides N-1 stage-2 verification.
+
+- **Definite-assignment analysis reuses region-local scratch sets** (issue #5104). Fixed-point probes recycle unpublished entry and exit storage instead of allocating a new set for every block simulation and predecessor intersection. Nested regions borrow read-only input states. Published states, conditional edges, convergence and diagnostic order remain unchanged; no compiler throughput improvement is claimed.
+
+- **Ordered visible imports share source-tree views** (issue #5105, ADR-0203). Ordinary import lookup reuses binding-pass-owned indexes instead of filtering every file's imports at each reference. Empty lexical scopes share ancestor views, and import additions invalidate descendant snapshots. Historical scopes retain import segments; only requested scopes cache flattened views. File isolation, ancestor order, alias precedence, implicit fallback and ambiguity diagnostics remain unchanged. Five-pair fresh-process compiler replays reduced Core/Core.Tests median times from 35.44/71.48 seconds to 25.99/25.20 seconds with exact output parity. Peak RSS medians and separate single-sample process allocations were slightly higher. These two fixed workloads do not establish a full-solution build speedup.
+
+- **Synchronous iterators reuse their first enumerator** (issue #5102). An unused sequence returns its own state machine for the first enumeration on its creating thread. Later or cross-thread enumerations create independent frames from the original captured arguments and value receiver. Direct `IEnumerator` returns remain ready for `MoveNext` without acquiring an enumerator. Iterator bodies remain deferred, and replay and disposal behavior are unchanged. Async iterators and local-field compaction are unchanged; this removes one frame allocation in the eligible path, not a demonstrated compiler-throughput improvement.
+
+- **SDK packaging reuses equivalent repository build graphs** (issue #5103). Compiler, formatter and generator payloads publish from their normal MSBuild reference instances into separate staging directories. Incompatible publish settings keep isolated build outputs. Repository builds track tool contents before reusing compiled outputs. The package layout and the source-built compiler for the netstandard task remain unchanged.
+
+- Aligned VS Code and Visual Studio TextMate highlighting with website Prism
+  for escaped and Unicode names, contextual intrinsics and reference/slice
+  vocabulary, numeric and character literals, and nested string interpolation.
+  Shared regression cases exercise both tokenizers.
+
+## 0.5.199 (October 21, 2026)
+
+This snapshot is grounded in [`v0.5.199`](https://github.com/DavidObando/gsharp/releases/tag/v0.5.199), commit `5fa04b164c8d83a70ad2fda26164a97f1213cb24`, published October 21, 2026 at 05:26 UTC. The compiler, language server, formatter and tools are now written in G#. This release includes native shared-storage slices, platform nullability, immutable byte strings and explicit UTF-8 text boundaries. Later scalar/code-point APIs and other post-tag changes belong to Next, not this snapshot. The following entries preserve the tag's complete 0.5 change history.
+
+- **Explicit byte-string UTF-8 text boundaries** (issue #5080, ADR-0204). `ByteString.EncodeUtf8` and `DecodeUtf8` require explicit strict or replacement policies. Strict failures report `ByteStringEncodingException.InputKind` (`Utf8`/`Utf16`) and the first malformed sequence's byte offset or unpaired surrogate's code-unit offset. Offsets are relative to the input value, including substrings. Replacement decoding advances exactly one invalid byte; replacement encoding handles each unpaired code unit. No implicit conversion, normalization or BOM insertion/stripping occurs. This text-boundary API ships in 0.5.199; scalar enumeration and code-point collections are not included.
+
+- **Immutable arbitrary-byte strings** (issue #5068, ADR-0204). Native `bytestring` names `Gsharp.Values.ByteString`; `b"\xFF\0"` preserves exact bytes without changing CLR `string`. The core provides content equality/hash/order, byte indexing and ranges, pattern-based byte iteration, bytewise search/concatenation, copying mutable boundaries and explicit compact `Detach()`. Empty defaults are present values, distinct from nullable `nil`. Dollar signs in byte literals are data, not interpolation. Literal evaluation reuses private storage after initialization; formatting, hovers, completion and the code-model printer preserve byte semantics. Missing runtime support reports GS0627 and invalid literal/source encoding reports GS0628. This byte-string core ships in 0.5.199. Scalar enumeration, code-point collections and later repository pin changes are not part of this tag.
 
 - **CLR overload applicability reuses local raw parameter arrays** (issue #5071, ADR-0203). Normal-form preparation retains its raw declaration parameters, while closed generic candidates still read their substituted signatures. Expanded applicability normalizes the ABI-only count against its own parameter vector. Inference, constraints, callbacks and fallback order remain separate between forms. This is a small reflection-work reduction, not a demonstrated compiler throughput improvement.
 
 - **Imported metadata readers reuse raw declaration facts** (issue #5070, ADR-0203). Open-member token lookups and raw nullable/context attribute decoding share weak, actual-reflection-object caches. Receiver-specific nullability, module identity and direct versus signature-filtered load behavior remain unchanged. Failed attribute reads remain retryable, and host generic definitions do not retain private reference contexts. Fixed Core/Oahu.Core profiles reduced definition scans from 47,484/3,724 to 389/96 with identical emitted bytes and diagnostics. Direct compiler median times were 40.952 → 41.940 seconds for Core and 4.385 → 3.950 seconds for Oahu.Core, with overlapping ranges; no general throughput improvement is claimed.
-
-- **The repository compiler uses published SDK 0.5.199** (issue #2189). The bootstrap pin and matching analyzer-testing package move from 0.5.179 to the new release. This pin update uses the ordinary managed SDK; experimental NativeAOT and ReadyToRun toolchains remain outside the published package and await human review. The separate pin PR's CI provides N-1 stage-2 verification.
-
-- **SDK packaging reuses equivalent repository build graphs** (issue #5103). Compiler, formatter and generator payloads publish from their normal MSBuild reference instances into separate staging directories. Incompatible publish settings keep isolated build outputs. Repository builds track tool contents before reusing compiled outputs. The package layout and the source-built compiler for the netstandard task remain unchanged.
 
 - **The compiler now builds with the published G# SDK 0.5.179** (issue #2189). The bootstrap pin moves from 0.5.7 to the release containing the measured compiler lookup, generator setup and bounded-worker improvements. The analyzer-testing package follows the same pin. This separate pin update builds the repository with that released compiler; its CI provides stage-2 verification under the N-1 rule.
 
@@ -44,8 +63,6 @@ The published **0.4.591** release is the version used by the website's installat
 
 - **Body binding reuses canonical declaration readers** (issue #5056, ADR-0203). Immutable alias and struct snapshots avoid rebuilding the declaration universe for repeated body lookups while invalidating ancestor declarations and alias overrides. Opt-in body workers also accept proven scalar string/character and source-enum switches. Receivers, calls, inferred signatures and shared synthesis retain their coordinated path and the existing request budget.
 
-- **Definite-assignment analysis reuses region-local scratch sets** (issue #5104). Fixed-point probes recycle unpublished entry and exit storage instead of allocating a new set for every block simulation and predecessor intersection. Nested regions borrow read-only input states. Published states, conditional edges, convergence and diagnostic order remain unchanged; no compiler throughput improvement is claimed.
-
 - **File and stream emission share preparation** (issue #5069, ADR-0203). Both entry points use the same diagnostic aggregation, documentation validation and ordered lowering pipeline for each invocation. Destination handling, staged publication and implementation/reference output remain separate. This is a maintenance refactor, not a build-speed improvement; the CLI already lowers once for implementation and reference output.
 
 - **Bounded method-local lowering and instruction emission** (issue #5042, ADR-0203). Opt-in compiler workers can lower noncapturing primitive lambdas and emit primitive/local method instructions into independent buffers. Cross-body discovery, metadata, generic remaps and PDB publication remain ordered; unknown or metadata-dependent bodies keep the sequential path. The existing shared worker and memory budget applies. Measurements now separate discovery, method instructions, implementation/reference output, PDB construction and PE serialization.
@@ -54,15 +71,11 @@ The published **0.4.591** release is the version used by the website's installat
 
 - **Candidate lookup indexes and opt-in compiler measurements** (issue #5040). Alias collision and unknown-arity nested lookup use name/arity and canonical-owner candidate buckets instead of scanning every alias. Imported extension metadata and record-shape classification reuse context-sensitive indexes, including negative results. Persisted reference indexes reject changed reference contents even when assembly identities match. Set `GSHARP_MEASURE_PHASES` to a JSON path for nested phase timings, process counters, and input/cache metrics without changing diagnostics.
 
-- **Ordered visible imports share source-tree views** (issue #5105, ADR-0203). Ordinary import lookup reuses binding-pass-owned indexes instead of filtering every file's imports at each reference. Empty lexical scopes share ancestor views, and import additions invalidate descendant snapshots. Historical scopes retain import segments; only requested scopes cache flattened views. File isolation, ancestor order, alias precedence, implicit fallback and ambiguity diagnostics remain unchanged. Five-pair fresh-process compiler replays reduced Core/Core.Tests median times from 35.44/71.48 seconds to 25.99/25.20 seconds with exact output parity. Peak RSS medians and separate single-sample process allocations were slightly higher. These two fixed workloads do not establish a full-solution build speedup.
-
 - **Inferred-type hints match G# declaration syntax**. Visual Studio and VS Code now show `FakeRunner` rather than `: FakeRunner` after an inferred local's name. Parameter-name hints such as `exitCode:` are unchanged.
 
 - **Indexed member values keep their hover and navigation targets** (issue #5035). Hover and go-to-definition now follow the compiler's bound member through indexing, including source properties and fields, CLR members, and `List[T]`, array and string values. `runner.Calls[0]` and `call.Args[0]` no longer lose their property hovers or source definitions. An indexed method result such as `uri.ToString()[0]` shows the method on its bound receiver instead of an unrelated same-named method. Index arguments still resolve to their own locals.
 
 - **Suspending `for … in` loops dispose their enumerators** (issue #5037). Loop cleanup now survives `yield` and `await`: exhaustion, early consumer disposal, `break`, `return`, and exceptions release acquired disposable enumerators. Nested iterator cleanup runs inside-out even when an inner enumerator's `Dispose` throws.
-
-- **Synchronous iterators reuse their first enumerator** (issue #5102). An unused sequence returns its own state machine for the first enumeration on its creating thread. Later or cross-thread enumerations create independent frames from the original captured arguments and value receiver. Direct `IEnumerator` returns remain ready for `MoveNext` without acquiring an enumerator. Iterator bodies remain deferred, and replay and disposal behavior are unchanged. Async iterators and local-field compaction are unchanged; this removes one frame allocation in the eligible path, not a demonstrated compiler-throughput improvement.
 
 - **Bounded compiler reuse is opt-in** (issue #5038). `GSharpUseSharedCompilation` reuses one serial compiler worker per MSBuild node and build. Requests isolate input paths, options, environment, and reference contexts. Workers retire by request count, idle time, or memory. Transport failures are explicit; compiler failures are never retried. Imported generic symbols no longer retain private metadata contexts through a host assembly's cache bucket.
 
@@ -211,7 +224,7 @@ Visual Studio extensions are the same.
 Before moving an application to 0.5, pin the intended SDK, select its
 documentation, run the project's tests, and review the affected diagnostics.
 
-For changes after the published snapshot, pay particular attention to stricter generic-constraint and nullable-argument diagnostics. Code previously accepted with an invalid CLR contract may now be rejected at compile time; the detailed entries below identify the diagnostic and remedy.
+When migrating from 0.4, pay particular attention to stricter generic-constraint and nullable-argument diagnostics. Code previously accepted with an invalid CLR contract may now be rejected at compile time; the detailed entries below identify the diagnostic and remedy.
 
 Before moving an application to a different compiler version, pin the intended SDK, select its documentation, run the project's tests, and review the affected diagnostics. Do not treat the development branch's implementation notes as a stable compatibility promise.
 
@@ -530,11 +543,6 @@ Before moving an application to a different compiler version, pin the intended S
 - **Bound-node analyzer actions now see the same operation tree as operation-block actions** (issue [#4457](https://github.com/DavidObando/gsharp/issues/4457)). `RegisterBoundNodeAction` and translated Roslyn `RegisterOperationAction` rules enter lambda and local-function bodies, visit a local assignment's target before its value, and still treat a plain `x is T` as one type-test operation. Nested nodes retain the enclosing member as their containing function, matching Roslyn.
 
 ### Fixed
-
-- Aligned VS Code and Visual Studio TextMate highlighting with website Prism
-  for escaped and Unicode names, contextual intrinsics and reference/slice
-  vocabulary, numeric and character literals, and nested string interpolation.
-  Shared regression cases exercise both tokenizers.
 
 - **Property writes through tuple elements update the stored struct** (issue #5023). `tuple.Item1.Value = "v"` previously changed a copy and silently lost the update. Tuple-element receivers now keep their storage through nested tuples, field and array chains, explicit address/dereference pairs, compound assignments, control-flow right-hand sides, and suspension. Receiver components run once, before the right-hand side; read-only storage remains protected. Native and CLR ref-returning owners are captured once for writes and diagnosed if their managed address would have to survive suspension; non-suspending opaque borrows retain their once-captured address. Capturable array/reference owners stop borrowed-address propagation. Conditional and nested-field borrows preserve the selected storage across suspension without retaining a managed pointer.
 

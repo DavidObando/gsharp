@@ -19,7 +19,7 @@ In this tutorial, you will grow from one file to a project-shaped program. You w
 Keep the project file small and let the SDK include `.gs` files automatically:
 
 ```xml title="MyApp.gsproj"
-<Project Sdk="Gsharp.NET.Sdk">
+<Project Sdk="Gsharp.NET.Sdk/0.5.199">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>

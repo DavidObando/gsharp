@@ -59,7 +59,9 @@ The server capability factory enables the following:
 | Code actions | `textDocument/codeAction`, exposing project-wide refactorings (e.g. `Sort imports`) and quick fixes for the nil-related diagnostics covered in [Quick fixes](#quick-fixes-textdocumentcodeaction) below. |
 | Code lenses | `textDocument/codeLens`, currently reference-count lenses for declarations. |
 | Semantic tokens | Full and range semantic tokens. |
-| Inlay hints | `textDocument/inlayHint`, currently parameter-name hints at call sites. |
+| Inlay hints | `textDocument/inlayHint`, inferred-type hints and parameter-name hints at call sites. |
+
+Use the extension and language server from the matching published release when following released docs. Next may describe newer server capabilities; an application's SDK pin does not select its editor extension version.
 
 ## Diagnostics lifecycle
 
@@ -71,7 +73,7 @@ During `initialize`, the server attempts best-effort workspace discovery from th
 
 ## Performance and generated project state
 
-The 0.4 language server has several incremental paths that keep editor features responsive on larger projects:
+The 0.5 language server has several incremental paths that keep editor features responsive on larger projects:
 
 - **Incremental delta binding:** body-only edits reuse unchanged per-file declarations and bound bodies instead of rebinding the whole project.
 - **Incremental semantic model:** syntax-node buckets are memoized per `SyntaxTree`, and function-local maps per reused bound body, so hover, definition, and completion rebuild only the changed inputs when possible.

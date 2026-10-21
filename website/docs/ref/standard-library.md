@@ -11,7 +11,7 @@ G# deliberately keeps its language-defined library small. Primitive types, colle
 
 ## Primitive types
 
-The built-in primitive type symbols are exactly:
+The built-in primitive names and native byte-string alias are:
 
 | Category | Types | Notes |
 | --- | --- | --- |
@@ -20,6 +20,7 @@ The built-in primitive type symbols are exactly:
 | Signed integers | `int8`, `int16`, `int32`, `int64`, `nint` | Unsuffixed integer literals default to `int32`. Older aliases such as `int` and `long` are not built-in primitive names. |
 | Floating point and decimal | `float32`, `float64`, `decimal` | Unsuffixed float literals default to `float64`; suffixes include `F`, `D`, and `M`. |
 | Text | `char`, `string` | `char` is one UTF-16 code unit; `string` is the CLR string type. |
+| Immutable bytes | `bytestring` | Native alias for `Gsharp.Values.ByteString`, not CLR text. The core and explicit UTF-8 text boundaries ship in 0.5.199; see [byte strings](spec.md#byte-string-literals). |
 | Top and no-value | `object`, `void` | `object` is the universal upper bound; `void` is the no-result type. |
 | Absence | `nil` | `nil` is a special literal type that converts to nullable types, not a named runtime type. |
 
@@ -54,7 +55,7 @@ Channel operations are recognized specially by the binder; they are language syn
 | send | `ch <- value` | `chan[T]` or `out chan[T]`; value converts to `T` | statement |
 | drain | `for v in ch { … }`, `while let v = <-ch { … }` | `chan[T]` or `in chan[T]` | loops until the channel is closed |
 | close | `ch.Close()` | `chan[T]` or `out chan[T]` | member call; closing twice throws, `Dispose()` is idempotent |
-| `select` | `select { case … }` | channel operations | runs the first ready case |
+| `select` | `select { case … }` | channel operations | chooses uniformly at random among ready arms |
 
 The Go-style built-in functions `len`, `cap`, `append`, `delete`, `close(ch)`, and `make(chan T)` are **retired**. A call reports `GS0566` naming the member replacement for the site — `xs.Length`, `m.Count`, `m.Remove(k)`, `ch.Length()`, `ch.Capacity`, `ch.Close()`, `chan[T](n)` — and a user-defined function of the same name is an ordinary call. See [Go-style built-ins (retired)](../extensions/go-builtins) for the full table.
 
@@ -68,7 +69,7 @@ let (after, ok) = <-ch   // 0, false
 
 ## Arrays and slices
 
-Fixed arrays use `[N]T`; slices use `[]T`. Literals use the same shape with an initializer body. A slice **is** a CLR array (`[]T` is `T[]`), so its length is `.Length` and there is no separate capacity; the growable shape is `List[T]` with `Add`.
+`[N]T` and `[]T` are exact CLR arrays (`T[]`); `[N]T{...}` checks the initializer count. Their length is `.Length`, with no separate capacity. Native `slice[T]` and `readonly slice[T]` are distinct value descriptors with `.Length` and `.Capacity`. Assignment and ranges share storage. Retain the descriptor returned by `.Append(...)`; growth may allocate. `.Clone()` copies elements to independent storage. Readonly prevents slot writes, not deep mutation. CLR boundaries use explicit `slice[T].FromArray(array)` (shares exact storage) and `.ToArray()` (copies). See [native slices](spec.md#native-shared-storage-slices). `List[T]` remains an alternative for growable CLR collections.
 
 ```gsharp
 import System.Collections.Generic
@@ -111,17 +112,17 @@ The `Gsharp.Extensions` assembly ships with `Gsharp.NET.Sdk` and is referenced b
 
 ### Gsharp.Extensions.Optional
 
-Extensions on `T?` for both reference-typed (`T : class`) and value-typed (`T : struct`) receivers. Each helper has two overloads with disjoint generic constraints; the G# binder picks the right one based on the receiver type.
+The tables below use conceptual signatures, not copyable G# declarations: constraints and overload variants are abbreviated. Extensions on `T?` support both reference-typed (`T : class`) and value-typed (`T : struct`) receivers. `Map` and `FlatMap` require both `T` and `U` to be reference types, or both to be value types; they do not provide cross-family projections. Each helper has overloads with disjoint generic constraints; the G# binder picks the right one based on the receiver type.
 
 | Symbol | Form | One-line description |
 | --- | --- | --- |
-| `Map` | `func [T, U] (self T?) Map(f (T) -> U) U?` | Apply `f` to the present value; pass `null` through unchanged. |
+| `Map` | `func [T, U] (self T?) Map(f (T) -> U) U?` | Apply `f` to the present value; pass `nil` through unchanged. |
 | `FlatMap` | `func [T, U] (self T?) FlatMap(f (T) -> U?) U?` | Chain a projection that itself returns a `U?`, flattening the result. |
 | `OrElse` | `func [T] (self T?) OrElse(default T) T` | Return the present value or the eager fallback `default`. |
 | `OrCompute` | `func [T] (self T?) OrCompute(default () -> T) T` | Return the present value or invoke `default()` lazily for the fallback. |
 | `OrThrow` | `func [T] (self T?) OrThrow(message string) T` | Return the present value or throw `InvalidOperationException(message)`. |
 | `IfPresent` | `func [T] (self T?) IfPresent(action (T) -> void)` | Invoke `action` only when the value is present; no-op otherwise. |
-| `Filter` | `func [T] (self T?) Filter(pred (T) -> bool) T?` | Keep the value when `pred(value)` is true; otherwise yield `null`. |
+| `Filter` | `func [T] (self T?) Filter(pred (T) -> bool) T?` | Keep the value when `pred(value)` is true; otherwise yield `nil`. |
 
 Each helper carries both a `where T : class` and a `where T : struct` overload, so the same names apply to reference- and value-typed `T?`. The G# binder picks the right overload based on the receiver's shape; this follows the constraint-aware overload-resolution rule.
 

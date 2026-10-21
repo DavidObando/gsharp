@@ -11,6 +11,8 @@ Start with the small answer, then follow the link to the precise rule. Code frag
 
 `T?` can hold `nil`. `T` and `T?` are distinct types; use nullable flow rather than assuming a value is present.
 
+Imported .NET positions follow nullable metadata: `T` is annotated non-null, `T?` is annotated nullable, and an oblivious reference is a platform type displayed as `T!`. The default platform mode permits nullable and non-null use of `T!` without a runtime guarantee. `T!` is not source syntax; `value!!` is a runtime nil check. See [imported references](../tour/dotnet-interop.md#nullable-imported-references).
+
 ### Null conditional access
 
 `?.` accesses a member only when its receiver is present:

@@ -119,7 +119,9 @@ Console.WriteLine("answer=${n *
 
 Malformed interpolation is reported by dedicated diagnostics: `GS0220` (non-constant alignment), `GS0221` (handler forwarding), `GS0222` (unterminated hole), `GS0223` (empty hole), `GS0224` (empty format specifier), and `GS0225` (newline in the literal portion of the string). By default an interpolated string lowers to `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler`; when its contextual target type is `IFormattable` or `FormattableString` it instead lowers to `FormattableStringFactory.Create`, deferring formatting so the caller selects the culture. See the [CLR interop reference](./clr-interop.md#interpolated-strings-and-formatting).
 
-### Byte-string literals (development)
+<span id="byte-string-literals-development"></span>
+
+### Byte-string literals
 
 An adjacent, unescaped `b"` starts an immutable arbitrary-byte literal with
 nominal type `Gsharp.Values.ByteString`, spelled `bytestring` when unshadowed.
@@ -140,8 +142,9 @@ even when that spelling is shadowed. Missing/incompatible runtime support
 diagnoses GS0627.
 
 These are value expressions, not metadata/attribute/optional-parameter
-constants or constant patterns. Release/pin adoption remains
-separate from this development capability; see ADR-0204.
+constants or constant patterns. The byte-string core and explicit UTF-8 text
+boundaries ship in 0.5.199. Scalar iteration and code-point collections below
+are Next-only APIs, not part of that release.
 
 #### Explicit UTF-8 text boundaries
 
@@ -172,6 +175,8 @@ Default/empty byte strings decode to `""`; empty text encodes to an empty value.
 
 #### Code-point collections
 
+**Next only:** these APIs and `InputKind.CodePoints` are not in 0.5.199.
+
 `ByteString.FromCodePoints(source: readonly slice[int32], policy: CodePointEncoding)`
 encodes unrestricted signed integers as UTF-8. `CodePointEncoding` lives in
 `Gsharp.Values`: `Strict` rejects negative values, surrogates U+D800..U+DFFF
@@ -199,6 +204,8 @@ strips/inserts BOM nor drops embedded zero or non-BMP scalars. Both require
 linear processing plus growing buffers and output storage, not zero allocation.
 
 #### Lazy UTF-8 scalar iteration
+
+**Next only:** this scalar-enumeration API is not in 0.5.199.
 
 `value.DecodeUtf8Scalars(policy: Utf8Decoding)` returns value-type
 `ByteString.Utf8Enumerable`. Its `GetEnumerator()` returns concrete value-type
@@ -253,7 +260,7 @@ VariableDecl = ( "const" | "let" | "var" ) identifier TypeClause? "=" Expression
              | "let" "{" identifier "=" identifier { "," identifier "=" identifier } "}" "=" Expression .
 ```
 
-An initializer-less `var` binds the named type's **zero value**: `0`/`false`/`""` for the scalar types, the all-zero value for structs and enums, and — for the magic collection types — a **sound empty instance** rather than a null reference. `var m map[K,V]` is an empty map, `var s []T` an empty slice, `var a [N]T` a zeroed length-`N` array, and `var q sequence[T]` an empty sequence, so the bare (non-`?`) spelling's non-null promise holds and the slot is immediately usable. This applies to locals, top-level (REPL-hoisted) globals, and struct/class fields alike (fields receive a synthesized field initializer), and recurses into a struct-typed slot's own fields at any nesting depth — a bare `var s S` local/global/field binds a sound empty instance for every magic-collection field reachable through `S`'s own field composition, whether `S` is the slot's direct type or nested inside another struct or class. `chan[T]` is carved out — an auto-created channel has no sensible default, so a channel declaration without an initializer is rejected (`GS0520`; initialize with `chan[T]()`, `chan[T](capacity)`, or `Chan.Unbounded[T]()`). Array/slice *elements* of collection type keep the CLR default (null) — only declaration slots get empty instances — and the explicit `= default` spelling keeps its literal CLR meaning (null), including for a struct's magic-collection fields; only an *omitted* initializer gets the sound empty instance. A struct's non-magic field explicit initializer (e.g. `var Count int32 = 5`) still does not run for a bare declaration, at any nesting depth — only the sound zero value for a magic-collection field is synthesized.
+An initializer-less `var` binds the named type's **zero value**: `0`/`false` for numeric and boolean types, `nil` for reference types (including `string`), the all-zero value for structs and enums, and — for the magic collection types — a **sound empty instance** rather than a null reference. `var m map[K,V]` is an empty map, `var s []T` an empty slice, `var a [N]T` a zeroed length-`N` array, and `var q sequence[T]` an empty sequence, so the bare (non-`?`) spelling's non-null promise holds and the slot is immediately usable. This applies to locals, top-level (REPL-hoisted) globals, and struct/class fields alike (fields receive a synthesized field initializer), and recurses into a struct-typed slot's own fields at any nesting depth — a bare `var s S` local/global/field binds a sound empty instance for every magic-collection field reachable through `S`'s own field composition, whether `S` is the slot's direct type or nested inside another struct or class. `chan[T]` is carved out — an auto-created channel has no sensible default, so a global or field channel declaration without an initializer is rejected (`GS0520`); locals require definite assignment before use (`GS0522`). Initialize with `chan[T]()`, `chan[T](capacity)`, or `Chan.Unbounded[T]()`. Array/slice *elements* of collection type keep the CLR default (null) — only declaration slots get empty instances — and the explicit `= default` spelling keeps its literal CLR meaning (null), including for a struct's magic-collection fields; only an *omitted* initializer gets the sound empty instance. A struct's non-magic field explicit initializer (e.g. `var Count int32 = 5`) still does not run for a bare declaration, at any nesting depth — only the sound zero value for a magic-collection field is synthesized.
 
 `let` communicates immutability of the binding. `var` introduces a mutable variable. `const` is for compile-time constants. Tuple deconstruction and named deconstruction use `let` forms. Multi-target assignment is statement syntax over existing writable storage and accepts either one RHS per target or one matching tuple-valued RHS. The legacy `identifier ":=" Expression` short variable-declaration form was removed; use `let name = expr` (immutable) or `var name = expr` (mutable) instead.
 
@@ -594,7 +601,7 @@ let counts = map[string,int32]{"g": 1, "sharp": 2}
 
 ### Channels
 
-Channels are written `chan[T]` — the element type inside brackets, like `sequence[T]` and `map[K, V]`. `in chan[T]` is a receive-only handle and `out chan[T]` a send-only one; a `chan[T]` converts implicitly to either, never the reverse, which is what makes channel ownership checkable. A channel value is constructed by applying the type clause to arguments: `chan[T]()` is a **rendezvous** channel (capacity 0 — a send completes only when a receiver takes the value), `chan[T](capacity)` is buffered, and `Chan.Unbounded[T]()` is the one unbounded form, spelled through the runtime class deliberately. Prefix receive is `<-ch` (the element's zero value on a closed, drained channel — no exception); send statements are `ch <- value`; `ch.Close()` closes (closing twice throws; `Dispose()` is the idempotent close, so `using let` works); `select` multiplexes receive and send cases. `chan[T]` **is** `System.Threading.Channels.Channel<T>` (`in`/`out` are `ChannelReader<T>`/`ChannelWriter<T>`), so any BCL channel flows in with no adapter, and the conversions run in both directions and across assemblies: the lattice reads the types, not the spelling, so a `Channel<T>` — from C#, from NuGet, or read back from a G# library's own metadata — converts implicitly to a `ChannelWriter<T>` or `ChannelReader<T>` target exactly as `chan[T]` converts to `out chan[T]` or `in chan[T]`, which is also C#'s rule for the same pair (`Channel<TWrite, TRead>` declares implicit operators to both); what `chan[T](…)` constructs is the runtime's `Gsharp.Concurrency.Chan<T>` subclass, which also carries `Length()` (a racy snapshot, hence a method) and `Capacity` (fixed, hence a property). A channel declaration **must** carry an initializer — an auto-created channel has no sensible default, so `var ch chan[T]` without one is rejected with `GS0520`; this is the deliberate carve-out from the empty-instance zero values the other collection types get. A trailing `?` marks the whole channel nullable (`chan[int32]?`); a nullable element is `chan[int32?]`.
+Channels are written `chan[T]` — the element type inside brackets, like `sequence[T]` and `map[K, V]`. `in chan[T]` is a receive-only handle and `out chan[T]` a send-only one; a `chan[T]` converts implicitly to either, never the reverse, which is what makes channel ownership checkable. A channel value is constructed by applying the type clause to arguments: `chan[T]()` is a **rendezvous** channel (capacity 0 — a send completes only when a receiver takes the value), `chan[T](capacity)` is buffered, and `Chan.Unbounded[T]()` is the one unbounded form, spelled through the runtime class deliberately. Prefix receive is `<-ch` (the element's zero value on a closed, drained channel — no exception); send statements are `ch <- value`; `ch.Close()` closes (closing twice throws; `Dispose()` is the idempotent close, so `using let` works); `select` multiplexes receive and send cases. `chan[T]` **is** `System.Threading.Channels.Channel<T>` (`in`/`out` are `ChannelReader<T>`/`ChannelWriter<T>`), so any BCL channel flows in with no adapter, and the conversions run in both directions and across assemblies: the lattice reads the types, not the spelling, so a `Channel<T>` — from C#, from NuGet, or read back from a G# library's own metadata — converts implicitly to a `ChannelWriter<T>` or `ChannelReader<T>` target exactly as `chan[T]` converts to `out chan[T]` or `in chan[T]`, which is also C#'s rule for the same pair (`Channel<TWrite, TRead>` declares implicit operators to both); what `chan[T](…)` constructs is the runtime's `Gsharp.Concurrency.Chan<T>` subclass, which also carries `Length()` (a racy snapshot, hence a method) and `Capacity` (fixed, hence a property). A channel global or field **must** carry an initializer (`GS0520`). A local may be declared without one, but must be definitely assigned before use (`GS0522`). An auto-created channel has no sensible default, unlike the empty-instance values of other collection declarations. A trailing `?` marks the whole channel nullable (`chan[int32]?`); a nullable element is `chan[int32?]`.
 
 The retired spellings are rejected with a replacement named in the message: the juxtaposed type clause `chan T` (`GS0567` — use `chan[T]`), and the built-ins `make(chan T[, n])` and `close(ch)` (`GS0566` — use `chan[T](…)` / `Chan.Unbounded[T]()` and `ch.Close()`). The syntax needs no import (the `import Gsharp.Extensions.Go` gate is retired, GS0316); the concurrency library lives in the implicitly imported `Gsharp.Concurrency` namespace.
 

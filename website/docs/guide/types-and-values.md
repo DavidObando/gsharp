@@ -23,7 +23,7 @@ Numeric operators are defined for matching primitive types; G# does not silently
 
 ## Arrays, slices, and maps
 
-Arrays have fixed length and are written `[N]T`. Slices are written `[]T` and are backed by CLR arrays in the current implementation. Use `.Length` for slice and array length, and use CLR collection types such as `List[T]` when you need growable storage. Maps are written `map[K,V]` and are backed by `Dictionary<K,V>`.
+Both `[N]T` and `[]T` are exact CLR arrays (`T[]`), not value-semantic fixed buffers or native slice descriptors. `[N]T{...}` checks the initializer count; `[]T{...}` infers it. Arrays have `.Length` but no independent capacity. Native `slice[T]` and `readonly slice[T]` are value descriptors over managed storage with length and capacity. Maps use `map[K,V]` and are backed by `Dictionary<K,V>`.
 
 ```gsharp
 let numbers = []int32{1, 2, 3}
@@ -33,6 +33,8 @@ let names = map[int32,string]{1: "one", 2: "two"}
 ```
 
 The `[n]T` expression allocates a fresh zero-initialized slice of runtime length `n`; `[n]T{...}` keeps the fixed-count initializer check, and `[]T{...}` infers the length from the initializer. Nullability position matters for arrays and slices: `[]T?` means a non-nil slice whose elements are nullable, `[]?T` means the slice itself is nullable, and `[]?T?` means both. The same rule applies to `[N]T`.
+
+Native slice assignment and ranges share storage; element writes are visible through aliases. `Append` returns a new descriptor: retain its result, because growth may allocate new storage. `Clone()` copies elements into independent storage. A readonly slice prevents slot writes, not mutation of referenced objects. Use explicit `slice[T].FromArray(array)` (shares an exact CLR array) / `ToArray()` (copies) boundaries; there is no implicit array/slice conversion. See the [native slice contract](../ref/spec.md#native-shared-storage-slices) and [Tour example](../tour/types.md#arrays-and-slices).
 
 Unsafe code can use raw pointers (`*T`) inside an `unsafe` context. Generic low-level code can constrain `T` with `unmanaged` and use `sizeof(T)`:
 
@@ -131,7 +133,7 @@ func Apply[T IAdd](w T, a int32, b int32) int32 {
 Console.WriteLine(Apply(Plus{}, 3, 4))              // 7
 ```
 
-The witness-T parameter `w T` lets the type-argument-inference pipeline pick `T` from the call site; explicit type arguments (`Apply[Plus](3, 4)`) work too. Static-virtual members map directly onto the .NET runtime's "static abstract / static virtual" support (e.g. `INumber<T>`, `IParsable<T>`, `IAdditionOperators<TL, TR, TR>`), so G# generic-math code interoperates with C# 11+ assemblies on either side. Diagnostics `GS0330`–`GS0333` flag the common failure modes (a non-`func` member inside the interface's `shared { }` block, missing implementation, instance method for a static slot, dispatch on the wrong type) — see the [diagnostics reference](../ref/diagnostics.md#static-virtual-interface-member-diagnostics-gs0330gs0333-gs0396gs0397).
+The witness-T parameter `w T` lets the type-argument-inference pipeline pick `T` from the call site; explicit type arguments (`Apply[Plus](Plus{}, 3, 4)`) work too. Static-virtual members map directly onto the .NET runtime's "static abstract / static virtual" support (e.g. `INumber<T>`, `IParsable<T>`, `IAdditionOperators<TL, TR, TR>`), so G# generic-math code interoperates with C# 11+ assemblies on either side. Diagnostics `GS0330`–`GS0333` flag the common failure modes (a non-`func` member inside the interface's `shared { }` block, missing implementation, instance method for a static slot, dispatch on the wrong type) — see the [diagnostics reference](../ref/diagnostics.md#static-virtual-interface-member-diagnostics-gs0330gs0333-gs0396gs0397).
 
 ### Private interface helper methods
 

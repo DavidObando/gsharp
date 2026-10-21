@@ -1,0 +1,500 @@
+---
+title: "Tour: Control flow"
+sidebar_position: 4
+draft: false
+description: "Make decisions, repeat work, and handle nullable values with G# control flow."
+---
+
+# Tour: Control flow
+
+G# uses `if`, `switch`, `for`, `while`, and `do`-`while` for ordinary control flow.
+
+## If
+
+`if` conditions are expressions and blocks use braces.
+
+```gsharp title="If.gs"
+package Tour.ControlFlow.If
+
+import System
+
+func Main() {
+    let n = 7
+    if n > 0 {
+        Console.WriteLine("positive")
+    } else {
+        Console.WriteLine("zero or negative")
+    }
+}
+```
+
+## `if` as a value
+
+`if` can also sit in expression position. The form requires a terminal `else`, supports `else if` chains, and may use multi-statement blocks whose trailing expression is the branch value.
+
+```gsharp title="IfExpression.gs"
+package Tour.ControlFlow.IfExpression
+
+import System
+
+func log(message string) {
+    Console.WriteLine(message)
+}
+
+func Main() {
+    let n = 7
+    let label = if n > 0 { "positive" } else if n < 0 { "negative" } else { "zero" }
+
+    let title = if label == "positive" {
+        log("admin route")
+        "Admin Dashboard"
+    } else {
+        "Home"
+    }
+
+    Console.WriteLine(title)
+}
+```
+
+The result type is the common type of all branch tails. Missing the terminal `else` in value position reports `GS0276`; an empty block reports `GS0277`; branches with no common type report `GS0263`.
+
+Both forms of `if` can start with a simple statement and a `;`, such as a `var` declaration, an assignment or a call. It runs once, before the condition, and what it declares is visible in the condition and in every branch, but not after the `if`:
+
+```gsharp
+if var n = ReadCount(); n > 0 {
+    Console.WriteLine("read $n")
+} else {
+    Console.WriteLine("nothing read")
+}
+
+let summary = if var n = ReadCount(); n > 0 { "read $n" } else if n == 0 { "empty" } else { "error $n" }
+```
+
+## `if let`, `guard let`, and `while let` — nullable bindings
+
+`if let name = expr { ... }` strips the nullable layer from a value and binds the underlying non-null view to `name` inside the then-branch. The companion `guard let name = expr else { exit }` form binds `name` for the remainder of the enclosing block; the else clause must unconditionally exit.
+`while let name = expr { ... }` repeats while the initializer is non-`nil`,
+re-evaluating it before every iteration and binding the non-null value only
+inside the loop body.
+
+```gsharp title="NullableBindings.gs"
+package Tour.ControlFlow.NullableBindings
+
+import System
+
+func Greet(name string?) {
+    if let n = name {
+        Console.WriteLine("hi $n")
+    } else {
+        Console.WriteLine("hi stranger")
+    }
+}
+
+func Length(s string?) int32 {
+    guard let v = s else {
+        return -1
+    }
+
+    return v.Length
+}
+
+func Both(left string?, right string?) {
+    if let a = left, let b = right {
+        Console.WriteLine("$a + $b")
+    }
+}
+
+func HasText(value string?) bool {
+    if let text = value && text.Length > 0 {
+        return true
+    }
+    return false
+}
+
+func Drain(reader System.IO.TextReader) {
+    while let line = reader.ReadLine() {
+        Console.WriteLine(line.Length)
+    }
+}
+```
+
+The binding's initializer must have a nullable type (`T?`). In `if let`,
+bindings are evaluated left to right and stop at the first `nil`, so
+`let b = B(a)` may use an `a` bound to its left (already narrowed to its
+non-null type). A single top-level `&&` after the *last* binding of an
+`if let` starts an optional boolean guard that only runs once every binding
+matched. Because `&&` is also an ordinary operator, parenthesize one that
+belongs to an initializer:
+`if let ok = (a && b ? x : y) { … }`. Names bound by `if let` are visible in
+later initializers, in the guard, and in the then-branch only — never in the
+`else` branch.
+
+The else-block of `guard let` must end in `return`, `throw`, `break`, or
+`continue`. Bindings from `guard let` remain visible after the statement.
+Neither `guard let` nor `while let` accepts a `&&` guard. A `continue` inside
+`while let` re-evaluates the initializer; a `break` exits without another
+evaluation.
+
+## `if let` as a value
+
+`if let` also works in expression position, so "unwrap or fall back" is a single expression. The terminal `else` is required, and each branch block ends in the value it produces.
+
+```gsharp title="IfLetExpression.gs"
+package Tour.ControlFlow.IfLetExpression
+
+import System
+
+func FirstCopyright(copyrights []?string) string? {
+    return if let all = copyrights && all.Length > 0 {
+        all[0]
+    } else {
+        default(string?)
+    }
+}
+
+func Combine(left string?, right string?) string {
+    return if let a = left, let b = right && a.Length > 0 {
+        "$a + $b"
+    } else if let a = left {
+        a
+    } else {
+        "none"
+    }
+}
+```
+
+The header works exactly like the statement form above: the same bindings, guard, evaluation order and scoping. The same `GS0276` / `GS0277` / `GS0263` rules as the plain `if` expression apply, plus `GS0296` when an initializer is not nullable.
+
+## `??=` — null-coalescing compound assignment
+
+`a ??= b` is the compound shorthand for *"if `a` is currently `nil`, evaluate `b` and write the result into `a`."* The right-hand side is evaluated only in the nil case. Like `=` and `+=`, it is an expression: its value is `a`'s final value, so `return cache ??= Load()` both fills the cache and returns it.
+
+```gsharp title="NullCoalescingAssign.gs"
+package Tour.ControlFlow.NullCoalescingAssign
+
+func Fill() string {
+    var greeting string? = nil
+    greeting ??= "hello"
+    greeting ??= "ignored"
+    return greeting ?? "fallback"
+}
+```
+
+Use `??` for the read operator and `??=` for assignment.
+
+## Throw expressions
+
+`throw` can appear in value position. It is useful with `??` when a nullable value is required to be present.
+
+```gsharp title="ThrowExpression.gs"
+package Tour.ControlFlow.ThrowExpression
+
+import System
+
+func RequireName(name string?) string {
+    return name ?? throw Exception("name is required")
+}
+```
+
+## For
+
+G# supports C-style `for init; condition; post`, condition-only `for`, infinite `for`, and range forms. The ellipsis form is convenient for integer ranges. `++` and `--` work as statements and as value-producing prefix/postfix expressions.
+
+```gsharp title="Loop.gs"
+package GSharp.Example.Loop
+
+import System
+
+func Main() {
+    var count = 5
+
+    for var i = count; i > 0; i-- {
+        Console.WriteLine("Count value: $i")
+    }
+
+    var n = 1
+    let old = n++
+    let current = ++n
+    Console.WriteLine(old)
+    Console.WriteLine(current)
+}
+```
+
+## For-in, from-end indexing, and ranges
+
+`for v in collection` is the preferred collection iteration form. From-end indexes use `^n`, ranges use `lo..hi`, and a standalone range value can be reused for indexing.
+
+```gsharp title="ForInAndRanges.gs"
+package Tour.ControlFlow.ForInAndRanges
+
+import System
+
+func Main() {
+    var nums = []int32{10, 20, 30, 40}
+    for v in nums[1..^1] {
+        Console.WriteLine(v)
+    }
+
+    let last = nums[^1]
+    let middleRange = 1..3
+    let middle = nums[middleRange]
+
+    Console.WriteLine(last)
+    Console.WriteLine(middle.Length)
+}
+```
+
+## While and do-while
+
+`while cond { ... }` evaluates `cond` first and runs the body while it is true.
+The nullable-binding variant, `while let value = Next() { ... }`, runs while
+`Next()` returns a non-`nil` value and scopes `value` to the body.
+`do { ... } while cond` is the post-test variant: the body always runs at least
+once.
+
+```gsharp title="WhileDo.gs"
+package Tour.ControlFlow.WhileDo
+
+import System
+
+func Main() {
+    var i = 0
+    while i < 3 {
+        Console.WriteLine(i)
+        i++
+    }
+
+    var j = 5
+    do {
+        Console.WriteLine(j)
+        j++
+    } while j < 5
+}
+```
+
+## Labels, labeled break/continue, and `goto`
+
+Loops can be prefixed with a `label:` declaration. `break label` and `continue label` jump out of or continue the named enclosing loop. General labels can also be targets for `goto`.
+
+```gsharp title="LabelsAndGoto.gs"
+package Tour.ControlFlow.LabelsAndGoto
+
+import System
+
+func Main() {
+    var i = 0
+
+again:
+    i++
+    if i < 3 {
+        goto again
+    }
+
+outer: for row in 1...3 {
+        for col in 1...3 {
+            if row == 2 && col == 2 {
+                break outer
+            }
+            Console.WriteLine(row)
+            Console.WriteLine(col)
+        }
+    }
+}
+```
+
+Unknown `goto` labels report `GS0469`; duplicate labels in a function report `GS0470`.
+
+## Switch statements
+
+Switch cases have block bodies and do not fall through implicitly. A trailing `fallthrough` can explicitly enter the next arm's body, subject to the placement rules below.
+
+```gsharp title="PatternSwitch.gs"
+package GSharp.Samples.PatternSwitch
+
+import System
+
+func describe(n int32) {
+    switch n {
+        case 0 { Console.WriteLine("zero") }
+        case < 0 { Console.WriteLine("negative") }
+        case > 100 { Console.WriteLine("huge") }
+        default { Console.WriteLine("positive small") }
+    }
+}
+
+func Main() {
+    describe(-5)
+    describe(0)
+    describe(7)
+    describe(250)
+}
+```
+
+### Explicit fallthrough
+
+`fallthrough` must be the direct last statement of a non-final switch arm. It enters the next arm's body without testing that arm's pattern. The destination pattern must not declare bindings, and the destination arm must not have a `when` guard.
+
+This complete program is checked in as `samples/WebsiteFallthrough.gs`:
+
+```gsharp title="fallthrough.gs"
+package Examples.Fallthrough
+
+import System
+
+func trace(value int32) string {
+    var result = ""
+    switch value {
+        case 1 {
+            result += "one/"
+            fallthrough
+        }
+        case 2 {
+            result += "two/"
+            fallthrough
+        }
+        default {
+            result += "end"
+        }
+    }
+    return result
+}
+
+Console.WriteLine(trace(1))
+Console.WriteLine(trace(2))
+Console.WriteLine(trace(3))
+
+switch 1 {
+    case 1 {
+        Console.WriteLine("selected")
+        fallthrough
+    }
+    case 99 {
+        Console.WriteLine("explicit target")
+    }
+    default {
+        Console.WriteLine("not reached")
+    }
+}
+```
+
+```text
+one/two/end
+two/end
+end
+selected
+explicit target
+```
+
+The constant switch enters `case 99` even though `1` does not match it, then exits because that body has no `fallthrough`. `GS0168` reports invalid placement, `GS0533` reports a final-arm use, and `GS0534` reports a destination with pattern bindings or a guard. This is a switch-statement feature, not a switch-expression arm value.
+
+## Switch expressions and patterns
+
+Switch expressions use `case ...:` arms and produce a value. Patterns include constants, relational forms, discard, type patterns, property patterns, and list patterns.
+
+```gsharp title="SwitchExpression.gs"
+package GSharp.Samples.SwitchExpression
+
+import System
+
+func Main() {
+    let nums = []int32{-3, 0, 1, 5, 101}
+    for n in nums {
+        let label = switch n {
+            case 0: "zero"
+            case < 0: "neg"
+            case > 100: "huge"
+            default: "small-pos"
+        }
+        Console.WriteLine("$n -> $label")
+    }
+}
+```
+
+## Smart casts (flow narrowing)
+
+After a successful `is` or `!is` test against a local, parameter, or read-only top-level `let`, G# automatically narrows the receiver to the tested type for the rest of the flow region.
+
+```gsharp title="SmartCasts.gs"
+package Tour.ControlFlow.SmartCasts
+
+import System
+
+open class Animal {
+    var Name string
+}
+
+class Dog : Animal {
+    func Bark() string { return Name + ": woof" }
+}
+
+class Cat : Animal {
+    func Purr() string { return Name + ": purr" }
+}
+
+func Speak(a Animal) {
+    if a is Dog {
+        Console.WriteLine(a.Bark())
+    }
+}
+
+func SpeakOrSilent(a Animal) {
+    if a !is Dog {
+        return
+    }
+    Console.WriteLine(a.Bark())
+}
+
+func GreetOrSilent(a Animal, silent bool) {
+    if !(a is Dog) || silent {
+        return
+    }
+    Console.WriteLine(a.Bark())
+}
+
+func Describe(a Animal) string {
+    switch a {
+        case d is Dog { return a.Bark() }
+        case c is Cat { return a.Purr() }
+        default { return a.Name }
+    }
+}
+```
+
+The branches of an `if` expression and of the conditional operator narrow the same way, so `(a is Dog) ? a.Bark() : a.Name` and `if a is Dog { a.Bark() } else { a.Name }` are equivalent; a nil guard narrows too (`s != nil ? s.Length : 0`).
+
+Reassignment to a narrowed receiver inside the narrowed region drops the narrowing for the remainder of the region. Fields, properties, and indexed expressions are never narrowed because their reads are not idempotent.
+
+## Pattern variables
+
+When the tested value is not a plain local — a property, a call result, a nested member — smart casts cannot name it. A pattern can instead bind the matched value to a **pattern variable** by writing the name after the pattern, exactly as in C#. The variable is read-only and is in scope wherever the match is known to have happened: the `&&` continuation, the selected branch, and the statements after an `if` whose other branch always exits.
+
+```gsharp title="PatternVariables.gs"
+package Tour.ControlFlow.PatternVariables
+
+import System
+
+class Box {
+    prop Value object? { get; init; }
+}
+
+func Describe(box Box) string {
+    if box.Value is string text && text.Length > 3 {
+        return "long text " + text
+    }
+    if box is { Value: int32 n } {
+        return "number " + n.ToString()
+    }
+    if !(box.Value is Box inner) {
+        return "empty"
+    }
+    return "nested " + Describe(inner)
+}
+
+func FirstRest(values []int32) string {
+    return values is [1, ..rest] && rest.Length > 0 ? rest[0].ToString() : "none"
+}
+```
+
+Reading a pattern variable outside its region reports `GS0532`. Type patterns with a designation (`case Dog dog { ... }`) are also accepted in `switch` arms alongside the `case dog is Dog` spelling.
+
+Next: [Tour: Concurrency](concurrency.md).

@@ -45,7 +45,7 @@ with tempfile.TemporaryDirectory(prefix="gsharp-patterns-") as temporary:
         assert set(archive.namelist()) == names
         for name in names:
             relative = Path(name).relative_to("ConcurrencyPatterns")
-            assert archive.read(name) == (root / "samples/ConcurrencyPatterns" / relative).read_bytes()
+            assert archive.read(name) == (root / "samples/ConcurrencyPatterns" / relative).read_bytes().replace(b"\r\n", b"\n")
         archive.extractall(workspace)
     (workspace / "global.json").write_text(json.dumps({
         "sdk": {"version": "10.0.100", "rollForward": "latestFeature", "allowPrerelease": False}

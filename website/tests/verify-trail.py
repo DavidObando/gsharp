@@ -22,7 +22,7 @@ with tempfile.TemporaryDirectory(prefix="gsharp-trail-") as temporary:
         ]
         assert sorted(archive.namelist()) == sorted("Trail/" + name for name in expected_files)
         for name in expected_files:
-            assert archive.read("Trail/" + name) == (root / "samples/Trail" / name).read_bytes()
+            assert archive.read("Trail/" + name) == (root / "samples/Trail" / name).read_bytes().replace(b"\r\n", b"\n")
         archive.extractall(workspace)
     (workspace / "global.json").write_text(json.dumps({
         "sdk": {"version": "10.0.100", "rollForward": "latestFeature", "allowPrerelease": False}

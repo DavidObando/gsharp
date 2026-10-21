@@ -159,7 +159,9 @@ func Main() {
 
 ## Nullable imported references
 
-Unannotated imported reference types are treated as nullable by default, and annotated nullable BCL returns stay nullable. Coalesce or check them before returning a non-null value.
+The default `platform-types` mode reads CLR nullable metadata. Annotated non-null positions import as `T`, annotated nullable positions as `T?`, and oblivious (unannotated) reference positions as platform types displayed as `T!`. A platform type permits both non-null and nullable use; this is an interop escape hatch, not a runtime guarantee. `T!` is a display notation, not writable source syntax. Postfix `value!!` is different: it checks at runtime and throws on `nil`.
+
+Nullable BCL returns remain nullable. Coalesce or check them before returning a non-null value:
 
 ```gsharp title="NullableImports.gs"
 package Tour.Interop.NullableImports

@@ -2,6 +2,7 @@ import {test, expect} from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import rawBenchmark from '../../static/data/concurrency-bench.json';
 import type {Snapshot} from '../../src/components/ConcurrencyBenchmarks';
+import release from '../../src/data/release.json';
 
 const benchmark: Snapshot = rawBenchmark;
 
@@ -47,6 +48,27 @@ test('Next article links keep the development version', async ({page}) => {
   await expect(page).toHaveURL(/\/docs\/next\/getting-started\/quickstart/);
 });
 
+test('released, archived, and Next routes retain their own installation guidance', async ({page}) => {
+  for (const [route, version, sdk] of [
+    ['docs/getting-started/install', release.docsVersion, release.version],
+    ['docs/0.4/getting-started/install', '0.4', '0.4.591'],
+    ['docs/0.3/intro', '0.3', null],
+    ['docs/next/getting-started/install', 'Next', release.version],
+  ] as const) {
+    await page.goto(route);
+    await expect(page.locator('article')).toBeVisible();
+    await expect(page.locator('.navbar__item.dropdown').filter({hasText: version}).first()).toBeVisible();
+    if (sdk) await expect(page.locator('article')).toContainText(`Gsharp.NET.Sdk/${sdk}`);
+  }
+  await page.goto('trail');
+  await expect(page.getByText('Historical capture:', {exact: false})).toContainText(
+    'extension gsharplang.vscode-gsharp 0.4.591',
+  );
+  await expect(page.getByText('Historical capture:', {exact: false})).toContainText(
+    `independently executed with G# SDK ${release.version}`,
+  );
+});
+
 test('local search is lazy, version-aware, and keyboard accessible', async ({page}) => {
   const indexRequests: string[] = [];
   page.on('request', (request) => {
@@ -69,10 +91,13 @@ test('local search is lazy, version-aware, and keyboard accessible', async ({pag
       '.gs-search-result > a:not(.gs-search-section)[href*="/docs/next/ref/diagnostics"]',
     ),
   ).toBeAttached();
-  await dialog.getByRole('combobox').selectOption('0.4');
-  await expect(dialog.getByRole('searchbox')).toHaveValue('GS0154');
-  await expect(dialog.locator('.gs-search-result')).not.toHaveCount(0);
-  await expect(dialog.locator('.gs-search-result a[href*="/docs/next/"]')).toHaveCount(0);
+  for (const version of ['0.5', '0.4', '0.3']) {
+    await dialog.getByRole('combobox').selectOption(version);
+    await expect(dialog.getByRole('searchbox')).toHaveValue('GS0154');
+    await expect(dialog.locator('.gs-search-result')).not.toHaveCount(0);
+    await expect(dialog.locator('.gs-search-result').first()).toContainText(version);
+    await expect(dialog.locator('.gs-search-result a[href*="/docs/next/"]')).toHaveCount(0);
+  }
   await dialog.getByRole('button', {name: '?. safe access', exact: true}).click();
   await expect(dialog.getByRole('searchbox')).toHaveValue('null conditional access');
   await expect(dialog.locator('.gs-search-result')).not.toHaveCount(0);

@@ -215,13 +215,14 @@ test('tutorial source and output match the canonical showcase fixture', () => {
     WebsiteSwift: ['bridges/gsharp-for-swift-developers.md'],
     WebsiteFallthrough: ['tour/control-flow.md'],
     WebsiteConcurrency: ['guide/concurrency.md', 'tour/concurrency.md', 'tutorials/concurrency.md'],
+    WebsiteNativeSlices: ['tour/types.md'],
   };
   for (const directory of ['docs', `versioned_docs/version-${versions[0]}`]) {
     for (const [sample, pages] of Object.entries(checkedDocs)) {
-      const source = readFileSync(path.join(site, `../samples/${sample}.gs`), 'utf8').trim();
-      const output = readFileSync(path.join(site, `../samples/${sample}.golden`), 'utf8').trim();
+      const source = readFileSync(path.join(site, `../samples/${sample}.gs`), 'utf8').replace(/\r\n/g, '\n').trim();
+      const output = readFileSync(path.join(site, `../samples/${sample}.golden`), 'utf8').replace(/\r\n/g, '\n').trim();
       for (const page of pages) {
-        const tutorial = readFileSync(path.join(site, directory, page), 'utf8');
+        const tutorial = readFileSync(path.join(site, directory, page), 'utf8').replace(/\r\n/g, '\n');
         assert.ok(tutorial.includes(source), `${directory}/${page}: source must match ${sample}`);
         assert.ok(
           tutorial.includes(`\`\`\`text\n${output}\n\`\`\``),
@@ -305,13 +306,18 @@ test('active control-flow documentation describes supported explicit fallthrough
   }
 });
 
-test('Trail and its editor evidence match the advertised release and source', () => {
-  const source = readFileSync(path.join(site, '../samples/Trail/Program.gs'));
+test('Trail uses the release while authentic editor evidence remains explicitly historical', () => {
+  const source = readFileSync(path.join(site, '../samples/Trail/Program.gs'), 'utf8').replace(/\r\n/g, '\n');
   const project = readFileSync(path.join(site, '../samples/Trail/Trail.gsproj'), 'utf8');
   const capture = JSON.parse(readFileSync(path.join(site, 'static/img/trail-editor.json'), 'utf8'));
   assert.ok(project.includes(`Gsharp.NET.Sdk/${release.version}`));
-  assert.equal(capture.applicationSdk, release.version);
+  assert.equal(capture.applicationSdk, '0.4.591');
+  assert.equal(capture.extension, 'gsharplang.vscode-gsharp 0.4.591');
   assert.equal(capture.sourceSha256, createHash('sha256').update(source).digest('hex'));
+  const component = readFileSync(path.join(site, 'src/components/EditorProof/index.tsx'), 'utf8');
+  assert.match(component, /Historical capture:/);
+  assert.match(component, /extension \{capture\.extension\}/);
+  assert.match(component, /application SDK\{' '\}/);
   for (const directory of ['docs', `versioned_docs/version-${versions[0]}`]) {
     const tutorial = readFileSync(path.join(site, directory, 'tutorials/trail.md'), 'utf8');
     assert.ok(tutorial.includes(`trail-${release.version}.zip`));

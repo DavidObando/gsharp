@@ -1,0 +1,2682 @@
+---
+title: "Language specification"
+sidebar_position: 1
+draft: false
+description: "The G# language specification: grammar, types, expressions, statements, and execution rules."
+toc_max_heading_level: 2
+---
+
+# Language specification
+
+## Introduction
+
+G# is a Go-inspired language implemented for the .NET CLR. It uses Go-like packages, imports, functions, structs, slices, maps, channels, `go`, `select`, `defer`, and `range`-style iteration, while adding CLR classes, interfaces, properties, events, attributes, delegates, exceptions, `async`/`await`, iterators, and direct PE/PDB emission. This specification describes the language as implemented today by the shared lexer, parser, binder, lowerer, and emitter.
+
+The grammar fragments use EBNF. Terminals are quoted. `identifier`, `number`, `string`, and `char` denote lexical tokens. Brackets in grammar productions are literal when quoted; otherwise `[...]` means optional and `{...}` means repetition. G# does not implement Go-style automatic semicolon insertion; separators are the tokens shown in the productions.
+
+## Source code representation
+
+Source files are Unicode text. The compiler consumes source through .NET strings; in normal use files are UTF-8. Line terminators are LF, CR, or CRLF. Outside strings, whitespace is insignificant except where it separates tokens. Comments and whitespace are skipped before parsing.
+
+A compilation unit consists of an optional package declaration, zero or more imports, and declarations or top-level statements. Every driver executes emitted code: `gsc` runs the emitted program immediately without `/out:`, saves an assembly with `/out:`, and `gsi file.gs` emits and runs the script. The interactive `gsi` REPL also uses the emitter. `gsi` accepts only the `emit` engine choice.
+
+## Lexical elements
+
+### Comments
+
+Line comments begin with `//` and run to the end of the line. Block comments begin with `/*` and end with `*/`; they do not nest. An unterminated block comment is a lexical diagnostic. Documentation comments begin with `///` and run to the end of the line; consecutive `///` lines are concatenated, the first leading space is stripped, and the block is attached to the following declaration where it is parsed as Markdown and lowered to CLR XML doc. See [Documentation comments](#documentation-comments).
+
+### Tokens
+
+The lexer produces identifiers, reserved keywords, literal tokens, punctuation and operators, comments, whitespace, bad tokens, and EOF. The fixed operator and punctuation tokens are:
+
+```text
++  +=  ++  -  -=  --  *  *=  /  /=  %  %=  (  )  [  ]  {  }
+:  ;  ,  .  ...  ^  ^=  &  &&  &=  &^  &^=  |  |=  ||
+=  ==  !  !=  !!  ?  ?.  ?[  ??  ??=  <  <=  <-  ->  <<  <<=  >  >=  >>  >>=  @
+```
+
+The `:=` sequence is still lexed (as `ColonEqualsToken`) for diagnostic
+purposes — the parser hard-rejects every occurrence with `GS0305` — but the operator has no role in the grammar.
+
+### Identifiers
+
+Identifiers start with a Unicode letter or `_` and continue with Unicode letters, Unicode digits, or `_`. The implementation uses .NET `char.IsLetter` and `char.IsLetterOrDigit`, so names such as `café`, `π`, and `_value2` are valid. Identifiers represented only by surrogate pairs are not currently accepted as identifier characters.
+
+```ebnf
+identifier = letter { letter | unicode_digit } .
+letter     = unicode_letter | "_" .
+```
+
+### Keywords
+
+The reserved keywords are:
+
+```text
+as async await break case catch chan class const continue default defer do else enum false fallthrough finally for func go goto guard if import interface internal is let lock map nil open operator override package private protected public range return scope sealed select sequence struct switch throw true try type using var while
+```
+
+Several words are contextual rather than reserved: they retain identifier status except in the specific grammar contexts described below. The full set the parser recognises contextually is:
+
+```text
+add and base checked convenience data deinit delegate event explicit fixed get implicit in init inline make nameof not or out params prop raise ref remove scoped set shared stackalloc this typeof unchecked unmanaged unsafe when with yield
+```
+
+Notable contextual roles: `prop`, `event`, `delegate`, `data`, `inline`, `partial`, `shared`, `convenience`, and `deinit` introduce or modify members; `get`, `set`, `add`, `remove`, and `raise` name accessors; `in`, `out`, `ref`, `scoped`, and `params` modify parameters; `explicit` and `implicit` mark conversion operators; `and`, `or`, and `not` combine patterns; `this` and `base` reference the receiver; `when` guards a `catch`/`case`; and `make`, `with`, `yield`, `typeof`, and `nameof` are expression forms. The `init` parameterless-constructor constraint (`[T init()]`) was renamed from the former `new()` spelling; `new` is therefore no longer a constraint keyword. The unsafe/low-level words `unsafe`, `fixed`, `stackalloc`, and `unmanaged` are contextual (for example `stackalloc` is recognised only in the `stackalloc [` shape) and otherwise remain ordinary identifiers. `checked` and `unchecked` are contextual overflow-context markers, recognised as the block/expression forms only when immediately followed by `{` or `(` respectively. `lock` is a reserved keyword, not contextual. The legacy `record` contextual keyword was removed; the lexer still recognises it so the parser can emit the GS0307 migration diagnostic (`use data struct` / `data class`).
+
+### Operators and punctuation
+
+Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, `>>=`, and `>>>=`. Built-in operands use read/operate/write lowering; when the receiver type declares the matching compound-assignment operator, that in-place operator is called instead. `>>` is the signed (arithmetic) right shift, replicating the sign bit; `>>>` is the unsigned (logical) right shift, which always shifts in zero bits regardless of the operand's signedness. Prefix and postfix `++` and `--` are value-producing expressions on assignable numeric lvalues. The null-coalescing compound assignment `??=` writes the right-hand side into the left only when the lvalue currently reads as nil; like every other assignment operator it is an expression whose value is the left operand's final value; see [Null-coalescing compound assignment](#null-coalescing-compound-assignment). The `..` range operator slices a sliceable value inside an indexer (`a[lo..hi]`) and also forms a standalone `System.Range` value (`let r = 1..3`), and prefix `^n` is a first-class `System.Index` from-end expression (`a[^1]`, `let last = ^1`, `^3..^1`); prefix `~` is one's-complement; see [Range and slice expressions](#range-and-slice-expressions). `@` begins annotations on declarations.
+
+### Integer literals
+
+Integer literals may be decimal, hexadecimal, octal, or binary. Underscores may appear in digit bodies, including immediately after a base prefix, but not as the final digit and not as the only digit after a prefix.
+
+| Form | Prefix | Digits | Example |
+| --- | --- | --- | --- |
+| Decimal | none | `0` through `9` | `42`, `1_000` |
+| Hexadecimal | `0x` or `0X` | hex digits | `0xFF`, `0x_DEAD_BEEF` |
+| Octal | `0o` or `0O` | `0` through `7` | `0o755`, `0O_77` |
+| Binary | `0b` or `0B` | `0` and `1` | `0b1010`, `0B_1010` |
+
+Unsuffixed integer literals follow C# §6.4.5.3 integer-literal type inference: the literal takes the type of the first of `int32`, `uint32`, `int64`, `uint64` in which its value can be represented. So `42` is `int32`, `4294967295` is `uint32`, `5000000000` is `int64`, and `18446744073709551615` is `uint64`; a value exceeding `uint64` is rejected (`GS0004`). Combined with the constant-expression conversions below, a wider-typed literal whose value is within a target's range assigns to that target without a suffix (e.g. `var u uint32 = 4294967295`). Non-decimal (hex/octal/binary) values that fit `uint32` are bit-cast to `int32` for compatibility (`0xFFFFFFFF` is `-1`); non-decimal values exceeding 32 bits follow the same `int64`/`uint64` widening lattice. Integer suffixes are case-insensitive: `L` selects `int64`, `U` selects `uint32`, and `UL` or `LU` selects `uint64`.
+
+### Floating-point literals
+
+Floating-point literals are decimal-radix only. Accepted forms include `1.5`, `.5`, `1e10`, and `1.5e-3`. A digit must follow the dot, so `1.` is tokenized as an integer followed by `.` rather than a float. Unsuffixed float literals default to `float64`. Suffixes are case-insensitive: `F` selects `float32`, `D` selects `float64`, and `M` selects `decimal`.
+
+### Character literals
+
+Character literals are single-quoted and represent exactly one UTF-16 code unit or escape. Supported escapes are `\'`, `\"`, `\\`, `\0`, `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, `\x` with one to four hex digits, `\u` with exactly four hex digits, and `\U` with exactly eight hex digits constrained to a single UTF-16 code unit. Empty literals, multiple-code-unit literals, malformed escapes, and out-of-range Unicode escapes are diagnostics.
+
+### String literals
+
+Normal string literals are delimited by double quotes. In the current compiler lexer, the escape-like form for a literal quote inside a normal string is doubled quotes, as in `"a ""quoted"" word"`; backslash escapes are not interpreted by the normal string lexer. Raw strings are delimited by backticks, may span lines, do not process escapes or interpolation, normalize CR and CRLF to LF in their value, and cannot contain a backtick.
+
+Interpolation is sigil-free: holes live inside ordinary double-quoted strings, not behind a C#-style `$"…"` prefix. A hole is either `$name`, which captures a single identifier, or a braced `${expression}`. Use `$$` for a literal dollar sign. There is no `{{`/`}}` brace escaping; a literal brace is just a brace. Braced interpolation parses the captured expression text as a fresh expression syntax tree whose tokens carry absolute source spans, so IDE features (hover, go-to-definition, find-references, completion, signature help) work inside a hole.
+
+A braced hole may carry an optional alignment and format clause: `${expr,alignment}`, `${expr:format}`, or `${expr,alignment:format}`. The alignment is a constant integer (negative for left-justify), and the format is a standard .NET format string. The `,` and `:` separators are recognized only at the top level of the hole.
+
+```gsharp title="samples/InterpolatedString.gs"
+package InterpolatedString
+
+let name = "world"
+let n = 6
+Console.WriteLine("Hello, $name!")
+Console.WriteLine("answer = ${n * 7}")
+Console.WriteLine("$$ stays literal")
+```
+
+The `${…}` scanner is delimiter-aware. It tracks `()`, `[]`, and `{}` nesting, skips over nested `"…"` and `'…'` literals and `//` and `/* */` comments, and allows the hole expression to span multiple lines. Consequently `${dict["k"]}`, `${cond ? "a" : "b"}`, and a hole whose expression wraps onto a second line all lex correctly, and a `,` or `:` inside a nested string is never mistaken for an alignment or format clause.
+
+```gsharp title="samples/InterpolatedStringRichHoles.gs"
+let n = 6
+Console.WriteLine("greeting=${"hello"}")
+Console.WriteLine("len=${"a,b:c".Length}")
+Console.WriteLine("answer=${n *
+7}")
+```
+
+Malformed interpolation is reported by dedicated diagnostics: `GS0220` (non-constant alignment), `GS0221` (handler forwarding), `GS0222` (unterminated hole), `GS0223` (empty hole), `GS0224` (empty format specifier), and `GS0225` (newline in the literal portion of the string). By default an interpolated string lowers to `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler`; when its contextual target type is `IFormattable` or `FormattableString` it instead lowers to `FormattableStringFactory.Create`, deferring formatting so the caller selects the culture. See the [CLR interop reference](./clr-interop.md#interpolated-strings-and-formatting).
+
+<span id="byte-string-literals-development"></span>
+
+### Byte-string literals
+
+An adjacent, unescaped `b"` starts an immutable arbitrary-byte literal with
+nominal type `Gsharp.Values.ByteString`, spelled `bytestring` when unshadowed.
+It is distinct from CLR `string`; ordinary quoted literals never retarget.
+`\xHH` contributes exactly one byte. `\0`, `\n`, `\r`, `\t`, `\\` and `\"`
+contribute their byte values. Valid scalar source characters and scalar
+`\uHHHH`/`\UHHHHHHHH` escapes encode to UTF-8 without normalization or a BOM.
+Surrogate/out-of-range escapes and lossy source decoding diagnose (GS0628).
+Dollar signs are bytes, not interpolation; literal newlines, raw/multiline
+forms and automatic concatenation are not admitted.
+
+Byte strings have content equality/hash/order, value byte indexing, shared
+immutable ranges and byte iteration. Mutable import/export boundaries copy;
+`Detach()` compacts retained substrings. Default is empty, while `bytestring?`
+can additionally be `nil`. Visible types/aliases named `bytestring` win, and
+`$bytestring` always uses ordinary lookup. Literals retain nominal identity
+even when that spelling is shadowed. Missing/incompatible runtime support
+diagnoses GS0627.
+
+These are value expressions, not metadata/attribute/optional-parameter
+constants or constant patterns. The byte-string core and explicit UTF-8 text boundaries ship in 0.5.199.
+Scalar iteration and code-point collection APIs are not included in this tag.
+
+#### Explicit UTF-8 text boundaries
+
+`Gsharp.Values.ByteString.EncodeUtf8(text: string, policy: Utf16Encoding)`
+returns immutable bytes. `value.DecodeUtf8(policy: Utf8Decoding)` returns CLR
+`string`. Both enums live in `Gsharp.Values`. Policies are required:
+
+| Policy | Behavior |
+| --- | --- |
+| `Utf16Encoding.Strict` | Reject the first unpaired surrogate at its UTF-16 code-unit offset. |
+| `Utf16Encoding.ReplaceUnpairedCodeUnit` | Encode each unpaired code unit as U+FFFD; preserve valid surrogate pairs. |
+| `Utf8Decoding.Strict` | Accept only complete shortest-form Unicode scalar encodings. |
+| `Utf8Decoding.ReplaceInvalidByte` | Decode a complete valid scalar, or emit U+FFFD and advance exactly one invalid byte. |
+
+Strict conversions eagerly throw sealed `ByteStringEncodingException`, with
+get-only `InputKind: ByteStringInputKind` (`Utf8` or `Utf16`) and `Offset: int32`.
+The constructor is internal. `Offset` is zero-based and relative to the input
+value, including a substring. UTF-8 failures identify the start of the malformed
+sequence, not a later continuation byte. No partial result is returned.
+Invalid enum values throw `ArgumentOutOfRangeException` (`policy`), even on
+empty inputs. Null CLR text throws `ArgumentNullException` (`text`).
+
+There is no normalization, implicit conversion or BOM insertion/stripping.
+Embedded NUL remains content. Encoded U+FFFD consumes three valid bytes.
+Default/empty byte strings decode to `""`; empty text encodes to an empty value.
+Code-point collections, scalar enumeration and their policies remain deferred.
+
+### Boolean and nil literals
+
+`true` and `false` are boolean literals. `nil` is the null literal. `null` is not a keyword or literal in G#. When the identifier `null` appears in a value-expression position and no symbol named `null` exists in scope, the binder reports `GS0273` ("`'null'` is not a literal in G#. Did you mean `'nil'`?") and recovers by treating the identifier as `nil`, so target-type contexts continue to typecheck. Declarations may legally name a symbol `null` (e.g. `func null() { ... }` or `let null = "hi"`); identifier resolution wins over the recovery in that case.
+
+### `default` expressions
+
+`default(T)` evaluates to the zero-initialised value of any type `T`: `0`/`false`/`0.0` for built-in value types, `nil` for reference types and `T?`, field-wise zero for user structs, and the runtime substitution of `T` for an unconstrained type parameter (so `default(T)` in a generic function emits `initobj T` and Just Works for both reference- and value-type substitutions).
+
+The bare `default` literal is valid in *target-typed* positions and takes its type from the surrounding context: the initializer of a `let`/`var` with an explicit type clause, the value of a `return` when the enclosing function has a known declared return type, an argument bound against a parameter of known type, and a branch of a conditional expression typed by its sibling. A bare `default` used where no target type is available is reported as `GS0362`.
+
+The arm-leader use of `default` inside `switch`/`select` is unchanged — the parser recognises the arm leader before attempting expression parsing.
+
+## Constants and variables
+
+G# has `const`, `let`, and `var` declarations. A constant or `let` binding requires an initializer. A `var` binding may either have an initializer or name a type for a zero/default value.
+
+```ebnf
+VariableDecl = ( "const" | "let" | "var" ) identifier TypeClause? "=" Expression
+             | "async" "let" identifier TypeClause? "=" Expression   (* starts a child of the enclosing scope; read with `await name` *)
+             | "var" identifier TypeClause
+             | "let" "(" identifier { "," identifier } ")" "=" Expression
+             | "let" "{" identifier "=" identifier { "," identifier "=" identifier } "}" "=" Expression .
+```
+
+An initializer-less `var` binds the named type's **zero value**: `0`/`false` for numeric and boolean types, `nil` for reference types (including `string`), the all-zero value for structs and enums, and — for the magic collection types — a **sound empty instance** rather than a null reference. `var m map[K,V]` is an empty map, `var s []T` an empty slice, `var a [N]T` a zeroed length-`N` array, and `var q sequence[T]` an empty sequence, so the bare (non-`?`) spelling's non-null promise holds and the slot is immediately usable. This applies to locals, top-level (REPL-hoisted) globals, and struct/class fields alike (fields receive a synthesized field initializer), and recurses into a struct-typed slot's own fields at any nesting depth — a bare `var s S` local/global/field binds a sound empty instance for every magic-collection field reachable through `S`'s own field composition, whether `S` is the slot's direct type or nested inside another struct or class. `chan[T]` is carved out — an auto-created channel has no sensible default, so a global or field channel declaration without an initializer is rejected (`GS0520`); locals require definite assignment before use (`GS0522`). Initialize with `chan[T]()`, `chan[T](capacity)`, or `Chan.Unbounded[T]()`. Array/slice *elements* of collection type keep the CLR default (null) — only declaration slots get empty instances — and the explicit `= default` spelling keeps its literal CLR meaning (null), including for a struct's magic-collection fields; only an *omitted* initializer gets the sound empty instance. A struct's non-magic field explicit initializer (e.g. `var Count int32 = 5`) still does not run for a bare declaration, at any nesting depth — only the sound zero value for a magic-collection field is synthesized.
+
+`let` communicates immutability of the binding. `var` introduces a mutable variable. `const` is for compile-time constants. Tuple deconstruction and named deconstruction use `let` forms. Multi-target assignment is statement syntax over existing writable storage and accepts either one RHS per target or one matching tuple-valued RHS. The legacy `identifier ":=" Expression` short variable-declaration form was removed; use `let name = expr` (immutable) or `var name = expr` (mutable) instead.
+
+## Types
+
+### Predeclared types
+
+The predeclared primitive and special type names are `bool`, `uint8`, `int8`, `int16`, `uint16`, `int32`, `uint32`, `int64`, `uint64`, `nint`, `nuint`, `float32`, `float64`, `decimal`, `char`, `string`, `object`, `void`, and the special literal type `nil`. Width-bearing integer names are canonical.  /  additionally accepts the friendly numeric aliases `int` (→ `int32`), `uint` (→ `uint32`), `long` (→ `int64`), `ulong` (→ `uint64`), `short` (→ `int16`), `ushort` (→ `uint16`), `byte` (→ `uint8`), `sbyte` (→ `int8`), `float` (→ `float32`), and `double` (→ `float64`) in every type-clause position; the alias resolves to the canonical `TypeSymbol` at the binder, so diagnostics, `typeof`, `nameof`, hover, and IL always print the canonical name. Aliases are reserved type names — a `type` / `struct` / `class` / `enum` / `delegate` declaration that tries to shadow one is rejected with `GS0102`.
+
+### Boolean types
+
+`bool` has values `true` and `false`. Logical operators are `!`, `&&`, and `||`. Bitwise-style boolean operators `&`, `|`, and `^` are also defined.
+
+### Numeric types
+
+Integral types are `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64`, `uint64`, `nint`, and `nuint`. Floating and decimal types are `float32`, `float64`, and `decimal`. Operators are defined per primitive type rather than by implicit cross-type promotion. Widening numeric conversions follow the implemented conversion lattice; other numeric primitive pairs require explicit conversion. A binary operator additionally applies an implicit, lossless widening of one integer operand to the other operand's integer type when such a directional widening exists in the conversion lattice (e.g. `uint32 + int64`, `uint8 + int32`, `int32 + int64`); the narrower operand is converted and the operator binds at the wider type. This covers arithmetic (`+`, `-`, `*`, `/`, `%`), comparison (`==`, `<`, …), and bitwise (`&`, `|`, `^`) operators. When neither operand widens to the other (e.g. `int32` and `uint32`, where neither is an implicit conversion to the other) the operands stay mixed and require an explicit cast; all narrowing of a non-constant value likewise requires an explicit cast. As an exception, when one operand of a binary operator is a constant integer literal and the other operand is an integer type, the literal adapts to that integer type if its value is representable there (C#-style constant-expression conversion); so `a + 1` with `a` of type `uint32` binds as `uint32 + uint32`. A constant whose value is out of range for the target type still requires an explicit cast. The same directional integer-widening lattice and constant-literal adaptation also apply to **lifted (nullable) operators**: when one or both operands are nullable integer types (`T?`), the narrower underlying type widens to the wider, the operator binds at the lifted (nullable) wider type, and the result is nullable (or `bool` for comparisons) — e.g. `uint8? + int32`, `uint8? == int32?`, and `int64? == 11` all bind, with the literal/widening rules evaluated on the underlying types. Lifted arithmetic/bitwise operators yield a null result if either operand is null; lifted comparisons follow the existing nullable-comparison semantics. Non-widening nullable pairs (e.g. `int32?` and `uint32?`) and out-of-range constants still require an explicit cast, exactly as in the non-nullable case. A **compound assignment** `lhs op= rhs` applies the identical numeric widening and constant-literal adaptation to its right operand that the binary operator `lhs op rhs` applies: it binds whenever `lhs = lhs op rhs` binds, then converts the operation result back to the LHS type for the store. So `a += b` widens `b` exactly like `a = a + b` (e.g. `int32 += uint8`, `int64 += int32`), across all arithmetic, bitwise, and shift compound forms. The final assignment conversion preserves C#-style narrowing safety: a compound assignment whose result does not implicitly convert back to the LHS type (e.g. `uint8 += int32`) is rejected, just as `u = u + i` is.
+
+**Numeric literal narrowing and widening.** G# follows C#'s rules for converting numeric values to a target type:
+
+- **Implicit constant-expression conversions (C# §10.2.11).** A *constant* integer expression — an integer literal, or unary `+`/`-` applied to one — implicitly converts (narrows or widens) to **any** integer target type **provided its value is within that target's range**, with no cast required. So `var x uint8 = 42`, `var s int16 = 100`, `var u uint32 = 5`, and `var a int8 = -5` all compile. A constant whose value is **out of range** for the target (e.g. `var x uint8 = 300`, `var c uint8 = -1`) remains an error — the value is never silently wrapped or truncated. The folded value is re-materialised as a constant of exactly the target type.
+- **Implicit widening of non-constant values.** A value of a narrower numeric type implicitly converts to a wider one following the widening lattice (e.g. `int32 → int64`, `int32 → float64`, `float32 → float64`) with no cast: `var widened int64 = itemCount` where `itemCount` is an `int32`.
+- **Explicit narrowing of non-constant values.** Narrowing a non-constant value (e.g. `int64 → int32`, `float64 → int32`) requires the explicit conversion-call form `T(x)` and is never applied implicitly. The conversion truncates toward zero like C#, so `int32(19.75)` is `19`. (The `(x as T)` form is reference-type pattern conversion, not the numeric cast form.)
+- **Call-site argument conversions.** The same implicit conversions apply when binding a call argument to a **concrete** (non-generic) numeric parameter, mirroring C#: a non-constant argument widens to a wider parameter type following the widening lattice (e.g. an `int32` argument to an `int64` parameter, a `uint16` to an `int32`), and a *constant* integer argument (a literal, or unary `+`/`-` over one) narrows or cross-signs to the parameter type when its value is in range (e.g. `5` to a `uint32` parameter). A non-constant narrowing/cross-sign argument (e.g. an `int32` variable to a `uint32` parameter) still requires the explicit `T(x)` form, exactly as in C#. This applies uniformly to function calls, constructor calls, and constructor chaining. Generic inference is unaffected: a numeric argument supplied to a **type-parameter** position must already have the inferred type — it is not widened during inference — so an explicit conversion is still required there.
+
+### String and character types
+
+`string` is the CLR `System.String` type. It supports concatenation with `+` and equality with `==` and `!=`. `char` is the CLR `System.Char` type and supports comparison.
+
+### Object and nil
+
+`object` is the universal upper bound. Values backed by CLR types and user value types can implicitly convert or box to `object`; explicit conversions can unbox to CLR value types. Nullable types are written by appending `?` to a type clause. `nil` converts implicitly to nullable types but not to non-nullable types. **Nil comparison** (`x == nil` / `x != nil`, either operand order) is defined once, for **every reference-backed builtin type** — `object`, classes, interfaces, function and delegate types, `sequence[T]`/`asyncSequence[T]`, `map[K,V]`, `[]T`, `[N]T`, `[,]T` (and higher ranks), and `chan[T]` / `in chan[T]` / `out chan[T]` — with or without a `?` annotation; comparison is the interop-boundary observation tool. The comparison surface is comparison-*only*: assigning `nil` into a bare (non-`?`) slot of any of these types remains an error. A reference upcast lifts through nullable annotations: when `U` is a base class or implemented interface of `T`, both `T → U?` and `T? → U?` are implicit reference conversions — for reference types a nullable annotation shares the underlying reference representation, so the lifted upcast is a metadata-only no-op that maps `nil` to `nil` and reference-upcasts a non-null value. The narrowing `T? → U` (dropping the nullable annotation) is not implicit and still requires `!!`. This holds for the **enumerable aliases** too: `sequence[T]` and `async sequence[T]` are identity aliases for `IEnumerable[T]` and `IAsyncEnumerable[T]`, but the alias relates the *underlying* types only — a `(sequence[T])?`, an `(async sequence[T])?` or an `IEnumerable[T]?` reaching a non-nullable slot of either spelling reports `GS0154`, exactly as a `string?` at a `string` parameter does; adding or preserving the annotation (`sequence[T] → IEnumerable[T]?`, `(sequence[T])? → IEnumerable[T]?`) still converts. The same rule applies to `map[K, V]?` and to every structural shape whose element is still an open type parameter. Arrays and slices are **invariant** in their element type for *implicit* conversions: `[]Derived` does not implicitly convert to `[]Base` even though the CLR permits array reference covariance, because a covariant write through the widened reference fails at run time (`System.ArrayTypeMismatchException`). The widening is available *explicitly*, one dimension only, when the element conversion is itself an implicit reference conversion: `cast[[]Base](derived)` (equally `cast[[]Base]` over an imported `Derived[]`) is a representation-level no-op that yields the **same** array instance, and the bare form is rejected with `GS0156` pointing at that cast. Unrelated or narrowing element types remain unconvertible. Postfix `!!` asserts non-null; applying `!!` to a value that is actually nil fails at runtime with the underlying CLR exception (`System.InvalidOperationException` when unwrapping a value-type `T?`, `System.NullReferenceException` when dereferencing a nil reference) — the compiled semantics are the language contract. `??` is null coalescing. A **tuple type** `(T1, …, Tn)` converts implicitly to `(U1, …, Un)` when both are tuple types of the same arity and **each** element `Ti → Ui` has an implicit conversion (identity, reference/interface upcast, the lifted nullable-reference upcast above, numeric widening, boxing, …) — element-wise, mirroring C# §10.2.13. So `(A, Derived)` converts to `(A, Base)` and `(A, Derived?)` to `(A, Base?)`. The conversion applies in argument, assignment/`let`-target, and return positions. Because the source and target `System.ValueTuple<…>` are distinct CLR instantiations, the conversion is materialised by rebuilding the destination tuple from the per-element converted values rather than by reinterpreting the source. A tuple with any element lacking an implicit conversion (a downcast such as `(A, Base) → (A, Derived)`, or an unrelated pair such as `(A, int32) → (A, string)`) or a differing arity is not convertible and requires the elements to match. **Tuple equality**: `==` and `!=` are defined whenever both operands are tuple types of the same arity (differing arity is error GS0539; a tuple against a non-tuple is GS0129). The comparison is element-wise: each operand is evaluated exactly once, then the element pairs are compared left-to-right through the ordinary equality rules (user-declared element operators, string equality, lifted nullable elements, nested tuples recursively), folded with short-circuiting `&&` (`!=` folds the element `!=` comparisons with `||`) — mirroring C# §12.12.10. An element pair with no defined equality reports GS0129 with the element types. The result is `bool`. **Named tuple elements**: a tuple type may name elements name-first — `(line int32, column int32)` — and a tuple literal may label elements — `(line: 1, column: 2)` (partial naming allowed; a lone labeled or named single element is GS0543 because `(T)` is grouping). Names are metadata over the positional shape: a declared name resolves member access to its position (`pos.line` ≡ `pos.Item1`, and `ItemN`/`.N` stay valid), same-shape tuples differing only in names are identical types related by an identity conversion (an explicit literal label that the target renames warns GS0541; a named-value conversion to a differently-named target is silent), equality ignores names, and generic substitution preserves them. Duplicate names are GS0540; `ItemN` at the wrong position and `Rest` are reserved (GS0542).
+
+### Arrays and slices
+
+There are two distinct buffer representations. `[]T` (also `array[T]`) and
+`[N]T` retain their exact CLR-array ABI and copying ranges described below.
+The separate native `slice[T]` and `readonly slice[T]` forms use shared-storage
+value descriptors; see [Native shared-storage slices](#native-shared-storage-slices).
+
+Fixed arrays are written `[N]T`, slices are written `[]T`, and native CLR rectangular arrays are written `[,]T`, `[,,]T`, and so on through rank 32. Rank is part of rectangular-array type identity; runtime dimension lengths are not. A fixed array's declared length is part of its identity when it appears as a **generic type argument**: `List[[3]int32]` and `List[[4]int32]` are different types and do not convert, in either direction and at any nesting depth, because the length is retained beside the erased CLR shape (`List<T[]>`, which cannot represent it) rather than compared through it. The **spelling** is part of that identity too: `List[[]int32]` and `List[[3]int32]` are likewise different types and do not convert in either direction, because a slice type argument is retained beside the erased shape for the same reason a fixed length is — `[]T` and `[N]T` share the one CLR `T[]`. Note that this deliberately does not mirror the bare rule below, where `[3]int32` *does* widen implicitly to `[]int32`: a generic's type argument is matched by **identity**, not by convertibility, so `List` being invariant in `T` makes the two instantiations as unrelated as `List[Derived]` and `List[Base]`. Generic **variance** does not readmit such a pair either, so `IEnumerable[[3]int32]` does not convert to `IEnumerable[[4]int32]` or to `IEnumerable[[]int32]` despite `IEnumerable`'s covariance. A matching length is still one type, a matching spelling is still one type, a covariant widening over the same argument still widens, and an array recovered from imported metadata still converts either way and against *either* spelling — reflection records neither a length nor a slice-ness to disagree with, so a G# `List[[3]int32]` and a G# `List[[]int32]` both reach a C# `List<int[]>` parameter, and a C# `List<int[]>` return fills either slot. The same rule holds between the bare array types themselves, stated as a **widening**: `[N]T` converts implicitly to `[]T` — dropping a known length for an unknown one is a representation no-op, so a fixed array still reaches every `[]T` slot — while **nothing converts implicitly *into* a `[N]T`** except a `[N]T` of the same length. So `[3]int32` does not convert to `[4]int32`, `[]int32` does not convert to `[3]int32`, and `var lit [3]int32 = [2]int32{1, 2}` is rejected rather than binding a length-2 value into a length-3 slot. Each rejected pair keeps its explicit `cast[…]`, exactly as slice covariance does (`GS0156` points at it); the cast reinterprets and does not change the value, so a `[3]int32` cast to `[4]int32` still reports `.Length` 3. An array recovered from imported metadata is exempt in both directions — reflection records no length to disagree with — so a G# `[3]int32` still reaches a C# `int[]` parameter and a C# `int[]` return still fills a `[3]int32` slot. The rule reaches a **generic's member slot** as well: `List[[3]int32]`'s `Add` takes a `[3]int32`, because the slot is projected through the type argument the receiver retained rather than read off the erased `List<int32[]>`, so `xs.Add([4]int32{…})` reports `GS0156` and `xs.Add([]Foo{…})` does too. A member slot over a **slice** argument keeps the bare widening, because `[]T` and the CLR `T[]` describe the same shape: `List[[]int32]`'s `Add` still takes a `[3]int32`. So retaining the slice makes the two *instantiations* distinct without narrowing what either one's members accept. The element type `T` is an arbitrary type clause, not just an identifier: it may itself be an array/slice, so jagged arrays such as `[][]uint8` (the G# spelling of C# `byte[][]`) and deeper nestings (`[][][]int32`) remain distinct from rectangular arrays. Arrays may also contain pointers (`[]*int32`), maps (`[]map[K,V]`), channels (`[]chan[T]`), and generic or qualified names (`[]List[int32]`, `[]Outer.Inner`). Array and slice composite literals use the same bracketed prefix with the element type, which likewise may be nested (`[][]int32{ []int32{1, 2}, []int32{3} }`):
+
+```gsharp
+let xs = []int32{1, 2, 3}
+let ys = [3]int32{1, 2, 3}
+let grid = [][]int32{ []int32{1, 2}, []int32{3, 4, 5} }
+```
+
+A runtime/zero-initialised array allocation is written `[n]T`, where `n` is an arbitrary length expression and there are no element initialisers. It allocates a fresh, zero-initialised slice `[]T` of length `n` (the idiomatic native form replacing the BCL call `System.GC.AllocateArray[T](n)`). The empty-initializer spelling `[n]T{}` is equivalent. The length is converted to `int32` (the typing the underlying CIL `newarr` requires):
+
+```gsharp
+func zeros(n int32) []int32 {
+    return [n]int32       // a zero-initialised []int32 of length n
+}
+
+let buffer = [8]int32     // length-8, all elements 0
+```
+
+Rectangular allocation supplies one expression per dimension, and indexing supplies exactly one expression per rank:
+
+```gsharp
+let matrix = [2, 3]int32
+matrix[1, 2] = 42
+
+let cube = [2, 3, 4]string
+cube[1, 2, 3] = "last"
+```
+
+Dimensions and indices convert to `int32`, evaluate once from left to right, and preserve CLR exceptions: a negative dimension throws `OverflowException`, an invalid index throws `IndexOutOfRangeException`, and a nil receiver throws `NullReferenceException`. CLR storage is zero-initialized and row-major. A flat rectangular initializer lists elements in that same row-major order:
+
+```gsharp
+let matrix = [2, 3]int32{1, 2, 3, 4, 5, 6}
+```
+
+A non-empty rectangular initializer requires non-negative constant dimensions whose product equals the element count. Empty/no-initializer forms allow runtime dimensions. Reads, writes, compound assignments, increments/decrements, `??=`, address-taking, multi-target assignment, and async operands preserve receiver/dimension/index/value evaluation order.
+
+Rectangular arrays expose the ordinary `System.Array` surface: `.Length` is total element count, `.Rank` is dimension count, and `.GetLength(d)`, `.GetLowerBound(d)`, and `.GetUpperBound(d)` inspect a dimension. `for … in` enumerates elements in row-major order; a two-variable loop uses a flat zero-based enumeration index. Rectangular arrays are not slices; `.Length` is their element count.
+
+Source and imported CLR rectangular arrays retain rank in fields, properties, parameters, returns, generic substitutions, nullable metadata, and reflection. G# emits the CLR `T[,]`/`T[,,]` shape directly rather than flattening it.
+
+Like other bare magic collection types, an uninitialized non-null rectangular slot receives a sound empty instance: every dimension has length zero. A nullable rectangular slot (`[,]?T`) retains `nil` as its zero value.
+
+Slices are backed by CLR arrays: `[]T` **is** `T[]`, so a slice's length is `.Length` and it has no separate capacity. The growable shape is `List[T]` + `Add`. The Go-style `len`, `cap`, `append`, `delete`, and `make` built-ins are retired (`GS0566`); see [Retired Go-style built-ins](#retired-go-style-built-ins) for the replacement table.
+
+#### Nullable arrays vs arrays of nullable elements
+
+The position of a nullable `?` in an array/slice type clause selects **what** is nullable — the array reference itself, or each element. A `?` **after the element** marks the element; a `?` **right after `]`** marks the whole array:
+
+| Spelling | Meaning | Indexable? |
+| --- | --- | --- |
+| `[]T?`   | a (non-nil) array of **nullable elements** | yes — `a[i]` yields `T?` |
+| `[]?T`   | a **nullable array** reference (the whole array may be nil) | no — null-forgive (`!!`) or use `a?[i]` first |
+| `[]?T?`  | a nullable array of nullable elements | no — `!!` first, then `a[i]` yields `T?` |
+| `[,]T?`  | a non-nil rectangular array of nullable elements | yes — `a[i, j]` yields `T?` |
+| `[,]?T`  | a nullable rectangular-array reference | no — null-forgive (`!!`) or use `a?[i, j]` first |
+
+The same rule applies to fixed and rectangular arrays: `[N]T?` / `[,]T?` mark nullable elements, while `[N]?T` / `[,]?T` mark the whole array reference nullable. In a jagged type the trailing `?` binds to the innermost element, so `[][]T?` is a slice of slices of `T?`, and `[]*T?` is a slice of nullable pointers. An element-nullable value array (`[]int32?`) is backed by `Nullable<int32>[]` and round-trips nil elements; a nullable array (`[]?T`) is a nullable reference to a slice and stays non-indexable until null-forgiven (`GS0116` otherwise), preserving the prior nullable-array semantics under the new spelling. A nullable array whose element is itself a slice (`[]?[]T`) is not spellable, because `?[` lexes as the null-conditional index token.
+
+```gsharp
+var elems []int32? = []int32?{nil, 7}   // array of nullable elements
+elems[0] = 42                            // a[i] : int32? (read/write nil)
+
+var maybe []?int32 = nil                 // nullable array reference
+if maybe == nil { /* … */ }
+var first = maybe?[0]                     // null-conditional index, first : int32?
+```
+
+Slices are backed by CLR arrays. `len` and `cap` observe array length, and `append` allocates and copies into a new array in the current implementation.
+
+Array and slice element access (`a[i]`, read or write) accepts **any** integer-typed index, matching C#'s element-access rule: `int8`, `uint8`, `int16`, `uint16`, `char`, `int32`, `uint32`, `int64`, `uint64`, `nint`, and `nuint`. The narrower kinds that implicitly widen to `int32` are converted to `int32`; the wider kinds (`uint32`, `int64`, `uint64`, `nint`, `nuint`) are converted to the native index type `nint`, which the underlying CIL `ldelem`/`stelem`/`ldelema` accept as the index operand. Rectangular indices use CLR `Get`/`Set`/`Address` pseudo-methods and therefore convert every integer index to `int32`. A non-integer index (`float32`/`float64`/`bool`/`string`/`decimal`/a user type) is rejected (`GS0156`). `string` char-indexing (`s[i]`) likewise accepts any integer index, converting to the `int32` the `get_Chars` accessor takes.
+
+### Persistent managed references
+
+`managed[T]` and `readonly managed[T]` name the invariant reference types
+`Gsharp.Values.ManagedRef<T>` and `ReadOnlyManagedRef<T>`, supplied by
+`Gsharp.Runtime.Values`. They are **heap-storable location handles**, not CLR
+`T&`. Existing `*T`, `&x`, `ref`, `in`, `out` and `scoped` keep their borrowed
+contracts. Ordinary names and `$` escapes take precedence over the contextual
+handle spellings.
+
+```gsharp
+func Counter() managed[int32] {
+    var x = 1
+    let ref early = x
+    let p = managed(x)
+    early = 2
+    x += 3
+    return p
+}
+let p = Counter()
+*p += 1
+let readonlyView = p.AsReadOnly()
+let sameReadonlyView = readonly managed(*p)
+let ref readonly observed = readonlyView.Borrow()
+```
+
+`readonly managed(location)` is the readonly address intrinsic, not an
+operator on arbitrary values. `readonly` and `managed` remain contextual
+identifiers; the former joined spelling `readonlyManaged` has no intrinsic
+meaning. A shadowing ordinary type or callable keeps normal lookup; use the
+qualified `Gsharp.Values.ReadOnlyManagedRef[T]` type/API when necessary.
+The modifier binds before nullability: `readonly managed[T]?` and
+`(readonly managed[T])?` are nullable handles, whereas `readonly managed[T?]`
+has a nullable referent. In `ref readonly managed[T]`, the first `readonly`
+modifies the borrowed return of a writable handle slot. A readonly borrow of
+a readonly handle slot is `ref readonly readonly managed[T]`.
+
+All accesses to an addressed local use one planned closure-compatible cell,
+including borrowed aliases formed before the persistent request. Copies of
+struct values and by-value parameters remain independent; parameters keep
+their existing readonly binding permission. Copying a handle copies its
+location identity, while `var value = *p` copies the referent normally.
+
+Factories admit compiler-owned storage, known borrowed aliases, existing
+persistent dereferences, accessible instance fields, nested value fields,
+exact one-dimensional CLR array elements, and native slice elements. Owners
+and indices are evaluated once. Rebinding an object/array/slice variable or
+growing a slice cannot retarget an existing handle. Replacing a struct in its
+promoted slot does update the value seen by that slot's field handles.
+
+`.Borrow()` returns `ref T` or `ref readonly T`. Readonly permission is shallow:
+the slot cannot be replaced, but an object reached through it is not deeply
+immutable. There is no writable upgrade. Ordinary readonly struct calls
+retain defensive-copy behavior. `==` compares locations of the same invariant
+handle type; `.SameLocation(other)` compares writable and readonly views.
+Hashes use owner identity and a canonical typed path, never mutable contents.
+`ReferenceEquals` observes wrapper identity instead.
+
+A non-null handle must be initialized (or definitely assigned before local
+use); `default` is permitted for `managed[T]?` / `readonly managed[T]?` and is
+nil. Compiler-owned aggregate initialization cannot silently invent null
+non-null handle fields. Every source primary, designated and synthesized/default
+constructor path is checked even when the declaring library constructs no
+instance itself. Required shared/static fields and static auto-property backing
+fields on classes and structs are checked across direct initializers and every
+path through `shared { init { ... } }`; nullable static storage may remain nil.
+A primary-constructor parameter becomes a field and therefore cannot be a
+scoped handle. Explicit constructor calls and convenience chaining honor
+same-compilation scoped parameters; imported constructor/operator metadata does
+not preserve this by-value contract and is treated conservatively.
+Foreign and unconstrained generic initialization can still supply null despite
+annotations; dereference/Borrow then throws `NullReferenceException`, never
+allocates a substitute location.
+
+User operators and conversion operators apply the same scoped-argument rule as
+ordinary calls. Compiler-known managed-handle equality and writable-to-readonly
+permission APIs remain allowed; values copied from a scoped referent are
+ordinary scalar/value results and may be passed normally.
+
+Converting a source or imported instance method group to a function/delegate
+captures its receiver as the delegate target. A scoped managed handle therefore
+cannot be that receiver, whether the resulting group is returned, stored, or
+passed immediately to another call. Static method groups do not capture a
+receiver and remain valid, as do groups formed over scalar/value copies and
+ordinary non-scoped handles. A direct instance call is not a method-group
+capture and continues to use the ordinary call contract.
+
+Managed and unmanaged function-pointer signatures carry no G# `scoped`
+parameter contract. Invoking either pointer kind is therefore an unknown call
+for lifetime purposes: a scoped managed handle cannot be passed in any argument
+position, regardless of whether the pointer came from a local, parameter,
+field, property, or index expression. Ordinary non-scoped handles and scalar
+or value copies remain valid arguments, and a function pointer may return an
+ordinary handle according to its declared ABI.
+
+Ordinary handles may cross `await`, `yield` and channel suspension. A
+`scoped` handle cannot be a parameter or scope-preserving local of an async,
+suspending, iterator, or async-iterator function: the current state-machine
+lowering retains every parameter and declared local in generated fields, even
+when a particular use appears before the first suspension. Copy the referent
+to an ordinary value before entering the state machine, or pass an ordinary
+non-scoped handle whose lifetime may extend beyond the call. Temporary borrows
+also may not cross suspension: retain an ordinary handle and borrow again in
+the next execution segment.
+An earlier borrowed argument followed by a suspending argument is diagnosed;
+evaluate the suspending value first. This includes array elements, imported
+ref-return indexers and imported ref-return properties selected through a
+managed handle. A scalar or by-value property copied before suspension is not a
+borrow and remains valid.
+
+GS0604 rejects incoming/scoped caller storage, unknown or merged borrowed
+provenance, borrowed struct `this`, spans/ref-struct/native memory, ordinary
+property values and temporaries, map/string elements, statics/thread-statics,
+multidimensional arrays and explicit-layout fields. Explicitly copying a value
+to a new local is allowed, but that local is not an alias to the old storage.
+A scoped handle cannot be stored as an instance/static field initializer,
+top-level global initializer, or assignment in a `shared` initializer block.
+Handles provide GC reachability, not exclusivity, synchronization, native
+ownership or race freedom. Existing atomic APIs can consume lawful borrows.
+
+### Native shared-storage slices
+
+`slice[T]` is a heap-storable immutable descriptor over an exact managed array,
+with independent offset, `Length`, and `Capacity`. `readonly slice[T]` grants
+readonly element access to the same storage. Their public ABI is respectively
+`Gsharp.Values.Slice<T>` and `Gsharp.Values.ReadOnlySlice<T>` in the SDK's
+`Gsharp.Runtime.Values` assembly (.NET 10). They are not `ref struct`s.
+Assignment copies the descriptor, never its elements. Views retain the entire
+owner array; there is no pooling, disposal, or implicit ownership transfer.
+
+```gsharp
+import Gsharp.Values
+
+var samples = slice[int32]{10, 20, 30}
+let tail = samples[1..]
+tail[0] = 99                         // samples[1] is now 99
+let raw = array[int32]{1, 2, 3}      // still exactly int32[]
+let shared = slice[int32].FromArray(raw)
+let view readonly slice[int32] = shared
+let independent = shared.ToArray()  // explicit copy
+```
+
+Native literals initialize positional elements in lexical order and have
+length = capacity = element count. `Create(length, capacity)` requires
+`0 <= length <= capacity` and allocates CLR-default elements, including null
+reference elements. Default descriptors are usable empty values. `slice[T]?`
+is a nullable **descriptor**, whereas `slice[T?]` has nullable **elements**.
+Non-null native descriptors cannot be assigned or compared to `nil`.
+Both permission kinds are invariant, including element nullability.
+Managed-byref, byref-like, pointer and `void` element types are rejected.
+
+The contextual modifier works in every type position, including generic
+arguments and tuples. `ref readonly slice[T]` borrows a mutable-element
+descriptor readonly; `ref (readonly slice[T])` borrows a readonly-element
+descriptor slot writable; `ref readonly (readonly slice[T])` restricts both.
+Neither `readonlySlice` nor `readonly map` is a magic type.
+
+Ordinary visible types and aliases named `slice` or `array` take precedence,
+including their ordinary wrong-arity/constraint/ambiguity diagnostics.
+`$slice[T]` and `$array[T]` force ordinary lookup; `$readonly` is not a modifier.
+When shadowed, use `Gsharp.Values.Slice[T]`,
+`Gsharp.Values.ReadOnlySlice[T]`, or `[]T` explicitly. The readonly modifier
+requires a resolved native slice, not an unrelated same-named type.
+
+| Operation | Native contract |
+| --- | --- |
+| `s[lo..hi]`, `s.Subslice(lo, hi)` | Require `0 <= lo <= hi <= Capacity`; result length `hi-lo`, capacity `Capacity-lo` |
+| `s.Subslice(lo, hi, max)` | Require `0 <= lo <= hi <= max <= Capacity`; result capacity `max-lo` |
+| `s.Slice(lo, hi[, max])` | Extension facade imported from `Gsharp.Values`; **endpoints, not BCL start/count** |
+| `s.Append(value)`, `s.AppendRange(source)` | Return an extended descriptor; reuse spare capacity or allocate/copy logical elements on growth |
+| `s.CopyTo(destination)` | Memmove-safe shallow copy of `min(source.Length, destination.Length)`; return copied count |
+| `s.Clear()` | Set only logical elements to CLR defaults |
+| `s.Clone()`, `s.ToArray()` | Independent shallow copies with exact logical length |
+| `s.AsReadOnly()` | Permission weakening without copying elements |
+| `s.AsSpan()`, `s.AsMemory()` | Share exactly the logical range; readonly descriptors return readonly counterparts |
+| `s.TryGetArray(out owner)` | Writable descriptor only; succeed exactly when offset = 0 and Length = Capacity = owner.Length |
+| `slice[T].TryFromMemory(memory, out s)` | Array-backed exact `T[]` only; capacity = supplied range length; no copying |
+
+Omitted lower bounds are zero; omitted upper bounds and `^n` use the saved
+Length, not Capacity. A zero-length view retains its owner, offset and capacity.
+The receiver is saved once before written bounds/indices, in source order.
+Written range bounds all evaluate before normalization/validation. Invalid
+elements throw `IndexOutOfRangeException`; invalid bounds/factory dimensions
+throw `ArgumentOutOfRangeException`; append-length overflow throws
+`OverflowException` before mutation. No growth factor is promised.
+
+Indexers return actual element references. Nested value-field stores mutate
+backing storage; by-value element locals are copies. `let` prevents descriptor
+rebinding, not element mutation. Readonly views forbid element stores and
+writable refs; non-readonly value-type calls use defensive copies. Reference
+objects reached through elements are not deeply immutable. Old views and refs
+remain on the old owner after append reallocates.
+
+Readonly descriptors expose observations, slicing, iteration, `CopyTo`,
+`ToArray`, readonly span/memory, and mutable independent `Clone`, but not append,
+clear, or writable owner recovery. `FromArray` rejects null and every covariant
+runtime array (including empty arrays); `TryFromMemory` rejects custom owners
+and readonly string memory, including empty ranges. `TryGetArray` failure writes
+null. Subranges never implicitly become exact arrays or copy-in/copy-out proxies.
+
+Equality and hashing use owner identity, offset, Length and Capacity, not
+contents; the default owner normalizes to `Array.Empty<T>()`. Native G# equality
+requires the same declared permission kind. Iteration saves the descriptor and
+Length, reading current elements as visited. Native list-pattern rest bindings
+are shared views; CLR-array rest bindings still copy.
+
+Slices can live in fields, closures, generic values and async state machines.
+Borrowed element references/spans obey existing liveness rules. A write that
+would suspend after selecting an element or nested value-field location is
+diagnosed with GS0602 rather than silently reselecting it after suspension.
+Evaluate the suspending value first and then select the desired location.
+
+Changing an existing array API to native slices is an intentional public ABI
+change. cs2gs retains C# array/range/list-pattern semantics. Go fixed-value arrays
+remain separate: use an ordinary value `StereoFrame`, not `[2]float64`, for
+value-copy stereo frames. See `samples/NativeSlices.gs` in the repository.
+
+### Maps
+
+Maps are written `map[K,V]` and are backed by `Dictionary<K,V>` in the implementation. A `map[K,V]` therefore converts implicitly to the interfaces that backing implements over its own key and value — `IDictionary[K,V]`, `IReadOnlyDictionary[K,V]`, and `ICollection`/`IReadOnlyCollection`/`IEnumerable` of `KeyValuePair[K,V]` (and so to `sequence[KeyValuePair[K,V]]`, which is the alias spelling of the last) — in that direction only, and regardless of whether the key and value are closed or still open. The reverse does not hold: an `IDictionary[K,V]` need not be a `map[K,V]`. Map literals use key-value entries, indexing reads values, and indexed assignment updates entries. Maps are iterable with the range `for`: `for k, v in m` destructures each entry into key and value, and `for kv in m` yields each entry as a `KeyValuePair[K,V]`; iteration order is unspecified (see the `for` statement section). Maps carry no implicit synchronization: concurrent access from multiple goroutines is not goroutine-safe (consistent with Go), and callers must synchronize explicitly with `lock`, `SyncMap[K,V]`, or concurrent CLR collections via interop.
+
+```gsharp
+let counts = map[string,int32]{"g": 1, "sharp": 2}
+```
+
+### Sequences
+
+`sequence[T]` is the sequence type and projects to `IEnumerable<T>`. A function returning `sequence[T]` can use `yield` to produce values. `async sequence[T]` projects to asynchronous enumeration. There is no dedicated sequence literal syntax today; use arrays, slices, iterator functions, or imported CLR sequence producers.
+
+### Channels
+
+Channels are written `chan[T]` — the element type inside brackets, like `sequence[T]` and `map[K, V]`. `in chan[T]` is a receive-only handle and `out chan[T]` a send-only one; a `chan[T]` converts implicitly to either, never the reverse, which is what makes channel ownership checkable. A channel value is constructed by applying the type clause to arguments: `chan[T]()` is a **rendezvous** channel (capacity 0 — a send completes only when a receiver takes the value), `chan[T](capacity)` is buffered, and `Chan.Unbounded[T]()` is the one unbounded form, spelled through the runtime class deliberately. Prefix receive is `<-ch` (the element's zero value on a closed, drained channel — no exception); send statements are `ch <- value`; `ch.Close()` closes (closing twice throws; `Dispose()` is the idempotent close, so `using let` works); `select` multiplexes receive and send cases. `chan[T]` **is** `System.Threading.Channels.Channel<T>` (`in`/`out` are `ChannelReader<T>`/`ChannelWriter<T>`), so any BCL channel flows in with no adapter, and the conversions run in both directions and across assemblies: the lattice reads the types, not the spelling, so a `Channel<T>` — from C#, from NuGet, or read back from a G# library's own metadata — converts implicitly to a `ChannelWriter<T>` or `ChannelReader<T>` target exactly as `chan[T]` converts to `out chan[T]` or `in chan[T]`, which is also C#'s rule for the same pair (`Channel<TWrite, TRead>` declares implicit operators to both); what `chan[T](…)` constructs is the runtime's `Gsharp.Concurrency.Chan<T>` subclass, which also carries `Length()` (a racy snapshot, hence a method) and `Capacity` (fixed, hence a property). A channel global or field **must** carry an initializer (`GS0520`). A local may be declared without one, but must be definitely assigned before use (`GS0522`). An auto-created channel has no sensible default, unlike the empty-instance values of other collection declarations. A trailing `?` marks the whole channel nullable (`chan[int32]?`); a nullable element is `chan[int32?]`.
+
+The retired spellings are rejected with a replacement named in the message: the juxtaposed type clause `chan T` (`GS0567` — use `chan[T]`), and the built-ins `make(chan T[, n])` and `close(ch)` (`GS0566` — use `chan[T](…)` / `Chan.Unbounded[T]()` and `ch.Close()`). The syntax needs no import (the `import Gsharp.Extensions.Go` gate is retired, GS0316); the concurrency library lives in the implicitly imported `Gsharp.Concurrency` namespace.
+
+```gsharp title="samples/Channels.gs"
+package GSharp.Samples.Channels
+
+import System
+
+let ch = chan[int32](3)
+ch <- 1
+ch <- 2
+ch <- 3
+ch.Close()
+
+let a = <-ch
+let b = <-ch
+let c = <-ch
+let d = <-ch
+
+Console.WriteLine(a)
+Console.WriteLine(b)
+Console.WriteLine(c)
+Console.WriteLine(d)
+```
+
+```text title="samples/Channels.golden"
+1
+2
+3
+0
+```
+
+<span id="go-style-built-ins-import-gsharpextensionsgo"></span>
+
+### Retired Go-style built-ins
+
+G# 0.4 inherited a small set of Go-style built-in functions — `len`, `cap`,
+`append`, `delete`, and the channel forms `make(chan T[, cap])` and
+`close(ch)` — gated behind a per-file `import Gsharp.Extensions.Go`.
+All of them are retired, and the namespace with them: every
+receiver already carries the member, so a free function that adds no syntax
+only competed with it. A call to a retired name reports `GS0566`, whose
+message names the replacement for that exact site; the names are free for
+user-defined functions, which bind as ordinary calls.
+
+| Retired | Write instead |
+|---|---|
+| `len(arr)` / `len(slice)` / `len(string)` / `len(rectangular)` | `arr.Length` / `s.Length` |
+| `len(map)` | `m.Count` |
+| `len(ch)` / `cap(ch)` | `ch.Length()` / `ch.Capacity` (on a channel you constructed) |
+| `cap(slice)` | removed — a slice is a fixed CLR array whose capacity is its length, `xs.Length` |
+| `append(slice, elem)` | keep a growable `List[T]` and call `.Add(elem)` |
+| `delete(map, key)` | `m.Remove(k)` |
+| `make(chan T[, cap])` | `chan[T]()` / `chan[T](cap)` / `Chan.Unbounded[T]()` |
+| `close(ch)` | `ch.Close()` |
+
+```gsharp title="samples/Slices.gs (excerpt)"
+import System.Collections.Generic
+
+var nums = []int32{10, 20, 30}
+Console.WriteLine(nums.Length)   // 3
+var grown = List[int32]()
+grown.Add(40)
+Console.WriteLine(grown.Count)   // 1
+```
+
+### Function types
+
+Function types are written `(T1, T2) -> R` — fully-parenthesized parameter type list, a single `->` arrow, then a return type clause. A void-returning function uses `void` as the return type: `(T1, T2) -> void`. Multi-return shapes use a tuple return type: `() -> (T1, T2)`. A nullable return is written on the return type, so `(T) -> R?` is a non-null function returning `R?`. A nullable function type must parenthesize the whole function type before `?`: `((T) -> R)?`; both can combine as `((T) -> R?)?`. Async function type clauses are written `async (T) -> R`; nullable async function types use the same outer parentheses, `async ((T) -> R)?`. G# function values can convert to compatible CLR delegate types. The legacy `func(T1, T2) R` and `async func(T) R` type-clause spellings continue to parse for one release; each occurrence emits a `GS0303` deprecation warning.
+
+### Structs, classes, data classes/structs, and inline value classes
+
+Type declarations introduce aggregates with the aggregate keyword (`class`, `struct`, `enum`, `interface`) as the head — the legacy `type Name kind` form was removed. Structs are value-like and may declare fields, **in-body instance methods**, properties, events, and `shared` static members; a struct in-body `func` binds as an instance method on the value type with a synthesized by-ref `this`, the same canonical, warning-free site classes use. Structs are constructed via primary constructors and struct literals; plain structs also support explicit `init(...)` constructors. Data and inline structs retain their primary-constructor-only form. An explicit `init(...)` on a plain struct or class cannot duplicate its primary constructor's parameter signature (`GS0284`). Classes are reference-like and can have primary constructors, explicit `init` constructors, base classes, interfaces, fields, methods, properties, events, and `shared` static members. Plain classes are sealed for inheritance unless marked `open`; overriding requires `override` and a compatible open base method. `sealed class` declares a Kotlin-style closed hierarchy (subclasses allowed in-package, exhaustiveness-bound in `switch`). Inside an instance member of a derived class, an `override` (or any other instance member) may invoke the **base class** implementation of an inherited virtual member non-virtually via the **base-class call** syntax `base.Member(args)` — the faithful mapping of C# `base.M(...)` — or the explicit bracketed form `base[BaseClass].Member(args)`. Postfix access applies normally to the result, as in `base.Member(args).Next()`. The call emits as `ldarg.0` followed by a non-virtual `call instance R BaseClass::Member(...)`, so the nearest base implementation runs without re-dispatching through the v-table; this lets an override delegate to the member it shadows without infinite recursion. The member is resolved by walking the base chain, so a grandparent's implementation is reached when the immediate base class does not declare its own override; parameters, generics, and return values are supported. `base.Member(...)` is valid only inside an instance member of a class, or inside a function literal nested in one (the literal keeps its enclosing member's `base`, as a C# lambda or local function does; the compiler routes such a base call, including a generic one or one with `ref`/`out`/`in` arguments or a `ref` return, through a private forwarder method on the class so it stays non-virtual and verifiable); otherwise the call is rejected with GS0383. A base-qualified field or property is also a valid target of compound assignment, `??=` and increment/decrement (`base.count += 1`, `base.Name ??= v`, `base.Position++`), which reads and writes it through the base accessors non-virtually. `base.E += handler` and `base.E -= handler` subscribe through a non-virtual event the base declares (source or imported); a virtual (`open`/`override`) base event is not supported through `base` yet. : the base class may be an **imported / BCL** type — a class deriving from a CLR base (e.g. `System.IO.Stream`, `System.IO.MemoryStream`, or simply `System.Object`) can delegate to an inherited virtual member via `base.Dispose(disposing)`, `base.ToString()`, `base.Position`, etc. The inherited member is resolved against the class's CLR base type (honoring `protected`/`public` accessibility and walking a user → user → BCL chain) and emits the same non-virtual `call`; a base call into an **abstract** BCL member with no implementation (e.g. `base.Read(...)` on `System.IO.Stream`) is rejected with GS0413 (matching C# CS0205). A missing member on any base reports GS0384, and a `base[Type]` selector that is not the actual base class reports GS0385 — see the diagnostics reference. A class method MAY be declared **abstract** by giving an `open func` a `;` no-body marker instead of a `{ … }` block — `open func Area() float64;` — the canonical G# spelling of a C# `abstract` method. An abstract method declares a virtual slot with no implementation (emitted as `MethodAttributes.Abstract | Virtual | NewSlot`, no IL body); it is only valid as an `open` member of an `open class` (otherwise GS0388). A class that declares — or inherits without overriding — an abstract method is itself **abstract**: it is emitted with `TypeAttributes.Abstract` and cannot be instantiated (constructing it is the compile error GS0386, never a runtime failure). A concrete (non-`open`) subclass must `override` every inherited abstract member (otherwise GS0387); an `open` subclass may leave them abstract and remain abstract itself. Abstract methods support parameters, generic type parameters, and reference- or value-typed (including `ref`) return types, and dispatch virtually through the base/abstract slot. A class can also be declared **`abstract class`** explicitly: it is inheritable (the modifier implies `open`), is emitted with `TypeAttributes.Abstract` and cannot be instantiated even when it declares no abstract member; `Foo()` and `Foo{}` are both GS0386. A **`shared class`** is the spelling of a C# `static class`: it is emitted CLR `abstract sealed` and cannot be instantiated, and its body is the shared member list — every field, `const`, property, event and `func` declared directly in it is a shared (static) member, `init { }` is its static initializer, and it has no `shared { }` block of its own (a non-shared class keeps its trailing `shared { }` block). It cannot declare an `init(…)` constructor, a primary constructor, a `deinit`, a `shared { }` block, or an `open` or `override` method, property or event (GS0617), or have a base class or interface (GS0619), and it cannot be combined with `open`, `sealed`, `abstract` or `data` (GS0618). Every part of a `partial` shared class carries `shared` (GS0479). `abstract` and `shared` are contextual modifiers valid only on a `class` head.
+
+**Construction versus same-named callables.** A call-shaped construction `T(args)` / `T[A](args)` competes with any callable of the same name in scope. A free (non-receiver) function, a function-valued local, or a member of the enclosing type named `T` shadows the type, so the call binds to that callable. A receiver-clause **extension** function never shadows a constructible source type of the same name: C# never considers an extension method for `new T(...)`, so `Slice[T](owner, 0, n, n)` constructs `Slice[T]` even when an extension `func (s Slice[T]) Slice[T](lo int32, hi int32, max int32)` has the same arity in bare form. Such an extension stays callable in receiver form (`s.Slice(1, 2, 4)`).
+
+`data class` and `data struct` synthesize structural ergonomics such as equality and copy/update support; `data class` is reference-typed, `data struct` is value-typed. The `record` keyword was removed; migrate to `data struct Name(...)` (or `data class Name(...)` when reference semantics are desired). `inline struct` is the inline value class form and must have exactly one field.
+
+Every declared `data class` / `data struct` synthesizes the C# `record` ABI, so a G# data type and a C# `record` / `record struct` present the same CLR surface, with the one `Deconstruct` difference noted below:
+
+* `ToString()` uses the C# record format: `Point { X = 3, Y = 4 }`, or `Empty { }` when nothing prints. A generic type prints its simple name without type arguments. Only public instance fields and readable public non-indexer instance properties print (static members, indexers and pointer-typed members are skipped), in declaration order, and members printed by a data base's `PrintMembers` come first. Values format with the **current culture**, as in C#.
+* `PrintMembers(StringBuilder)` is synthesized (`private` on a sealed type that starts the slot, otherwise `protected virtual`). A hand-written `PrintMembers` of the compatible shape replaces it; a non-explicit-interface `PrintMembers` with exactly one by-value `StringBuilder` parameter that is not of the compatible shape is GS0623 (other overloads and explicit-interface implementations are ordinary methods). A hand-written `ToString` of the compatible shape replaces the synthesized `ToString` (GS0487 otherwise).
+* The type implements `IEquatable<Self>` through the synthesized typed `Equals`; `Equals(object)`, `GetHashCode()`, `==` and `!=` are structural (`left` / `right` operator parameters).
+* A data class has the protected (private when sealed) copy constructor with parameter `original`, the `<Clone>$` method that `with` / `.copy(...)` call, and the record `EqualityContract` property (`protected virtual`, `private` on a sealed root) that typed equality consults. A body-only type has a parameterless constructor (what `T{X: 1}` uses); a type with a non-empty primary constructor has no additional one, and an empty primary constructor (`data class Empty()`) is itself the parameterless constructor.
+* `Deconstruct` stays G#'s own: positional components when there is a primary constructor, otherwise all fields and then all auto-properties in declaration order, and none for a type without members. This differs from a C# record only for body-only records.
+* `data object { ... }` and `object { ... }` literals keep G#'s equality surface plus `IEquatable<Self>` and print as `{ X = 1, Y = 2 }` with no type name; they get no `PrintMembers`, copy constructor or clone.
+
+Known gaps: a data class that only synthesizes `PrintMembers` over an inherited abstract `PrintMembers` is rejected with GS0387 (#4876), and an imported non-data class between a record and a data class hides the inherited `PrintMembers` slot (#4877).
+
+```gsharp title="samples/DataStruct.gs"
+package GSharp.Example.DataStruct
+
+import System
+
+data struct Point {
+    X int32
+    Y int32
+}
+
+var p = Point{X: 3, Y: 4}
+var q = Point{X: 3, Y: 4}
+var r = Point{X: 3, Y: 5}
+
+Console.WriteLine(p == q)
+Console.WriteLine(p != r)
+Console.WriteLine(q == r)
+```
+
+### Interfaces
+
+Interfaces are declared with `interface Name { ... }`. Interface members are method, property, and event signatures. A method signature MAY carry a body — a **default-interface method** — that classes implementing the interface inherit when they do not provide their own override. A body-less (abstract) interface method is terminated by `;` — the universal no-body marker for `func` declarations, the same marker P/Invoke uses; a method carrying a `{ … }` body takes no `;`. Both abstract and default methods may appear in the same interface. An interface method MAY itself be **generic**, declaring its own type-parameter list `[T]` (or `[T, U]`) between the method name and the parameter list — the same `func Name[T](...)` form class methods and free functions use. The bodyless slot binds to a generic method (arity > 0) and is emitted as a CLR generic abstract method (signature generic-parameter count plus per-method `GenericParam` rows); an implementing class supplies a same-arity generic method, and callers invoke it through an interface-typed reference with an explicit type argument (`a.Echo[int32](x)`). A same-name class method of a different generic arity does not satisfy the slot and is rejected with **GS0187**. An interface MAY also declare **static-virtual interface members** inside a `shared { … }` block on the interface — the same `shared { … }` block that hosts static members on classes and structs. Inside an interface `shared` block, a body-less `func` (terminated by `;`) declares an abstract static-virtual slot that every implementer must supply; a `func` carrying a body declares a default static-virtual member that implementers MAY override but are not required to. An interface `shared` block MAY also declare a **static-virtual interface property** — `prop Name T { get; }` (or `{ get; set }`, or the bare `prop Name T;` get/set form) — emitted as static-virtual `get_Name`/`set_Name` accessor slots (`Static | Virtual | Abstract`) plus a `Property` row; the implementer satisfies it with a matching static property in its own `shared { … }` block (paired to the slot by a `MethodImpl` row), and a generic method constrained by the interface reads it through `T.Name` (lowered to `constrained. !!T  call <iface>::get_Name()`). A static interface property accessor MAY also carry a **body** — `prop Name T { get { … } }` — declaring a *default* static-virtual property: the accessor slots are emitted as non-abstract `Static | Virtual` methods with IL bodies, and implementers may override but are not required to (GS0396 is retired). An interface `shared` block MAY additionally declare interface static **state** — `var` / `let` / `const` fields on **non-generic or generic** interfaces — emitted as real CLR `Static` FieldDef rows on the interface TypeDef (`const` as a `Static | Literal` field with a `Constant` row, reads inlined; non-`const` initializers run in a synthesized interface `.cctor`); the storage is shared interface state read/written by bare name inside the interface's own static members or by qualified `IName.Field` (`IBox[int32].Field` for a generic interface), and compound assignment (`+=` / `-=`) is supported. On a generic interface each closed construction owns independent static storage (access sites reference the field through a `TypeSpec` for the construction, so `IBox[int32]` and `IBox[string]` are distinct), matching CLR per-construction static-field semantics. An `event` member inside the interface `shared` block remains unsupported and is rejected with GS0330. Implementers supply the static via their own `shared { … }` block; generic methods constrained by the interface can dispatch through `T.M(...)`, which the compiler lowers to the CLR's `constrained. !!T  call <iface>::<method>` pattern. an interface may also declare **private helper methods** — instance helpers as `private func` directly inside the interface body, or static private helpers as `private func` inside the interface's `shared { … }` block — that participate in the interface's own implementation but are NOT part of the public contract. A sibling default method on the same interface can call the helper; implementers cannot see it and cannot override it. The helper MUST carry a body and is emitted as `MethodAttributes.Private | HideBySig` (plus `Static` when declared inside the `shared { … }` block). Classes can implement interfaces and values can upcast to implemented interfaces. An interface MAY itself **extend one or more base interfaces** via a `: A, B` clause directly after the interface name, mirroring C# `interface B : A`. Each entry in the clause MUST resolve to an interface — a G# interface or an imported CLR interface; naming a class or struct base is rejected with **GS0391**. A derived interface inherits the members of every base interface (an `interface B : A` surfaces `A`'s members on `B`, so a `B`-typed reference may call inherited members and dispatch reaches the implementer), records each base interface in metadata as an `InterfaceImpl` row on its TypeDef, and a class or struct implementing the derived interface must satisfy both the inherited and the directly declared members (the implementer's interface set is expanded to the transitive closure, matching C#). `sealed interface` declares a Kotlin-style closed hierarchy. When two unrelated interfaces both supply a default body for the same signature, the implementing class must declare its own override (GS0318); inside that override (or any other instance member) the class may delegate to one of the inherited defaults via **explicit-base interface call** syntax `base[IFoo].M(args)`. The base-call emits as a non-virtual `call instance R IFoo::M(...)` so the inherited body runs without re-dispatching through the v-table; private interface helpers remain unreachable by design. The diagnostics for static-virtual members are GS0330–GS0333 (with GS0396 for a default-bodied static interface property and GS0397 for an implementer that omits a required static-virtual interface property); the diagnostics for private interface helpers are GS0334–GS0337; the diagnostics for explicit-base calls are GS0338–GS0341 (see the diagnostics reference). The `open`, `override`, and `sealed override` modifiers on interface methods remain deferred follow-ups (GS0321).
+
+### Enums
+
+Enums are declared with `enum Name { ... }`. They may not be generic and must contain at least one member. Equality is supported, and switch exhaustiveness diagnostics understand enum members.
+
+An enum whose members carry payload parameters is a **discriminated union** :
+
+```gsharp
+enum Shape {
+    Circle(r float64);
+    Square(s float64);
+    Empty
+}
+```
+
+The parser desugars each payload-bearing case into a class deriving from a sealed base named after the enum, so construction (`Circle(2.0)`), pattern matching (`case c is Circle:`), and exhaustiveness checking reuse the sealed-class machinery.
+
+### Generics
+
+Generic declarations and instantiations use brackets rather than angle brackets. Type parameters can have variance markers `in` and `out` and zero or more constraints inside the same bracket section: the legacy single-identifier slot accepts `any`, `comparable`, or an **interface name** — a G# interface or an imported CLR interface, non-generic (e.g. `[T IDisposable]`) or constructed-generic, including the self-referential form `[T IComparable[T]]` where the type parameter appears in its own constraint. The same legacy slot also accepts a **base class** as a constraint, mirroring C#'s `where T : BaseClass`: a user-declared class — open or sealed, generic or not, including the CRTP-style self-referential `[T Box]` / `[T Box[T]]` forms where the class names itself in its own constraint — or an imported reference-type class. C# permits at most one base-class constraint; G#'s single legacy slot enforces this structurally. A *value type* (a non-class struct or an enum) is still rejected with **GS0153**. The same legacy slot also accepts **another type parameter** — C#'s `where TDerived : TBase`, spelled `[TBase, TDerived TBase]` — at every placement: a generic function's own list, a generic type's own list, and a generic method's parameter bounded by the *enclosing* type's parameter (`class Box[T] { func Accept[U T](u U) }`). The bounding parameter need not come first, and the bound projects onto a `GenericParamConstraint` metadata row whose `TypeDefOrRefOrSpec` is a TypeSpec naming `VAR(n)` / `MVAR(n)` — the same encoding C# emits — so the produced assembly verifies. A type argument that does not equal, derive from, or implement the argument supplied for the bounding parameter is rejected with **GS0152**; where the relation cannot be answered in a closed form (either side still mentions an unsubstituted type parameter) the instantiation is accepted, since the CLR only loads it once it is closed. A dependent bound does *not* propagate the bounding parameter's own reference-type or value-type nature — `[TBase class, TDerived TBase]` does not make `TDerived` a reference type for the purposes of `nil` — because the CLR carries no such implication on the constraint row. A **circular** chain of type-parameter constraints (`[T T]`, `[A B, B A]`) is rejected with **GS0581** (C# spells the same rule CS0454). Inside the body of a function so constrained, the instance members of the constraint interface are available on values of `T` (e.g. `a.CompareTo(b)` binds because `T : IComparable[T]`); the call is emitted as the verifiable CLR `constrained. !!T  callvirt <iface>::M(...)` sequence and a matching `GenericParamConstraint` metadata row is written so the produced assembly verifies. The instance members of a base-class constraint bind the same way (e.g. `x.Speak()` binds because `T : Animal`), emitted as `constrained. !!T  callvirt <class>::M(...)` over the class's own method so virtual dispatch resolves the most-derived override at runtime, again with a `GenericParamConstraint` row pointing at the class. A type argument that does not implement the constraint interface — or, for a base-class constraint, does not equal or derive from the constraint class — is rejected with **GS0152**. G# adds three repeatable flag-style constraints — `class`, `struct`, and `init()` (the default-constructor constraint was formerly spelled `new()`) — that may appear in any order after the legacy slot. The flag constraints map directly to the matching CLR `GenericParameterAttributes` bits (`ReferenceTypeConstraint`, `NotNullableValueTypeConstraint` + the implied `DefaultConstructorConstraint`, and `DefaultConstructorConstraint` respectively). Mutually exclusive combinations (`class struct`, `struct init()`) are rejected as **GS0361**. A type parameter that carries an `init()` constraint may be **constructed** inside the generic body with the call-like spelling `T()`: the construction lowers to a reified `System.Activator.CreateInstance<T>()` (the standard C# `new()`-constraint lowering), which produces a real instance for both reference types with a public parameterless constructor and value types. Constructing a type parameter that lacks an `init()` constraint is rejected with **GS0389** (mirrors C# CS0304); a type **argument** that cannot satisfy an `init()` constraint at the instantiation site is rejected with **GS0152**. Construction works for both generic types (`class Factory[T init()]`) and generic functions (`func make[T init()]()`). A non-generic type and a same-named generic of a different arity may coexist (`Op` and `Op[T]`, mirroring `Task`/`Task[T]`); name resolution keys candidates by `(name, generic arity)`. This disambiguation applies uniformly to type references, struct/class literals, **and constructor invocations**: a construction carrying an explicit type-argument list — `Op[int32](5)` — selects the generic definition whose arity matches the supplied type-argument count even when a sibling non-generic `Op` exists, while `Op(...)` with no type arguments resolves the arity-0 type. A type-argument count that matches no same-named candidate is rejected with **GS0148**.
+
+```gsharp
+func Identity[T any](value T) T {
+    return value
+}
+
+func Map[T class, U class](self T?, f (T) -> U) U?         { /* class-typed Optional.Map */ }
+func Map[T struct, U struct](self T?, f (T) -> U) U?       { /* struct-typed Optional.Map */ }
+func Make[T class init()]() T { return T() }                // class + init(): T() constructs T
+
+let x = Identity[int32](42)
+```
+
+The implementation emits **reified CLR generic metadata** for user-declared and imported generic types and methods: `TypeDef` carries `GenericParam` rows, signatures over `T` encode `Var(idx)`/`MVar(idx)`, closed CLR generics that mention an in-scope type parameter (`List[T]`) emit as honest `GenericInstantiation` blobs, and open-bearing delegate shapes (`func(T) U`) dispatch through reified `Func`N` MemberRefs on constructed `TypeSpec`. Generic method inference is implemented for supported cases.
+
+### Type syntax
+
+```ebnf
+ArrayTypePrefix = "[" number? "]"
+                | "[" "," { "," } "]" .
+TypeClause = identifier TypeArgList? "?"?
+           | ArrayTypePrefix "?"? identifier TypeArgList? "?"?
+           | ArrayTypePrefix "?"? TypeClause "?"?
+           | "(" TypeClause { "," TypeClause } ")" "?"?
+           | "(" TypeClauseList? ")" "->" TypeClause "?"?
+           | "async" "(" TypeClauseList? ")" "->" TypeClause "?"?
+           | "map" "[" TypeClause "]" TypeClause "?"?
+           | ( "in" | "out" )? "chan" "[" TypeClause "]" "?"?
+           | "chan" TypeClause                                                    (* legacy; GS0567 *)
+           | "sequence" "[" TypeClause "]" "?"?
+           | "async" "sequence" "[" TypeClause "]" "?"?
+           | "func" "(" TypeClauseList? ")" TypeClause? "?"?                  (* deprecated, GS0303 *)
+           | "async" "func" "(" TypeClauseList? ")" TypeClause? "?"?          (* deprecated, GS0303 *)
+           | "*" TypeClause "?"? .
+TypeClauseList = TypeClause { "," TypeClause } .
+TypeArgList = "[" TypeClause { "," TypeClause } "]" .
+```
+
+The function-type productions disambiguate against the tuple-type production by bounded look-ahead: in a type-clause slot, an opening `(` is a function-type clause iff the matching `)` is followed by `->`, otherwise it is a tuple-type clause. The parenthesized-nullable function-type form `((T) -> R)?` adds one more shape starting with `((`: the outer parentheses are read as the nullable-wrapping form only when the group they delimit contains exactly one function type — no comma at the outer nesting level. When a top-level comma is present, the outer parentheses are a tuple type whose elements are themselves resolved by the same look-ahead, so a tuple may have function-type elements — `((int32) -> int32, (int32) -> int32)`, `(() -> int32, string)`, and the named-element form `(f (int32) -> int32, g () -> int32)` — in declared-type and type-argument positions alike. The arrow form is the canonical spelling  the legacy `func(T) R` and `async func(T) R` shapes still parse for one release and emit `GS0303`.
+
+A type clause may name a type with a **dotted qualifier** (`Container.Nested`, `Outer.Middle.Inner`), and each segment may itself carry a type-argument list (`Outer.Box[int32]`). A source-declared nested type is normally referenceable by its **simple name** within the package, but when a top-level type (or a nested type of a different container) shares that simple name, the bare name binds to the homonym that owns the simple name; the nested type then remains referenceable **only** through its qualified `Container.Nested` form. The qualified form resolves robustly against the nested type in every position — as a type clause (variable/return type), in a **generic-argument** position (`List[C.E]`, including nested generics `List[Outer.Box[int32]]`), and in a **struct-literal** position (`C.E{X: 1u}`) — so the constructed value's members resolve against the nested type. A genuine duplicate (two top-level types of the same name, or two nested types with the same name in the *same* container) is still a `GS0102` error.
+
+Byref/pointer syntax exists as `*T`, unary `&`, and unary `*`. The emitter implements its CLR storage and interop behavior.
+
+The prefix `*T` is **context-sensitive**. **Outside** an `unsafe` context it denotes a *managed* by-ref pointer (CLR `ELEMENT_TYPE_BYREF`, `T&`): GC-tracked, legal only as a ref-kind parameter (`ref`/`out`/`in`), a `ref` return, or a `let ref` local — and rejected as a field type (`GS9006`) or plain parameter type (`GS0243`). **Inside** an `unsafe` context the same `*T` denotes an *unmanaged* raw pointer (CLR `ELEMENT_TYPE_PTR`, C# `T*`): not GC-tracked, and legal as a field, local, and plain (non-ref-kind) parameter type. An `unsafe` context is entered by an `unsafe` modifier on a function (`unsafe func F(...)`), an `unsafe { … }` block statement, or an `unsafe` modifier on a type declaration (`unsafe class` / `unsafe struct`); `unsafe` is a contextual keyword (no new reserved word). The `unsafe` modifier on a function binds both its body and its **signature** (parameter + return types) in an unsafe context — this holds for a free function, an extern, and a *method* declared inside an otherwise-*safe* `class`/`struct` (instance, static/`shared`, or interface member), so a single unsafe method may take/return unmanaged pointers without marking the whole type `unsafe`. A non-`unsafe` method's `*T` keeps its managed by-ref meaning (`GS0243`). The legal pointee subset is the blittable primitives (`int8`…`int64`, `uint8`…`uint64`, `nint`/`nuint`, `float32`/`float64`, `bool`, `char`), pointers-to-pointers, and blittable user/value structs `*S` (`S` must be a value type whose fields are all blittable, mirroring C#'s "unmanaged type" rule); the opaque byte pointer (C# `byte*`) is spelled `*uint8`, while a true void-element pointer (C# `void*`) is spelled `*void` — a `ELEMENT_TYPE_PTR` over `ELEMENT_TYPE_VOID` that carries no element type. A pointer to a managed reference type, a non-blittable struct (one with a string/class/other managed field), or a formatted class is rejected with `GS0398`. Inside an unsafe context the unmanaged pointer supports dereference read/write (`*p`), indexing (`p[i]` ≡ `*(p + i)`), scaled arithmetic (`p + i` / `p - i`), pointer difference (`p - q` for two operands of the same `*T`, yielding the scaled element count `((nint)p - (nint)q) / sizeof(T)` as `nint`; mismatched `*T - *U` remains an error), comparison/equality, a null pointer (`nil`), casts between pointer types and to/from `nint`/`IntPtr` (the `(byte*)x` ≡ `*uint8(x)`, `(void*)x` ≡ `*void(x)`, and `(nint)p` round-trip), and use as a plain `@DllImport`/`@LibraryImport` parameter. For a blittable struct pointer `*S` the deref/index load and store emit `ldobj`/`stobj <S>`, the arithmetic/difference scale is the CIL `sizeof S` opcode (a user struct's size is not known at G# compile time), and the value is member-accessible through the pointer in both the explicit `(*p).field` form and the arrow sugar **`p->field`** (read and write, plus `p->method(...)`). `p->member` is parsed as sugar for `(*p).member` (no new bound-node kinds); it reuses the existing `->` token, and because a bare `p -> body` is also a single-identifier lambda, `p->member` is disambiguated to pointer member access only inside an unsafe context (a single-identifier lambda inside unsafe code is still written `(x) -> body`). A blittable struct pointer round-trips through `nint` and casts to/from a typed pointer via the `*S(expr)` form (the struct analogue of `*uint8(p)`). Most of these operations are lowered in the binder to native-int arithmetic and reinterpret conversions; the only new lowered node is `sizeof S`. Genuinely-unsafe pointer IL is *unverifiable by design* (as in C#); the emit tests assert runtime behaviour. A `*void` value cannot be directly dereferenced, indexed, or advanced by arithmetic (it has no element type); those operations are rejected with `GS0403` until it is cast to a typed pointer `*T`, but comparison/equality and `nint`/typed-pointer casts are allowed. **Managed function pointers** are spelled `*func(T1, T2) R`: only legal inside `unsafe` (`GS0404`), obtained from a static/free method with `&Method` (emits `ldftn`; `GS0405` on instance/overloaded/generic methods), invoked directly with `fp(args)` (emits `calli`), and round-trippable through `nint`. This form is distinct from the deprecated `func(T) R` type clause and does not emit `GS0303`; rewriting it as `*((T) -> R)` instead creates a pointer to a managed delegate and is rejected with `GS0398`. `nil` denotes the null function-pointer value. **Fixed-size buffers** are spelled `fixed name [N]T` inside an `unsafe struct`: the buffer lowers to a compiler-generated nested `<name>e__FixedBuffer` struct (explicit `ClassLayout` size `N * sizeof(T)`, single `FixedElementField`, `[CompilerGenerated]`/`[UnsafeValueType]`) and the containing field carries `[FixedBuffer(typeof(T), N)]`; a reference to the buffer — through a receiver (`s.name`, `p->name`) or by its bare name inside the declaring struct — decays to a `*T` to the first element, indexable as `name[i]`. The element type must be a blittable primitive (`GS0409`) and `N` a positive constant (`GS0408`). `fixed`/pinning is implemented separately (described below).
+
+`stackalloc [n]T` stack-allocates a contiguous buffer of `n` elements of a blittable element type `T`, emitted as the CIL `localloc` instruction and reclaimed when the method returns. It uses **G#-style array grammar** — the bracketed count first, then the element type (`stackalloc [4]uint8`), mirroring G#'s array/slice type grammar (`[]T`, `[n]T`). It has two forms, selected by the target type exactly as the unsafe gating of `*T` falls out of context. The **safe** form is the default and needs **no** `unsafe` context: `var buf = stackalloc [4]uint8` yields a `System.Span[T]` (or `System.ReadOnlySpan[T]` when the target is one) over the allocated block, so element access is bounds-checked and `.Length` is available. The **unsafe** form is reached only inside an `unsafe` context when the target type is a `*T` unmanaged pointer (`var p *int32 = stackalloc [3]int32`), yielding the raw `localloc` pointer; outside an unsafe context no pointer target exists, so the safe `Span[T]` form is always chosen and no extra "unsafe required" diagnostic is needed. The count is a full expression (a runtime length is allowed). An optional brace-delimited **initializer** supplies the element values: `stackalloc [3]int32{1, 2, 3}` (explicit count) or the count-inferred `stackalloc []int32{1, 2, 3}` (empty brackets — the length comes from the initializer). Each initializer element must be convertible to `T`, and the values are stored into the block through the `localloc` pointer via scaled indirect writes (for both the safe `Span[T]` and unsafe `*T` forms). A count-inferred `stackalloc []T` with no initializer is rejected with `GS0411`, and an explicit `stackalloc [n]T{…}` whose constant count disagrees with the initializer length is rejected with `GS0412` (matching C#). The element type must be a blittable primitive or a pointer; a managed/non-blittable element type is rejected with `GS0399`. Without an initializer the buffer is **zero-initialised** (method bodies are emitted with `.locals init`, which zeroes `localloc` memory, matching C# safe-`stackalloc`). `stackalloc` is a contextual keyword recognised only in the `stackalloc […` shape, so it remains usable as an ordinary identifier elsewhere. `localloc` IL is *unverifiable by design* (as in C#); the emit tests assert runtime behaviour.
+
+The `fixed` statement `fixed <name> *T = <source> { … }` pins a managed buffer for the duration of its body block and binds an unmanaged pointer `<name>` of type `*T` to the buffer's first element (including span-like sources) — the G# spelling of C# `fixed (T* p = source) { … }`. The header is paren-less, consistent with G#'s other statement headers (`if`/`for`/`while`/`unsafe`), and `fixed` is a **contextual keyword** recognised only in the `fixed <ident> *…` shape, so it remains usable as an ordinary identifier elsewhere; the source expression is parsed with struct-literal suppression so the `{` that follows opens the body block rather than a composite literal. Because it produces a raw unmanaged pointer, the statement is legal **only inside an `unsafe` context** (function, `unsafe { … }` block, or unsafe type); used outside one it is rejected with `GS0400`. The **source** must be a pinnable managed buffer: a slice/array `[]T` (the cs2gs mapping of a C# `T[]`, CLR-backed by `T[]`), a `string`, a **span-like** source whose type exposes a public instance `ref T GetPinnableReference()` (canonically `System.Span[T]` / `System.ReadOnlySpan[T]`), or a **fixed-size buffer field** (`fixed p *int8 = h.B.Name { … }`, or a bare `fixed p *int8 = Name { … }` inside the declaring struct) — the G# spelling of C# `fixed (sbyte* p = Name)`, which binds `p` to the buffer's first element and keeps the buffer's containing storage pinned for the block. As in C#, a fixed-size buffer is pinnable only when it lives in *movable* storage (a class field, an array/slice element, a `ref`/`out`/`in` parameter, or a struct method's receiver); one reached through storage that cannot move (a local, a by-value parameter, or a pointer dereference `p->Name`) is rejected with `GS0507` (C#'s CS0213) and is used directly as a `*T` instead. The pointer's pointee type must match the buffer's element type (`uint16`/`char` are accepted interchangeably for `string`); any other source — or a pointee mismatch — is rejected with `GS0401`. The bound `*T` pointer is in scope **only inside the body** and is read-only. Lowering mirrors the C# compiler: a synthetic CLR **pinned local** (`.locals init ([n] T[] pinned)` for a slice/array, `string pinned` for a `string`, `T& pinned` for a span-like source or a fixed-size buffer) holds the buffer reference so the GC cannot move it; the pointer is derived as the element-0 address (`ldelema` with a null/zero-length guard for arrays — an empty buffer yields a null pointer — `RuntimeHelpers.OffsetToStringData` for strings, `call GetPinnableReference(); conv.u` for span-like sources, and `ldflda name; ldflda FixedElementField` — the address of the buffer's first element, exactly as C# emits — for a fixed-size buffer). For a span-like source the emitted MemberRef carries the real BCL signature, including `modreq(System.Runtime.InteropServices.InAttribute)` on `ReadOnlySpan[T].GetPinnableReference()`'s `ref readonly T` return, so the call binds at runtime. On block exit the pinned local is released (`ldnull; stloc` for array/string, `ldc.i4.0; conv.u; stloc` for a span-like or fixed-size buffer by-ref pin). Pinning + unmanaged-pointer dereference IL is *unverifiable by design* (as in C#); the emit tests assert runtime behaviour.
+
+CLR `ref struct` types such as `Span[T]` and `ReadOnlySpan[T]` are consumable as stack-only values: they are indexable (`s[i]`), ref-returning members auto-dereference in rvalue position, a `[]T` slice converts implicitly to a span, and a user `ref struct X { … }` may embed a closed generic value-type field. Stack-escape violations are reported as `GS0219`; writing through a `ReadOnlySpan[T]` element is `GS0226`. The full ref-safe-to-escape analysis is deferred.
+
+## Declarations and scope
+
+### Packages and imports
+
+A package declaration names the package for the compilation unit. Imports bring packages, CLR namespaces, or aliases into scope. The compiler can add an implicit `System` import by default; `/noimplicitimports` disables it.
+
+```ebnf
+CompilationUnit = PackageDecl? ImportDecl* Member* EOF .
+PackageDecl     = "package" identifier { "." identifier } .
+ImportDecl      = "import" ( identifier "=" )? identifier { "." identifier } .
+```
+
+**Static imports (`import Ns.Type`, the G# form of C# `using static`).** When the trailing dotted path of a non-alias import names a **type** owned by the program (a `class` with a `shared { … }` block) rather than a package/namespace, the import additionally brings that type's `shared` (static) members — methods, fields, properties, and consts — into scope for **unqualified** reference. An unqualified call or identifier that fails ordinary resolution is then matched against the `shared` members of the imported types, so `import p.aux.EnumUtil` lets `GetValues()` (and the generic `GetValues[TEnum]()`) be written bare instead of `EnumUtil.GetValues()`. Following C#, qualification still works, and a name that two or more imported types both expose is reported as ambiguous (`GS0414`) only at the reference site. A plain namespace import (`import p.aux`) does **not** hoist statics, and an aliased import (`import x = p.aux.EnumUtil`) only introduces the alias. Hoisting covers types compiled together with the consumer; importing the static members of a referenced CLR static class is out of scope.
+
+### Top-level declarations
+
+Top-level members are functions, type declarations, variable declarations, or top-level statements. Mixing explicit `Main` and top-level statements is diagnosed. Accessibility modifiers are `public`, `internal`, `protected`, and `private`; defaults depend on declaration context. The `protected` modifier is only valid on members of an inheritable `open class` (see *Protected accessibility* below); applying it to a top-level declaration, a non-`open` (sealed) class, or a struct member is rejected with GS0380, except on a `protected override` method, property or event of a non-`open` class (the base member dictates its accessibility).
+
+```ebnf
+Member        = Annotation* Accessibility? ( Async? FunctionDecl | TypeDecl | VariableDecl | GlobalStatement ) .
+Accessibility = "public" | "internal" | "protected" | "private" .
+Annotation   = "@" ( AnnotationTarget ":" )? identifier { "." identifier } ( "(" Arguments? ")" )? .
+```
+
+### Functions and methods
+
+Functions use `func`. Receiver clauses always declare extension functions — for BCL primitives and imported CLR types, for types from referenced packages, and for types this package owns (classes, structs, enums) alike; there is no ownership-based branch. Methods on owned classes **and owned structs** are declared inside the type body instead — that is the only spelling for an owned-type instance method; there is no receiver-clause equivalent. (The `extension` contextual keyword for the owned/enum case, and the `GS0314` warning that steered authors toward the in-body form, are both retired — a receiver clause needs no marker because it has exactly one meaning now.) Operator overloads use `operator` followed by the operator token and map to CLR operator names downstream; operators continue to use the receiver-clause form and are the one case that still attaches to an owned type directly (no in-body operator form exists). Parameters may carry a ref-kind modifier (`ref`, `out`, or `in`) and may declare a compile-time-constant default value to become optional. User functions may be overloaded as long as overloads differ by parameter types, arity, or ref-kinds; two declarations that differ only in return type are rejected as `GS0264`. One narrow exception, the *covariant-return interface bridge*, admits two same-name, same-parameter methods that differ only by return type **when each one satisfies a distinct interface slot** — most commonly a generic collection that implements `IEnumerable[T]` by declaring both the generic `func GetEnumerator() IEnumerator[T]` and a non-generic `func GetEnumerator() IEnumerator`.
+
+**Compound-assignment operators.** A class or struct may declare
+`func operator +=(rhs T) { ... }` and the corresponding `-=`, `*=`, `/=`, `%=`,
+`&=`, `|=`, `^=`, `<<=`, `>>=`, or `>>>=` forms. The declaration is an
+instance member, takes exactly one by-value operand, returns no value, and
+mutates its receiver in place. It may be written inside the type or with a
+receiver clause. At a compound-assignment expression it takes precedence over
+falling back to the related binary operator. The emitted CLR member is the
+matching public instance `op_*Assignment` special-name method.
+
+**User-defined conversion operators.** A package may declare implicit and explicit conversions on its own struct types using the spelling `func operator implicit (x T) U { … }` and `func operator explicit (x T) U { … }`. The contextual keywords `implicit` and `explicit` are recognized **only** immediately after `operator` (neither is a reserved keyword elsewhere). A conversion operator is implicitly **static**, takes **exactly one** by-value parameter (the source operand type `T`) and declares the target type `U` as its return type; it uses no receiver clause. At least one of `T` or `U` must be a struct owned by the current package, and `T` and `U` must differ. The declaration is emitted as a CLR `public static hidebysig specialname` method named `op_Implicit` or `op_Explicit` with signature `U (T)`, matching C#. Implicit conversions are applied automatically at assignment, at argument passing, and wherever a target type is expected; explicit conversions are applied at the type-call cast form `U(x)`. When a user conversion is applied the compiler emits a `call` to the operator. Conversions defined on imported/referenced CLR types (BCL `op_Implicit`/`op_Explicit`) are likewise recognized and applied. Malformed declarations are diagnosed: more or fewer than one parameter is `GS0393`; neither the source nor the target being an owned struct (or `T` equal to `U`) is `GS0394`; declaring two conversions with the same source/target pair (whether implicit or explicit) is `GS0395`.
+
+```ebnf
+FunctionDecl      = "func" ( ReceiverClause | InterfaceQualifierClause )? ( identifier | OperatorName | ConversionOperatorName ) TypeParamList? "(" Parameters? ")" RefReturnClause? FunctionBody .
+AsyncFunctionDecl = "async" FunctionDecl .
+FunctionBody      = Block | "->" Expression | ";" .  (* "->" Expression = expression-bodied member,  /  *)
+ReceiverClause    = "(" Parameter ")" .
+InterfaceQualifierClause = "(" TypeClause ")" .
+OperatorName      = "operator" OperatorToken .
+ConversionOperatorName = "operator" ( "implicit" | "explicit" ) .
+TypeParamList     = "[" TypeParameter { "," TypeParameter } "]" .
+TypeParameter     = ( "in" | "out" )? identifier ConstraintName? .
+Parameters        = Parameter { "," Parameter } .
+Parameter         = Annotation* ParameterModifier? identifier "..."? TypeClause ( "=" ConstantExpression )? .
+ParameterModifier = "ref" | "out" | "in" | "scoped" .
+RefReturnClause   = "ref"? TypeClause .
+```
+
+A function declared `func f(...) ref T` returns a managed pointer and pairs with the `return ref <lvalue>` statement form (diagnostics `GS0248`–`GS0255`). The `scoped` modifier on a `ref struct` / managed-pointer parameter constrains the value from escaping the call (enforced by the by-ref-like rules in `GS9004` / `GS9006`).
+
+A `ref`, `out` or `in` argument (`&x`) passes the storage location itself, so the storage's type must be the parameter type, with no conversion. The one allowance is reference nullability, as in C#: storage that differs from the parameter only in `?` annotations on reference types — `[]?int32` at `ref []int32`, `List[string?]` at `ref List[string]` — is accepted with the warning `GS0612`, reported in the direction a nil can flow through the shared storage (any difference for `ref`; nullable storage at a non-null `in`; a nullable `out` parameter over non-null storage; any nested difference). A platform (`T!`) position states nothing and never warns. `GS0612` reads *declared* types, not C#'s flow state, so it can fire where csc is silent (a `string?` local that was assigned a non-nil value) — narrow the storage or suppress the warning. A value-type `V?` is `Nullable<V>`, a different runtime type, and `V?` storage at a `V` parameter (or the reverse) is `GS0154`, for G# and imported callees alike. Overload resolution applies the same rule: a candidate whose parameter the storage cannot reach is not applicable, and an exact storage type is better than one that differs only in nullability. A compiler warning such as `GS0612` can be suppressed for one declaration or one block with `@SuppressDiagnostic("GS0612")`; compiler errors cannot be suppressed.
+
+A function declared `func f(name ...T)` is **variadic**: the source-level element type is `T`, the parameter is seen inside the body as a slice `[]T`, and the call site may supply either *N* trailing positional arguments (packed into a freshly allocated `[]T`) or exactly one trailing `[]T` value (forwarded unwrapped — array identity is preserved). **Generalized carriers**: when the type written after `...` is itself a supported collection shape, it is the parameter's CARRIER — mirroring C#13 params collections — and its single type argument is the element type: `...[]T` ≡ C# `params T[]`, `...List[T]` ≡ `params List<T>`, the five `IEnumerable`-family interfaces likewise, and `...Span[T]`/`...ReadOnlySpan[T]` ≡ `params (ReadOnly)Span<T>`. The callee's body sees the carrier itself; expanded call-site arguments are element-coerced and packed into the carrier (array upcast for interfaces, `new List<T>(T[])`, the span's `T[]` constructor), and a single trailing argument implicitly convertible to the carrier passes through. Any non-carrier type after `...` keeps the element interpretation above. A List/span carrier over a same-compilation element that cannot be constructed at the call site reports `GS0544`. At most one variadic parameter is allowed per signature (`GS0364`) and it must be the last parameter (`GS0145`). Variadic declarations are accepted on top-level `func`, class instance / static methods, interface methods (including default-body methods), constructors, lambdas (function-literal and arrow form), named delegate declarations, and primary-constructor parameter lists on `class` / `struct` / `data class` / `data struct` / `inline struct`. On a primary-constructor parameter list the trailing variadic promotes to a `[]T` auto-field with the same name, exactly as the explicit `init(…)` lowering would. The emitter stamps `[System.ParamArrayAttribute]` on an array-carrier last parameter — and C#13's `[System.Runtime.CompilerServices.ParamCollectionAttribute]` on a collection-carrier one — so the method is consumable by C# / F# / VB callers using their native variadic syntax. The C# `params` keyword is not recognised in G# source; encountering it reports `GS0363` pointing at the canonical `...T` form.
+
+A `;` in place of the `Block` body marks the declaration as "no managed body". The body-less form is reserved for functions annotated with `@DllImport("libname", ...)` or `@LibraryImport("libname", ...)` (top-level or in a `shared` block) — see [Native interop (P/Invoke)](#native-interop-pinvoke). An unannotated `;` body is rejected with `GS0325`.
+
+An `-> Expression` in place of the `Block` body declares an **expression-bodied
+member**, using the G# arrow `->` (never the C# fat
+arrow `=>`, which remains a `GS0005` syntax error in every member position).
+`func f(...) T -> expr` desugars to `{ return expr }` when the function has a
+return type, and to `{ expr }` (an expression statement) when it is void —
+mirroring C#'s expression-bodied void methods. A void arrow body is checked
+exactly like that block body: `func f(c bool) -> if c { … }` is the void `if`,
+and a switch with void arms is the void switch. `-> { … }` is not an expression
+but the same block body an arrow lambda has — a statement block with an
+optional trailing value — and desugars to `{ stmts; return tail }` (or
+`{ stmts; tail }` when void), so `return` statements and statement endings work
+as in a block-bodied function. A brace followed by a continuation
+(`-> { … }.ToString()`) is still one expression. Because operators and
+user-defined conversion operators route through the same function-declaration
+path, they accept the arrow form too (`func (a V) operator + (b V) V -> …`,
+`func operator implicit (c T) U -> …`). The arrow body lives in a member
+position that is syntactically distinct from expression position, so it does not
+collide with arrow lambdas (`(x int32) -> x + 1`).
+
+#### Overload resolution and generic constraints
+
+The binder picks a callee in three steps: (1) collect every name- and arity-compatible candidate (instance methods, extension methods with a matching receiver type, and free functions); (2) filter to the **applicable** subset whose parameter types accept the supplied arguments after standard conversions; (3) rank the applicable set and pick the unique most-specific candidate, otherwise report `GS0160` (ambiguous overload).
+
+For generic candidates the filter step additionally validates the inferred (or explicitly supplied) type arguments against each generic parameter's CLR constraints — `where T : class`, `where T : struct`, `where T : new()`, and base/interface bounds. A candidate whose constraints are violated by the inferred type arguments is dropped before ranking. Constraints are checked **after** type inference: the type arguments inference picked are what the check sees. (See .)
+
+When multiple candidates survive parameter-shape ranking, the binder applies a final tie-break that prefers the candidate with the more specific generic-parameter constraints. The per-parameter ordering is `where T : struct` > `where T : class` > (no constraint); a candidate dominates another iff every type-parameter slot's score is greater-or-equal and at least one is strictly greater. Mutually-incomparable candidates remain ambiguous and report `GS0160`. An **explicitly-implemented interface member is not part of the implementing type's own surface** and is therefore not collected as a candidate for an ordinary call on that type: reaching it requires an interface-typed receiver (`cast[IList](xs).Add(v)`), as in C#. A **default-interface method** the type does not re-declare IS collected, since the type need not implement it at all; and on an *interface* receiver the members of its base interfaces are collected, being members of the derived interface. The same holds for a **collection literal**, whose synthesized `Add` binds through the ordinary call path: a member of a non-generic interface such as `System.Collections.IList.Add(object)` is reachable there only where the argument or the receiver has no CLR identity of its own and the widening is repairing that erasure, so `List[int32]{"x"}` is a compile-time error exactly as `List[int32]().Add("x")` is. A member of a *generic* interface is closed over the receiver's own type arguments and cannot widen, so it is unaffected.
+
+This rule lets `Gsharp.Extensions.Optional.Map` carry two overloads — `where T : class` and `where T : struct` — under one name, with the binder picking the right one based on the receiver type.
+
+### Type declarations
+
+```ebnf
+TypeDecl          = TypeAliasDecl | DelegateDecl | AggregateDecl .
+TypeAliasDecl     = "type" identifier TypeParamList? "=" identifier .
+DelegateDecl      = Visibility? "delegate" identifier TypeParamList? "(" Parameters? ")" TypeClause? ";" .
+AggregateDecl     = Visibility? OpenOrSealed? Data? Inline? Partial? Unsafe? AggregateKeyword identifier TypeParamList? PrimaryCtor? BaseClause? AggregateBody? .
+AggregateKeyword  = "class" | "struct" | "enum" | "interface" .
+Visibility        = "public" | "internal" | "private" .  (* type-level; "protected" is a member-only modifier *)
+OpenOrSealed      = "open" | "sealed" .
+Partial           = "partial" .
+Unsafe            = "unsafe" .
+PrimaryCtor       = "(" Parameters? ")" .
+BaseClause        = ":" QualifiedTypeName ( "(" Arguments? ")" )? { "," QualifiedTypeName } .
+AggregateBody     = "{" Member* "}" .
+```
+
+The aggregate keyword IS the declaration keyword. Unsupported modifier combinations are rejected at parse time (diagnostics GS0306–GS0312). Discriminated-union enums (members that carry a payload parameter list) are desugared at parse time to a sealed base class plus one subclass per case. Contextual `type` introduces aliases; named delegates use the separate `delegate` declaration.
+
+`partial` is a contextual modifier on `class`, `struct`, and `interface` declarations. Multiple partial declarations with the same package, containing type, and name merge into one emitted CLR type. Every declaration in a multi-part group must carry `partial` (`GS0475`); non-partial duplicates still report `GS0102`. Parts must agree on aggregate kind (`GS0476`), accessibility (`GS0477`), type parameters (`GS0480`), and base-class shape (`GS0481`); `open` and `sealed` cannot conflict (`GS0478`); `data` / `inline` / `ref` must be repeated on every part (`GS0479`); only one part may declare a primary constructor (`GS0482`) or `deinit` (`GS0483`). Interfaces implemented by different parts are unioned, members and annotations concatenate in deterministic source order, and `shared { init { ... } }` blocks from all parts concatenate into the single `.cctor`. `partial enum` is rejected (`GS0484`). A single partial declaration with no siblings is legal. Nested partial types merge recursively within their containing type.
+
+A `DelegateDecl` declares a real CLR `MulticastDelegate`-derived named delegate type, so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Generic delegate declarations (`delegate Predicate[T any](value T) bool;`) are supported, emitting a generic delegate `TypeDef`. The trailing semicolon is required, including when the return type is omitted for a void delegate. The retired `type Name = delegate func(...)` spelling reports `GS0535`.
+
+### Members
+
+```ebnf
+StructBody       = "{" StructMember* "}" .
+StructMember     = Annotation* Accessibility? ( OpenOrOverride* ( MethodDecl | PropertyDecl | EventDecl | ConstructorDecl ) | SharedBlock | FieldDecl ) .
+OpenOrOverride   = "open" | "override" .
+ConstructorDecl  = "init" "(" Parameters? ")" ( ":" identifier "(" Arguments? ")" )? Block .
+SharedBlock      = "shared" "{" SharedMember* "}" .
+SharedMember     = Accessibility? ( MethodDecl | PropertyDecl | EventDecl | FieldDecl ) | StaticInitializerBlock .
+StaticInitializerBlock = "init" Block .  (*  / : runs in the type's .cctor after static-field initializers *)
+FieldDecl        = Accessibility? ( "var" | "let" ) identifier TypeClause ( "=" Expression )? .
+PropertyDecl     = "prop" InterfaceQualifierClause? ( identifier | IndexerHeader ) TypeClause ( PropertyBody | "->" Expression )? .  (* "->" Expression = read-only computed property/indexer,  *)
+IndexerHeader    = "this" "[" Parameters "]" .  (* : user indexer member, emitted as the CLR default `Item` property *)
+PropertyAccessor = ( "get" | ( "set" | "init" ) ( "(" identifier ")" )? ) ( Block | "->" Expression | ";" )? .  (* "->" Expression = expression-bodied accessor,  *)
+EventDecl        = "event" InterfaceQualifierClause? identifier TypeClause EventBody? .
+EventAccessor    = ( "add" | "remove" | "raise" ) ( Block | ";" )? .
+InterfaceBody    = "{" ( InterfaceMethodDecl | PropertyDecl | EventDecl )* "}" .
+InterfaceMethodDecl = "func" identifier "(" Parameters? ")" TypeClause? FunctionBody .  (* FunctionBody ";" = no-body (abstract) marker;  *)
+```
+
+An explicit interface implementation places its interface type immediately
+after the member keyword:
+
+```gsharp
+class Both : ILeft, IRight {
+    func (ILeft) Name() string -> "left"
+    func (IRight) Name() string -> "right"
+    prop (ILeft) Value int32 { get -> 1 }
+    event (IRight) Changed Handler
+}
+```
+
+The forms are `func (IFace) M`, `prop (IFace) P`,
+`prop (IFace) this[...]`, and `event (IFace) E`. The qualifier accepts simple,
+qualified, and constructed generic interface names and must identify an
+interface implemented by the containing type. The same method and property
+forms inside `shared` implement static interface slots. Qualified members keep
+their ordinary source names, coexist with same-named implementations for other
+interfaces, and are callable only through the corresponding interface view.
+
+A property or event accessor body is a block `{ … }`, an `-> Expression`
+expression body, or `;` (a bare/auto accessor). The expression-body form uses the G# arrow `->`: `prop Name T -> expr` is a
+get-only computed property (and `prop this[i T] U -> expr` a get-only computed
+indexer), while `get -> expr`, `set -> expr`, and `init -> expr` are
+expression-bodied accessors — `get -> e` desugars to `{ return e }` and
+`set -> e` / `init -> e` to `{ e }` (the setter may use the implicit `value`
+parameter, or a named one via `set(name)`). The C# fat arrow `=>` is **not** a
+G# token: `get => e` or `add => e` remains a syntax error (GS0005). This narrows
+the  rule, which previously rejected every non-block accessor body;
+event accessors (`add`/`remove`/`raise`) still take a block `{ … }` or `;` only.
+
+A property or indexer may declare a **by-ref return** by writing `ref` between
+the member name (or the indexer's `]`) and the type clause — `prop Value ref
+int32 { get { return ref this.slot } }`, `prop Value ref int32 -> this.slot`, or
+`prop this[i int32] ref int32 -> this.items[i]`. The getter is emitted returning
+`T&` (both the PropertyDef signature and `get_Value` carry the by-ref return), so
+a CLR consumer can alias the storage with `ref int x = ref holder.Value`. On the
+arrow form the `ref` on the declaration makes the desugared return a `return ref`
+— there is no `-> ref e` spelling. The form is restricted to **computed,
+read-only** properties: an auto-property, a bodiless `{ get }`, an abstract slot,
+and an interface requirement are all rejected with **GS0578** (none of them names
+storage a reference can point at), and a `set`/`init` accessor alongside `ref` is
+rejected with **GS0579** (the returned reference is already the write path).
+Inside the getter, the existing `ref`-return rules apply unchanged: the body must
+`return ref <lvalue>` (GS0252 for a plain `return`, GS0253 for a non-lvalue,
+GS0254 for a getter-local). A G# *read* of such a member loads through the
+returned pointer and observes the pointee, exactly as a read of an imported
+ref-returning member does; G# itself cannot bind the result as an alias. The
+by-ref return is part of the signature for override purposes: `override prop P
+ref T` matches only a `ref` base slot, and a by-value override may not take over
+a `ref` one — both mismatches report **GS0185**.
+
+#### Protected accessibility
+
+The `protected` modifier (CIL `family`) makes a member accessible **within its
+declaring type and within the bodies of types that derive from it**, and
+inaccessible from unrelated external code. It mirrors C# `protected`:
+
+- A `protected` field, method, property (and its `get`/`set`/`init` accessors),
+  event, or constructor is visible to the declaring class and to any class that
+  derives — directly or transitively — from it, when accessed from the derived
+  class's own body. Access from outside that inheritance chain reports
+  **GS0379** (`'<member>' is inaccessible due to its protection level`).
+- As in C# (CS1540), a derived class reaches a `protected` **instance** member
+  only through a receiver whose static type is that derived class or a class
+  derived from it: `this`, `base`, a bare name, or a variable of the derived
+  type. Any construction of a generic accessing class counts as that class
+  (inside `G[T]`, a `G[int32]` receiver is valid), as in C#. A receiver typed as the base class or as a sibling subclass may be an
+  instance of some other subclass, so `s.f` with `s Source` inside
+  `class Derived : Source` reports **GS0379**. Static `protected` members have
+  no receiver and are exempt; the declaring class itself may use any receiver.
+- Because protection is only meaningful where a derived type can exist,
+  `protected` is permitted **only on members of an `open class`** (the only
+  inheritable G# types). Applying it to a member of a non-`open`/sealed class, a
+  `struct` member (structs are CLR value types and are never inheritable), a
+  nested type whose container is not an `open class`, or a top-level
+  declaration is rejected with **GS0380**
+  (`'protected' is only valid on members of an inheritable 'open' class`).
+  The one exception is a `protected override` method, property or event: it takes its
+  accessibility from the base member it overrides, so a non-`open` (CLR-sealed)
+  class may declare one.
+- `protected` composes with `open`/`override`: a `protected open func` may be
+  overridden by a `protected override func` in a derived `open class`, and the
+  call dispatches virtually.
+- A derived class reaches an inherited `protected` (or `protected internal`)
+  **static** field, property or method of a source or imported base (not yet
+  a `protected static` event of an imported base) through the base type's name
+  (`Regex.ValidateMatchTimeout(timeout)` inside a class deriving from
+  `System.Text.RegularExpressions.Regex`) or through its own name. A static
+  method inherited from a base class — public or `protected` — can also be
+  called unqualified from the derived class's instance and `shared` members.
+  That lookup is a last resort: it runs only when nothing else in scope
+  matches the name (the class's own members, an enclosing type's statics,
+  imports, package functions), so it never changes what a call that already
+  bound resolves to. This differs from C# in two places, where C# finds the
+  inherited static first: a nested class `Inner : Base` inside `Outer`
+  calling `H()` binds `Outer`'s static `H` in G# but `Base.H` in C#, and a
+  package-level function `H` wins over an inherited static `H` in G#.
+  `base.StaticMember(...)` is not a valid spelling (C# rejects it
+  too). Bare, unqualified names of inherited static fields and properties
+  are not yet in scope; qualify them with the base type's name.
+- Emit: `protected` maps to `MethodAttributes.Family` / `FieldAttributes.Family`
+  (and `TypeAttributes.NestedFamily` for an eligible nested type), so the CLR
+  enforces the same rule on consumers compiled separately and the metadata is
+  IL-verifiable.
+
+Unlike `private`/`internal` — which G# currently leaves to CLR enforcement at
+run time — `protected` is enforced both at bind time (GS0379) and by the emitted
+`family` metadata.
+
+
+#### Indexer members
+
+A type can declare a **user indexer member** with the `prop this[...]` form,
+giving it an element-access syntax (`obj[i]`, `obj[i] = v`):
+
+```gsharp
+class Repo[T] {
+    private let _items List[T] = List[T]()
+    func Add(item T) { _items.Add(item) }
+    prop this[index int32] T {        // get-only indexer
+        get { return _items[index] }
+    }
+}
+```
+
+An indexer is an instance member with a non-empty index parameter list and at
+least one accessor body. It is emitted as the CLR default indexer: an `Item`
+property whose accessors are `get_Item` / `set_Item`, with a
+`System.Reflection.DefaultMemberAttribute("Item")` on the declaring type, so
+the indexer round-trips with C# and other CLR consumers. The enclosing type may
+be generic; index parameter and element types are substituted through the
+receiver's type arguments. An indexer declared without index parameters reports
+`GS0370`; one declared without an accessor body (an "auto-indexer") reports
+`GS0371`.
+
+A type may declare several indexers, including multi-parameter ones, as long
+as their index-parameter signatures differ. Each is
+emitted as its own `Item` property, exactly as C# emits overloaded indexers.
+An element access (`obj[i]`, `obj[row, column]`) selects the indexer by
+ordinary overload resolution over the written arguments; an ambiguous access
+reports `GS0266` and an access no indexer accepts reports `GS0267`. A second
+indexer with the same signature still reports `GS0102`. A derived type's
+indexer hides only a base indexer with the same signature. A
+`System.Index` value (`obj[^1]`, `obj[saved]`) binds to a declared
+`this[System.Index]` indexer. Writes and compound assignments through a
+multi-parameter indexer evaluate the receiver and each argument once, then
+store through the setter, or through a writable `ref` getter when there is no
+setter.
+
+A property declared on a **generic** type whose type mentions a class type
+parameter (`prop Value T`, or a constructed form such as `prop Items []T`) is
+substituted through the receiver's type arguments on member access, exactly like
+a generic field: reading or writing `box.Value` where `box : Box[int32]` binds
+as `int32`. The accessor call on a constructed receiver is emitted
+against the constructed type so the substitution holds at run time.
+
+#### Get-only auto-properties
+
+A get-only auto-property (`prop Length int32 { get; }`) exposes only a getter,
+but — as in C# — it may be assigned inside an instance constructor (`init(...)`)
+of the **declaring** type, on the instance being constructed: `Length = n`,
+`this.Length = n`, compound assignment (`Length += 1`), and increment
+(`Count++`) all store its synthesized backing field directly. No setter or
+`init` accessor is emitted, so the property keeps a get-only CLR ABI. Anywhere
+else the property is read-only (`GS0127`): an ordinary method, another instance
+(`other.Length = n`), a derived type's constructor, and a lambda or local
+function inside the constructor (C# CS0200). A `shared` get-only auto-property
+has no user-writable static constructor body and is assigned only through its
+declaration.
+
+#### Init-only accessors
+
+A property may declare an **`init` accessor** in place of `set`, in either the
+auto-property (`prop Name string { get; init; }`) or explicit-body
+(`init { backingField = value }`) form. An `init` accessor behaves like a `set`
+accessor — it writes the property — except that it may only be invoked while the
+object is being initialized:
+
+* inside a constructor of the declaring type,
+* in an object/aggregate initializer at the creation site (`T() { Prop = v }`),
+* or from another `init` accessor of the same instance.
+
+Assigning to an init-only property anywhere else (after construction completes)
+is a compile error, `GS0372`. Reading an init-only property is always allowed.
+A property may not declare both `set` and `init` (`GS0373`), and an `init`
+accessor may not appear on a `shared` (static) property (`GS0374`).
+
+An `init` accessor is emitted as a `set_Prop` method whose `void` return carries
+the `System.Runtime.CompilerServices.IsExternalInit` required-custom-modifier
+(modreq), exactly as C# encodes init-only setters, so the accessor round-trips
+with C# and other CLR consumers. An auto-property `init;` emits a writable
+backing field plus the init-only setter.
+
+#### Read-only (`let`) fields
+
+A field declared with `let` is **read-only**, mirroring a C# `readonly` field. A
+`let` field is assignable only **during construction**:
+
+* by its declaration initializer (`let x int32 = 5`), and/or
+* inside the declaring type's constructor(s) (`init(...)`), targeting the
+  instance being constructed (the bare `x = …` form, or the qualified
+  `this.x = …` form). As in C#, the constructor may write the field any number
+  of times; a `let` field with no initializer may instead be assigned once in
+  the constructor.
+
+Assigning a `let` field anywhere else — from a non-constructor method, after
+construction completes, on another instance (`other.x = …`), or from a derived
+type's constructor against a base-declared `let` field — is a compile error,
+`GS0127`. Reading a `let` field is always allowed. A `let` field that is never
+assigned keeps its type's zero/default value, exactly like an unassigned C#
+`readonly` field. A `var` field has no such restriction and remains mutable.
+
+A `let` field is emitted with the CLR `initonly` field flag — the metadata
+encoding of a C# `readonly` field — so the read-only guarantee holds at the
+metadata level and constructor writes remain verifiable IL. Static `let` fields
+keep their existing behavior: they are assignable only through their declaration
+initializer (materialized into the synthesized static constructor), since G#
+exposes no user-authored static constructor body.
+
+#### Inline field initializers
+
+Any `const`, `let`, or `var` field in a type body may carry an inline
+initializer with the `= expr` suffix:
+
+```gsharp
+class Foo {
+  const one string = "value"
+  let two string = "something"
+  var three string = "this should work"
+}
+```
+
+The semantics match C#:
+
+* An **instance** field initializer (`let`/`var x T = expr`) runs as part of
+  **every** instance constructor, **before** the constructor body, in textual
+  declaration order. This holds for a primary constructor, each explicit
+  `init(...)` constructor, and the synthesized default constructor when no
+  constructor is declared. Because the initializer runs before the constructor
+  body, it may not reference `this`, another instance member of the same object,
+  or an explicit `init(...)` parameter; doing so reports `GS0377` (assign such fields in an
+  `init(...)` body instead). Primary-constructor parameters are in scope:
+  their corresponding fields are assigned before declaration initializers run.
+  A `var` field initialized inline may still be
+  overwritten by a later `init(...)` body.
+* A `let` field initializer counts as a construction-time write, so it composes
+  with the `initonly` emission described above (the field remains read-only).
+* A **static** field initializer (a `let`/`var` inside a `shared { ... }` block)
+  runs in the static constructor (`.cctor`) in declaration order.
+* A **`const`** field is a **compile-time constant**: it is implicitly static and
+  read-only, its initializer must fold to a constant expression, and it is
+  emitted as a CLR literal field (a `Constant` metadata row) usable in constant
+  contexts and from other assemblies. A `const` field with no initializer reports
+  `GS0375`; a `const` field whose initializer is not a constant expression reports
+  `GS0376`.
+* For **value types** (`struct` / `data struct`), a composite struct literal
+  (`Pt{ ... }`) starts with zero-initialized storage. Generic ownership,
+  primary-parameter scope, or non-public initialized storage requires an
+  owning constructor: primary inputs are evaluated once, then declaration
+  initializers run in declaration order, then explicit non-primary member
+  writes run in literal order. Ordinary omitted primary fields keep the
+  literal's zero value where that default is legal. An omitted primary input
+  whose substituted type requires a non-null managed-reference slot (including
+  nested aggregates and nonempty fixed arrays) reports `GS0604`, just like an
+  explicit `default` of that type. Nullable handles remain legal defaults.
+  Other public-only, non-generic literals retain inline
+  initialization for omitted fields. Braces do not execute an authored
+  constructor body; calling `T(...)` still does. Compiler-owned initialization
+  remains distinct when an authored parameterless constructor exists. Braced
+  member/content population runs after primary inputs and declaration
+  initializers. Raw `default(T)` and array element
+  zero-initialization do not invoke these constructors.
+
+## Expressions
+
+### Precedence
+
+Unary operators bind tighter than binary operators. Binary operators are left-associative; higher precedence binds tighter.
+
+| Precedence | Operators | Meaning |
+| --- | --- | --- |
+| 8 | `+`, `-`, `!`, `~`, `^` (from-end index), `*`, `&`, `<-`, `await` | unary |
+| 7 | `*`, `/`, `%`, `<<`, `>>`, `&`, `&^` | multiplicative, shifts, bitwise and, bit clear |
+| 6 | `+`, `-`, `\|`, `^` | additive, bitwise or, xor |
+| 5 | `==`, `!=`, `<`, `<=`, `>`, `>=`, `is`, `as` | equality, comparison, type test, safe cast |
+| 4 | `&&` | logical and |
+| 3 | `\|\|` | logical or |
+| 2 | `??` | null coalescing (right-associative) |
+| 1 | `?` … `:` … | conditional (ternary, right-associative) |
+
+The conditional expression `cond ? whenTrue : whenFalse` requires `cond` to be `bool` and the two branches to share a common type. Mismatched branches report `GS0263`. The narrow  form `ref cond ? lhs : rhs` (and its `out` / `in` siblings) survives as a payload to a ref-kind argument; diagnostics `GS0260`–`GS0262` apply there.
+
+### Null-coalescing operator `??`
+
+The binary null-coalescing operator `a ?? b` evaluates `a`; if it is non-nil the result is `a`, otherwise `b` is evaluated and yields the result. The right operand `b` is evaluated **lazily** — only when `a` reads as nil. The left operand must be of a nullable type (a nullable reference type `T?` or a `Nullable<T>` value type); for a value-type `T?`, "is nil" is `HasValue == false`. The result type is the best common type of the operands: when both sides share an underlying type `T`, the result is `T` (when `b` is non-nullable) or `T?` (when `b` is itself nullable).
+
+`??` is **right-associative** and sits at a precedence below `||` (logical or) and above the ternary conditional, so `a ?? b ?? c` parses as `a ?? (b ?? c)` and `a ?? b ? c : d` parses as `(a ?? b) ? c : d`. The compound form `a ??= b` is the assignment analogue. (G# previously spelled this operator `?:`; that spelling was removed in favor of `??` —.)
+
+The right operand may be a [throw-expression](#throw-expressions) — `a ?? throw e` — in which case the result type is `a`'s underlying type and the `throw` runs only when `a` reads as nil.
+
+### Type-test and safe-cast operators
+
+`expr is pattern` evaluates the expression once and returns `bool`. A bare type
+pattern (`expr is T`) tests runtime assignability; constants, relational/list/
+property patterns, parentheses, and `not` / `and` / `or` use the same semantics
+as switch patterns. `expr as T` performs a safe downcast: it returns the value
+typed as nullable `T?` when the cast succeeds, or `nil` when it fails. A
+reference target is written `x as string`; a value-type target must itself be
+nullable (`x as int32?`). In both cases the expression result is nullable.
+Using `as` with a non-nullable value type target produces diagnostic `GS0270`. Both
+operators sit at the comparison precedence level. Pattern matching reuses the
+switch pattern binder/emitter; a plain type test lowers to CLR `isinst`.
+
+A successful type-bearing `is` (or `!is`) pattern against a local, parameter, or
+read-only top-level `let` flow-narrows the receiver to the proven type for the
+rest of the enclosing flow region — see *Smart casts (flow narrowing)* below.
+
+Postfix `!!`, member access `.`, null-conditional access `?.`, null-conditional indexing `?[`, indexing, calls, and generic instantiation are parsed greedily on primary expressions. This applies to **any** primary, including a parenthesized expression — for example `(a + b).GetType()`, `(nums)[0]`, and `("s").Length` are all valid. The sole exception is a bare numeric literal: `42.Member` is not accepted because it is ambiguous with float-literal lexing; wrap it as `(42).Member` instead.
+
+### Primary expressions and calls
+
+Primary expressions include literals, identifiers, calls, generic calls, struct literals, array or slice literals, map literals, function literals, general block expressions, switch expressions, if expressions, tuple literals, anonymous-object literals, channel construction `chan[T](...)`, `typeof(...)`, `nameof(...)`, and `default(...)`. Calls accept positional, named, and ref-kind-prefixed arguments:
+
+- **Named arguments** — `Foo(timeout: 30, retries: 3)` for free functions, user methods, user constructors, user extension functions, imported CLR methods and constructors, imported extension methods, and inherited CLR instance methods (including delegate `Invoke`). The separator is `:`. In argument position, `=` is an ordinary assignment expression; a bare assignment whose target also names a parameter reports `GS0524` so the author can choose `Foo(timeout: 30)` or `Foo((timeout = 30))` explicitly. Indirect calls through a function-typed or delegate-typed variable, and variadic call sites, do not accept named arguments because the call target does not preserve parameter names. Diagnostics `GS0244`–`GS0247` cover ordering, duplicates, and unknown names.
+- **Ref-kind arguments** — `f(ref x)`, `f(out var n)`, `f(in z)`. The call-site modifier must match the parameter's declared kind (`GS0235`), except that `in` may be omitted as in C#: an argument without a modifier at an `in` parameter is converted to the parameter type and passed by readonly reference — the address of an addressable lvalue of that type (local, parameter, field, array element), otherwise the address of a compiler-introduced readonly temporary holding the value.
+
+Generic instantiation uses brackets and bounded lookahead to distinguish type arguments from indexing. Examples include `Id[int32](1)` and `Box[string]{Value: "x"}`.
+
+Function literals use `func` or `async func`. A trailing lambda can appear after an explicit call close-paren and is desugared into the final argument. G# also supports a dedicated arrow-lambda expression form: `(p1, p2) -> body`. Parameter types and the return type are **inferred** from the target delegate type; they may also be spelled explicitly (`(p1 T1, p2 T2) -> body`). A single-parameter lambda may drop the parentheses (`x -> body`). The body is either a single expression or a brace-delimited block. A block body is a statement block with an optional trailing value expression: an `if`-without-`else` and other void control-flow run as statements, `return` works anywhere, and the trailing expression (or `return`) supplies the lambda value (void when neither yields a value) — full parity with `func` literals. Arrow lambdas share the function-literal capture, lowering, and emit pipeline (closures, `ldftn`/`newobj`, delegate construction). A lambda can also convert to `System.Linq.Expressions.Expression[TDelegate]` when `TDelegate` is a delegate type (G# function type, named delegate, or imported CLR delegate). The conversion works in assignments, returns, and call arguments and emits a runtime expression tree. Unsupported expression-tree constructs — statement-bodied lambdas, async/await, assignments, switch/pattern-heavy forms, throw expressions, null propagation, tuples, unsafe/byref/pointer shapes, collection initializers, maps, and other constructs without a stable `System.Linq.Expressions` representation — report `GS0473`; an `Expression[T]` whose `T` is not delegate-like reports `GS0474`.
+
+The inferred-type arrow lambda is the **canonical** lambda form; the explicit `func (x T) R { … }` literal remains the alternative for when explicit typing is desired or no target type is available. A parameter named `_` is a **discard**: more than one `_` parameter may appear in a single parameter list — on lambdas and on named functions/methods alike (e.g. an event handler `(_, _) -> …`) — and the repeated-name check that otherwise reports `GS0101` does not apply to `_`. Each `_` still occupies its own positional slot (so the emitted signature has the correct arity), but a discard parameter is **not** added to the body's lookup scope, so referencing `_` does not resolve to a parameter. A non-`_` duplicate parameter name (`(x, x) -> …`) is still rejected with `GS0101`.
+
+```ebnf
+FunctionLiteral = "func" "(" Parameters? ")" TypeClause? Block
+                | "async" "func" "(" Parameters? ")" TypeClause? Block .
+TrailingLambda  = FunctionLiteral .
+LambdaExpression = "(" Parameters? ")" "->" ( Expression | Block )
+                | Identifier "->" ( Expression | Block ) .
+```
+
+### Accessor chains
+
+Member access and indexing chain after primaries. `a.b`, `a?.b`, `a[i]`, `a?[i]`, `a.b(c)`, and generic call access forms are valid where the binder can resolve the target. Chains also apply to parenthesized and literal receivers — `(a + b).GetType()`, `(nums)[0]`, `("s").Length`, and `switch v { … }.ToString()` — with one exception: a bare numeric literal does not chain (`42.Member` is unsupported; write `(42).Member`). Assignment permits identifiers, indexed targets, field/property targets, and event `+=` or `-=` on accessors. Null-conditional forms (`?.`, `?[]`) are not allowed on the left-hand side of an assignment (diagnostic GS0301).
+
+### Range and slice expressions
+
+A **range** uses the `..` operator inside an indexer to slice a contiguous portion of a sliceable value, mirroring C# range expressions. The lower and upper bounds are optional, giving four forms:
+
+```gsharp
+let xs = []int32{10, 20, 30, 40, 50}
+let a = xs[1..3]   // elements 1,2 -> {20, 30}
+let b = xs[..2]    // open lower bound -> {10, 20}
+let c = xs[2..]    // open upper bound -> {30, 40, 50}
+let d = xs[..]     // full copy -> {10, 20, 30, 40, 50}
+```
+
+The lower bound defaults to `0` and the upper bound defaults to the length of the target. Both bounds are `int32` offsets from the start; the result spans `[lower, upper)` (upper-exclusive), exactly like C#. The same `..` operator also forms a **standalone `System.Range` value** outside an index.
+
+The binder resolves the target type to one of the following sliceable shapes and lowers the range to the corresponding BCL surface:
+
+| Target | Lowering |
+| --- | --- |
+| Array `[N]T` / slice `[]T` | a fresh `[]T` allocated with the computed length and filled via `System.Array.Copy(src, start, dst, 0, length)` (a copy, not an alias) |
+| `string` | `s.Substring(start, length)` |
+| Span-like value (`int Length`/`int Count` + `Slice(int, int)`, e.g. `Span[T]`, `ReadOnlySpan[T]`, `Memory[T]`, `ArraySegment[T]`) | `value.Slice(start, length)` |
+| Native `slice[T]` / `readonly slice[T]` | Shared capacity-aware `Subslice` view with exclusive endpoints; never the span-like start/count convention |
+| A type exposing an indexer accepting `System.Range` | the `this[System.Range]` indexer is called directly with a constructed `System.Range` |
+
+Slicing a target that matches none of these shapes reports `GS0392`.
+
+#### From-end indices (`^n`)
+
+A **from-end index** expression `^n` is a first-class `System.Index` value with `IsFromEnd == true`, exactly as in C#. It measures the offset `n` from the end of whatever it eventually indexes, i.e. the concrete offset is `length - n`:
+
+```gsharp
+let xs = []int32{10, 20, 30, 40, 50}
+let last = xs[^1]    // last element -> 50
+let nth  = xs[^2]    // second from end -> 40
+let a = xs[1..^1]    // drop first and last -> {20, 30, 40}
+let b = xs[..^3]     // all but last 3 -> {10, 20}
+let c = xs[^2..]     // last 2 -> {40, 50}
+let s = "abcdef"
+let head = s[..^3]   // "abc"
+```
+
+A bare `a[^n]` reads the single element `length - n` from an array/slice, a `string`, or any value with an `int Length`/`int Count` property plus a `this[int]` or `this[System.Index]` indexer. Inside a range, a from-end bound computes `length - n` at lowering time for the array/string/span-like paths, and is passed through as `System.Index(n, fromEnd: true)` when the target exposes a `this[System.Range]` indexer.
+
+`^n` is valid in every expression context: it can be stored, passed, returned, and used later as an index. Its operand is converted to `int32` and evaluated once; creating the value does not inspect any collection length (`^0` is a valid value that fails only when a consuming operation rejects its offset):
+
+```gsharp
+let third System.Index = ^3
+let last = ^1            // last : System.Index
+let value = xs[third]    // same element as xs[^3]
+consume(^2)
+```
+
+Outside an index bracket, `^` is a unary operator at unary precedence (`^a.b` is `^(a.b)`). At the leading position of an index bound or after `..`, the marker keeps its historical reading of the whole bound expression as the operand (`a[^n + 1]` is `a[^(n + 1)]`). Binary `^` remains bitwise XOR (`a[i ^ j]`), and one's-complement is spelled `~x`:
+
+| spelling | meaning |
+|---|---|
+| `~x` | unary integer/enum one's-complement |
+| `x ^ y` | binary bitwise XOR |
+| `^x` | `System.Index` from-end expression |
+
+Parentheses do not restore a one's-complement reading: `(^x)` is still an Index. Write `(~x)` for a complemented integer.
+
+#### Standalone range values
+
+The `..` operator also forms a **standalone `System.Range` value** outside an index, in the general expression grammar:
+
+```gsharp
+let r = 1..3       // r : System.Range
+let s = a[r]       // index an array/slice/string/span by a Range value
+let full = ..      // Range.All
+let tail = 2..     // 2..end
+let head = ..^1    // start..^1 (drop the last)
+```
+
+All four open forms (`lo..hi`, `lo..`, `..hi`, `..`) are supported, and either bound may be a from-end index (`^3..`, `^4..^1`). A bound becomes a `System.Index`: a plain integer `v` is `Index(v)` (from-start), a `^n` marker is `Index(n, fromEnd: true)`, a bound that is already a `System.Index` value is used as-is, an open lower defaults to the start, and an open upper defaults to the end. Each written bound is evaluated exactly once, left to right. The value is constructed as `new System.Range(start, end)`, matching how C# lowers a range expression, and is typed `System.Range`.
+
+**Precedence.** The `..` operator binds *looser than every binary operator*, so each bound is a full expression: `1+2..3+4` parses as `(1+2)..(3+4)`. An open upper bound (`lo..`) ends at a closing delimiter, a separator, or a line break — so `let r = 1..` on its own line is the open range `1..end`, not a continuation onto the next statement.
+
+**Indexing by a range value.** A `System.Range`-typed value used as an index argument (`a[r]`, or the inline `a[(1..3)]`) slices the receiver using the *same* shapes as the syntactic `a[1..3]` form: arrays/slices copy via `Array.Copy`, `string` uses `Substring`, span-like values use `Slice`, and a `this[System.Range]` indexer is called with the value directly. The concrete `start`/`length` are resolved from the range value at runtime via `System.Index.GetOffset(length)`.
+
+**From-end bounds.** A standalone range may begin with a from-end bound (`^a..b`, `^4..^1`); the former `GS0410` restriction is retired. Saved `System.Index` values are valid bounds too (`let r = i..j`).
+
+### Composite literals
+
+Struct literals use `TypeName{Field: value}`. Data structs also support copy/update with `expr with { Field = value }`. Array and slice literals use `[N]T{...}` or `[]T{...}`, and a runtime/zero-initialised array allocation is written `[n]T`. Map literals use `map[K,V]{key: value}`.
+
+### Collection initializers
+
+A collection construction target followed by a brace-enclosed element list builds and populates a CLR collection in one expression — the analogue of C#'s `new List<int>{1, 2, 3}` / `new Dictionary<K,V>{ ["a"] = 1 }`. The collection type is named at the site (consistent with G#'s `[]T{…}`, `map[K,V]{…}`, and struct-literal traditions); the no-parentheses form `List[T]{…}` is sugar for `List[T](){…}`.
+
+```gsharp
+let xs = List[int32]{ 1, 2, 3 }                              // bare elements
+let hs = HashSet[int32]{ 1, 2, 2, 3 }                        // set (deduplicated)
+let d1 = Dictionary[string, int32]{ "a": 1, "b": 2 }         // key: value pairs
+let d2 = Dictionary[string, int32]{ ["a"] = 1, ["b"] = 2 }   // [key] = value entries
+let ci = Dictionary[string, int32](StringComparer.OrdinalIgnoreCase){ "Key": 5 }  // ctor args
+```
+
+Each element lowers against a fresh local seeded by the constructor call: a **bare** element `e` becomes `add.Add(e)`, a **keyed** pair `k: v` becomes `add.Add(k, v)`, and an **indexed** entry `[k] = v` becomes the indexer set `add[k] = v` (overwrite semantics; later duplicate keys win). Element, key, and value expressions are converted through ordinary overload resolution. A leading identifier-keyed entry in the no-parentheses form selects a struct/member literal; a call-headed collection initializer such as `Dictionary[K, V](){ key: value }` treats the key as an expression. A target type without the required `Add` capability reports `GS0369` rather than failing internally; indexed entries use ordinary indexer diagnostics.
+
+A **spread element** is written `...source` and is accepted by array, slice,
+and CLR collection initializers:
+
+```gsharp
+let values = []int64{ 1, ...Source(), 4 }
+let list = List[int32](){ 0, ...items, 9 }
+```
+
+The source expression is evaluated exactly once at its lexical position.
+Elements are then enumerated in order and converted individually using the
+same implicit conversions as ordinary initializer elements. Multiple spreads,
+empty sources, generic sources, spans, LINQ results, and user-defined element
+conversions are supported. Dictionary-style collection targets may spread an
+enumerable of key/value pairs. A source that is not enumerable, an inaccessible
+enumerator, or an incompatible element type is diagnosed at the spread.
+
+### Mixed member and content initializers
+
+Call-headed initializers accept explicit receiver members, `.Member: value`,
+interleaved with content, spreads, keyed entries, and indexed writes:
+
+```gsharp
+let root = Container(layout){
+    .Width: 320.0,
+    Text("Account"),
+    ...rows,
+    .Height: 100.0,
+}
+```
+
+`.Member:` always initializes a member; unmarked `key: value` always calls
+`Add(key, value)` in this family. A key named `Capacity` does not become a
+property assignment when its target exposes a `Capacity` property. A
+misspelled dotted member is an error, not a collection fallback. Duplicate
+member designators are rejected. Member-only initializers do not require
+`Add`; `.Children: { ... }` populates an existing readable collection member.
+
+The original call is evaluated once, including constructor arguments and
+factory side effects. User elements execute in lexical order against its
+result; an `Add` observes preceding member writes, not later ones. A fresh
+value type's mandatory non-null collection zero values are available before
+the first element, even if a field is assigned later. This repair does not
+evaluate later values early or reset actual constructor/factory results.
+
+The concise member-first form `Container{ Width: 320.0, child, ...rows }`
+is also supported. Existing `Type(args){ Member = value }` object initializers
+are unchanged. A leading `Type{ ...source }` without parentheses remains
+structural projection; `Type(){ ...source }` enumerates content. Normal
+constructor and generic constraints still apply.
+
+### Structural projections and object spread
+
+An unrelated concrete source value can implicitly convert to a concrete target
+when the compiler can construct the target safely from public source members.
+Every required constructor input and every automatically writable target slot
+on the selected construction path must have one exact, unambiguous,
+case-sensitive source match with an implicit value conversion. Extra source
+members are ignored:
+
+```gsharp
+class PersonEntity {
+    var Name string
+    var Age int32
+    var PersistenceVersion int64
+}
+
+data class PersonDto(Name string, Age int32)
+
+let dto PersonDto = entity
+```
+
+The same conversion works from anonymous objects and in target-typed arguments
+and returns. It constructs a new value; it is not a cast, does not use runtime
+reflection, and never reads non-public state or writes non-public target
+storage.
+
+A named target literal makes the projection explicit with one leading spread:
+
+```gsharp
+let dto = PersonDto{
+    ...entity,
+    Name: entity.DisplayName
+}
+```
+
+The spread must be first and appears at most once. Explicit entries are
+evaluated in lexical order and override same-named spread members, allowing
+renaming, calculation, explicit conversion, and nested projection. Explicit
+spread may leave optional writable members at their ordinary initialized or
+default values, but required constructor inputs must still come from the spread
+or an explicit entry. The source expression and each selected getter are
+evaluated at most once.
+
+### Anonymous-object literals
+
+`object { ... }` creates an anonymous object. In the field-only form, members are newline- or semicolon-separated `let` / `var` field declarations whose types may be inferred from their initializers or written explicitly. A plain field-only `object` exposes get-only properties for reflection-heavy CLR consumers; `data object { ... }` uses data-struct-style value semantics (`Equals`, `GetHashCode`, `IEquatable<Self>`, a `ToString` that prints `{ X = 1, Y = 2 }` without a type name, deconstruction, and `with`).
+
+```gsharp
+let anon = object {
+    let Name = "David"
+    let Count int32 = 3
+}
+
+let value = data object { let X = 1; let Y = 2 }
+let moved = value with { X = 10 }
+```
+
+A rich anonymous object may declare a base class or interfaces with
+`object : Base(args), IFace { ... }` and may contain fields, methods, and
+events. Rich objects synthesize a private class and reuse normal
+class/interface/override checking. Rich field types may be inferred from their
+literal-site initializers; `nil`, untyped callable expressions, cycles, and
+ref-like values require an explicit admissible type (`GS0605`). `init` /
+`deinit` members are not allowed (`GS0485`). A function or method written as an
+omitted-return-type arrow whose body is exactly an anonymous-object literal
+infers the anonymous type for private/internal exposure, but public/protected
+APIs narrow to the declared supertype or to `object`.
+
+```gsharp
+let listener = object : MouseListener {
+    func onClick() { Console.WriteLine("clicked") }
+}
+
+let dog = object : Animal("Fluffy") {
+    override func SaySomething() string -> "woof"
+}
+```
+
+Base arguments and explicit field initializers bind in the enclosing lexical
+scope and evaluate once: base arguments left-to-right, then fields in
+declaration order. An explicit field is a snapshot. A free variable used by a
+member body captures its lexical binding, so outer assignments and sibling
+closures observe one shared cell. Captures are hidden implementation state and
+are not public anonymous members or data-value components. Raw borrowed
+aliases, scoped handles, and ref-like values cannot escape into the generated
+heap class.
+
+The generated rich-object constructor stores snapshots and capture state before
+calling the selected base constructor. This allows a base virtual call to
+observe initialized rich-object state without changing ordinary named-class
+constructor ordering.
+
+`object` is contextual here: only `object {` and `object :` (optionally preceded by `data`) start the literal.
+
+### Explicit structural interface adaptation
+
+`adapt[I](source)` evaluates `source` once and allocates a fresh ordinary
+generated wrapper whose static type is interface `I`:
+
+```gsharp
+interface Reader { func Read() int32; }
+class Source { func Read() int32 -> 42 }
+
+let first = adapt[Reader](Source())
+let second = adapt[Reader](Source())
+```
+
+Adaptation is explicit; it adds no implicit conversion-classifier edge.
+Repeated calls create distinct wrapper identities even when the source already
+implements `I`. Reflection and `GetType()` observe the wrapper, and the wrapper
+implements only `I` and its inherited interfaces. `$adapt` is an ordinary
+escaped identifier.
+
+The compiler resolves the complete plan statically and emits the wrapper in the
+caller assembly. Accessible public instance methods, exact generic methods,
+properties, indexers, events, ref-kind parameters/returns, inherited abstract
+slots, and default interface members participate. Matching is case-sensitive
+and exact after generic substitution, including nullability, ref kinds,
+constraints, required metadata, and accessor sets. Numeric/user conversions,
+optional arguments, `params` expansion, projection, covariance repairs,
+extensions, inaccessible members, and runtime shape discovery are not used.
+Missing, ambiguous, incompatible, or unsupported slots report `GS0606`; static
+abstract/virtual members and operators remain a separate design.
+
+Source storage is explicit:
+
+- A reference/interface source stores the evaluated object once. Reassigning
+  the source local does not retarget the wrapper.
+- A struct source stores one mutable value copy. Mutations persist in the
+  adapter copy, not in the original.
+- `adapt[I](ref handle)` stores a `managed[T]` or
+  `readonly managed[T]` value for value-type `T` and borrows that retained
+  location on each call. Writable handles update the original storage;
+  readonly handles admit only metadata-proven readonly members.
+
+Nullable reference/interface sources must be narrowed. A foreign oblivious
+null throws `ArgumentNullException` during adaptation. Forwarded calls preserve
+the original exception and task identity; no reflection, `dynamic`,
+`DispatchProxy`, runtime code generation, or default-return stub is used.
+
+### Switch expressions and patterns
+
+Switch expressions use `:` between the pattern and the arm value. The legacy `->` arm separator is still accepted as a one-release migration aid but emits warning `GS0302`. Switch expressions require coverage or a default arm as enforced by diagnostics.
+
+An arm may list several comma-separated patterns, `case 1, 2: …`; each comma means `or`, exactly as in the statement form. A `switch` that starts a statement is the switch expression when its arms use `:` and the [switch statement](#switch-statements) when they use blocks, so a switch expression can be the trailing value of a block, an if-branch or a lambda body. Where its value is discarded (an expression statement, a void arrow body, a lambda body that is void), a switch expression with a void arm is the **void switch**: every arm's value is discarded and, like the switch statement, it needs no `default` arm — an unmatched value runs no arm. Any other switch expression, including one in statement position whose arms all produce values, still needs a `default` arm or an exhaustive discriminator (`GS0176`).
+
+```gsharp
+let description = switch value {
+case 0: "zero"
+case 1: "one"
+default: "many"
+}
+```
+
+Patterns include list-like patterns, property patterns, bare type patterns,
+binding type patterns with `is`, wildcard `_`, relational patterns, and
+expression patterns. A type pattern can compose directly with a property
+pattern: `string { Length: > 0 }`.
+
+Boolean `is` accepts the same full pattern grammar and produces `bool`:
+
+```gsharp
+if kind is "a" or "b" { ... }
+if code is > 100 and < 200 { ... }
+if values is [1, .., 3] { ... }
+if value is string { Length: > 0 } { ... }
+```
+
+Bare name patterns are resolved semantically. Switch arms preserve their
+historical value-first meaning (so enum members and constants remain value
+patterns), then fall back to a type. Boolean `is` preserves its historical
+type-first meaning, then falls back to a value. A property suffix forces the
+type interpretation. Use `== name` to force a value interpretation after
+boolean `is`.
+
+A pattern may name the value it matches by writing a **designation** identifier
+after it, C# style: `value is string text`, `value is Dog { Name:
+"Rex" } dog`, `value is { Length: > 0 } text`, `box is { Value: Dog d }`,
+`value is { } present` (the empty property pattern is a pure non-nil test over
+any input), and `values is [1, ..rest]`. The designation must follow the
+pattern on the same line and cannot be one of the contextual pattern words
+`and`, `or`, `when`; `_` discards. A pattern variable is a read-only local of
+the tested type that is assigned exactly once, when its pattern matches, and it
+is in scope exactly where C# would consider it definitely assigned: the right
+operand of `&&` (of `||` after a negated test), the branch an `if` or `?:`
+selects, the body of a `for`/`while` whose condition tests it, a `switch` arm
+whose `when` guard binds it, and the statements after an `if` whose other
+branch always exits (`if !(value is string text) { return }` makes `text`
+usable afterwards). Reading it anywhere else reports `GS0532`; binding the same
+name twice on one path (`a is T t && b is U t`) reports `GS0102`. The switch
+spelling `name is Type` stays a switch-only form — in boolean position it
+reports `GS0525` — while `Type name` is accepted in every pattern position,
+including `switch` arms.
+
+The total pattern `var name` always matches, including when the input is
+`nil`, and binds the input at its exact static type without narrowing. It may
+appear anywhere a pattern may appear, including property and list
+subpatterns. `var _` is a total discard.
+
+```gsharp
+if value is string text && text.Length > 3 { use(text) }
+if !(node is Leaf leaf) { return }
+Console.WriteLine(leaf.Value)
+let label = value is int32 n ? n.ToString() : "?"
+```
+
+A list pattern (`[p1, p2, ...]`) may include at most one **slice ("rest") subpattern**: a bare `..` discards the middle slice, `..name` captures it into a `[]T` binding, and `..pattern` matches it against a nested pattern (e.g. `[first, .., last]`, `[head, ..rest]`, `[.., > 0]`). The slice subpattern greedily absorbs whichever elements are not matched by the fixed-position patterns before and after it.
+
+Patterns may be combined with the **combinators** `and`, `or`, and `not`, mirroring C#. `not P` matches when `P` does not; `P and Q` matches when both match (left-to-right, with `Q` evaluated only if `P` matched); `P or Q` matches when either matches (short-circuit). The combinators are contextual keywords usable in pattern position only and remain ordinary identifiers everywhere else. Precedence — matching C# — is `not` (tightest), then `and`, then `or`, so `a or b and c` parses as `a or (b and c)` and `not a and b` as `(not a) and b`; parentheses `( … )` override the default grouping. Combinators compose with every pattern kind, e.g. `case > 0 and < 10:`, `case < 0 or > 100:`, `case _ is Dog and { Name: "Rex" }:`. A direct designation under the top-level negation of a boolean is-expression is permitted (`value is not Dog dog`); the variable is definitely assigned when the expression is false. Bindings under `or`, nested `not`, and switch-pattern `not` remain rejected with `GS0390`. Smart-cast narrowing of the discriminator is applied under `and` (the union of the sub-patterns' narrowings) and, soundly, only under `or` when **both** branches prove the same narrowing; `not` contributes no positive narrowing. A combined pattern is treated conservatively by exhaustiveness analysis: it never acts as a total/`default` arm, so it cannot by itself make a value-returning `switch` exhaustive.
+
+A pattern in a `switch` arm — in both the expression form and the statement form — may be followed by an optional `when <bool-expr>` guard, mirroring C#. `when` is a contextual keyword: it introduces a guard only in this position and remains usable as an ordinary identifier everywhere else. An arm with a guard is selected only when **both** the pattern matches **and** the guard expression evaluates to `true`; otherwise control falls through to the next arm. The guard applies to the whole arm after the (possibly combined) pattern matches, and sees any pattern narrowing / smart-cast in effect for the arm (so the guard of `case x is T when …` observes the discriminator as `T`). A non-`bool` guard is rejected with the standard conversion diagnostic. Because a guarded arm can fail at run time, it never contributes to exhaustiveness: a guarded discard (`case _ when …`) does **not** act as a total/`default` arm, so a value-returning `switch` whose only catch-all is guarded still requires a reachable `default` arm (`GS0176`).
+
+```gsharp
+let description = switch value {
+case > 0 when value < 10: "small"
+case > 0: "big"
+default: "nonpositive"
+}
+```
+
+### Lambda expressions
+
+`->` introduces a lambda expression. The **canonical** form omits parameter and return types and lets them be **inferred** from the expected delegate type at the use site: `(x) -> x + 1`, `(a, b) -> a + b`. A single-parameter lambda may drop the parentheses entirely: `x -> x + 1`. Parameter types may also be spelled explicitly when desired (`(x int32) -> x + 1`). The body is either a single expression or a brace-delimited block. A block body is a **statement block with an optional trailing value expression**: control-flow statements — including an `if` *without* a matching `else` — run as void statements, explicit `return` statements work anywhere, and a trailing expression (or `return`) supplies the lambda value. The last item is read by the same rule as in every [block expression](#general-block-expressions): a final `if … else …`, `if let … else …`, nested `{ … }` or colon-arm `switch` is the trailing value. A block with no value-producing trailing expression and no value `return` is a **void** (`Action`-like) lambda; so is one whose trailing value is void. An expression body whose value may be void follows the [discarded-position rule](#if-expressions): `(c) -> if c { Log() }` is a void lambda. This brings block-bodied arrow lambdas to full parity with `func` literals while keeping the concise trailing-value form. Lambdas may capture outer locals; the closure machinery is shared with `func` literals.
+
+```gsharp
+// Canonical: inferred parameter/return types, target-typed from the use site.
+let nums = List[int32]{ 1, 2, 3, 4 }
+let evens = nums.Where(x -> x % 2 == 0)          // bare single parameter
+let squares = nums.Select((x) -> x * x)          // parenthesized single parameter
+
+func Apply(f Func[int32, int32], v int32) int32 { return f(v) }
+let r = Apply((x) -> x + 1, 41)                  // 42 — param type inferred from Func[int32,int32]
+
+let add = (a, b) -> a + b                         // inferred when a target type is present
+let triple = (x) -> {
+    let doubled = x * 2
+    return doubled + x
+}
+
+// Alternative: explicit types (no target type required).
+let inc = func (x int32) int32 { return x + 1 }
+```
+
+Inference is **target-typed**: when an untyped arrow lambda flows into a position whose type is delegate-convertible — a G# `(T) -> R` function type, a named delegate, or a CLR `Func` / `Action` / `Predicate` — the binder extracts that shape and fills in the omitted parameter types and inferred return type. This works for arguments to free functions, instance / interface / static methods (user-declared and imported), and for typed local bindings. Where no target type is available (e.g. a class field initializer, assignment to an existing delegate-typed lvalue, or overload disambiguation that depends on the lambda's shape) the parameter type must be spelled or the explicit `func` form used; *Deferred* for the exact cases. A lambda with no inferable parameter type reports `GS0304`.
+
+### If expressions
+
+`if` can also appear in value position. The expression form is selected by the parser whenever an `if` appears where a primary expression is expected (let-init, call argument, return operand, switch-expression arm, the trailing position of a block, etc.); when an `if` is the head of a statement the existing statement form is preserved. The same `if` keyword is used for both shapes — there is no separate `if-expression` keyword.
+
+```ebnf
+IfExpression  = "if" ( SimpleStmt ";" )? Expression BlockExpression ( "else" ( IfExpression | BlockExpression ) )? .
+BlockExpression = "{" Statement* ( Expression )? "}" .
+```
+
+- An `if` used in value position MUST have an exhaustive `else` chain — every branch must produce a value. Missing the terminal `else` reports `GS0276`.
+- A branch is a block of the form `{ stmt* expr }`. The trailing expression (the last expression statement of the block) is the branch value; the prefix statements run for their side effects. There is no `yield` keyword on this path — the form mirrors the switch-expression arm, which has no `yield` either. A branch may instead end in `throw`, `return`, `break` or `continue`: its end is unreachable, so it has the bottom (`never`) type and takes the other branch's type (`let a = if c { 1 } else { return 0 }`). Any other block with no trailing expression in value position reports `GS0277`.
+- **Discarded positions.** Where the value is discarded — an expression statement, a void arrow body (`func f() -> if c { … }`, `set -> if …`), or a lambda body whose value may be void — an `if` without `else` is the void `if`, and an `if`/`if let` whose branch is void is the void `if`; the other branch's value is discarded. This is the meaning of the equivalent if statement.
+- `else if` chains nest right-associatively: `if c1 { a } else if c2 { b } else { c }` parses as `if c1 { a } else { if c2 { b } else { c } }`.
+- The header is the same as the if-statement's, including the optional simple-statement initializer: `let s = if var v = g(); v > 3 { "big ${v}" } else { "small ${v}" }`. The initializer runs exactly once, before the condition, and is scoped exactly as in the [if-statement](#if-statements): visible in the condition, in both branches and in every later `else if` link, and not after the expression. Each `else if` link may have its own initializer, which runs only when that link is reached.
+- The result type is the common type of all branch tails, chosen by the same `ComputeConditionalCommonType` helper that  uses for the ternary (identity, one-way implicit conversion, numeric widening tie-break, nil/null compatibility). Branch tails are implicitly converted to that result type. Mismatched branch types report `GS0263` (shared with the ternary).
+- Only one arm is evaluated at runtime; the other arms are not executed. Lowers to the same `BoundConditionalExpression` that the ternary uses, so no new IL emit paths are involved.
+- A throw-expression (`throw e`) may be used as a ternary branch (`cond ? a : throw e`), a `??` right operand, or a switch-expression arm; its bottom (`never`) type takes the sibling operand's type. An *if-expression* branch may simply end in `throw e` (`if c { 1 } else { throw e }`): as above, a branch whose end is unreachable has the `never` type, the same treatment the ternary and the switch-expression arm give a throw expression.
+- The nullable-binding variant `if let name = expr [, let n2 = e2]* [&& guard] { value } else { value }` is available in the same value positions and follows all of the rules above; see [`if let` expressions](#if-let-expressions).
+
+```gsharp
+let label = if x > 0 { "positive" } else if x < 0 { "negative" } else { "zero" }
+
+let title = if user.IsAdmin {
+    log("admin route")
+    "Admin Dashboard"
+} else {
+    "Home"
+}
+```
+
+When `if` heads a statement, the statement form (`if cond { stmt }` with optional `else`) is used and the expression form is not reached. The two forms share one header grammar, `( SimpleStmt ";" )? Expression`; they differ only where value position requires it, in the mandatory `else` (`GS0276`) and the value-producing branch tails (`GS0277`).
+
+### General block expressions
+
+A brace block with a trailing expression is a primary expression anywhere a
+value is accepted:
+
+```ebnf
+BlockExpression = "{" Statement* Expression "}" .
+```
+
+```gsharp
+let value = { let left = next() let right = next() left + right }
+consume({ let item = next() item })
+return 2 * { let item = next() item }
+```
+
+Prefix statements execute in source order, then the trailing expression is
+evaluated exactly once and supplies the block's value. The last item of the
+block is its trailing value when it is an expression, an `if … else …` or
+`if let … else …` chain ending in a plain `else`, a final nested `{ … }`, or a
+`switch` with `:` arms; this rule is the same in every value-capable block,
+including if-branches, arrow-lambda bodies and arrow-member bodies. A block with
+no trailing value is accepted in two cases: when its end is unreachable — its
+last statement is `return`, `throw`, `rethrow`, `break`, `continue` or `goto`,
+or a statement whose every branch ends in `return`/`throw` — it has the bottom
+(`never`) type and unifies with any other branch or target type; and where its
+value is discarded it is a void block. Otherwise a missing tail reports
+`GS0277`. An untyped local whose initializer never produces a value
+(`let a = throw e`) reports `GS0124`. The block introduces a lexical scope; its locals may shadow outer
+names and be captured by nested lambdas, but are not visible after the closing
+brace. Contextual target types flow to the tail in declarations, assignments,
+returns, fields, collection elements, and call/constructor arguments.
+
+`return`, `break`, `continue`, and `yield` retain the enclosing function/loop/
+iterator context. `await` is legal under the normal async rules. Lowering spills
+control-flow and suspension points before emission, preserving left-to-right
+evaluation without leaving partial parent-expression values on the IL stack.
+`&{ statements; lvalue }` evaluates the prefix before taking the tail lvalue's
+address and remains subject to normal ref/out escape checks. Field initializers
+keep the ordinary restrictions on `this`, instance members, and constructor
+ordering. Field/property initializers and `base(...)`/delegating-`init(...)`
+arguments are pre-body initialization contexts and reject `return`; nested
+lambdas still own their normal function control context. Statement-bearing
+blocks inside expression-tree lambdas report `GS0473`.
+
+Braces remain contextual: function/loop/if/switch bodies parse as statement
+blocks, while struct/object/collection literals and property patterns keep
+their existing literal/pattern forms. Arrow-lambda and arrow-member bodies
+(`-> { … }`) are statement blocks with an optional trailing value, read by the
+rule above.
+
+### Expression grammar
+
+```ebnf
+Expression        = AssignmentExpression .
+Assignment        = identifier "=" Assignment
+                  | identifier CompoundAssign Assignment
+                  | identifier "[" Expression "]" "=" Assignment
+                  | identifier "." identifier "=" Assignment
+                  | AccessorExpression ( "+=" | "-=" ) Assignment
+                  | RangeExpression "??=" Assignment  (* null-coalescing assignment; right-associative *)
+                  | RangeExpression .
+RangeExpression   = BinaryExpression? ".." ( "^"? BinaryExpression )? | BinaryExpression .  (* standalone System.Range value; `..` binds looser than every binary operator, so `1+2..3+4` is `(1+2)..(3+4)`. Either bound may be a `^` from-end Index expression. Suppressed inside an index bound, where IndexArgument owns `..`. *)
+BinaryExpression  = PrefixExpression { BinaryOperator PrefixExpression } .
+PrefixExpression  = ( "+" | "-" | "!" | "~" | "^" | "*" | "&" | "<-" | "await" | "++" | "--" ) PrefixExpression | PostfixExpression .  (* "~" one's-complement; "^" System.Index from-end *)
+PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | ( "[" | "?[" ) IndexArgument "]" } ( "++" | "--" )? ( "with" "{" FieldEqualsList? "}" )? .
+(* Prefix `++x`/`--x` and postfix `x++`/`x--` are value-producing expressions. Prefix yields the value AFTER mutation; postfix yields the value BEFORE mutation. The operand must be an assignable variable, field, or indexed element; otherwise GS0402 is reported. They are also valid as standalone statements (`IncDecStmt`).. *)
+IndexArgument     = Expression | Expression? ".." Expression? .  (* the range form slices; see "Range and slice expressions" *)
+PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | LambdaExpression | BlockExpression | SwitchExpr | IfExpression | IfLetExpression | "(" Expression ")" | TupleLiteral | ChannelCreation | TypeOf | NameOf .
+(* Postfix chains apply to every PrimaryExpression except a bare numeric Literal: `42.Member` is not accepted; use `(42).Member`.. *)
+Literal           = Number | String | InterpolatedString | "true" | "false" | "nil" | char .
+InterpolatedString = '"' { InterpolationText | "$$" | "$" identifier | InterpolationHole } '"' .
+InterpolationHole = "${" Expression ( "," Expression )? ( ":" FormatText )? "}" .
+(* The hole scanner is delimiter-aware: it balances ()[]{}, skips nested string/char literals and comments, and permits newlines, so the "," and ":" clause separators are only recognized at the top level of the hole.. *)
+```
+
+## Statements
+
+### Blocks and expression statements
+
+A block is a braced statement list. Expression statements are accepted for expressions that are meaningful as statements, including calls.
+
+```ebnf
+Block     = "{" Statement* "}" .
+Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | WhileLetStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | FallthroughStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | IncDecStmt | ChannelSendStmt | ExpressionStmt .
+```
+
+### Assignment and variable statements
+
+Bindings are introduced with `let` (immutable) or `var` (mutable); the legacy Go-style `name := expr` short declaration was removed /  and the parser now emits `GS0305` against any occurrence of `:=`. Multi-target assignment accepts existing writable locals, fields, properties, array/map/CLR-indexer elements, nested member targets, and pointer dereferences. All target receiver/index/address components are evaluated left-to-right before any RHS; RHS values are then evaluated once, and writes occur left-to-right. A single tuple-valued RHS is evaluated once and unified by element when its arity matches the target count: `a, b = Pair()`. The parallel `a, b := x, y` form is removed (use one `let`/`var` declaration per name). Increment and decrement are available both as statements and as value-producing expressions: prefix `++x`/`--x` yields the value after mutation, postfix `x++`/`x--` yields the value before mutation. The operand is evaluated once (the receiver of an indexed or member target is not re-evaluated), so they compose correctly inside short-circuit and branching expressions (e.g. `while i > 0 && i-- > 1 { }`)..
+
+A `let` or `var` may carry a `ref` prefix to declare a **ref-aliasing local** ( follow-up): `let ref m = arr[i]` produces a local whose IL slot is a managed pointer (`T&`) that aliases the right-hand-side storage. The RHS must be an lvalue (`GS0256`); ref locals are illegal at top level, inside `async` / iterator bodies, and as `const` (`GS0258`). Reads and writes through the alias forward to the underlying storage.
+
+```ebnf
+RefLocalDecl = ( "let" | "var" ) "ref" identifier "=" Expression .
+```
+
+### If statements
+
+`if` accepts an optional simple statement before a semicolon, then a condition and body, with an optional `else` body.
+
+```ebnf
+IfStmt = "if" ( SimpleStmt ";" )? Expression Statement ( "else" Statement )? .
+```
+
+The initializer is a `var` declaration, an assignment, an increment or decrement, or a call. It runs exactly once, before the condition. Its declarations are visible in the condition, in the then-body, in the `else` body and in every link of an `else if` chain, and not after the statement; a later `else if` link's own initializer is visible only in that link and the links after it. An `if` followed by `let` is the [`if let`](#if-let-guard-let-and-while-let-binding-statements) binding form instead, so the initializer cannot be a `let` declaration. The [if-expression](#if-expressions) takes the same header with the same scoping.
+
+### `if let`, `guard let`, and `while let` binding statements
+
+`if let`, `guard let`, and `while let` strip the nullable layer from a value
+and bind a fresh identifier to the underlying non-null view:
+
+```ebnf
+IfLetStmt        = "if" LetBindingHeader Statement ( "else" Statement )? .
+GuardLetStmt     = "guard" LetBindingList "else" Block .
+WhileLetStmt     = "while" LetBindingList Statement .
+LetBindingHeader = LetBindingList ( "&&" Expression )? .
+LetBindingList   = LetBindingClause ( "," LetBindingClause )* .
+LetBindingClause = "let" identifier TypeClause? "=" LetInitializer .
+```
+
+The initializer expression of each `let` clause must have a nullable type
+(`T?`); otherwise the binder reports `GS0296`. Inside the then-block of
+`if let` (or in the remainder of the enclosing block after `guard let`), the
+binding is observable at the underlying non-null type `T` via the smart-cast
+machinery of . A `while let` binding has the same non-null view inside
+the loop body and is out of scope after the loop.
+
+A `LetInitializer` is an ordinary expression except that a **top-level** `&&`
+or `||` ends it, so the delimiter can start the guard. An assignment, a `??`
+tail and a `?:` conditional (whose right-hand side and false arm follow the
+same rule) are accepted; a logical
+operator that belongs to the initializer is parenthesized:
+`if let v = (a && b ? x : y) { … }`. A top-level `||` after the bindings
+reports `GS0626`. When an `if let` has a guard and its final initializer is a
+non-nullable `bool` (for example `if let v = a && b ? x : y`, where the `&&`
+starts the guard), the binder reports `GS0624` instead of `GS0296` and asks for
+parentheses.
+
+GS0624 also diagnoses an unparenthesized assignment, coalescing or ternary
+continuation whose nullable conversion hides the boolean before the guard. For example, with
+`cached bool?`, write `if let v = (cached = a && b)` to preserve the original
+assignment value and body execution, or `(cached = a) && b` to make the new
+guard explicit. The same rule applies when conditional unification hides a
+boolean false arm. Nested `if`/`if let` expressions and parenthesized
+subexpressions close their own boundaries and are not traversed for this
+migration check.
+
+`if let` (statement and expression alike) evaluates its bindings left to right
+and stops at the first `nil`: later initializers and the guard do not run, and
+the else-block (if any) runs instead. A later initializer may use an earlier
+binding at its narrowed non-null type (`if let a = A(), let b = B(a) { … }`).
+Every initializer must still be nullable, including later ones (`GS0296`). An
+optional `bool` guard after the final binding (`if let s = maybe && s.Length >
+0 { … }`) runs only once every binding matched, sees every bound name narrowed,
+and selects the else-block when it is false. The then-block sees the guard as
+an `if` branch sees its condition: `&& other != nil` narrows `other`, and
+`&& o is string text` puts `text` in scope. The bound names are visible in
+later initializers, in the guard, and in the then-block only, never in the
+else-block or after the statement.
+
+`while let` evaluates all clause initializers left to right before one
+combined nil-test. It performs this evaluation before the first iteration and
+again after every body iteration; `continue` targets that re-evaluation point,
+whereas `break` exits directly. Its bindings are never visible outside the
+body or in another initializer in the same header. `guard let` interleaves
+each initializer with its exiting nil test. Neither `while let` nor `guard let`
+accepts a guard: a `&&` after their bindings reports `GS0625`. The else-block of
+`guard let` MUST exit the enclosing scope (`return`, `throw`, `break`,
+`continue`, or a block whose last statement does); otherwise the binder
+reports `GS0297`. `guard` is a reserved keyword.
+
+### `if let` expressions
+
+`if let` is also available as a value-producing **expression**, combining the
+binding header above with the branch rules of the if-expression:
+
+```ebnf
+IfLetExpression = "if" LetBindingHeader BlockExpression
+                  "else" ( IfExpression | IfLetExpression | BlockExpression ) .
+```
+
+```gsharp
+let first = if let copyright = GetCopyrights() && copyright.Length > 0 {
+    copyright[0]
+} else {
+    default(string?)
+}
+```
+
+- The `else` branch is **mandatory** in value position (`GS0276`), each branch
+  block must end in a value-producing expression (`GS0277`), and the branch
+  tails must have a common result type (`GS0263`). A contextual target type
+  (typed `let`, `return`, assignment, argument) is threaded into both branches.
+- The header — initializer rule, guard, left-to-right short circuit, scoping
+  and narrowing — is exactly the statement form's header above. Only the
+  mandatory `else` and the value-producing branches differ, because the form
+  sits in a value position.
+- The `else` branch may chain into another `if`/`if let` expression
+  (`else if let name = expr { … } else { … }`).
+- `if let` only parses as an expression in a value position; a
+  statement-leading `if let` is the statement form.
+
+### Null-coalescing compound assignment
+
+`??=` writes the right-hand side into the left-hand side **only when the
+current value of the left-hand side is `nil`**. The right-hand side is
+short-circuited (not evaluated) when the lvalue is already non-nil.
+
+```ebnf
+NullCoalescingAssignment = Expression "??=" Assignment .
+```
+
+The left-hand side must be of a nullable type (`T?`, for either a nullable
+reference type or `Nullable<T>`); a non-nullable lvalue reports `GS0298`.
+The accepted lvalue shapes are the same as for the simple assignment
+statement: local / parameter / package-level variable, instance field on a
+struct or class, auto-property or computed property with a setter, CLR
+property or non-init-only CLR field, and indexer access (G#-native or CLR).
+A non-assignable target reports `GS0299`. The usual `GS0127` (read-only
+lvalue) and conversion diagnostics also apply.
+
+`??=` is an assignment expression, like `=`, the compound operators and
+`++`/`--`, so it may appear in any value position: `let r = (x ??= y)`,
+`f(x ??= y)`, `return x ??= y`. It is right-associative, so `a ??= b ??= c`
+is `a ??= (b ??= c)`, and `a ??= b ?? c` is `a ??= (b ?? c)`. As a statement
+it is an expression statement whose value is discarded.
+
+The value of `a ??= b` is the final value of `a`: the value read when it was
+not nil, otherwise the assigned value of `b`; the target is not read again to
+produce it. Its type is `a`'s underlying type when the stored value is known
+non-nil, that is, when `b`'s own type is non-nullable and not a platform type
+(`int32? ??= 42` has type `int32`, `string? ??= "x"` has type `string`, the
+types `a ?? b` has), and `a`'s `T?` otherwise: when `b` may be nil, when `b`
+is a platform (`T!`) value, which is stored unchecked, or when `b` is an `if`,
+`switch`, conditional or block expression, which the target types as a whole.
+A platform target follows the same rule. The value is converted to the target
+once, so a boxed value is the same object in `a` and in the result. A throwing
+right side (`a ??= throw e`) is the coalesce's fallback. As with `=`, a
+lambda whose body ends in `??=` infers a `void` result when no target type
+gives it one. Flow narrowing is
+unchanged: the expression form does not narrow `a` afterwards, and the
+statement form does so only when the right side throws, since `a` is then
+non-nil on every path that continues.
+
+The semantics, including single evaluation of the receiver and any index
+expressions, are:
+
+```text
+a ??= b
+    is equivalent to
+{
+    let __recv = <receiver-of-a>     // only if a's receiver is non-trivial
+    let __idx  = <index-of-a>        // only for indexer targets
+    __recv.member /* [__idx] */ ?? {
+        let __value = b
+        __recv.member /* [__idx] */ = __value
+        __value
+    }
+}
+```
+
+As a statement, where the value is discarded, the `??` is an
+`if __recv.member == nil { __recv.member = b }` test with the same captures.
+For nullable value types (`int32?`, `bool?`, …) the same shapes apply; the nil
+test is the `Nullable<T>` test, so the write only fires when
+`HasValue == false`.
+
+Value-type member receivers retain their writable storage: `a[i].F ??= v`
+updates the array element and `h.Outer.Inner.F ??= v` updates the nested
+field, in both statement and value positions. Reference owners and indices
+are captured before the nil test, including when the right side suspends
+and reassigns those variables; the struct itself is not copied. A struct
+temporary reports `GS0499`, and read-only receivers are rejected as with `=`.
+The receiver's null and bounds checks occur before indexer arguments are
+evaluated. Capturing a reference owner preserves CLR field storage, including
+fields reached through a previous REPL submission. A smart-cast boxed struct
+is not writable struct storage and reports `GS0499`.
+An opaque ref-returning receiver is evaluated once through a ref alias; if
+that alias would remain live across an awaited right side, `GS0258` rejects
+the operation instead of re-evaluating the ref-returning call.
+
+### Switch statements
+
+Switch statement cases use block bodies and never fall through implicitly. A `fallthrough` statement is permitted only as the direct last statement of a non-final arm body. It transfers control to the next arm's body in source order without testing its pattern. The destination pattern must not introduce bindings, and the destination arm must not have a `when` guard. Invalid placement reports `GS0168`, a final-arm use reports `GS0533`, and an ineligible destination reports `GS0534`.
+
+```ebnf
+SwitchStmt = "switch" Expression "{" SwitchCase* "}" .
+SwitchCase = "case" PatternList [ "when" Expression ] Block | "default" Block .
+SwitchExpr = "switch" Expression "{" SwitchArm* "}" .
+SwitchArm  = "case" PatternList [ "when" Expression ] ":" Expression | "default" ":" Expression .
+PatternList = Pattern { "," Pattern } .
+FallthroughStmt = "fallthrough" .
+```
+
+`case 1, 2` lists several patterns; each comma means `or`, in both forms. A
+`switch` at the start of a statement whose arms use `:` is the switch expression
+used as a statement: a void arm makes it the void switch, which, like this form,
+needs no `default` (see *Switch expressions and patterns*).
+
+When an arm pattern is a type pattern (`T`, `T { ... }`, or `<ident> is T`) or
+any combined pattern that proves the discriminator's runtime type, the
+discriminator expression is flow-narrowed to `T` inside the arm body in
+addition to any bound arm variable. The right side of `and` binds against the
+left side's proven type, so `case string and { Length: > 0 }` is valid even
+when the original discriminator is `object` — see *Smart casts (flow
+narrowing)* below.
+
+### Smart casts (flow narrowing)
+
+Ref:  and its  addenda.
+
+A successful `is` (or `!is`) test against a *stable narrowable receiver* flow-narrows that receiver to the tested type for the rest of the enclosing flow region. A stable receiver is either a *local root* — a local, a parameter, or a read-only top-level `let` binding — **or** a *stable member-access path*: a chain of immutable members read through a stable receiver chain, such as `b.Pet` or `o.Box.Pet`. The narrowing applies to member lookup, overload resolution, conversion, and emit. The same machinery composes through `!`, `&&`, `||`, `if`/`else`, the branches of an `if` expression and of the conditional operator `?:`, `switch` arms, `if let` / `guard let` / `while let`, and the early-exit lift. The two conditional value forms narrow identically: `s != nil ? s.Length : 0` and `if s != nil { s.Length } else { 0 }` both read `s` as `string` in the first branch, and a nil guard or type test narrows only the branch it proves. Because a branch's type is its narrowed type, the conditional's result type can be the narrowed type: with `n int32?`, `n != nil ? n : 0` has type `int32`. On a value narrowed from a value-type `T?` to `T`, a member that `T` does not have, such as `Value`, `HasValue` or `GetValueOrDefault`, binds against the original `Nullable<T>` storage, so `n != nil ? n.Value : 0` and `if n != nil { return n.Value }` compile; a member `T` does have still binds to `T`.
+
+```gsharp
+if a is Dog {
+    a.Bark()                      // a narrowed to Dog inside the then-block
+}
+
+if a !is Dog { return }
+a.Bark()                          // a narrowed to Dog in the rest of the block
+
+let name = (a is Dog) ? a.Bark() : a.Name   // a narrowed to Dog in the first branch
+
+if a is Dog && a.Name != "" {
+    Console.WriteLine(a.Bark())   // && threads the left narrowing into the right operand
+}
+
+if !(a is Dog) || silent { return }
+a.Bark()                          // || + early-exit: a is Dog AND silent is false here
+
+switch a {
+    case d is Dog { Console.WriteLine(a.Bark()) }    // a narrowed to Dog in this arm
+    case c is Cat { Console.WriteLine(a.Purr()) }    // a narrowed to Cat in this arm
+    default       { return }
+}
+
+if b.Pet is Dog {
+    b.Pet.Bark()                  // stable member path b.Pet narrowed to Dog
+}
+```
+
+Rules summary:
+
+- `!` flips which branch sees the narrowing: `!(a is T)` narrows `a` to `T` in the *else*-branch (and in the rest of the block when the then-branch unconditionally exits).
+- `&&` threads the left operand's then-frame into the right operand and into the combined then-branch.
+- `||` is the De Morgan dual of `&&`: the combined then-frame is the *intersection* of both operands' then-frames; the combined else-frame is the *merge* of both operands' else-frames; the right operand is bound with the left's else-frame.
+- A `switch` arm pattern of the shape `<ident> is T` narrows the discriminator inside the arm body. When the switch is exhaustive (has a `default` or discard arm) AND every non-exiting arm contributes the same `{discriminator → T}` narrowing, that narrowing is lifted into the rest of the enclosing block after the switch.
+- Reassignment to a narrowed receiver inside the narrowed region drops the narrowing for the remainder of the region; the same applies if the receiver is captured by a closure (the closure body binds the receiver at its declared type).
+- A *stable member-access path* narrows only when **every** link is provably immutable, matching Kotlin's smart-cast rules for members: the root must be a stable local/parameter/read-only global; each field link must be a `let`/read-only instance field; each property link must be an immutable auto-property (no custom getter, no setter or `init`-only, not `open`/overridable, not `static`). `var` fields, settable or custom-getter or overridable properties, static members, and members of imported/other-compilation types (CLR members) are never narrowed. A member-path narrowing is conservatively invalidated by any intervening call, by a member/indexed/indirect assignment, or by reassigning its root. Indexed expressions remain non-narrowable because their reads are not idempotent.
+
+### For loops and while-style loops
+
+G# has `for`, `for in`, `while`, and `do`-`while` forms. The legacy
+`for v := range coll`, `for k, v := range dict`, and `for i := lo ... hi`
+spellings were removed; use the `in` forms.
+
+```ebnf
+ForStmt = "for" Statement
+        | "for" Expression Statement
+        | "for" SimpleStmt? ";" Expression? ";" SimpleStmt? Statement
+        | "for" identifier ( "," identifier )? "in" Expression Statement
+        | "for" identifier TypeClause "in" Expression Statement
+        | "for" identifier "in" Expression "..." Expression Statement
+        | "for" "(" identifier ( "," identifier )* ")" "in" Expression Statement .
+```
+
+The last form deconstructs each element of a `ValueTuple`
+sequence into the parenthesized identifier list, one binding per tuple slot
+(`for (k, v) in pairs { ... }`).
+
+The `for … in` range form iterates arrays, slices, strings (over `char`),
+`sequence[T]` and other CLR/pattern enumerables, and `map[K,V]`. The meaning
+of the identifier list depends on the operand:
+
+The single-variable form may declare an element type:
+`for item T in collection`. Each source element is explicitly converted to
+`T` before the body executes, matching C# `foreach (T item in collection)`.
+An impossible conversion is diagnosed at compile time; a failed runtime cast
+throws the normal CLR exception.
+
+- **Indexed and enumerable collections** (arrays, slices, strings, sequences,
+  CLR enumerables): the single-variable form `for v in coll` binds each
+  element; the two-variable form `for i, v in coll` binds the zero-based
+  index and the element.
+- **Maps** (`map[K,V]`, and imported dictionary shapes): the two-variable
+  form `for k, v in m` destructures each entry into its key (`k: K`) and
+  value (`v: V`) — the map analog of the index+value form. The
+  single-variable form `for kv in m` binds the whole entry as a
+  `KeyValuePair[K, V]` (`kv.Key` / `kv.Value`) — C#/Kotlin entry semantics,
+  matching `foreach` over a `Dictionary`; the Go form in which a single
+  variable yields only keys is deliberately **not** adopted (iterate `m.Keys`
+  for that). Map iteration works for concrete instantiations and for open
+  maps whose `K`/`V` are in-scope type parameters, and lowers through the
+  backing `Dictionary`'s enumerator.
+
+**Map iteration order is unspecified.** Programs must not rely on any
+particular entry order, including insertion order. Structurally modifying the
+map's key set while iterating it — inserting a new key — throws the backing
+`Dictionary`'s `System.InvalidOperationException` ("Collection was
+modified"); updating the value of an existing key is permitted.
+
+```ebnf
+WhileStmt    = "while" Expression Statement .
+WhileLetStmt = "while" LetBindingList Statement .
+DoWhileStmt  = "do" Block "while" Expression .
+```
+
+The optional `SimpleStmt` of the C-style three-part `for` accepts a `var`
+or `let` declaration (e.g. `for var i = 0; i < n; i++`), an assignment, an
+increment / decrement, or an expression statement.
+
+A controlling expression in a statement header — the `for` condition or
+post-statement, the condition-only `for`/`while` condition, the `if`
+condition, and the `switch`/`match` subject — never treats a trailing `{` as
+a composite-literal brace. As in Go, the `{` opens the statement body. This
+applies even when the controlling expression ends in an indexer
+(`for var s = 0; s < n; s += arr[s] { … }`) or a generic-composite shape
+(`name[args] { … }`): the brackets bind as an indexer / type-argument list and
+the following `{` opens the body. Composite literals are still parsed normally
+in ordinary expression position (`var b = Box[int32]{Value: 42}`,
+`Point{X: 1, Y: 2}`) and inside a nested parenthesized/bracketed/argument
+context within a header.
+
+`while` evaluates its condition first and runs the body while the condition is
+true. `do`-`while` always runs the body once before evaluating the condition;
+the body must be a block.
+
+### Labeled loops, break, continue, and `goto`
+
+`for`, `while`, and `do`-`while` may be prefixed with `identifier ":"` to
+declare a label. `break identifier` and `continue identifier` then target the
+matching enclosing loop instead of the innermost one. Unlabeled
+`break`/`continue` keep their existing innermost-loop semantics. The optional
+label after `break`/`continue` must appear on the same source line as the
+keyword (mirroring `return` value parsing). `identifier ":"` may also prefix any **non-loop**
+statement, declaring a `goto` target instead of a loop label. `goto
+identifier` performs an unconditional jump to that label; the label namespace
+is local to the enclosing function, and a `goto` may forward-reference a
+label declared later in the same function or jump out of a nested block to a
+label in an enclosing one (jumping *into* a nested block is not supported).
+
+Diagnostics:
+
+- **GS0293** — `break`/`continue` names a label that is not in scope on the
+  enclosing loop stack.
+- **GS0295** — *warning*. A loop label shadows another label of the same name
+  on the enclosing loop stack.
+- **GS0120** — pre-existing — `break`/`continue` used outside any loop.
+- **GS0469** — `goto` targets a label that does not exist in the current
+  function.
+- **GS0470** — two `label:` declarations with the same name in the same
+  function.
+- **GS0294** is retired — a label on a non-loop statement is now a
+  valid `goto` target rather than an error.
+
+```ebnf
+LabeledStmt ::= identifier ':' Statement   (* loop =>  break/continue target; any other statement =>  goto target *)
+GotoStmt    ::= 'goto' identifier
+```
+
+### `lock` statement
+
+`lock expr { ... }` establishes mutual exclusion around its body for the
+lifetime of the object referenced by `expr`. The binder lowers it to the
+classic `System.Threading.Monitor` `Enter`/`try`/`finally`/`Exit` pattern.
+
+```ebnf
+LockStmt ::= 'lock' Expression Statement
+```
+
+### `checked`/`unchecked` blocks and expressions
+
+`checked { ... }` / `unchecked { ... }` establish the named integer-overflow
+context for the arithmetic in the block; `checked(expr)` / `unchecked(expr)`
+do the same for a single expression. Both `checked` and `unchecked` are
+**contextual** identifiers — they are only recognized as the block/expression
+forms when immediately followed by `{` or `(` respectively; a bare identifier
+named `checked` used as an ordinary value is unaffected.
+
+```ebnf
+CheckedStmt       ::= ('checked' | 'unchecked') Block
+CheckedExpression ::= ('checked' | 'unchecked') '(' Expression ')'
+```
+
+### Return and yield
+
+`return` may have no expression, one expression, or a comma-separated expression list, which is represented as a tuple literal. In a `ref`-returning function (`func f(...) ref T`), the return statement form is `return ref <lvalue>` — plain `return expr` reports `GS0252`, and a non-lvalue operand reports `GS0253`. `yield expr` is contextual and valid in iterator functions returning `sequence[T]` or async sequence forms as appropriate.
+
+### Defer and using
+
+`defer expr` registers a deferred call. The parser accepts an expression, but binding requires a call expression. `using` introduces a resource variable declaration and requires a disposable value.
+
+```ebnf
+UsingStmt = "using" VariableDecl .
+DeferStmt = "defer" Expression .
+```
+
+### Go, scope, channel send and receive, and select
+
+`go expr` starts a concurrent call; binding requires the operand to be a call (`GS0137` otherwise). The operand may return `void` — the natural goroutine shape, matching Go — and any result a value-returning operand produces is discarded. `scope { ... }` is structured concurrency and joins registered child tasks at scope exit. Channel receive is a prefix expression `<-ch`; channel send is a statement `ch <- value`. `select` supports default, receive-discard, receive-bind (via `case let v = <-ch`), and send cases.
+
+The `go`, `chan[T]`, `<-` (send and receive), and `select` forms are part of the language and need no import (the former import gate, GS0316, is retired). A send through an `in chan[T]` is `GS0549`; a receive through an `out chan[T]` is `GS0550`. Channel operations lower onto the `Gsharp.Runtime.Channels` runtime (`Gsharp.Concurrency.ChannelOps`), which the SDK references implicitly.
+
+A `select` arm may also select on a **timer selectable** rather than a channel: `after(d)` becomes ready once, `d` after it is created, and `tick(d)` becomes ready every `d` until it is disposed, holding at most one pending tick. These are library functions in the implicitly imported `Gsharp.Concurrency` namespace, not language forms, and either may be shadowed by a declaration of the same name. Both are backed by `System.Threading.Timer`, whose resolution is one whole millisecond, so a delay or period is quantized **upwards**: the interval actually armed is never shorter than the one requested, and 1 ms is the shortest period `tick` can deliver. `tick` requires a strictly positive period.
+
+```ebnf
+GoStmt     = "go" ( Expression | Block ) .   (* `go { … }` spawns the block as a zero-parameter goroutine *)
+ScopeStmt  = "scope" Block .
+SelectStmt = "select" "{" SelectCase* "}" .
+SelectCase = "default" Block
+           | "case" "<-" Expression Guard? Block
+           | "case" "let" identifier "=" "<-" Expression Guard? Block
+           | "case" Expression "<-" Expression Guard? Block
+           | "case" "await" Expression Guard? Block                      (* a Task arm *)
+           | "case" "let" identifier "=" "await" Expression Guard? Block (* a Task[T] arm *)
+           | "case" "cancelled" Guard? Block .                           (* the ambient context's cancellation *)
+Guard      = "when" Expression .   (* evaluated once on entry; a false guard keeps the arm out of the select *)
+```
+
+### Throw, try, catch, and finally
+
+G# uses CLR-style exceptions. A `try` statement must have at least one catch or finally semantically.
+
+```ebnf
+TryStmt       = "try" Block CatchClause* FinallyClause? .
+CatchClause   = "catch" CatchHeader? CatchFilter? Block .
+CatchHeader   = "(" ( identifier TypeClause | Type ) ")" .
+CatchFilter   = "when" Expression .
+FinallyClause = "finally" Block .
+ThrowStmt     = "throw" Expression .
+```
+
+A catch clause has four forms, matching C#: `catch (name T)` binds the exception
+to `name`; `catch (T)` names the type it handles and binds nothing; a bare
+`catch` is `catch (Exception)` without a binder; and any of these may carry a
+`when` filter. `when` is contextual here, exactly as in a `switch` arm guard.
+
+A filter expression must be `bool`. It is emitted as a **CLR exception filter
+region**, so its semantics are the runtime's: it is evaluated during the *first
+pass*, before any intervening `finally` unwinds the stack; when it evaluates to
+`false`, or throws (in which case the thrown exception is discarded), the clause
+declines and matching continues with the next clause, and if no clause accepts,
+the exception propagates with its original throw site intact.
+
+Because a filter runs on the throwing thread with no suspension point available,
+`await` inside one is rejected (`GS0572`), as is `rethrow` (`GS0570` — a filter
+is not a handler). A clause that an earlier **unfiltered** clause already covers
+can never run and is rejected (`GS0573`); an earlier *filtered* clause may
+decline, so it does not shadow a later clause.
+
+The handler is reached only when its filter evaluates to `true`. Pattern
+variables in the filter's definitely-assigned-when-true set are therefore in
+scope throughout the handler, including after an `await` in an async handler.
+Variables assigned only on a false path are not in scope there.
+
+#### Throw expressions
+
+`throw` is also usable as an **expression** (a *throw-expression*), mirroring C#.
+A throw-expression `throw e` has the bottom (`never`) type, which is implicitly
+convertible to **any** target type, and it never produces a value — it always
+transfers control by raising `e`. It is accepted in the common expression
+positions:
+
+- the right-hand side of `??` — `s ?? throw Exception("null")`;
+- a branch of the conditional operator — `cond ? a : throw Exception("nope")`;
+- a returned operand — `return throw Exception(...)`;
+- an arrow/lambda body — `(v string?) -> v ?? throw Exception("null")`;
+- an argument — `f(s ?? throw Exception(...))`.
+
+The surrounding `??` / conditional takes the **sibling** operand's type
+(`s ?? throw e` has the type of `s`'s underlying type; `cond ? a : throw e` has
+the type of `a`). The thrown operand must be a `System.Exception` (or derived),
+exactly as for the throw statement; otherwise `GS0155` ("cannot convert … to
+System.Exception") is reported. The emitter lowers a throw-expression to the
+operand followed by CIL `throw`; because that never returns, the code after it
+(the `??` / conditional merge point reached only from the other branch) is
+unreachable and the emitted IL is verifiable.
+
+A bare `throw e` at statement start is still the throw **statement** — the
+statement parser intercepts it before expression parsing — so existing code is
+unaffected. A throw statement that ends a value block makes the block's end
+unreachable, so the block has the `never` type too
+(`let v int32 = { log("x") throw e }`).
+
+```ebnf
+ThrowExpr     = "throw" Expression .
+```
+
+### Await and async iteration
+
+`await expr` is a prefix expression and must appear in an async context with an awaitable operand. `await for` iterates asynchronous sequences.
+
+```ebnf
+AwaitForRangeStmt = "await" "for" identifier TypeClause? "in" Expression Block .
+```
+
+## Concurrency
+
+`go` launches concurrent function calls. Emitted code supports channels, `go`, `scope`, and `select` through lowering and CLR primitives. Outside `scope`, launched-task exceptions can be unobserved; inside `scope`, child tasks are registered and joined when the scope exits.
+
+Channels are typed (`chan[T]`, with `in`/`out` directional handles), are rendezvous by default or buffered by capacity, and support `Close()`, send, receive, and `select`. Receiving from a closed channel yields the element's zero value without an exception, as shown by the `Channels` sample. The Go-flavored shapes (`go`, `chan[T]`, `<-` send, `<-` receive, `select`) are part of the language and need no import.
+
+## Async and iterators
+
+`async func` declarations and literals are supported. An omitted return type is Task-observable, and declaring `T` is observable as `Task[T]`. Explicit `async func ... void` instead emits CLR `void` with `AsyncVoidMethodBuilder`, matching C# async-void timing and exception propagation; it is intended for void delegate/event handlers and cannot be awaited. Async function type clauses remain Task-shaped. The emitter lowers async methods and lambdas to state machines, including exception handler rewriting, spill management, and capture analysis.
+
+### Suspending functions (`suspend func`)
+
+A `suspend func f(...) R` is `async func`'s sibling with **no observable task**: the same state machine, but the emitted CLR method returns `ValueTask[R]` (`ValueTask` for `void`), is built with the pooling `ValueTask` builder, and carries `[Gsharp.Concurrency.Suspending]`. G# call sites see the logical type `R`: inside another suspending function, an `async func`, or an async iterator the call is an **implicit await**; inside a function that is neither, the call has nowhere to await, so it blocks the thread through the runtime's root bridge and reports the warning `GS0558` — except in the synthesized entry point, which is the root where blocking is correct. The body of a `suspend func` may use `await`. A declaration is exactly one of `async` or `suspend`. Channel operations inside any state-machine body (`async func`, `suspend func`, `async sequence[T]`) park the state machine rather than a thread; inside a `lock` body they keep the blocking lowering because the monitor is thread-affine.
+
+**Suspension is inferred.** A plain `func` whose body performs a suspension point — a channel operation outside a `lock` body, an `await`, or a call to a function that suspends — is compiled as a suspending function too, exactly as if it had been declared `suspend func`; the inference is a fixed point over the assembly's call graph, so mutual recursion converges, and `suspend func` is only ever *needed* at a boundary. Inference stops at: the synthesized entry point (the root, which blocks once), `async func` (its task is observable), `open`/`override`/abstract methods, interface members and the methods that implement them, constructors, property and event accessors, operators, P/Invoke stubs, iterators (`sequence[T]`), `Dispose`, and function literals. A suspension point inside one of those keeps the blocking lowering, and a call from one of those to a suspending function blocks through the root bridge with `GS0558`; an `await` there has no blocking form to fall back to, so it reports `GS0574` instead and names the two declared colorings. A `go` operand does not color its caller: `go f(x)` starts `f` and returns immediately whatever `f` does. Every inferred function is emitted with the `ValueTask` shape and `[Suspending]`, so another assembly reads the coloring from metadata without re-running any analysis.
+
+**`await` colours the awaiting function**. `await` is not restricted to an `async func`: awaiting is itself a suspension point, so a plain `func` may await an ordinary `Task`/`ValueTask` and inference colours it exactly as a channel operation would. Two positions reject it rather than colouring: a `lock` body, because the monitor is thread-affine and a continuation resuming on another thread would exit a lock it does not hold (`GS0575`, the rule C# spells CS1996), and nested inside a `go` operand's arguments, where the spawn takes the call and the await has no place to suspend (`GS0576` — bind the value to a local first). `GS0132` remains only for an `await` with no enclosing function at all.
+
+The compiler inserts an await for you **only where the syntax is a channel operation** — `ch <- v`, `<-ch`, `select`, channel `for..in` — and at a call to a function that is itself suspending. It never does so because a method returns a task: an awaitable type means in G# what it means in C#, so `ReceiveBatch`/`SendBatch` are ordinary `ValueTask[int32]` calls you `await`, and `.AsTask()` on one names the task.
+
+Iterator functions return `sequence[T]` and contain `yield`. Async sequences use `async sequence[T]` and `await for`. The emitter has synchronous and asynchronous iterator state-machine rewriters.
+
+## CLR interop semantics
+
+G# imports can resolve CLR namespaces and metadata references. CLR primitive types map to G# built-ins when possible; other CLR types are represented as imported types. The binder and emitter support imported constructors, static and instance methods, fields, properties, indexers, events, delegates, method groups, operator overloads, and conversion operators. G# function values can convert to compatible CLR delegates such as `Action`, `Func`, named delegates, and `Predicate`, and can widen to `System.Delegate` or `System.MulticastDelegate`.
+
+Attributes use `@Name(...)` and optional use-site targets such as `@field:`, `@param:`, and `@return:`. The implementation recognises attributes and emits user attributes through CLR `CustomAttribute` rows. A `func` declaration annotated with `@DllImport("libname", ...)` whose body is the single token `;` is accepted as a P/Invoke declaration and emitted as a CLR `PinvokeImpl` method with the matching `ImplMap` / `ModuleRef` rows (see [Native interop](#native-interop-pinvoke) below).
+
+## Native interop (P/Invoke)
+
+ /  adds attribute-driven P/Invoke. A `func` declaration whose body is a single `;` token and which carries an `@DllImport("libname", ...)` annotation is bound as a P/Invoke stub: there is no managed body, and the compiler emits a CLR `PinvokeImpl` method with an `ImplMap` row pointing at the deduplicated `ModuleRef` for `libname`. The declaration may be a top-level `func` or a static member in a class's or struct's `shared { … }` block (the G# spelling of a C# `static extern` / `static partial` import); a member keeps its declared accessibility and is emitted as a `static` method of its declaring type, so callers reach it as `Type.Name(...)` exactly as C# callers do.
+
+```gs
+package P
+import System
+import System.Runtime.InteropServices
+
+@DllImport("libc", EntryPoint: "strlen", CharSet: CharSet.Ansi)
+func NativeStrLen(text string) nint;
+
+Console.WriteLine(NativeStrLen("Hello, world!"))
+```
+
+Supported attribute knobs (each maps directly to the corresponding ECMA-335 `ImplMap` bit or `MethodImportAttributes` enum value): `EntryPoint`, `CharSet`, `SetLastError`, `CallingConvention`, `ExactSpelling`, `PreserveSig`, `BestFitMapping`, `ThrowOnUnmappableChar`. Defaults match the CLR's `[DllImport]` defaults: ANSI charset, WinAPI calling convention, `SetLastError=false`, `PreserveSig=true`, and `ExactSpelling` defaulting to `(CharSet == Auto)`.
+
+Supported v1 marshalling types: every primitive integer (`int8`/`16`/`32`/`64`, `uint8`/`16`/`32`/`64`), `nint`/`nuint`, `float32`/`float64`, `bool`, `char`, `string` (governed by `CharSet`), single-element `*T` byref-style pointers (where `T` is primitive), plain unmanaged `*T` pointer parameters in an `unsafe` extern (pointee a blittable primitive, another pointer, or a blittable user/value struct, marshalled as a native pointer — e.g. `void* pBuffer` ≡ `*void` (a void-element pointer), `byte* pBuf` ≡ `*uint8`, `int* pRead` ≡ `*int32`, `Point* p` ≡ `*Point`), and slices of primitives. Anything outside this set surfaces as GS0323. Struct marshalling, function-pointer marshalling, and custom marshallers are deferred follow-ups.
+
+A P/Invoke declaration may not be `async`, generic, an extension method, an instance method (declare it in the type's `shared { … }` block instead — the CLR represents every P/Invoke as a static method), a member of a generic type or of a type nested in one (the CLR refuses to load such a method; C# reports CS7042), or ref-returning; each violation is reported as GS0326. A function with a `;` body but neither `@DllImport` nor `@LibraryImport` is rejected as GS0325. A function with both `@DllImport` and a managed body is rejected as GS0324. The full diagnostic catalogue (GS0322–GS0329) is listed in the [Diagnostics reference](./diagnostics).
+
+G# lifts the original blanket rejection of `ref` / `out` / `in` parameters on P/Invoke declarations: a parameter may now carry a ref-kind modifier provided the pointee type is blittable (the same blittable primitives as the by-value path — `int8`…`int64`, `uint8`…`uint64`, `nint`/`nuint`, `float32`/`float64` — or a `@StructLayout(LayoutKind.Sequential|Explicit)`-annotated struct whose fields are all blittable per the rules below). The runtime marshals the byref slot as a managed pointer `T*` to the unmanaged callee — the canonical shape for libc APIs that write through an out-pointer (`time(time_t *)`, `clock_gettime(int, struct timespec *)`). Non-blittable byref pointees (`bool`, `char`, `string`, decimal, slices, sequences, classes, nullable values) are rejected with the new GS0352 diagnostic; non-blittable struct pointees continue to flow through GS0349. Both `@DllImport` and `@LibraryImport` support byref parameters; the `@LibraryImport` outer wrapper forwards the address through both stub halves.
+
+The modern source-generator-shaped `@LibraryImport(...)` form is also accepted on `;`-bodied `func` declarations, alongside `@DllImport`. Under `@LibraryImport`, the compiler generates an explicit managed marshalling stub (outer wrapper) that calls a hidden blittable inner P/Invoke — the runtime never auto-marshals at the unmanaged boundary, which makes the resulting assemblies AOT-friendly and verifiable under `ilverify`. The attribute knobs are `EntryPoint`, `SetLastError`, `StringMarshalling`, and `StringMarshallingCustomType` (accepted for source compatibility but not honoured: no custom marshaller runs); `CharSet` and `CallingConvention` do not exist on `@LibraryImport`. Like `@DllImport`, `@LibraryImport` works on a top-level `func` and on a class or struct `shared` member; for a member, both the outer stub and the hidden inner P/Invoke are methods of the declaring type. Whenever a `string` parameter **or a `string` return** is present, `StringMarshalling: StringMarshalling.Utf8` or `StringMarshalling.Utf16` must be specified explicitly (GS0344). `string` return values are supported: the outer stub materializes the managed string via `Marshal.PtrToStringUTF8`/`PtrToStringUni` and treats the returned native buffer as non-owning (it is not freed). Mixing `@DllImport` and `@LibraryImport` on the same declaration is GS0342. See the [Diagnostics reference](./diagnostics) for the full surface.
+
+### Struct and class marshalling
+
+ /  lifts the v1 deferral on struct- and class-marshalling. A `struct` or `class` declaration may carry an `@StructLayout(LayoutKind.Sequential)` or `@StructLayout(LayoutKind.Explicit)` annotation, and the fields of an `Explicit`-layout type each carry an `@FieldOffset(N)` annotation. `LayoutKind.Auto` is rejected (GS0346) — the CLR may reorder fields under `Auto`, which breaks the bit-for-bit ABI contract that P/Invoke relies on. The optional `Pack` and `Size` named arguments are forwarded to the emitted `ClassLayout` row.
+
+```gs
+@StructLayout(LayoutKind.Sequential)
+struct Point {
+    var X int32
+    var Y int32
+}
+
+@StructLayout(LayoutKind.Explicit, Size: 8)
+struct LargeInteger {
+    @FieldOffset(0) var LowPart  uint32
+    @FieldOffset(4) var HighPart int32
+    @FieldOffset(0) var QuadPart int64
+}
+```
+
+Both `@StructLayout` and `@FieldOffset` are CLR *pseudo-custom attributes* — the runtime reconstructs them at reflection time from the `ClassLayout` and `FieldLayout` metadata-table rows, so the emitter writes those rows directly and skips the normal `CustomAttribute` encoding (decompilers therefore see exactly one `[StructLayout]` per type, not two).
+
+A struct or class that appears in a P/Invoke signature must be *blittable*: every field is a primitive integer/float, an `nint` / `nuint`, a pointer (`*T`), or a blittable nested struct. `bool`, `char`, `string`, `decimal`, slices, sequences, and unannotated classes are non-blittable in v1; the binder rejects them with GS0349. Per-field `[MarshalAs]` for non-blittable fields remains a follow-up.
+
+Classes follow a stricter rule: a `class` must carry an explicit `@StructLayout(LayoutKind.Sequential|Explicit)` annotation before it can appear in a P/Invoke signature (the default class layout is `Auto`), and even then it can only flow *by reference* — using a class as a P/Invoke return type is rejected with GS0351. Return a struct or `nint` instead. The full diagnostic catalogue (GS0346–GS0351) is listed in the [Diagnostics reference](./diagnostics); for the design rationale and the blittability classification rules.
+
+### Function-pointer marshalling
+
+ /  lifts the v1 deferral on function-typed and delegate-typed P/Invoke parameters and returns. Two shapes are supported:
+
+**Shape A — managed delegate callbacks.** A `delegate Name(...) R` declaration annotated with `@UnmanagedFunctionPointer(CallingConvention.Cdecl)` (or any of `Stdcall`, `Thiscall`, `Fastcall`) may appear as a P/Invoke parameter type. The runtime synthesizes a stable C-ABI thunk via `Marshal.GetFunctionPointerForDelegate`. A delegate-typed P/Invoke parameter without `@UnmanagedFunctionPointer` is rejected with GS0353.;
+
+**Shape B — raw function pointers.** A type clause of the form `unmanaged[CC] (T1, T2, ...) -> R` denotes a CLR function-pointer type (encoded as `ELEMENT_TYPE_FNPTR` in the metadata blob). The bracketed calling-convention slot is optional: bare `unmanaged (T) -> R` is the platform-default unmanaged convention, and the slot may hold a convention list (`[Cdecl, SuppressGCTransition]`). The four legacy conventions are `Cdecl`, `Stdcall`, `Thiscall`, `Fastcall`; an unknown convention name is rejected with GS0354. An address converts to a function pointer with `cast[unmanaged[CC] (T) -> R](address)` and back with `nint(fp)`; `x as (unmanaged[CC] (T) -> R)?` and `x is unmanaged[CC] (T) -> R` test the function pointer's runtime projection, `System.IntPtr`. Returning a managed delegate from a P/Invoke is rejected with GS0355 because the runtime cannot infer the lifetime contract; use Shape B or `nint` + `Marshal.GetDelegateForFunctionPointer` instead.
+
+```gs
+@UnmanagedFunctionPointer(CallingConvention.Cdecl)
+delegate Int64Comparer(a nint, b nint) int32;
+
+@DllImport("libc", EntryPoint: "qsort")
+func native_qsort(base nint, nmemb nint, size nint, cmp Int64Comparer) void;
+
+@DllImport("libc", EntryPoint: "dlsym")
+func native_dlsym(handle nint, name string) unmanaged[Cdecl] () -> void;
+```
+
+GC contract (Shape A): the CLR keeps the delegate rooted only for the duration of `Marshal.GetFunctionPointerForDelegate` + the inner native call. The caller must hold an explicit reference (and ideally call `GC.KeepAlive` at the end of the scope) for as long as the native side may invoke the callback. The full diagnostic catalogue (GS0353–GS0356) is listed in the [Diagnostics reference](./diagnostics); for the design rationale and worked examples.
+
+### Per-parameter `@MarshalAs` overrides
+
+ /  lets a P/Invoke parameter opt into a custom unmanaged marshalling form via `@MarshalAs(UnmanagedType.…)`. Without `@MarshalAs`, each parameter is marshalled using the implicit  rule for its G# type; `@MarshalAs` is the override.
+
+```gs
+@DllImport("user32", EntryPoint: "MessageBoxW")
+func MessageBoxW(
+    hWnd nint,
+    @MarshalAs(UnmanagedType.LPWStr) lpText string,
+    @MarshalAs(UnmanagedType.LPWStr) lpCaption string,
+    uType uint32) int32;
+
+@DllImport("libfoo", EntryPoint: "sum_buf")
+func native_sum_buf(
+    @MarshalAs(UnmanagedType.LPArray, SizeParamIndex: 1) buf []int32,
+    count int32) int64;
+
+@DllImport("libfoo", EntryPoint: "set_flag")
+func native_set_flag(@MarshalAs(UnmanagedType.I4) on bool) int32;
+```
+
+The v1 supported `UnmanagedType` set is `LPStr`, `LPWStr`, `LPUTF8Str`, `BStr`, `LPArray`, `SafeArray`, `I1`, `U1`, `I2`, `U2`, `I4`, `U4`, `I8`, `U8`, `Bool`, `VariantBool`, `SysInt`, `SysUInt`, `Struct`, `ByValTStr` (requires `SizeConst:`), `ByValArray` (requires `SizeConst:`). `LPArray` requires `SizeConst:` and/or `SizeParamIndex:`. Anything outside the set (`CustomMarshaler`, `IUnknown`, `IDispatch`, `FunctionPtr`, `Currency`, `LPStruct`) is rejected with GS0357. The binder enforces a per-UnmanagedType/G#-type compatibility table; mismatches surface as GS0358. Missing required knobs (`SizeConst:` for inline forms, `SizeParamIndex:` for `LPArray`) surface as GS0359. `@MarshalAs` on a non-P/Invoke function — or on a `@LibraryImport` *string* parameter, which is governed by the function-wide `StringMarshalling:` knob — surfaces as GS0360.
+
+`@MarshalAs` is encoded as a CLR `FieldMarshal` table row (ECMA-335 II.23.4) and the `HasFieldMarshal` flag on the Param row; the emitter does not also write a `CustomAttribute` row, matching C#'s `[MarshalAs]` shape. The full diagnostic catalogue (GS0357–GS0360) is listed in the [Diagnostics reference](./diagnostics); for the design rationale, the FieldMarshal blob byte tables, and the LibraryImport-string interaction.
+
+Interpolated strings interoperate with the CLR formatting types. By default they lower to `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler` (value-type holes are not boxed); a string targeted at `IFormattable` or `FormattableString` lowers to `FormattableStringFactory.Create` for deferred, culture-aware formatting; and a parameter annotated with `[InterpolatedStringHandler]` receives the handler directly, including `[InterpolatedStringHandlerArgument]` forwarding.
+
+## Documentation comments
+
+ introduces Markdown-authored documentation comments that round-trip losslessly to CLR XML doc. A documentation comment is a run of consecutive `///` lines; each line contributes one paragraph of authored text after one optional leading space is stripped. The block is attached to the immediately following declaration (free function, type, member, or top-level constant) and is parsed as Markdown plus a small set of `@`-prefixed block tags drawn from the CLR XML-doc vocabulary.
+
+Recognised tags:
+
+| Tag | Meaning |
+| --- | --- |
+| `@summary` | Default; usually elided. Prose-only `///` blocks become the summary. |
+| `@param name` | Documents parameter `name`. |
+| `@typeparam name` | Documents type parameter `name`. |
+| `@returns` | Documents the return value. |
+| `@value` | Documents a property's value. |
+| `@remarks` | Long-form remarks. |
+| `@exception TypeName` | Documents a thrown exception. |
+| `@seealso TypeName` | Cross-reference. |
+| `@inheritdoc` | Inherit documentation from a base/interface member. |
+
+Authors can drop raw `<...>` XML through unchanged by writing it inside a fenced ```` ```xmldoc ```` code block, for constructs Markdown cannot express.
+
+The compiler renders the merged documentation in hover for both G# declarations and imported CLR APIs (their `.xml` doc files are ingested and rendered identically). Diagnostics:
+
+| Code | Severity | Cause |
+| --- | --- | --- |
+| `GS0227` | Warning | Documentation comment is not attached to a declaration. |
+| `GS0228` | Warning (opt-in) | Missing documentation on a public member. |
+| `GS0229` | Warning | `@param` / `@typeparam` name does not match any parameter. |
+| `GS0230` | Warning | Unsupported documentation Markdown construct. |
+| `GS0231` | Warning | Unknown documentation tag. |
+
+## Appendix: full parser grammar
+
+```ebnf
+(* Several terminals below are CONTEXTUAL identifiers, not reserved keywords:
+   data, inline, ref, scoped, delegate, convenience, init, deinit, shared, prop,
+   event, get, set, add, remove, raise, make, typeof, nameof, unmanaged,
+   with, base, checked, unchecked, fixed, the variance markers in/out, and the
+   parameter ref-kinds ref/out/in. `lock` IS a reserved keyword.
+   They are written as quoted terminals here for brevity. *)
+
+CompilationUnit   ::= PackageDecl? ImportDecl* Member* EOF
+PackageDecl       ::= 'package' identifier ('.' identifier)*
+ImportDecl        ::= 'import' (identifier '=')? identifier ('.' identifier)*
+Member            ::= Annotation* Accessibility?
+                      ( Async? FunctionDecl
+                      | AggregateDecl
+                      | TypeAliasDecl
+                      | DelegateDecl
+                      | VariableDecl                 (* requires Accessibility *)
+                      | GlobalStatement )
+Accessibility     ::= 'public' | 'internal' | 'protected' | 'private'  (* 'protected' is valid only on members of an inheritable 'open class'; see  *)
+Async             ::= 'async' | 'suspend'                            (* 'suspend func' is a suspending function; see Async and iterators *)
+Annotation        ::= '@' (AnnotationTarget ':')? identifier ('.' identifier)* ('(' Arguments? ')')?
+AnnotationTarget  ::= 'field' | 'param' | 'return' | 'type' | 'method' | 'property' | 'event' | 'module' | 'assembly' | 'genericparam'
+
+FunctionDecl      ::= 'func' (ReceiverClause | InterfaceQualifierClause)? (identifier | OperatorName | ConversionOperatorName) TypeParamList? '(' Parameters? ')' 'ref'? TypeClause? (Block | '->' Expression | ';')
+                      (* '->' Expression = expression-bodied member; ';' is the no-body marker: P/Invoke and abstract members *)
+ReceiverClause    ::= '(' Parameter ')'
+InterfaceQualifierClause ::= '(' TypeClause ')'
+OperatorName      ::= 'operator' OperatorToken
+ConversionOperatorName ::= 'operator' ('implicit' | 'explicit')
+TypeParamList     ::= '[' TypeParameter (',' TypeParameter)* ']'
+TypeParameter     ::= ('in' | 'out')? identifier ConstraintRef? ConstraintFlag*
+ConstraintRef     ::= identifier TypeArgList?           (* legacy slot: any | comparable | interface name (G# or imported CLR); generic-instantiated e.g. [T IAdd[T]] or [T IComparable[T]]; a base class; or ANOTHER TYPE PARAMETER, e.g. [TBase, TDerived TBase] *)
+ConstraintFlag    ::= 'class' | 'struct' | 'init' '(' ')'  (* repeatable flag constraints; 'init()' renamed from 'new()' *)
+Parameters        ::= Parameter (',' Parameter)*
+Parameter         ::= Annotation* 'scoped'? ('ref' | 'out' | 'in')? identifier '...'? TypeClause ('=' Expression)?
+
+TypeAliasDecl     ::= 'type' identifier TypeParamList? '=' identifier
+DelegateDecl      ::= 'delegate' identifier TypeParamList? '(' Parameters? ')' TypeClause? ';'   (* named CLR delegate; omit the return type for void *)
+AggregateDecl     ::= ClassDecl | StructDecl | EnumDecl | InterfaceDecl    (* leading modifiers may appear in any order; per-kind validity is enforced by the binder *)
+ClassDecl         ::= ('open' | 'sealed')? 'data'? 'class' identifier TypeParamList? PrimaryCtor? BaseClause? StructBody?
+StructDecl        ::= 'data'? 'inline'? 'ref'? 'struct' identifier TypeParamList? PrimaryCtor? BaseClause? StructBody?
+EnumDecl          ::= 'sealed'? 'enum' identifier '{' EnumMemberList? '}'
+InterfaceDecl     ::= 'sealed'? 'interface' identifier TypeParamList? InterfaceBaseClause? InterfaceBody
+InterfaceBaseClause ::= ':' TypeClause (',' TypeClause)*               (* : base interfaces; each must resolve to an interface *)
+PrimaryCtor       ::= '(' Parameters? ')'
+BaseClause        ::= ':' TypeClause ('(' Arguments? ')')? (',' TypeClause)*
+EnumMemberList    ::= EnumMember ((',' | ';') EnumMember)* (',' | ';')?
+EnumMember        ::= Annotation* identifier ('(' Parameters? ')')?       (* payload => discriminated-union case *)
+
+StructBody        ::= '{' StructMember* '}'
+StructMember      ::= Annotation*
+                      ( Accessibility? OpenOrOverride* (MethodDecl | PropertyDecl | EventDecl)
+                      | Accessibility? ConstructorDecl
+                      | DeinitDecl
+                      | SharedBlock
+                      | FieldDecl )
+OpenOrOverride    ::= 'open' | 'override'
+ConstructorDecl   ::= 'convenience'? 'func'? 'init' '(' Parameters? ')' (':' identifier '(' Arguments? ')')? Block
+DeinitDecl        ::= 'deinit' Block                     (* class-only; no parameters or return type *)
+SharedBlock       ::= 'shared' '{' SharedMember* '}'
+SharedMember      ::= Annotation* Accessibility? (Async? MethodDecl | PropertyDecl | EventDecl | FieldDecl)
+                    | StaticInitializerBlock
+StaticInitializerBlock ::= 'init' Block          (*  / : statements run in the type's .cctor after field initializers *)
+MethodDecl        ::= FunctionDecl
+FieldDecl         ::= Accessibility? ('var' | 'let') identifier TypeClause ('=' Expression)?
+PropertyDecl      ::= 'prop' InterfaceQualifierClause? (identifier | IndexerHeader) TypeClause (PropertyBody | '->' Expression)?   (* '->' Expression = read-only computed property/indexer,  *)
+IndexerHeader     ::= 'this' '[' Parameters ']'   (* : user indexer member; emitted as CLR default 'Item' property *)
+PropertyBody      ::= '{' PropertyAccessor* '}'
+PropertyAccessor  ::= ('get' | 'set' ('(' identifier ')')?) (Block | '->' Expression | ';')?   (* '->' Expression = expression-bodied accessor,  *)
+EventDecl         ::= 'event' InterfaceQualifierClause? identifier TypeClause EventBody?
+EventBody         ::= '{' EventAccessor* '}'
+EventAccessor     ::= ('add' | 'remove' | 'raise') (Block | ';')?
+InterfaceBody     ::= '{' InterfaceMember* '}'
+InterfaceMember   ::= Annotation* (InterfaceMethodDecl | PropertyDecl | EventDecl | InterfaceSharedBlock)
+InterfaceMethodDecl ::= 'private'? 'func' identifier TypeParamList? '(' Parameters? ')' TypeClause? (Block | ';')
+                      (* Block => default-interface method; ';' => abstract no-body marker *)
+InterfaceSharedBlock ::= 'shared' '{' InterfaceSharedMember* '}'           (* static-virtual interface members,  *)
+InterfaceSharedMember ::= 'private'? 'func' identifier TypeParamList? '(' Parameters? ')' TypeClause? (Block | ';')
+                      | 'prop' identifier TypeClause ( '{' PropertyAccessor* '}' | ';' )   (* static-virtual interface property,  /  *)
+
+ArrayTypePrefix   ::= '[' Number? ']' | '[' ',' (',')* ']'
+TypeClause        ::= identifier ('.' identifier)* TypeArgList? '?'?
+                    | ArrayTypePrefix '?'? identifier ('.' identifier)* '?'?
+                    | '(' TypeClause ')' '?'?                                             (* parenthesized (grouping) type clause; the trailing '?' marks
+                                                                                             the WHOLE inner type nullable, e.g. '([]int32)?',  *)
+                    | '(' TupleTypeElement (',' TupleTypeElement)+ ')' '?'?                          (* tuple type; TupleTypeElement ::= identifier? TypeClause *)
+                    | '(' FnTypeParamList? ')' '->' TypeClause                            (* arrow function type, ; `?` in TypeClause is return nullability *)
+                    | '(' '(' FnTypeParamList? ')' '->' TypeClause ')' '?'?               (* parenthesized arrow function type,  *)
+                    | 'async' '(' FnTypeParamList? ')' '->' TypeClause
+                    | 'async' '(' '(' FnTypeParamList? ')' '->' TypeClause ')' '?'?       (* parenthesized async arrow function type,  *)
+                    | 'map' '[' TypeClause ',' TypeClause ']' '?'?                        (* canonical,  *)
+                    | 'map' '[' TypeClause ']' TypeClause '?'?                            (* legacy; GS0366 *)
+                    | ('in' | 'out')? 'chan' '[' TypeClause ']' '?'?                       (* 'chan[int32]?' is a nullable channel,
+                                                                                             'chan[int32?]' a channel of nullable; 'in' receive-only, 'out' send-only *)
+                    | 'chan' TypeClause                                                   (* legacy; GS0567 *)
+                    | 'sequence' '[' TypeClause ']' '?'?
+                    | 'async' 'sequence' '[' TypeClause ']' '?'?
+                    | 'func' '(' FnTypeParamList? ')' TypeClause? '?'?                    (* deprecated; GS0303 *)
+                    | 'async' 'func' '(' FnTypeParamList? ')' TypeClause? '?'?            (* deprecated; GS0303 *)
+                    | '*' TypeClause '?'?                                                  (* pointer type *)
+                    | 'unmanaged' ('[' identifier ']')? '(' TypeClauseList? ')' '->' TypeClause   (* function pointer *)
+FnTypeParamList   ::= '...'? TypeClause (',' '...'? TypeClause)*                          (* per-slot variadic *)
+TypeArgList       ::= '[' TypeClause (',' TypeClause)* ']'
+TypeClauseList    ::= TypeClause (',' TypeClause)*
+
+Block             ::= '{' Statement* '}'
+Statement         ::= Block
+                    | Annotation* VariableDecl
+                    | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | ForTupleRangeStmt | WhileStmt | WhileLetStmt | DoWhileStmt | LabeledStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt
+                    | SwitchStmt | FallthroughStmt | TryStmt | ThrowStmt | UsingStmt | AwaitUsingStmt | DeferStmt | GoStmt | ScopeStmt | LockStmt
+                    | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | GotoStmt | CheckedStmt
+                    | IncDecStmt | ChannelSendStmt | ExpressionStmt
+VariableDecl      ::= 'async' 'let' identifier TypeClause? '=' Expression
+                      (* `async let` starts the initializer as a child of the enclosing `scope`
+                         and binds the name to its eventual result. The binding is a value of type R, not a
+                         handle, so it cannot outlive its owner; every read is `await name` (GS0569). Outside
+                         a `scope` it is GS0551; never read, GS0559. *)
+                    | ('const' | 'let' | 'var') 'scoped'? 'ref'? identifier TypeParamList? TypeClause? '=' Expression
+                      (* TypeParamList is 'let'-only: `let Name[T] = func (...) ... { ... }` hangs a generic
+                         parameter list off the binding, since the anonymous function-literal initializer has nowhere
+                         else to carry one. *)
+                    | 'var' 'scoped'? identifier TypeClause                                  (* no initializer; binds the type's zero value — a sound empty
+                                                                                                instance for map/slice/array/sequence, GS0520 for chan *)
+                    | 'let' '(' identifier (',' identifier)* ')' '=' Expression               (* tuple deconstruction *)
+                    | 'let' '{' identifier '=' identifier (',' identifier '=' identifier)* '}' '=' Expression   (* named deconstruction *)
+MultiAssignmentStmt ::= AssignmentTarget (',' AssignmentTarget)+ '=' Expression (',' Expression)*
+AssignmentTarget    ::= identifier
+                      | Expression '.' identifier
+                      | Expression '[' ExpressionList ']'
+                      | '*' Expression
+                      | 'base' '[' TypeClause ']' '.' identifier
+IncDecStmt        ::= identifier ('++' | '--')
+FallthroughStmt   ::= 'fallthrough'                       (* direct last statement of a non-final switch arm; next arm has no pattern bindings or guard *)
+
+IfStmt            ::= 'if' (SimpleStmt ';')? Expression Statement ('else' Statement)?
+IfLetStmt         ::= 'if' LetBindingList Statement ('else' Statement)?
+GuardLetStmt      ::= 'guard' LetBindingList 'else' Statement
+WhileLetStmt      ::= 'while' LetBindingList Statement
+LetBindingList    ::= LetBindingClause (',' LetBindingClause)*
+LetBindingClause  ::= 'let' identifier TypeClause? '=' Expression
+ForStmt           ::= 'for' Block
+                    | 'for' Expression Block
+                    | 'for' SimpleStmt? ';' Expression? ';' SimpleStmt? Block
+                    | 'for' identifier (',' identifier)? 'in' Expression Block
+                    | 'for' identifier 'in' Expression '...' Expression Block
+ForTupleRangeStmt ::= 'for' '(' identifier (',' identifier)* ')' 'in' Expression Block   (* tuple deconstruction over a ValueTuple sequence,  *)
+WhileStmt         ::= 'while' Expression Statement
+DoWhileStmt       ::= 'do' Statement 'while' Expression
+LabeledStmt       ::= identifier ':' Statement            (* : a label on a loop is an  break/continue target; a label on any other statement is a 'goto' jump target instead *)
+LockStmt          ::= 'lock' Expression Statement          (* : mutual exclusion around the body, lowered to Monitor Enter/try/finally/Exit *)
+GotoStmt          ::= 'goto' identifier                    (* : unconditional jump to a same-function 'label:' target *)
+CheckedStmt       ::= ('checked' | 'unchecked') Block       (* : names the overflow-checking context for the block's statements; 'checked'/'unchecked' are contextual, recognised only immediately before '{' *)
+SimpleStmt        ::= ('var' | 'let') 'scoped'? 'ref'? identifier TypeClause? '=' Expression
+                    | 'var' 'scoped'? identifier TypeClause
+                    | IncDecStmt
+                    | ExpressionStmt                       (* includes Assignment, compound assignment, and '??=' *)
+BreakStmt         ::= 'break' identifier?                  (* an optional label must be on the same source line *)
+ContinueStmt      ::= 'continue' identifier?
+ReturnStmt        ::= 'return' ('ref' Expression | Expression (',' Expression)*)?   (* 'ref' return,  *)
+YieldStmt         ::= 'yield' Expression
+
+SwitchStmt        ::= 'switch' Expression '{' SwitchCase* '}'
+SwitchCase        ::= 'case' Pattern ('when' Expression)? Block | 'default' Block
+SwitchExpr        ::= 'switch' Expression '{' SwitchArm* '}'
+SwitchArm         ::= 'case' Pattern ('when' Expression)? (':' | '->') Expression | 'default' (':' | '->') Expression
+                      (* '->' is the legacy  form. ':' is the preferred separator; the legacy '->' form is still accepted but emits warning GS0302. *)
+                      (* The optional 'when' guard selects the arm only when the pattern matches AND the guard is true; 'when' is a contextual keyword. *)
+Pattern           ::= OrPattern
+                      (* Combinators: 'not' binds tightest, then 'and', then 'or'; 'and'/'or'/'not' are contextual keywords. *)
+OrPattern         ::= AndPattern ('or' AndPattern)*
+AndPattern        ::= UnaryPattern ('and' UnaryPattern)*
+UnaryPattern      ::= 'not' UnaryPattern | PrimaryPattern
+PrimaryPattern    ::= '(' Pattern ')'
+                    | '[' ListPatternElement (',' ListPatternElement)* ']'
+                    | 'var' identifier                        (* total pattern; identifier may be '_' *)
+                    | PropertyPattern identifier?             (* optional designation *)
+                    | TypeClause PropertyPattern? identifier? (* bare type pattern with optional designation; name-shaped forms are semantically disambiguated from value patterns *)
+                    | identifier 'is' TypeClause PropertyPattern?
+                    | '_'                                  (* discard: identifier '_' not followed by '(' or '.' *)
+                    | ('<' | '<=' | '>' | '>=' | '==' | '!=') Expression
+                    | Expression
+PropertyPattern   ::= '{' (identifier ':' Pattern (',' identifier ':' Pattern)*)? '}'
+ListPatternElement ::= Pattern | SlicePattern
+SlicePattern      ::= '..' (identifier | Pattern)?           (* slice ("rest") subpattern, : bare '..' discards the middle slice; '..name' captures it into a '[]T' binding; '..pattern' matches it against a nested pattern *)
+
+TryStmt           ::= 'try' Block CatchClause* FinallyClause?
+CatchClause       ::= 'catch' CatchHeader? CatchFilter? Block
+CatchHeader       ::= '(' ( identifier TypeClause | Type ) ')'   (* binder-and-type, or type only *)
+CatchFilter       ::= 'when' Expression                          (* bool; emitted as a CLR filter region *)
+FinallyClause     ::= 'finally' Block
+ThrowStmt         ::= 'throw' Expression
+UsingStmt         ::= 'using' VariableDecl
+AwaitUsingStmt    ::= 'await' 'using' VariableDecl
+DeferStmt         ::= 'defer' Expression
+GoStmt            ::= 'go' (Expression | Block)
+ScopeStmt         ::= 'scope' Block
+AwaitForRangeStmt ::= 'await' 'for' identifier TypeClause? 'in' Expression Block
+SelectStmt        ::= 'select' '{' SelectCase* '}'
+SelectCase        ::= 'default' Block
+                    | 'case' '<-' Expression Guard? Block
+                    | 'case' 'let' identifier '=' '<-' Expression Guard? Block
+                    | 'case' Expression '<-' Expression Guard? Block
+                    | 'case' 'await' Expression Guard? Block
+                    | 'case' 'let' identifier '=' 'await' Expression Guard? Block
+                    | 'case' 'cancelled' Guard? Block
+Guard             ::= 'when' Expression
+ChannelSendStmt   ::= Expression '<-' Expression
+
+Expression        ::= Assignment
+Assignment        ::= identifier '=' Assignment
+                    | identifier CompoundAssign Assignment
+                    | identifier '[' IndexArgumentList ']' '=' Assignment
+                    | identifier '.' identifier '=' Assignment
+                    | PostfixExpression '[' IndexArgumentList ']' ('=' | CompoundAssign) Assignment
+                    | PostfixExpression '.' identifier '=' Assignment
+                    | '*' PrefixExpression '=' Assignment                (* indirect (pointer) assignment,  *)
+                    | (identifier | PostfixExpression) ('+=' | '-=') Assignment   (* event subscribe / unsubscribe *)
+                    | ConditionalExpression
+ConditionalExpression ::= RangeExpression ('?' Assignment ':' Assignment)?   (* ternary,  *)
+RangeExpression   ::= NullCoalescingExpression? '..' ('^'? NullCoalescingExpression)? | NullCoalescingExpression   (* standalone System.Range value; `..` binds looser than all binary operators. Either bound may be a '^' from-end Index expression. Suppressed inside an index bound (IndexArgument owns '..'); re-enabled inside parens/argument lists. *)
+NullCoalescingExpression ::= WithExpression ('??' NullCoalescingExpression)?  (* right-assoc null-coalescing,  *)
+WithExpression    ::= BinaryExpression ('with' '{' FieldEqualsList? '}')*    (* non-destructive record update *)
+CompoundAssign    ::= '+=' | '-=' | '*=' | '/=' | '%=' | '^=' | '&=' | '|=' | '&^=' | '<<=' | '>>=' | '>>>=' | '??='   (* '>>>=' unsigned right shift assign,  *)
+BinaryExpression  ::= PrefixExpression BinaryTail*
+BinaryTail        ::= BinaryOperator PrefixExpression
+                    | ('is' | '!' 'is') Pattern                          (* boolean pattern test *)
+                    | 'as' TypeClause                                    (* safe cast,  *)
+BinaryOperator    ::= '*' | '/' | '%' | '<<' | '>>' | '>>>' | '&' | '&^'
+                      (* '>>>' unsigned (logical) right shift, : discards the sign bit instead of replicating it *)
+                    | '+' | '-' | '|' | '^'
+                    | '==' | '!=' | '<' | '<=' | '>' | '>='
+                    | '&&'
+                    | '||'
+PrefixExpression  ::= ('+' | '-' | '!' | '~' | '^' | '*' | '&' | '<-' | 'await') PrefixExpression | PostfixExpression   (* '~' is one's-complement; '^' is a System.Index from-end expression *)
+PostfixExpression ::= PrimaryExpression PostfixOp*
+PostfixOp         ::= '!!' | ('.' | '?.') NameOrCall | ('[' | '?[') IndexArgumentList ']'
+IndexArgumentList ::= IndexArgument (',' IndexArgument)*
+IndexArgument     ::= IndexBound | IndexBound? '..' IndexBound?   (* range/slice form, ; from-end via  *)
+IndexBound        ::= '^'? Expression                            (* leading '^' marks a from-end index,  *)
+NameOrCall        ::= identifier | Call | GenericCall
+PrimaryExpression ::= Literal | identifier
+                    | Call | GenericCall | NullableTypeCall | ObjectCreation
+                    | CollectionInitializer
+                    | StructLiteral | GenericStructLiteral | ArrayLiteral | MapLiteral
+                    | FunctionLiteral | LambdaExpression
+                    | SwitchExpr | IfExpression | IfLetExpression
+                    | '(' Expression ')' | TupleLiteral
+                    | ChannelCreation | TypeOf | NameOf | DefaultExpression | BaseInterfaceCall | CheckedExpression
+                    | ThrowExpr                                          (* throw-expression,  *)
+Literal           ::= Number | String | InterpolatedString | 'true' | 'false' | 'nil' | char
+InterpolatedString ::= '"' ( InterpolationText | '$$' | '$' identifier | InterpolationHole )* '"'
+InterpolationHole ::= '${' Expression ( ',' SignedInteger )? ( ':' FormatText )? '}'
+Call              ::= identifier '(' Arguments? ')' TrailingLambda?
+GenericCall       ::= identifier TypeArgList '(' Arguments? ')' TrailingLambda?
+NullableTypeCall  ::= identifier '?' '(' Arguments? ')' TrailingLambda?   (* nullable-type construction *)
+ObjectCreation    ::= (Call | GenericCall) '{' ObjectInitList? '}'        (* Foo() { F = v, ... } *)
+ObjectInitList    ::= identifier '=' Expression (',' identifier '=' Expression)* ','?
+CollectionInitializer ::= CollectionTarget '{' CollectionElementList? '}'  (* List[T]{ ... } *)
+CollectionTarget  ::= GenericCall | Call                                  (* List[T], Dictionary[K,V](cmp), ... *)
+                    | identifier TypeArgList                              (* List[T]  — synthesizes a zero-arg ctor *)
+CollectionElementList ::= CollectionElement (',' CollectionElement)* ','?
+CollectionElement ::= Expression                                          (* bare:    1            → Add(1)        *)
+                    | Expression ':' Expression                          (* keyed:   "a": 1       → Add("a", 1)   *)
+                    | '[' Expression ']' '=' Expression                  (* indexed: ["a"] = 1    → this["a"] = 1 *)
+StructLiteral     ::= identifier '{' FieldInitList? '}'
+GenericStructLiteral ::= identifier TypeArgList '{' FieldInitList? '}'
+FieldInitList     ::= identifier ':' Expression (',' identifier ':' Expression)* ','?
+FieldEqualsList   ::= identifier '=' Expression (',' identifier '=' Expression)* ','?
+ArrayLiteral      ::= '[' Number? ']' TypeClause '{' InitializerElementList? '}'
+                    | '[' Expression ']' TypeClause ('{' InitializerElementList? '}')?
+                    | '[' Expression (',' Expression)+ ']' TypeClause ('{' InitializerElementList? '}')?
+InitializerElementList ::= InitializerElement (',' InitializerElement)* ','?
+InitializerElement ::= '...' Expression | Expression
+MapLiteral        ::= 'map' '[' TypeClause ',' TypeClause ']' '{' MapEntryList? '}'
+                    | 'map' '[' TypeClause ']' TypeClause '{' MapEntryList? '}'    (* legacy; GS0366 *)
+MapEntry          ::= Expression ':' Expression
+FunctionLiteral   ::= 'async'? 'func' '(' Parameters? ')' TypeClause? Block
+LambdaExpression  ::= 'async'? '(' LambdaParameters? ')' '->' ( Expression | Block )
+LambdaParameters  ::= LambdaParameter (',' LambdaParameter)*
+LambdaParameter   ::= Annotation* 'scoped'? ('ref' | 'out' | 'in')? identifier '...'? TypeClause? ('=' Expression)?
+TrailingLambda    ::= FunctionLiteral
+ChannelCreation   ::= 'chan' '[' TypeClause ']' '(' Expression? ')'                 (* 'make(chan T[, n])' is retired, GS0566 *)
+TypeOf            ::= 'typeof' '(' TypeClause ')'
+NameOf            ::= 'nameof' '(' Expression ')'
+DefaultExpression ::= 'default' ('(' TypeClause ')')?                     (*  *)
+BaseInterfaceCall ::= 'base' '[' TypeClause ']' '.' identifier TypeArgList? '(' Arguments? ')'   (* explicit-base interface call,  *)
+CheckedExpression ::= ('checked' | 'unchecked') '(' Expression ')'         (* : names the overflow-checking context for evaluating the argument expression *)
+IfExpression      ::= 'if' (SimpleStmt ';')? Expression Block ('else' (IfExpression | Block))?   (* if-as-expression,  *)
+IfLetExpression   ::= 'if' LetBindingList ('&&' Expression)? Block
+                      'else' (IfExpression | IfLetExpression | Block)         (* if-let-as-expression *)
+TupleLiteral      ::= '(' TupleLiteralElement ',' TupleLiteralElement (',' TupleLiteralElement)* ')'
+TupleLiteralElement ::= (identifier ':')? Expression                     (* labeled element *)
+Arguments         ::= Argument (',' Argument)*
+Argument          ::= identifier ':' (RefArgument | Expression)
+                    | RefArgument
+                    | Expression
+RefArgument       ::= ('ref' | 'in') (identifier | '(' Expression ')')
+                    | 'out' (('var' | 'let') identifier TypeClause? | '_' TypeClause? | identifier | '(' Expression ')')
+```

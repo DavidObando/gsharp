@@ -34,7 +34,7 @@ G# targets the .NET CLR. The compiler can emit executables or libraries with man
 
 ## How do I install G#?
 
-Start with the [installation guide](getting-started/install.md). The project flow uses `dotnet new install Gsharp.Templates`, a `gsharp-console` template, and `.gsproj` files that use the `Gsharp.NET.Sdk` MSBuild SDK. Both [`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/) and [`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/) are published on NuGet.
+Start with the [installation guide](getting-started/install.md). The project flow uses `dotnet new install Gsharp.Templates::0.5.199`, a `gsharp-console` template, and `.gsproj` files that use the `Gsharp.NET.Sdk` MSBuild SDK. Both [`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/) and [`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/) are published on NuGet.
 
 ## Where is the language specification?
 
@@ -96,7 +96,7 @@ G# uses CLR-style exceptions with `try`, `catch`, `finally`, and `throw`. That c
 
 ## Are slices, maps, and sequences built in?
 
-Yes. Fixed arrays use `[N]T`, slices use `[]T`, maps use `map[K,V]`, and sequences use `sequence[T]`. Slices are backed by CLR arrays, maps by dictionary-like storage, and sequences map to .NET enumerable shapes, with iterator functions using `yield`.
+Yes. `[N]T` and `[]T` are exact CLR arrays. Native `slice[T]` and `readonly slice[T]` descriptors share managed storage with length and capacity; retain `Append` results and use `Clone()` for independent storage. Maps use `map[K,V]` (CLR dictionaries), and `sequence[T]` maps to .NET enumerable shapes, with iterator functions using `yield`. See [types and values](guide/types-and-values.md#arrays-slices-and-maps).
 
 ## What editor and debugging support exists?
 
