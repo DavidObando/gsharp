@@ -50,7 +50,7 @@ grammarCases.push({
   source: reserved.map((text) => `$${text}`).join(' '),
   tokens: reserved.map((text) => [`$${text}`, 'identifier']),
 });
-for (const {name, source, tokens} of grammarCases) {
+for (const {name, source, tokens, absent = []} of grammarCases) {
   test(`Prism lexical parity: ${name}`, () => {
     registerGrammar();
     const categories = {
@@ -78,6 +78,14 @@ for (const {name, source, tokens} of grammarCases) {
       for (let i = start; i < start + text.length; i++) {
         assert.ok(scopes[i].some((scope) => categories[kind].includes(scope)),
           `${name}: ${text} at ${i}: ${scopes[i]}`);
+      }
+    }
+    for (const [text, kind] of absent) {
+      const start = source.indexOf(text);
+      assert.ok(start >= 0, `${name}: fixture contains ${text}`);
+      for (let i = start; i < start + text.length; i++) {
+        assert.ok(!scopes[i].some((scope) => categories[kind].includes(scope)),
+          `${name}: ${text} at ${i} must not be ${kind}: ${scopes[i]}`);
       }
     }
   });

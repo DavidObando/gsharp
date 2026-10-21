@@ -48,6 +48,8 @@ Visual Studio packages the VS Code TextMate grammar directly; it has no separate
 grammar to synchronize. The website registers its G# Prism grammar in
 `website/src/theme/prism-include-languages.ts`. Both engines run the shared
 `src/test/grammar-cases.json` lexical regression cases.
+Interpolation cases cover byte literals, nullable array elements, nested dollar
+escapes, and literal `$${...}` openers. Optional `absent` spans reject incorrect scopes.
 
 Lexical highlighting recognizes reserved/contextual words, escaped and Unicode
 identifiers, literal forms, interpolation, annotations, and operators. Contextual

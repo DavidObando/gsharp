@@ -113,6 +113,7 @@
         "0": { "name": "punctuation.definition.interpolation.end.gsharp" }
       },
       "patterns": [
+        { "include": "#interpolation-nullable-array-type" },
         { "include": "#interpolation-conditional" },
         { "include": "#interpolation-format" },
         { "include": "#interpolation-alignment" },
@@ -122,11 +123,19 @@
         { "include": "source.gsharp" }
       ]
     },
+    "interpolation-nullable-array-type": {
+      "begin": "(?=(?:\\[[^\\]\\r\\n]*\\]\\s*)+\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*(?:\\s*\\.\\s*\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*|\\s*\\[[^\\]\\r\\n]*\\])*\\s*\\?(?=\\s*\\{))",
+      "end": "(?<=\\?)",
+      "patterns": [
+        { "include": "source.gsharp" }
+      ]
+    },
     "interpolation-conditional": {
       "name": "meta.conditional.interpolation.gsharp",
-      "begin": "(?<!\\?)\\?(?![?.\\[])",
+      "begin": "(?<!\\?)\\?(?![?.\\[]|\\s*[),\\]}:])",
       "end": ":",
       "patterns": [
+        { "include": "#interpolation-nullable-array-type" },
         { "include": "#interpolation-conditional" },
         { "include": "#interpolation-nested-braces" },
         { "include": "#interpolation-nested-parentheses" },
@@ -150,6 +159,7 @@
       "begin": "\\{",
       "end": "\\}",
       "patterns": [
+        { "include": "#interpolation-nullable-array-type" },
         { "include": "#interpolation-conditional" },
         { "include": "#interpolation-nested-braces" },
         { "include": "#interpolation-nested-parentheses" },
@@ -161,6 +171,7 @@
       "begin": "\\(",
       "end": "\\)",
       "patterns": [
+        { "include": "#interpolation-nullable-array-type" },
         { "include": "#interpolation-conditional" },
         { "include": "#interpolation-nested-braces" },
         { "include": "#interpolation-nested-parentheses" },
@@ -172,6 +183,7 @@
       "begin": "\\[",
       "end": "\\]",
       "patterns": [
+        { "include": "#interpolation-nullable-array-type" },
         { "include": "#interpolation-conditional" },
         { "include": "#interpolation-nested-braces" },
         { "include": "#interpolation-nested-parentheses" },

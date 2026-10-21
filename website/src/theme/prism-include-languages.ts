@@ -12,6 +12,17 @@ import siteConfig from '@generated/docusaurus.config';
 import type * as PrismNamespace from 'prismjs';
 import type {Optional} from 'utility-types';
 
+// A nullable array element type precedes its initializer, not a ternary arm.
+const nullableArrayType = /(?:\[[^\]\r\n]*\]\s*)+\$?[\p{L}_][\p{L}\p{Nd}_]*(?:\s*\.\s*\$?[\p{L}_][\p{L}\p{Nd}_]*|\s*\[[^\]\r\n]*\])*\s*\?(?=\s*\{)/u;
+const conditionalQuestion = /(?<!\?)\?(?![?.\[]|\s*[),\]}:])/u;
+const nullableArrayTypeAt = new RegExp(`^${nullableArrayType.source}`, 'u');
+const conditionalQuestionAt = new RegExp(`^${conditionalQuestion.source}`, 'u');
+
+function quoteMode(source: string, index: number): string {
+  return source[index] === '"' && source[index - 1] === 'b' &&
+    !/[\p{L}\p{Nd}_$]/u.test(source[index - 2] ?? '') ? 'byte' : source[index];
+}
+
 // Prism calls RegExp.exec for both top-level and nested grammar patterns.
 // Scan delimiters instead of approximating a fixed brace depth with regexes.
 function balancedPattern(start: RegExp): RegExp {
@@ -20,13 +31,13 @@ function balancedPattern(start: RegExp): RegExp {
     start.lastIndex = this.lastIndex;
     let match: RegExpExecArray | null;
     while ((match = start.exec(source))) {
-      if (match[0].startsWith('/')) {
+      if (match[0].startsWith('/') || (match[0].startsWith('[') && match[0].endsWith('?'))) {
         this.lastIndex = start.lastIndex;
         return match;
       }
       const first = match.index + (match[0] === '${' ? 1 : 0);
       const closing: Record<string, string> = {'{': '}', '[': ']', '(': ')', '?': ':'};
-      const stack = [closing[source[first]] ?? source[first]];
+      const stack = [closing[source[first]] ?? quoteMode(source, first)];
       let i = first + 1;
       for (; i < source.length && stack.length; i++) {
         const c = source[i];
@@ -46,13 +57,19 @@ function balancedPattern(start: RegExp): RegExp {
           const close = source.indexOf('*/', i + 2);
           i = close < 0 ? source.length : close + 1;
         } else if (c === '"' || c === "'" || c === '`') {
-          stack.push(c === '"' && source[i - 1] === 'b' &&
-            !/[\p{L}\p{Nd}_$]/u.test(source[i - 2] ?? '') ? 'byte' : c);
+          stack.push(quoteMode(source, i));
+        } else if (source[first] === '?' && (c === '[' || c === '?')) {
+          const arrayType = c === '[' ? nullableArrayTypeAt.exec(source.slice(i)) : null;
+          if (arrayType) {
+            i += arrayType[0].length - 1;
+          } else if (c === '[') {
+            stack.push(']');
+          } else if (top === ':' && conditionalQuestionAt.test(source.slice(i)) &&
+            source[i - 1] !== '?') {
+            stack.push(':');
+          }
         } else if ('{[('.includes(c)) {
           stack.push(c === '{' ? '}' : c === '[' ? ']' : ')');
-        } else if (source[first] === '?' && top === ':' && c === '?' &&
-          !/[?.[]/.test(source[i + 1] ?? '') && source[i - 1] !== '?') {
-          stack.push(':');
         } else if (c === top) {
           stack.pop();
         }
@@ -72,7 +89,10 @@ function balancedPattern(start: RegExp): RegExp {
 function interpolationFormatPattern(): RegExp {
   const pattern = /:[\s\S]*$/g;
   pattern.exec = function(source: string): RegExpExecArray | null {
-    const opaque = balancedPattern(/\/\/[^\r\n]*|\/\*[\s\S]*?\*\/|["'`([{]|(?<!\?)\?(?![?.\[])/gu);
+    const opaque = balancedPattern(new RegExp(
+      `${nullableArrayType.source}|\\/\\/[^\\r\\n]*|\\/\\*[\\s\\S]*?\\*\\/|["'\`([{]|${conditionalQuestion.source}`,
+      'gu',
+    ));
     let cursor = 0;
     while (cursor < source.length) {
       opaque.lastIndex = cursor;
@@ -181,6 +201,7 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
         },
         interpolation: {
           pattern: balancedPattern(/\$\{/gu),
+          greedy: true,
           inside: {
             'interpolation-punctuation': {
               pattern: /^\$\{|\}$/,
