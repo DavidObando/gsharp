@@ -49,8 +49,12 @@ grammar to synchronize. The website registers its G# Prism grammar in
 `website/src/theme/prism-include-languages.ts`. Both engines run the shared
 `src/test/grammar-cases.json` lexical regression cases.
 Interpolation cases cover byte literals, nullable array elements, nested dollar
-escapes, and literal `$${...}` openers. Optional `absent` spans reject incorrect scopes.
-Type contexts protect nested generic nullable suffixes from conditional scanning.
+escapes, and literal `$${...}` openers. Optional `absent` spans reject incorrect scopes;
+`format` suffixes also reject format scopes anywhere in the expression.
+Persistent type-head/tail states protect nested generic nullable suffixes across
+physical lines. Member contexts consume exactly one name, including after trivia.
+Pattern primaries distinguish discard, constant, and `var` bindings from types;
+`not`/`and`/`or` introduce the appropriate next primary rather than a nullable name.
 Anonymous-class header colons stay in expressions. Line comments accept CR, LF,
 and CRLF line endings.
 

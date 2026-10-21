@@ -111,6 +111,8 @@ function typeEnd(source: string, index: number): number {
     const word = wordAt(source, index);
     const afterWord = skipTrivia(source, index + word.length);
     const nextWord = wordAt(source, afterWord);
+    const signature = word === 'func' ||
+      (word === 'unmanaged' && (source[afterWord] === '[' || source[afterWord] === '('));
     if ((word === 'readonly' && ['managed', 'slice'].includes(nextWord)) ||
       (word === 'async' && (['func', 'sequence'].includes(nextWord) || source[afterWord] === '(')) ||
       (['in', 'out'].includes(word) && nextWord === 'chan')) {
@@ -130,7 +132,7 @@ function typeEnd(source: string, index: number): number {
           index += wordAt(source, index).length;
         } else break;
       }
-      if (!['func', 'unmanaged'].includes(word)) {
+      if (!signature) {
         const suffix = skipTrivia(source, index);
         return source[suffix] === '?' && !/[?.]/.test(source[suffix + 1] ?? '')
           ? suffix + 1 : index;
@@ -150,6 +152,65 @@ function typeEnd(source: string, index: number): number {
   return signatureEnd;
 }
 
+// Pattern heads follow Parser.Patterns: combinators introduce another primary;
+// discard, constants and designations are not type names with nullable tails.
+function patternEnd(source: string, index: number): number {
+  let primary = true;
+  let designation = false;
+  while (index < source.length) {
+    index = skipTrivia(source, index);
+    const word = wordAt(source, index);
+    if (primary && word === 'not') {
+      index += word.length;
+      continue;
+    }
+    if (!primary && (word === 'and' || word === 'or')) {
+      index += word.length;
+      primary = true;
+      designation = false;
+      continue;
+    }
+    if (!primary) {
+      if (designation && word && !['is', 'as', 'not', 'when'].includes(word)) {
+        index += word.length;
+        designation = false;
+        continue;
+      }
+      return index;
+    }
+    if (word === 'var') {
+      index = skipTrivia(source, index + word.length);
+      index += wordAt(source, index).length;
+      designation = false;
+    } else if (['nil', 'true', 'false'].includes(word) ||
+      (word === '_' && !['.', '('].includes(source[skipTrivia(source, index + 1)]))) {
+      index += word.length;
+      designation = false;
+    } else if (word || source[index] === '[' || source[index] === '*') {
+      const end = typeEnd(source, index);
+      if (end > index) {
+        index = end;
+        designation = true;
+      } else {
+        const group = source[index] === '[' ? groupEnd(source, index) : index;
+        if (group <= index) return index;
+        index = group;
+        designation = false;
+      }
+    } else if ('("\'`[{'.includes(source[index] ?? '\0')) {
+      const end = groupEnd(source, index);
+      if (end === index) return index;
+      index = end;
+      designation = source[index - 1] === '}' || source[index - 1] === ']';
+    } else if (/[0-9]/.test(source[index] ?? '')) {
+      while (index < source.length && /[0-9a-zA-Z_.]/.test(source[index])) index++;
+      designation = false;
+    } else return index;
+    primary = false;
+  }
+  return index;
+}
+
 function interpolationFormatPattern(): RegExp {
   const pattern = /:[\s\S]*$/g;
   pattern.exec = function(source: string): RegExpExecArray | null {
@@ -161,7 +222,8 @@ function interpolationFormatPattern(): RegExp {
       const word = wordAt(source, cursor);
       if (word) {
         cursor += word.length;
-        if (!memberName && (word === 'as' || word === 'is')) cursor = typeEnd(source, cursor);
+        if (!memberName && word === 'as') cursor = typeEnd(source, cursor);
+        else if (!memberName && word === 'is') cursor = patternEnd(source, cursor);
         else if (!memberName && word === 'object') {
           const header = skipTrivia(source, cursor);
           if (source[header] === ':') cursor = header + 1;

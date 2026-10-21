@@ -24,7 +24,7 @@ const syntaxFactsPath = path.resolve(
 );
 
 const grammar = JSON.parse(fs.readFileSync(grammarPath, 'utf8'));
-const cases: {name: string; source: string; tokens: [string, string][]; absent?: [string, string][]}[] =
+const cases: {name: string; source: string; tokens: [string, string][]; absent?: [string, string][]; format?: string}[] =
   JSON.parse(fs.readFileSync(path.join(__dirname, 'grammar-cases.json'), 'utf8'));
 const reserved = reservedKeywordsFromCompiler();
 cases.push({
@@ -65,7 +65,7 @@ describe('shared lexical parity cases through the TextMate engine', () => {
     }
   });
 
-  it.each(cases)('$name', async ({source, tokens, absent = []}) => {
+  it.each(cases)('$name', async ({source, tokens, absent = [], format}) => {
     const loaded = (await registry.loadGrammar('source.gsharp'))!;
     let stack = INITIAL;
     const scopes: string[][] = [];
@@ -104,6 +104,15 @@ describe('shared lexical parity cases through the TextMate engine', () => {
       expect(start).toBeGreaterThanOrEqual(0);
       for (let i = start; i < start + text.length; i++) {
         expect(scopes[i].some((scope) => categories[kind].test(scope))).toBe(false);
+      }
+    }
+    if (format !== undefined) {
+      const start = source.lastIndexOf(format);
+      expect(start).toBeGreaterThanOrEqual(0);
+      for (let i = 0; i < source.length; i++) {
+        if (scopes[i].some((scope) => categories.format.test(scope))) {
+          expect(i >= start && i < start + format.length).toBe(true);
+        }
       }
     }
   });
