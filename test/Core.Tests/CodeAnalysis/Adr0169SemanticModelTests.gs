@@ -13,6 +13,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Generic
+import System.IO
 import System.Linq
 import System.Threading.Tasks
 import Xunit
@@ -21,6 +22,141 @@ import Xunit
 /// syntax→bound-node, syntax→type queries), (cref:Symbol.DeclaringSyntaxNodes),
 /// and (cref:GSharpSyntaxWalker).
 open class Adr0169SemanticModelTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedStaticContextInjection_KeepsCanonicalReadAndAuthoredContext(asyncCaller bool) {
+        let root = Path.Combine(
+            Directory.GetCurrentDirectory(),
+            "issue5035-static-context-" + Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(root)
+        try {
+            let runtime = typeof(Gsharp.Concurrency.SuspendingAttribute).Assembly.Location
+            let assemblyPath = Path.Combine(root, "StaticContextContracts.dll")
+            let references = []string{
+                typeof(object).Assembly.Location,
+                Path.Combine(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "System.Runtime.dll"),
+                runtime
+            }
+                .Distinct(StringComparer.OrdinalIgnoreCase).Select(
+                (path string) -> Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(path)
+            )
+            let fixture = Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpCompilation
+                .Create(
+                "StaticContextContracts",
+                []Microsoft.CodeAnalysis.SyntaxTree{Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(`using System.Threading.Tasks;
+using Gsharp.Concurrency;
+namespace StaticContextContracts {
+    public static class Api<T> {
+        [Suspending] public static ValueTask<string> Read<U>(int value, Context ctx5035 = default) => new("selected");
+        [Suspending] public static ValueTask<string> Written(int value, Context authored) => new("written");
+        [Suspending] public static ValueTask<string> Other(int value, Context authored) => new("other");
+    }
+}`)},
+                references,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary)
+            )
+            {
+                using let stream = File.Create(assemblyPath)
+                let emitted = fixture.Emit(stream)
+                Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+            }
+            // Roslyn cannot spell the CLR-only hidden parameter name. Match the
+            // existing cross-assembly fixture technique and verify its metadata.
+            let bytes = File.ReadAllBytes(assemblyPath)
+            let from = System.Text.Encoding.UTF8.GetBytes("ctx5035\u0000")
+            let to = System.Text.Encoding.UTF8.GetBytes("<>ctx\u0000")
+            let offset = Assert.Single(
+                Enumerable.Range(0, bytes.Length - from.Length + 1).Where(
+                    (i int32) -> bytes.AsSpan(i, from.Length).SequenceEqual(from)
+                )
+            )
+            Array.Clear(bytes, offset, from.Length)
+            to.CopyTo(bytes, offset)
+            File.WriteAllBytes(assemblyPath, bytes)
+            let source = `package Query
+CALLERfunc Run(explicitContext Gsharp.Concurrency.Context) {
+    scope {
+        let first = StaticContextContracts.Api[int32].Read[bool](1)
+        let authored = StaticContextContracts.Api[int32].Written(2, explicitContext)
+        let other = StaticContextContracts.Api[int32].Other(3, explicitContext)
+    }
+}
+`.Replace(
+                "CALLER",
+                if asyncCaller {
+                    "async "
+                } else {
+                    "suspend "
+                }
+            )
+            let tree = SyntaxTree.Parse(SourceText.From(source, Path.Combine(root, "Consumer.gs")))
+            using let resolver = ReferenceResolver.WithReferences([]string{assemblyPath, runtime})
+            let compilation = Compilation(resolver, tree)
+            Assert.Empty(compilation.GlobalScope.Diagnostics)
+            Assert.Empty(compilation.BoundProgram.Diagnostics)
+            let model = compilation.GetSemanticModel(tree)
+            let run = compilation.GlobalScope.Functions.Single((f FunctionSymbol) -> f.Name == "Run")
+            let body = compilation.BoundProgram.Functions[run]
+            let context = body
+                .DescendantsAndSelf()
+                .OfType[BoundVariableDeclaration]()
+                .Single((v BoundVariableDeclaration) -> v.Variable.Name == "ctx")
+                .Variable
+            let first = QualifierInitializer(tree, "first")
+            let callSyntax = Assert.IsType[CallExpressionSyntax](
+                Assert.IsType[AccessorExpressionSyntax](first.RightPart).RightPart
+            )
+            let completion = Assert.IsType[BoundAwaitExpression](model.GetBoundNode(first))
+            let physical = Assert.IsType[BoundImportedCallExpression](completion.LogicalCompletionOperand)
+            Assert.Same(callSyntax, physical.Syntax)
+            Assert.True(ImportedFunctionSymbol.HasHiddenContextParameter(physical.Function.Method))
+            Assert.Equal("<>ctx", physical.Function.Method.GetParameters()[^1].Name)
+            Assert.Same(context, Assert.IsType[BoundVariableExpression](physical.Arguments[^1]).Variable)
+            Assert.Equal(2, physical.Arguments.Length)
+            Assert.Equal("System.Boolean", Assert.Single(physical.Function.Method.GetGenericArguments()).FullName)
+            Assert.Equal(
+                "System.Int32",
+                Assert.Single(physical.Function.Method.DeclaringType!!.GetGenericArguments()).FullName
+            )
+            for name in[]string{"authored", "other"} {
+                let written = Assert.IsType[BoundAwaitExpression](model.GetBoundNode(QualifierInitializer(tree, name)))
+                let selected = Assert.IsType[BoundImportedCallExpression](written.LogicalCompletionOperand)
+                Assert.Same(run.Parameters[0], Assert.IsType[BoundVariableExpression](selected.Arguments[^1]).Variable)
+                Assert.NotSame(context, Assert.IsType[BoundVariableExpression](selected.Arguments[^1]).Variable)
+            }
+            Assert.True(
+                model.TryGetStaticTypeQualifier(
+                    first,
+                    callSyntax,
+                    out var owner,
+                    out var qualifier,
+                    out var selectedRead
+                )
+            )
+            Assert.Same(physical, selectedRead)
+            Assert.Same(physical.StaticQualifierType, owner)
+            Assert.Same(physical.StaticQualifierSyntax, qualifier)
+            Assert.Same(callSyntax, physical.StaticMemberSyntax)
+            Assert.Equal(
+                "StaticContextContracts.Api`1",
+                physical.Function.Method.DeclaringType?.GetGenericTypeDefinition().FullName
+            )
+            Assert.Same(completion.Type, model.GetTypeInfo(callSyntax).Type)
+            Assert.Same(physical.Function, model.GetSymbolInfo(callSyntax).Symbol)
+            Assert.NotSame(completion.Type, physical.Type)
+        } finally {
+            Directory.Delete(root, recursive: true)
+        }
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)

@@ -1207,7 +1207,7 @@ internal class ChannelRuntimeBinder {
             if !TryAppendImportedContext(call.Function.Method, call.Arguments, context, out var arguments) {
                 return call
             }
-            return BoundImportedCallExpression(
+            let copy = BoundImportedCallExpression(
                 call.Syntax,
                 call.Function,
                 arguments,
@@ -1215,6 +1215,8 @@ internal class ChannelRuntimeBinder {
                 call.TypeArgumentSymbols,
                 call.StaticContainerType
             )
+            call.CopyStaticQualifierTo(copy)
+            return copy
         }
 
         /// ADR-0174 D7, the cross-assembly half for instance methods (issue #4392):
