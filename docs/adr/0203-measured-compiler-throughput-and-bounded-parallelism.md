@@ -673,6 +673,25 @@ including the captured Core closure's existing GS9100 warning without suppressio
 No output normalization or byte masking was needed. This establishes metadata
 work reuse with unchanged output, not a general throughput improvement.
 
+### Shared emit preparation (#5069)
+
+File and stream emission invoke one private preparation helper for each request.
+It aggregates diagnostics, validates documentation and preserves the established
+interpolation, initialization, spill, capture, managed-reference, expression-tree
+and state-machine lowering order. The helper reuses the existing lowering-result
+bundle; it adds no public service, option or cache.
+
+Each caller retains its nullability scope, assembly-name handling, exception
+boundary and destination behavior. Source suppressions still apply when creating
+the final result. The GS0545 gate and the distinct binding and lowering diagnostic
+paths retain their existing ordering. All requested artifacts remain staged before
+publication; reference emission still omits debug information.
+
+This consolidates maintenance and correctness policy, not repeated CLI work.
+The stream path already lowers once for implementation and reference output.
+No build-time improvement is claimed, and no lowered state is cached across
+invocations or changed options.
+
 ### Local declaration discovery reduction (#5055)
 
 The generator projection and compiler keep separate declaration scopes.
