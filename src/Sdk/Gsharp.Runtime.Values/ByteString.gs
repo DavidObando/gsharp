@@ -5,6 +5,7 @@
 package Gsharp.Values
 
 import System
+import System.Buffers
 import System.Collections
 import System.Collections.Generic
 import System.ComponentModel
@@ -167,6 +168,38 @@ struct ByteString : IEquatable[ByteString], IComparable[ByteString], IEnumerable
         ByteString(ToArray(), 0, Length)
     }
 
+    /// Decodes UTF-8 with an explicit policy, without normalization or BOM stripping.
+    /// Strict failures throw (cref:ByteStringEncodingException) at the malformed sequence's first byte.
+    /// Offsets are relative to this value. No partial string is returned.
+    /// Invalid policies throw (cref:ArgumentOutOfRangeException), including on empty input.
+    /// @param policy The required malformed-input policy.
+    /// @returns The decoded CLR string, preserving embedded NUL and BOM characters.
+    func DecodeUtf8(policy Utf8Decoding) string {
+        if policy != Utf8Decoding.Strict && policy != Utf8Decoding.ReplaceInvalidByte {
+            throw ArgumentOutOfRangeException("policy")
+        }
+        let result = StringBuilder()
+        let buffer = [2]char
+        var cursor = 0
+        while cursor < Length {
+            let source = cast[ReadOnlySpan[uint8]](Owner.AsSpan(offset + cursor, Length - cursor))
+            let status = Rune.DecodeFromUtf8(source, out var scalar, out var consumed)
+            if status != OperationStatus.Done {
+                if policy == Utf8Decoding.Strict {
+                    throw ByteStringEncodingException(ByteStringInputKind.Utf8, cursor)
+                }
+                // ADR-0204 replaces one byte, not the BCL's malformed-sequence grouping.
+                result.Append('\uFFFD')
+                cursor++
+            } else {
+                let written = scalar.EncodeToUtf16(buffer.AsSpan())
+                result.Append(buffer, 0, written)
+                cursor += consumed
+            }
+        }
+        return result.ToString()
+    }
+
     /// Gets a value enumerator that yields bytes, not storage references.
     func GetEnumerator() Enumerator -> Enumerator(this)
 
@@ -244,6 +277,30 @@ struct ByteString : IEquatable[ByteString], IComparable[ByteString], IEnumerable
 
         /// Gets the canonical empty value.
         prop Empty ByteString -> default(ByteString)
+
+        /// Encodes CLR text as UTF-8 without normalization or BOM insertion.
+        /// Strict failures throw (cref:ByteStringEncodingException) at the first unpaired UTF-16 code unit.
+        /// No partial value is returned. Null CLR text throws (cref:ArgumentNullException).
+        /// Invalid policies throw (cref:ArgumentOutOfRangeException), including on empty input.
+        /// @param text The non-null CLR string to encode.
+        /// @param policy The required unpaired-surrogate policy.
+        /// @returns An immutable byte string, preserving embedded NUL and BOM characters.
+        func EncodeUtf8(text string, policy Utf16Encoding) ByteString {
+            ArgumentNullException.ThrowIfNull(text, "text")
+            if policy != Utf16Encoding.Strict && policy != Utf16Encoding.ReplaceUnpairedCodeUnit {
+                throw ArgumentOutOfRangeException("policy")
+            }
+            try {
+                let bytes = UTF8Encoding(false, policy == Utf16Encoding.Strict).GetBytes(text)
+                return if bytes.Length == 0 {
+                    default(ByteString)
+                } else {
+                    ByteString(bytes, 0, bytes.Length)
+                }
+            } catch (ex EncoderFallbackException) {
+                throw ByteStringEncodingException(ByteStringInputKind.Utf16, ex.Index)
+            }
+        }
 
         /// Copies a readonly view without adopting writable sibling storage.
         func CopyFrom(source ReadOnlySlice[uint8]) ByteString -> if source.IsEmpty {

@@ -140,8 +140,34 @@ even when that spelling is shadowed. Missing/incompatible runtime support
 diagnoses GS0627.
 
 These are value expressions, not metadata/attribute/optional-parameter
-constants or constant patterns. Encoding/scalar APIs and release/pin adoption
-remain separate from this development core; see ADR-0204.
+constants or constant patterns. Release/pin adoption and scalar APIs remain
+separate from this development capability; see ADR-0204.
+
+#### Explicit UTF-8 text boundaries
+
+`Gsharp.Values.ByteString.EncodeUtf8(text: string, policy: Utf16Encoding)`
+returns immutable bytes. `value.DecodeUtf8(policy: Utf8Decoding)` returns CLR
+`string`. Both enums live in `Gsharp.Values`. Policies are required:
+
+| Policy | Behavior |
+| --- | --- |
+| `Utf16Encoding.Strict` | Reject the first unpaired surrogate at its UTF-16 code-unit offset. |
+| `Utf16Encoding.ReplaceUnpairedCodeUnit` | Encode each unpaired code unit as U+FFFD; preserve valid surrogate pairs. |
+| `Utf8Decoding.Strict` | Accept only complete shortest-form Unicode scalar encodings. |
+| `Utf8Decoding.ReplaceInvalidByte` | Decode a complete valid scalar, or emit U+FFFD and advance exactly one invalid byte. |
+
+Strict conversions eagerly throw sealed `ByteStringEncodingException`, with
+get-only `InputKind: ByteStringInputKind` (`Utf8` or `Utf16`) and `Offset: int32`.
+The constructor is internal. `Offset` is zero-based and relative to the input
+value, including a substring. UTF-8 failures identify the start of the malformed
+sequence, not a later continuation byte. No partial result is returned.
+Invalid enum values throw `ArgumentOutOfRangeException` (`policy`), even on
+empty inputs. Null CLR text throws `ArgumentNullException` (`text`).
+
+There is no normalization, implicit conversion or BOM insertion/stripping.
+Embedded NUL remains content. Encoded U+FFFD consumes three valid bytes.
+Default/empty byte strings decode to `""`; empty text encodes to an empty value.
+Code-point collections, scalar enumeration and their policies remain deferred.
 
 ### Boolean and nil literals
 

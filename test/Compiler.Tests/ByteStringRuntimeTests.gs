@@ -16,6 +16,146 @@ import Xunit
 
 class ByteStringRuntimeTests {
     @Fact
+    func Utf8DecodingAllocatesResultStorageRatherThanOneStringPerScalar() {
+        let value = ByteString.FromLiteral(String('4', 16_384))
+        let expected = String('D', 8192)
+        value.DecodeUtf8(Utf8Decoding.Strict)
+        value.DecodeUtf8(Utf8Decoding.ReplaceInvalidByte)
+        let before = GC.GetAllocatedBytesForCurrentThread()
+        let strict = value.DecodeUtf8(Utf8Decoding.Strict)
+        let replacement = value.DecodeUtf8(Utf8Decoding.ReplaceInvalidByte)
+        let allocated = GC.GetAllocatedBytesForCurrentThread() - before
+        Assert.Equal(expected, strict)
+        Assert.Equal(expected, replacement)
+        // Allow builder chunks and returned strings, but not a temporary string per ASCII scalar.
+        Assert.True(allocated < 98_304, "UTF-8 decoding allocated " + allocated.ToString() + " bytes.")
+    }
+
+    @Theory
+    @InlineData("", "")
+    @InlineData("007F", "\0\u007F")
+    @InlineData("C280DFBF", "\u0080\u07FF")
+    @InlineData("E0A080ED9FBFEE8080EFBFBF", "\u0800\uD7FF\uE000\uFFFF")
+    @InlineData("F0908080F48FBFBF", "\uD800\uDC00\uDBFF\uDFFF")
+    @InlineData("41C3A9E282ACF09F9880", "Aé€😀")
+    @InlineData("EFBBBF0041EFBFBD", "\uFEFF\0A\uFFFD")
+    @InlineData("65CC81", "e\u0301")
+    func Utf8TextBoundariesPreserveExactScalars(hex string, text string) {
+        let bytes = Convert.FromHexString(hex)
+        let value = ByteString.FromLiteral("FF" + hex + "FF").Subslice(1, 1 + bytes.Length)
+        Assert.Equal(text, value.DecodeUtf8(Utf8Decoding.Strict))
+        Assert.Equal(text, value.DecodeUtf8(Utf8Decoding.ReplaceInvalidByte))
+        Assert.Equal(bytes, ByteString.EncodeUtf8(text, Utf16Encoding.Strict).ToArray())
+        Assert.Equal(bytes, ByteString.EncodeUtf8(text, Utf16Encoding.ReplaceUnpairedCodeUnit).ToArray())
+    }
+
+    @Theory
+    @InlineData("80", "\uFFFD")
+    @InlineData("BF", "\uFFFD")
+    @InlineData("C0AF", "\uFFFD\uFFFD")
+    @InlineData("C1BF", "\uFFFD\uFFFD")
+    @InlineData("C2", "\uFFFD")
+    @InlineData("C241", "\uFFFDA")
+    @InlineData("E080AF", "\uFFFD\uFFFD\uFFFD")
+    @InlineData("EDA080", "\uFFFD\uFFFD\uFFFD")
+    @InlineData("EDBFBF", "\uFFFD\uFFFD\uFFFD")
+    @InlineData("E282", "\uFFFD\uFFFD")
+    @InlineData("E28241", "\uFFFD\uFFFDA")
+    @InlineData("F0808080", "\uFFFD\uFFFD\uFFFD\uFFFD")
+    @InlineData("F4908080", "\uFFFD\uFFFD\uFFFD\uFFFD")
+    @InlineData("F5808080", "\uFFFD\uFFFD\uFFFD\uFFFD")
+    @InlineData("FF", "\uFFFD")
+    @InlineData("F09F98", "\uFFFD\uFFFD\uFFFD")
+    @InlineData("F0908041", "\uFFFD\uFFFD\uFFFDA")
+    @InlineData("E282EFBFBDF09F9880C2A2", "\uFFFD\uFFFD\uFFFD😀¢")
+    func Utf8MalformedSequencesFailAtTheirStartAndReplaceOneByte(hex string, replacement string) {
+        let prefix = "41C2A2"
+        let value = ByteString.FromLiteral("FF" + prefix + hex + "FF").Subslice(1, 4 + hex.Length / 2)
+        var result = "not published"
+        let error = Assert.Throws[ByteStringEncodingException](
+            func () {
+                result = value.DecodeUtf8(Utf8Decoding.Strict)
+            }
+        )
+        Assert.Equal(ByteStringInputKind.Utf8, error.InputKind)
+        Assert.Equal(3, error.Offset)
+        Assert.Equal("not published", result)
+        Assert.Equal("A¢" + replacement, value.DecodeUtf8(Utf8Decoding.ReplaceInvalidByte))
+        let atZero = ByteString.FromLiteral(hex)
+        let zeroError = Assert.Throws[ByteStringEncodingException](
+            func () object? {
+                return atZero.DecodeUtf8(Utf8Decoding.Strict)
+            }
+        )
+        Assert.Equal(0, zeroError.Offset)
+    }
+
+    @Theory
+    @InlineData("D800", "EFBFBD", 0)
+    @InlineData("DC00", "EFBFBD", 0)
+    @InlineData("0041D800", "41EFBFBD", 1)
+    @InlineData("D800D800DC00", "EFBFBDF0908080", 0)
+    @InlineData("D800DC00DC00", "F0908080EFBFBD", 2)
+    @InlineData("D8000041DC00", "EFBFBD41EFBFBD", 0)
+    @InlineData("DC00D800", "EFBFBDEFBFBD", 0)
+    @InlineData("0041DBFFDFFFD800D8000042", "41F48FBFBFEFBFBDEFBFBD42", 3)
+    func Utf16UnpairedCodeUnitsHaveExactOffsetsAndIndividualReplacements(units string, hex string, offset int32) {
+        let chars = [units.Length / 4]char
+        for var i = 0; i < chars.Length; i++ {
+            chars[i] = char(Convert.ToInt32(units.Substring(i * 4, 4), 16))
+        }
+        let text = String(chars)
+        var result = ByteString.FromLiteral("FF")
+        let error = Assert.Throws[ByteStringEncodingException](
+            func () {
+                result = ByteString.EncodeUtf8(text, Utf16Encoding.Strict)
+            }
+        )
+        Assert.Equal(ByteStringInputKind.Utf16, error.InputKind)
+        Assert.Equal(offset, error.Offset)
+        Assert.Equal([]uint8{255}, result.ToArray())
+        Assert.Equal(
+            Convert.FromHexString(hex),
+            ByteString.EncodeUtf8(text, Utf16Encoding.ReplaceUnpairedCodeUnit).ToArray()
+        )
+    }
+
+    @Fact
+    func Utf8EmptyDefaultsPoliciesAndOwnershipRemainExplicit() {
+        for value in[]ByteString{default(ByteString), ByteString.Empty, ByteString.FromLiteral("FF").Subslice(1, 1)} {
+            Assert.Equal("", value.DecodeUtf8(Utf8Decoding.Strict))
+            Assert.Equal("", value.DecodeUtf8(Utf8Decoding.ReplaceInvalidByte))
+        }
+        Assert.Null(Owner(ByteString.EncodeUtf8("", Utf16Encoding.Strict)))
+        Assert.Null(Owner(ByteString.EncodeUtf8("", Utf16Encoding.ReplaceUnpairedCodeUnit)))
+        for policy in[]int32{-1, 2, int32.MaxValue} {
+            for value in[]ByteString{default(ByteString), ByteString.FromLiteral("41")} {
+                let error = Assert.Throws[ArgumentOutOfRangeException](
+                    func () object? {
+                        return value.DecodeUtf8(cast[Utf8Decoding](policy))
+                    }
+                )
+                Assert.Equal("policy", error.ParamName)
+            }
+            for text in[]string{"", "A"} {
+                let error = Assert.Throws[ArgumentOutOfRangeException](
+                    func () object? {
+                        return ByteString.EncodeUtf8(text, cast[Utf16Encoding](policy))
+                    }
+                )
+                Assert.Equal("policy", error.ParamName)
+            }
+        }
+        let encoded = ByteString.EncodeUtf8("A\0é", Utf16Encoding.Strict)
+        let exported = encoded.ToArray()
+        exported[0] = 0
+        let slice = encoded.ToSlice()
+        slice[1] = 255
+        Assert.Equal([]uint8{65, 0, 195, 169}, encoded.ToArray())
+        Assert.Equal("A\0é", encoded.DecodeUtf8(Utf8Decoding.Strict))
+    }
+
+    @Fact
     func MutableInputsAndExportsNeverAliasContents() {
         let source = []uint8{0, 255, 195, 40}
         let input = Slice[uint8].FromArray(source)
