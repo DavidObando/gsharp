@@ -1,5 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import {Registry, INITIAL, parseRawGrammar} from 'vscode-textmate';
+import {loadWASM, OnigScanner, OnigString} from 'vscode-oniguruma';
 
 // Implementation-grounded conformance tests for the G# TextMate grammar.
 //
@@ -22,6 +24,81 @@ const syntaxFactsPath = path.resolve(
 );
 
 const grammar = JSON.parse(fs.readFileSync(grammarPath, 'utf8'));
+const cases: {name: string; source: string; tokens: [string, string][]}[] =
+  JSON.parse(fs.readFileSync(path.join(__dirname, 'grammar-cases.json'), 'utf8'));
+const reserved = reservedKeywordsFromCompiler();
+cases.push({
+  name: 'compiler reserved vocabulary',
+  source: reserved.join('; '),
+  tokens: reserved.map((text) => [text, ['true', 'false', 'nil'].includes(text) ? 'constant' : 'keyword']),
+}, {
+  name: 'all reserved words can be escaped identifiers',
+  source: reserved.map((text) => `$${text}`).join(' '),
+  tokens: reserved.map((text) => [`$${text}`, 'identifier']),
+});
+
+describe('shared lexical parity cases through the TextMate engine', () => {
+  let registry: Registry;
+  beforeAll(async () => {
+    const wasm = fs.readFileSync(require.resolve('vscode-oniguruma/release/onig.wasm'));
+    await loadWASM(wasm.buffer.slice(wasm.byteOffset, wasm.byteOffset + wasm.byteLength));
+    registry = new Registry({
+      onigLib: Promise.resolve({
+        createOnigScanner: (patterns) => new OnigScanner(patterns),
+        createOnigString: (text) => new OnigString(text),
+      }),
+      loadGrammar: async () => parseRawGrammar(fs.readFileSync(grammarPath, 'utf8'), grammarPath),
+    });
+  });
+  afterAll(() => registry?.dispose());
+
+  it('recognizes the same Markdown fence aliases as Prism', () => {
+    const injection = JSON.parse(fs.readFileSync(injectionPath, 'utf8'));
+    const scanner = new OnigScanner([injection.repository['gsharp-code-block'].begin]);
+    try {
+      for (const alias of ['gs', 'gsharp', 'g#', 'GS', 'GSharp', 'G#']) {
+        expect(scanner.findNextMatchSync(`\`\`\`${alias}`, 0)).not.toBeNull();
+      }
+      expect(scanner.findNextMatchSync('```gsharpish', 0)).toBeNull();
+    } finally {
+      scanner.dispose();
+    }
+  });
+
+  it.each(cases)('$name', async ({source, tokens}) => {
+    const loaded = (await registry.loadGrammar('source.gsharp'))!;
+    let stack = INITIAL;
+    const scopes: string[][] = [];
+    for (const line of source.split('\n')) {
+      const result = loaded.tokenizeLine(line, stack);
+      for (const token of result.tokens) {
+        for (let i = token.startIndex; i < Math.min(token.endIndex, line.length); i++) {
+          scopes.push(token.scopes);
+        }
+      }
+      scopes.push([]);
+      stack = result.ruleStack;
+    }
+    const categories: Record<string, RegExp> = {
+      keyword: /^keyword\./, identifier: /^(variable\.other|entity\.name)/,
+      type: /^(support\.type|entity\.name\.type)/, function: /^entity\.name\.function/,
+      number: /^constant\.numeric/, operator: /^(keyword\.operator|meta\.conditional)/,
+      string: /^string\./, char: /^string\.quoted\.single/, format: /^string\.unquoted\.format/,
+      interpolation: /^(meta\.interpolation|variable\.other\.interpolation|punctuation\.definition\.interpolation)/,
+      escape: /^constant\.character\.escape/, annotation: /^storage\.type\.annotation/,
+      constant: /^constant\.language/, comment: /^comment\./,
+    };
+    for (const [text, kind] of tokens) {
+      const start = source.indexOf(text);
+      expect(start).toBeGreaterThanOrEqual(0);
+      for (let i = start; i < start + text.length; i++) {
+        expect({text, char: source[i], scopes: scopes[i],
+          covered: scopes[i].some((scope) => categories[kind].test(scope))})
+          .toEqual(expect.objectContaining({covered: true}));
+      }
+    }
+  });
+});
 
 function reservedKeywordsFromCompiler(): string[] {
   const source = fs.readFileSync(syntaxFactsPath, 'utf8');
@@ -138,7 +215,7 @@ describe('gsharp.tmLanguage.json', () => {
 
   it('recognizes assembly-target annotations', () => {
     const annotationMatchers = repositoryMatchStrings('annotations').map(
-      (m) => new RegExp(m),
+      (m) => new RegExp(m, 'u'),
     );
     expect(
       annotationMatchers.some((r) =>
@@ -155,7 +232,7 @@ describe('gsharp.tmLanguage.json', () => {
     expect(keywordMatchers.some((r) => r.test('object : IFoo {'))).toBe(true);
 
     const declarationMatchers = repositoryMatchStrings('declarations').map(
-      (m) => new RegExp(m),
+      (m) => new RegExp(m, 'u'),
     );
     const declarations = [
       'func (IFoo) M()',
@@ -182,10 +259,10 @@ describe('gsharp.tmLanguage.json', () => {
 
     it.each(cases)('captures the type name in `%s`', (source, name) => {
       const pattern = declarationPatterns.find(
-        (p) => p.match && new RegExp(p.match).test(source),
+        (p) => p.match && new RegExp(p.match, 'u').test(source),
       );
       expect(pattern).toBeDefined();
-      const match = new RegExp(pattern!.match!).exec(source)!;
+      const match = new RegExp(pattern!.match!, 'u').exec(source)!;
       expect(match[2]).toBe(name);
       expect(pattern!.captures?.['2']?.name).toBe('entity.name.type.gsharp');
     });

@@ -4,15 +4,104 @@
  *
  * The grammar is implementation-grounded: keywords, contextual keywords and
  * built-in primitive type names are taken from the G# compiler
- * (src/Core/CodeAnalysis/Syntax/SyntaxFacts.cs and
- *  src/Core/CodeAnalysis/Symbols/TypeSymbol.cs).
+ * (src/Core/CodeAnalysis/Syntax/SyntaxFacts.gs and
+ *  src/Core/CodeAnalysis/Symbols/TypeSymbol.gs).
  */
 
 import siteConfig from '@generated/docusaurus.config';
 import type * as PrismNamespace from 'prismjs';
 import type {Optional} from 'utility-types';
 
+// Prism calls RegExp.exec for both top-level and nested grammar patterns.
+// Scan delimiters instead of approximating a fixed brace depth with regexes.
+function balancedPattern(start: RegExp): RegExp {
+  const pattern = new RegExp(start.source, 'gu');
+  pattern.exec = function(source: string): RegExpExecArray | null {
+    start.lastIndex = this.lastIndex;
+    let match: RegExpExecArray | null;
+    while ((match = start.exec(source))) {
+      if (match[0].startsWith('/')) {
+        this.lastIndex = start.lastIndex;
+        return match;
+      }
+      const first = match.index + (match[0] === '${' ? 1 : 0);
+      const closing: Record<string, string> = {'{': '}', '[': ']', '(': ')', '?': ':'};
+      const stack = [closing[source[first]] ?? source[first]];
+      let i = first + 1;
+      for (; i < source.length && stack.length; i++) {
+        const c = source[i];
+        const top = stack[stack.length - 1];
+        if (top === '"' || top === "'" || top === '`' || top === 'byte') {
+          if (c === (top === 'byte' ? '"' : top)) stack.pop();
+          else if (top !== '`' && c === '\\') i++;
+          else if (top === '"' && c === '$' && source[i + 1] === '$') i++;
+          else if (top === '"' && c === '$' && source[i + 1] === '{') {
+            stack.push('}');
+            i++;
+          } else if (top !== '`' && /[\r\n]/.test(c)) break;
+        } else if (c === '/' && source[i + 1] === '/') {
+          const newline = source.indexOf('\n', i + 2);
+          i = newline < 0 ? source.length : newline;
+        } else if (c === '/' && source[i + 1] === '*') {
+          const close = source.indexOf('*/', i + 2);
+          i = close < 0 ? source.length : close + 1;
+        } else if (c === '"' || c === "'" || c === '`') {
+          stack.push(c === '"' && source[i - 1] === 'b' &&
+            !/[\p{L}\p{Nd}_$]/u.test(source[i - 2] ?? '') ? 'byte' : c);
+        } else if ('{[('.includes(c)) {
+          stack.push(c === '{' ? '}' : c === '[' ? ']' : ')');
+        } else if (source[first] === '?' && top === ':' && c === '?' &&
+          !/[?.[]/.test(source[i + 1] ?? '') && source[i - 1] !== '?') {
+          stack.push(':');
+        } else if (c === top) {
+          stack.pop();
+        }
+      }
+      if (!stack.length) {
+        match[0] = source.slice(match.index, i);
+        this.lastIndex = i;
+        return match;
+      }
+    }
+    this.lastIndex = 0;
+    return null;
+  };
+  return pattern;
+}
+
+function interpolationFormatPattern(): RegExp {
+  const pattern = /:[\s\S]*$/g;
+  pattern.exec = function(source: string): RegExpExecArray | null {
+    const opaque = balancedPattern(/\/\/[^\r\n]*|\/\*[\s\S]*?\*\/|["'`([{]|(?<!\?)\?(?![?.\[])/gu);
+    let cursor = 0;
+    while (cursor < source.length) {
+      opaque.lastIndex = cursor;
+      const nested = opaque.exec(source);
+      const colon = source.indexOf(':', cursor);
+      if (colon < 0) break;
+      if (nested && nested.index < colon) {
+        cursor = opaque.lastIndex;
+      } else if (colon >= this.lastIndex) {
+        const result = /:[\s\S]*$/g;
+        result.lastIndex = colon;
+        const match = result.exec(source);
+        this.lastIndex = source.length;
+        return match;
+      } else {
+        cursor = colon + 1;
+      }
+    }
+    this.lastIndex = 0;
+    return null;
+  };
+  return pattern;
+}
+
 function registerGSharp(Prism: typeof PrismNamespace): void {
+  const word = (pattern: RegExp): RegExp => new RegExp(
+    `(?<![\\p{L}\\p{Nd}_$])(?:${pattern.source.replace(/\\b/g, '')})(?![\\p{L}\\p{Nd}_])`,
+    'u',
+  );
   // Reserved keywords recognized by the lexer (SyntaxFacts.GetKeywordKind).
   const keywords =
     /\b(?:as|async|await|break|case|catch|chan|class|const|continue|default|defer|do|else|enum|fallthrough|finally|for|func|go|goto|guard|if|import|interface|internal|is|let|lock|map|open|operator|override|package|private|protected|public|range|rethrow|return|scope|sealed|select|sequence|struct|suspend|switch|throw|try|using|var|while)\b/;
@@ -43,7 +132,7 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
   // unconditionally an extension now, so `extension` is an ordinary
   // identifier again — it is deliberately absent from this list.
   const contextualKeywords =
-    /\b(?:abstract|add|and|base|checked|convenience|data|deinit|delegate|event|explicit|fixed|get|implicit|in|init|inline|make|nameof|not|or|out|params|partial|prop|raise|record|ref|remove|scoped|set|shared|sizeof|stackalloc|this|type|typeof|unchecked|unmanaged|unsafe|when|with|yield)\b/;
+    /\b(?:abstract|adapt|add|and|any|array|base|cancelled|cast|checked|comparable|convenience|data|deinit|delegate|event|explicit|fixed|get|implicit|in|init|inline|make|managed|nameof|not|or|out|params|partial|prop|raise|readonly|record|ref|remove|scoped|set|shared|sizeof|slice|stackalloc|this|type|typeof|unchecked|unmanaged|unsafe|when|with|yield)\b/;
 
   // Built-in primitive type names (TypeSymbol). Width-bearing names are
   // canonical; friendly aliases (`int`, `long`, etc.) are accepted by the
@@ -81,13 +170,17 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
         },
       },
     },
-    // Interpolated/regular double-quoted strings with escapes and ${...} holes.
+    // Interpolated/regular strings, including multiline interpolation holes.
     string: {
-      pattern: /"(?:\\.|\$\{[^{}]*\}|[^"\\\r\n])*"/,
+      pattern: balancedPattern(/"/gu),
       greedy: true,
       inside: {
+        'dollar-escape': {
+          pattern: /\$\$/,
+          alias: 'char',
+        },
         interpolation: {
-          pattern: /\$\{[^{}]*\}/,
+          pattern: balancedPattern(/\$\{/gu),
           inside: {
             'interpolation-punctuation': {
               pattern: /^\$\{|\}$/,
@@ -95,18 +188,22 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
             },
           },
         },
+        'interpolation-identifier': {
+          pattern: /\$[\p{L}_][\p{L}\p{Nd}_]*/u,
+          alias: 'interpolation',
+        },
         'string-escape': {
-          pattern: /\\(?:u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|x[0-9a-fA-F]{1,4}|.)/,
+          pattern: /\\(?:u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|x[0-9a-fA-F]{1,4}|['"\\0abfnrtv])/,
           alias: 'char',
         },
       },
     },
     char: {
-      pattern: /'(?:\\(?:u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|x[0-9a-fA-F]{1,4}|.)|[^'\\\r\n])'/,
+      pattern: /'(?:\\(?:u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|x[0-9a-fA-F]{1,4}|['"\\0abfnrtv])|[^'\\\r\n])'/,
       greedy: true,
     },
     'assembly-annotation': {
-      pattern: /(@assembly:\s*)[A-Za-z_]\w*/,
+      pattern: /(@assembly:\s*)[\p{L}_][\p{L}\p{Nd}_]*/u,
       lookbehind: true,
       alias: 'attr-name',
     },
@@ -116,30 +213,35 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
       alias: 'keyword',
     },
     annotation: {
-      pattern: /@[A-Za-z_]\w*/,
+      pattern: /@[\p{L}_][\p{L}\p{Nd}_]*/u,
       alias: 'attr-name',
     },
     'explicit-interface-declaration': {
       pattern:
-        /\b(?:func|prop|event)\s+\([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\[[^\]\r\n]+\])?\)\s+(?:this|[A-Za-z_]\w*)/,
+        /(?<![\p{L}\p{Nd}_$])(?:func|prop|event)\s+\((?:\$?[\p{L}_][\p{L}\p{Nd}_]*\.)*\$?[\p{L}_][\p{L}\p{Nd}_]*(?:\[[^\]\r\n]+\])?\)\s+\$?[\p{L}_][\p{L}\p{Nd}_]*/u,
       inside: {
         function: {
-          pattern: /(^func\s+\([^)]+\)\s+)[A-Za-z_]\w*$/,
+          pattern: /(^func\s+\([^)]+\)\s+)\$?[\p{L}_][\p{L}\p{Nd}_]*$/u,
           lookbehind: true,
         },
         property: {
           pattern:
-            /(^(?:prop|event)\s+\([^)]+\)\s+)(?:this|[A-Za-z_]\w*)$/,
+            /(^(?:prop|event)\s+\([^)]+\)\s+)\$?[\p{L}_][\p{L}\p{Nd}_]*$/u,
           lookbehind: true,
         },
         'class-name': {
           pattern:
-            /(\()[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\[[^\]\r\n]+\])?(?=\))/,
+            /(\()(?:\$?[\p{L}_][\p{L}\p{Nd}_]*\.)*\$?[\p{L}_][\p{L}\p{Nd}_]*(?:\[[^\]\r\n]+\])?(?=\))/u,
           lookbehind: true,
         },
         keyword: /^(?:func|prop|event)\b/,
         punctuation: /[()]/,
       },
+    },
+    'function-declaration': {
+      pattern: /((?<![\p{L}\p{Nd}_$])(?:func|sequence)\s+)\$?[\p{L}_][\p{L}\p{Nd}_]*/u,
+      lookbehind: true,
+      alias: 'function',
     },
     'class-name': [
       {
@@ -147,36 +249,40 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
         // canonical named-delegate-type declaration (issue #3510); `type` is
         // kept for the retired `type Name = delegate func(...)` recovery form.
         pattern:
-          /(\b(?:class|struct|enum|interface|type|delegate)\s+)[A-Za-z_]\w*/,
+          /((?<![\p{L}\p{Nd}_$])(?:class|struct|enum|interface|type|delegate)\s+)\$?[\p{L}_][\p{L}\p{Nd}_]*/u,
         lookbehind: true,
       },
       {
         // Conventionally PascalCase identifiers read as types/CLR names.
-        pattern: /\b[A-Z]\w*\b/,
+        pattern: /(?<![\p{L}\p{Nd}_$])[A-Z][\p{L}\p{Nd}_]*(?![\p{L}\p{Nd}_])/u,
       },
     ],
-    keyword: keywords,
+    'escaped-identifier': {
+      pattern: /\$[\p{L}_][\p{L}\p{Nd}_]*/u,
+      alias: 'identifier',
+    },
+    keyword: word(keywords),
     'contextual-keyword': {
-      pattern: contextualKeywords,
+      pattern: word(contextualKeywords),
       alias: 'keyword',
     },
     'anonymous-object': {
-      pattern: /\bobject(?=\s*(?:\{|:))/,
+      pattern: /(?<![\p{L}\p{Nd}_$])object(?=\s*(?:\{|:))/u,
       alias: 'keyword',
     },
     'builtin-type': {
-      pattern: builtinTypes,
+      pattern: word(builtinTypes),
       alias: 'builtin',
     },
-    boolean: /\b(?:true|false)\b/,
+    boolean: word(/\b(?:true|false)\b/),
     'nil-literal': {
-      pattern: /\bnil\b/,
+      pattern: word(/\bnil\b/),
       alias: 'constant',
     },
-    number:
-      /\b(?:0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|(?:\d[\d_]*)?\.?\d[\d_]*(?:[eE][+-]?\d+)?)(?:[uUlLfFdDmM]{1,2})?\b/,
+    number: /(?<![\p{L}\p{Nd}_$])(?:0[xX]_*[0-9a-fA-F](?:_*[0-9a-fA-F])*(?:[uU][lL]?|[lL][uU]?)?|0[oO]_*[0-7](?:_*[0-7])*(?:[uU][lL]?|[lL][uU]?)?|0[bB]_*[01](?:_*[01])*(?:[uU][lL]?|[lL][uU]?)?|(?:[0-9](?:_*[0-9])*(?:\.[0-9](?:_*[0-9])*)?|(?<!\.)\.[0-9](?:_*[0-9])*)(?:[eE][+-]?[0-9](?:_*[0-9])*)?(?:[uU][lL]?|[lL][uU]?|[fFdDmM])?)(?![\p{L}\p{Nd}_])/u,
     // Function/attribute names at call/declaration sites.
-    function: /\b[A-Za-z_]\w*(?=\s*[<(])/,
+    function: /[\p{L}_][\p{L}\p{Nd}_]*(?=\s*\()/u,
+    identifier: /[\p{L}_][\p{L}\p{Nd}_]*/u,
     operator:
       // Order matters in Prism alternations — list multi-character operators
       // first so they win over their single-character prefixes.
@@ -191,8 +297,13 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
   if (stringInside && stringInside.interpolation) {
     stringInside.interpolation.inside = {
       'interpolation-punctuation': {
-        pattern: /^\$\{|\}$/,
+        pattern: /^\$\{?|\}$/,
         alias: 'punctuation',
+      },
+      format: {
+        pattern: interpolationFormatPattern(),
+        inside: {punctuation: /^:/},
+        alias: 'string',
       },
       rest: Prism.languages.gsharp,
     };

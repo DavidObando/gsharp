@@ -180,6 +180,8 @@ def select(paths, event, projects=None, go_exists=None):
             suites.add(SUITES["compiler"])
         if "vscode" in areas:
             jobs.update({"vscode-extension", "vsix", "visual-studio-extension"})
+            if "src/vscode-gsharp/src/test/grammar-cases.json" in paths:
+                docs_jobs.update({"build", "visual"})
         if "visual-studio" in areas:
             jobs.add("visual-studio-extension")
         if "samples" in areas:

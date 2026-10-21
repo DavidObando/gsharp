@@ -42,6 +42,28 @@ Language feature settings take effect after running **GSharp: Restart Language S
 Formatting is canonical and option-free: 4 spaces, K&R braces, and a fixed
 120-column width. Format-on-save is enabled for G# by default.
 
+### Syntax highlighting and semantic tokens
+
+Visual Studio packages the VS Code TextMate grammar directly; it has no separate
+grammar to synchronize. The website registers its G# Prism grammar in
+`website/src/theme/prism-include-languages.ts`. Both engines run the shared
+`src/test/grammar-cases.json` lexical regression cases.
+
+Lexical highlighting recognizes reserved/contextual words, escaped and Unicode
+identifiers, literal forms, interpolation, annotations, and operators. Contextual
+words can still be ordinary names. Declaration/call scopes and Prism's PascalCase
+type convention are lexical hints, not symbol resolution. Neither grammar can
+determine overloads, shadowing, extension ownership, imported nullability, or
+whether a name denotes a type, property, or local in every context. The language
+server's semantic tokens supply symbol-aware editor classifications; Prism has
+no language server. Imported platform types (`T!`) are display notation, not new
+source syntax.
+
+Run the shared cases with `npm run test:unit -- --runInBand grammar.test.ts` here
+and `node --test --test-name-pattern=Prism tests/content.test.mjs` in `website`.
+The editor tests use the real TextMate/Oniguruma tokenizer, not JavaScript regex
+approximations.
+
 ## Commands
 
 | Command | Description |

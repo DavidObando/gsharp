@@ -9,6 +9,7 @@
     { "include": "#characters" },
     { "include": "#numbers" },
     { "include": "#annotations" },
+    { "include": "#escaped-identifiers" },
     { "include": "#declarations" },
     { "include": "#keywords" },
     { "include": "#types" },
@@ -72,7 +73,7 @@
     "interpreted-string": {
       "name": "string.quoted.double.gsharp",
       "begin": "\"",
-      "end": "\"",
+      "end": "\"|(?=$)",
       "applyEndPatternLast": true,
       "patterns": [
         { "include": "#string-escape" },
@@ -179,7 +180,7 @@
       ]
     },
     "interpolation-ident": {
-      "match": "(\\$)([a-zA-Z_][a-zA-Z0-9_]*)",
+      "match": "(\\$)([\\p{L}_][\\p{L}\\p{Nd}_]*)",
       "captures": {
         "1": { "name": "punctuation.definition.interpolation.begin.gsharp" },
         "2": { "name": "variable.other.interpolation.gsharp" }
@@ -189,7 +190,7 @@
       "patterns": [
         {
           "name": "string.quoted.single.gsharp",
-          "match": "'(\\\\.|[^'\\\\])'"
+          "match": "'(?:\\\\(?:['\"\\\\0abfnrtv]|x[0-9A-Fa-f]{1,4}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})|[^'\\\\\\r\\n])'"
         }
       ]
     },
@@ -197,19 +198,19 @@
       "patterns": [
         {
           "name": "constant.numeric.hex.gsharp",
-          "match": "\\b0[xX][0-9a-fA-F_]+\\b"
+          "match": "(?<![\\p{L}\\p{Nd}_$])0[xX]_*[0-9a-fA-F](?:_*[0-9a-fA-F])*(?:[uU][lL]?|[lL][uU]?)?(?![\\p{L}\\p{Nd}_])"
         },
         {
           "name": "constant.numeric.binary.gsharp",
-          "match": "\\b0[bB][01_]+\\b"
+          "match": "(?<![\\p{L}\\p{Nd}_$])0[bB]_*[01](?:_*[01])*(?:[uU][lL]?|[lL][uU]?)?(?![\\p{L}\\p{Nd}_])"
         },
         {
-          "name": "constant.numeric.float.gsharp",
-          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*([eE][+-]?[0-9_]+)?[fFdDmM]?\\b"
+          "name": "constant.numeric.octal.gsharp",
+          "match": "(?<![\\p{L}\\p{Nd}_$])0[oO]_*[0-7](?:_*[0-7])*(?:[uU][lL]?|[lL][uU]?)?(?![\\p{L}\\p{Nd}_])"
         },
         {
-          "name": "constant.numeric.integer.gsharp",
-          "match": "\\b[0-9][0-9_]*[lLuU]*\\b"
+          "name": "constant.numeric.decimal.gsharp",
+          "match": "(?<![\\p{L}\\p{Nd}_$])(?:[0-9](?:_*[0-9])*(?:\\.[0-9](?:_*[0-9])*)?|(?<!\\.)\\.[0-9](?:_*[0-9])*)(?:[eE][+-]?[0-9](?:_*[0-9])*)?(?:[uU][lL]?|[lL][uU]?|[fFdDmM])?(?![\\p{L}\\p{Nd}_])"
         }
       ]
     },
@@ -217,7 +218,7 @@
       "patterns": [
         {
           "name": "meta.annotation.assembly.gsharp",
-          "match": "(@)(assembly)(:)([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "(@)(assembly)(:)\\s*([\\p{L}_][\\p{L}\\p{Nd}_]*)",
           "captures": {
             "1": { "name": "punctuation.definition.annotation.gsharp" },
             "2": { "name": "storage.modifier.annotation-target.gsharp" },
@@ -227,7 +228,7 @@
         },
         {
           "name": "meta.annotation.gsharp",
-          "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "(@)([\\p{L}_][\\p{L}\\p{Nd}_]*)",
           "captures": {
             "1": { "name": "punctuation.definition.annotation.gsharp" },
             "2": { "name": "storage.type.annotation.gsharp" }
@@ -239,7 +240,7 @@
       "patterns": [
         {
           "comment": "Explicit-interface function: `func (IFoo) Name(...)`",
-          "match": "\\b(func)\\s+(\\()([A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\]\\r\\n]+\\])?)(\\))\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(func)\\s+(\\()((?:\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*\\.)*\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*(?:\\[[^\\]\\r\\n]+\\])?)(\\))\\s+(\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*)",
           "captures": {
             "1": { "name": "keyword.declaration.gsharp" },
             "2": { "name": "punctuation.definition.interface.begin.gsharp" },
@@ -250,7 +251,7 @@
         },
         {
           "comment": "Explicit-interface property/indexer: `prop (IFoo) Name T`",
-          "match": "\\b(prop)\\s+(\\()([A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\]\\r\\n]+\\])?)(\\))\\s+(this|[A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(prop)\\s+(\\()((?:\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*\\.)*\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*(?:\\[[^\\]\\r\\n]+\\])?)(\\))\\s+(this|\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*)",
           "captures": {
             "1": { "name": "keyword.declaration.gsharp" },
             "2": { "name": "punctuation.definition.interface.begin.gsharp" },
@@ -261,7 +262,7 @@
         },
         {
           "comment": "Explicit-interface event: `event (IFoo) Changed Handler`",
-          "match": "\\b(event)\\s+(\\()([A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\]\\r\\n]+\\])?)(\\))\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(event)\\s+(\\()((?:\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*\\.)*\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*(?:\\[[^\\]\\r\\n]+\\])?)(\\))\\s+(\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*)",
           "captures": {
             "1": { "name": "keyword.declaration.gsharp" },
             "2": { "name": "punctuation.definition.interface.begin.gsharp" },
@@ -272,7 +273,7 @@
         },
         {
           "comment": "Aggregate declarations per ADR-0078: `class|struct|enum|interface Name`",
-          "match": "\\b(class|struct|enum|interface)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(class|struct|enum|interface)\\s+(\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*)",
           "captures": {
             "1": { "name": "keyword.declaration.gsharp" },
             "2": { "name": "entity.name.type.gsharp" }
@@ -280,15 +281,15 @@
         },
         {
           "comment": "Named delegate type declaration (canonical form, issue #3510): `delegate Name(params) R;`",
-          "match": "\\b(delegate)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(delegate)\\s+(\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*)",
           "captures": {
             "1": { "name": "keyword.modifier.contextual.gsharp" },
             "2": { "name": "entity.name.type.gsharp" }
           }
         },
         {
-          "comment": "Retired delegate type alias spelling (issue #3510, superseded by `delegate Name(...) R;`); `type` is no longer a reserved keyword and only parses here as an error-recovery form: `type Name = delegate ...`",
-          "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "comment": "Erased type alias: `type Name = Target`; only the delegate RHS spelling is retired.",
+          "match": "\\b(type)\\s+(\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*)",
           "captures": {
             "1": { "name": "keyword.modifier.contextual.gsharp" },
             "2": { "name": "entity.name.type.gsharp" }
@@ -296,7 +297,7 @@
         },
         {
           "comment": "Function/sequence declaration: `func Name(...)` or `sequence Name(...)`",
-          "match": "\\b(func|sequence)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(func|sequence)\\s+(\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*)",
           "captures": {
             "1": { "name": "keyword.declaration.gsharp" },
             "2": { "name": "entity.name.function.gsharp" }
@@ -328,7 +329,7 @@
         },
         {
           "name": "keyword.modifier.contextual.gsharp",
-          "match": "\\b(abstract|and|checked|convenience|data|deinit|delegate|event|explicit|fixed|implicit|in|init|inline|make|nameof|not|or|out|params|partial|prop|raise|record|ref|remove|scoped|shared|sizeof|stackalloc|type|typeof|unchecked|unmanaged|unsafe|when|with|yield)\\b"
+          "match": "\\b(abstract|adapt|and|any|array|cancelled|cast|checked|comparable|convenience|data|deinit|delegate|event|explicit|fixed|implicit|in|init|inline|make|managed|nameof|not|or|out|params|partial|prop|raise|readonly|record|ref|remove|scoped|shared|sizeof|slice|stackalloc|type|typeof|unchecked|unmanaged|unsafe|when|with|yield)\\b"
         },
         {
           "name": "keyword.other.accessor.gsharp",
@@ -473,7 +474,7 @@
       "patterns": [
         {
           "name": "meta.function-call.gsharp",
-          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+          "match": "([\\p{L}_][\\p{L}\\p{Nd}_]*)\\s*(?=\\()",
           "captures": {
             "1": { "name": "entity.name.function.gsharp" }
           }
@@ -484,9 +485,13 @@
       "patterns": [
         {
           "name": "variable.other.gsharp",
-          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+          "match": "[\\p{L}_][\\p{L}\\p{Nd}_]*"
         }
       ]
+    },
+    "escaped-identifiers": {
+      "name": "variable.other.gsharp",
+      "match": "\\$[\\p{L}_][\\p{L}\\p{Nd}_]*"
     },
     "punctuation": {
       "patterns": [

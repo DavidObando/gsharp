@@ -18,7 +18,7 @@ function documents(directory) {
   });
 }
 
-test('Prism keeps exact byte literals distinct from CLR string interpolation', () => {
+function registerGrammar() {
   const source = readFileSync(path.join(site, 'src/theme/prism-include-languages.ts'), 'utf8');
   const compiled = ts.transpileModule(source, {
     compilerOptions: {module: ts.ModuleKind.CommonJS, esModuleInterop: true},
@@ -33,6 +33,58 @@ test('Prism keeps exact byte literals distinct from CLR string interpolation', (
     },
   });
   module.exports.default(Prism);
+}
+
+const grammarCases = JSON.parse(readFileSync(path.join(site,
+  '../src/vscode-gsharp/src/test/grammar-cases.json'), 'utf8'));
+const syntaxFacts = readFileSync(path.join(site,
+  '../src/Core/CodeAnalysis/Syntax/SyntaxFacts.gs'), 'utf8');
+const reserved = [...syntaxFacts.matchAll(/case\s+"([a-zA-Z]+)"\s*\{/g)].map((match) => match[1]).sort();
+assert.ok(reserved.length > 40);
+grammarCases.push({
+  name: 'compiler reserved vocabulary',
+  source: reserved.join('; '),
+  tokens: reserved.map((text) => [text, ['true', 'false', 'nil'].includes(text) ? 'constant' : 'keyword']),
+}, {
+  name: 'all reserved words can be escaped identifiers',
+  source: reserved.map((text) => `$${text}`).join(' '),
+  tokens: reserved.map((text) => [`$${text}`, 'identifier']),
+});
+for (const {name, source, tokens} of grammarCases) {
+  test(`Prism lexical parity: ${name}`, () => {
+    registerGrammar();
+    const categories = {
+      keyword: ['keyword'], identifier: ['identifier', 'function', 'class-name'],
+      type: ['builtin', 'class-name'], function: ['function'], number: ['number'],
+      operator: ['operator'], string: ['string', 'raw-string', 'byte-string'], format: ['format'],
+      char: ['char'], interpolation: ['interpolation'], escape: ['char', 'string-escape', 'dollar-escape', 'byte-escape'],
+      annotation: ['attr-name'], constant: ['constant', 'boolean'], comment: ['comment'],
+    };
+    const scopes = [];
+    function flatten(items, parents = []) {
+      for (const token of items) {
+        if (typeof token === 'string') {
+          for (let i = 0; i < token.length; i++) scopes.push(parents);
+        } else {
+          const kinds = [...parents, token.type, ...[token.alias ?? []].flat()];
+          flatten(Array.isArray(token.content) ? token.content : [token.content], kinds);
+        }
+      }
+    }
+    flatten(Prism.tokenize(source, Prism.languages.gsharp));
+    for (const [text, kind] of tokens) {
+      const start = source.indexOf(text);
+      assert.ok(start >= 0, `${name}: fixture contains ${text}`);
+      for (let i = start; i < start + text.length; i++) {
+        assert.ok(scopes[i].some((scope) => categories[kind].includes(scope)),
+          `${name}: ${text} at ${i}: ${scopes[i]}`);
+      }
+    }
+  });
+}
+
+test('Prism keeps exact byte literals distinct from CLR string interpolation', () => {
+  registerGrammar();
   function types(tokens) {
     return tokens.flatMap((token) => typeof token === 'string'
       ? [] : [token.type, ...(Array.isArray(token.content) ? types(token.content) : [])]);
