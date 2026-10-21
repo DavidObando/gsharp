@@ -122,7 +122,7 @@
       "patterns": [
         { "include": "#interpolation-postfix" },
         { "include": "#interpolation-type-context" },
-        { "include": "#interpolation-member-name" },
+        { "include": "#interpolation-expression-member-name" },
         { "include": "#interpolation-nullable-call" },
         { "include": "#interpolation-object-header" },
         { "include": "#interpolation-conditional" },
@@ -218,7 +218,6 @@
       "patterns": [
         { "include": "#comments" },
         { "include": "#interpolation-nested-brackets" },
-        { "include": "#interpolation-member-name" },
         {
           "begin": "->",
           "beginCaptures": { "0": { "name": "keyword.operator.gsharp" } },
@@ -229,7 +228,8 @@
             { "include": "#interpolation-type-head" },
             { "include": "#interpolation-type-tail" }
           ]
-        }
+        },
+        { "include": "#interpolation-member-name" }
       ]
     },
     "interpolation-function-type": {
@@ -272,7 +272,7 @@
       "patterns": [
         { "include": "#comments" },
         {
-          "begin": "<=?|>=?|==|!=",
+          "begin": "<=?|>=?|==|!=|(?=[+!~0-9\"'`\\-])",
           "beginCaptures": { "0": { "name": "keyword.operator.gsharp" } },
           "end": "(?=(?<![\\p{L}\\p{Nd}_$])(?:and|or)\\b)|(?=[:}])",
           "patterns": [{ "include": "#interpolation-expression" }]
@@ -315,13 +315,59 @@
       "match": "(?<=[\\p{L}\\p{Nd}_\\])}\"'`!])\\?(?=\\()"
     },
     "interpolation-postfix": {
-      "comment": "An index after an operand is not an array type prefix, including when separated by comments or a physical newline.",
-      "begin": "(?<=[\\p{L}\\p{Nd}_\\])}])(?=\\s|\\[|/\\*|//)",
+      "comment": "A completed literal or !! is already a value. Names need a call/index before a pointer arrow; a bare-name or parenthesized arrow can introduce a lambda.",
+      "patterns": [
+        {
+          "begin": "(?:(?<=[\\]}\"'`])|(?<=!!))(?=\\s|[\\[(]|\\?(?=[\\[(])|->|/\\*|//)",
+          "end": "(?=\\S)",
+          "applyEndPatternLast": true,
+          "patterns": [{ "include": "#interpolation-postfix-tail" }]
+        },
+        {
+          "begin": "(?<=[\\p{L}\\p{Nd}_\\)])(?<!(?<![\\p{L}\\p{Nd}_$])async)(?=\\s|[\\[(]|\\?(?=[\\[(])|/\\*|//)",
+          "end": "(?=\\S)",
+          "applyEndPatternLast": true,
+          "patterns": [
+            { "include": "#comments" },
+            {
+              "begin": "(?=[\\[(])|\\?(?=\\[)|(?<=[\\p{L}\\p{Nd}_\\])}\"'`!])\\?(?=\\()",
+              "beginCaptures": { "0": { "name": "keyword.operator.gsharp" } },
+              "end": "(?=\\S)",
+              "applyEndPatternLast": true,
+              "patterns": [
+                {
+                  "begin": "\\G",
+                  "end": "(?<=[\\])])|(?=\\S)",
+                  "applyEndPatternLast": true,
+                  "patterns": [
+                    { "include": "#interpolation-nested-parentheses" },
+                    { "include": "#interpolation-nested-brackets" }
+                  ]
+                },
+                { "include": "#interpolation-postfix-tail" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "interpolation-postfix-tail": {
+      "patterns": [
+        { "include": "#comments" },
+        { "include": "#interpolation-nullable-call" },
+        { "name": "keyword.operator.gsharp", "match": "\\?(?=\\[)" },
+        { "include": "#interpolation-nested-brackets" },
+        { "include": "#interpolation-nested-parentheses" },
+        { "include": "#interpolation-member-name" }
+      ]
+    },
+    "interpolation-expression-member-name": {
+      "begin": "(?=\\?\\.|(?<!\\.)\\.(?![.0-9]))",
       "end": "(?=\\S)",
       "applyEndPatternLast": true,
       "patterns": [
         { "include": "#comments" },
-        { "include": "#interpolation-nested-brackets" }
+        { "include": "#interpolation-member-name" }
       ]
     },
     "interpolation-object-header": {
@@ -340,7 +386,7 @@
       ]
     },
     "interpolation-member-name": {
-      "begin": "\\?\\.|(?<!\\.)\\.(?![.0-9])",
+      "begin": "\\?\\.|(?<!\\.)\\.(?![.0-9])|->",
       "end": "(\\$[\\p{L}_][\\p{L}\\p{Nd}_]*)|([\\p{L}_][\\p{L}\\p{Nd}_]*)(?=\\s*\\()|([\\p{L}_][\\p{L}\\p{Nd}_]*)|(?=\\S)",
       "endCaptures": {
         "1": { "name": "variable.other.gsharp" },

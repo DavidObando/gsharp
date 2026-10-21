@@ -118,6 +118,18 @@ test('Prism keeps exact byte literals distinct from CLR string interpolation', (
   assert.ok(types(Prism.tokenize('"${name}"', Prism.languages.gsharp)).includes('interpolation'));
 });
 
+test('Prism distinguishes function parameter modifiers from singleton named tuples', () => {
+  registerGrammar();
+  for (const modifier of ['ref', 'out', 'in']) {
+    const valid = `"${'${'}value as ((${modifier} int32) -> void)? ?? fallback:G}"`;
+    assert.match(Prism.highlight(valid, Prism.languages.gsharp, 'gsharp'), /class="token format\b/);
+  }
+  for (const name of ['element', 'ref', 'out', 'in']) {
+    const invalid = `"${'${'}value as (${name} int32)? ?? fallback:G}"`;
+    assert.doesNotMatch(Prism.highlight(invalid, Prism.languages.gsharp, 'gsharp'), /class="token format\b/);
+  }
+});
+
 test('release metadata and installation stay aligned', () => {
   assert.equal(release.docsVersion, versions[0]);
   assert.equal(release.tag, `v${release.version}`);

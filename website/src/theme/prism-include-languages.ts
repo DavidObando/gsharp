@@ -108,11 +108,12 @@ function arrayPrefixEnd(source: string, index: number): number {
 
 // Validate delimited type clauses instead of treating every balanced group as
 // a type: list patterns and index expressions have different token productions.
-function typeListEnd(source: string, index: number, depth: number, tuple = false, pointers = false): number {
+function typeListEnd(source: string, index: number, depth: number, tuple = false, pointers = false, signature = false): number {
   const close = source[index] === '(' ? ')' : ']';
   let cursor = skipTrivia(source, index + 1);
   let count = 0;
   let named = false;
+  let modifiers = false;
   while (cursor < source.length && source[cursor] !== close) {
     if (source.startsWith('...', cursor) && close === ')') cursor += 3;
     let end = typeEnd(source, cursor, depth + 1, pointers);
@@ -122,13 +123,20 @@ function typeListEnd(source: string, index: number, depth: number, tuple = false
       const name = wordAt(source, cursor);
       if (!typeName(name)) return index;
       cursor = skipTrivia(source, cursor + name.length);
+      const modifier = ['ref', 'out', 'in'].includes(name);
+      if (modifier && source.startsWith('...', cursor)) cursor += 3;
       end = typeEnd(source, cursor, depth + 1, pointers);
       if (end <= cursor) return index;
       end = skipTrivia(source, end);
-      named = true;
+      if (modifier) modifiers = true;
+      else named = true;
     }
     count++;
-    if (source[end] === close) return tuple && named && count === 1 ? index : end + 1;
+    if (source[end] === close) {
+      const parameters = signature || source.startsWith('->', skipTrivia(source, end + 1));
+      if (parameters && named) return index;
+      return tuple && (named || (modifiers && !parameters)) && count === 1 ? index : end + 1;
+    }
     if (source[end] !== ',') return index;
     cursor = skipTrivia(source, end + 1);
   }
@@ -192,7 +200,7 @@ function typeEnd(source: string, index: number, depth = 0, pointers = true): num
     index = skipTrivia(source, index);
     if (source[index] !== '(') return signatureEnd;
     pointers = word === 'unmanaged' || managedPointer || (!word && pointers);
-    const end = typeListEnd(source, index, depth, !word, pointers);
+    const end = typeListEnd(source, index, depth, !word, pointers, !!word);
     if (end === index) return start;
     signatureEnd = end;
     index = skipTrivia(source, end);
@@ -274,10 +282,12 @@ function patternEnd(source: string, index: number): number {
       if (end === index) return index;
       index = end;
       designation = source[index - 1] === '}' || source[index - 1] === ']';
-    } else if (/[0-9]/.test(source[index] ?? '')) {
-      while (index < source.length && /[0-9a-zA-Z_.]/.test(source[index])) index++;
+    } else {
+      const end = expressionEnd(source, index, true);
+      if (end <= index) return index;
+      index = end;
       designation = false;
-    } else return index;
+    }
     primary = false;
   }
   return index;
@@ -291,17 +301,26 @@ function postfixCallAt(source: string, index: number): boolean {
 function expressionEnd(source: string, cursor: number, patternOperand = false): number {
   let memberName = false;
   let conditionals = 0;
+  let operand: 'none' | 'name' | 'value' | 'lambda' = 'none';
   while (cursor < source.length) {
     cursor = skipTrivia(source, cursor);
     const word = wordAt(source, cursor);
     if (word) {
       if (patternOperand && !memberName && !conditionals && (word === 'and' || word === 'or')) return cursor;
       cursor += word.length;
-      if (!memberName && word === 'as') cursor = typeEnd(source, cursor);
-      else if (!memberName && word === 'is') cursor = patternEnd(source, cursor);
-      else if (!memberName && word === 'object') {
+      if (!memberName && word === 'as') {
+        cursor = typeEnd(source, cursor);
+        operand = 'value';
+      } else if (!memberName && word === 'is') {
+        cursor = patternEnd(source, cursor);
+        operand = 'value';
+      } else if (!memberName && word === 'object') {
         const header = skipTrivia(source, cursor);
         if (source[header] === ':') cursor = header + 1;
+        operand = 'name';
+      } else {
+        operand = memberName || ['nil', 'true', 'false'].includes(word) ? 'value' : 'name';
+        if (word === 'async' && source[skipTrivia(source, cursor)] === '(') operand = 'none';
       }
       memberName = false;
       continue;
@@ -318,15 +337,29 @@ function expressionEnd(source: string, cursor: number, patternOperand = false): 
       const end = groupEnd(source, cursor);
       if (end === cursor) break;
       cursor = end;
+      operand = c === '(' && operand === 'none' ? 'lambda' : 'value';
       memberName = false;
       continue;
     }
+    if (source.startsWith('->', cursor)) {
+      memberName = operand === 'value';
+      operand = 'none';
+      cursor += 2;
+      continue;
+    }
+    if (source.startsWith('!!', cursor) && operand !== 'none') {
+      operand = 'value';
+      cursor += 2;
+      continue;
+    }
     memberName = c === '.';
+    operand = c && /[0-9]/.test(c) ? 'value' : 'none';
     if (c === '?') {
       if (source[cursor + 1] === '?' || source[cursor + 1] === '.') {
         memberName = source[cursor + 1] === '.';
         cursor++;
-      } else if (source[cursor + 1] !== '[' && !postfixCallAt(source, cursor)) conditionals++;
+      } else if (source[cursor + 1] === '[' || postfixCallAt(source, cursor)) operand = 'value';
+      else conditionals++;
     } else if (c === ':' && conditionals) conditionals--;
     else if (c === ':' || (patternOperand && c && ',;})]'.includes(c))) return cursor;
     cursor++;

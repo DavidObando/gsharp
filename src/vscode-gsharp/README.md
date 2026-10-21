@@ -61,6 +61,11 @@ Adjacent `?(` invokes any postfix receiver, including indexed and call results;
 whitespace-separated `? (` remains conditional. Nested index expressions retain
 their own conditional delimiters. Named tuple array elements remain types, while
 property suffixes and relational operands preserve following pattern combinators.
+Completed literals and `!!` keep postfix context; unary `!` does not. Function
+parameter modifiers are distinct from tuple element names and ordinary types
+named `ref`/`out`/`in`. Constant-pattern operands use expression context, including
+signs and exponents. Value-receiver pointer arrows preserve member context;
+lambda heads and function-type return arrows retain their own contexts.
 Anonymous-class header colons stay in expressions. Line comments accept CR, LF,
 and CRLF line endings.
 
@@ -81,6 +86,9 @@ approximations.
 Before asserting an ambiguous interpolation's scopes, check its expression kind
 and `InterpolatedStringSegment.Format` with the compiler's `SyntaxTree.Parse`;
 two agreeing highlighters do not establish the language's parse.
+The compiler currently loses enclosing unsafe context for bare-name pointer
+arrows inside interpolation (#5110); pointer regressions use compiler-accepted
+call, index and qualified receivers instead of asserting an invented parse.
 
 ## Commands
 
