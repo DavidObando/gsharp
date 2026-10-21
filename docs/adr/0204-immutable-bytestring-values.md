@@ -2,10 +2,11 @@
 
 - **Status**: Accepted
 - **Date**: 2026-10-20
-- **Phase**: Core and explicit UTF-8 text conversion implemented; scalar APIs deferred
+- **Phase**: Core, explicit UTF-8 text conversion and scalar iteration implemented; code-point collections deferred
 - **Issue**: [#5065](https://github.com/DavidObando/gsharp/issues/5065)
 - **Core implementation**: [#5068](https://github.com/DavidObando/gsharp/issues/5068)
 - **Text conversion**: [#5080](https://github.com/DavidObando/gsharp/issues/5080)
+- **Scalar iteration**: [#5087](https://github.com/DavidObando/gsharp/issues/5087)
 - **Related**: [ADR-0191](0191-go-to-gsharp-migration-tool.md),
   [ADR-0190](0190-native-slices-and-clr-array-interoperability.md),
   [ADR-0187](0187-first-class-index-range-and-runtime-declarations.md),
@@ -45,8 +46,9 @@ ordinary methods/operators, native `bytestring` spelling and exact-byte
 
 The development implementation covers the core surface in section 4, native
 spelling and literals in section 5, their compiler/tooling integration, and
-section 6's explicit UTF-8 text conversions. Scalar APIs remain deferred;
-examples using those APIs are forward-looking. This is not a claim of a
+section 6's explicit UTF-8 text conversions and lazy scalar iteration.
+Code-point collection APIs remain deferred; examples using those APIs are
+forward-looking. This is not a claim of a
 published SDK, complete witness-matrix certification, or Go translation readiness.
 No compiler, runtime, SDK pin, existing literal or migration profile changes
 in the design PR.
@@ -383,25 +385,36 @@ Utf16Encoding = Strict | ReplaceUnpairedCodeUnit
 
 ByteString.EncodeUtf8(text: string, policy: Utf16Encoding) -> bytestring
 value.DecodeUtf8(policy: Utf8Decoding) -> string
+value.DecodeUtf8Scalars(policy: Utf8Decoding) -> ByteString.Utf8Enumerable
+Utf8Item = { ByteOffset: int32, Value: int32, ByteLength: int32 }
+ByteString.Utf8Enumerable.GetEnumerator() -> ByteString.Utf8Enumerable.Enumerator
+ByteString.Utf8Enumerable.Enumerator.MoveNext() -> bool
+ByteString.Utf8Enumerable.Enumerator.Current -> Utf8Item
 ```
 
-Neither method has a policy default. `EncodeUtf8` rejects a null CLR argument
-with `ArgumentNullException` (`text`). Both methods reject invalid policies
+No method has a policy default. `EncodeUtf8` rejects a null CLR argument
+with `ArgumentNullException` (`text`). All three methods reject invalid policies
 with `ArgumentOutOfRangeException` (`policy`), including on empty input.
+`DecodeUtf8Scalars` checks the policy at the factory call, without decoding bytes.
 
-The following scalar/collection APIs remain deferred:
+The following code-point collection APIs remain deferred:
 
 ```text
 CodePointEncoding = Strict | ReplaceInvalidCodePoint
 ByteString.FromCodePoints(source: readonly slice[int32],
                          policy: CodePointEncoding) -> bytestring
 value.DecodeCodePoints(policy: Utf8Decoding) -> slice[int32]
-value.DecodeUtf8Scalars(policy: Utf8Decoding) -> ByteString.Utf8Enumerable
-Utf8Item = { ByteOffset: int32, Value: int32, ByteLength: int32 }
 ```
 
-`Utf8Enumerable` uses a value enumerator and yields `Utf8Item` by value.
-Its values are valid Unicode scalars represented by `int32`. This does not
+`ByteString.Utf8Enumerable` and its nested `Enumerator` are value types.
+They provide concrete pattern-based enumeration without collection interfaces.
+`Utf8Item` is a value type in `Gsharp.Values` with get-only properties and an
+internal constructor. Each yielded item contains one valid Unicode scalar,
+its byte offset relative to this value, and its consumed input byte length.
+Default/empty enumerable and enumerator values enumerate empty.
+Re-enumeration starts fresh; copied enumerators have independent cursors.
+The enumerable retains only immutable ownership, without exporting storage.
+Scalar values are represented by `int32`. This does not
 redefine G# `char`, or treat every `int32`/Go rune as a valid scalar.
 `FromCodePoints` deliberately accepts unrestricted signed `int32` input so
 callers can validate or replace invalid values explicitly.
@@ -415,7 +428,7 @@ callers can validate or replace invalid values explicitly.
 | Code-point strict | Reject negative values, surrogate values and values above U+10FFFF at their input element index. |
 | Replace invalid code point | Each invalid element becomes U+FFFD; valid values retain their encoding. |
 
-Strict eager text conversions throw `ByteStringEncodingException`, a sealed
+Strict text conversions and scalar iteration throw `ByteStringEncodingException`, a sealed
 `System.Exception` subclass in `Gsharp.Values`. Its get-only `InputKind`
 property has public enum type `ByteStringInputKind`, with exactly `Utf8` and
 `Utf16` members. Its get-only `Offset: int32` is the zero-based first failing
@@ -430,6 +443,10 @@ Lazy strict enumeration can yield a valid prefix before failing at `MoveNext`.
 It must never replace a strict failure with end-of-sequence or continue after
 failure. State this distinction in API docs; callers needing all-or-nothing
 validation use an eager operation before consuming results.
+The strict fault cursor remains unadvanced. Every subsequent `MoveNext` reports
+the same failure offset, rather than advancing or returning false.
+Decoding never reads past a substring's logical end, even when its owner
+contains bytes that would complete the scalar.
 UTF-8 enumeration offsets are relative to this byte-string value, not its
 backing owner's offset. UTF-8 BOM bytes decode to U+FEFF; encoding does not
 insert a BOM and decoding does not strip one.
@@ -457,8 +474,14 @@ are not included in this proposal.
 | Prefix/suffix/search | No per-call allocation; search algorithm/complexity must be documented and benchmarked before implementation acceptance. No quadratic-time claim is hidden behind an API name. |
 | Concatenation of two nonempty values | Linear copy into one result byte buffer; repeated `result = result + part` can be quadratic in total output size. |
 | Copy factory, detach, mutable export | Linear copy into one output buffer. No extra wrapper object is required for a value descriptor. |
-| Direct byte and UTF-8 enumeration | Value enumerators, no per-byte/per-scalar boxing, buffer copy or allocation. Interface-based enumeration can box once. |
+| Direct byte and UTF-8 enumeration | Value enumerators, no per-byte/per-scalar boxing, buffer copy or allocation. Byte enumeration through collection interfaces can box once; UTF-8 enumeration exposes only the concrete pattern. |
 | Eager encoding/decoding | Linear processing plus result storage; exact allocation budgets require implementation evidence. |
+
+Eager `DecodeUtf8` consumes the same scalar enumerator. It uses one reusable
+UTF-16 buffer, not a temporary string per scalar. The scalar allocation test
+warms both policies, then measures 64 passes over an 8192-byte bounded view:
+zero allocated bytes on the concrete path. This is a measured regression
+budget, not a throughput claim or full witness-matrix certification.
 
 Substring retention is explicit, not an automatic heuristic based on owner
 size. Users can call `Detach` before caching a small long-lived token.

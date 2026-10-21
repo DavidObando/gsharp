@@ -194,7 +194,26 @@ Strict conversions throw `ByteStringEncodingException` with `InputKind`
 (`ByteStringInputKind.Utf8` or `.Utf16`) and zero-based `Offset` relative to
 the input value. They return no partial result. See the
 [text-boundary reference](../ref/spec.md#explicit-utf-8-text-boundaries) for
-policy and exception details. Scalar iteration remains deferred.
+policy and exception details.
+
+Use `value.DecodeUtf8Scalars(policy)` for lazy scalar iteration:
+
+```gsharp
+for item in b"Aé😀".DecodeUtf8Scalars(Utf8Decoding.Strict) {
+    Console.WriteLine("${item.ByteOffset}:${item.Value}:${item.ByteLength}")
+}
+// 0:65:1, 1:233:2, 3:128512:4 (one item per line)
+```
+
+The concrete `ByteString.Utf8Enumerable` and its nested `Enumerator` are value
+types. Each `Utf8Item` has get-only `int32` properties `ByteOffset`, `Value`
+and `ByteLength`. Offsets are relative to the value, including substrings.
+Concrete enumeration copies no buffers and allocates nothing per scalar.
+Strict `MoveNext` may yield a valid prefix before throwing; retries report
+the same failure without advancing. The factory validates the policy, not
+the bytes. Default/empty values enumerate empty, repeated enumeration starts
+fresh, and enumerator copies advance independently. Code-point collections
+remain deferred.
 
 Visible user types/aliases named `bytestring` win ordinary lookup;
 `$bytestring` never selects the native alias. A byte literal always has the

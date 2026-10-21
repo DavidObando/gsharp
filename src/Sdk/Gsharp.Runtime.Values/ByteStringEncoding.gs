@@ -30,7 +30,31 @@ enum ByteStringInputKind {
     Utf16
 }
 
-/// Reports the first malformed input in an eager strict text conversion.
+/// A decoded Unicode scalar and its byte range relative to the input value.
+struct Utf8Item {
+    internal init(byteOffset int32, value int32, byteLength int32) {
+        ByteOffset = byteOffset
+        Value = value
+        ByteLength = byteLength
+    }
+
+    /// Gets the zero-based byte offset relative to the input value.
+    prop ByteOffset int32 {
+        get;
+    }
+
+    /// Gets the valid Unicode scalar as an integer.
+    prop Value int32 {
+        get;
+    }
+
+    /// Gets the number of consumed input bytes.
+    prop ByteLength int32 {
+        get;
+    }
+}
+
+/// Reports the first malformed input in a strict text conversion or scalar iteration.
 sealed class ByteStringEncodingException : Exception {
     internal init(inputKind ByteStringInputKind, offset int32) : base(
         "Invalid " + inputKind.ToString() + " input at offset " + offset.ToString() + "."
