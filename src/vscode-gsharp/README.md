@@ -55,6 +55,11 @@ Persistent type-head/tail states protect nested generic nullable suffixes across
 physical lines. Member contexts consume exactly one name, including after trivia.
 Pattern primaries distinguish discard, constant, and `var` bindings from types;
 `not`/`and`/`or` introduce the appropriate next primary rather than a nullable name.
+List patterns do not consume an element-type name; parenthesized patterns retain
+their conditional arms while nullable tuple types retain their suffix.
+Nullable conversion/delegate calls require adjacent `?(`. Generic-call candidates
+validate type arguments rather than treating expression indices as types; their
+states persist across physical lines.
 Anonymous-class header colons stay in expressions. Line comments accept CR, LF,
 and CRLF line endings.
 

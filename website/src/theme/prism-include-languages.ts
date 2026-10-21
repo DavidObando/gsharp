@@ -13,6 +13,9 @@ import type * as PrismNamespace from 'prismjs';
 import type {Optional} from 'utility-types';
 
 const identifier = /\$?[\p{L}_][\p{L}\p{Nd}_]*/uy;
+// Reserved keywords recognized by the lexer (SyntaxFacts.GetKeywordKind).
+const keywords =
+  /\b(?:as|async|await|break|case|catch|chan|class|const|continue|default|defer|do|else|enum|fallthrough|finally|for|func|go|goto|guard|if|import|interface|internal|is|let|lock|map|open|operator|override|package|private|protected|public|range|rethrow|return|scope|sealed|select|sequence|struct|suspend|switch|throw|try|using|var|while)\b/;
 
 function wordAt(source: string, index: number): string {
   identifier.lastIndex = index;
@@ -90,19 +93,66 @@ function groupEnd(source: string, index: number): number {
   return match?.index === index ? group.lastIndex : index;
 }
 
+function typeName(word: string): boolean {
+  return !!word && (word.startsWith('$') ||
+    (keywords.exec(word)?.[0] !== word && !['nil', 'true', 'false'].includes(word)));
+}
+
+function arrayPrefixEnd(source: string, index: number): number {
+  let cursor = skipTrivia(source, index + 1);
+  const length = /^[0-9][0-9a-zA-Z_]*/.exec(source.slice(cursor));
+  if (length) cursor = skipTrivia(source, cursor + length[0].length);
+  else while (source[cursor] === ',') cursor = skipTrivia(source, cursor + 1);
+  return source[cursor] === ']' ? cursor + 1 : index;
+}
+
+// Validate delimited type clauses instead of treating every balanced group as
+// a type: list patterns and index expressions have different token productions.
+function typeListEnd(source: string, index: number, depth: number, tuple = false, pointers = false): number {
+  const close = source[index] === '(' ? ')' : ']';
+  let cursor = skipTrivia(source, index + 1);
+  let count = 0;
+  let named = false;
+  while (cursor < source.length && source[cursor] !== close) {
+    if (source.startsWith('...', cursor) && close === ')') cursor += 3;
+    let end = typeEnd(source, cursor, depth + 1, pointers);
+    if (end <= cursor) return index;
+    end = skipTrivia(source, end);
+    if (source[end] !== ',' && source[end] !== close && close === ')') {
+      const name = wordAt(source, cursor);
+      if (!typeName(name)) return index;
+      cursor = skipTrivia(source, cursor + name.length);
+      end = typeEnd(source, cursor, depth + 1, pointers);
+      if (end <= cursor) return index;
+      end = skipTrivia(source, end);
+      named = true;
+    }
+    count++;
+    if (source[end] === close) return tuple && named && count === 1 ? index : end + 1;
+    if (source[end] !== ',') return index;
+    cursor = skipTrivia(source, end + 1);
+  }
+  return close === ')' && source[cursor] === close ? cursor + 1 : index;
+}
+
 // Read a type only in a type position (Parser.TypeClauses), never infer it
-// from the operator that follows '?'. Delimited type arguments remain opaque.
-function typeEnd(source: string, index: number): number {
+// from the operator that follows '?'. Validate delimiter contents lexically.
+function typeEnd(source: string, index: number, depth = 0, pointers = true): number {
   const start = index;
+  // ponytail: bound speculative type depth; deeper input falls back to balanced expression scanning.
+  if (depth > 128) return start;
   let signatureEnd = start;
+  let managedPointer = false;
   while (index < source.length) {
     index = skipTrivia(source, index);
     if (source[index] === '*') {
+      managedPointer = wordAt(source, skipTrivia(source, index + 1)) === 'func';
+      if (!pointers && !managedPointer) return start;
       index++;
       continue;
     }
     if (source[index] === '[') {
-      const end = groupEnd(source, index);
+      const end = arrayPrefixEnd(source, index);
       if (end === index) return start;
       index = skipTrivia(source, end);
       if (source[index] === '?' && source[index + 1] !== '?') index++;
@@ -119,12 +169,13 @@ function typeEnd(source: string, index: number): number {
       index = afterWord;
       continue;
     }
+    if (word && !typeName(word) && !['func', 'map', 'chan', 'sequence'].includes(word)) return start;
     if (word) {
       index += word.length;
       while (true) {
         const next = skipTrivia(source, index);
         if (source[next] === '[') {
-          const end = groupEnd(source, next);
+          const end = typeListEnd(source, next, depth);
           if (end === next) return start;
           index = end;
         } else if (source[next] === '.' && wordAt(source, skipTrivia(source, next + 1))) {
@@ -140,7 +191,8 @@ function typeEnd(source: string, index: number): number {
     }
     index = skipTrivia(source, index);
     if (source[index] !== '(') return signatureEnd;
-    const end = groupEnd(source, index);
+    pointers = word === 'unmanaged' || managedPointer || (!word && pointers);
+    const end = typeListEnd(source, index, depth, !word, pointers);
     if (end === index) return start;
     signatureEnd = end;
     index = skipTrivia(source, end);
@@ -150,6 +202,16 @@ function typeEnd(source: string, index: number): number {
     // Function return types can themselves be function, tuple or array types.
   }
   return signatureEnd;
+}
+
+function patternTypeEnd(source: string, index: number): number {
+  const end = typeEnd(source, index);
+  const next = skipTrivia(source, end);
+  const word = wordAt(source, next);
+  // CanFollowBareTypePattern plus an optional identifier designation.
+  return end > index && (next === source.length ||
+    /[{}\]),:;?+\-*/%&|^<>=!]/.test(source[next] ?? '') ||
+    typeName(word) || ['as', 'is', 'else', 'case', 'default'].includes(word)) ? end : index;
 }
 
 // Pattern heads follow Parser.Patterns: combinators introduce another primary;
@@ -186,13 +248,13 @@ function patternEnd(source: string, index: number): number {
       (word === '_' && !['.', '('].includes(source[skipTrivia(source, index + 1)]))) {
       index += word.length;
       designation = false;
-    } else if (word || source[index] === '[' || source[index] === '*') {
-      const end = typeEnd(source, index);
+    } else if (word || '[(*'.includes(source[index] ?? '\0')) {
+      const end = patternTypeEnd(source, index);
       if (end > index) {
         index = end;
         designation = true;
       } else {
-        const group = source[index] === '[' ? groupEnd(source, index) : index;
+        const group = '[('.includes(source[index] ?? '\0') ? groupEnd(source, index) : index;
         if (group <= index) return index;
         index = group;
         designation = false;
@@ -211,6 +273,18 @@ function patternEnd(source: string, index: number): number {
   return index;
 }
 
+function nullableCallEnd(source: string, index: number): number {
+  let end = index;
+  const next = skipTrivia(source, end);
+  if (source[next] === '[') {
+    end = typeListEnd(source, next, 0);
+    if (end <= next) return index;
+  }
+  // Both token boundaries are adjacent, just as ParseNullableTypeCallExpression
+  // and LooksLikeGenericCallSite require. An expression index is not a type-argument list.
+  return source.startsWith('?(', end) ? groupEnd(source, end + 1) : index;
+}
+
 function interpolationFormatPattern(): RegExp {
   const pattern = /:[\s\S]*$/g;
   pattern.exec = function(source: string): RegExpExecArray | null {
@@ -224,9 +298,12 @@ function interpolationFormatPattern(): RegExp {
         cursor += word.length;
         if (!memberName && word === 'as') cursor = typeEnd(source, cursor);
         else if (!memberName && word === 'is') cursor = patternEnd(source, cursor);
-        else if (!memberName && word === 'object') {
-          const header = skipTrivia(source, cursor);
-          if (source[header] === ':') cursor = header + 1;
+        else {
+          if (!memberName && word === 'object') {
+            const header = skipTrivia(source, cursor);
+            if (source[header] === ':') cursor = header + 1;
+          }
+          cursor = nullableCallEnd(source, cursor);
         }
         memberName = false;
         continue;
@@ -273,10 +350,6 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
     `(?<![\\p{L}\\p{Nd}_$])(?:${pattern.source.replace(/\\b/g, '')})(?![\\p{L}\\p{Nd}_])`,
     'u',
   );
-  // Reserved keywords recognized by the lexer (SyntaxFacts.GetKeywordKind).
-  const keywords =
-    /\b(?:as|async|await|break|case|catch|chan|class|const|continue|default|defer|do|else|enum|fallthrough|finally|for|func|go|goto|guard|if|import|interface|internal|is|let|lock|map|open|operator|override|package|private|protected|public|range|rethrow|return|scope|sealed|select|sequence|struct|suspend|switch|throw|try|using|var|while)\b/;
-
   // Contextual keywords: ordinary identifiers that act as keywords in context.
   // Grounded in the parser's contextual recognitions (Text == "…" checks),
   // covering member/declaration words (`prop`, `event`, `delegate`, `data`,
