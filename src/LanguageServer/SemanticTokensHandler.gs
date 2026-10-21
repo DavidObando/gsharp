@@ -328,7 +328,9 @@ shared class SemanticTokensComputer {
             return (SemanticTokenType.Comment, Array.Empty[SemanticTokenModifier]())
         }
         // String literals
-        if token.Kind == SyntaxKind.StringToken || token.Kind == SyntaxKind.InterpolatedStringToken {
+        if token.Kind == SyntaxKind.StringToken ||
+            token.Kind == SyntaxKind.ByteStringToken ||
+            token.Kind == SyntaxKind.InterpolatedStringToken {
             return (SemanticTokenType.String, Array.Empty[SemanticTokenModifier]())
         }
         // Number literals

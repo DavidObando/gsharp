@@ -119,6 +119,30 @@ Console.WriteLine("answer=${n *
 
 Malformed interpolation is reported by dedicated diagnostics: `GS0220` (non-constant alignment), `GS0221` (handler forwarding), `GS0222` (unterminated hole), `GS0223` (empty hole), `GS0224` (empty format specifier), and `GS0225` (newline in the literal portion of the string). By default an interpolated string lowers to `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler`; when its contextual target type is `IFormattable` or `FormattableString` it instead lowers to `FormattableStringFactory.Create`, deferring formatting so the caller selects the culture. See the [CLR interop reference](./clr-interop.md#interpolated-strings-and-formatting).
 
+### Byte-string literals (development)
+
+An adjacent, unescaped `b"` starts an immutable arbitrary-byte literal with
+nominal type `Gsharp.Values.ByteString`, spelled `bytestring` when unshadowed.
+It is distinct from CLR `string`; ordinary quoted literals never retarget.
+`\xHH` contributes exactly one byte. `\0`, `\n`, `\r`, `\t`, `\\` and `\"`
+contribute their byte values. Valid scalar source characters and scalar
+`\uHHHH`/`\UHHHHHHHH` escapes encode to UTF-8 without normalization or a BOM.
+Surrogate/out-of-range escapes and lossy source decoding diagnose (GS0628).
+Dollar signs are bytes, not interpolation; literal newlines, raw/multiline
+forms and automatic concatenation are not admitted.
+
+Byte strings have content equality/hash/order, value byte indexing, shared
+immutable ranges and byte iteration. Mutable import/export boundaries copy;
+`Detach()` compacts retained substrings. Default is empty, while `bytestring?`
+can additionally be `nil`. Visible types/aliases named `bytestring` win, and
+`$bytestring` always uses ordinary lookup. Literals retain nominal identity
+even when that spelling is shadowed. Missing/incompatible runtime support
+diagnoses GS0627.
+
+These are value expressions, not metadata/attribute/optional-parameter
+constants or constant patterns. Encoding/scalar APIs and release/pin adoption
+remain separate from this development core; see ADR-0204.
+
 ### Boolean and nil literals
 
 `true` and `false` are boolean literals. `nil` is the null literal. `null` is not a keyword or literal in G#. When the identifier `null` appears in a value-expression position and no symbol named `null` exists in scope, the binder reports `GS0273` ("`'null'` is not a literal in G#. Did you mean `'nil'`?") and recovers by treating the identifier as `nil`, so target-type contexts continue to typecheck. Declarations may legally name a symbol `null` (e.g. `func null() { ... }` or `let null = "hi"`); identifier resolution wins over the recovery in that case.

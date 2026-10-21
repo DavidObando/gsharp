@@ -108,6 +108,7 @@ shared class Highlight {
         return switch kind {
             case SyntaxKind.NumberToken: Tokens.Number
             case SyntaxKind.StringToken: Tokens.StringLit
+            case SyntaxKind.ByteStringToken: Tokens.StringLit
             case SyntaxKind.CommentToken: Tokens.Comment
             case SyntaxKind.IdentifierToken: Tokens.Identifier
             default: Tokens.TextTertiary

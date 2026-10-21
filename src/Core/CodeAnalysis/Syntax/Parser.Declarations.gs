@@ -1771,6 +1771,7 @@ open partial class Parser {
                 case SyntaxKind.IdentifierToken,
                 SyntaxKind.NumberToken,
                 SyntaxKind.StringToken,
+                SyntaxKind.ByteStringToken,
                 SyntaxKind.OpenParenthesisToken,
                 SyntaxKind.OpenSquareBracketToken,
                 SyntaxKind.AmpersandToken,

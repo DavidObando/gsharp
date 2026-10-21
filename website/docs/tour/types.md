@@ -155,6 +155,38 @@ func Main() {
 }
 ```
 
+## Immutable byte strings
+
+**Development capability:** `bytestring` is an immutable arbitrary-byte value,
+not a CLR text string or a promise that its bytes are valid UTF-8. This core
+requires a matching compiler/runtime; explicit encoding APIs are not implemented
+yet. Ordinary `string` remains `System.String`.
+
+```gsharp
+func Payload(packet bytestring) bytestring {
+    if !packet.StartsWith(b"\xCA\xFE") {
+        throw System.FormatException("Invalid header")
+    }
+    return packet[2..]
+}
+```
+
+Length and indices count bytes. `b"\xFF\0"` has two bytes; dollar signs in a
+byte literal are ordinary data. Scalar source characters and valid `\u`/`\U`
+escapes encode to UTF-8, while `\xHH` inserts exactly one byte. Equality, hashing
+and ordering compare contents; ranges share immutable storage. Use `Detach()`
+to copy a retained substring into compact storage.
+
+`default(bytestring)` is empty; `bytestring?` can additionally be `nil`.
+`Gsharp.Values.ByteString.CopyFrom` snapshots a readonly native byte slice or
+`ReadOnlySpan[uint8]`; `ToArray()`, `ToSlice()` and `CopyTo` copy to independent
+writable storage. There is no implicit text conversion or public backing view.
+`ToString()` is a bounded escaped diagnostic, not decoded text.
+
+Visible user types/aliases named `bytestring` win ordinary lookup;
+`$bytestring` never selects the native alias. A byte literal always has the
+nominal runtime type, regardless of shadowing.
+
 ## CLR collection initializers
 
 CLR collections can be created with `List[T]{...}`, `HashSet[T]{...}`, and `Dictionary[K,V]{...}` initializers. Dictionary entries use `key: value`; use `[key] = value` when the key is an identifier expression.

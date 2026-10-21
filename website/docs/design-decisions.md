@@ -21,7 +21,7 @@ description: "Index of the G# design decisions."
 | [0046](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0046-char-literal-grammar.md) | `'c'` character literal grammar | Specifies character literal grammar, escapes, static type, and diagnostics. |
 | [0049](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0049-width-bearing-integer-names.md) | Width-bearing integer keyword names | Chooses explicit names such as `int32` and `uint64` over ambiguous aliases. |
 | [0098](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0098-friendly-numeric-type-aliases.md) | Friendly numeric type aliases | Adds `int` / `uint` / `long` / `ulong` / `short` / `ushort` / `byte` / `sbyte` / `float` / `double` as binder-resolved aliases on top of the canonical width-bearing names; diagnostics and IL keep the canonical spelling. |
-| [0204](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0204-immutable-bytestring-values.md) | Immutable byte strings with native G# ergonomics | Proposed: a nominal immutable byte-string value, `bytestring` spelling, exact-byte literals, content operations and explicit encoding policies; not implemented. |
+| [0204](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0204-immutable-bytestring-values.md) | Immutable byte strings with native G# ergonomics | Accepted: immutable core, native `bytestring` spelling and exact-byte literals implemented in development; encoding/scalar APIs and release adoption remain separate. |
 
 ## Concurrency, async, and resource scope
 

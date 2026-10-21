@@ -4,6 +4,9 @@ import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
 import {createHash} from 'node:crypto';
+import {runInNewContext} from 'node:vm';
+import ts from 'typescript';
+import {Prism} from 'prism-react-renderer';
 
 const site = fileURLToPath(new URL('../', import.meta.url));
 const release = JSON.parse(readFileSync(path.join(site, 'src/data/release.json'), 'utf8'));
@@ -14,6 +17,36 @@ function documents(directory) {
     return statSync(file).isDirectory() ? documents(file) : /\.mdx?$/.test(name) ? [file] : [];
   });
 }
+
+test('Prism keeps exact byte literals distinct from CLR string interpolation', () => {
+  const source = readFileSync(path.join(site, 'src/theme/prism-include-languages.ts'), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {module: ts.ModuleKind.CommonJS, esModuleInterop: true},
+  }).outputText;
+  const module = {exports: {}};
+  runInNewContext(compiled, {
+    module,
+    exports: module.exports,
+    require(name) {
+      assert.equal(name, '@generated/docusaurus.config');
+      return {themeConfig: {prism: {additionalLanguages: []}}};
+    },
+  });
+  module.exports.default(Prism);
+  function types(tokens) {
+    return tokens.flatMap((token) => typeof token === 'string'
+      ? [] : [token.type, ...(Array.isArray(token.content) ? types(token.content) : [])]);
+  }
+  for (const input of ['b"$name${literal}"', 'b"${"', 'b"\\xFF\\0"']) {
+    const actual = types(Prism.tokenize(input, Prism.languages.gsharp));
+    assert.ok(actual.includes('byte-string'), input);
+    assert.ok(!actual.includes('interpolation'), input);
+  }
+  for (const input of ['ab"x"', '$b"x"', 'b "x"', 'éb"x"']) {
+    assert.ok(!types(Prism.tokenize(input, Prism.languages.gsharp)).includes('byte-string'), input);
+  }
+  assert.ok(types(Prism.tokenize('"${name}"', Prism.languages.gsharp)).includes('interpolation'));
+});
 
 test('release metadata and installation stay aligned', () => {
   assert.equal(release.docsVersion, versions[0]);

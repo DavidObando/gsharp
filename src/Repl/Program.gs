@@ -134,7 +134,7 @@ shared class Program {
     /// diagnostics render to standard error, the program's output streams
     /// straight through, and its integer result is the exit code.
     private func RunScript(scriptPath string, references List[string]) int32 {
-        let tree = SyntaxTree.Parse(SourceText.From(File.ReadAllText(scriptPath), scriptPath))
+        let tree = SyntaxTree.Load(scriptPath)
         let effectiveReferences = ReferenceResolver.ResolveDriverReferencePaths(references)
         using let resolver = ReferenceResolver.WithRuntimeReferences(effectiveReferences)
         let compilation = Compilation(resolver, tree)

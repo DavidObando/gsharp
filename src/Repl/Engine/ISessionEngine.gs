@@ -4,6 +4,7 @@
 
 package GSharp.Repl.Engine
 
+import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Generic
 import System.Threading
@@ -38,6 +39,11 @@ interface ISessionEngine {
     /// @param text The submission source.
     /// @returns The evaluated cell.
     func Evaluate(text string) Cell;
+
+    /// Evaluates a document without discarding its original source bytes.
+    /// @param source The loaded source document.
+    /// @returns The evaluated cell.
+    func Evaluate(source SourceText) Cell;
 
     /// Evaluates a submission on a background thread so the caller's render
     /// loop stays responsive. Cancellation is best-effort: the token is only

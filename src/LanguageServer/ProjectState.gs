@@ -152,23 +152,28 @@ open class ProjectState {
     /// in-memory buffer (e.g. successive diagnostic / hover pulls).
     /// @param filePath Absolute path to the `.gs` file.
     /// @param text The current text content of the file.
+    /// @param rawBytes Original file bytes, when loaded from disk rather than an editor buffer.
     /// @returns The parsed (cref:SyntaxTree).
-    func UpdateFile(filePath string, text string) SyntaxTree {
-        let key = NormalizePath(filePath)
-        if syntaxTrees.TryGetValue(key, out var existing) &&
-            existing
-            .Text
-            ?.FileName == filePath &&
-            existing
-            .Text
-            .ToString() == text {
-            return existing
+    func UpdateFile(filePath string, text string, rawBytes[]?uint8 = nil) SyntaxTree {
+        lock compilationLock {
+            let key = NormalizePath(filePath)
+            if syntaxTrees.TryGetValue(key, out var existing) &&
+                existing
+                .Text
+                ?.FileName == filePath &&
+                existing
+                .Text
+                .ToString() == text && (rawBytes ?? Array.Empty[uint8]()).SequenceEqual(
+                existing.Text.RawBytes ?? Array.Empty[uint8]()
+            ) {
+                return existing
+            }
+            let sourceText = SourceText.From(text, filePath, rawBytes)
+            let tree = SyntaxTree.Parse(sourceText)
+            syntaxTrees[key] = tree
+            Invalidate()
+            return tree
         }
-        let sourceText = SourceText.From(text, filePath)
-        let tree = SyntaxTree.Parse(sourceText)
-        syntaxTrees[key] = tree
-        Invalidate()
-        return tree
     }
 
     /// Adds a source file by reading it from disk.
@@ -176,8 +181,8 @@ open class ProjectState {
     /// @returns The parsed (cref:SyntaxTree), or null if the file could not be read.
     func AddFileFromDisk(filePath string) SyntaxTree? {
         try {
-            let text = File.ReadAllText(filePath)
-            return UpdateFile(filePath, text)
+            let source = SourceText.Load(filePath)
+            return UpdateFile(filePath, source.ToString(), source.RawBytes)
         } catch (IOException) {
             return nil
         } catch (UnauthorizedAccessException) {

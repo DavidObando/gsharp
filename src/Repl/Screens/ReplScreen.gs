@@ -5,6 +5,7 @@
 package GSharp.Repl.Screens
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.LanguageServer.Protocol
 import GSharp.Repl
 import GSharp.Repl.Engine
@@ -521,7 +522,7 @@ class ReplScreen : ITabScreen, IDisposable {
             }
             case "load" {
                 if File.Exists(arg) {
-                    engine.Evaluate(File.ReadAllText(arg))
+                    engine.Evaluate(SyntaxTree.Load(arg).Text)
                     navigator?.ShowToast("Loaded $arg")
                 } else {
                     navigator?.ShowToast("File not found: $arg")

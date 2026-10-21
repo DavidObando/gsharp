@@ -1,9 +1,10 @@
 # ADR-0204: Immutable byte strings with native G# ergonomics
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-10-20
-- **Phase**: General-purpose capability design; no implementation
+- **Phase**: Core implementation; encoding and scalar APIs deferred
 - **Issue**: [#5065](https://github.com/DavidObando/gsharp/issues/5065)
+- **Core implementation**: [#5068](https://github.com/DavidObando/gsharp/issues/5068)
 - **Related**: [ADR-0191](0191-go-to-gsharp-migration-tool.md),
   [ADR-0190](0190-native-slices-and-clr-array-interoperability.md),
   [ADR-0187](0187-first-class-index-range-and-runtime-declarations.md),
@@ -37,12 +38,15 @@ the exact source language/toolchain version selected by ADR-0191.
 
 ## Decision
 
-**Propose an immutable, nominal byte-string value with content semantics,
+**Provide an immutable, nominal byte-string value with content semantics,
 ordinary methods/operators, native `bytestring` spelling and exact-byte
 `b"..."` literals. Keep encoding explicit and keep `string` unchanged.**
 
-This ADR is a reviewable proposal, not an acceptance or availability claim.
-All byte-string APIs, literals and examples below are unavailable sketches.
+The development implementation covers the core surface in section 4, native
+spelling and literals in section 5, and their compiler/tooling integration.
+Section 6's encoding/scalar APIs remain a separate implementation chunk;
+examples using those APIs are forward-looking. This is not a claim of a
+published SDK, complete witness-matrix certification, or Go translation readiness.
 No compiler, runtime, SDK pin, existing literal or migration profile changes
 in the design PR.
 
@@ -176,6 +180,9 @@ alias or an erased `object` container.
 Follow ADR-0190's ordinary-name precedence for `bytestring`: a visible user
 type or explicit type alias wins. An escaped `$bytestring` is always ordinary
 lookup. Only an unshadowed spelling resolves the recognized runtime type.
+These rules include types imported from earlier REPL submissions; earlier
+functions and callable globals also retain ordinary call precedence over
+native conversion syntax.
 Qualified `Gsharp.Values.ByteString` is always available when imported
 namespace/type names do not obscure that qualification.
 
@@ -325,6 +332,31 @@ allocation after its initialization. Backing storage is private and immutable;
 pooling equal literals is not source-visible identity. Emission/order/names
 must be deterministic.
 
+The initial implementation lowers literals through the ordinary imported
+static-call machinery to editor-hidden compiler support
+`ByteString.FromLiteral(string hexadecimalBytes)`. Hexadecimal is a lossless
+compiler interchange, not a text encoding of the byte-string value.
+A runtime `ConditionalWeakTable` keyed by the emitted CLR string literal
+publishes private immutable storage; the warm lookup creates no callback or
+byte buffer. Competing first evaluations may construct candidates, but only
+the published descriptor is returned. The table does not strongly retain
+dynamically supplied keys. Equal literals may share storage; no identity or
+cross-module pooling contract is added. Synthesized literal-holder fields
+remain an alternative if measurements justify replacing the cached call.
+The code-model factory snapshots bytes as hexadecimal and the printer emits
+exact byte escapes without decoding them.
+
+Compiler recognition validates the nominal type and its required signatures.
+GS0627 reports missing/incompatible runtime support; GS0628 reports malformed
+literal escapes/scalars or lossy on-disk source decoding. Loading a file with
+byte literals checks its original BOM-selected encoding strictly once per source document,
+including all interpolation-hole parsers;
+ordinary files without byte literals retain their existing loader behavior.
+File loaders decode and retain one byte buffer, including BOM detection, so parsing
+and encoding validation cannot observe different disk reads.
+The REPL's existing compiled submission path uses the same bound imported call,
+not a separate string-based interpreter representation.
+
 Byte literals are typed value expressions, not CLR metadata constants.
 The initial proposal does not admit them as attribute arguments, optional
 parameter constants or `const` fields, or add compile-time byte-string
@@ -432,9 +464,11 @@ contract. P/Invoke and JSON support are not inferred from the name.
 
 ### 8. Independent and discriminating evidence
 
-This section is a future implementation test plan. The design PR runs no
-product tests, allocation benchmarks, behavioral mutants or claimed prototypes.
-Examples above are source review material, not compiled samples.
+This matrix spans the core and later encoding work. Implementation PRs record
+only the witnesses actually executed; deferred rows remain obligations, not
+certification claims. The original design PR ran no product tests, allocation
+benchmarks or behavioral mutants. Examples using deferred APIs remain source
+review material, not compiled samples.
 
 Use hand-authored exact byte vectors, scalar/offset vectors, encoding rules
 and C#/G# cross-language fixtures. The implementation must not generate its
@@ -507,9 +541,9 @@ detach trades a copy for predictable retention. Mutable boundaries copy.
 No zero-copy mutable-array import, implicit text conversion or universal
 string-constant support is promised.
 
-This proposal constrains later byte-string APIs to preserve immutability and
-content semantics. It does not reserve syntax or change current programs
-until an accepted, implemented and released capability is available.
+Later byte-string APIs must preserve these immutability and content contracts.
+The core addition does not change CLR `string`, reserve a keyword, or authorize
+repository adoption before a release and the separate N-1 pin update.
 
 ## Alternatives considered
 

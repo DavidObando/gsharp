@@ -586,6 +586,9 @@ shared class SymbolDisplay {
         if type == nil || IsVoid(type) {
             return "void"
         }
+        if !(type is NullableTypeSymbol) && ByteStringTypes.IsDefinition(type.ClrType) {
+            return "bytestring"
+        }
         if !(type is NullableTypeSymbol) && NativeSliceTypes.TryGetElement(
             type,
             out var sliceElement,
@@ -1108,6 +1111,9 @@ shared class SymbolDisplay {
     }
 
     private func FormatClrTypeName(clrType Type?, qualifyNames bool) string {
+        if ByteStringTypes.IsDefinition(clrType) {
+            return "bytestring"
+        }
         if ManagedReferenceTypes.IsDefinition(clrType, out var readOnlyManaged) {
             return "${(if readOnlyManaged { "readonly " } else { string.Empty })}managed[${FormatClrTypeName(clrType.GetGenericArguments()[0], qualifyNames)}]"
         }

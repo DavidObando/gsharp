@@ -39,6 +39,22 @@ function repositoryMatchStrings(section: string): string[] {
 }
 
 describe('gsharp.tmLanguage.json', () => {
+  it('keeps byte strings non-interpolating with an adjacent unescaped prefix', () => {
+    const bytes = grammar.repository['byte-string'];
+    const prefix = new RegExp(bytes.begin);
+    expect(prefix.exec('b"$name${literal}"')?.index).toBe(0);
+    expect(prefix.test('ab"x"')).toBe(false);
+    expect(prefix.test('$b"x"')).toBe(false);
+    expect(prefix.test('b "x"')).toBe(false);
+    expect(bytes.patterns.some((p: {include?: string}) =>
+      p.include?.startsWith('#interpolation'))).toBe(false);
+    const escape = new RegExp(bytes.patterns[0].match);
+    expect(escape.exec('\\xFF')?.[0]).toBe('\\xFF');
+    expect(escape.test('\\xF')).toBe(false);
+    expect(escape.test('\\a')).toBe(false);
+    expect(escape.exec('\\x000')?.[0]).toBe('\\x00');
+  });
+
   it('is well-formed JSON with the expected scope name', () => {
     expect(grammar.scopeName).toBe('source.gsharp');
     const injection = JSON.parse(fs.readFileSync(injectionPath, 'utf8'));

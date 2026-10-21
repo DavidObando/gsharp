@@ -1705,6 +1705,7 @@ open partial class Parser {
         private func IsLiteralStartToken(kind SyntaxKind) bool {
             return kind == SyntaxKind.NumberToken ||
                 kind == SyntaxKind.StringToken ||
+                kind == SyntaxKind.ByteStringToken ||
                 kind == SyntaxKind.InterpolatedStringToken ||
                 kind == SyntaxKind.TrueKeyword ||
                 kind == SyntaxKind.FalseKeyword ||

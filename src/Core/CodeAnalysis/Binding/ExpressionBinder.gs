@@ -57,6 +57,7 @@ internal partial class ExpressionBinder {
     private let lambdas LambdaBinder
     private let bindTypeClause(TypeClauseSyntax) -> TypeSymbol?
     private let lookupType(string) -> TypeSymbol?
+    private let lookupTypeToken(SyntaxToken) -> TypeSymbol?
     private let resolveClrTypeForGenericArg(TypeSymbol) -> Type?
     private let reportObsoleteUseIfApplicable(TextLocation, Symbol, string) -> void
     private let isAsyncIteratorReturnType(TypeSymbol) -> bool
@@ -94,6 +95,7 @@ internal partial class ExpressionBinder {
         lambdas LambdaBinder,
         bindTypeClause(TypeClauseSyntax) -> TypeSymbol?,
         lookupType(string) -> TypeSymbol?,
+        lookupTypeToken(SyntaxToken) -> TypeSymbol?,
         resolveClrTypeForGenericArg(TypeSymbol) -> Type?,
         reportObsoleteUseIfApplicable(TextLocation, Symbol, string) -> void,
         isAsyncIteratorReturnType(TypeSymbol) -> bool,
@@ -111,6 +113,7 @@ internal partial class ExpressionBinder {
         this.lambdas = lambdas ?? throw ArgumentNullException("lambdas")
         this.bindTypeClause = bindTypeClause ?? throw ArgumentNullException("bindTypeClause")
         this.lookupType = lookupType ?? throw ArgumentNullException("lookupType")
+        this.lookupTypeToken = lookupTypeToken ?? throw ArgumentNullException("lookupTypeToken")
         this.resolveClrTypeForGenericArg = resolveClrTypeForGenericArg ??
             throw ArgumentNullException("resolveClrTypeForGenericArg")
         this.reportObsoleteUseIfApplicable = reportObsoleteUseIfApplicable ??

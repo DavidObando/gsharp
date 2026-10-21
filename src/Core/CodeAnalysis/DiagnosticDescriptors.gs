@@ -2562,6 +2562,16 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "Source generator execution failed: {0}"
     )
+    internal let ByteStringRuntime DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0627",
+        DiagnosticSeverity.Error,
+        "Byte strings require a matching Gsharp.Runtime.Values runtime providing immutable ByteString support."
+    )
+    internal let InvalidByteStringLiteral DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0628",
+        DiagnosticSeverity.Error,
+        "Invalid byte-string literal: {0}"
+    )
     internal let FatalCompilerIOError DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9997",
         DiagnosticSeverity.Error,

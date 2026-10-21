@@ -274,6 +274,7 @@ async sequence[T]
         let typeName string? = switch token.Kind {
             case SyntaxKind.NumberToken: GetNumericTypeName(token.Value)
             case SyntaxKind.StringToken: "string"
+            case SyntaxKind.ByteStringToken: "bytestring"
             case SyntaxKind.InterpolatedStringToken: "string"
             case SyntaxKind.TrueKeyword: "bool"
             case SyntaxKind.FalseKeyword: "bool"

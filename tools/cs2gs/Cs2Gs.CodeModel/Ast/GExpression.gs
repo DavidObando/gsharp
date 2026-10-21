@@ -4,6 +4,7 @@
 
 package Cs2Gs.CodeModel.Ast
 
+import System
 import System.Collections.Generic
 import System.Linq
 
@@ -44,7 +45,7 @@ class LiteralExpression : GExpression {
         get;
     }
 
-    /// Gets the raw, unquoted literal value (for string/char this is the inner text).
+    /// Gets the raw, unquoted value: string/char inner text, or hexadecimal for byte strings.
     prop Value string {
         get;
     }
@@ -64,6 +65,14 @@ class LiteralExpression : GExpression {
         /// @param value The unescaped inner text.
         /// @returns The literal.
         func String(value string) LiteralExpression -> LiteralExpression(LiteralKind.String, value)
+
+        /// Creates an exact-byte literal without decoding its contents.
+        /// @param value Bytes to snapshot.
+        /// @returns The literal.
+        func Bytes(value IEnumerable[uint8]) LiteralExpression -> LiteralExpression(
+            LiteralKind.ByteString,
+            Convert.ToHexString(value.ToArray())
+        )
 
         /// Creates a Go-style backtick raw string literal (issue #3501); the value must contain no backtick or
         /// CR.

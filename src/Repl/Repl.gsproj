@@ -38,6 +38,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <_ExplicitReference Remove="$(GsharpValuesRuntimeAssemblyFullPath)" />
     <ProjectReference Include="@(GsharpCore-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
     <ProjectReference Include="@(GsharpLanguageServer-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
     <ProjectReference Include="..\Sdk\Gsharp.Extensions\Gsharp.Extensions.csproj" ReferenceOutputAssembly="false" />

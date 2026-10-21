@@ -30,6 +30,16 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param location The text location where the error was found.
     func ReportUnterminatedString(location TextLocation) -> Report(location, DiagnosticDescriptors.UnterminatedString)
 
+    /// Reports malformed exact-byte literal syntax.
+    func ReportInvalidByteStringLiteral(location TextLocation, reason string) -> Report(
+        location,
+        DiagnosticDescriptors.InvalidByteStringLiteral,
+        reason
+    )
+
+    /// Reports a missing or incompatible immutable-byte-string runtime.
+    func ReportByteStringRuntime(location TextLocation) -> Report(location, DiagnosticDescriptors.ByteStringRuntime)
+
     /// Reports a number literal as invalid.
     /// @param location The text location where the error was found.
     /// @param text Text found in the source document.

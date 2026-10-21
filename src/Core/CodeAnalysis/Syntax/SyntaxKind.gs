@@ -287,5 +287,6 @@ enum SyntaxKind {
     SpreadElementExpression,
     KeyedCollectionElement,
     IndexedCollectionElement,
-    MemberCollectionElement
+    MemberCollectionElement,
+    ByteStringToken
 }

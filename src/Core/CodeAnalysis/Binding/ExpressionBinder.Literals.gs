@@ -666,6 +666,26 @@ internal partial class ExpressionBinder {
     }
 
     private func BindLiteralExpression(syntax LiteralExpressionSyntax) BoundExpression {
+        if syntax.LiteralToken.Kind == SyntaxKind.ByteStringToken {
+            if !ByteStringTypes.TryResolveDefinition($scope.References!!, out var byteStringType) {
+                Diagnostics.ReportByteStringRuntime(syntax.Location)
+                return BoundErrorExpression(syntax)
+            }
+            let bytes = cast[ImmutableArray[uint8]](syntax.Value!!)
+            let factory = Invariant.Required(
+                ByteStringTypes.GetLiteralFactory(byteStringType),
+                "validated byte-string runtime provides the literal factory",
+                expression: "ByteStringTypes.GetLiteralFactory(byteStringType)"
+            )
+            return BoundClrStaticCallExpression(
+                syntax,
+                factory,
+                TypeSymbol.FromClrTypeWithoutNullability(byteStringType, NullabilityFreeReason.ResolvedTypeName),
+                ImmutableArray.Create[BoundExpression](
+                    BoundLiteralExpression(syntax, Convert.ToHexString(bytes.AsSpan()))
+                )
+            )
+        }
         // Phase 3.C.2: a literal whose syntax value is null is the `nil`
         // literal — preserve null so BoundLiteralExpression picks the Null
         // sentinel type. All other literals default missing values to 0
@@ -3243,9 +3263,12 @@ internal partial class ExpressionBinder {
                 "a non-nested array literal has an element type identifier",
                 expression: "syntax.ElementTypeIdentifier"
             )
-            elementType = lookupType(elementTypeIdentifier.ValueText)
+            elementType = lookupTypeToken(elementTypeIdentifier)
             if elementType == nil {
                 Diagnostics.ReportUndefinedType(elementTypeIdentifier.Location, elementTypeIdentifier.ValueText)
+                return BoundErrorExpression(nil)
+            }
+            if elementType == TypeSymbol.Error {
                 return BoundErrorExpression(nil)
             }
             // ADR-0186 §9: an array element is a nested position, so it stays
@@ -3448,12 +3471,15 @@ internal partial class ExpressionBinder {
         syntax StackAllocExpressionSyntax,
         targetType TypeSymbol? = nil
     ) BoundExpression {
-        let elementType TypeSymbol? = lookupType(syntax.ElementTypeIdentifier.ValueText)
+        let elementType TypeSymbol? = lookupTypeToken(syntax.ElementTypeIdentifier)
         if elementType == nil {
             Diagnostics.ReportUndefinedType(
                 syntax.ElementTypeIdentifier.Location,
                 syntax.ElementTypeIdentifier.ValueText
             )
+            return BoundErrorExpression(nil)
+        }
+        if elementType == TypeSymbol.Error {
             return BoundErrorExpression(nil)
         }
         // The element type must be unmanaged: the buffer is raw, contiguous,

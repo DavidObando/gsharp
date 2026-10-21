@@ -571,6 +571,9 @@ open partial class Parser {
             case SyntaxKind.StringToken {
                 return ParsePostfixChain(ParseStringLiteral())
             }
+            case SyntaxKind.ByteStringToken {
+                return ParsePostfixChain(LiteralExpressionSyntax(syntaxTree, NextToken()))
+            }
             case SyntaxKind.InterpolatedStringToken {
                 return ParsePostfixChain(ParseInterpolatedStringLiteral())
             }

@@ -71,13 +71,18 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    func Evaluate(text string) Cell -> EvaluateCore(text, CancellationToken.None)
+    func Evaluate(text string) Cell -> Evaluate(SourceText.From(text))
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    func Evaluate(source SourceText) Cell -> EvaluateCore(source, CancellationToken.None)
 
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
     func EvaluateAsync(text string, cancellationToken CancellationToken) Task[Cell] -> Task.Run[Cell](
-        () -> EvaluateCore(text, cancellationToken)
+        () -> EvaluateCore(SourceText.From(text), cancellationToken)
     )
 
     /// ```xmldoc
@@ -190,7 +195,8 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
         submission.Compilation
     )
 
-    private func EvaluateCore(text string, cancellationToken CancellationToken) Cell {
+    private func EvaluateCore(source SourceText, cancellationToken CancellationToken) Cell {
+        let text = source.ToString()
         let index = cells.Count + 1
         let originalOut = Console.Out
         let originalError = Console.Error
@@ -209,7 +215,7 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
         var cell Cell
         try {
             try {
-                cell = CompileAndRun(text, index, cancellationToken, stdout, stderr)
+                cell = CompileAndRun(source, index, cancellationToken, stdout, stderr)
             } catch (ex Exception) when !(ex is OperationCanceledException) {
                 let diag = GSharp
                     .Core
@@ -244,7 +250,7 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
     }
 
     private func CompileAndRun(
-        text string,
+        source SourceText,
         index int32,
         cancellationToken CancellationToken,
         stdout StringWriter?,
@@ -257,7 +263,8 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
         let n = (submissionCounter += 1)
         let assemblyName = "gsi$$" + n.ToString()
         let packageName = "gsi" + n.ToString()
-        let tree = SyntaxTree.Parse(SourceText.From(text, string.Empty))
+        let text = source.ToString()
+        let tree = SyntaxTree.Parse(source)
         // ADR-0174 D1: a later cell's resolver is rebuilt from the prior
         // submissions, so it must re-append the bundled driver references
         // (Gsharp.Extensions, Gsharp.Runtime.Channels) the first cell got from

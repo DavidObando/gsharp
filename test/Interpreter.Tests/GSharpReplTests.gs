@@ -8,6 +8,30 @@ import GSharp.Repl.Engine
 import Xunit
 
 open class GSharpReplTests {
+    @Theory
+    @InlineData("typeof(bytestring) == typeof($$bytestring)", true)
+    @InlineData("let value bytestring = bytestring{Value: 7}\nvalue.Value", int32(7))
+    func EarlierUserTypeWinsOverNativeAlias(submission string, expected object) {
+        using let engine = EmittedSessionEngine()
+        let declaration = engine.Evaluate("class bytestring { var Value int32 }")
+        Assert.False(declaration.HasError, string.Join("; ", declaration.Diagnostics))
+        let result = engine.Evaluate(submission)
+        Assert.False(result.HasError, string.Join("; ", result.Diagnostics))
+        Assert.Equal(expected, result.Value)
+    }
+
+    @Theory
+    @InlineData("func bytestring(value object) int32 -> 42")
+    @InlineData("let bytestring (object) -> int32 = (value object) -> 42")
+    func EarlierCallableWinsOverNativeConversion(declaration string) {
+        using let engine = EmittedSessionEngine()
+        let first = engine.Evaluate(declaration)
+        Assert.False(first.HasError, string.Join("; ", first.Diagnostics))
+        let result = engine.Evaluate("bytestring(b\"x\")")
+        Assert.False(result.HasError, string.Join("; ", result.Diagnostics))
+        Assert.Equal(42, result.Value)
+    }
+
     @Fact
     func Snapshot_DisplaysConstructedSourceGenericType() {
         using let engine = EmittedSessionEngine()

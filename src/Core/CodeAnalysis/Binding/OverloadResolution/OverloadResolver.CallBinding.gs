@@ -518,6 +518,21 @@ internal partial class OverloadResolver {
         ) {
             return true
         }
+        if Scope.SubmissionImports is {} submissions {
+            if submissions.TryFindFunctionContainer(Scope.References!!, name, out _) {
+                return true
+            }
+            if submissions.TryFindGlobalVariable(Scope.References!!, name, out _, out var declared) &&
+                declared is {} previous &&
+                (
+                previous.Type is FunctionPointerTypeSymbol || MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                    previous.Type,
+                    out _
+                )
+            ) {
+                return true
+            }
+        }
         if HasEnclosingMemberCallableCandidate(name) {
             return true
         }
@@ -790,7 +805,11 @@ internal partial class OverloadResolver {
             tryBindClrConstructorCall(syntax, out var clrCtorCall) {
             return clrCtorCall!!
         }
-        let conversionType = lookupTypeWithArity(syntax.Identifier.ValueText, ctorPreferredArity)
+        let conversionType = if hasNonConstructorCallable {
+            nil
+        } else {
+            lookupTypeWithArity(syntax.Identifier, ctorPreferredArity)
+        }
         let hasSingleInlineOutArgument = syntax
             .Arguments
             .Count == 1 &&
@@ -876,7 +895,7 @@ internal partial class OverloadResolver {
         // primary constructor is also positionally constructible —
         // `Entry(1, 2)` lowers to a struct literal initializing its fields.
         if !hasNonConstructorCallable &&
-            lookupTypeWithArity(syntax.Identifier.ValueText, ctorPreferredArity) is StructSymbol classType &&
+            lookupTypeWithArity(syntax.Identifier, ctorPreferredArity) is StructSymbol classType &&
             (
             classType.IsClass ||
                 classType.IsInline ||

@@ -2,6 +2,13 @@
 
 Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severity level, a human-readable message, and a source location (file, line, column). This document enumerates all identifiers so that project files can suppress or promote them using standard MSBuild properties.
 
+## Immutable byte strings (ADR-0204)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0627 | Error | Native byte strings require a matching immutable `Gsharp.Runtime.Values` runtime. | Reference the matching SDK runtime; CLR text and mutable arrays are never fallback representations. |
+| GS0628 | Error | A byte literal has a malformed escape/scalar, or its source file was decoded with replacement. | Use exact `\xHH` byte escapes or valid scalar escapes and save source in a valid BOM-selected Unicode encoding. |
+
 ## Native slices (ADR-0190)
 
 | Code | Severity | Meaning | Remedy |

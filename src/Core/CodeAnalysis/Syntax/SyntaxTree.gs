@@ -119,10 +119,7 @@ open class SyntaxTree {
         /// @param filePath The source file path.
         /// @returns A parsed syntax tree.
         func Load(filePath string) SyntaxTree {
-            let rawBytes = File.ReadAllBytes(filePath)
-            let text = File.ReadAllText(filePath)
-            let sourceText = SourceText.From(text, filePath, rawBytes)
-            return Parse(sourceText)
+            return Parse(SourceText.Load(filePath))
         }
 
         /// Parses the source text into a syntax tree.
