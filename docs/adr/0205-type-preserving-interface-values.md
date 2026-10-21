@@ -200,6 +200,9 @@ A **separately accepted receiver-mode ADR** must own snapshot-call slots,
 location-receiver slots, nullable-location entry, method-value captures and
 their imported metadata. This document records their required observations;
 it does not approve a receiver syntax or silently add those modes.
+[Proposed ADR-0206](0206-explicit-snapshot-and-selected-location-receivers.md)
+recommends explicit slot policies and separates capture from invocation copies.
+It remains an independent design gate, not acceptance of this category.
 
 The first category implementation may admit class-reference calls through
 ordinary accessible instance methods. It may store/extract structs and handles
