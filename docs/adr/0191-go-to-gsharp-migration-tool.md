@@ -183,8 +183,8 @@ Reject a proposal that merely exports Go implementation bookkeeping.
 
 | Priority / semantic need | Existing reusable basis and remaining gap | Candidate design and decision gate | Intended application idiom |
 | --- | --- | --- | --- |
-| A: immutable arbitrary bytes | Native slices/arrays provide storage, not immutable ownership or byte-content string semantics | General-purpose `bytestring` type, with library and additive language integration evaluated together. Decide ownership, default, operators, encoding and literal/iteration ergonomics; section 6.2 | A byte-string type, ordinary operations and explicit text conversion, not string-runtime calls |
-| A: interface values and receiver copies | Nominal interfaces, `adapt`, rich objects and managed locations provide slots, forwarding and storage. They do not select original dynamic identity, typed presence or copy-per-call semantics | Opt-in interface-value/structural capability and explicit receiver-mode designs; compare metadata/boxing alternatives in section 7. Prove independent non-Go uses and preserve ordinary CLR/adapt behavior | Typed method calls and capability tests; hidden witness/dispatch metadata |
+| A: immutable arbitrary bytes | ADR-0204's core, UTF-8 conversion, scalar iteration and code-point collection APIs are implemented in-tree; native slices/arrays alone do not supply immutable ownership | Accepted [ADR-0204](0204-immutable-bytestring-values.md); release, separate verified pin movement and Go family admission remain distinct gates; section 6.2 | A byte-string type, ordinary operations and explicit text conversion, not string-runtime calls |
+| A: interface values and receiver copies | Nominal interfaces, `adapt`, rich objects and managed locations provide slots, forwarding and storage. They do not select original dynamic identity, typed presence or copy-per-call semantics | Proposed [ADR-0205](0205-type-preserving-interface-values.md) compares the three section 7 candidates and recommends a finite-evidence value category; snapshot/location calls require a separate receiver-mode ADR. No design acceptance or implementation is implied | Typed method calls and capability tests; hidden witness/dispatch metadata |
 | B: fixed value arrays and addressable aggregates | Structs copy values; native slices/ref indexers preserve locations. Existing `[N]T` remains CLR-array-backed | Separate additive value-array design, including length/type identity, copies, nested writes and view lifetimes. Start proofs with stereo and ten-element values, not a permanent shape-specific output ABI | Value assignment and indexed writes, not `Array2F64.Get/Set` calls |
 | B: slices, arithmetic and evaluation | Native `slice[T]`, nullable descriptors, concrete integers, factories, managed refs and capture cells already exist | First prove ordinary lowering. Where repeated source-width checks or nil/evaluation scaffolding obscure code, evaluate general checked-index/conversion or sequencing facilities in separate ADRs. Do not add a Go slice/index wrapper or resurrect `make` | `slice[T].Create`, ordinary indexing and clear, minimal evaluation temporaries |
 | C: faults, defer/recover, maps and iterator effects | Existing exceptions/control flow, native defer and collections supply mechanisms, not automatic Go equivalence | Separate semantic studies: reusable cleanup/unwinding or control-effect capabilities where justified; exact Go recovery eligibility, panic payload/version and map rules remain explicit mappings | Structured control flow and typed errors, not hand-expanded state/dispatch protocols |
@@ -592,24 +592,16 @@ does not authorize CLR string emission, since byte length/index/order differ
 from UTF-16 operations. Proof-based representation optimization is deferred.
 
 The selected direction is a general-purpose immutable byte-string type.
-The dedicated [ADR-0204](0204-immutable-bytestring-values.md) proposes its
-handwritten examples, library/language comparison, ownership, encoding and
-cost contracts. It remains Proposed and does not make the facility available.
-Its dedicated ADR must compare an ordinary library type with integrated
-language spelling, byte literals and byte/code-point iteration. Library-only
-is not preselected for speed; language integration should earn its complexity
-through readable handwritten and generated use. Existing
-[Values naming](../../src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj)
-uses PascalCase nominal types in `Gsharp.Values`; `Gsharp.Values.ByteString`
-is one **candidate**, not a shipped type or fixed package ABI. A library prototype
-can use the existing alias syntax
-`type bytestring = Gsharp.Values.ByteString`; qualify the nominal type or
-choose a collision-safe alias when needed. Lowercase `bytestring` is not an
-accepted built-in, reserved word, automatic alias or new literal syntax.
-It is the proposed type spelling, whose integration, nominal identity,
-packaging, conversions and constant rules need an accepted dedicated ADR.
-Any compiler feature needs implementation and release, followed by the separate
-N-1 pin gate before repository use. None is implemented here.
+The dedicated [ADR-0204](0204-immutable-bytestring-values.md) is Accepted.
+Its core, native spelling/literals, explicit UTF-8 conversion, scalar iteration
+and code-point collection APIs are implemented in-tree through #5076, #5083,
+#5090 and #5096. That ADR records the handwritten examples, library/language
+comparison, ownership, encoding and cost contracts. Its nominal type is
+`Gsharp.Values.ByteString`; native `bytestring` spelling is compiler integration,
+not a requirement for applications to declare an alias.
+This status does not establish a published SDK, verified pin movement,
+complete witness certification or Go family admission. The N-1 pin still
+governs repository source. This ADR implements none of those APIs or gates.
 
 An immutable owner plus offset and byte length is a candidate representation,
 using native array/slice storage internally where useful. The public requirements
@@ -1004,7 +996,12 @@ Those are separate design choices, not an inseparable Go mode. If a choice
 has no useful general contract, keep its policy narrow rather than add it to
 the language merely for translation.
 
-The dedicated ADR must compare these candidates:
+The dedicated Proposed [ADR-0205](0205-type-preserving-interface-values.md)
+compares these candidates and recommends a finite-evidence category. It keeps
+receiver-mode acceptance separate. Its merge does not accept new semantics,
+implement this execution contract or admit a Go family.
+
+The comparison must cover:
 
 | Candidate | Benefit / reusable implementation basis | Tradeoff and required decision |
 | --- | --- | --- |
@@ -1633,9 +1630,9 @@ The following decisions need separate approval and evidence:
 | --- | --- |
 | M0 maintenance | Preserve implemented schema/profile v1, source-backed method authority and Linux-only complete analysis. Extra facts required by a lowerer need an explicitly versioned extension or separately validated sidecar, never reinterpretation of v1 or .NET-side rebinding. |
 | Text/value design and corpus | Resolve the byte/value capabilities and review realistic output before implementing section 6.1's allowlist. Then pin released compiler/runtime contracts and exact support artifacts and pass the independent matrix. No product implementation is approved by a docs check or compelled by a first-witness schedule. |
-| Reusable bytestring | Dedicated ADR compares library-only and additive type/literal/iteration integration. Decide spelling, ownership/default, nominal identity, constants, operators and encoding policies. Prove usefulness independently of go2gs and preserve CLR `string`. No route or new syntax is accepted here. |
+| Reusable bytestring | ADR-0204 is Accepted, with core/text/scalar/code-point APIs implemented in-tree. Release, separate verified N-1 pin movement, remaining witness certification and Go admission are independent gates. This ADR does not accept a migration mapping or change CLR `string`. |
 | Native integration | Implement the separate execution-contract handshake and demanded probes from section 7 without changing M0. Missing capabilities block only dependent families; never substitute copying arrays, unknown byrefs or reflection proxies. |
-| Interface values and receiver modes | Dedicated ADR compares opt-in structural values, compiler-recognized library storage and hidden nominal boxes. Decide typed presence, dynamic type/capability tests, value snapshots, per-call copies, equality and metadata. Prove handwritten usefulness and unchanged ordinary interfaces/adapt/struct mutation. No public `GoInterface` or universal tag layout is mandated. |
+| Interface values and receiver modes | Proposed ADR-0205 compares opt-in structural values, compiler-recognized library storage and hidden nominal boxes. Its recommended category covers presence, type/capability evidence, insertion snapshots and metadata; snapshot/location calls need a separate receiver-mode ADR. Both need explicit design acceptance and proof. No public `GoInterface` or universal tag layout is mandated. |
 | CLR and separate-library boundary | Specify explicit conversion, wrapper identity, round trips, public ABI, package privacy and cross-unit type evidence before exposing interface values or distributing package assemblies. Unknown imported types stay blocked; ordinary BCL interop must not change. |
 | Maps and control effects | Design readable eager defer, direct recovery, panic payloads, map behavior and iterator nonlocal control flow. Evaluate reusable language support separately from Go-specific policy. Minimal internal fault transport and named results do not complete these contracts. |
 | Performance budgets | Carry the approved prerequisite control-relative threshold and integrated #4511/#4512 allocation ceilings forward, then approve representative M2-M5 profile budgets. The current spike does not approve universal application limits. |
