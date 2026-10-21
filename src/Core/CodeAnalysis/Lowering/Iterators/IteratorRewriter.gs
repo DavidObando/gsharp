@@ -129,7 +129,7 @@ shared class IteratorRewriter {
         body BoundBlockStatement,
         @NotNullWhen(true) out plan IteratorStateMachinePlan?
     ) bool {
-        let elementType TypeSymbol? = GetIteratorElementType(function.Type)
+        let elementType TypeSymbol? = GetIteratorElementType(function.Type, out _)
         if !IteratorDetection.ContainsYield(body) || AsyncIteratorDetection.IsAsyncIteratorFunction(function, body) ||
             elementType == nil {
             plan = nil
@@ -150,11 +150,17 @@ shared class IteratorRewriter {
         }
     }
 
-    private func GetIteratorElementType(type TypeSymbol) TypeSymbol? {
+    internal func ReturnsEnumerable(type TypeSymbol) bool {
+        return GetIteratorElementType(type, out var returnsEnumerable) != nil && returnsEnumerable
+    }
+
+    private func GetIteratorElementType(type TypeSymbol, out returnsEnumerable bool) TypeSymbol? {
+        returnsEnumerable = false
         var type = type
         // ADR-0186 §9: see PlatformTypeSymbol.StripTopLevel.
         type = PlatformTypeSymbol.StripTopLevel(type)
         if type is SequenceTypeSymbol seq {
+            returnsEnumerable = true
             return seq.ElementType
         }
         // Issue #810: prefer the symbolic type argument when the function's
@@ -178,6 +184,7 @@ shared class IteratorRewriter {
                 .OpenDefinition
                 .FullName == "System.Collections.Generic.IEnumerator`1"
         ) {
+            returnsEnumerable = imported.OpenDefinition.FullName == "System.Collections.Generic.IEnumerable`1"
             return imported.TypeArguments[0]
         }
         let clr Type? = type?.ClrType
@@ -188,6 +195,7 @@ shared class IteratorRewriter {
             let def = clr.GetGenericTypeDefinition()
             if def.FullName == "System.Collections.Generic.IEnumerable`1" ||
                 def.FullName == "System.Collections.Generic.IEnumerator`1" {
+                returnsEnumerable = def.FullName == "System.Collections.Generic.IEnumerable`1"
                 return TypeSymbol.FromClrTypeWithoutNullability(
                     clr.GetGenericArguments()[0],
                     NullabilityFreeReason.TypeStructure
@@ -195,6 +203,7 @@ shared class IteratorRewriter {
             }
         }
         if clr.FullName == "System.Collections.IEnumerable" || clr.FullName == "System.Collections.IEnumerator" {
+            returnsEnumerable = clr.FullName == "System.Collections.IEnumerable"
             return TypeSymbol.FromClrTypeWithoutNullability(typeof(object), NullabilityFreeReason.TypeLiteral)
         }
         return nil

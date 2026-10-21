@@ -548,20 +548,30 @@ internal class StateMachineEmitter {
             fields.Add(initialThreadField)
             let fieldMap = Dictionary[VariableSymbol, FieldSymbol]()
             let parameterFields = Dictionary[ParameterSymbol, FieldSymbol]()
+            let replayFields = Dictionary[ParameterSymbol, FieldSymbol]()
             for parameter in plan.Function.Parameters {
-                let field = FieldSymbol("<>3__" + parameter.Name, parameter.Type, Accessibility.Public)
+                let field = FieldSymbol("<>w__" + parameter.Name, parameter.Type, Accessibility.Public)
+                let replayField = FieldSymbol("<>3__" + parameter.Name, parameter.Type, Accessibility.Public)
                 fields.Add(field)
+                fields.Add(replayField)
                 fieldMap[parameter] = field
                 parameterFields[parameter] = field
+                replayFields[parameter] = replayField
             }
             // Issue #641: hoist `this` (the user-class receiver) into a field
             // so the MoveNext body can access instance members of the enclosing
             // class across yield suspension points.
             var thisProxyField FieldSymbol? = nil
-            if plan.Function.ThisParameter != nil && plan.Function.ReceiverType != nil {
-                thisProxyField = FieldSymbol("<>4__this", plan.Function.ReceiverType, Accessibility.Public)
-                fields.Add(thisProxyField)
-                fieldMap[plan.Function.ThisParameter!!] = thisProxyField
+            var replayThisField FieldSymbol? = nil
+            let receiverType = plan.Function.ReceiverType
+            if plan.Function.ThisParameter != nil && receiverType != nil {
+                let proxy = FieldSymbol("<>4__this", receiverType, Accessibility.Public)
+                let replay = FieldSymbol("<>3__<>4__this", receiverType, Accessibility.Public)
+                thisProxyField = proxy
+                replayThisField = replay
+                fields.Add(proxy)
+                fields.Add(replay)
+                fieldMap[plan.Function.ThisParameter!!] = proxy
             }
             let hoistedFields = Dictionary[VariableSymbol, FieldSymbol]()
             var hoistedOrdinal = 1
@@ -818,9 +828,7 @@ internal class StateMachineEmitter {
                     )
                 )
             )
-            // Issue #810: the GetEnumerator and the outer-method kickoff
-            // both build a fresh state-machine literal. When the SM is
-            // generic, the literal target must be the CONSTRUCTED instance
+            // Issue #810: when the SM is generic, a fresh literal must target the CONSTRUCTED instance
             // `<Empty>d__1<MVar(0)>` so the emitted `newobj`/`stfld` tokens
             // land on a TypeSpec carrying the right type arguments. The
             // GetEnumerator overloads run on `this` (an instance of the
@@ -840,89 +848,27 @@ internal class StateMachineEmitter {
                     this.emitCtx.References.MapClrTypeToReferences
                 )!!
             }
-            let getEnumeratorThisParameter = Invariant.Required(
-                getEnumerator.ThisParameter,
-                "a state-machine method has an instance receiver",
-                expression: "getEnumerator.ThisParameter"
+            this.lambdaBodies[getEnumerator] = this.BuildIteratorGetEnumeratorBody(
+                getEnumerator,
+                smClass,
+                stateField,
+                initialThreadField,
+                parameterFields,
+                replayFields,
+                plan.Function.Parameters,
+                thisProxyField,
+                replayThisField
             )
-            let getEnumeratorObjectThisParameter = Invariant.Required(
-                getEnumeratorObject.ThisParameter,
-                "a state-machine method has an instance receiver",
-                expression: "getEnumeratorObject.ThisParameter"
-            )
-            let GetEnumeratorField = func (parameter ParameterSymbol) BoundExpression {
-                return BoundFieldAccessExpression(
-                    nil,
-                    BoundVariableExpression(nil, getEnumeratorThisParameter),
-                    smClass,
-                    parameterFields[parameter]
-                )
-            }
-            let GetEnumeratorObjectField = func (parameter ParameterSymbol) BoundExpression {
-                return BoundFieldAccessExpression(
-                    nil,
-                    BoundVariableExpression(nil, getEnumeratorObjectThisParameter),
-                    smClass,
-                    parameterFields[parameter]
-                )
-            }
-            let getEnumeratorThisProxy = if thisProxyField != nil {
-                BoundFieldAccessExpression(
-                    nil,
-                    BoundVariableExpression(nil, getEnumeratorThisParameter),
-                    smClass,
-                    thisProxyField
-                )
-            } else {
-                default(BoundFieldAccessExpression?)
-            }
-            let getEnumeratorObjectThisProxy = if thisProxyField != nil {
-                BoundFieldAccessExpression(
-                    nil,
-                    BoundVariableExpression(nil, getEnumeratorObjectThisParameter),
-                    smClass,
-                    thisProxyField
-                )
-            } else {
-                default(BoundFieldAccessExpression?)
-            }
-            this.lambdaBodies[getEnumerator] = Lowerer.Lower(
-                BoundBlockStatement(
-                    nil,
-                    ImmutableArray.Create[BoundStatement](
-                        BoundReturnStatement(
-                            nil,
-                            this.CreateIteratorStateMachineLiteral(
-                                smClass,
-                                stateField,
-                                parameterFields,
-                                plan.Function.Parameters,
-                                GetEnumeratorField,
-                                thisProxyField,
-                                getEnumeratorThisProxy
-                            )
-                        )
-                    )
-                )
-            )
-            this.lambdaBodies[getEnumeratorObject] = Lowerer.Lower(
-                BoundBlockStatement(
-                    nil,
-                    ImmutableArray.Create[BoundStatement](
-                        BoundReturnStatement(
-                            nil,
-                            this.CreateIteratorStateMachineLiteral(
-                                smClass,
-                                stateField,
-                                parameterFields,
-                                plan.Function.Parameters,
-                                GetEnumeratorObjectField,
-                                thisProxyField,
-                                getEnumeratorObjectThisProxy
-                            )
-                        )
-                    )
-                )
+            this.lambdaBodies[getEnumeratorObject] = this.BuildIteratorGetEnumeratorBody(
+                getEnumeratorObject,
+                smClass,
+                stateField,
+                initialThreadField,
+                parameterFields,
+                replayFields,
+                plan.Function.Parameters,
+                thisProxyField,
+                replayThisField
             )
             let parameterValueFactory(ParameterSymbol) -> BoundExpression = (
                 parameter ParameterSymbol
@@ -941,10 +887,18 @@ internal class StateMachineEmitter {
                             this.CreateIteratorStateMachineLiteral(
                                 kickoffSmType,
                                 stateField,
+                                initialThreadField,
+                                if IteratorRewriter.ReturnsEnumerable(plan.Function.Type) {
+                                    -2
+                                } else {
+                                    0
+                                },
                                 parameterFields,
+                                replayFields,
                                 plan.Function.Parameters,
                                 parameterValueFactory,
                                 thisProxyField,
+                                replayThisField,
                                 thisProxyValue
                             )
                         )
@@ -970,23 +924,128 @@ internal class StateMachineEmitter {
         }
     }
 
+    private func BuildIteratorGetEnumeratorBody(
+        method FunctionSymbol,
+        smClass StructSymbol,
+        stateField FieldSymbol,
+        initialThreadField FieldSymbol,
+        parameterFields Dictionary[ParameterSymbol, FieldSymbol],
+        replayFields Dictionary[ParameterSymbol, FieldSymbol],
+        parameters ImmutableArray[ParameterSymbol],
+        thisProxyField FieldSymbol?,
+        replayThisField FieldSymbol?
+    ) BoundBlockStatement {
+        let thisParameter = Invariant.Required(
+            method.ThisParameter,
+            "a state-machine method has an instance receiver",
+            expression: "method.ThisParameter"
+        )
+        let Read = func (field FieldSymbol) BoundExpression {
+            return BoundFieldAccessExpression(nil, BoundVariableExpression(nil, thisParameter), smClass, field)
+        }
+        let Write = func (field FieldSymbol, value BoundExpression) BoundStatement {
+            return BoundExpressionStatement(
+                nil,
+                BoundFieldAssignmentExpression(nil, thisParameter, smClass, field, value)
+            )
+        }
+        let equal = Invariant.Required(
+            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+            "int32 equality exists for iterator reuse"
+        )
+        let unused = BoundBinaryExpression(nil, Read(stateField), equal, BoundLiteralExpression(nil, -2))
+        let sameThread = BoundBinaryExpression(nil, Read(initialThreadField), equal, this.IteratorThreadId())
+        let eligible = BoundBinaryExpression(
+            nil,
+            unused,
+            Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                "boolean conjunction exists for iterator reuse"
+            ),
+            sameThread
+        )
+        let reuse = ImmutableArray.CreateBuilder[BoundStatement]()
+        reuse.Add(Write(stateField, BoundLiteralExpression(nil, 0)))
+        // MoveNext can mutate working fields. Replay always starts from separate, unchanged captures.
+        for parameter in parameters {
+            reuse.Add(Write(parameterFields[parameter], Read(replayFields[parameter])))
+        }
+        let thisValue = if replayThisField != nil {
+            Read(replayThisField)
+        } else {
+            default(BoundExpression?)
+        }
+        if thisProxyField != nil && thisValue != nil {
+            reuse.Add(Write(thisProxyField, thisValue))
+        }
+        reuse.Add(BoundReturnStatement(nil, BoundVariableExpression(nil, thisParameter)))
+        let ReadParameter = func (parameter ParameterSymbol) BoundExpression {
+            return Read(replayFields[parameter])
+        }
+        return Lowerer.Lower(
+            BoundBlockStatement(
+                nil,
+                ImmutableArray.Create[BoundStatement](
+                    BoundIfStatement(nil, eligible, BoundBlockStatement(nil, reuse.ToImmutable()), nil),
+                    BoundReturnStatement(
+                        nil,
+                        this.CreateIteratorStateMachineLiteral(
+                            smClass,
+                            stateField,
+                            initialThreadField,
+                            0,
+                            parameterFields,
+                            replayFields,
+                            parameters,
+                            ReadParameter,
+                            thisProxyField,
+                            replayThisField,
+                            thisValue
+                        )
+                    )
+                )
+            )
+        )
+    }
+
+    private func IteratorThreadId() BoundExpression -> BoundClrStaticCallExpression(
+        nil,
+        BclMember.Method(typeof(Environment), "get_CurrentManagedThreadId"),
+        TypeSymbol.Int32,
+        ImmutableArray[BoundExpression].Empty
+    )
+
     private func CreateIteratorStateMachineLiteral(
         smClass StructSymbol,
         stateField FieldSymbol,
+        initialThreadField FieldSymbol,
+        initialState int32,
         parameterFields Dictionary[ParameterSymbol, FieldSymbol],
+        replayFields Dictionary[ParameterSymbol, FieldSymbol],
         parameters ImmutableArray[ParameterSymbol],
         parameterValueFactory(ParameterSymbol) -> BoundExpression,
         thisProxyField FieldSymbol? = nil,
+        replayThisField FieldSymbol? = nil,
         thisProxyValue BoundExpression? = nil
     ) BoundStructLiteralExpression {
         let initializers = ImmutableArray.CreateBuilder[BoundFieldInitializer]()
-        initializers.Add(BoundFieldInitializer(stateField, BoundLiteralExpression(nil, 0)))
+        initializers.Add(BoundFieldInitializer(stateField, BoundLiteralExpression(nil, initialState)))
+        if initialState == -2 {
+            initializers.Add(BoundFieldInitializer(initialThreadField, this.IteratorThreadId()))
+        }
         for parameter in parameters {
-            initializers.Add(BoundFieldInitializer(parameterFields[parameter], parameterValueFactory(parameter)))
+            let value = parameterValueFactory(parameter)
+            initializers.Add(BoundFieldInitializer(replayFields[parameter], value))
+            if initialState == 0 {
+                initializers.Add(BoundFieldInitializer(parameterFields[parameter], value))
+            }
         }
         // Issue #641: capture or propagate `this` into <>4__this.
-        if thisProxyField != nil && thisProxyValue != nil {
-            initializers.Add(BoundFieldInitializer(thisProxyField, thisProxyValue))
+        if replayThisField != nil && thisProxyValue != nil {
+            initializers.Add(BoundFieldInitializer(replayThisField, thisProxyValue))
+            if initialState == 0 && thisProxyField != nil {
+                initializers.Add(BoundFieldInitializer(thisProxyField, thisProxyValue))
+            }
         }
         return BoundStructLiteralExpression(nil, smClass, initializers.ToImmutable())
     }
