@@ -386,6 +386,13 @@ internal class MemberLookup {
         }
     }
 
+    private func CreateImportedExtensionHolderIndex(references ReferenceResolver) Lazy[
+        ImportedExtensionHolderIndex
+    ] -> Lazy[ImportedExtensionHolderIndex](
+        () -> BuildImportedExtensionHolderIndex(references),
+        System.Threading.LazyThreadSafetyMode.ExecutionAndPublication
+    )
+
     private func BuildImportedExtensionHolderIndex(references ReferenceResolver) ImportedExtensionHolderIndex {
         using let measurement = CompilationMeasurements.BeginPhase("references.extension-holders")
         CompilationMeasurements.Count("extensions.holder-scans")
@@ -510,7 +517,8 @@ internal class MemberLookup {
             // imported namespace is probed once. Holders are merged back into
             // reference-set order, then filtered by the consumer's
             // accessibility, which depends on the current assembly name.
-            let index = importedExtensionHolders.GetValue(binderCtx.References, BuildImportedExtensionHolderIndex)
+            let index = importedExtensionHolders.GetValue(binderCtx.References, CreateImportedExtensionHolderIndex)
+                .Value
             let merged = List[HolderCandidate]()
             for namespaceName in namespaces {
                 merged.AddRange(index.GetHolders(namespaceName))
@@ -744,8 +752,14 @@ internal class MemberLookup {
         private let importedExtensionIndexes ConditionalWeakTable[Type, ImportedExtensionIndex] =
         ConditionalWeakTable[Type, ImportedExtensionIndex]()
 
-        private let importedExtensionHolders ConditionalWeakTable[ReferenceResolver, ImportedExtensionHolderIndex] =
-        ConditionalWeakTable[ReferenceResolver, ImportedExtensionHolderIndex]()
+        // ConditionalWeakTable.GetValue can run its factory more than once for
+        // the same key under a race. The factory only creates the Lazy, so the
+        // scan itself runs once per resolver.
+        private let importedExtensionHolders ConditionalWeakTable[
+            ReferenceResolver,
+            Lazy[ImportedExtensionHolderIndex]
+        ] =
+        ConditionalWeakTable[ReferenceResolver, Lazy[ImportedExtensionHolderIndex]]()
 
         /// Issue #3679: distinguishes the internal-inclusive candidate set from the
         /// public-only one inside (cref:methodsIncludingSelfAndInterfacesCache).

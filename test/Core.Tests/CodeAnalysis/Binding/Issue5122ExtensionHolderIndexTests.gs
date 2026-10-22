@@ -4,7 +4,11 @@ import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import System
+import System.Collections.Generic
 import System.Linq
+import System.Reflection
+import System.Threading
+import System.Threading.Tasks
 import Xunit
 
 class Issue5122ExtensionHolderIndexTests {
@@ -32,6 +36,59 @@ namespace HoldersB5122 {
         Assert.True(other.TryImport(ImportSymbol("HoldersB5122", "HoldersB5122", nil)))
         let otherClasses = MemberLookup(BinderContext(other)).GetImportedExtensionClasses()
         Assert.Equal([]string{"Second"}, otherClasses.Select((holder Type) -> holder.Name).ToArray())
+        // Holders from several imported namespaces come back in reference-set
+        // order, not in import order.
+        // The expected order is the metadata order of the reference set, taken
+        // straight from the assembly. Importing in both orders guarantees that
+        // one of the two lookups differs from it unless the result is ordered.
+        let expected = resolver
+            .Assemblies
+            .SelectMany((assembly Assembly) -> assembly.GetTypes())
+            .Select((holder Type) -> holder.Name)
+            .Where((name string) -> name == "First" || name == "Second")
+            .ToArray()
+        Assert.Equal(2, expected.Length)
+        for first in[]string{"HoldersA5122", "HoldersB5122"} {
+            let second = if first == "HoldersA5122" {
+                "HoldersB5122"
+            } else {
+                "HoldersA5122"
+            }
+            let both = BoundScope(nil, resolver)
+            Assert.True(both.TryImport(ImportSymbol(first, first, nil)))
+            Assert.True(both.TryImport(ImportSymbol(second, second, nil)))
+            let ordered = MemberLookup(BinderContext(both)).GetImportedExtensionClasses()
+            Assert.Equal(expected, ordered.Select((holder Type) -> holder.Name).ToArray())
+        }
+        Assert.Equal(1L, measurements.GetCounter("extensions.holder-scans"))
+    }
+
+    @Fact
+    func ExtensionHolders_ConcurrentFirstLookups_ScanTheReferenceSetOnce() {
+        using let fixture = CSharpFixture(`namespace Race5122 {
+    public static class Holder { public static int One(this string value) => 1; }
+}`)
+        using let resolver = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        using let measurements = CompilationMeasurements.Start("test")
+        const workers = 8
+        using let barrier = Barrier(workers)
+        let tasks = List[Task[int32]]()
+        for var i = 0; i < workers; i++ {
+            tasks.Add(
+                Task.Run(
+                    () -> {
+                        let scope_ = BoundScope(nil, resolver)
+                        Assert.True(scope_.TryImport(ImportSymbol("Race5122", "Race5122", nil)))
+                        let lookup = MemberLookup(BinderContext(scope_))
+                        barrier.SignalAndWait()
+                        return lookup.GetImportedExtensionClasses().Count
+                    }
+                )
+            )
+        }
+        for count in Task.WhenAll(tasks).GetAwaiter().GetResult() {
+            Assert.Equal(1, count)
+        }
         Assert.Equal(1L, measurements.GetCounter("extensions.holder-scans"))
     }
 
