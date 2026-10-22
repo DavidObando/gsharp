@@ -8457,6 +8457,13 @@ class Binder {
             let isDirty = dirtyTrees != nil && bodySyntax.SyntaxTree != nil && dirtyTrees.Contains(
                 bodySyntax.SyntaxTree
             )
+            // Without a body cache there is nothing to reuse or store, so the
+            // syntax walk that decides cacheability is skipped (the `gsc` path).
+            if cache == nil {
+                let uncachedResult = bindAndLower()
+                AppendBodyDiagnostics(diagnostics, uncachedResult.Diagnostics, member)
+                return uncachedResult.Body
+            }
             let cacheable = !ContainsSyntheticBodySideEffects(bodySyntax)
             if !isDirty && cacheable && cache != nil && cache.TryReuse(
                 member,
@@ -8470,12 +8477,17 @@ class Binder {
             let result = bindAndLower()
             AppendBodyDiagnostics(diagnostics, result.Diagnostics, member)
             if cacheable {
-                cache?.Store(member, bodySyntax, result.Body, result.Diagnostics)
+                cache.Store(member, bodySyntax, result.Body, result.Diagnostics)
             }
             return result.Body
         }
 
         private func ContainsSyntheticBodySideEffects(node SyntaxNode) bool {
+            CompilationMeasurements.Count("binding.body-cacheability-walks")
+            return WalkSyntheticBodySideEffects(node)
+        }
+
+        private func WalkSyntheticBodySideEffects(node SyntaxNode) bool {
             if node is AnonymousClassExpressionSyntax anonymous && IsRichAnonymousObject(anonymous) {
                 return true
             }
@@ -8483,7 +8495,7 @@ class Binder {
                 return true
             }
             for child in node.GetChildren() {
-                if ContainsSyntheticBodySideEffects(child) {
+                if WalkSyntheticBodySideEffects(child) {
                     return true
                 }
             }

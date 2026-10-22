@@ -7,10 +7,14 @@ package GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import System
+import System.Collections.Generic
 import System.Collections.Immutable
 
 /// Bound program.
 class BoundProgram {
+    private let orderedFunctions Lazy[ImmutableArray[KeyValuePair[FunctionSymbol, BoundBlockStatement]]]
+
     /// Initializes a new instance of the (cref:BoundProgram) class.
     /// @param entryPointPackage The entry-point package; its name is exposed via (cref:PackageName) for
     /// back-compat.
@@ -182,6 +186,9 @@ class BoundProgram {
         Packages = packages
         Diagnostics = diagnostics
         Functions = functions
+        orderedFunctions = Lazy[ImmutableArray[KeyValuePair[FunctionSymbol, BoundBlockStatement]]](
+            () -> BoundProgramOrder.SortFunctions(functions)
+        )
         EntryPoint = entryPoint
         Statement = statement
         Structs = structs
@@ -255,6 +262,12 @@ class BoundProgram {
     prop Functions ImmutableDictionary[FunctionSymbol, BoundBlockStatement] {
         get;
     }
+
+    /// Gets the functions in (cref:SymbolSourceOrderComparer) order. The sort runs
+    /// once per program and is shared by every pass that walks it.
+    internal prop OrderedFunctions ImmutableArray[
+        KeyValuePair[FunctionSymbol, BoundBlockStatement]
+    ] -> orderedFunctions.Value
 
     /// Gets the synthesized or explicit entry-point function for this program,
     /// or null when the compilation produces a library. The body of the entry

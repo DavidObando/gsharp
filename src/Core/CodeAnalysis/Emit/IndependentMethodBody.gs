@@ -81,15 +81,15 @@ internal class IndependentMethodBody {
                 result.Add(SequencePoint.Hidden(offset, default(DocumentHandle)))
                 continue
             }
-            let location = syntax.Location
+            let positions = syntax.Location.GetLineRange()
             result.Add(
                 SequencePoint(
                     offset,
                     pdb.GetOrAddDocument(syntax.SyntaxTree),
-                    location.StartLine + 1,
-                    location.StartCharacter + 1,
-                    location.EndLine + 1,
-                    location.EndCharacter + 1
+                    positions.StartLine + 1,
+                    positions.StartCharacter + 1,
+                    positions.EndLine + 1,
+                    positions.EndCharacter + 1
                 )
             )
         }
