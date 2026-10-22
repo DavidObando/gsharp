@@ -23,7 +23,9 @@ SPEC.loader.exec_module(cb)
 
 CHECKSUM_OFFSET = 0x80 + 24 + 64
 DEBUG_DIR = 0x200
-DEBUG_PAYLOAD = 0x300
+DEBUG_PAYLOAD = 0x300      # entry 0, CodeView (type 2): RSDS, GUID, age, path
+EMBEDDED_PAYLOAD = 0x340   # entry 1, EmbeddedPortablePdb (type 17)
+PDB_CHECKSUM = 0x360       # entry 2, PdbChecksum (type 19): "SHA256", NUL, 32-byte hash
 BODY = 0x400
 
 
@@ -38,12 +40,19 @@ def synthetic_pe() -> bytes:
     optional = 0x80 + 24
     struct.pack_into("<H", data, optional, 0x20B)
     struct.pack_into("<I", data, optional + 112 + 6 * 8, 0x1200)  # debug directory RVA
-    struct.pack_into("<I", data, optional + 112 + 6 * 8 + 4, 28)
+    struct.pack_into("<I", data, optional + 112 + 6 * 8 + 4, 28 * 3)
     section = optional + 0xF0
     struct.pack_into("<IIII", data, section + 8, 0x600, 0x1000, 0x600, 0x0)  # vsize, rva, rawsize, rawptr (offsets +8..+20)
-    struct.pack_into("<I", data, DEBUG_DIR + 16, 8)
-    struct.pack_into("<I", data, DEBUG_DIR + 24, DEBUG_PAYLOAD)
-    data[DEBUG_PAYLOAD:DEBUG_PAYLOAD + 8] = b"RSDSpdb1"
+    for index, (kind, length, offset) in enumerate(((2, 26, DEBUG_PAYLOAD), (17, 16, EMBEDDED_PAYLOAD),
+                                                     (19, 39, PDB_CHECKSUM))):
+        entry = DEBUG_DIR + index * 28
+        struct.pack_into("<IIII", data, entry + 12, kind, length, 0, offset)  # type, size, rva, pointer
+    data[DEBUG_PAYLOAD:DEBUG_PAYLOAD + 4] = b"RSDS"
+    data[DEBUG_PAYLOAD + 4:DEBUG_PAYLOAD + 20] = bytes(range(16))
+    data[DEBUG_PAYLOAD + 24:DEBUG_PAYLOAD + 26] = b"p\0"
+    data[EMBEDDED_PAYLOAD:EMBEDDED_PAYLOAD + 16] = b"compressed-pdb!!"
+    data[PDB_CHECKSUM:PDB_CHECKSUM + 7] = b"SHA256\0"
+    data[PDB_CHECKSUM + 7:PDB_CHECKSUM + 39] = bytes(range(32))
     data[BODY:BODY + 16] = b"method-body-0123"
     return bytes(data)
 
@@ -51,12 +60,18 @@ def synthetic_pe() -> bytes:
 def fake_compiler(directory: Path, name: str, *, pdb: str = "pdb", ref: str = "ref", doc: str = "doc",
                   log: str = "ok", checksum: int = 0, body: str = "", noise: bool = False,
                   seconds: float = 0.0, exit_code: int = 0, omit: tuple = (),
-                  differ_from_call: int = 0, noise_checksum: bool = False) -> str:
+                  differ_from_call: int = 0, noise_checksum: bool = False,
+                  embedded: bool = False, pdb_hash: bool = False, extra: str = "", eol: str = "\n",
+                  log_tail: bytes = b"") -> str:
     """An executable standing in for gsc: writes every output the @rsp names."""
     dll = bytearray(synthetic_pe())
     if checksum:
         dll[CHECKSUM_OFFSET:CHECKSUM_OFFSET + 4] = struct.pack("<I", checksum)
-        dll[DEBUG_PAYLOAD:DEBUG_PAYLOAD + 8] = b"RSDSpdb2"
+        dll[DEBUG_PAYLOAD + 4:DEBUG_PAYLOAD + 20] = bytes(16)  # a different CodeView GUID
+    if embedded:
+        dll[EMBEDDED_PAYLOAD + 3] ^= 1  # same size, different embedded symbols
+    if pdb_hash:
+        dll[PDB_CHECKSUM + 20] ^= 1
     if body:
         dll[BODY:BODY + len(body)] = body.encode()
     path = directory / name
@@ -86,7 +101,9 @@ def fake_compiler(directory: Path, name: str, *, pdb: str = "pdb", ref: str = "r
         "if 'pdb' not in omit: open(pdb_path, 'w').write(pdb_text)\n"
         f"if 'refout' not in omit: open(paths['/refout:'], 'w').write({ref!r})\n"
         f"if 'doc' not in omit: open(paths['/doc:'], 'w').write({doc!r})\n"
-        f"print({log!r}, os.path.dirname(paths['/out:']))\n"
+        f"sys.stdout.buffer.write(({log!r} + ' ' + os.path.dirname(paths['/out:']) + {eol!r}).encode() + {log_tail!r})\n"
+        "sys.stdout.flush()\n"
+        f"if {extra!r}: open(os.path.splitext(paths['/out:'])[0] + '.runtimeconfig.json', 'w').write({extra!r})\n"
         "phases = {'Phases': [{'Name': 'parse', 'ElapsedMilliseconds': 5.0, 'ProcessAllocatedBytes': 1048576},\n"
         "                     {'Name': 'parse', 'ElapsedMilliseconds': 7.0, 'ProcessAllocatedBytes': 1048576}],\n"
         "          'Counters': {'symbols': 3}}\n"
@@ -220,6 +237,48 @@ class VerdictHoleTests(BenchTestCase):
         self.assertEqual(1, code)
 
 
+class StrictInputTests(BenchTestCase):
+    def failures(self, **candidate: object) -> list[str]:
+        code, _, _ = self.bench(fake_compiler(self.root, "a"), fake_compiler(self.root, "b", **candidate))
+        problems = self.report()["cells"]["core"]["problems"]
+        self.assertEqual(1 if problems else 0, code)
+        return problems
+
+    def test_an_embedded_pdb_payload_change_fails(self) -> None:
+        problems = self.failures(embedded=True)
+        self.assertTrue(any("outside the identity groups (1 bytes)" in p for p in problems), problems)
+
+    def test_a_pdb_checksum_hash_change_is_only_an_identity_difference(self) -> None:
+        self.assertEqual([], self.failures(pdb_hash=True))
+        impl = self.report()["cells"]["core"]["parity"]["candidate"][0]["implementation"]
+        self.assertEqual(["debug-payload"], impl["groups"])
+
+    def test_crlf_versus_lf_in_diagnostics_fails(self) -> None:
+        problems = self.failures(eol="\r\n")
+        self.assertIn("candidate run 0: diagnostics differ", problems)
+
+    def test_distinct_invalid_utf8_in_diagnostics_fails(self) -> None:
+        # Both bytes decode to U+FFFD with errors="replace"; raw comparison tells them apart.
+        code, _, _ = self.bench(fake_compiler(self.root, "a", log_tail=b"\xff\n"),
+                                fake_compiler(self.root, "b", log_tail=b"\xfe\n"))
+        self.assertEqual(1, code)
+        self.assertIn("diagnostics differ", " ".join(self.report()["cells"]["core"]["problems"]))
+
+    def test_an_unnamed_sidecar_file_is_compared(self) -> None:
+        a = fake_compiler(self.root, "a", extra='{"x":1}')
+        code, _, _ = self.bench(a, fake_compiler(self.root, "b", extra='{"x":2}'))
+        self.assertEqual(1, code)
+        self.assertIn("file:Core.runtimeconfig.json differs", " ".join(self.report()["cells"]["core"]["problems"]))
+        # Present on one side only is also a difference.
+        code, _, _ = self.bench(fake_compiler(self.root, "c"), fake_compiler(self.root, "d", extra="{}"),
+                                "--work", str(self.root / "work2"))
+        self.assertEqual(1, code)
+
+    def test_a_stage_path_in_diagnostics_is_normalized(self) -> None:
+        # The log prints the staging directory; identical compilers must still match.
+        self.assertEqual([], self.failures())
+
+
 class SafetyTests(BenchTestCase):
     def run_with(self, *extra: str) -> tuple[int, str]:
         a = fake_compiler(self.root, "a")
@@ -262,7 +321,7 @@ class SafetyTests(BenchTestCase):
         log = self.work / "core" / "candidate-0" / "compile.log"
         self.assertTrue(log.exists())
         self.assertIn(str(log), err)
-        self.assertFalse((self.work / "core" / "candidate-0" / "Core.dll").exists())
+        self.assertFalse((self.work / "core" / "candidate-0" / "outputs" / "Core.dll").exists())
         self.assertFalse((self.work / "core" / "stage").exists())
         self.assertTrue((self.work / "compiler-bench-report.json").exists())
 
@@ -295,7 +354,7 @@ class DisciplineTests(BenchTestCase):
     def test_keep_retains_the_outputs(self) -> None:
         a = fake_compiler(self.root, "a")
         self.assertEqual(0, self.bench(a, a, "--keep")[0])
-        self.assertTrue((self.work / "core" / "candidate-0" / "Core.dll").exists())
+        self.assertTrue((self.work / "core" / "candidate-0" / "outputs" / "Core.dll").exists())
 
     def test_a_failed_compile_is_a_tool_error(self) -> None:
         code, _, err = self.bench(fake_compiler(self.root, "a"), fake_compiler(self.root, "b", exit_code=3))
@@ -336,6 +395,14 @@ class PeGroupTests(unittest.TestCase):
         regions, notes = cb.identity_regions(synthetic_pe())
         names = {name for name, _, _ in regions}
         self.assertTrue({"checksum", "debug-directory", "debug-payload"} <= names)
+        # Only the hash-derived bytes are exempt: the CodeView GUID, the PdbChecksum
+        # hash, and each entry's timestamp. The embedded PDB payload is not.
+        covered = {offset for _, start, end in regions for offset in range(start, end)}
+        self.assertTrue(all(o in covered for o in range(DEBUG_PAYLOAD + 4, DEBUG_PAYLOAD + 20)))
+        self.assertTrue(all(o in covered for o in range(PDB_CHECKSUM + 7, PDB_CHECKSUM + 39)))
+        self.assertFalse(any(o in covered for o in range(EMBEDDED_PAYLOAD, EMBEDDED_PAYLOAD + 16)))
+        self.assertFalse(any(o in covered for o in range(DEBUG_PAYLOAD + 20, DEBUG_PAYLOAD + 26)))  # age and path
+        self.assertFalse(any(o in covered for o in range(DEBUG_DIR + 12, DEBUG_DIR + 28)))  # type, size, pointers
         self.assertTrue(any("MVID not located" in note for note in notes))  # synthetic PE has no metadata
 
     def test_the_mvid_group_comes_from_the_pe_layout_reader(self) -> None:

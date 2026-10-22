@@ -11,12 +11,25 @@ relative paths resolve against. A hello-world cell can be derived from the
 first cell's options. Output options are redirected into a work root under
 ~/.cache; the work root may not be under /tmp unless --allow-tmp is given.
 
-Parity: the reference assembly, PDB, XML documentation and diagnostics (the
-compiler's output stream) must be byte-identical. The implementation DLL may
-differ in the groups a deterministic build derives from its content: the COFF
-timestamp, the PE checksum, the MVID and the debug directory with its payloads. Those groups are
-reported by name. The first two baseline runs are compared as a control; a
-difference outside those groups, in the control or the candidate, fails.
+Parity: every file the compiler writes into the staging directory (reference
+assembly, PDB, XML documentation, any sidecar such as runtimeconfig.json) and
+the diagnostics stream (raw bytes, no decoding or newline translation; only the
+run directory path is replaced) must be byte-identical, and present in both
+runs. The implementation DLL is compared as raw bytes except for these
+exemptions, reported by name; each is a value a deterministic build derives from
+the rest of the file, so a real code change cannot hide in it:
+  - timestamp: the COFF TimeDateStamp (a hash when deterministic);
+  - checksum: the PE optional-header checksum (a function of every other byte);
+  - mvid: the 16-byte module version id (a content hash);
+  - debug-directory: the 4-byte TimeDateStamp of each debug directory entry;
+  - debug-payload: the 16-byte GUID of a CodeView entry (type 2) and the hash
+    of a PdbChecksum entry (type 19).
+Everything else is compared exactly, including debug directory types, sizes and
+pointers, the CodeView age and path, and EmbeddedPortablePdb (type 17) payloads,
+which hold the whole compressed PDB. A size difference always fails. Later
+baseline runs are a strict control with no exemption at all. A tolerated
+difference is a bounded statement, not proof of equal code: the check only says
+nothing outside those fields moved.
 
 Exit status: 0 outputs match, 1 an unexpected output difference, 2 a tool
 error (a compile failed, or a measurement could not be taken).
@@ -57,8 +70,6 @@ pe = _load("selfhost_pe", "selfhost_pe.py")
 BenchError = bench.BenchError
 METRICS = bench.METRICS
 KIND_BY_OPTION = {"/out:": "out", "/pdb:": "pdb", "/refout:": "refout", "/doc:": "doc"}
-# Kinds compared byte for byte, in addition to the diagnostics stream.
-EXACT_KINDS = ("pdb", "refout", "doc")
 
 
 def default_work_root() -> Path:
@@ -152,12 +163,22 @@ def identity_regions(data: bytes) -> tuple[list[tuple[str, int, int]], list[str]
         rva, size = u32(data, directories + 6 * 8), u32(data, directories + 6 * 8 + 4)
         if rva and size:
             start = to_offset(rva)
-            regions.append(("debug-directory", start, start + size))
             for index in range(size // 28):
                 entry = start + index * 28
-                length, raw = u32(data, entry + 16), u32(data, entry + 24)
-                if length and raw:
-                    regions.append(("debug-payload", raw, raw + length))
+                # Only the entry's TimeDateStamp is hash-derived; type, size and
+                # pointers must match byte for byte.
+                regions.append(("debug-directory", entry + 4, entry + 8))
+                kind, length, raw = u32(data, entry + 12), u32(data, entry + 16), u32(data, entry + 24)
+                if kind == 2 and length >= 24 and data[raw:raw + 4] == b"RSDS":
+                    # CodeView: signature, GUID, age, path. Only the GUID is content-derived.
+                    regions.append(("debug-payload", raw + 4, raw + 20))
+                elif kind == 19 and length:
+                    # PdbChecksum: algorithm name, NUL, then the hash of the PDB.
+                    nul = data.find(b"\0", raw, raw + length)
+                    if nul >= 0:
+                        regions.append(("debug-payload", nul + 1, raw + length))
+                # Any other type, notably 17 (EmbeddedPortablePdb, the whole compressed
+                # PDB), is compared byte for byte.
     except (ValueError, struct.error) as error:
         notes.append(f"PE header not fully located: {error}")
     try:
@@ -191,15 +212,14 @@ def compare_runs(first: dict, second: dict, first_dir: Path, second_dir: Path) -
     result: dict = {"exact": {}, "implementation": None, "missing": []}
     # An artifact present in one run and absent from the other is a difference, and
     # both runs must have produced an implementation DLL.
-    for kind in ("out", *EXACT_KINDS):
+    for kind in sorted(set(first) | set(second)):
         if (kind in first) != (kind in second):
             side = "candidate or later run" if kind in first else "first run"
             result["missing"].append(f"{kind} output is absent from the {side}")
     if "out" not in first or "out" not in second:
         result["missing"].append("an implementation DLL is required in both runs")
-    for kind in EXACT_KINDS:
-        if kind in first and kind in second:
-            result["exact"][kind] = Path(first[kind]).read_bytes() == Path(second[kind]).read_bytes()
+    for kind in sorted((set(first) & set(second)) - {"out"}):
+        result["exact"][kind] = Path(first[kind]).read_bytes() == Path(second[kind]).read_bytes()
     if "out" in first and "out" in second:
         left, right = Path(first["out"]).read_bytes(), Path(second["out"]).read_bytes()
         regions, notes = identity_regions(left)
@@ -207,9 +227,9 @@ def compare_runs(first: dict, second: dict, first_dir: Path, second_dir: Path) -
         outcome["notes"] = notes
         result["implementation"] = outcome
 
-    def log(directory: Path) -> str:
-        text = (directory / "compile.log").read_text(encoding="utf-8", errors="replace")
-        return text.replace(str(directory), "<run>")  # staged output paths are already "<out>"
+    def log(directory: Path) -> bytes:
+        # Raw bytes: no decoding or newline translation. Only the run directory path is replaced.
+        return (directory / "compile.log").read_bytes().replace(os.fsencode(str(directory)), b"<run>")
 
     result["diagnosticsIdentical"] = log(first_dir) == log(second_dir)
     return result
@@ -280,15 +300,20 @@ def run_once(compiler: str, rsp_text: str, work: Path, label: str, index: int, c
     measured = bench.parse_time((run_dir / "time.txt").read_text(encoding="utf-8"))
     measured["phases"] = read_phases(phases)
     measured["outputs"] = {}
-    for kind, path in output_paths(redirected).items():
-        if Path(path).exists():
-            target = run_dir / ("ref-" + Path(path).name if kind == "refout" else Path(path).name)
-            shutil.move(path, target)
-            measured["outputs"][kind] = str(target)
+    known = {str(Path(path)): kind for kind, path in output_paths(redirected).items()}
+    for staged in sorted(stage.rglob("*")):
+        if not staged.is_file():
+            continue
+        relative = staged.relative_to(stage)
+        # A file no option names (for example <out>.runtimeconfig.json) is compared too.
+        kind = known.get(str(staged), f"file:{relative.as_posix()}")
+        target = run_dir / "outputs" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(staged), target)
+        measured["outputs"][kind] = str(target)
     shutil.rmtree(stage, ignore_errors=True)
     log_path = run_dir / "compile.log"
-    log_path.write_text(log_path.read_text(encoding="utf-8", errors="replace").replace(str(stage), "<out>"),
-                        encoding="utf-8")
+    log_path.write_bytes(log_path.read_bytes().replace(os.fsencode(str(stage)), b"<out>"))
     return measured
 
 
