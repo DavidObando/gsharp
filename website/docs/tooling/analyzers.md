@@ -16,7 +16,7 @@ If you have written a Roslyn analyzer before, everything here will feel familiar
 Analyzers ship as ordinary .NET assemblies. Wire one into a `.gsproj` with the `GsharpCodeAnalyzer` item:
 
 ```xml
-<Project Sdk="Gsharp.NET.Sdk">
+<Project Sdk="Gsharp.NET.Sdk/0.5.212">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>

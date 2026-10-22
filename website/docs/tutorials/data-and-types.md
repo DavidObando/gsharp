@@ -249,7 +249,7 @@ o-1
 
 ## 6. Choose arrays, slices, and maps
 
-Fixed arrays use `[N]T`. Slices use `[]T`, expose `.Length`, and are backed by CLR arrays. Native CLR rectangular arrays use `[,]T` / `[,,]T`, allocate with `[d0, d1]T`, and index with `a[i, j]`. Use CLR collections such as `List[T]` when you need growable storage; CLR collections can use collection initializers:
+`[N]T` and `[]T` are exact CLR arrays with `.Length`, not native slice descriptors. Native `slice[T]` and `readonly slice[T]` have length and capacity, share storage on assignment/ranges, and grow through a returned `.Append(...)` descriptor. `.Clone()` copies elements; readonly is shallow. See the [Tour](../tour/types.md#arrays-and-slices). Native CLR rectangular arrays use `[,]T` / `[,,]T`, allocate with `[d0, d1]T`, and index with `a[i, j]`. Use CLR collections such as `List[T]` when you need growable storage; CLR collections can use collection initializers:
 
 ```gsharp title="Slices.gs"
 // file: Slices.gs

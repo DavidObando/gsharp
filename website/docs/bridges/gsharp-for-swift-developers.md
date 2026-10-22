@@ -21,7 +21,7 @@ Start with [installation](../getting-started/install.md), then compare concepts 
 | `if let` / `guard let` | `if let` / `guard let` | Learn the G# binding and control-flow rules rather than assuming every Swift form exists. |
 | `value ?? fallback` | `value ?? fallback` | Both make the fallback explicit. |
 | `value!` | `value!!` | G# uses two exclamation marks for a null assertion. Prefer handling expected absence. |
-| `[Int32]` | `[]int32` | G# slices are CLR arrays. They do not have Swift Array's value/copy-on-write semantics. |
+| `[Int32]` | `[]int32`, `slice[int32]` | `[]T` is an exact CLR array. Native slice descriptors share storage on assignment/ranges; retain `Append` results and use `Clone()` for a copy. Readonly slices prevent slot writes, not deep mutation. Neither shape has Swift Array's copy-on-write semantics. |
 | `print(value)` | `Console.WriteLine(value)` | Call the .NET console API. |
 | `self` | `this` | Receiver naming differs. |
 | `protocol` | `interface` | This is a conceptual correspondence, not a promise that associated types and protocol features map one-for-one. |
@@ -114,7 +114,7 @@ Read the [concurrency Tour](../tour/concurrency.md), then compare the [ten runna
 
 ## Extensions and errors
 
-Swift's `extension Type { ... }` block is not G# syntax. G# uses receiver functions, with ownership-specific rules described in [Effective G#](../guide/effective-gsharp.md#methods-receiver-functions-and-extension-functions). Follow the published language version; do not assume an in-progress language-design change is already available.
+Swift's `extension Type { ... }` block is not G# syntax. G# receiver functions are always extension methods, even when the receiver type belongs to the same package. Declare instance methods inside the type. See [Effective G#](../guide/effective-gsharp.md#methods-receiver-functions-and-extension-functions). Follow the published language version; do not assume an in-progress language-design change is already available.
 
 G# uses CLR exceptions and `try`/`catch`; it does not encode Swift's `throws` effect in the same way. Nullable results and exceptions solve different problems.
 

@@ -91,7 +91,7 @@ const config: Config = {
         docs: {
           sidebarPath: './sidebars.ts',
           editUrl: 'https://github.com/DavidObando/gsharp/tree/main/website/',
-          // Released 0.4 docs use /docs; development docs use /docs/next.
+          // The newest released snapshot uses /docs; development docs use /docs/next.
         },
         blog: false,
         theme: {

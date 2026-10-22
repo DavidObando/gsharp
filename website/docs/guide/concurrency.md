@@ -434,9 +434,9 @@ async func consume() {
 }
 ```
 
-Combine `scope` with `await for` to bound the lifetime of an async
-iterator. The scope joins the iterator's outstanding work before it
-returns.
+`await for` awaits each iterator advancement and disposes the enumerator when
+iteration ends. A surrounding `scope` joins explicitly started child work; it
+does not automatically register the iterator's internal tasks.
 
 ## Cleanup and concurrency
 

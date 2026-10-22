@@ -1,0 +1,117 @@
+---
+title: "Tour: Concurrency"
+sidebar_position: 5
+draft: false
+description: "Explore structured scopes, async functions, and asynchronous sequences in G#."
+---
+
+# Tour: Concurrency
+
+G# uses `scope` for structured concurrency, `async func` and `await` for task-based asynchrony, and `async sequence[T]` for asynchronous streams. The same `Task` and `Task[T]` types you know from the .NET BCL show up everywhere.
+
+## `scope` — structured concurrency
+
+`scope { ... }` joins the children started with `go` inside it and observes their failures. It does not make sequential calls concurrent or adopt every unrelated .NET task.
+
+This complete, checked example starts two children and collects their results:
+
+```gsharp title="workers.gs"
+package Website.Concurrency
+
+import System
+
+func send(value int32, results chan[int32]) {
+    results <- value
+}
+
+let results = chan[int32](2)
+
+scope {
+    go send(10, results)
+    go send(32, results)
+}
+
+Console.WriteLine(<-results + <-results)
+```
+
+```text
+42
+```
+
+The buffer holds both results while the parent waits for the children. Completion order may vary, but the sum does not. Use `scope` when a parent should not return before its children; [Trail](../tutorials/trail.md) expands this into a bounded worker pool.
+
+## `async func` and `await`
+
+`async func` returns `Task` when its return type is omitted or `Task[T]` when it declares `T`. Explicit `async func handler() void` is a fire-and-forget, non-awaitable event-handler shape matching C# `async void`. `await expr` suspends the surrounding async function until the awaited task completes and yields its result.
+
+```gsharp title="AsyncBasics.gs"
+package GSharp.Tour.AsyncBasics
+
+import System
+import System.Threading.Tasks
+
+async func compute(n int32) int32 {
+    await Task.Delay(5)
+    return n * 2
+}
+
+async func runAll() {
+    let a = await compute(3)
+    let b = await compute(4)
+    Console.WriteLine("a = $a, b = $b")
+}
+
+func Main() {
+    runAll().Wait()
+    Console.WriteLine("done")
+}
+```
+
+```text
+a = 6, b = 8
+done
+```
+
+The async lowering preserves loop back-edges across suspension points, so awaits inside `for`, `while`, and nested loops behave the same as they do in straight-line code.
+
+## `async sequence[T]` — asynchronous streams
+
+A function returning `sequence[T]` produces a synchronous iterator; `async func name() async sequence[T]` produces an asynchronous one. Async sequences are consumed with `await for`:
+
+```gsharp title="AsyncSequence.gs"
+package GSharp.Tour.AsyncSequence
+
+import System
+import System.Threading.Tasks
+
+async func pulses() async sequence[int32] {
+    for i in 1 ... 4 {
+        await Task.Delay(5)
+        yield i
+    }
+}
+
+async func consume() {
+    await for n in pulses() {
+        Console.WriteLine(n)
+    }
+}
+
+func Main() {
+    consume().Wait()
+}
+```
+
+```text
+1
+2
+3
+```
+
+`async sequence[T]` lowers to .NET's `IAsyncEnumerable[T]`, so it interoperates directly with `await foreach` on the C# side.
+
+## Channels and goroutines
+
+G# also offers a Go-flavored layer — `go`, `chan[T]` (with `in` / `out` handles), `select`, `ch.Close()`, and `for v in ch` — as part of the language, no import required. See [Extensions: Go-flavored concurrency](../extensions/go-concurrency) for the full surface.
+
+Next: [Tour: .NET interop](dotnet-interop.md).

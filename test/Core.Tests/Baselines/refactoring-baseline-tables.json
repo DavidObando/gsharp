@@ -3316,6 +3316,31 @@
       "rows=15 sha256=83EA163DBA3F957E"
     ]
   },
+  "samples/WebsiteNativeSlices.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Values, 0.5.0.0, , flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=3 sha256=E1B2430CD824A642"
+    ],
+    "MemberRef": [
+      "rows=13 sha256=04600527E3CB7140"
+    ],
+    "MethodBodies": [
+      "rows=2 sha256=DD214DB81BE9118F"
+    ],
+    "MethodDef": [
+      "rows=2 sha256=286959625C15E956"
+    ],
+    "TypeDef": [
+      "rows=2 sha256=D5D68B8B01D43DB9"
+    ],
+    "TypeRef": [
+      "rows=7 sha256=08C63137B5C8F7C8"
+    ]
+  },
   "samples/WebsiteNullable.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
@@ -3338,6 +3363,32 @@
     ],
     "TypeRef": [
       "rows=7 sha256=B7B4CA21AE2C05C6"
+    ]
+  },
+  "samples/WebsiteReleaseContracts.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Values, 0.5.0.0, , flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "Gsharp.Extensions, 1.0.0.0, , flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=6 sha256=C4FD0CA23D368D1C"
+    ],
+    "MemberRef": [
+      "rows=27 sha256=298E064900045DE4"
+    ],
+    "MethodBodies": [
+      "rows=8 sha256=54965B518853BBFA"
+    ],
+    "MethodDef": [
+      "rows=8 sha256=4E569C404F702A50"
+    ],
+    "TypeDef": [
+      "rows=4 sha256=70064533CF274B89"
+    ],
+    "TypeRef": [
+      "rows=19 sha256=1F601A20DC39174C"
     ]
   },
   "samples/WebsiteSwift.gs": {

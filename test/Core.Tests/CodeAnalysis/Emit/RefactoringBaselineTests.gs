@@ -136,6 +136,9 @@ open class RefactoringBaselineTests {
         let names = resolver.Assemblies.Select((a Assembly) -> a.GetName().Name).ToList()
         Assert.DoesNotContain(HostOnly, names)
         Assert.Contains("System.Runtime", names)
+        Assert.Contains("Gsharp.Extensions", names)
+        Assert.Contains("Gsharp.Runtime.Channels", names)
+        Assert.Contains("Gsharp.Runtime.Values", names)
     }
 
     shared {

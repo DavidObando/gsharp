@@ -32,9 +32,9 @@ The check has four parts:
                 the path, the exact version and the reason it is intentionally
                 not the latest release. An ALLOWED entry that matches nothing
                 is itself an error, so the list cannot rot.
-  4. downloads  website/static/downloads holds the release's Trail and
-                concurrency-pattern zips and no Trail or pattern zip for any
-                other version. Other files there are not checked.
+  4. evidence   The release's downloads exist. Explicit historical archives
+                and authentic editor evidence retain their original hashes;
+                unknown versioned downloads are rejected.
 
 Usage: check-release-version-refs.py [--root DIR]
 
@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import functools
+import hashlib
 import json
 import re
 import subprocess
@@ -60,6 +61,25 @@ RELEASE_JSON = "website/src/data/release.json"
 VERSIONS_JSON = "website/versions.json"
 VERSION_JSON = "version.json"
 DOWNLOADS = "website/static/downloads/"
+
+# Original assets and independently verified prior-cut bundles retain their provenance.
+# JSON is hashed with canonical LF, just as Git stores it.
+HISTORICAL_FILES = {
+    "website/static/img/trail-editor.json":
+        "15bf8041a8216375a72126080118c5344087e437682cc01d004a9a7fbdb0c942",
+    "website/static/img/trail-completion.png":
+        "2fe303f38ff6954ed4197fb7f4e41689f7f3b858da2896f42ee2dd8266669dde",
+    "website/static/img/trail-output.png":
+        "908a9456f70ffe450834cbce1041bfae46350a3c8490a9c4316eea535172f5b9",
+    DOWNLOADS + "trail-0.4.591.zip":
+        "f6f18542d7c02e29caefdbab065d89b5c81a3ddb803a3dba96d7f26deebb225b",
+    DOWNLOADS + "concurrency-patterns-0.4.591.zip":
+        "7f4592ef17c43a8c12ed727ab43ce2bf2b421426bc8474d11c5123cf9a52a89b",
+    DOWNLOADS + "trail-0.5.199.zip":
+        "5c71f443c6447e884bc50cc79df238863b1d359c8def8db5afd3ab34f7a53a4d",
+    DOWNLOADS + "concurrency-patterns-0.5.199.zip":
+        "bcc0fd1ab5c708fe7ea6338f82087e703123ea535d1438029ca30b30f7d5d7cf",
+}
 
 # A whole NuGet version token: three or four numeric parts and an optional
 # prerelease suffix ending in an alphanumeric. Matching the whole token matters:
@@ -123,14 +143,14 @@ TRACKED: tuple[Tracked, ...] = (
       for root, label in (("website/docs", "docs"),
                           ("website/versioned_docs/version-{D}", "default snapshot"))
       for page, pattern, why in DOC_PAGES),
-    Tracked("website/docs/release-notes.md", r"The published \*\*({V})\*\* release", 1,
+    Tracked("website/docs/release-notes.md", r"installation/download examples target \*\*({V})\*\*", 1,
             "release notes name the release the website installs"),
-    Tracked("website/versioned_docs/version-{D}/release-notes.md", r"^## ({V}) at a glance$", 1,
+    Tracked("website/versioned_docs/version-{D}/release-notes.md", r"^## ({V}) \([^)]+\)$", 1,
             "default snapshot release notes are headed by their release"),
     Tracked("website/versioned_docs/version-{D}/release-notes.md",
-            r"follows the published `v({V})` Git tag", 1,
+            r"This snapshot is grounded in \[`v({V})`\]", 1,
             "default snapshot names its source tag"),
-    Tracked("docs/docs-authoring.md", r"refreshed against `v({V})`", 1,
+    Tracked("docs/docs-authoring.md", r"snapshot is based on `v({V})`", 1,
             "names the tag the default snapshot was refreshed from"),
     # Snapshots cut before the guide moved to docs/ keep their own copy.
     Tracked("website/versioned_docs/version-{D}/contributing/docs-authoring.md",
@@ -140,11 +160,6 @@ TRACKED: tuple[Tracked, ...] = (
             "names the tag the default snapshot was refreshed from"),
     Tracked("website/static/data/concurrency-checks.json", r"\"sdkVersion\":\s*\"({V})\"", 1,
             "evidence from website/tests/verify-concurrency-patterns.py"),
-    Tracked("website/static/img/trail-editor.json", r"\"applicationSdk\":\s*\"({V})\"", 1,
-            "Trail editor capture: the SDK the application used"),
-    Tracked("website/static/img/trail-editor.json",
-            r"\"extension\":\s*\"gsharplang\.vscode-gsharp ({V})\"", 1,
-            "Trail editor capture: the VS Code extension it was taken with"),
     Tracked("samples/Trail/Trail.gsproj", r"Sdk=\"Gsharp\.NET\.Sdk/({V})\"", 1,
             "packaged into the Trail download"),
     Tracked("samples/ConcurrencyPatterns/gsharp/Patterns.gsproj",
@@ -183,6 +198,9 @@ ALLOWED: tuple[Allowed, ...] = (
             "synthetic versions in cs2gs project-transformer test data"),
     Allowed("build/test-selfhost-pack-stage1.py", frozenset(),
             "synthetic versions in the stage-1 SDK pack script's unit-test fixtures"),
+    Allowed("build/test-selfhost-stage2.py", frozenset({"0.4.591"}),
+            "fixed published pin and override-rejection inputs in the stage-2 controller's "
+            "isolated test fixtures, not the SDK used to build the repository"),
 )
 
 SKIPPED_SUFFIXES = (".lock.json", "package-lock.json", ".zip", ".png", ".jpg", ".jpeg",
@@ -215,6 +233,13 @@ class Tree:
         if path in self.overlay:
             return self.overlay[path]
         return _read(self.root, path)
+
+    def read_bytes(self, path: str) -> bytes | None:
+        if path in self.overlay:
+            text = self.overlay[path]
+            return text.encode("utf-8") if text is not None else None
+        file = self.root / path
+        return file.read_bytes() if file.is_file() else None
 
     def pins(self, path: str) -> tuple[tuple[str, int], ...]:
         """(version, line) of every package-qualified pin in the file."""
@@ -347,33 +372,43 @@ def check(tree: Tree) -> list[str]:
         if path.endswith(SKIPPED_SUFFIXES):
             continue
         for found, line in tree.pins(path):
-            if found == version:
-                continue
             allowed = next(
                 (a for a in ALLOWED
                  if fnmatch.fnmatchcase(path, a.glob) and (not a.versions or found in a.versions)),
                 None)
+            if allowed is not None:
+                used.add(allowed)
+            if found == version:
+                continue
             if allowed is None:
                 problems.append(
                     f"{path}:{line}: pins {found}, release is "
                     f"{version}; update it or add an ALLOWED entry with the reason")
-            else:
-                used.add(allowed)
     for entry in ALLOWED:
         if entry not in used:
             problems.append(
                 f"build/check-release-version-refs.py: ALLOWED entry {entry.glob} "
                 f"{sorted(entry.versions) or '(any)'} matches nothing; remove it")
 
-    # 4. downloads
+    # 4. current downloads and immutable historical evidence
     zip_pattern = re.compile(r"(trail|concurrency-patterns)-(" + VER + r")\.zip")
     downloads = {p[len(DOWNLOADS):] for p in paths if p.startswith(DOWNLOADS)}
     expected = {f"trail-{version}.zip", f"concurrency-patterns-{version}.zip"}
+    expected.update(p[len(DOWNLOADS):] for p in HISTORICAL_FILES if p.startswith(DOWNLOADS))
     for name in sorted(expected - downloads):
         problems.append(f"{DOWNLOADS}{name}: missing (website/scripts/prepare-showcase.py writes it)")
     for name in sorted(downloads - expected):
         if zip_pattern.fullmatch(name):
             problems.append(f"{DOWNLOADS}{name}: download for a release other than {version}; delete it")
+    for path, expected_hash in HISTORICAL_FILES.items():
+        data = tree.read_bytes(path)
+        if data is None:
+            problems.append(f"{path}: missing historical evidence")
+            continue
+        if path.endswith(".json"):
+            data = data.replace(b"\r\n", b"\n")
+        if hashlib.sha256(data).hexdigest() != expected_hash:
+            problems.append(f"{path}: historical evidence hash changed; do not relabel or regenerate it")
 
     return problems
 

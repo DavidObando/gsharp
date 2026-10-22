@@ -65,6 +65,12 @@ For expected-output blocks in tutorials and the Tour, copy the text from the sam
 
 The homepage imports the complete `samples/Website*.gs` fixtures and their `.golden` output directly. Run `python3 website/tests/verify-examples.py` from the repository root when changing them or the advertised release. It checks the published template and SDK in an isolated workspace; a pass with a development compiler alone does not establish compatibility with the release.
 
+Use `python` instead of `python3` on Windows if the latter is a Store alias. The equivalent website commands are `python scripts/prepare-showcase.py && npx --no-install tsc` and `python scripts/prepare-showcase.py && npx --no-install docusaurus build && npx --no-install pagefind --site build`.
+
+Run `python3 website/tests/verify-trail.py`, `python3 website/tests/verify-concurrency-patterns.py --race`, and `python3 -m unittest discover -s website/tests -p 'test_*.py'` for download changes. The preparation script canonicalizes packaged text to LF before hashing; historical archives remain untouched. The line-ending test compares LF and CRLF checkouts byte for byte. Go's race detector is unavailable on Windows ARM64; run without `--race` there and record that limitation. On Windows, suppress OS crash dialogs for the intentional negative subprocesses with `python -c "import ctypes, runpy; ctypes.windll.kernel32.SetErrorMode(2); runpy.run_path(r'website\tests\verify-concurrency-patterns.py', run_name='__main__')"`.
+
+For worktree-local verification, set `TEMP` and `TMP` to a named directory under that worktree. Put empty `<Project />` files named `Directory.Build.props` and `Directory.Build.targets` in its parent so downloaded projects do not inherit the compiler repository's build customization. Keep its ancestor NuGet source configuration available. Do not change the repository pin or lock files to bypass a restore failure.
+
 ## Source material
 
 The site content is grounded in two research artifacts produced while planning the site, plus the in-repo references:
@@ -85,7 +91,9 @@ Do not hard-code the deployed `/gsharp/` prefix in internal links. Preserve docu
 
 `website/docs` is development documentation at `/docs/next`. The first entry in `versions.json` is the default released snapshot at `/docs`; older snapshots retain their versioned paths.
 
-When refreshing a release, use the source from its actual Git tag, not a wholesale copy of unreleased main. The 0.4 snapshot was refreshed against `v0.4.591`. Update the advertised package in `src/data/release.json`, the matching installation instructions, and the public-installation checks together. Historical versions must retain their own syntax and commands.
+When refreshing a release, use the source from its actual Git tag, not a wholesale copy of unreleased main. The 0.5 snapshot is based on `v0.5.212` (`242d8777c778db4272103c9dcefd6d63609e10ee`, published October 22, 2026 at 01:07:10 UTC), with reviewed editorial corrections. The 0.4 snapshot remains based on `v0.4.591`. Update the advertised package in `src/data/release.json`, the matching installation instructions, and the public-installation checks together. Historical versions must retain their own syntax and commands.
+
+The original Trail editor captures remain historical 0.4.591 evidence. Preserve the image bytes and provenance; distinguish the extension version, application SDK and .NET SDK. Verify new downloads independently with the published SDK instead of relabeling screenshots.
 
 ## Presentation and search
 

@@ -14,7 +14,7 @@ description: "Build, run, test, and package G# projects using the Gsharp.NET.Sdk
 The `Gsharp.Templates` package provides `dotnet new` templates. The console template is the fastest path to a runnable project.
 
 ```bash
-dotnet new install Gsharp.Templates
+dotnet new install Gsharp.Templates::0.5.212
 dotnet new gsharp-console -n MyApp
 cd MyApp
 dotnet build
@@ -34,7 +34,7 @@ The template pins the `Gsharp.NET.Sdk` version into the generated project, sets 
 A `.gsproj` is an SDK-style MSBuild project. The SDK attribute selects G# compilation; the usual .NET properties describe the output.
 
 ```xml title="MyApp.gsproj"
-<Project Sdk="Gsharp.NET.Sdk">
+<Project Sdk="Gsharp.NET.Sdk/0.5.212">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
@@ -224,7 +224,7 @@ Stray `.cs` `Compile` items produced by other MSBuild targets are partitioned ou
 Use `OutputType` `Library` for reusable assemblies.
 
 ```xml title="MyLibrary.gsproj"
-<Project Sdk="Gsharp.NET.Sdk">
+<Project Sdk="Gsharp.NET.Sdk/0.5.212">
   <PropertyGroup>
     <OutputType>Library</OutputType>
     <TargetFramework>net10.0</TargetFramework>
@@ -275,12 +275,12 @@ cp /path/to/Gsharp.NET.Sdk.<version>.nupkg packages/
 dotnet build
 ```
 
-You can also pin an SDK version through `global.json` next to the project.
+The examples above pin the SDK directly in `Sdk="Gsharp.NET.Sdk/0.5.212"`, so they work outside this repository. Alternatively, use the unversioned `Sdk="Gsharp.NET.Sdk"` with an adjacent `global.json`:
 
 ```json title="global.json"
 {
   "msbuild-sdks": {
-    "Gsharp.NET.Sdk": "0.4.591"
+    "Gsharp.NET.Sdk": "0.5.212"
   }
 }
 ```

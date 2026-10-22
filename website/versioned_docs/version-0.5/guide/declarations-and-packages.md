@@ -1,0 +1,269 @@
+---
+title: "Declarations and packages"
+sidebar_position: 3
+draft: false
+description: "Declare names, organize packages, and control visibility in G# programs."
+---
+
+# Declarations and packages
+
+Declarations define the package-level and type-level shape of a G# program. This guide summarizes the current parser and binder behavior; the full EBNF is in the [language specification](../ref/spec.md#appendix-full-parser-grammar).
+
+## Packages
+
+A file may begin with a package declaration:
+
+```gsharp
+package Company.Product.Feature
+```
+
+The compiler supports multi-file and multi-package builds in the emit path. Top-level statements are allowed, but mixing top-level statements with an explicit `Main` entry point is diagnosed.
+
+## Imports and aliases
+
+Imports bring packages or CLR namespaces into scope. Use an alias when two imports would otherwise compete or when a long CLR namespace needs a local name.
+
+```gsharp
+import System
+import Text = System.Text
+```
+
+The compiler can add an implicit `System` import by default. Use `/noimplicitimports` when documenting or testing examples that should show every dependency explicitly.
+
+A non-alias import whose full path names a type also acts like C# `using static`: the type's `shared` / static members are available as an unqualified fallback. Namespace imports and aliases do not hoist statics, and ambiguous static imports are diagnosed at the use site.
+
+```gsharp
+import System.Math
+
+let hypotenuse = Sqrt(3.0 * 3.0 + 4.0 * 4.0)
+```
+
+## Visibility
+
+G# accepts `public`, `internal`, and `private` in the grammar positions where declarations support accessibility. Defaults are context-specific. In guides, prefer explicit visibility for public API examples and omit it for local or private examples. A top-level `private func` is emitted as assembly-internal so sibling types in the same assembly can call it, but it is not exported to consumers; `private` members inside user types remain true CLR private members.
+
+## Variables and constants
+
+Use `const`, `let`, and `var` declarations at package scope or statement scope. `let` and `const` require initializers; `var` can be initialized or declared with a type for the default value.
+
+```gsharp
+const answer = 42
+let greeting = "hello"
+var count int32
+var total = 0
+```
+
+Deconstruction is available in `let` forms. Multi-target assignment accepts
+writable storage targets and either one value per target or one matching tuple.
+
+```gsharp
+let (x, y) = pair
+let { Name = n, Age = a } = person
+left, right = right, left
+values[i], box.Value = 1, 2
+left, right = Pair()
+```
+
+
+## Functions and methods
+
+A function declaration starts with `func`. `async func` declares an async function. Receiver clauses attach behavior to a receiver type and are unconditionally extension functions — this holds for imported CLR types, BCL primitives, types from referenced packages, and types this package owns alike (classes, structs, and enums). Methods on owned classes and structs are declared inside the type body instead; there is no receiver-clause spelling for an owned instance method.
+
+```gsharp
+func Add(x int32, y int32) int32 {
+    return x + y
+}
+
+func Square(x int32) int32 -> x * x
+
+class Point {
+    var X int32
+    var Y int32
+
+    func LengthSquared() int32 {
+        return X * X + Y * Y
+    }
+}
+
+// Extension on a type this package does not own (a BCL primitive):
+func (value int32) Abs() int32 {
+    if value < 0 { return -value }
+    return value
+}
+```
+
+Generic functions use bracketed type parameters and bracketed type arguments.
+
+Parameters may carry a ref-kind modifier (`ref`, `out`, `in`, or `scoped`) and may declare a compile-time-constant default value to become optional. Two functions sharing a name are overloads when they differ by parameter types, arity, or ref-kinds; differing by return type alone is not a distinguishing signature. See the [feature matrix](../ref/feature-matrix.md) for the full capability table.
+
+```gsharp
+func greet(name string = "world", excited bool = false) string {
+    return excited ? "hi, $name!" : "hi, $name"
+}
+
+// Overloads — differ by arity.
+func area(width int32, height int32) int32 { return width * height }
+func area(side int32) int32                { return side * side }
+
+// Ref-kind parameters.
+func swap[T](ref a T, ref b T) {
+    let t = a
+    a = b
+    b = t
+}
+
+func tryParse(s string, out value int32) bool {
+    value = 0
+    if Int32.TryParse(s, out value) { return true }
+    return false
+}
+```
+
+A function can declare a managed-pointer return with `ref` before the return type clause — `func at(arr []int32, i int32) ref int32 { return ref arr[i] }`. Diagnostics `GS0248`–`GS0255` cover the supporting rules.
+
+Expression-bodied members use the G# arrow `->`, not C# `=>`. The form is available for free functions, methods, read-only properties, accessors, indexers, operators, and conversion operators; constructors, finalizers, and local functions keep block bodies.
+
+A named delegate type uses the standalone `delegate Name(parameters) ReturnType;` declaration, not a `type` alias. Omit the return type for a void delegate; the trailing semicolon is required:
+
+```gsharp
+delegate Handler(sender Object, e EventArgs);
+```
+
+Named delegates emit as real CLR `MulticastDelegate`-derived types so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types.
+
+## Type declarations
+
+The aggregate keyword (`class`, `struct`, `enum`, `interface`) is the declaration head. `data` adds structural synthesis (equality, `with`-copy, deconstruction). `inline struct` declares a single-field value wrapper. `partial class`, `partial struct`, and `partial interface` split one type across files or generated sources; every duplicate part must carry `partial`, and partial enums are not supported. Inside a `partial class` or `partial struct`, an individual `func` member may also be `partial`, splitting one method into a signature-only declaring part (`partial func F() int32;` — carrying any annotations) and one implementing part with the body; unlike C#, G# requires the implementing part to exist. A Roslyn source generator can supply the implementing part at build time: `shared { @GeneratedRegex("\\d+") private partial func Digits() Regex; }` (a static partial method goes in a `shared` block; `private shared partial func` is not valid). Partial properties, partial interface members, and top-level partial functions are not supported. `sealed class` / `sealed interface` declare Kotlin-style closed hierarchies. Payload-bearing enums (`enum Shape { Circle(r float64); Square(s float64) }`) are discriminated unions. Use contextual `type` for aliases (`type Count = int32`); named delegates have a separate declaration head (`delegate Greeter(name string);`).
+
+```gsharp
+data struct Point {
+    X int32
+    Y int32
+}
+
+open class Service(name string) {
+    prop Name string { get; }
+}
+
+enum Result { Ok, Failed }
+```
+
+Classes can have primary constructors, explicit `init` constructors, base clauses, fields, methods, properties, events, and `shared` static members. Base classes must be open to derive from; overriding uses `override`.
+
+Classes and structs can declare nested `class`, `struct`, `interface`, or `enum` types. A nested type can be referenced by simple name when unambiguous or by a qualified name such as `Outer.Inner`; qualified nested names also work in generic arguments and composite literals.
+
+Qualified constructor calls such as `Outer[int32].User()` also retain the enclosing construction and select the nested type's existing `init` overloads. The same call can appear in an expression-tree lambda (`() -> Outer[int32].User()`). Composite literals remain a separate construction form; replacing `()` with `{}` is not a constructor-binding workaround with equivalent initializer semantics.
+
+A primary-constructor parameter list accepts a trailing variadic `name ...T` parameter (`class`, `struct`, `data class`, `data struct`, `inline struct`). The variadic param promotes to a `[]T` auto-field with the same name and call binding follows the standard variadic pack / pass-through rules.
+```gsharp
+class Tags(name string, tags ...string) { }
+
+let t = Tags("project", "a", "b", "c")   // t.tags is []string{"a", "b", "c"}
+```
+
+## Properties, events, and static members
+
+Properties use contextual `prop` and may have accessors. Events use contextual `event` and may declare `add`, `remove`, and `raise` accessors. Static members live in a contextual `shared` block.
+
+```gsharp
+class Counter {
+    shared {
+        var Created int32
+    }
+
+    prop Value int32 { get; }
+    event Changed () -> void
+}
+```
+
+An abstract class can explicitly require property accessors without storage:
+
+```gsharp
+abstract class RequiredValue {
+    public abstract prop Value int32 { get; init; }
+}
+class Value : RequiredValue {
+    public override prop Value int32 { get; init; }
+    public init(value int32) { this.Value = value }
+}
+```
+
+Every non-abstract descendant must override the required accessors. An abstract
+descendant may inherit them or use `abstract override prop` to reabstract a
+virtual property. A concrete `open prop Value int32 { get; init; }` still
+synthesizes backing storage, including inside an abstract owner. Abstract
+properties cannot have accessor bodies or private required accessors.
+
+Indexers are properties named `this[...]` and lower to CLR `Item` default members:
+
+```gsharp
+class Buffer {
+    private var data []int32 = [4]int32
+
+    prop this[i int32] int32 {
+        get -> data[i]
+        set -> data[i] = value
+    }
+}
+```
+
+Static initialization logic lives in `shared { init { ... } }`. Static field initializers run first; one or more `init` blocks are concatenated in source order into the type initializer and run once before first static access.
+
+```gsharp
+class Tables {
+    shared {
+        private let Values []int32 = [4]int32
+        init {
+            Values[0] = 1
+        }
+    }
+}
+```
+
+User-defined conversion operators are declared as static operator functions on owned structs. Implicit conversions apply in target-typed contexts; explicit conversions use the target-type call form.
+
+```gsharp
+struct Bytes {
+    var Value []uint8
+}
+
+func operator implicit (b Bytes) []uint8 -> b.Value
+func operator explicit (value []uint8) Bytes -> Bytes{Value: value}
+```
+
+Compound-assignment operators are in-place instance members. They accept one
+right-hand operand, return no value, and may use either the in-body or receiver
+form:
+
+```gsharp
+class Counter {
+    var Value int32
+
+    func operator +=(amount int32) {
+        Value = Value + amount
+    }
+}
+```
+
+## Explicit interface implementations
+
+When two interfaces need distinct implementations of the same member, place
+the interface type in a qualifier clause immediately after `func`, `prop`, or
+`event`:
+
+```gsharp
+class Both : ILeft, IRight {
+    func (ILeft) Name() string -> "left"
+    func (IRight) Name() string -> "right"
+}
+```
+
+The qualifier accepts simple, qualified, or generic interface types and also
+works for properties, indexers, events, and static interface methods or
+properties inside `shared`. The member is callable through the corresponding
+interface view and emits the normal CLR explicit-implementation bridge.
+
+
+## Annotations
+
+Annotations start with `@` and may include a use-site target such as `@field:` or `@return:`. They are part of declaration syntax and map toward CLR metadata attributes. A function annotated with `@DllImport("libname", ...)` whose body is a single `;` is bound as a P/Invoke stub; see [CLR interop &gt; Unmanaged interop (P/Invoke)](../ref/clr-interop.md#unmanaged-interop-pinvoke).

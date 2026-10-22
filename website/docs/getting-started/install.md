@@ -22,10 +22,10 @@ The list should include a `10.0` SDK. If `dotnet` is not found, finish installin
 
 ## Start with the project template
 
-These commands install the published **0.4.591** template and create a console application:
+These commands install the published **0.5.212** template and create a console application:
 
 ```bash
-dotnet new install Gsharp.Templates::0.4.591
+dotnet new install Gsharp.Templates::0.5.212
 dotnet new gsharp-console -n MyApp
 cd MyApp
 dotnet run
@@ -72,7 +72,7 @@ See [VS Code setup](../tooling/vscode.md) for configuration and [debugging](../t
 For an existing source directory, a minimal `.gsproj` is:
 
 ```xml title="HelloWorld.gsproj"
-<Project Sdk="Gsharp.NET.Sdk/0.4.591">
+<Project Sdk="Gsharp.NET.Sdk/0.5.212">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
@@ -89,13 +89,14 @@ This is the contributor/preview path, not a prerequisite for using the release:
 ```bash
 git clone https://github.com/DavidObando/gsharp.git
 cd gsharp
-dotnet build GSharp.sln
+dotnet restore GSharp.slnx --locked-mode
+dotnet build GSharp.slnx --configuration Release --no-restore -graph
 ```
 
 Then run a checked-in sample:
 
 ```bash
-dotnet src/Compiler/bin/Debug/net10.0/gsc.dll samples/HelloWorld.gs
+dotnet out/bin/Release/Compiler/gsc.dll samples/HelloWorld.gs
 ```
 
 Without `/out`, `gsc` emits and runs the program. Add `/out` to save an assembly. Read the [compiler CLI reference](../tooling/gsc.md) for references, target frameworks, and output options.

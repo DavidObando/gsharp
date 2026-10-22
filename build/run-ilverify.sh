@@ -39,6 +39,7 @@ GSC_DLL="$ROOT/out/bin/$CONFIG/Compiler/gsc.dll"
 EXTENSIONS_DLL="$ROOT/out/bin/$CONFIG/Gsharp.Extensions/Gsharp.Extensions.dll"
 CHANNELS_DLL="$ROOT/out/bin/$CONFIG/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.dll"
 DIAGNOSTICS_DLL="$ROOT/out/bin/$CONFIG/IlVerifyDiagnostics/IlVerifyDiagnostics.dll"
+VALUES_DLL="$ROOT/out/bin/$CONFIG/Gsharp.Runtime.Values/Gsharp.Runtime.Values.dll"
 SAMPLES_DIR="$ROOT/samples"
 BASELINE_FILE="$ROOT/build/ilverify-known-failures.txt"
 TMP_BASE="${TMPDIR:-/tmp}"
@@ -52,18 +53,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "==> Building gsc, Gsharp.Runtime.Channels and Gsharp.Extensions ($CONFIG)"
+echo "==> Building gsc, Gsharp.Runtime.Channels, Gsharp.Runtime.Values and Gsharp.Extensions ($CONFIG)"
 # Gsharp.Extensions -> Gsharp.NET.Sdk packs gsgen via a raw <MSBuild> task, so
 # its restore does not flow transitively; restore the solution like CI does.
 dotnet restore GSharp.slnx --nologo -v:q
 dotnet build src/Compiler/Compiler.gsproj -c "$CONFIG" --no-restore --nologo -v:q
+# This G# project deliberately retains its .csproj filename for existing tooling.
 dotnet build src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj -c "$CONFIG" --no-restore --nologo -v:q
 dotnet restore build/ilverify/IlVerifyDiagnostics.gsproj --locked-mode --nologo -v:q
 dotnet build build/ilverify/IlVerifyDiagnostics.gsproj -c "$CONFIG" --no-restore --nologo -v:q
 [[ -f "$GSC_DLL" ]] || { echo "ERROR: gsc not found at $GSC_DLL"; exit 1; }
 [[ -f "$EXTENSIONS_DLL" ]] || { echo "ERROR: Gsharp.Extensions not found at $EXTENSIONS_DLL"; exit 1; }
-# ADR-0174 D1: the channel runtime is a Compiler ProjectReference, so it is built transitively.
+# Both runtimes are Compiler ProjectReferences, so they are built transitively.
 [[ -f "$CHANNELS_DLL" ]] || { echo "ERROR: Gsharp.Runtime.Channels not found at $CHANNELS_DLL"; exit 1; }
+[[ -f "$VALUES_DLL" ]] || { echo "ERROR: Gsharp.Runtime.Values not found at $VALUES_DLL"; exit 1; }
 
 echo "==> Restoring repo-local dotnet tools (dotnet-ilverify)"
 if ! dotnet tool run ilverify --version >/dev/null 2>&1; then
@@ -94,9 +97,9 @@ for dll in "$RUNTIME_DIR"/System.*.dll \
            "$RUNTIME_DIR"/Microsoft.Win32.Registry.dll; do
     [[ -f "$dll" ]] && REF_ARGS+=(-r "$dll")
 done
-# ADR-0174 D1: emitted programs reference the channel runtime whenever they
-# construct or operate on a channel; it is not a BCL assembly, so add it.
-REF_ARGS+=(-r "$CHANNELS_DLL")
+# Channel, native-slice and byte-string operations reference bundled runtimes
+# outside the BCL, so verification needs their assemblies too.
+REF_ARGS+=(-r "$CHANNELS_DLL" -r "$VALUES_DLL")
 
 # Baseline: map assembly base name -> comma-separated ignored error codes.
 baseline_codes() {

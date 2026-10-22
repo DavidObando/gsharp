@@ -73,6 +73,8 @@ gsc @app.rsp
 | `/implicit-imports` | Hyphenated alias for `/implicitimports`. Also accepts the same optional boolean value. |
 | `/noimplicitimports` | Disable the implicit `System` import. |
 | `/no-implicit-imports` | Hyphenated alias for `/noimplicitimports`. |
+| `/nullability:platform-types` | Default: import annotated references as `T` / `T?`, and oblivious references as platform types displayed as `T!`. The display notation is not source syntax. |
+| `/nullability:enabled`, `/nullability:oblivious` | `enabled` reads oblivious imports as nullable (legacy). `oblivious` reads imports as platform types and marks this compilation's own declarations oblivious. Prefer the default for new projects. |
 | `/nowarn:<ids>` | Suppress warning diagnostics with the listed comma- or semicolon-separated IDs. IDs may be canonical, such as `GS9100`, or numeric, such as `9100`; numeric forms normalize to `GS####`. |
 | `/warnaserror` | Promote all warnings to errors. |
 | `/warnaserror:<ids>` | Promote the listed warning IDs to errors. |

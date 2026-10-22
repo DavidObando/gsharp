@@ -1,6 +1,8 @@
 {
-  "version": "0.4.591",
-  "docsVersion": "0.4",
-  "tag": "v0.4.591",
+  "version": "0.5.212",
+  "docsVersion": "0.5",
+  "tag": "v0.5.212",
+  "sourceCommit": "242d8777c778db4272103c9dcefd6d63609e10ee",
+  "publishedAt": "2026-10-22T01:07:10Z",
   "sdk": ".NET 10 SDK"
 }

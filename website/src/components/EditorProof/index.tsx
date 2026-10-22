@@ -1,6 +1,7 @@
 import type {ReactNode} from 'react';
 import useBaseUrl from '@docusaurus/useBaseUrl';
 import capture from '@site/static/img/trail-editor.json';
+import release from '@site/src/data/release.json';
 
 export default function EditorProof(): ReactNode {
   const completion = useBaseUrl('/img/trail-completion.png');
@@ -18,12 +19,14 @@ export default function EditorProof(): ReactNode {
           />
         </a>
         <figcaption>
-          Actual {capture.editor}, G# extension {capture.applicationSdk}. The editor resolves .NET
-          APIs in the runnable Trail project.
+          Historical capture: {capture.editor}, extension {capture.extension}, application SDK{' '}
+          {capture.applicationSdk}, {capture.sdk}. These original pixels document the 0.4 project,
+          not a current editor verification. The current download is independently executed with
+          G# SDK {release.version}.
         </figcaption>
       </figure>
       <details>
-        <summary>See the same project running</summary>
+        <summary>See the historical 0.4 project running</summary>
         <figure>
           <a href={output} target="_blank" rel="noopener noreferrer">
             <img
@@ -35,8 +38,8 @@ export default function EditorProof(): ReactNode {
             />
           </a>
           <figcaption>
-            Real terminal output from <code>dotnet run --no-build -- demo .txt</code>, not a
-            simulated console.
+            Historical terminal output from <code>dotnet run --no-build -- demo .txt</code> with
+            application SDK {capture.applicationSdk}, not a simulated console or a new release capture.
           </figcaption>
         </figure>
       </details>

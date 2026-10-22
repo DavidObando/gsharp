@@ -53,7 +53,7 @@ G# is a modern .NET language with concise syntax influenced by Go, Kotlin, and S
 
 ## Packages replace namespaces in source
 
-Every G# file starts with a package declaration:
+A G# file may begin with a package declaration. It is optional; without it, declarations belong to the global namespace:
 
 ```gsharp
 package Acme.Tools

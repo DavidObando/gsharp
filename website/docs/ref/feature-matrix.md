@@ -20,6 +20,7 @@ This matrix summarizes current feature support in the emitter, which every drive
 | Comments | Supported | Supported | Line (`//`), block (`/* … */`), and Markdown documentation (`///`) comments. |
 | String, raw string, and interpolated string literals | Supported | Supported | Sigil-free interpolation with `$name`/`${expr,alignment:format}`, delimiter-aware multiline holes, and `DefaultInterpolatedStringHandler`/`FormattableString` lowering. |
 | Character literals | Supported | Supported | Character diagnostics are `GS0191` through `GS0195`. |
+| Immutable byte strings | Supported (.NET 10) | N/A | `bytestring` / `b"..."`, immutable byte operations, explicit UTF-8 policies, `DecodeUtf8Scalars`, `FromCodePoints` and `DecodeCodePoints` ship in 0.5.212. |
 | Documentation comments | Supported | Supported | `///` Markdown comments round-trip to CLR XML doc; hover renders CLR XML docs for imported APIs. Diagnostics `GS0227`–`GS0231`. |
 
 ## Types and values
@@ -112,7 +113,7 @@ This matrix summarizes current feature support in the emitter, which every drive
 | `default(T)` and bare `default` literal | Supported | Supported | `default(T)` for any type expression; bare `default` valid in target-typed positions (`let`/`var` with explicit type, `return` with known return type, typed call argument, `?:` branch typed by sibling). Diagnostic `GS0362` when no target type is available. |
 | Smart casts / flow narrowing | Supported | Supported | `is` / `!is` on a local, parameter, or read-only top-level `let` narrows the receiver to the tested type. Composes through `!`, `&&`, `||` (De Morgan dual), `if`/`else`, the branches of `if` expressions and of `?:`, the early-exit lift, `switch` arms, and `if let` / `guard let` / `while let`. Mutable receivers, fields, properties, and indexed expressions are not narrowed. |
 | Trailing `func` lambdas | Supported | Supported | `call(...) func(...) { ... }` form. |
-| Arrow lambda expressions (`(x int32) -> body`) | Supported | Supported | Parameter list is always parenthesised; body is a single expression or a brace block whose trailing expression is the value. Captures outer locals. Lambda parameter type inference and `(T) -> R` function-type syntax are supported separately. |
+| Arrow lambda expressions (`(x int32) -> body`) | Supported | Supported | A single inferred parameter may omit parentheses (`x -> x + 1`); typed or multiple parameters use parentheses; body is a single expression or a brace block whose trailing expression is the value. Captures outer locals. Lambda parameter type inference and `(T) -> R` function-type syntax are supported separately. |
 
 ## Concurrency, async, and iterators
 
@@ -148,7 +149,7 @@ This matrix summarizes current feature support in the emitter, which every drive
 
 | Feature | Emit (current) | Evaluator (removed Phase 3c) | Notes |
 | --- | --- | --- | --- |
-| `Gsharp.Extensions.Optional` | Supported | Supported | Extension helpers on `T?` (`Map`, `FlatMap`, `OrElse`, `OrCompute`, `OrThrow`, `IfPresent`, `Filter`). Value-typed (`T : struct`) helpers carry a `*Value` suffix and require `import Gsharp.Extensions.Optional`. |
+| `Gsharp.Extensions.Optional` | Supported | Supported | Extension helpers on `T?` (`Map`, `FlatMap`, `OrElse`, `OrCompute`, `OrThrow`, `IfPresent`, `Filter`). Reference- and value-typed receivers use the same names through disjoint constraints. Requires `import Gsharp.Extensions.Optional`. |
 | `Gsharp.Extensions.Sequences` | Supported | Supported | Static builders (`Range`, `RangeStep`, `Iterate`, `Repeat`, `Of`, `Empty`), transformers (`Windowed`, `Chunked`, `Indexed`, `Pairwise`, `Interleave`), safe terminals (`FirstOrNil`, `LastOrNil`, `SingleOrNil` plus `*ValueOrNil` companions), and G#-shaped collectors (`ToSlice`, `ToMap`). Requires `import Gsharp.Extensions.Sequences`. |
 | `Gsharp.Extensions.Go` (gate) | Removed | Removed | The concurrency surface is the language, the Go-style built-ins are retired (GS0566), and the namespace is deleted. |
 | No auto-import policy | N/A | N/A | Nothing under `Gsharp.Extensions.*` is auto-imported — even when implicit imports are enabled. Each namespace is opt-in per file. |

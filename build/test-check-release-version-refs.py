@@ -75,7 +75,7 @@ class ReleaseVersionRefsTests(unittest.TestCase):
         cases = [
             (f"{root}/getting-started/install.md", f"published **{VERSION}**", f"published **{OTHER}**"),
             (f"{root}/tutorials/trail.md", f"G# SDK {VERSION}", f"G# SDK {OTHER}"),
-            (f"{root}/release-notes.md", f"## {VERSION} at a glance", f"## {OTHER} at a glance"),
+            (f"{root}/release-notes.md", f"## {VERSION} (", f"## {OTHER} ("),
         ]
         for path, old, new in cases:
             with self.subTest(path=path):
@@ -104,7 +104,7 @@ class ReleaseVersionRefsTests(unittest.TestCase):
     def test_reworded_tracked_reference_fails_instead_of_passing_vacuously(self) -> None:
         path = "website/docs/release-notes.md"
         problems = self.problems_with(self.replaced(
-            path, f"The published **{VERSION}** release", "The current release"))
+            path, f"installation/download examples target **{VERSION}**", "installation examples"))
         self.assertReported(problems, path, "found 0")
 
     def test_missing_optional_snapshot_page_is_not_reported(self) -> None:
@@ -172,6 +172,14 @@ class ReleaseVersionRefsTests(unittest.TestCase):
         name = f"{refs.DOWNLOADS}concurrency-patterns-{VERSION}.zip"
         problems = self.problems_with({name: None})
         self.assertReported(problems, name, "missing")
+
+    def test_historical_assets_must_exist_and_retain_their_original_content(self) -> None:
+        self.assertEqual(len(refs.HISTORICAL_FILES), 7)
+        for path in refs.HISTORICAL_FILES:
+            for content, finding in [(None, "missing historical evidence"),
+                                     ("relabeled or regenerated", "historical evidence hash changed")]:
+                with self.subTest(path=path, finding=finding):
+                    self.assertReported(self.problems_with({path: content}), path, finding)
 
     def test_invalid_json_is_reported_not_raised(self) -> None:
         for path in (refs.RELEASE_JSON, refs.VERSIONS_JSON):

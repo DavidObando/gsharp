@@ -19,7 +19,7 @@ G# brings Go-style ergonomics — packages, `func`, `defer`, `for`, slices — t
 | `fmt.Println(x)` | `Console.WriteLine(x)` | Use .NET library types directly. |
 | `var x int` | `var x int` (alias for `int32`) or `var x int32` | G# accepts both the friendly `int` alias and the canonical `int32`. The alias resolves to the canonical type at the binder, so diagnostics and IL print the width-bearing name.  |
 | `:=` | `let x = …` or `var x = …` | G# removed the Go-style `:=` short declaration; every binding site requires `let` (immutable) or `var` (mutable). For ranges, write `for i in lo ... hi` and `for v in xs`. |
-| `[]T` | `[]T` | Slices are backed by CLR arrays and expose `.Length`; use `List[T]` for growable storage. `[]T?` means nullable elements, while `[]?T` means the slice itself may be `nil`. |
+| `[]T` | `slice[T]` / `readonly slice[T]` | Native value descriptors share storage on assignment/ranges. Retain `.Append(...)` results; growth may allocate. `.Clone()` copies elements. Readonly is shallow. `[]T` remains an exact CLR array (`T[]`), not a Go slice; `[]T?` has nullable elements and `[]?T` is a nullable array. |
 | `[3]T` | `[3]T` | Fixed arrays carry the length in the type; the expression `[n]T` allocates a zero-initialized runtime-length `[]T`. |
 | `map[K,V]` | `map[K,V]` or `Dictionary[K, V]` | CLR generic syntax uses brackets. |
 | `struct` | `struct`, `data struct`, `data class`, or `class` | G# also has CLR classes and structural data aggregates. |
@@ -35,7 +35,7 @@ G# brings Go-style ergonomics — packages, `func`, `defer`, `for`, slices — t
 | `case <-ctx.Done()` | `case cancelled` | The arm observes the enclosing `scope`'s context; without one the select unwinds on cancellation instead. |
 | set a channel variable to `nil` to disable an arm | `case <-ch when enabled` | The guard is evaluated once when the select is entered; a false guard keeps the arm out entirely. |
 | no equivalent | `case let v = await task` | A `Task` or `Task[T]` races the channels on the same waiter. |
-| `len(xs)`, `append(xs, v)`, `delete(m, k)` | `xs.Length`, `List[T]` + `.Add(v)`, `m.Remove(k)` | The Go-style built-ins are retired (GS0566 names the member). |
+| `len(xs)`, `append(xs, v)`, `delete(m, k)` | `xs.Length`, `xs = xs.Append(v)` for native slices, `m.Remove(k)` | The Go-style built-ins are retired (GS0566 names the member). |
 | `defer cleanup()` | `defer cleanup()` | Defers run at block exit. |
 | `interface{}` | `object` or an interface type | CLR object identity and interfaces apply. |
 | `error` returns | exceptions or result values | G# interoperates with .NET exceptions. |

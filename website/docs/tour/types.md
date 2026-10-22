@@ -155,9 +155,37 @@ func Main() {
 }
 ```
 
+Native `slice[T]` and `readonly slice[T]` are distinct from the CLR arrays above. They copy length/capacity descriptors while sharing managed storage. Ranges share storage too; `Clone()` copies elements. Retain `.Append(...)` results because growth can allocate. Readonly prevents slot writes, not mutation of referenced objects. Convert explicitly at CLR boundaries with `slice[T].FromArray(array)` (shares exact storage) and `ToArray()` (copies).
+
+The checked-in `samples/NativeSlices.gs` demonstrates allocation-free range processing. This smaller example shows aliasing and copying:
+
+```gsharp
+package Website.NativeSlices
+
+import System
+
+let values = slice[int32].Create(2, 4)
+values[0] = 7
+let view = values[0 .. 1]
+view[0] = 9
+let copied = values.Clone()
+copied[0] = 1
+Console.WriteLine(values[0])
+Console.WriteLine(copied[0])
+```
+
+Expected output:
+
+```text
+9
+1
+```
+
+See the [native slice contract](../ref/spec.md#native-shared-storage-slices) for nil/empty values, growth and readonly permissions.
+
 ## Immutable byte strings
 
-**Development capability:** `bytestring` is an immutable arbitrary-byte value,
+**Available in 0.5.212:** `bytestring` is an immutable arbitrary-byte value,
 not a CLR text string or a promise that its bytes are valid UTF-8. This capability
 requires a matching compiler/runtime. Ordinary `string` remains `System.String`.
 
@@ -195,6 +223,8 @@ Strict conversions throw `ByteStringEncodingException` with `InputKind`
 the input value. They return no partial result. See the
 [text-boundary reference](../ref/spec.md#explicit-utf-8-text-boundaries) for
 policy and exception details.
+
+**Available in 0.5.212:** scalar iteration and code-point collection APIs below are released.
 
 Use `value.DecodeUtf8Scalars(policy)` for lazy scalar iteration:
 
@@ -297,9 +327,9 @@ Use `data object { ... }` when you want value-style equality, `ToString`, decons
 
 A composite literal with no fields uses the zero value for each field. A `var` declaration with an explicit type and no initializer also starts at the type's zero value: `0` for numeric types, `False` for `bool`, `nil` for reference types (including `string`), and `nil` for nullable values.
 
-The magic collection types are the exception: their zero value is a **sound empty instance**, not `nil` — `var m map[string, int32]` starts as an empty map you can index and assign into immediately, `var s []int32` as an empty slice you can `append` to, `var a [3]int32` as three zeroed elements, and `var q sequence[int32]` as an empty sequence. Channels are carved out: `var ch chan int32` without an initializer is an error (`GS0520`) — create channels explicitly with `make`.
+Collection declarations synthesize a **sound empty instance**, not `nil`: `var m map[string, int32]` starts as an empty map, `var s []int32` as a zero-length CLR array, `var a [3]int32` as three zeroed elements, and `var q sequence[int32]` as an empty sequence. Arrays cannot grow; use `List[T]` or retain the result of native slice `.Append(...)`. A default native slice is a present empty descriptor (length and capacity zero), not `nil`; `slice[T]?` adds absence. Channel globals and fields require an initializer (`GS0520`); locals must be assigned before use (`GS0522`). Use `chan[int32]()` or `chan[int32](capacity)`.
 
-The CLR default of a type can be spelled directly as `default(T)` for any type `T` (for the collection types above that is still `nil`, not the empty instance). The bare `default` literal is accepted wherever the target type is known from context.
+The CLR default of a type can be spelled directly as `default(T)` for any type `T`. For array, map and sequence references this is `nil`, unlike their synthesized declaration defaults. A native slice descriptor is a value type whose CLR default remains present and empty. The bare `default` literal is accepted wherever the target type is known from context.
 
 ## A note on `nil` vs `null`
 

@@ -48,7 +48,7 @@ Use the local toolchain and the static Tour while the live Playground is deferre
 - run examples with `dotnet run` for `.gsproj` projects or `gsc` for direct compiler experiments.
 
 ```bash
-dotnet new install Gsharp.Templates
+dotnet new install Gsharp.Templates::0.5.212
 dotnet new gsharp-console -n MyApp
 cd MyApp
 dotnet run
