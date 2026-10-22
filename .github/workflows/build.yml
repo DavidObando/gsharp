@@ -394,7 +394,8 @@ jobs:
               python3 build/test-cs2gs-apps-leg.py ;;
             selfhost-bench)
               command -v /usr/bin/time >/dev/null || { sudo apt-get update && sudo apt-get install -y time; }
-              python3 build/test-selfhost-bench.py ;;
+              python3 build/test-selfhost-bench.py
+              python3 build/test-compiler-bench.py ;;
             comment-checker)
               dotnet restore build/gstokens/GsTokens.gsproj --locked-mode
               python3 build/test-check-comment-only-diff.py ;;

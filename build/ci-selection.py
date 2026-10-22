@@ -42,7 +42,8 @@ HARNESS = {
                     "build/test-concurrency-bench.py"],
     "apps": ["build/test-cs2gs-apps-gate-issues.py", "build/cs2gs-apps-gate-issues.py",
              "build/test-cs2gs-apps-leg.py", "build/cs2gs-apps-leg.py"],
-    "selfhost-bench": ["build/test-selfhost-bench.py", "build/selfhost-bench.py"],
+    "selfhost-bench": ["build/test-selfhost-bench.py", "build/selfhost-bench.py",
+                       "build/test-compiler-bench.py", "build/compiler-bench.py"],
     "comment-checker": ["build/test-check-comment-only-diff.py", "build/check-comment-only-diff.py"],
 }
 BUILD_JOBS = {
