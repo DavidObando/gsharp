@@ -1,66 +1,53 @@
-# Contributing to G#
+# Contribute to G#
 
-G# accepts focused bug fixes, tests, documentation, and agreed language or
-tooling changes. Open or claim an issue before substantial work so semantics
-and scope are settled before code is written.
+Before a large change, use a new issue or an open issue.
+Agree on the scope and language behavior of the pull request (PR) with the maintainer.
 
-## The repository is built with G#
+## Repository source
 
-The compiler, language server, formatter and tools are G# source (`.gs`,
-`.gsproj`). Three parts of the repository are deliberately still C#:
+The compiler, language server, formatter, and tools use G# (`.gs`, `.gsproj`).
+Change the G# source on `main`.
 
-- `src/vs-gsharp` (the Visual Studio extension). It targets .NET Framework and
-  keeps its `#if NETFRAMEWORK` directives. It builds on Windows only and
-  references the G# language server.
-- `build/selfhost/PeBodyMutations.cs`, a file-based `dotnet run` helper that
-  `build/test-selfhost-stage2.py` runs by file name. (The stage-2 controller's
-  helper projects beside it, `PackageContentHash.gsproj` and
-  `TestSupervisorLogger.gsproj`, are G#; the controller builds those exact
-  paths, so do not rename them.)
-- Test fixtures and cs2gs inputs that are C# on purpose (for example
-  `tools/cs2gs/corpus` and `*.cs.txt` source data). They are the C# the
-  translator is tested against.
+Keep these files in C#:
 
-The final C#-built release is `v0.4.1270`; its C# source of the compiler lives
-on branch `cs2gs/csharp-0.4`, which is **semi-frozen**: a living corpus for
-cs2gs. **Fixes happen in G#, on `main`.** Do not open bug-fix or feature PRs
-against the C# branch. It receives only code back-ported from G# to C# when that
-code merits exercising cs2gs, and a security fix released as `0.4.1270+k`. Both
-are made by the maintainer, and the cs2gs apps nightly
-(`.github/workflows/cs2gs-apps-nightly.yml`) pins a SHA of the branch in
-`tools/cs2gs/external/gsharp-csharp.json`. That nightly runs cs2gs as built from
-`main` (written in G#) over the C# source on that branch, plus Oahu and Code
-Exploder.
+- The Visual Studio extension in `src/vs-gsharp`.
+- The helper `build/selfhost/PeBodyMutations.cs`.
+- The C# test fixtures and translator inputs, which include `tools/cs2gs/corpus` and `*.cs.txt`.
+
+The branch `cs2gs/csharp-0.4` supplies C# input for cs2gs tests.
+Only the maintainer changes this branch.
+See [the migration documentation](docs/self-migration-cutover.md) for previous decisions.
 
 ## Prerequisites
 
-- .NET SDK selected by [`global.json`](global.json)
-- Git
-- Node.js 24 only when changing [`website/`](website/) or the VS Code extension
-- Windows with Visual Studio only when changing `src/vs-gsharp`
+Install these tools:
+
+- The .NET SDK specified in [`global.json`](global.json).
+- Git.
+- Node.js 24, for changes to `website` or the VS Code extension.
+- Visual Studio on Windows, for changes to `src/vs-gsharp`.
 
 ### The N-1 rule
 
-The repository builds with the previous released compiler. The pin is the
-`Gsharp.NET.Sdk` entry under `msbuild-sdks` in [`global.json`](global.json), and
-it names a published release restored from nuget.org. Repository source may use
-only language features that the pinned release supports.
+The repository builds with the previous released compiler.
+The `Gsharp.NET.Sdk` entry in `msbuild-sdks` in `global.json` gives the compiler version.
 
-If your PR adds a language feature, do not use it in repository source (`src/`,
-`test/`, `tools/`, samples) in the same PR. Use it only after a release
-containing it becomes the pin. Moving the pin is a separate PR: update
-`global.json`, build from a clean clone, and note the new version in the
-release notes. That PR's green CI with the new pin is its stage-2 verification:
-each release is the repository built by the previous pin (stage 1 of its tag),
-so building `main` with it is stage 2.
+Use only language features that this compiler supports in repository source, tests, tools, and samples.
+Do not use a new language feature in the PR that adds the feature.
+Wait until `global.json` specifies a release that contains the feature.
 
-See [`docs/self-host-bootstrap.md`](docs/self-host-bootstrap.md) for how stage 0
-(the pin), stage 1 and stage 2 relate. The isolated stage-2 controller
-(`build/selfhost-stage2.py`,
-[ADR-0198](docs/adr/0198-isolated-stage-2-self-host-certification.md)) is
-background and optional, owner-run evidence, not a merge requirement.
+Change the compiler version in a different PR.
+Build from a clean clone with that version.
+Record the version in the release notes.
+Do not use a local SDK or an SDK without a release to make a build pass.
 
-## Restore and build
+See [the bootstrap instructions](docs/self-host-bootstrap.md) for the build stages.
+Stage-2 certification is optional.
+It is not a requirement for a PR or a release.
+
+## Build and format
+
+Run these commands from the repository root:
 
 ```sh
 dotnet restore GSharp.slnx --locked-mode
@@ -68,228 +55,142 @@ dotnet tool restore
 dotnet build GSharp.slnx --configuration Release --no-restore -graph
 ```
 
-Restore uses the checked-in NuGet lock files (`packages.lock.json`). Do not
-update lock files unless dependency changes are part of the PR.
+Use `-graph` to prevent two builds of the same project at the same time.
+Warnings are errors.
+Change `packages.lock.json` files only when the PR changes dependencies.
 
-`-graph` matters: it prevents duplicate project builds from racing over shared
-compiler outputs. Warnings are errors.
-
-Format `.gs` files with gsfmt. CI runs the check twice; run the write mode
-locally until it is clean:
+Format the G# files:
 
 ```sh
 dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --write .
 dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --check .
 ```
 
-### Editor extensions
+For extension builds, use the [VS Code instructions](src/vscode-gsharp/README.md) or [Visual Studio instructions](src/vs-gsharp/README.md).
 
-The VS Code extension builds with npm. Press F5 in VS Code to launch an
-Extension Host with it:
+## Tests
 
-```sh
-cd src/vscode-gsharp
-npm install
-npm run compile
-```
-
-The Visual Studio extension builds from a Visual Studio Developer PowerShell:
-
-```powershell
-msbuild src\vs-gsharp\VsGsharp.sln /restore /t:Build /p:Configuration=Release
-```
-
-The VSIX is written to
-`src\vs-gsharp\src\VsGsharp\bin\Release\net472\GSharp.VisualStudio.vsix`.
-To try it in an experimental instance:
-
-```powershell
-src\vs-gsharp\scripts\Install-ExperimentalVsix.ps1 -RootSuffix GSharp
-src\vs-gsharp\scripts\Invoke-Vs2026Smoke.ps1 `
-  -RootSuffix GSharp `
-  -SolutionPath path\to\sample.sln
-```
-
-The installer removes only the selected experimental profile's MEF,
-extension metadata, and project-template indexes. It then warms that profile
-before a solution is opened.
-
-## Test
-
-Run the smallest project and filter that covers the change:
+Run the tests that cover the change.
+Use a project and a filter to limit the test run:
 
 ```sh
-dotnet test test/Compiler.Tests/Compiler.Tests.gsproj \
-  --configuration Release --no-build --no-restore \
-  --filter 'FullyQualifiedName~LanguageConformance'
+dotnet test test/Compiler.Tests/Compiler.Tests.gsproj --configuration Release --no-build --no-restore --filter 'FullyQualifiedName~LanguageConformance'
 ```
 
-The complete suite is memory-heavy and can exceed 45 minutes. CI shards it;
-local full-suite runs are not expected for focused changes. Run relevant e2e
-scripts under [`e2etests/`](e2etests/) when changing the SDK, templates,
-debugging, packaging, or generated projects.
+Continuous integration (CI) runs the full test suite in separate jobs.
+Do only the applicable local tests.
+Run applicable scripts in [`e2etests`](e2etests/) for SDK, template, debugger, package, or generated-project changes.
 
-PR CI selects components and their consumers with `build/ci-selection.py`
-([ADR-0200](docs/adr/0200-component-aware-pr-validation.md)). Unknown inputs
-select full validation. Each workflow reports its selection reasons.
-The stable required checks are `ci` and `docs-ci`. Official builds still run
-full validation. When changing routing or component dependencies, run:
+The necessary checks are `ci` and `docs-ci`.
+PR workflows select affected components and their consumers with `build/ci-selection.py`.
+Unknown inputs cause full validation.
+Official builds use full validation.
+See [ADR-0200](docs/adr/0200-component-aware-pr-validation.md).
+
+For changes to CI selection or test distribution, run these tests:
 
 ```sh
 python3 build/test-ci-selection.py
 python3 build/test-ci-test-matrix.py
 ```
 
-`Cs2Gs.Tests` launches nested SDK builds. Its stability depends on both
-invariants pinned by `TestHostProcessSetupTests`: MSBuild node reuse is disabled
-(#2407) and xUnit test execution is serialized (#2689). Do not remove either
-without an equivalent measured fix.
+Keep MSBuild node reuse disabled in `Cs2Gs.Tests`.
+Keep xUnit test execution serial in that project.
+`TestHostProcessSetupTests` makes sure that the project obeys these requirements.
 
-## Tests must discriminate
+### Show that a test finds the error
 
-[ADR-0154](docs/adr/0154-test-oracle-strength.md) requires every new or changed
-behavioral test to have a witness of discrimination. Record in the PR how the
-test went red on the pre-fix commit, an exact revert, or a product mutant, then
-green with the change. Real driver tests must invoke the real driver path.
+For each new or changed behavioral test, obey [ADR-0154](docs/adr/0154-test-oracle-strength.md).
+Record a failure without the correction and a pass with the correction.
+For the failure, use the previous commit, a revert of the correction, or a mutant.
+A mutant is a temporary change that causes the error.
+Driver tests must use the driver that users use.
 
-Prefer:
+Use these assertions:
 
-- a regression test beside the affected subsystem;
-- byte-for-byte output for emitted behavior;
-- diagnostic IDs plus source locations for rejected code;
-- non-empty assertions before `Assert.All` or equivalent quantifiers.
+- Compare emitted output bytes with the correct bytes.
+- Assert diagnostic IDs and source locations for rejected code.
+- Assert that a collection is not empty before `Assert.All` or an equivalent assertion.
 
-## Golden files
+### Golden files
 
-File snapshots use the shared `GoldenFile` helper. On mismatch, tests write
-`<golden>.actual` and report the first differing line. Review that file, then
-accept intended changes with:
+Use the shared `GoldenFile` helper for file snapshots.
+On a mismatch, the helper writes `<golden>.actual`.
+Examine this file before you accept a change:
 
 ```sh
 GSHARP_UPDATE_GOLDENS=1 dotnet test <project> --filter <golden-test>
 ```
 
-The cs2gs executable corpus uses `baseline.stdout.golden` through
-`StdoutParity`; run the relevant pipeline test after changing one.
+Run the applicable pipeline test after a change to a cs2gs `baseline.stdout.golden` file.
+After `cs2gs coverage --write`, examine the inventory and [coverage matrix](docs/cs2gs-coverage-matrix.md).
 
-For the generated C# construct inventory:
+## Design and comments
 
-```sh
-cs2gs coverage --write
-```
+Make an architecture decision record (ADR) for changes to public syntax, semantics, compatibility, or architecture for multiple components.
+Use [the ADR template](docs/adr/0000-template.md).
+Use the next ADR number.
+Include the issue link and changes to the applicable reference documents.
 
-Review both the inventory and [`docs/cs2gs-coverage-matrix.md`](docs/cs2gs-coverage-matrix.md).
+Keep each change in the agreed scope.
+Use helpers and code patterns from the repository.
+If a change can cause incorrect code, report a diagnostic or stop execution.
 
-## Design changes
+Use the writing rules of ASD-STE100 Simplified Technical English for code comments.
+Keep instructions to 20 words for each sentence.
+Keep descriptions to 25 words for each sentence.
+Use one topic for each sentence.
+Use active verbs.
+Use the same technical name for the same thing.
 
-User-visible syntax, semantics, compatibility promises, or cross-cutting
-architecture changes need an ADR. Copy
-[`docs/adr/0000-template.md`](docs/adr/0000-template.md), use the next number,
-link the issue, and update affected reference documentation.
+Give constraints in comments.
+Use issue or ADR links to tell why the constraints are necessary.
+Do not give a history of the code.
+Use `///` for API documentation and `//` for implementation notes.
+Do not change tool directives, `@param`, `@returns`, or `(cref:...)` references.
+Remove references to tools or CI jobs that the repository no longer uses.
 
-Keep changes narrow. Reuse existing helpers and patterns. Do not add fallback
-behavior that can silently produce wrong code; report a diagnostic or fail
-loudly instead.
-
-## Code comments
-
-Write comments in plain technical English. Follow the writing rules of
-ASD-STE100 (Simplified Technical English), not its restricted dictionary.
-
-What to write:
-
-- Say what the code does and why: the constraint, the invariant, or the
-  external fact that makes it correct. Do not tell how the code got there.
-  To give the reason, cite the issue or ADR (`Issue #4133`, `ADR-0186`).
-- Do not name a workflow, script, gate, job, or CI run that no longer exists.
-- Write `///` doc comments for the user of the API, because they ship as
-  IntelliSense text. Put implementation notes in `//` comments.
-- Do not change comments that a tool reads, such as `// <auto-generated/>`,
-  `# shellcheck` and `# noqa`. In a doc comment, keep the `@param` and
-  `@returns` tags and the `(cref:...)` targets (ADR-0057). Reword only the
-  prose.
-
-How to write it:
-
-- Write one topic in each sentence. Keep an instruction to 20 words or fewer
-  and a description to 25 words or fewer.
-- Use the active voice, the present tense for behavior, and the imperative
-  for instructions: "The binder reports GS0281", "Call `Reset` first".
-- Do not put more than three nouns in a row.
-- Use one name for one thing, and use the name that the code uses.
-- Do not use idioms or slang.
-- Prefer a period to an em dash (—) or a semicolon. Use commas or
-  parentheses for a short aside. A semicolon between two short, related
-  clauses is acceptable.
-
-Words to avoid:
-
-| Avoid | Write instead |
-| --- | --- |
-| load-bearing | required, or say what depends on it |
-| belt and suspenders, defense in depth (for a second check) | a second check, and say what it catches |
-| crucial(ly), importantly, notably, note that, it is worth noting | (delete), and state the fact |
-| genuine(ly), actually, honest(ly) | (delete), or real, correct |
-| simply, just, essentially, basically (as filler) | (delete) |
-| deliberately, intentionally | keep only for a choice that looks like a bug, and give the reason |
-| in order to | to |
-| paper over | hide |
-| under the hood | internally, or name the component |
-| guardrail | check, negative test |
-| robust(ly), cleanly | say which input it handles, or "without errors" |
-| sanity check | check |
-| surgical | small, exact |
-| smoking gun | the cause |
-| footgun, sharp edge | an easy mistake, and say what it is |
-| heavy lifting | the main work |
-| delve, leverage (verb), seamless(ly) | look at, use, (delete) |
-
-Check a comment-only change with:
+For changes to comments only, run this check:
 
 ```sh
 python3 build/check-comment-only-diff.py --base origin/main
 ```
 
-It supports `.gs` files only. It reads the base and the head with the
-compiler's lexer (it builds `build/gstokens` first) and passes only if the
-tokens that are not comments are identical. A change inside a string literal
-fails. A change to what the compiler reads from a `///` comment fails too: a
-tag such as `@param a`, a `(cref:...)` or `[`a`](paramref)` reference, an
-`xmldoc` element, the declaration the block comes before, or a block that is
-added or removed. Its prose can change. If you delete a comment inside a line, keep the space
-it leaves, because the parser can depend on whether two tokens touch. Every
-other file type (`.py`, `.yml`, `.sh`, `.cs`) fails as "unsupported: review
-manually". A comment in a test input (the cs2gs corpus, or a fixture that a
-test reads) can be test data, so run the tests that read the file.
+The check supports `.gs` files only.
+It compares compiler tokens and documentation structure.
+Keep the space between tokens when you remove an inline comment.
+For other file types, compare the changes manually.
+Run the applicable tests when the test input includes comments.
 
-## Documentation site
+## Documentation
+
+For website changes, run these commands:
 
 ```sh
 cd website
 npm ci
 npm run typecheck
+npm run test:content
 npm run build
 ```
 
-Broken links fail the production build. Current docs live in `website/docs`;
-released snapshots under `website/versioned_docs` change only during an
-intentional version cut. Page conventions, examples, links and versioning are
-in [`docs/docs-authoring.md`](docs/docs-authoring.md).
+The production build rejects broken links.
+Change development documentation in `website/docs`.
+Change released documentation in `website/versioned_docs` only for an agreed version update.
+See [the documentation instructions](docs/docs-authoring.md).
 
 ## Pull requests
 
-- Link the issue with `Fixes #NNNN` or `Part of #NNNN`.
-- Keep generated files, tests, and docs in the same PR as their source change.
-- Fill in verification and ADR-0154 witness sections in the PR template.
-- Do not commit build output, `.actual` snapshots, credentials, or local logs.
-- Use normal GitHub review; disclose vulnerabilities through
-  [`SECURITY.md`](SECURITY.md), never a public issue.
+Use these requirements for each PR:
 
-Automated contributors follow the same rules. Preserve Oahu, Oats,
-Claude Code, or other provenance labels when applicable; automation does not
-replace maintainer responsibility for the merge. A self-review may record
-`MERGEABLE`, `BLOCKER`, `SHOULD-FIX`, or `NIT`; resolve blockers and file
-intentional residual work instead of dropping it. [`CLAUDE.md`](CLAUDE.md)
-collects the operational details for agents: the review loop, CI gate
-behaviour, bootstrap hazards, local-environment hazards, and
-nullability-architecture rules.
+- Include `Fixes #NNNN` or `Part of #NNNN` for the issue.
+- Include related tests, documentation, and generated files with the source change.
+- Complete the PR template with validation results and ADR-0154 test results.
+- Keep build output, `.actual` files, credentials, and local logs out of commits.
+- Keep applicable provenance labels, such as Oahu, Oats, and Claude Code.
+- Correct errors that prevent the merge.
+- Record remaining work in issues.
+
+Report security vulnerabilities through [`SECURITY.md`](SECURITY.md), not public issues.
+Automated contributors must obey the same requirements.
+See [`CLAUDE.md`](CLAUDE.md) for agent instructions.
