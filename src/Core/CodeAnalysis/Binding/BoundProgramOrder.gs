@@ -4,6 +4,7 @@
 
 package GSharp.Core.CodeAnalysis.Binding
 
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import System.Collections.Generic
 import System.Collections.Immutable
@@ -20,13 +21,23 @@ internal shared class BoundProgramOrder {
     /// Gets the program's functions in (cref:SymbolSourceOrderComparer) order.
     /// @param program The program.
     /// @returns The function entries, deterministically ordered.
-    func Functions(program BoundProgram) ImmutableArray[KeyValuePair[FunctionSymbol, BoundBlockStatement]] -> program
-        .Functions
-        .OrderBy(
-        (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) -> pair.Key,
-        SymbolSourceOrderComparer.Instance
-    )
-        .ToImmutableArray()
+    func Functions(program BoundProgram) ImmutableArray[KeyValuePair[FunctionSymbol, BoundBlockStatement]] ->
+    program.OrderedFunctions
+
+    /// Sorts a function map into (cref:SymbolSourceOrderComparer) order.
+    /// (cref:BoundProgram) calls this once and caches the result.
+    /// @param functions The function map.
+    /// @returns The function entries, deterministically ordered.
+    func SortFunctions(functions ImmutableDictionary[FunctionSymbol, BoundBlockStatement]) ImmutableArray[
+        KeyValuePair[FunctionSymbol, BoundBlockStatement]
+    ] {
+        CompilationMeasurements.Count("emit.function-sorts")
+        return functions.OrderBy(
+            (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) -> pair.Key,
+            SymbolSourceOrderComparer.Instance
+        )
+            .ToImmutableArray()
+    }
 
     /// Gets a field-initializer map's entries in (cref:SymbolSourceOrderComparer)
     /// order. The maps are identity-keyed `ImmutableDictionary` instances, so a

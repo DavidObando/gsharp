@@ -481,14 +481,15 @@ internal partial class MethodBodyEmitter {
             return
         }
         let documentHandle = this.outer.emitCtx.Pdb!!.GetOrAddDocument(syntax.SyntaxTree)
+        let positions = location.GetLineRange()
         this.sequencePoints.Add(
             SequencePoint(
                 ilOffset: ilOffset,
                 document: documentHandle,
-                startLine: location.StartLine + 1,
-                startColumn: location.StartCharacter + 1,
-                endLine: location.EndLine + 1,
-                endColumn: location.EndCharacter + 1
+                startLine: positions.StartLine + 1,
+                startColumn: positions.StartCharacter + 1,
+                endLine: positions.EndLine + 1,
+                endColumn: positions.EndCharacter + 1
             )
         )
         this.lastSequencePointIlOffset = ilOffset

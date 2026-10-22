@@ -50,6 +50,17 @@ struct TextLocation : IComparable[TextLocation] {
     /// Only defined for located entries (non-null (cref:Text)).
     prop EndCharacter int32 -> Span.End - Text!!.Lines[EndLine].Start
 
+    /// Gets the zero-based start and end line and character in one pass: two
+    /// line lookups, where reading the four properties separately costs six.
+    /// Only defined for located entries (non-null (cref:Text)).
+    /// @returns The start line, start character, end line and end character.
+    internal func GetLineRange()(StartLine int32, StartCharacter int32, EndLine int32, EndCharacter int32) {
+        let source = Text!!
+        let startLine = source.GetLineIndex(Span.Start)
+        let endLine = source.GetLineIndex(Span.End)
+        return (startLine, Span.Start - source.Lines[startLine].Start, endLine, Span.End - source.Lines[endLine].Start)
+    }
+
     /// Gets the file name. Null for a location-less entry; empty for source
     /// texts created without a file name.
     prop FileName string? -> Text?.FileName
