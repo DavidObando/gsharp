@@ -59,6 +59,9 @@ class ReferenceMetadataIndex {
     /// Gets content fingerprints in resolver search order. Empty entries cannot be adopted.
     prop ContentFingerprints ImmutableArray[string] -> contentFingerprints
 
+    /// Gets the type names recorded for each assembly, in the same order as (cref:AssemblyIdentities).
+    internal prop TypeNames ImmutableArray[ImmutableArray[string]] -> typeNamesByAssembly
+
     /// Builds the merged full-name → assembly-index map with <em>first-writer-wins</em>
     /// precedence (the first assembly, in search order, that declares a given name
     /// owns it). This mirrors the precedence of (cref:ReferenceResolver)'s
