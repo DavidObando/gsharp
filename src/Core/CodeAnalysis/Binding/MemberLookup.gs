@@ -18,6 +18,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis
 import System.Collections
 import System.Collections.Concurrent
+import SystemObject = System.Object
 import System.Globalization
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Syntax
@@ -329,6 +330,98 @@ internal class MemberLookup {
         return result
     }
 
+    /// A type declared in a namespace, with its position in the reference
+    /// set's assembly and metadata order.
+    private data class HolderCandidate(Candidate Type, Ordinal int32) { }
+
+    /// The types of a reference set grouped by namespace. Enumerating the
+    /// assemblies happens once. A namespace is probed for static `[Extension]`
+    /// classes the first time an import names it, so only types in imported
+    /// namespaces are ever probed.
+    private class ImportedExtensionHolderIndex {
+        private let gate object = SystemObject()
+        private let namespaces Dictionary[string, List[HolderCandidate]]
+        private let probed Dictionary[string, ImmutableArray[HolderCandidate]] =
+        Dictionary[string, ImmutableArray[HolderCandidate]](StringComparer.Ordinal)
+
+        internal init(namespaces Dictionary[string, List[HolderCandidate]]) {
+            this.namespaces = namespaces
+        }
+
+        /// Gets the static `[Extension]` classes declared in a namespace, in
+        /// reference-set order and regardless of accessibility.
+        internal func GetHolders(namespaceName string) ImmutableArray[HolderCandidate] {
+            lock gate {
+                if probed.TryGetValue(namespaceName, out var existing) {
+                    return existing
+                }
+                let holders = ImmutableArray.CreateBuilder[HolderCandidate]()
+                if namespaces.TryGetValue(namespaceName, out var candidates) {
+                    for candidate in candidates {
+                        CompilationMeasurements.Count("extensions.holder-probes")
+                        // The probes below walk base types and attributes, which
+                        // under MetadataLoadContext can throw for types whose
+                        // dependency closure is unresolvable in the compile's
+                        // reference set — e.g. a HOST-fallback net10 BCL assembly
+                        // scanned during a netstandard2.0 compile, whose typerefs
+                        // target assembly versions the netstandard facade set
+                        // cannot satisfy. Such a type can never be a usable
+                        // extension holder here; skip it instead of failing the
+                        // whole compilation (the GS9998 TypeLoadException wall on
+                        // the migrated netstandard2.0 Gsharp.NET.Sdk, #3501).
+                        try {
+                            if !IsStaticClass(candidate.Candidate) || !HasExtensionAttribute(candidate.Candidate) {
+                                continue
+                            }
+                        } catch (ex Exception) when ClrTypeUtilities.IsMetadataLoadFailure(ex) {
+                            continue
+                        }
+                        holders.Add(candidate)
+                    }
+                }
+                let result = holders.ToImmutable()
+                probed[namespaceName] = result
+                return result
+            }
+        }
+    }
+
+    private func CreateImportedExtensionHolderIndex(references ReferenceResolver) Lazy[
+        ImportedExtensionHolderIndex
+    ] -> Lazy[ImportedExtensionHolderIndex](
+        () -> BuildImportedExtensionHolderIndex(references),
+        System.Threading.LazyThreadSafetyMode.ExecutionAndPublication
+    )
+
+    private func BuildImportedExtensionHolderIndex(references ReferenceResolver) ImportedExtensionHolderIndex {
+        using let measurement = CompilationMeasurements.BeginPhase("references.extension-holders")
+        CompilationMeasurements.Count("extensions.holder-scans")
+        let namespaces = Dictionary[string, List[HolderCandidate]](StringComparer.Ordinal)
+        var ordinal int32 = 0
+        for assembly in references.Assemblies {
+            var types IEnumerable[Type?]
+            try {
+                types = assembly.GetTypes()
+            } catch (ex ReflectionTypeLoadException) {
+                types = ex.Types
+            } catch {
+                continue
+            }
+            for type in types {
+                if type == nil || type.Namespace == nil {
+                    continue
+                }
+                if !namespaces.TryGetValue(type.Namespace!!, out var bucket) {
+                    bucket = List[HolderCandidate]()
+                    namespaces.Add(type.Namespace!!, bucket)
+                }
+                bucket.Add(HolderCandidate(type, ordinal))
+                ordinal++
+            }
+        }
+        return ImportedExtensionHolderIndex(namespaces)
+    }
+
     private data class ImportedExtensionIndex(Methods ImmutableDictionary[string, ImmutableArray[MethodInfo]]) { }
 
     private func BuildImportedExtensionIndex(type Type) ImportedExtensionIndex {
@@ -409,7 +502,6 @@ internal class MemberLookup {
         ) {
             return this.binderCtx.CachedImportedExtensionClasses!!
         }
-        using let measurement = CompilationMeasurements.BeginPhase("references.extension-holders")
         binderCtx.CachedImportedExtensionMethods = nil
         let namespaces = HashSet[string](StringComparer.Ordinal)
         if !imports.IsDefault {
@@ -421,38 +513,26 @@ internal class MemberLookup {
         }
         let classes = List[Type]()
         if namespaces.Count > 0 {
-            for assembly in this.binderCtx.References.Assemblies {
-                var types IEnumerable[Type?]
+            // The reference set is enumerated once per resolver and each
+            // imported namespace is probed once. Holders are merged back into
+            // reference-set order, then filtered by the consumer's
+            // accessibility, which depends on the current assembly name.
+            let index = importedExtensionHolders.GetValue(binderCtx.References, CreateImportedExtensionHolderIndex)
+                .Value
+            let merged = List[HolderCandidate]()
+            for namespaceName in namespaces {
+                merged.AddRange(index.GetHolders(namespaceName))
+            }
+            merged.Sort((left HolderCandidate, right HolderCandidate) -> left.Ordinal.CompareTo(right.Ordinal))
+            for holder in merged {
                 try {
-                    types = assembly.GetTypes()
-                } catch (ex ReflectionTypeLoadException) {
-                    types = ex.Types
-                } catch {
+                    if !IsVisibleImportedType(holder.Candidate) {
+                        continue
+                    }
+                } catch (ex Exception) when ClrTypeUtilities.IsMetadataLoadFailure(ex) {
                     continue
                 }
-                for type in types {
-                    if type == nil || type.Namespace == nil || !namespaces.Contains(type.Namespace!!) {
-                        continue
-                    }
-                    // The probes below walk base types and attributes, which
-                    // under MetadataLoadContext can throw for types whose
-                    // dependency closure is unresolvable in the compile's
-                    // reference set — e.g. a HOST-fallback net10 BCL assembly
-                    // scanned during a netstandard2.0 compile, whose typerefs
-                    // target assembly versions the netstandard facade set
-                    // cannot satisfy. Such a type can never be a usable
-                    // extension holder here; skip it instead of failing the
-                    // whole compilation (the GS9998 TypeLoadException wall on
-                    // the migrated netstandard2.0 Gsharp.NET.Sdk, #3501).
-                    try {
-                        if !IsStaticClass(type) || !HasExtensionAttribute(type) || !IsVisibleImportedType(type) {
-                            continue
-                        }
-                    } catch (ex Exception) when ClrTypeUtilities.IsMetadataLoadFailure(ex) {
-                        continue
-                    }
-                    classes.Add(type)
-                }
+                classes.Add(holder.Candidate)
             }
         }
         this.binderCtx.CachedImportedExtensionClasses = classes
@@ -671,6 +751,15 @@ internal class MemberLookup {
     shared {
         private let importedExtensionIndexes ConditionalWeakTable[Type, ImportedExtensionIndex] =
         ConditionalWeakTable[Type, ImportedExtensionIndex]()
+
+        // ConditionalWeakTable.GetValue can run its factory more than once for
+        // the same key under a race. The factory only creates the Lazy, so the
+        // scan itself runs once per resolver.
+        private let importedExtensionHolders ConditionalWeakTable[
+            ReferenceResolver,
+            Lazy[ImportedExtensionHolderIndex]
+        ] =
+        ConditionalWeakTable[ReferenceResolver, Lazy[ImportedExtensionHolderIndex]]()
 
         /// Issue #3679: distinguishes the internal-inclusive candidate set from the
         /// public-only one inside (cref:methodsIncludingSelfAndInterfacesCache).
