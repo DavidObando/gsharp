@@ -128,6 +128,8 @@ Order matters: publish first, then point the website at the published package.
       writes `trail-M.zip` and `concurrency-patterns-M.zip`. Retain historical
       downloads and register their original hashes when they become historical.
       ZIP creator OS, relative POSIX ordering and LF payloads must be deterministic.
+      Store payloads without compression so zlib-version differences cannot
+      change the archive hash.
    5. Regenerate the concurrency evidence:
       `python3 website/tests/verify-concurrency-patterns.py --race`. It needs Go
       and restores `Gsharp.NET.Sdk/M` from nuget.org. It rewrites

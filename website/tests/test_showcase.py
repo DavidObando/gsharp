@@ -40,6 +40,10 @@ def init(self, *args, **kwargs):
     zip_init(self, *args, **kwargs)
     self.create_system = 0 if host == "windows" else 3
 zipfile.ZipInfo.__init__ = init
+# Different compressor versions can produce different valid DEFLATE streams.
+compressobj = zipfile.zlib.compressobj
+zipfile.zlib.compressobj = lambda level, *args, **kwargs: compressobj(
+    1 if host == "windows" else 9, *args, **kwargs)
 write_text = path_type.write_text
 def write(self, data, *args, **kwargs):
     kwargs.setdefault("newline", "\\r\\n" if host == "windows" else "\\n")

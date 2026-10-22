@@ -47,7 +47,7 @@ broad catches for top-level reporting or cleanup.
 ```gsharp
 try {
     process(request)
-} catch (e HttpRequestException) when e.StatusCode == 429 {
+} catch (e HttpRequestException) when e.StatusCode == System.Net.HttpStatusCode.TooManyRequests {
     retryLater(request)
 } catch (OperationCanceledException) {
     // The type is all this handler needs; no local is bound.
@@ -56,6 +56,9 @@ try {
     Console.WriteLine("unexpected")
 }
 ```
+
+This excerpt assumes `process`, `request` and `retryLater` from the surrounding
+program and imports `System` and `System.Net.Http`.
 
 A `when` filter must be a `bool` expression, and it is emitted as a real CLR
 filter region: it runs during the first pass — before any intervening `finally`

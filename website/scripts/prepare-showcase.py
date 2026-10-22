@@ -19,11 +19,12 @@ sources = [project / name for name in ["Trail.gsproj", "Program.gs", "README.md"
 sources += (project / "demo").rglob("*")
 output = site / "static/downloads"
 output.mkdir(parents=True, exist_ok=True)
-with zipfile.ZipFile(output / f'trail-{release["version"]}.zip', "w", compression=zipfile.ZIP_DEFLATED) as archive:
+# These small downloads stay uncompressed: DEFLATE bytes vary between zlib versions.
+with zipfile.ZipFile(output / f'trail-{release["version"]}.zip', "w", compression=zipfile.ZIP_STORED) as archive:
     for source in sorted(sources, key=lambda path: path.relative_to(project).as_posix()):
         if source.is_file():
             info = zipfile.ZipInfo("Trail/" + source.relative_to(project).as_posix(), (2026, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
+            info.compress_type = zipfile.ZIP_STORED
             info.create_system = 3
             info.external_attr = 0o644 << 16
             archive.writestr(info, source_bytes(source))
@@ -53,11 +54,11 @@ for pattern in patterns:
     pattern["gsharp"] = gs.read_text()
     pattern["go"] = go.read_text()
 archive_name = f'concurrency-patterns-{release["version"]}.zip'
-with zipfile.ZipFile(output / archive_name, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+with zipfile.ZipFile(output / archive_name, "w", compression=zipfile.ZIP_STORED) as archive:
     for source in sorted(pattern_files, key=lambda path: path.relative_to(patterns_root).as_posix()):
         info = zipfile.ZipInfo("ConcurrencyPatterns/" + source.relative_to(patterns_root).as_posix(),
                               (2026, 1, 1, 0, 0, 0))
-        info.compress_type = zipfile.ZIP_DEFLATED
+        info.compress_type = zipfile.ZIP_STORED
         info.create_system = 3
         info.external_attr = 0o644 << 16
         archive.writestr(info, source_bytes(source))
