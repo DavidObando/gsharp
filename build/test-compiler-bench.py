@@ -50,7 +50,8 @@ def synthetic_pe() -> bytes:
 
 def fake_compiler(directory: Path, name: str, *, pdb: str = "pdb", ref: str = "ref", doc: str = "doc",
                   log: str = "ok", checksum: int = 0, body: str = "", noise: bool = False,
-                  seconds: float = 0.0, exit_code: int = 0) -> str:
+                  seconds: float = 0.0, exit_code: int = 0, omit: tuple = (),
+                  differ_from_call: int = 0, noise_checksum: bool = False) -> str:
     """An executable standing in for gsc: writes every output the @rsp names."""
     dll = bytearray(synthetic_pe())
     if checksum:
@@ -72,10 +73,19 @@ def fake_compiler(directory: Path, name: str, *, pdb: str = "pdb", ref: str = "r
         f"dll = bytearray({bytes(dll)!r})\n"
         f"if {noise!r}:\n"
         "    dll[0x420:0x428] = os.urandom(8)\n"
-        "open(paths['/out:'], 'wb').write(dll)\n"
-        f"open(paths['/pdb:'], 'w').write({pdb!r})\n"
-        f"open(paths['/refout:'], 'w').write({ref!r})\n"
-        f"open(paths['/doc:'], 'w').write({doc!r})\n"
+        f"omit = {omit!r}\n"
+        "counter = sys.argv[0] + '.calls'\n"
+        "calls = int(open(counter).read()) + 1 if os.path.exists(counter) else 1\n"
+        "open(counter, 'w').write(str(calls))\n"
+        f"pdb_text = {pdb!r} + ('-late' if {differ_from_call} and calls >= {differ_from_call} else '')\n"
+        f"if {noise_checksum!r}:\n"
+        f"    dll[{CHECKSUM_OFFSET}:{CHECKSUM_OFFSET + 4}] = os.urandom(4)\n"
+        # Without /pdb the compiler writes <out>.pdb beside the DLL.
+        "pdb_path = paths.get('/pdb:') or os.path.splitext(paths['/out:'])[0] + '.pdb'\n"
+        "if 'out' not in omit: open(paths['/out:'], 'wb').write(dll)\n"
+        "if 'pdb' not in omit: open(pdb_path, 'w').write(pdb_text)\n"
+        f"if 'refout' not in omit: open(paths['/refout:'], 'w').write({ref!r})\n"
+        f"if 'doc' not in omit: open(paths['/doc:'], 'w').write({doc!r})\n"
         f"print({log!r}, os.path.dirname(paths['/out:']))\n"
         "phases = {'Phases': [{'Name': 'parse', 'ElapsedMilliseconds': 5.0, 'ProcessAllocatedBytes': 1048576},\n"
         "                     {'Name': 'parse', 'ElapsedMilliseconds': 7.0, 'ProcessAllocatedBytes': 1048576}],\n"
@@ -132,12 +142,12 @@ class ParityTests(BenchTestCase):
         self.assertEqual(0, code, err)
         cell = self.report()["cells"]["core"]
         self.assertEqual([], cell["problems"])
-        self.assertTrue(cell["parity"]["candidate"]["implementation"]["identical"])
+        self.assertTrue(cell["parity"]["candidate"][0]["implementation"]["identical"])
         # Two 'parse' spans per run aggregate by name into one row: count 2, 12 ms.
         self.assertEqual({"count": 2, "wallMs": 12.0, "allocMiB": 2.0}, cell["candidate"]["phases"]["parse"])
         self.assertEqual(3, cell["candidate"]["counters"]["symbols"])
         self.assertEqual(3, len(cell["baselineRuns"]))
-        self.assertIn("baseline-vs-baseline control: identical", out)
+        self.assertIn("control (2 runs): identical", out)
 
     def test_a_pdb_difference_fails(self) -> None:
         code, _, err = self.bench(fake_compiler(self.root, "a"), fake_compiler(self.root, "b", pdb="other"))
@@ -159,7 +169,7 @@ class ParityTests(BenchTestCase):
     def test_identity_group_bytes_are_reported_but_pass(self) -> None:
         code, out, err = self.bench(fake_compiler(self.root, "a"), fake_compiler(self.root, "b", checksum=0xDEADBEEF))
         self.assertEqual(0, code, err)
-        impl = self.report()["cells"]["core"]["parity"]["candidate"]["implementation"]
+        impl = self.report()["cells"]["core"]["parity"]["candidate"][0]["implementation"]
         self.assertEqual(["checksum", "debug-payload"], impl["groups"])
         self.assertEqual(0, impl["otherBytes"])
         self.assertIn("differs in checksum, debug-payload", out)
@@ -176,6 +186,94 @@ class ParityTests(BenchTestCase):
         code, _, _ = self.bench(noisy, fake_compiler(self.root, "b"))
         self.assertEqual(1, code)
         self.assertIn("baseline control", " ".join(self.report()["cells"]["core"]["problems"]))
+
+
+class VerdictHoleTests(BenchTestCase):
+    def test_a_candidate_that_omits_an_artifact_fails(self) -> None:
+        for kind in ("pdb", "refout", "doc", "out"):
+            with self.subTest(kind=kind):
+                code, _, _ = self.bench(fake_compiler(self.root, f"a{kind}"),
+                                        fake_compiler(self.root, f"b{kind}", omit=(kind,)),
+                                        "--work", str(self.root / f"work-{kind}"))
+                self.assertEqual(1, code)
+                report = json.loads((self.root / f"work-{kind}" / "compiler-bench-report.json").read_text("utf-8"))
+                self.assertIn(f"{kind} output is absent", " ".join(report["cells"]["core"]["problems"]))
+
+    def test_a_difference_in_a_later_candidate_run_fails(self) -> None:
+        # The candidate's third run writes a different PDB; runs 0 and 1 match.
+        code, _, _ = self.bench(fake_compiler(self.root, "a"), fake_compiler(self.root, "b", differ_from_call=3))
+        self.assertEqual(1, code)
+        self.assertEqual(["candidate run 2: pdb differs"], self.report()["cells"]["core"]["problems"])
+
+    def test_the_baseline_control_rejects_identity_group_noise(self) -> None:
+        code, _, _ = self.bench(fake_compiler(self.root, "a", noise_checksum=True), fake_compiler(self.root, "b"))
+        self.assertEqual(1, code)
+        self.assertIn("baseline control", " ".join(self.report()["cells"]["core"]["problems"]))
+
+    def test_the_default_sidecar_pdb_is_compared_when_pdb_is_not_in_the_response_file(self) -> None:
+        self.rsp.write_bytes(b"\xef\xbb\xbf/out:/tree/obj/Core.dll\n/refout:/tree/obj/ref/Core.dll\n"
+                             b"/doc:/tree/bin/Core.xml\n" + str(self.project / "a.gs").encode() + b"\n")
+        self.assertEqual({"out", "pdb", "refout", "doc"}, set(cb.output_paths(self.rsp.read_text("utf-8-sig"))))
+        self.assertEqual(0, self.bench(fake_compiler(self.root, "a"), fake_compiler(self.root, "b"))[0])
+        code, _, _ = self.bench(fake_compiler(self.root, "c"), fake_compiler(self.root, "d", pdb="other"),
+                                "--work", str(self.root / "work2"))
+        self.assertEqual(1, code)
+
+
+class SafetyTests(BenchTestCase):
+    def run_with(self, *extra: str) -> tuple[int, str]:
+        a = fake_compiler(self.root, "a")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cb.main(["--baseline", a, "--candidate", a, "--runs", "2", "--warmup", "0", *extra])
+        return code, err.getvalue()
+
+    def test_path_like_cell_names_are_rejected_and_nothing_is_deleted(self) -> None:
+        victim = self.root / "victim"
+        victim.mkdir()
+        (victim / "keep.txt").write_text("x", encoding="utf-8")
+        for index, name in enumerate(("../victim", str(victim), "a/b", "..")):
+            with self.subTest(name=name):
+                code, err = self.run_with("--cell", name, str(self.rsp), str(self.project),
+                                          "--work", str(self.root / f"work-{index}"))
+                self.assertEqual(2, code, err)
+                self.assertIn("cell name", err)
+                self.assertTrue((victim / "keep.txt").exists())
+
+    def test_a_non_empty_work_root_is_refused_untouched(self) -> None:
+        self.work.mkdir()
+        (self.work / "precious").mkdir()
+        (self.work / "precious" / "data.txt").write_text("x", encoding="utf-8")
+        code, err = self.run_with("--cell", "core", str(self.rsp), str(self.project), "--work", str(self.work))
+        self.assertEqual(2, code)
+        self.assertIn("not an empty directory", err)
+        self.assertEqual(["precious"], [p.name for p in self.work.iterdir()])
+        self.assertTrue((self.work / "precious" / "data.txt").exists())
+
+    def test_duplicate_cell_names_are_rejected(self) -> None:
+        code, err = self.run_with("--cell", "core", str(self.rsp), str(self.project),
+                                  "--cell", "core", str(self.rsp), str(self.project), "--work", str(self.work))
+        self.assertEqual(2, code)
+        self.assertIn("unique", err)
+
+    def test_a_failed_run_keeps_its_log_and_drops_large_outputs(self) -> None:
+        code, _, err = self.bench(fake_compiler(self.root, "a"), fake_compiler(self.root, "b", exit_code=3))
+        self.assertEqual(2, code)
+        log = self.work / "core" / "candidate-0" / "compile.log"
+        self.assertTrue(log.exists())
+        self.assertIn(str(log), err)
+        self.assertFalse((self.work / "core" / "candidate-0" / "Core.dll").exists())
+        self.assertFalse((self.work / "core" / "stage").exists())
+        self.assertTrue((self.work / "compiler-bench-report.json").exists())
+
+    def test_a_hello_path_with_spaces_is_one_token(self) -> None:
+        spaced = self.root / "dir with space"
+        spaced.mkdir()
+        source = spaced / 'he"llo.gs'
+        source.write_text("x", encoding="utf-8")
+        line = cb.hello_rsp("/out:/a.dll\n", source).splitlines()[-1]
+        # The response-file tokenizer reads a doubled quote inside quotes as one quote.
+        self.assertEqual('"' + str(source).replace('"', '""') + '"', line)
 
 
 class DisciplineTests(BenchTestCase):

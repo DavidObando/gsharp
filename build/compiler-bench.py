@@ -29,6 +29,7 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import shutil
 import statistics
 import struct
@@ -82,6 +83,10 @@ def output_paths(rsp_text: str) -> dict[str, str]:
         for option, kind in KIND_BY_OPTION.items():
             if probe.lower().startswith(option):
                 found[kind] = probe[len(option):].strip('"')
+    # With a portable /debug and no /pdb, gsc still writes "<out>.pdb" beside the
+    # implementation DLL (src/Compiler/Program.gs, sidecar PDB default).
+    if "pdb" not in found and "out" in found:
+        found["pdb"] = str(Path(found["out"]).with_suffix(".pdb"))
     return found
 
 
@@ -90,7 +95,10 @@ def hello_rsp(template: str, source: Path) -> str:
     # Source lines end in .gs; on Linux an absolute source path also starts with "/".
     lines = [line for line in template.splitlines()
              if line.strip() and not line.strip().strip('"').lower().endswith(".gs")]
-    return "\n".join([*lines, str(source.resolve())]) + "\n"
+    # Quote with the response-file tokenizer's syntax (a doubled quote inside quotes),
+    # so a path with spaces stays one token.
+    quoted = '"' + str(source.resolve()).replace('"', '""') + '"'
+    return "\n".join([*lines, quoted]) + "\n"
 
 
 def load_rsp(path: Path) -> str:
@@ -180,7 +188,15 @@ def compare_bytes(left: bytes, right: bytes, regions: list[tuple[str, int, int]]
 
 def compare_runs(first: dict, second: dict, first_dir: Path, second_dir: Path) -> dict:
     """Compares the outputs and diagnostics of two runs; each dict is a run's `outputs` map."""
-    result: dict = {"exact": {}, "implementation": None}
+    result: dict = {"exact": {}, "implementation": None, "missing": []}
+    # An artifact present in one run and absent from the other is a difference, and
+    # both runs must have produced an implementation DLL.
+    for kind in ("out", *EXACT_KINDS):
+        if (kind in first) != (kind in second):
+            side = "candidate or later run" if kind in first else "first run"
+            result["missing"].append(f"{kind} output is absent from the {side}")
+    if "out" not in first or "out" not in second:
+        result["missing"].append("an implementation DLL is required in both runs")
     for kind in EXACT_KINDS:
         if kind in first and kind in second:
             result["exact"][kind] = Path(first[kind]).read_bytes() == Path(second[kind]).read_bytes()
@@ -199,14 +215,26 @@ def compare_runs(first: dict, second: dict, first_dir: Path, second_dir: Path) -
     return result
 
 
-def unexpected(comparison: dict) -> list[str]:
-    problems = [f"{kind} differs" for kind, same in comparison["exact"].items() if not same]
+def unexpected(comparison: dict, strict: bool = False) -> list[str]:
+    """The failures of a comparison.
+
+    `strict` is for the baseline control. Every run stages its outputs at the same
+    path, so two runs of one deterministic compiler are byte-identical, identity
+    groups included (the PDB path feeds the content hash). Only the
+    baseline-vs-candidate comparison may differ in the identity groups.
+    """
+    problems = list(comparison["missing"])
+    problems += [f"{kind} differs" for kind, same in comparison["exact"].items() if not same]
     if not comparison["diagnosticsIdentical"]:
         problems.append("diagnostics differ")
     impl = comparison["implementation"]
-    if impl and not impl["identical"] and (impl["sizeDiffers"] or impl["otherBytes"]):
-        problems.append("implementation DLL differs outside the identity groups"
-                        + (" (size)" if impl["sizeDiffers"] else f" ({impl['otherBytes']} bytes)"))
+    if impl and not impl["identical"]:
+        if strict:
+            problems.append("implementation DLL differs"
+                            + (f" in {', '.join(impl['groups'])}" if impl["groups"] else ""))
+        elif impl["sizeDiffers"] or impl["otherBytes"]:
+            problems.append("implementation DLL differs outside the identity groups"
+                            + (" (size)" if impl["sizeDiffers"] else f" ({impl['otherBytes']} bytes)"))
     return problems
 
 
@@ -246,6 +274,8 @@ def run_once(compiler: str, rsp_text: str, work: Path, label: str, index: int, c
         except OSError as error:
             raise BenchError(f"{label} run {index} could not start: {error}") from error
     if result.returncode != 0:
+        # Drop the large staged outputs but keep compile.log, which the error names.
+        shutil.rmtree(stage, ignore_errors=True)
         raise BenchError(f"{label} run {index} failed (exit {result.returncode}); see {run_dir / 'compile.log'}")
     measured = bench.parse_time((run_dir / "time.txt").read_text(encoding="utf-8"))
     measured["phases"] = read_phases(phases)
@@ -301,51 +331,83 @@ def print_cell(name: str, cell: dict) -> None:
         print(f"counter {counter}: baseline {base['counters'].get(counter, 0)} "
               f"candidate {cand['counters'].get(counter, 0)}")
     parity = cell["parity"]
-    impl = parity["candidate"]["implementation"]
-    if impl:
-        groups = ", ".join(impl["groups"]) or "none"
-        print(f"implementation DLL: {'identical' if impl['identical'] else 'differs in ' + groups}"
-              f" ({impl['otherBytes']} bytes outside identity groups)")
-        for note in impl["notes"]:
+    impls = [c["implementation"] for c in parity["candidate"] if c["implementation"]]
+    if impls:
+        groups = sorted({g for i in impls for g in i["groups"]})
+        identical = all(i["identical"] for i in impls)
+        print(f"implementation DLL ({len(impls)} candidate runs): "
+              f"{'identical' if identical else 'differs in ' + (', '.join(groups) or 'none')}"
+              f" ({max(i['otherBytes'] for i in impls)} bytes outside identity groups)")
+        for note in impls[0]["notes"]:
             print(f"  note: {note}")
-    control = parity.get("control")
-    if control and control["implementation"]:
-        c_impl = control["implementation"]
-        print("baseline-vs-baseline control: "
-              + ("identical" if c_impl["identical"] else "differs in " + (", ".join(c_impl["groups"]) or "no group")))
+    controls = parity["control"]
+    if controls:
+        print(f"baseline-vs-baseline control ({len(controls)} runs): "
+              + ("identical" if not any(unexpected(c, strict=True) for c in controls) else "DIFFERS"))
     print("parity: " + ("OK" if not cell["problems"] else "FAILED - " + "; ".join(cell["problems"])))
 
 
-def prune_outputs(runs: list[dict], index: int) -> None:
-    """Deletes a run's large outputs once nothing needs them."""
-    for path in runs[index]["outputs"].values():
+def prune_outputs(run: dict) -> None:
+    """Deletes a run's large outputs once nothing needs them; logs stay."""
+    for path in run["outputs"].values():
         Path(path).unlink(missing_ok=True)
 
 
+CELL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def cell_directory(work: Path, name: str) -> Path:
+    """The cell's own directory, directly under the work root; the script deletes it later."""
+    if not CELL_NAME.fullmatch(name) or ".." in name:
+        raise BenchError(f"cell name {name!r} must be letters, digits, '.', '_' or '-' (no path separators)")
+    directory = (work / name).resolve()
+    if directory.parent != work.resolve():
+        raise BenchError(f"cell {name!r} does not resolve directly under the work root")
+    if directory.exists():
+        raise BenchError(f"cell directory {directory} already exists")
+    return directory
+
+
 def run_cell(name: str, rsp_text: str, cwd: Path, args: argparse.Namespace, work: Path) -> dict:
-    cell_work = work / name
+    cell_work = cell_directory(work, name)
     runs: dict[str, list[dict]] = {"baseline": [], "candidate": []}
     compilers = {"baseline": args.baseline, "candidate": args.candidate}
-    for index in range(args.warmup):
-        for label in ("baseline", "candidate"):
-            run_once(compilers[label], rsp_text, cell_work, f"warmup-{label}", index, cwd)
-            shutil.rmtree(cell_work / f"warmup-{label}-{index}", ignore_errors=True)
-    for index in range(args.runs):
-        # Alternate which compiler goes first so neither always runs on a warmer machine.
-        order = ["baseline", "candidate"] if index % 2 == 0 else ["candidate", "baseline"]
-        for label in order:
-            runs[label].append(run_once(compilers[label], rsp_text, cell_work, label, index, cwd))
-            # The first two baseline runs and the first candidate run feed the parity check.
-            if index >= (2 if label == "baseline" else 1) and not args.keep:
-                prune_outputs(runs[label], index)
-    first_base, first_cand = cell_work / "baseline-0", cell_work / "candidate-0"
-    parity: dict = {"candidate": compare_runs(runs["baseline"][0]["outputs"], runs["candidate"][0]["outputs"],
-                                              first_base, first_cand)}
-    problems = [f"candidate: {p}" for p in unexpected(parity["candidate"])]
-    if args.runs >= 2:
-        parity["control"] = compare_runs(runs["baseline"][0]["outputs"], runs["baseline"][1]["outputs"],
-                                         first_base, cell_work / "baseline-1")
-        problems += [f"baseline control (nondeterministic baseline): {p}" for p in unexpected(parity["control"])]
+    parity: dict = {"candidate": [], "control": []}
+    problems: list[str] = []
+    try:
+        for index in range(args.warmup):
+            for label in ("baseline", "candidate"):
+                run_once(compilers[label], rsp_text, cell_work, f"warmup-{label}", index, cwd)
+                shutil.rmtree(cell_work / f"warmup-{label}-{index}", ignore_errors=True)
+        for index in range(args.runs):
+            # Alternate which compiler goes first so neither always runs on a warmer machine.
+            order = ["baseline", "candidate"] if index % 2 == 0 else ["candidate", "baseline"]
+            for label in order:
+                runs[label].append(run_once(compilers[label], rsp_text, cell_work, label, index, cwd))
+            # Every measured run is compared with the first baseline run, whose outputs
+            # are kept until the cell ends. Candidate runs use the identity-group
+            # tolerance; later baseline runs are the strict control.
+            base0 = runs["baseline"][0]
+            base_dir = cell_work / "baseline-0"
+            candidate = compare_runs(base0["outputs"], runs["candidate"][index]["outputs"],
+                                     base_dir, cell_work / f"candidate-{index}")
+            parity["candidate"].append(candidate)
+            problems += [f"candidate run {index}: {p}" for p in unexpected(candidate)]
+            if index >= 1:
+                control = compare_runs(base0["outputs"], runs["baseline"][index]["outputs"],
+                                       base_dir, cell_work / f"baseline-{index}")
+                parity["control"].append(control)
+                problems += [f"baseline control run {index} (baseline is not deterministic): {p}"
+                             for p in unexpected(control, strict=True)]
+            if not args.keep:
+                prune_outputs(runs["candidate"][index])
+                if index >= 1:
+                    prune_outputs(runs["baseline"][index])
+    except BenchError:
+        # Keep the logs a failure message points at; drop the large outputs.
+        for measured in (*runs["baseline"], *runs["candidate"]):
+            prune_outputs(measured)
+        raise
     cell = {"cwd": str(cwd), "baseline": summarize(runs["baseline"]), "candidate": summarize(runs["candidate"]),
             "parity": parity, "problems": problems,
             "baselineRuns": [{m: r[m] for m in METRICS} for r in runs["baseline"]],
@@ -355,14 +417,8 @@ def run_cell(name: str, rsp_text: str, cwd: Path, args: argparse.Namespace, work
     return cell
 
 
-def finish(work: Path, report: dict, keep: bool) -> None:
-    if not work.exists():
-        return
+def write_report(work: Path, report: dict) -> None:
     (work / "compiler-bench-report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    if not keep:
-        for child in work.iterdir():
-            if child.is_dir():
-                shutil.rmtree(child, ignore_errors=True)
 
 
 def main(argv: list[str]) -> int:
@@ -396,24 +452,33 @@ def main(argv: list[str]) -> int:
     except BenchError as error:
         print(f"compiler-bench: {error}", file=sys.stderr)
         return 2
+    created = False
     try:
         args.baseline = bench.resolve_compiler(args.baseline)
         args.candidate = bench.resolve_compiler(args.candidate)
+        # The script owns the work root: a non-empty directory may hold someone else's files.
+        if work.exists() and (not work.is_dir() or any(work.iterdir())):
+            raise BenchError(f"work root {work} exists and is not an empty directory")
         work.mkdir(parents=True, exist_ok=True)
+        created = True
         cells = [(name, load_rsp(Path(rsp)), Path(cwd).resolve()) for name, rsp, cwd in args.cell]
         if args.hello:
             cells.insert(0, ("hello", hello_rsp(cells[0][1], args.hello), cells[0][2]))
+        names = [name for name, _, _ in cells]
+        if len(set(names)) != len(names):
+            raise BenchError(f"cell names must be unique: {names}")
         for name, rsp_text, cwd in cells:
             report["cells"][name] = run_cell(name, rsp_text, cwd, args, work)
     except BenchError as error:
         report["error"] = str(error)
         print(f"compiler-bench: {error}", file=sys.stderr)
-        finish(work, report, args.keep)
+        if created:  # never write into a directory that was rejected
+            write_report(work, report)
         return 2
     report["loadAfter"] = bench.load_average()
     for name, cell in report["cells"].items():
         print_cell(name, cell)
-    finish(work, report, args.keep)
+    write_report(work, report)
     failed = [name for name, cell in report["cells"].items() if cell["problems"]]
     if failed:
         print(f"\ncompiler-bench: unexpected output differences in: {', '.join(failed)}", file=sys.stderr)
