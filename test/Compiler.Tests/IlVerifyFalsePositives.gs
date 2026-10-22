@@ -7,8 +7,9 @@ import System.Globalization
 import System.Text.RegularExpressions
 
 /// Shared fail-closed adapter for the test helper and standalone ILVerify gate.
+/// The legacy filter waiver requires opt-in; its skipped-code limitation is tracked in #5115.
 internal shared class IlVerifyFalsePositives {
-    func OnlyKnown(assemblyPath string, stdout string) bool {
+    func OnlyKnown(assemblyPath string, stdout string, allowFilterInFinally bool = false) bool {
         let errorLines = List[string]()
         var reportedCount int32? = nil
         for rawLine in stdout.Replace("\r\n", "\n").Split('\n') {
@@ -32,7 +33,8 @@ internal shared class IlVerifyFalsePositives {
         }
         let filterRule = IlVerifyFilterInFinallyRule.Load(assemblyPath)
         for line in errorLines {
-            if !filterRule.Matches(errorCode: nil, line) && !IlVerifyStaticInterfaceRule.Matches(assemblyPath, line) {
+            if !(allowFilterInFinally && filterRule.Matches(errorCode: nil, line)) &&
+                !IlVerifyStaticInterfaceRule.Matches(assemblyPath, line) {
                 return false
             }
         }

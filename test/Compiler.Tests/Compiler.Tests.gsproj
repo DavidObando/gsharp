@@ -13,6 +13,7 @@
     <ProjectReference Include="@(GsharpCompiler-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
     <ProjectReference Include="@(GsharpRepl-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" ReferenceOutputAssembly="false" />
     <ProjectReference Include="../../src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../build/ilverify/IlVerifyDiagnostics.gsproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\Sdk\Gsharp.Extensions\Gsharp.Extensions.csproj" ReferenceOutputAssembly="false" />
     <Compile Include="..\Shared\EmittedFixture.gs" Link="EmittedFixture.cs" />
     <Compile Include="..\Core.Tests\CSharpFixture.gs" Link="CSharpFixture.cs" />

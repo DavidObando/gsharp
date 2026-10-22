@@ -203,7 +203,8 @@ internal shared class IlVerifier {
         let (exitCode, stdout, stderr) = RunProcess(psi, assemblyPath, VerifyTimeoutMilliseconds)
         if exitCode == 2 && string.IsNullOrWhiteSpace(stderr) && IlVerifyFalsePositives.OnlyKnown(
             assemblyPath,
-            stdout
+            stdout,
+            allowFilterInFinally: true
         ) {
             return
         }
