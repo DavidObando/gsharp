@@ -8,6 +8,8 @@
     <!-- Compiler is shipped as gsc.dll so the Gsharp.NET.Sdk and end users
          can invoke `dotnet gsc.dll` (matching csc/vbc naming convention). -->
     <AssemblyName>gsc</AssemblyName>
+      <!-- Disable tiered PGO instrumentation in the published payload (#5120). Tiered compilation stays on. -->
+    <TieredPGO>false</TieredPGO>
   </PropertyGroup>
 
   <ItemGroup>
