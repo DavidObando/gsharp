@@ -96,11 +96,12 @@ internal shared class IlVerifyStaticInterfaceRule {
             let slotType = reader.GetTypeDefinition(slot.GetDeclaringType())
             var signature = reader.GetBlobReader(slot.Signature)
             let flags = MethodAttributes.Static | MethodAttributes.Virtual
+            // Default static, nongeneric signatures have an all-zero header.
             if slot.GetGenericParameters().Count != 0 || slotType.GetGenericParameters()
                 .Count != 0 ||
                 signature
                 .ReadSignatureHeader()
-                .IsGeneric ||
+                .RawValue != uint8(0) ||
                 (slot.Attributes & flags) != flags ||
                 (code == "CallAbstract" && (slot.Attributes & MethodAttributes.Abstract) == 0) ||
                 (slotType.Attributes & TypeAttributes.Interface) == 0 {

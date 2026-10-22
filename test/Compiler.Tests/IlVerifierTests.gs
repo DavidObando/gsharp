@@ -85,6 +85,9 @@ open class IlVerifierTests {
     @InlineData(int32(1))
     @InlineData(int32(2))
     @InlineData(int32(3))
+    @InlineData(int32(4))
+    @InlineData(int32(5))
+    @InlineData(int32(6))
     func StaticInterfaceDispatch_RejectsWrongSlotMetadataAndConstraint(mutant int32) {
         let dir = Path.Combine(AppContext.BaseDirectory, "static-interface-metadata-${Guid.NewGuid():N}")
         Directory.CreateDirectory(dir)
@@ -120,7 +123,7 @@ open class IlVerifierTests {
                     codeStart + callOffset - 4,
                     4
                 )
-            } else {
+            } else if mutant == 3 {
                 // Give T an unrelated class constraint instead of IAdd.
 
                 Assert.Equal(4, md.GetTableRowSize(TableIndex.GenericParamConstraint))
@@ -132,6 +135,22 @@ open class IlVerifierTests {
                 ) +
                     2
                 Array.Copy(BitConverter.GetBytes(uint16(MetadataTokens.GetRowNumber(unrelated) << 2)), 0, bytes, row, 2)
+            } else {
+                let signature = md.GetMethodDefinition(slotHandle).Signature
+                let length = md.GetBlobBytes(signature).Length
+                Assert.InRange(length, 1, 127)
+                let blob = pe.PEHeaders.MetadataStartOffset + md.GetHeapMetadataOffset(HeapIndex.Blob) +
+                    MetadataTokens.GetHeapOffset(signature)
+                Assert.Equal(uint8(length), bytes[blob])
+                Assert.Equal(uint8(0), bytes[blob + 1])
+                // HAS_THIS, EXPLICIT_THIS and VARARG are not default static signatures.
+                bytes[blob + 1] = if mutant == 4 {
+                    uint8(0x20)
+                } else if mutant == 5 {
+                    uint8(0x40)
+                } else {
+                    uint8(0x05)
+                }
             }
             File.WriteAllBytes(dll, bytes)
             Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report))
