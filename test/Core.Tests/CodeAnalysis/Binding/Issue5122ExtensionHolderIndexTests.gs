@@ -36,6 +36,29 @@ namespace HoldersB5122 {
     }
 
     @Fact
+    func ExtensionHolders_ProbeOnlyTypesInImportedNamespaces_AndEachNamespaceOnce() {
+        using let fixture = CSharpFixture(`namespace Probed5122 {
+    public static class Holder { public static int One(this string value) => 1; }
+    public class Plain { }
+}
+namespace Untouched5122 {
+    public static class Other { public static int Two(this string value) => 2; }
+    public class A { }
+    public class B { }
+    public class C { }
+}`)
+        using let resolver = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        using let measurements = CompilationMeasurements.Start("test")
+        for var i = 0; i < 3; i++ {
+            let scope_ = BoundScope(nil, resolver)
+            Assert.True(scope_.TryImport(ImportSymbol("Probed5122", "Probed5122", nil)))
+            Assert.Equal(1, MemberLookup(BinderContext(scope_)).GetImportedExtensionClasses().Count)
+        }
+        // Only the two types declared in the imported namespace are probed, once.
+        Assert.Equal(2L, measurements.GetCounter("extensions.holder-probes"))
+    }
+
+    @Fact
     func ExtensionHolders_ReapplyInternalAccessPerConsumer_WithSharedIndex() {
         using let fixture = CSharpFixture(`using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Friend5122")]
