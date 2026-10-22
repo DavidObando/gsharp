@@ -207,11 +207,13 @@ looks for the files it needs. These are the lookups today:
 
 The rules:
 
-1. **The RID package is self-contained for everything that `gsc` loads.** It
-   carries `gsc.dll`, `gsc.deps.json`, `gsc.runtimeconfig.json`, `GSharp.Core.dll`
-   and the bundled runtime assemblies above, all beside `gsc.dll`. This is what
-   `dotnet publish` of the compiler produces now. The first lookup candidate
-   therefore works.
+1. **The RID package is self-contained for everything that `gsc` itself loads,
+   except the portable runtime set.** It carries `gsc.dll`, `gsc.deps.json`,
+   `gsc.runtimeconfig.json`, `GSharp.Core.dll` and the other private
+   dependencies of `gsc` (`Microsoft.VisualStudio.Validation`,
+   `System.IO.Hashing`, `System.Reflection.MetadataLoadContext`), all beside
+   `gsc.dll`. These are the only assemblies that are R2R-compiled. The portable
+   runtime set (see below) is not R2R-compiled.
 2. **The SDK passes explicit paths.** When it starts `gsc` with `/analyzer:`, the
    SDK also passes `/gsgentool:$(GsgenToolFullPath)`. The result does not depend
    on where `gsc.dll` is.
@@ -231,6 +233,49 @@ The rules:
 5. **`gsgen` and `gsfmt` stay in the SDK package.** The RID package does not
    duplicate them (about 23 MB zipped for `gsgen`).
 
+### Portable runtime set
+
+Some assemblies leave the compiler's own directory and reach user output or a
+user process. An R2R copy of them would run only on one OS and architecture.
+That is the failure of PR #5154, but silent: the wrong file would be inside the
+user's output folder. These assemblies must stay portable IL (PE `Machine`
+`0x14C`) and must never be R2R-compiled:
+
+| Assembly | Why it reaches users | Source of the portable copy |
+| --- | --- | --- |
+| `Gsharp.Runtime.Channels.dll` | `CopyBundledRuntimeBeside` copies it into a direct `/out:` result (`Program.gs:611-657`), and the SDK references it from `tools/channels/`. | SDK package `tools/channels/` |
+| `Gsharp.Runtime.Values.dll` | Same as above. | SDK package `tools/values/` |
+| `Gsharp.Extensions.dll` | The SDK references it from `tools/extensions/` and copies it local into user output. | SDK package `tools/extensions/` |
+| `Gsharp.HotReload.Runtime.dll` | It runs inside the user process during hot reload. | SDK package `tools/hotreload/` |
+
+The other things that flow to users are not in the set. `GSharp.Core.dll` is
+private to the compiler: no SDK target and no emitter code references it from a
+user program. Analyzer and generator assemblies are loaded by `gsc` and `gsgen`
+as input, and reading their metadata works the same for any image kind.
+Satellite `*.resources.dll` files hold compiler messages only. XML documentation
+files and PDBs are data. The compiler's `*.resources.dll` files are excluded from
+crossgen, as the .NET SDK does (`Crossgen.targets` in `dotnet/dotnet`).
+
+The rules:
+
+1. **Exclusion list.** The crossgen step names the portable runtime set. It
+   skips those four assemblies. They are never compiled, in any package.
+2. **One source.** The SDK package's portable copies are the only copies that
+   `gsc` copies. The RID package ships no copy of the set, unless the compiler
+   fails to load without it. In that case the RID package ships the IL copies,
+   byte-identical to the SDK ones, and the implementation PR records the reason.
+3. **Lookup order.** `FindBundledRuntimePath` checks, in this order: beside
+   `gsc.dll` (the IL layout), the existing `../<project folder>/` and
+   `../<sdk folder>/` folders, and the SDK package rule from the companion
+   tools section (`<packages>/gsharp.net.sdk/<version>/tools/<sdk folder>/`).
+   A copy beside an R2R `gsc.dll` is used only if rule 2 allows it and its
+   `Machine` is `0x14C`. If the candidate has another `Machine` value, the
+   lookup skips it.
+4. **Pack-time invariant.** The pack step reads the PE header of each assembly
+   in the portable runtime set, in every package. It fails the pack if one has a
+   `Machine` value other than `0x14C`, or if one is not byte-identical to the
+   SDK portable copy.
+
 The implementation PR must add these tests:
 
 - An end-to-end build of a project with a source generator while the R2R
@@ -242,7 +287,13 @@ The implementation PR must add these tests:
 - The same direct call with only the RID package present. It must fail with the
   existing diagnostic that names `/gsgentool:`.
 - A direct call that compiles a program with a channel, from the RID package
-  layout. It must copy `Gsharp.Runtime.Channels.dll` beside the output.
+  layout. It must copy `Gsharp.Runtime.Channels.dll` beside the output. The
+  copy must be byte-identical to the SDK package copy, and its PE `Machine` must
+  be `0x14C`. The same check applies to `Gsharp.Runtime.Values.dll`.
+- A mutant that adds `Gsharp.Runtime.Channels.dll` to the crossgen input must
+  make the pack-time invariant fail the pack.
+- A mutant that makes the lookup prefer a copy with another `Machine` value must
+  make the direct-call test fail.
 - A mutant that restores the old `ResolveGsgenToolPath` must make the second
   test fail (ADR-0154).
 
@@ -347,6 +398,7 @@ lists what becomes a promise if this ADR is accepted.
 | Probe order | The five-step order in Decision 4, including `GsharpCompilerFullPath`, `GsharpUseReadyToRunCompiler` and the launch-host check. |
 | Launch host | `gsc` starts with `$(DOTNET_HOST_PATH)`. An R2R image is used only when the host RID equals the package RID. A mismatch uses IL. |
 | Same layout | A RID package has the same file names under `tools/<tfm>/<rid>/` as the IL layout under `tools/compiler/`. |
+| Portable runtime set | The four assemblies in the table are portable IL in every package, and the files that `gsc` copies into user output are byte-identical to the SDK package copies. |
 | Companion location | From `tools/<tfm>/<rid>/` in a RID package, `gsgen` is found at the SDK package rule in "Companion tools and shared assets" and with `/gsgentool:` and `GSHARP_GSGEN_TOOL`. |
 | Version lock | A RID package has the exact version of its SDK. |
 | Supported set | The six RIDs are listed in the documentation for as long as they are published. |
