@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 The entries below are newer than v0.5.212. Published features and migration notes follow in the release section.
 
+- **Imported extension holders are indexed once per reference set** (issue #5122, part of #2189). The scan that finds static `[Extension]` classes in the reference assemblies runs once per resolver instead of once per binder context; each lookup filters the indexed holders by imported namespace and re-applies accessibility for the current assembly, so internal and friend-assembly rules are unchanged. On the Core compile the `references.extension-holders` phase dropped from 812 openings (546 ms) to 1 (5 ms), with identical PDB, reference assembly and XML output.
+
 - **Published 0.5 website snapshot** (issues #5082, #5084). The default documentation and downloads target v0.5.212, with release-grounded guidance for native slices, platform nullability, SDK projects and editor tooling. Released scalar/code-point APIs are included; Next retains only post-tag changes; 0.4/0.3 snapshots and original archives remain unchanged. Original 0.4.591 editor captures are explicitly historical, while current examples execute independently with the published SDK. Downloads use canonical LF payloads, a fixed ZIP creator OS and relative POSIX entry ordering; cross-host regression checks cover Windows/POSIX defaults. Release-reference checks retain mandatory current references and hash-check authentic historical evidence. The sample hashing and standalone verifier harnesses include the runtime dependencies used by the driver.
 
 ## 0.5.212 (October 22, 2026)
