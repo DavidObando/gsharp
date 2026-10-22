@@ -54,9 +54,9 @@ b = 8
 done
 ```
 
-Wrapping the call in `scope { runAll().Wait() }` would join the async
-work as part of the structured-concurrency block — useful when the
-parent operation owns child work that must complete first.
+Here `.Wait()` waits for `runAll()`. Wrapping the same call in `scope` does not
+register the task as an owned child. A `scope` joins children launched with `go`;
+dropping `.Wait()` would leave this ordinary async task unjoined.
 
 ## 2. Return value types from async functions
 

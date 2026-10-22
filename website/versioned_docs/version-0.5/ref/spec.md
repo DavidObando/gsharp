@@ -53,13 +53,13 @@ letter     = unicode_letter | "_" .
 The reserved keywords are:
 
 ```text
-as async await break case catch chan class const continue default defer do else enum false fallthrough finally for func go goto guard if import interface internal is let lock map nil open operator override package private protected public range return scope sealed select sequence struct switch throw true try type using var while
+as async await break case catch chan class const continue default defer do else enum fallthrough false finally for func go goto guard if import interface internal is let lock map nil open operator override package private protected public range rethrow return scope sealed select sequence struct suspend switch throw true try using var while
 ```
 
-Several words are contextual rather than reserved: they retain identifier status except in the specific grammar contexts described below. The full set the parser recognises contextually is:
+Several words are contextual rather than reserved: they retain identifier status except in the specific grammar contexts described below. Examples include:
 
 ```text
-add and base checked convenience data deinit delegate event explicit fixed get implicit in init inline make nameof not or out params prop raise ref remove scoped set shared stackalloc this typeof unchecked unmanaged unsafe when with yield
+add and base checked convenience data deinit delegate event explicit fixed get implicit in init inline make nameof not object or out params partial prop raise ref remove scoped set shared sizeof stackalloc this type typeof unchecked unmanaged unsafe when with yield
 ```
 
 Notable contextual roles: `prop`, `event`, `delegate`, `data`, `inline`, `partial`, `shared`, `convenience`, and `deinit` introduce or modify members; `get`, `set`, `add`, `remove`, and `raise` name accessors; `in`, `out`, `ref`, `scoped`, and `params` modify parameters; `explicit` and `implicit` mark conversion operators; `and`, `or`, and `not` combine patterns; `this` and `base` reference the receiver; `when` guards a `catch`/`case`; and `make`, `with`, `yield`, `typeof`, and `nameof` are expression forms. The `init` parameterless-constructor constraint (`[T init()]`) was renamed from the former `new()` spelling; `new` is therefore no longer a constraint keyword. The unsafe/low-level words `unsafe`, `fixed`, `stackalloc`, and `unmanaged` are contextual (for example `stackalloc` is recognised only in the `stackalloc [` shape) and otherwise remain ordinary identifiers. `checked` and `unchecked` are contextual overflow-context markers, recognised as the block/expression forms only when immediately followed by `{` or `(` respectively. `lock` is a reserved keyword, not contextual. The legacy `record` contextual keyword was removed; the lexer still recognises it so the parser can emit the GS0307 migration diagnostic (`use data struct` / `data class`).

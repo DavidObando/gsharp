@@ -19,16 +19,16 @@ Identifiers start with a Unicode letter or `_` and continue with Unicode letters
 
 The reserved keywords may not be used as identifiers. The complete set is:
 
-- Declarations: `package`, `import`, `using`, `type`, `func`, `operator`, `var`, `let`, `const`
+- Declarations: `package`, `import`, `using`, `func`, `operator`, `var`, `let`, `const`
 - Type and member kinds: `class`, `struct`, `interface`, `enum`, `map`, `sequence`, `chan`
 - Control flow: `if`, `else`, `for`, `while`, `do`, `switch`, `case`, `default`, `fallthrough`, `break`, `continue`, `goto`, `guard`, `range`, `return`
 - Pattern and cast: `is`, `as`
-- Concurrency: `go`, `select`, `scope`, `defer`, `async`, `await`
+- Concurrency: `go`, `select`, `scope`, `defer`, `async`, `await`, `lock`, `suspend`
 - Exceptions: `try`, `catch`, `finally`, `throw`, `rethrow`
 - Access and inheritance modifiers: `public`, `internal`, `protected`, `private`, `open`, `override`, `sealed`
 - Literals: `true`, `false`, `nil`
 
-Some words are contextual: `data`, `inline`, `partial`, `prop`, `event`, `shared`, `init`, `get`, `set`, `add`, `remove`, `raise`, `in`, `out`, `yield`, `with`, `unsafe`, `fixed`, `stackalloc`, `sizeof`, `typeof`, `nameof`, `unmanaged`, `object`, and `make` are ordinary identifiers except in the syntax positions that give them special meaning.
+Some words are contextual: `type`, `data`, `inline`, `partial`, `prop`, `event`, `shared`, `init`, `get`, `set`, `add`, `remove`, `raise`, `in`, `out`, `yield`, `with`, `unsafe`, `fixed`, `stackalloc`, `sizeof`, `typeof`, `nameof`, `unmanaged`, `object`, and `make` are ordinary identifiers except in the syntax positions that give them special meaning.
 
 ## Numeric literals
 
