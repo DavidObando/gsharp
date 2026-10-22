@@ -187,7 +187,9 @@ shared class ClrTypeUtilities {
         // Same-context fast path covers inheritance / interfaces.
         if object.ReferenceEquals(target.Assembly, source.Assembly) || target.GetType() == source.GetType() {
             try {
-                if target.IsAssignableFrom(source) {
+                // A TypeBuilderInstantiation target always throws from IsAssignableFrom;
+                // go straight to the by-name walk below.
+                if !IsTypeBuilderInstantiation(target) && target.IsAssignableFrom(source) {
                     return true
                 }
                 // Issue #908: do NOT treat a `false` here as authoritative. The
@@ -272,6 +274,59 @@ shared class ClrTypeUtilities {
         return false
     }
 
+    /// The `System.Reflection.Emit.TypeBuilderInstantiation` runtime type, or `nil`
+    /// when this runtime does not expose it by that name.
+    private let typeBuilderInstantiationType Type? = typeof(TypeBuilder).Assembly.GetType(
+        "System.Reflection.Emit.TypeBuilderInstantiation",
+        false
+    )
+
+    /// The assembly that holds the `System.Reflection.MetadataLoadContext` reflection objects.
+    private let metadataLoadContextAssembly Assembly = typeof(MetadataLoadContext).Assembly
+
+    /// Whether [`type`](paramref) is a `System.Reflection.Emit.TypeBuilderInstantiation`: a
+    /// generic instantiation closed over a type that is still being defined by emit.
+    /// @remarks That type answers `GetMethods`, `GetMethodImpl`, `GetInterfaces`,
+    /// `IsSubclassOf`, `IsByRefLike` and `IsAssignableFrom` by throwing
+    /// (cref:NotSupportedException). Probes test this first so the common case does
+    /// not pay for a thrown and caught exception. The probes keep their `catch` as
+    /// the last resort, so a runtime that hides the type only loses the fast path.
+    /// @param type The type to inspect.
+    /// @returns `true` when the type is a `TypeBuilderInstantiation`.
+    internal func IsTypeBuilderInstantiation(type Type?) bool -> type != nil &&
+        typeBuilderInstantiationType != nil &&
+        type.GetType() == typeBuilderInstantiationType
+
+    /// Whether [`member`](paramref) was produced by a `System.Reflection.MetadataLoadContext`.
+    /// @param member The reflection object to inspect.
+    /// @returns `true` when the object belongs to the metadata load context assembly.
+    internal func IsMetadataLoadContextMember(member MemberInfo?) bool -> member != nil && object.ReferenceEquals(
+        member.GetType().Assembly,
+        metadataLoadContextAssembly
+    )
+
+    /// Whether `definition.MakeGenericType(arguments)` is certain to be rejected
+    /// because a `MetadataLoadContext` definition was handed a host runtime type.
+    /// @remarks `RoDefinitionType.MakeGenericType` accepts only arguments loaded by its own
+    /// context and throws (cref:ArgumentException) for any host `RuntimeType`. Callers that
+    /// already treat the rejection as "no closure" test this first. A `false` answer does
+    /// not promise success: other contexts and constraint violations still throw, and
+    /// callers keep their `catch` for those.
+    /// @param definition The generic type definition to close.
+    /// @param arguments The type arguments to close it over.
+    /// @returns `true` when the closure is certain to be rejected.
+    internal func MakeGenericTypeIsRejectedAcrossContexts(definition Type?, arguments[]Type) bool {
+        if !IsMetadataLoadContextMember(definition) {
+            return false
+        }
+        for argument in arguments {
+            if argument.IsRuntimeProvidedType() {
+                return true
+            }
+        }
+        return false
+    }
+
     /// Issue #367: returns whether [`type`](paramref) is a CLR by-ref-like
     /// (`ref struct`) type — one carrying
     /// `System.Runtime.CompilerServices.IsByRefLikeAttribute`, such as
@@ -286,7 +341,7 @@ shared class ClrTypeUtilities {
     /// @param type The candidate type.
     /// @returns `true` when the type is a by-ref-like value type.
     func IsByRefLike(type Type?) bool {
-        if type == nil {
+        if type == nil || IsTypeBuilderInstantiation(type) {
             return false
         }
         try {
@@ -683,6 +738,11 @@ shared class ClrTypeUtilities {
         if accessor == nil {
             return false
         }
+        // MetadataLoadContext methods throw from GetBaseDefinition unconditionally (#2863),
+        // so read the override bit from the metadata attributes without raising first.
+        if IsMetadataLoadContextMember(accessor) {
+            return IsOverrideFromMetadataAttributes(accessor)
+        }
         try {
             return accessor.GetBaseDefinition() != accessor
         } catch (ex Exception) when IsMetadataLoadFailure(ex) {
@@ -768,7 +828,11 @@ shared class ClrTypeUtilities {
                     }
                     var direct[]Type
                     try {
-                        direct = current.GetInterfaces()
+                        direct = if IsTypeBuilderInstantiation(current) {
+                            Array.Empty[Type]()
+                        } else {
+                            current.GetInterfaces()
+                        }
                     } catch (ex Exception) when IsMetadataLoadFailure(ex) {
                         direct = Array.Empty[Type]()
                     }
@@ -1292,17 +1356,21 @@ func (type Type?) GetMethodSafe(name string?) MethodInfo? {
         return nil
     }
     try {
-        return type.GetMethod(name)
+        if !ClrTypeUtilities.IsTypeBuilderInstantiation(type) {
+            return type.GetMethod(name)
+        }
     } catch (NotSupportedException) {
-        if !ClrTypeUtilities.IsConstructedGenericWithTypeBuilderArgument(type) {
-            return nil
-        }
-        let openMethod MethodInfo? = type.GetGenericTypeDefinition().GetMethod(name)
-        return if openMethod != nil {
-            ClrTypeUtilities.GetConstructedGenericMethod(type, openMethod)
-        } else {
-            default(MethodInfo?)
-        }
+        // Resolved through the open definition below.
+
+    }
+    if !ClrTypeUtilities.IsConstructedGenericWithTypeBuilderArgument(type) {
+        return nil
+    }
+    let openMethod MethodInfo? = type.GetGenericTypeDefinition().GetMethod(name)
+    return if openMethod != nil {
+        ClrTypeUtilities.GetConstructedGenericMethod(type, openMethod)
+    } else {
+        default(MethodInfo?)
     }
 }
 
@@ -1320,26 +1388,30 @@ func (type Type?) GetMethodSafe(name string?, types[]?Type) MethodInfo? {
         return nil
     }
     try {
-        return type.GetMethod(name, types)
+        if !ClrTypeUtilities.IsTypeBuilderInstantiation(type) {
+            return type.GetMethod(name, types)
+        }
     } catch (NotSupportedException) {
-        if !ClrTypeUtilities.IsConstructedGenericWithTypeBuilderArgument(type) {
-            return nil
-        }
-        let openType = type.GetGenericTypeDefinition()
-        let typeArguments = type.GetGenericArguments()
-        let openTypeArguments = openType.GetGenericArguments()
-        let openMethod MethodInfo? = ClrTypeUtilities.FindOpenGenericMethod(
-            openType,
-            name,
-            types,
-            openTypeArguments,
-            typeArguments
-        )
-        return if openMethod != nil {
-            ClrTypeUtilities.GetConstructedGenericMethod(type, openMethod)
-        } else {
-            default(MethodInfo?)
-        }
+        // Resolved through the open definition below.
+
+    }
+    if !ClrTypeUtilities.IsConstructedGenericWithTypeBuilderArgument(type) {
+        return nil
+    }
+    let openType = type.GetGenericTypeDefinition()
+    let typeArguments = type.GetGenericArguments()
+    let openTypeArguments = openType.GetGenericArguments()
+    let openMethod MethodInfo? = ClrTypeUtilities.FindOpenGenericMethod(
+        openType,
+        name,
+        types,
+        openTypeArguments,
+        typeArguments
+    )
+    return if openMethod != nil {
+        ClrTypeUtilities.GetConstructedGenericMethod(type, openMethod)
+    } else {
+        default(MethodInfo?)
     }
 }
 
@@ -1357,7 +1429,7 @@ func (type Type?) GetMethodSafe(name string?, types[]?Type) MethodInfo? {
 /// @returns `true` when [`type`](paramref) is a real CLR enum.
 @ExtensionOwner(typeof(ClrTypeUtilities))
 func (type Type?) IsEnumSafe() bool {
-    if type == nil {
+    if type == nil || ClrTypeUtilities.IsTypeBuilderInstantiation(type) {
         return false
     }
     try {

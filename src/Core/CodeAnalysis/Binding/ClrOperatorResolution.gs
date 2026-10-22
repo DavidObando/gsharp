@@ -340,7 +340,7 @@ internal shared class ClrOperatorResolution {
         @NotNullWhen(true) out method MethodInfo?
     ) bool {
         method = nil
-        if declaring == nil {
+        if declaring == nil || ClrTypeUtilities.IsTypeBuilderInstantiation(declaring) {
             return false
         }
         var candidates[]MethodInfo
