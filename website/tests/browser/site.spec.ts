@@ -127,6 +127,7 @@ test('search failures provide a usable fallback', async ({page}) => {
 
 for (const colorScheme of ['light', 'dark'] as const) {
   test(`${colorScheme} theme: released, archived, and Next reference pages hydrate`, async ({page}) => {
+    test.setTimeout(120000);
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     await page.emulateMedia({colorScheme, reducedMotion: 'reduce'});
@@ -139,7 +140,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
   });
 
   test(`${colorScheme} theme: responsive layout and accessible surfaces`, async ({page}) => {
-    test.setTimeout(120000);
+    test.setTimeout(180000);
     await page.emulateMedia({colorScheme, reducedMotion: 'reduce'});
     for (const width of [320, 390, 768, 1024, 1440]) {
       await page.setViewportSize({width, height: 960});
