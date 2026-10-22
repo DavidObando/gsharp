@@ -8,6 +8,7 @@
     <Project Path="src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.gsproj" Type="C#" />
   </Folder>
   <Folder Name="/Build/">
+    <Project Path="build/ilverify/IlVerifyDiagnostics.gsproj" Type="C#" />
     <File Path="build/.stylecop.json" />
     <File Path="build/gsharp.build.props" />
     <File Path="build/gsharp.build.ruleset" />
