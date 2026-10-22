@@ -1,5 +1,6 @@
 import {test, expect} from '@playwright/test';
 import os from 'node:os';
+import {expectHydrated} from './hydration';
 
 test.beforeAll(() => {
   expect(
@@ -26,7 +27,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await page.emulateMedia({colorScheme, reducedMotion: 'reduce'});
       await page.setViewportSize({width: scenario.width, height: scenario.height});
       await page.goto(scenario.route);
-      await expect(page.locator('html')).toHaveAttribute('data-has-hydrated', 'true');
+      await expectHydrated(page);
       await page.evaluate(() => document.fonts.ready);
       if (scenario.name === 'search') {
         await page.getByRole('button', {name: 'Search documentation', exact: true}).click();

@@ -3,6 +3,7 @@ import AxeBuilder from '@axe-core/playwright';
 import rawBenchmark from '../../static/data/concurrency-bench.json';
 import type {Snapshot} from '../../src/components/ConcurrencyBenchmarks';
 import release from '../../src/data/release.json';
+import {expectHydrated} from './hydration';
 
 const benchmark: Snapshot = rawBenchmark;
 
@@ -75,7 +76,7 @@ test('local search is lazy, version-aware, and keyboard accessible', async ({pag
     if (request.url().includes('/pagefind/')) indexRequests.push(request.url());
   });
   await page.goto('docs/next/intro');
-  await expect(page.locator('html')).toHaveAttribute('data-has-hydrated', 'true');
+  await expectHydrated(page);
   expect(indexRequests).toEqual([]);
   await page.keyboard.press('Control+k');
   const dialog = page.getByRole('dialog');
@@ -125,6 +126,18 @@ test('search failures provide a usable fallback', async ({page}) => {
 });
 
 for (const colorScheme of ['light', 'dark'] as const) {
+  test(`${colorScheme} theme: released, archived, and Next reference pages hydrate`, async ({page}) => {
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.emulateMedia({colorScheme, reducedMotion: 'reduce'});
+    for (const route of ['docs/ref/spec', 'docs/0.4/ref/spec', 'docs/next/ref/spec']) {
+      await page.goto(route);
+      await expectHydrated(page);
+      await expect(page.locator('html')).toHaveAttribute('data-theme', colorScheme);
+    }
+    expect(errors).toEqual([]);
+  });
+
   test(`${colorScheme} theme: responsive layout and accessible surfaces`, async ({page}) => {
     test.setTimeout(120000);
     await page.emulateMedia({colorScheme, reducedMotion: 'reduce'});
@@ -148,7 +161,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
       'concurrency',
     ]) {
       await page.goto(route);
-      await expect(page.locator('html')).toHaveAttribute('data-has-hydrated', 'true');
+      await expectHydrated(page);
       await expect(page.locator('html')).toHaveAttribute('data-theme', colorScheme);
       await page.evaluate(() => document.fonts.ready);
       await expect(page.locator('body')).toHaveCSS(
