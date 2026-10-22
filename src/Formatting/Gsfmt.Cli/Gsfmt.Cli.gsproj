@@ -6,6 +6,8 @@
     <RootNamespace>GSharp.Gsfmt</RootNamespace>
     <AssemblyName>gsfmt</AssemblyName>
     <Nullable>enable</Nullable>
+      <!-- Disable tiered PGO instrumentation in the published payload (#5120). Tiered compilation stays on. -->
+    <TieredPGO>false</TieredPGO>
   </PropertyGroup>
 
   <PropertyGroup>

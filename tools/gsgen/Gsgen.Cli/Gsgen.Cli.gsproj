@@ -7,6 +7,8 @@
     <!-- Shipped as gsgen.dll so the Gsharp.NET.Sdk can invoke `dotnet gsgen.dll`
          as a separate process (ADR-0145 §A/§F), matching the gsc convention. -->
     <AssemblyName>gsgen</AssemblyName>
+      <!-- Disable tiered PGO instrumentation in the published payload (#5120). Tiered compilation stays on. -->
+    <TieredPGO>false</TieredPGO>
   </PropertyGroup>
 
   <ItemGroup>
