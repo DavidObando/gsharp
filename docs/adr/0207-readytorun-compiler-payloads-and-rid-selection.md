@@ -94,9 +94,14 @@ Package sizes (zipped, from the linux-x64 probe): `gsc` and its closure is
 3. **The SDK gets the host RID package with `PackageDownload`.** The SDK adds a
    `PackageDownload` item for the RID of the `dotnet` host that runs `gsc`
    (`$(NETCoreSdkPortableRuntimeIdentifier)`). The version is the exact range
-   `[<SDK version>]`. A RID that is not in the supported list gets no
-   `PackageDownload`. A NuGet dependency meta-package is rejected (see
-   Alternatives).
+   `[<SDK version>]`. The SDK adds it only when this host RID is exactly one of
+   the six RIDs in `GsharpCompilerRuntimeIdentifiers`. For any other host
+   (`linux-musl-x64`, `win-x86`, `linux-arm`, the BSDs, and so on) the SDK adds
+   no `PackageDownload` and uses the IL payload, so restore never asks for a
+   package that does not exist. The opt-out `GsharpUseReadyToRunCompiler=false`
+   also adds no `PackageDownload`. A user can then restore offline, or against a
+   mirror that lacks the RID packages. A NuGet dependency meta-package is
+   rejected (see Alternatives).
 4. **One probe selects the directory.** The MSBuild property
    `GsharpCompilerFullPath` (already in `Gsharp.NET.Sdk.props`) is the only place
    that decides. Order:
@@ -109,10 +114,16 @@ Package sizes (zipped, from the linux-x64 probe): `gsc` and its closure is
    language server and the extensions) call one shared function with the same
    order. Outside MSBuild, they find the packages folder of the SDK package and
    use the id and version rule in "Naming and layout".
-5. **Fallback is silent and always correct.** If the RID is not supported, the
-   package is absent, or the file is missing, the IL path is used. The build
-   logs one low-importance message with the reason. A missing RID package never
-   fails a build.
+5. **Fallback is silent and always correct at build time.** If the RID is not
+   supported, the opt-out is set, or the file is missing from the package
+   directory, the IL path is used. The build logs one low-importance message
+   with the reason. The failure rules are:
+   - For a host outside the six RIDs, nothing is requested, so nothing can fail.
+   - For a host in the six RIDs, a missing package at the exact SDK version makes
+     restore fail, because NuGet cannot find the version that `PackageDownload`
+     names. The release process must prevent this (see "Costs of the promise").
+   - With `GsharpUseReadyToRunCompiler=false`, nothing is requested and nothing
+     can fail.
 6. **Cross-compilation.** The pack host runs crossgen2 with explicit target OS
    and architecture for each RID. A pack host needs the crossgen2 pack of its
    own RID and the runtime pack of each target RID at restore.
@@ -164,9 +175,12 @@ The G# choices:
 Deviations, with reasons:
 
 - The .NET SDK maps the host RID to the best pack RID through the RID graph
-  (`NuGetUtils.GetBestMatchingRid`). G# compares the portable host RID with the
-  list. A distro RID such as `linux-musl-x64` is not in the list and uses IL.
-  This keeps the probe simple. We can add RID-graph matching later.
+  (`NuGetUtils.GetBestMatchingRid`). The first G# release matches the exact
+  portable host RID against the allowlist of six. A host such as
+  `linux-musl-x64` is not in the list and uses IL. RID-graph matching can be
+  added later as a speedup that does not break anything. It needs a check first:
+  it is untested whether an image tagged for `linux` loads on musl, so the
+  implementation must verify it before it maps a RID to a package.
 - The .NET packs ship a runtime, so their RID is a runtime RID. Our packs ship
   code for `dotnet gsc.dll`, so only the host RID of the `dotnet` process counts.
 - The RID package is not a .NET tool, so it has no `DotnetToolSettings.xml`
@@ -214,7 +228,7 @@ lists what becomes a promise if this ADR is accepted.
 | Item | Promise |
 | --- | --- |
 | IL fallback | `tools/compiler` in `Gsharp.NET.Sdk` always holds a working portable `gsc`. This is the main promise. |
-| Failure mode | A missing or unsupported RID package never breaks a build. It only costs speed. |
+| Failure mode | A host outside the six RIDs, or a build with `GsharpUseReadyToRunCompiler=false`, never requests a RID package and cannot fail. On the six RIDs, a missing package at the exact SDK version fails restore, and the release process prevents it. After restore, a missing file only costs speed. |
 | Probe order | The four-step order in Decision 4, including `GsharpCompilerFullPath` and `GsharpUseReadyToRunCompiler`. |
 | Same layout | A RID package has the same file names under `tools/<tfm>/<rid>/` as the IL layout under `tools/compiler/`. |
 | Version lock | A RID package has the exact version of its SDK. |
@@ -248,12 +262,15 @@ lists what becomes a promise if this ADR is accepted.
 
 ### Costs of the promise
 
-- Each release publishes seven packages (six RID packages and the SDK). The
-  feed must have the RID packages before a user restores the SDK, because the
-  `PackageDownload` of the host RID fails the restore if its package is absent.
-  The publish step needs an ordering and a retry rule. (A missing package makes
-  the restore fail, not the build fall back, because NuGet cannot find a
-  version that `PackageDownload` names. The release process must prevent it.)
+- Each release publishes seven packages (six RID packages and the SDK). Because
+  a missing RID package fails restore on that RID, the publish step must:
+  1. publish the six RID packages first, and the SDK package last;
+  2. retry a failed push of any package, and never publish the SDK if one RID
+     package failed;
+  3. run a post-publish check that all six `Gsharp.NET.Sdk.Compiler.<rid>`
+     packages exist on the feed at the exact SDK version (a restore of a probe
+     project on each RID, or a feed query), and mark the release failed if one
+     is missing.
 - The release pipeline needs crossgen2 for six RIDs and a smoke job for each.
   Any RID may ship unverified, but the team always tries to verify all six. The
   release notes of a release name each RID that the smoke did not verify.
@@ -334,9 +351,10 @@ Neutral:
 The maintainer decided these points on 2026-10-22: `PackageDownload` of the host
 RID, internal RID package ids that follow the .NET conventions, removal of a RID
 only in a major release, and verification of all six RIDs with any RID allowed to
-ship unverified. The questions that remain are:
+ship unverified.
 
-1. Is `Gsharp.NET.Sdk.Compiler.<rid>` the right base identity, or does the
-   maintainer prefer another name?
-2. Should the implementation add RID-graph matching (as the .NET SDK does) in the
-   first release, or only the exact portable RID?
+No question remains open. The maintainer fixed two more points on 2026-10-22:
+the base name is `Gsharp.NET.Sdk.Compiler.<rid>`, and the first release matches
+the exact portable RID against an allowlist of six. RID-graph matching is a
+future, additive speedup. It needs a check of musl first (see "Naming and
+layout").
