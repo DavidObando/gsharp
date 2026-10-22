@@ -144,6 +144,27 @@ test('release metadata and installation stay aligned', () => {
     const install = readFileSync(path.join(site, directory, 'getting-started/install.md'), 'utf8');
     assert.ok(install.includes(`Gsharp.Templates::${release.version}`));
     assert.ok(install.includes(`Gsharp.NET.Sdk/${release.version}`));
+    const notes = readFileSync(path.join(site, directory, 'release-notes.md'), 'utf8');
+    assert.ok(notes.includes(`commit \`${release.sourceCommit}\``), `${directory}: published tag commit`);
+  }
+});
+
+test('released byte-string guidance includes scalar and code-point APIs', () => {
+  for (const directory of ['docs', `versioned_docs/version-${versions[0]}`]) {
+    const spec = readFileSync(path.join(site, directory, 'ref/spec.md'), 'utf8')
+      .split('### Byte-string literals')[1].split('### Boolean and nil literals')[0];
+    const tour = readFileSync(path.join(site, directory, 'tour/types.md'), 'utf8')
+      .split('## Immutable byte strings')[1].split('\n## ')[0];
+    const feature = readFileSync(path.join(site, directory, 'ref/feature-matrix.md'), 'utf8')
+      .split('\n').find((line) => line.startsWith('| Immutable byte strings |'));
+    const library = readFileSync(path.join(site, directory, 'ref/standard-library.md'), 'utf8')
+      .split('\n').find((line) => line.startsWith('| Immutable bytes |'));
+    for (const source of [spec, tour, feature, library]) {
+      assert.ok(source.includes('DecodeUtf8Scalars'), `${directory}: scalar iteration`);
+      assert.ok(source.includes('FromCodePoints'), `${directory}: code-point encoding`);
+      assert.ok(source.includes('DecodeCodePoints'), `${directory}: code-point decoding`);
+      assert.doesNotMatch(source, /Next[- ]only|remain[s]? deferred|not included in this tag/i);
+    }
   }
 });
 

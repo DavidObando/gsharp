@@ -4,7 +4,7 @@ Original, runnable comparison examples for the G# website. The pattern inventory
 
 ## Run
 
-G# requires the .NET 10 SDK and restores `Gsharp.NET.Sdk/0.5.199`:
+G# requires the .NET 10 SDK and restores `Gsharp.NET.Sdk/0.5.212`:
 
 ```sh
 dotnet run --project gsharp -- worker-pool

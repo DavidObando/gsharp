@@ -8,11 +8,11 @@ sidebar_position: 2
 
 Trail scans local project files, computes SHA-256 hashes, and writes a sorted JSON report. This walkthrough connects language concepts to one complete program instead of a collection of unrelated fragments.
 
-**Verified example:** G# SDK 0.5.199 and .NET 10. The project is original code; Oahu's task-oriented workflows and goo's concrete G# examples informed the presentation, not its implementation.
+**Verified example:** G# SDK 0.5.212 and .NET 10. The project is original code; Oahu's task-oriented workflows and goo's concrete G# examples informed the presentation, not its implementation.
 
 ## 1. Run the complete project
 
-Install the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0), download [Trail for SDK 0.5.199](/downloads/trail-0.5.199.zip), and unzip it. From the extracted `Trail` directory:
+Install the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0), download [Trail for SDK 0.5.212](/downloads/trail-0.5.212.zip), and unzip it. From the extracted `Trail` directory:
 
 ```bash
 dotnet run -- demo

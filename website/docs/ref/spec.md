@@ -143,8 +143,8 @@ diagnoses GS0627.
 
 These are value expressions, not metadata/attribute/optional-parameter
 constants or constant patterns. The byte-string core and explicit UTF-8 text
-boundaries ship in 0.5.199. Scalar iteration and code-point collections below
-are Next-only APIs, not part of that release.
+boundaries ship in 0.5.212. Scalar iteration and code-point collections below
+are also included in this release.
 
 #### Explicit UTF-8 text boundaries
 
@@ -175,8 +175,6 @@ Default/empty byte strings decode to `""`; empty text encodes to an empty value.
 
 #### Code-point collections
 
-**Next only:** these APIs and `InputKind.CodePoints` are not in 0.5.199.
-
 `ByteString.FromCodePoints(source: readonly slice[int32], policy: CodePointEncoding)`
 encodes unrestricted signed integers as UTF-8. `CodePointEncoding` lives in
 `Gsharp.Values`: `Strict` rejects negative values, surrogates U+D800..U+DFFF
@@ -204,8 +202,6 @@ strips/inserts BOM nor drops embedded zero or non-BMP scalars. Both require
 linear processing plus growing buffers and output storage, not zero allocation.
 
 #### Lazy UTF-8 scalar iteration
-
-**Next only:** this scalar-enumeration API is not in 0.5.199.
 
 `value.DecodeUtf8Scalars(policy: Utf8Decoding)` returns value-type
 `ByteString.Utf8Enumerable`. Its `GetEnumerator()` returns concrete value-type

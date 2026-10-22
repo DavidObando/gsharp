@@ -185,7 +185,7 @@ See the [native slice contract](../ref/spec.md#native-shared-storage-slices) for
 
 ## Immutable byte strings
 
-**Available in 0.5.199:** `bytestring` is an immutable arbitrary-byte value,
+**Available in 0.5.212:** `bytestring` is an immutable arbitrary-byte value,
 not a CLR text string or a promise that its bytes are valid UTF-8. This capability
 requires a matching compiler/runtime. Ordinary `string` remains `System.String`.
 
@@ -224,7 +224,7 @@ the input value. They return no partial result. See the
 [text-boundary reference](../ref/spec.md#explicit-utf-8-text-boundaries) for
 policy and exception details.
 
-**Next only:** scalar iteration and code-point collection APIs below are not in 0.5.199. Use a matching development compiler/runtime for these examples.
+**Available in 0.5.212:** scalar iteration and code-point collection APIs below are released.
 
 Use `value.DecodeUtf8Scalars(policy)` for lazy scalar iteration:
 

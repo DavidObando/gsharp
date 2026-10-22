@@ -174,7 +174,7 @@ class ReleaseVersionRefsTests(unittest.TestCase):
         self.assertReported(problems, name, "missing")
 
     def test_historical_assets_must_exist_and_retain_their_original_content(self) -> None:
-        self.assertEqual(len(refs.HISTORICAL_FILES), 5)
+        self.assertEqual(len(refs.HISTORICAL_FILES), 7)
         for path in refs.HISTORICAL_FILES:
             for content, finding in [(None, "missing historical evidence"),
                                      ("relabeled or regenerated", "historical evidence hash changed")]:

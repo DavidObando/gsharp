@@ -91,7 +91,7 @@ Do not hard-code the deployed `/gsharp/` prefix in internal links. Preserve docu
 
 `website/docs` is development documentation at `/docs/next`. The first entry in `versions.json` is the default released snapshot at `/docs`; older snapshots retain their versioned paths.
 
-When refreshing a release, use the source from its actual Git tag, not a wholesale copy of unreleased main. The 0.5 snapshot is based on `v0.5.199` (`5fa04b164c8d83a70ad2fda26164a97f1213cb24`, published October 21, 2026 at 05:26 UTC), with reviewed editorial corrections. The 0.4 snapshot remains based on `v0.4.591`. Update the advertised package in `src/data/release.json`, the matching installation instructions, and the public-installation checks together. Historical versions must retain their own syntax and commands.
+When refreshing a release, use the source from its actual Git tag, not a wholesale copy of unreleased main. The 0.5 snapshot is based on `v0.5.212` (`242d8777c778db4272103c9dcefd6d63609e10ee`, published October 22, 2026 at 01:07:10 UTC), with reviewed editorial corrections. The 0.4 snapshot remains based on `v0.4.591`. Update the advertised package in `src/data/release.json`, the matching installation instructions, and the public-installation checks together. Historical versions must retain their own syntax and commands.
 
 The original Trail editor captures remain historical 0.4.591 evidence. Preserve the image bytes and provenance; distinguish the extension version, application SDK and .NET SDK. Verify new downloads independently with the published SDK instead of relabeling screenshots.
 

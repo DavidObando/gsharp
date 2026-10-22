@@ -20,7 +20,7 @@ This matrix summarizes current feature support in the emitter, which every drive
 | Comments | Supported | Supported | Line (`//`), block (`/* … */`), and Markdown documentation (`///`) comments. |
 | String, raw string, and interpolated string literals | Supported | Supported | Sigil-free interpolation with `$name`/`${expr,alignment:format}`, delimiter-aware multiline holes, and `DefaultInterpolatedStringHandler`/`FormattableString` lowering. |
 | Character literals | Supported | Supported | Character diagnostics are `GS0191` through `GS0195`. |
-| Immutable byte strings | Supported (.NET 10) | N/A | `bytestring` / `b"..."`, immutable byte operations and explicit UTF-8 encode/decode policies ship in 0.5.199. Scalar enumeration and code-point collections are not included in this tag. |
+| Immutable byte strings | Supported (.NET 10) | N/A | `bytestring` / `b"..."`, immutable byte operations, explicit UTF-8 policies, `DecodeUtf8Scalars`, `FromCodePoints` and `DecodeCodePoints` ship in 0.5.212. |
 | Documentation comments | Supported | Supported | `///` Markdown comments round-trip to CLR XML doc; hover renders CLR XML docs for imported APIs. Diagnostics `GS0227`–`GS0231`. |
 
 ## Types and values

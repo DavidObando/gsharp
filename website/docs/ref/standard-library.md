@@ -20,7 +20,7 @@ The built-in primitive names and native byte-string alias are:
 | Signed integers | `int8`, `int16`, `int32`, `int64`, `nint` | Unsuffixed integer literals default to `int32`. Older aliases such as `int` and `long` are not built-in primitive names. |
 | Floating point and decimal | `float32`, `float64`, `decimal` | Unsuffixed float literals default to `float64`; suffixes include `F`, `D`, and `M`. |
 | Text | `char`, `string` | `char` is one UTF-16 code unit; `string` is the CLR string type. |
-| Immutable bytes | `bytestring` | Native alias for `Gsharp.Values.ByteString`, not CLR text. The core and explicit UTF-8 text boundaries ship in 0.5.199; see [byte strings](spec.md#byte-string-literals). |
+| Immutable bytes | `bytestring` | Native alias for `Gsharp.Values.ByteString`, not CLR text. The core, explicit UTF-8 boundaries, `DecodeUtf8Scalars`, `FromCodePoints` and `DecodeCodePoints` ship in 0.5.212; see [byte strings](spec.md#byte-string-literals). |
 | Top and no-value | `object`, `void` | `object` is the universal upper bound; `void` is the no-result type. |
 | Absence | `nil` | `nil` is a special literal type that converts to nullable types, not a named runtime type. |
 

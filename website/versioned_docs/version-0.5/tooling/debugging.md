@@ -47,7 +47,7 @@ gsc Program.gs /out:bin/App.dll /debug:portable /pdb:bin/App.pdb
 The SDK maps standard .NET debug properties to the same compiler flags.
 
 ```xml title="MyApp.gsproj"
-<Project Sdk="Gsharp.NET.Sdk/0.5.199">
+<Project Sdk="Gsharp.NET.Sdk/0.5.212">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>

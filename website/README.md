@@ -35,7 +35,7 @@ Requires Node.js 24 (matching CI) and Python 3. Python's standard library packag
 
 The site is built and deployed by `.github/workflows/pages.yml`. Pull requests build only; pushes to `main` deploy. Docs versioning is enabled: the unreleased docs are the "current" version, and released snapshots are cut with `npm run docusaurus docs:version <x.y>`.
 
-The current docs are served at `/docs/next`; the first entry of `versions.json` supplies the default `/docs` snapshot. The 0.5 documentation was refreshed from `v0.5.199`, not from unreleased main. The 0.4 snapshot retains its v0.4.591 provenance. Preserve historical semantics and document IDs when updating a snapshot. Use relative Markdown file links within docs so Next articles stay in Next.
+The current docs are served at `/docs/next`; the first entry of `versions.json` supplies the default `/docs` snapshot. The 0.5 documentation was refreshed from `v0.5.212`, not from unreleased main. The 0.4 snapshot retains its v0.4.591 provenance. Preserve historical semantics and document IDs when updating a snapshot. Use relative Markdown file links within docs so Next articles stay in Next.
 
 ## Search and production preview
 

@@ -62,7 +62,7 @@ VERSIONS_JSON = "website/versions.json"
 VERSION_JSON = "version.json"
 DOWNLOADS = "website/static/downloads/"
 
-# Original 0.4 assets remain evidence of that release, not of the current SDK.
+# Original assets and independently verified prior-cut bundles retain their provenance.
 # JSON is hashed with canonical LF, just as Git stores it.
 HISTORICAL_FILES = {
     "website/static/img/trail-editor.json":
@@ -75,6 +75,10 @@ HISTORICAL_FILES = {
         "f6f18542d7c02e29caefdbab065d89b5c81a3ddb803a3dba96d7f26deebb225b",
     DOWNLOADS + "concurrency-patterns-0.4.591.zip":
         "7f4592ef17c43a8c12ed727ab43ce2bf2b421426bc8474d11c5123cf9a52a89b",
+    DOWNLOADS + "trail-0.5.199.zip":
+        "5c71f443c6447e884bc50cc79df238863b1d359c8def8db5afd3ab34f7a53a4d",
+    DOWNLOADS + "concurrency-patterns-0.5.199.zip":
+        "bcc0fd1ab5c708fe7ea6338f82087e703123ea535d1438029ca30b30f7d5d7cf",
 }
 
 # A whole NuGet version token: three or four numeric parts and an optional

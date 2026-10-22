@@ -34,7 +34,7 @@ G# targets the .NET CLR. The compiler can emit executables or libraries with man
 
 ## How do I install G#?
 
-Start with the [installation guide](getting-started/install.md). The project flow uses `dotnet new install Gsharp.Templates::0.5.199`, a `gsharp-console` template, and `.gsproj` files that use the `Gsharp.NET.Sdk` MSBuild SDK. Both [`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/) and [`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/) are published on NuGet.
+Start with the [installation guide](getting-started/install.md). The project flow uses `dotnet new install Gsharp.Templates::0.5.212`, a `gsharp-console` template, and `.gsproj` files that use the `Gsharp.NET.Sdk` MSBuild SDK. Both [`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/) and [`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/) are published on NuGet.
 
 ## Where is the language specification?
 

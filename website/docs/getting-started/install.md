@@ -22,10 +22,10 @@ The list should include a `10.0` SDK. If `dotnet` is not found, finish installin
 
 ## Start with the project template
 
-These commands install the published **0.5.199** template and create a console application:
+These commands install the published **0.5.212** template and create a console application:
 
 ```bash
-dotnet new install Gsharp.Templates::0.5.199
+dotnet new install Gsharp.Templates::0.5.212
 dotnet new gsharp-console -n MyApp
 cd MyApp
 dotnet run
@@ -72,7 +72,7 @@ See [VS Code setup](../tooling/vscode.md) for configuration and [debugging](../t
 For an existing source directory, a minimal `.gsproj` is:
 
 ```xml title="HelloWorld.gsproj"
-<Project Sdk="Gsharp.NET.Sdk/0.5.199">
+<Project Sdk="Gsharp.NET.Sdk/0.5.212">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
