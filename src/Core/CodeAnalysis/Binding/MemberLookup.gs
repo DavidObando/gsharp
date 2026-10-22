@@ -1132,6 +1132,16 @@ internal class MemberLookup {
                             if !ClrTypeUtilities.EmittedMemberNameMatches(openMethod, n) {
                                 continue
                             }
+                            // TypeBuilder.GetMethod accepts only a TypeBuilder instantiation of the
+                            // method's own generic declaring type; every other shape would throw.
+                            let openDeclaringType = openMethod.DeclaringType
+                            if !ClrTypeUtilities.IsTypeBuilderInstantiation(clrType) ||
+                                openDeclaringType == nil ||
+                                !openDeclaringType.IsGenericTypeDefinition ||
+                                openDeclaringType != clrType.GetGenericTypeDefinition() ||
+                                (openMethod.IsGenericMethod && !openMethod.IsGenericMethodDefinition) {
+                                continue
+                            }
                             try {
                                 let mapped = TypeBuilder.GetMethod(clrType, openMethod)
                                 OpenMethodsByMappedMethod.GetValue(mapped, (_ MethodInfo) -> openMethod)
@@ -6314,6 +6324,9 @@ internal class MemberLookup {
                     projectedArguments[i] = contextObject
                 }
             }
+            if ClrTypeUtilities.MakeGenericTypeIsRejectedAcrossContexts(targetOpenDefinition, projectedArguments) {
+                return false
+            }
             try {
                 projectedType = targetOpenDefinition.MakeGenericType(projectedArguments)
                 return !projectedType!!.ContainsGenericParameters
@@ -6841,7 +6854,7 @@ internal class MemberLookup {
                 }
                 richArgs[i] = projected ?? contextObject
             }
-            if anyRich {
+            if anyRich && !ClrTypeUtilities.MakeGenericTypeIsRejectedAcrossContexts(openDef, richArgs) {
                 try {
                     return openDef.MakeGenericType(richArgs)
                 } catch {
@@ -6852,6 +6865,9 @@ internal class MemberLookup {
             let flatArgs = [openParams.Length]Type
             for var i = 0; i < openParams.Length; i++ {
                 flatArgs[i] = contextObject
+            }
+            if ClrTypeUtilities.MakeGenericTypeIsRejectedAcrossContexts(openDef, flatArgs) {
+                return nil
             }
             try {
                 return openDef.MakeGenericType(flatArgs)
