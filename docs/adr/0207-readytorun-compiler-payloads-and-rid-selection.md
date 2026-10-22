@@ -78,6 +78,15 @@ from .NET SDK 10.0.400). Scripts and packages are in `~/.cache/r2r5155/exp`.
    how the .NET SDK gets crossgen2, runtime and apphost packs. Restore must run
    first, and `$(NuGetPackageRoot)` is defined only after restore.
 
+6. **A missing RID package fails restore.** `Toy.Sdk` 4.0.0 added a
+   `PackageDownload` for `[4.0.0]` of the host RID package. The package was in
+   neither the feed nor the cache. `dotnet restore` failed with `NU1102` ("Unable
+   to find package ... with version (= 4.0.0)"). A `dotnet build --no-restore`
+   after it failed with the same error from the assets file. With an opt-out
+   property that removed the `PackageDownload`, both restore and build
+   succeeded. So the opt-out must be set for restore and for build. A failed
+   acquisition is fatal, not a fallback.
+
 Package sizes (zipped, from the linux-x64 probe): `gsc` and its closure is
 8.2 MB, `gsfmt` 8.2 MB and `gsgen` 23.2 MB. For `gsc` only, six RIDs add about
 49 MB to the registry. A host that downloads one RID adds about 8 MB.
@@ -92,13 +101,15 @@ Package sizes (zipped, from the linux-x64 probe): `gsc` and its closure is
    `win-arm64`, `osx-x64` and `osx-arm64`. Each package has the version of its
    SDK. Section "Naming and layout" gives the reasons for the names.
 3. **The SDK gets the host RID package with `PackageDownload`.** The SDK adds a
-   `PackageDownload` item for the RID of the `dotnet` host that runs `gsc`
-   (`$(NETCoreSdkPortableRuntimeIdentifier)`). The version is the exact range
-   `[<SDK version>]`. The SDK adds it only when this host RID is exactly one of
+   `PackageDownload` item for the RID of the `dotnet` host that runs `gsc` (see
+   "Launch host" below for how that host is found). The RID is not read from
+   the SDK property alone. The version is the exact range
+   `[<SDK version>]`. The SDK adds it only when the launch-host RID is exactly one of
    the six RIDs in `GsharpCompilerRuntimeIdentifiers`. For any other host
    (`linux-musl-x64`, `win-x86`, `linux-arm`, the BSDs, and so on) the SDK adds
    no `PackageDownload` and uses the IL payload, so restore never asks for a
-   package that does not exist. The opt-out `GsharpUseReadyToRunCompiler=false`
+   package that does not exist. Result 6 shows that a failed acquisition is
+   fatal, so the guard is the only protection for those hosts. The opt-out `GsharpUseReadyToRunCompiler=false`
    also adds no `PackageDownload`. A user can then restore offline, or against a
    mirror that lacks the RID packages. A NuGet dependency meta-package is
    rejected (see Alternatives).
@@ -107,9 +118,11 @@ Package sizes (zipped, from the linux-x64 probe): `gsc` and its closure is
    that decides. Order:
    1. A value set by the user (`GsharpCompilerFullPath`). It wins.
    2. `GsharpUseReadyToRunCompiler=false` selects the IL path.
-   3. The file `tools/<tfm>/<rid>/gsc.dll` inside the RID package in the NuGet
+   3. If the launch host is unknown or its RID is not the RID of the package
+      (see "Launch host"), select the IL path.
+   4. The file `tools/<tfm>/<rid>/gsc.dll` inside the RID package in the NuGet
       packages folder, if the file exists.
-   4. The IL path `$(MSBuildThisFileDirectory)../tools/compiler/gsc.dll`.
+   5. The IL path `$(MSBuildThisFileDirectory)../tools/compiler/gsc.dll`.
    Other consumers (`Program.gs` driver probe, the selfhost scripts, the
    language server and the extensions) call one shared function with the same
    order. Outside MSBuild, they find the packages folder of the SDK package and
@@ -130,6 +143,44 @@ Package sizes (zipped, from the linux-x64 probe): `gsc` and its closure is
 7. **CI verifies all six RIDs.** An artifact-consumption smoke runs on all six
    RIDs (see "CI plan"). A RID that was not verified in a given release is
    named in the release notes of that release.
+
+### Launch host
+
+Acquisition, selection and launch must use the same executable. The R2R image
+works only with a host of its own OS and architecture.
+
+`$(NETCoreSdkPortableRuntimeIdentifier)` names the selected SDK installation. It
+is not the program that launches `gsc`. Today all launchers start the bare name
+`dotnet` and use `PATH`: `BuildTask.gs` (the compile), `GsgenTask.gs`
+(`gsgen`), `WorkerProcessClient.gs` (the worker) and the `Program.gs` driver
+(`gsgen`). Nothing uses `DOTNET_HOST_PATH`. The language server and the editor
+extensions do not start `gsc`. So an x64 SDK that runs on an arm64 machine can
+select the x64 pack while `PATH` starts an arm64 `dotnet`.
+
+The rule:
+
+1. **The launch host is `$(DOTNET_HOST_PATH)`.** The `dotnet` CLI sets it for
+   the build. It is the host that runs MSBuild and the SDK. A new shared
+   launcher function starts `gsc`, the worker and `gsgen` with that exact path.
+   If it is not set (for example Visual Studio with .NET Framework MSBuild), the
+   launch host is unknown. Then the probe selects the IL path, and the launcher
+   keeps the current `dotnet` from `PATH`.
+2. **The host RID is the RID of the build process.** The task runs inside the
+   host process, so `RuntimeInformation.RuntimeIdentifier` (as a portable RID)
+   is the RID of `$(DOTNET_HOST_PATH)`. The SDK props use the same value when
+   they add the `PackageDownload`, and not the SDK property alone. A task that
+   runs in another kind of process (for example .NET Framework MSBuild) has no
+   usable host RID and selects IL.
+3. **A mismatch falls back to IL.** At launch, the task compares the host RID
+   with the RID of the selected package. If they differ, it uses the IL path and
+   logs a message. This guards the case where the restore ran with one host and
+   the build runs with another.
+4. **One implementation.** The probe and the launcher are one function. The
+   language server, the extensions and the selfhost scripts that need to start
+   `gsc` call it, or use the IL path.
+
+The implementation PR must add a test that fails if a launcher starts `dotnet`
+from `PATH` while the selected path is an R2R image.
 
 ### Naming and layout
 
@@ -229,7 +280,8 @@ lists what becomes a promise if this ADR is accepted.
 | --- | --- |
 | IL fallback | `tools/compiler` in `Gsharp.NET.Sdk` always holds a working portable `gsc`. This is the main promise. |
 | Failure mode | A host outside the six RIDs, or a build with `GsharpUseReadyToRunCompiler=false`, never requests a RID package and cannot fail. On the six RIDs, a missing package at the exact SDK version fails restore, and the release process prevents it. After restore, a missing file only costs speed. |
-| Probe order | The four-step order in Decision 4, including `GsharpCompilerFullPath` and `GsharpUseReadyToRunCompiler`. |
+| Probe order | The five-step order in Decision 4, including `GsharpCompilerFullPath`, `GsharpUseReadyToRunCompiler` and the launch-host check. |
+| Launch host | `gsc` starts with `$(DOTNET_HOST_PATH)`. An R2R image is used only when the host RID equals the package RID. A mismatch uses IL. |
 | Same layout | A RID package has the same file names under `tools/<tfm>/<rid>/` as the IL layout under `tools/compiler/`. |
 | Version lock | A RID package has the exact version of its SDK. |
 | Supported set | The six RIDs are listed in the documentation for as long as they are published. |
@@ -308,14 +360,16 @@ Positive:
 - Users keep one reference. The shared package stays portable.
 - `gsc` start time drops about 31% and the Core compile about 9% on supported
   hosts, with identical output.
-- The fallback makes R2R an optimization only. It cannot break a build.
+- After a successful restore, R2R is an optimization only. A missing file, an unsupported host or an unknown launch host uses IL.
 - With `PackageDownload`, a user downloads one RID package (about 8 MB).
 
 Negative:
 
 - More packages and a stricter publish order.
 - A larger release pipeline (six crossgen2 targets, six smoke runners).
+- `PackageDownload` is a required restore input. On the six RIDs, a missing package at the exact SDK version fails restore, and the release process must prevent it.
 - `PackageDownload` needs restore, so a flow that never restores uses IL.
+- All launchers must use one host path (`DOTNET_HOST_PATH`), which changes four call sites.
 - The stage-2 allowlist hashes in `build/selfhost-stage2.py` change with the Pack
   targets and must be refreshed.
 
