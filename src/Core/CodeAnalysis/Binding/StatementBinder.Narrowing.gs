@@ -11,6 +11,7 @@ import System.Diagnostics.CodeAnalysis
 import System.Linq
 import System.Reflection
 import GSharp.Core.CodeAnalysis.Binding.OverloadResolution
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Lowering
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
@@ -21,6 +22,15 @@ import System.Threading
 internal partial class StatementBinder {
     private let externalCallableAliases HashSet[VariableSymbol] = HashSet[VariableSymbol]()
     private let lastEarlyExitLifts List[(Path AccessPath, Type TypeSymbol)] = List[(Path AccessPath, Type TypeSymbol)]()
+    // Issue #5128: effect summary of the statement bound last. Invalidation
+    // and the callable alias update read the same summary, so the bound tree of
+    // a statement is walked once. A summary is valid only for the node and the
+    // entry alias set it was computed for.
+    private var effectsNode BoundStatement? = nil
+    private var effectsAliases HashSet[VariableSymbol]? = nil
+    private var effects AssignedRootsCollector? = nil
+    // Member-mutation facts are a pure function of a statement's syntax.
+    private let memberMutationBySyntax Dictionary[SyntaxNode, bool] = Dictionary[SyntaxNode, bool]()
 
     internal func IsolateExternalCallableAliases() HashSet[VariableSymbol] {
         let saved = HashSet[VariableSymbol](externalCallableAliases)
@@ -242,31 +252,37 @@ internal partial class StatementBinder {
         // existing, more permissive invalidation (reassignment only).
         //
         // Issue #1639: both the assigned-name collection and the member-mutation
-        // check used to walk the full statement syntax subtree separately. They
-        // gather independent facts from the same tree, so a single combined
-        // walk collects both in one pass instead of two.
+        // check used to walk the full statement syntax subtree separately.
+        // Issue #5128: with a bound statement, the assigned roots come from the
+        // statement effect summary, so the syntax walk only answers the
+        // member-mutation question and caches that answer per statement.
         let assignedNames = HashSet[string]()
-        let dropAllMemberPaths = CollectAssignedNamesAndMemberMutation(statementSyntax, assignedNames)
+        let dropAllMemberPaths = if boundStatement != nil {
+            SyntaxMayMutateMemberPaths(statementSyntax)
+        } else {
+            CollectAssignedNamesAndMemberMutation(statementSyntax, assignedNames)
+        }
         // Issue #2943: use bound assignment targets when available so symbol
         // identity, not a same-named variable in an enclosing scope, decides
         // which root and member paths are invalidated. Special lowering paths
         // that invalidate before producing one bound statement retain the
         // syntax-name fallback.
-        var assignedRoots HashSet[VariableSymbol]
+        var assignedRoots HashSet[VariableSymbol]? = nil
+        var anyRootAssigned = false
         var dropAllRoots = false
         var dropGlobalRoots = false
         var statementCollector AssignedRootsCollector? = nil
         if boundStatement != nil {
-            let collector = AssignedRootsCollector(nil, externalCallableAliases)
-            collector.Visit(boundStatement)
+            let collector = GetStatementEffects(boundStatement, externalCallableAliases)
             statementCollector = collector
-            assignedRoots = collector.Roots
             dropAllRoots = collector.MayMutateAnyRoot
             dropGlobalRoots = collector.MayMutateGlobalRoots
+            // The summary is shared, so read it without adding roots to it.
+            anyRootAssigned = collector.Roots.Count > 0
             for frame in binderCtx.NarrowedVariables {
                 for path in frame.Keys {
                     if collector.AssignsRoot(path.Root) {
-                        assignedRoots.Add(path.Root)
+                        anyRootAssigned = true
                     }
                 }
             }
@@ -277,8 +293,9 @@ internal partial class StatementBinder {
                     assignedRoots.Add(v)
                 }
             }
+            anyRootAssigned = assignedRoots.Count > 0
         }
-        if assignedRoots.Count == 0 && !dropAllMemberPaths && !dropAllRoots && !dropGlobalRoots {
+        if !anyRootAssigned && !dropAllMemberPaths && !dropAllRoots && !dropGlobalRoots {
             return
         }
         // Issue #208: iterate ALL frames (not just the top) because the
@@ -293,7 +310,14 @@ internal partial class StatementBinder {
             for key in frame.Keys {
                 let drop = (statementCollector != nil && MayBeMutatedByUnknownWrite(statementCollector, key)) ||
                     (dropGlobalRoots && key.Root is GlobalVariableSymbol) ||
-                    assignedRoots.Contains(key.Root) || (key.HasMembers && dropAllMemberPaths)
+                    (
+                    if statementCollector != nil {
+                        statementCollector.AssignsRoot(key.Root)
+                    } else {
+                        assignedRoots!!.Contains(key.Root)
+                    }
+                ) ||
+                    (key.HasMembers && dropAllMemberPaths)
                 if drop {
                     (
                         (
@@ -327,9 +351,102 @@ internal partial class StatementBinder {
             labeledBlock.Statements[0] is BoundLabelStatement {
             statement = labeledBlock.Statements[1]
         }
-        let collector = AssignedRootsCollector(nil, aliasesAtEntry)
-        collector.Visit(statement)
+        let collector = GetStatementEffects(statement, aliasesAtEntry)
+        // The summary serves one statement; later statements recompute it.
+        ClearStatementEffects()
         ApplyCallableAliasExitState(externalCallableAliases, statement, aliasesAtEntry, collector)
+    }
+
+    // Returns the effect summary of [`statement`](paramref) for the entry alias
+    // set [`aliases`](paramref). The summary is a collector that has visited the
+    // statement. Callers must treat it as read-only.
+    private func GetStatementEffects(
+        statement BoundStatement,
+        aliases IReadOnlyCollection[VariableSymbol]
+    ) AssignedRootsCollector {
+        if effects != nil && object.ReferenceEquals(effectsNode, statement) && HasSameAliases(aliases) {
+            CompilationMeasurements.Count("narrowing.effect-reuses")
+            return effects!!
+        }
+        let collector = AssignedRootsCollector(nil, aliases)
+        collector.Visit(statement)
+        CompilationMeasurements.Count("narrowing.effect-walks")
+        effectsNode = statement
+        effectsAliases = if aliases.Count == 0 {
+            nil
+        } else {
+            HashSet[VariableSymbol](aliases)
+        }
+        effects = collector
+        return collector
+    }
+
+    private func HasSameAliases(aliases IReadOnlyCollection[VariableSymbol]) bool {
+        if aliases.Count == 0 {
+            return effectsAliases == nil
+        }
+        if effectsAliases == nil || effectsAliases!!.Count != aliases.Count {
+            return false
+        }
+        for alias in aliases {
+            if !effectsAliases!!.Contains(alias) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func ClearStatementEffects() {
+        effectsNode = nil
+        effectsAliases = nil
+        effects = nil
+    }
+
+    // Issue #5128: same member-mutation rule as CollectAssignedNamesAndMemberMutation,
+    // without the name collection. The answer for a statement node is cached, so
+    // an enclosing statement does not walk a nested statement again.
+    private func SyntaxMayMutateMemberPaths(node SyntaxNode) bool {
+        let cacheable = node is StatementSyntax
+        if cacheable && memberMutationBySyntax.TryGetValue(node, out var cached) {
+            return cached
+        }
+        var mayMutateMemberPaths = false
+        switch node {
+            case CallExpressionSyntax,
+            MemberFieldAssignmentExpressionSyntax,
+            MemberIndexAssignmentExpressionSyntax,
+            IndexAssignmentExpressionSyntax,
+            CompoundIndexAssignmentExpressionSyntax,
+            IndirectAssignmentExpressionSyntax,
+            IndirectCompoundAssignmentExpressionSyntax,
+            FieldAssignmentExpressionSyntax {
+                mayMutateMemberPaths = true
+            }
+            case AssignmentExpressionSyntax { }
+            case EventSubscriptionExpressionSyntax{IsIncrementDecrement: true} inc {
+                mayMutateMemberPaths = inc.LeftHandSide is not NameExpressionSyntax
+            }
+            case m is MultiAssignmentStatementSyntax {
+                for t in m.Targets {
+                    // Fresh locals do not mutate pre-existing storage.
+                    if t is not NameExpressionSyntax && t is not MultiAssignmentDeclarationExpressionSyntax {
+                        mayMutateMemberPaths = true
+                    }
+                }
+            }
+        }
+        if !mayMutateMemberPaths {
+            for child in node.GetChildren() {
+                if SyntaxMayMutateMemberPaths(child) {
+                    mayMutateMemberPaths = true
+                    break
+                }
+            }
+        }
+        if cacheable {
+            memberMutationBySyntax[node] = mayMutateMemberPaths
+        }
+        return mayMutateMemberPaths
     }
 
     private func ApplyCallableAliasExitState(
