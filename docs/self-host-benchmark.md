@@ -33,3 +33,33 @@ python3 build/selfhost-bench.py \
 | Peak RSS | 887.2 MB | 900.4 MB | 1.015 |
 
 Verdict: **within budget**, close to 1:1. The G#-built `GSharp.Core.dll` is larger on disk than the C#-built one (4.9 MB vs 3.2 MB), but neither compile time nor peak memory follows that difference.
+
+## Before/after benchmark for compiler changes: `build/compiler-bench.py`
+
+Issue [#5127](https://github.com/DavidObando/gsharp/issues/5127) (Q9). A performance change to the compiler needs the same
+evidence each time. The script runs a baseline compiler and a candidate compiler interleaved on the same inputs and
+checks that their outputs match. It reuses the measurement helpers of `build/selfhost-bench.py`. It is a developer tool,
+not a CI gate.
+
+```sh
+python3 build/compiler-bench.py \
+  --baseline ~/.nuget/packages/gsharp.net.sdk/<pin>/tools/compiler/gsc.dll \
+  --candidate out/bin/Release/Compiler/gsc.dll \
+  --cell core out/obj/Core/Release/GSharp.Core.rsp src/Core \
+  --cell coretests out/obj/Core.Tests/Release/GSharp.Core.Tests.rsp tests/Core.Tests \
+  --hello hello.gs --runs 5 --warmup 1
+```
+
+- **Cells.** Each `--cell NAME RSP CWD` is a response file and the project directory its relative paths resolve against. `--hello FILE.gs` adds a hello-world cell that reuses the first cell's options with `FILE.gs` as the only source.
+- **Response files** are read as `utf-8-sig`, because the SDK writes a BOM.
+- **Work root.** Output options are redirected into a staging directory under `~/.cache/q9-bench/run-<time>` (override with `--work`). Every run stages to the same path, so the path embedded in the PDB, and the content hash derived from it, is the same for all runs. A work root under `/tmp` is refused unless `--allow-tmp` is given. Large outputs are deleted after each run; `compiler-bench-report.json` stays, and `--keep` keeps everything. The work root must not exist or must be empty, and cell names must be plain names (letters, digits, dot, underscore, hyphen). After a failed compile the run's `compile.log` is kept.
+- **Interleaving.** Runs alternate which compiler goes first.
+- **Measurements.** Per cell: wall, CPU and peak RSS as median (min-max), and the `GSHARP_MEASURE_PHASES` phases aggregated by name (count, median wall milliseconds) with the counters. The script sets `GSHARP_MEASURE_PHASES` for each run. Samples are small and the host is shared, so the numbers rank costs; they are not confidence intervals.
+- **Parity.** Every file the compiler writes into the staging directory (reference assembly, PDB, XML documentation, and any sidecar such as `runtimeconfig.json`) must be present in both runs and byte-identical. The diagnostics stream is compared as raw bytes, with no decoding or newline translation; only the run directory path is replaced. Every measured candidate run is compared with the first baseline run.
+- **Implementation DLL exemptions.** The DLL is compared as raw bytes except for values a deterministic build derives from the rest of the file, reported by name when they differ: `timestamp` (COFF TimeDateStamp), `checksum` (PE checksum), `mvid` (located by `build/selfhost_pe.py`), `debug-directory` (the 4-byte TimeDateStamp of each debug directory entry), and `debug-payload` (the GUID of the CodeView entry and the hash of the PdbChecksum entry). Everything else must match, including debug directory types, sizes and pointers, the CodeView age and path, and the EmbeddedPortablePdb payload (the whole compressed PDB with `/debug:embedded`). A size difference always fails, and a tolerated difference only says that nothing outside those fields moved.
+- **Control.** Every later baseline run is a strict control with no exemptions: because all runs stage to one path it must be byte-identical, and any difference means the baseline is not deterministic.
+- **Exit status.** 0 outputs match, 1 an unexpected output difference, 2 a tool error (a compile failed, GNU time is missing, or the work root is under `/tmp`).
+
+`/sourcelink` is an input file, so the script leaves it alone. The script does not collect `dotnet-counters` or `dotnet-trace` data; run those by hand as in the study's reproduction section.
+
+`build/test-compiler-bench.py` uses stand-in compilers. It checks that identical outputs pass, that a difference in the PDB, reference assembly, XML documentation, diagnostics or an implementation DLL method body fails, that a difference only in the checksum and debug payload passes and is reported, and that a nondeterministic baseline fails through the control.
