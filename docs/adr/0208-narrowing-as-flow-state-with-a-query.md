@@ -171,7 +171,11 @@ the `GSharp.Core`, `GSharp.Core.Tests` and `gsc` response files with it
   0 errors in all three.
 
 So on this code base the exit-path exemption is never load-bearing, and the
-non-null proof is load-bearing once.
+non-null proof is load-bearing once. Both experiments used the bound
+collector: roots by symbol identity (not the name resolution of section 10
+rule 1) and today's call rule (not rule 4's syntactic callee test). They
+measure rules 2 and 3; rules 1 and 4 are unmeasured here, and the
+response-file compile in PR 3 (section 19) is their measurement.
 
 ### 5. Constraints
 
@@ -388,11 +392,19 @@ extends today's `CollectAssignedNamesAndMemberMutation`:
    `FunctionReturnsDefinitelyNonNull` (`:1248-1272`), which reads another
    function's syntax to decide a flow fact.
 4. **Closures, references, pointers.** An assignment inside a lambda literal
-   in the region kills. A call anywhere in the region kills every root in
-   the function's closure-assigned name set (`ComputeClosureAssignedNames`,
-   already syntactic and function-wide). `out`/`ref` arguments and `&x`
-   operands kill their root. An indirect assignment through anything other
-   than an address-of operand kills every mutable root.
+   in the region kills. A call whose callee resolves at loop entry to a
+   variable (an indirect call through a callable-typed local or parameter),
+   or whose callee the walker cannot resolve, kills every root in the
+   function's closure-assigned name set (`ComputeClosureAssignedNames`,
+   already syntactic and function-wide), unless the variable is a known
+   external callable in the entry state. A call whose callee resolves to a
+   declared function or method does not kill locals, matching today's
+   `function.HasCaptures` and `AnalyzeCallableInvocation` rule at the same
+   precision (a declared function has no captures; a function literal is a
+   variable). `out`/`ref` arguments and `&x` operands kill their root. An
+   indirect assignment through anything other than an address-of operand
+   kills every mutable root. This rule is unmeasured by the section 4
+   experiments; PR 3 measures it.
 
 Facts proven inside the body (`while x != nil`, a guard, an assignment that
 narrows) are per iteration and unaffected; e13 keeps compiling. The exit
@@ -647,11 +659,14 @@ each predicted change listed in the PR body; the benchmark table of section
    `StatementEffects` composed bottom-up in a side table, `BinderContext.
    Narrowing`, and the query. The frame list becomes save/restore of a state
    value; every existing pass keeps its rule. Adds `narrowing.loop-rebinds`.
-   Adds the **comparison mode** `GSHARP_NARROWING_COMPARE=<path>`: the
-   binder runs the old join interpreter next to the new join and writes
-   every disagreement as `file:line, path, old type, new type, row`.
-   Acceptance: byte-identical output; zero disagreements on Core, Core.Tests
-   and Oahu, since this PR changes no rule.
+   Implements the section 9 join in shadow: computed from the branch exit
+   states at every merge point but not yet consumed. Adds the **comparison
+   mode** `GSHARP_NARROWING_COMPARE=<path>`: the binder compares the shadow
+   join with what the old passes lifted and writes every disagreement as
+   `file:line, path, old type, new type, row`. Acceptance: byte-identical
+   output; every disagreement on Core, Core.Tests and Oahu falls under a row
+   of section 16 (the shadow join is the new rule, so R1-R6 are expected to
+   appear there), and none outside the table.
 2. **Joins from exit states (R1-R6, R9).** `if`, `switch`, blocks, `try`,
    cleanup regions, forward `goto`, labels; expression-granular state
    updates; delete `ApplyIfJoinNarrowings`, `ComputeIfJoinNonNull`,
