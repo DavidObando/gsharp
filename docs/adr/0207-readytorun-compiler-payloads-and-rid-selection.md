@@ -200,8 +200,9 @@ looks for the files it needs. These are the lookups today:
   `FindBundledRuntimePath` (`src/Core/CodeAnalysis/Symbols/ReferenceResolver.gs:1561-1573`)
   checks `<baseDirectory>/<file>` first, then `../<project folder>/` and
   `../<sdk folder>/`. `Program.gs:604-621` uses it to copy the runtime beside a
-  direct `/out:` output. The first candidate (beside `gsc.dll`) works only if
-  the RID package carries these files.
+  direct `/out:` output. These files are in the portable runtime set (see below).
+  The first candidate (beside `gsc.dll`) finds them only if the package ships
+  an IL copy there.
 - **`GSharp.Core.dll` and the other `gsc` dependencies**: the .NET host loads
   them from `gsc.deps.json` beside `gsc.dll`.
 
