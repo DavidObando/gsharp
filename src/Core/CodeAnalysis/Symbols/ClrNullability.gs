@@ -14,6 +14,7 @@ import System.IO
 import System.Linq
 import System.Reflection
 import System.Runtime.CompilerServices
+import System.Threading
 
 /// Phase 3.C.5 / ADR-0001 / issue #209: helpers for reading C# nullable-reference-types
 /// metadata (`[NullableAttribute]` / `[NullableContextAttribute]`)
@@ -58,6 +59,83 @@ shared class ClrNullability {
     private let NullableContextCache ConditionalWeakTable[ICustomAttributeProvider, RawFlags] =
     ConditionalWeakTable[ICustomAttributeProvider, RawFlags]()
 
+    /// The decoded symbol of one declaration, one slot per nullability mode.
+    /// The mode is an ambient setting (see (cref:NullabilityOptions)) and changes the
+    /// decoded symbol, so it is part of the cache key.
+    private class DecodedSignature {
+        internal var PlatformTypes TypeSymbol?
+        internal var Legacy TypeSymbol?
+    }
+
+    /// Issue #5125: decoded symbols of imported declarations, keyed by the
+    /// reflected member (property, field, method return or parameter) and the
+    /// nullability mode. The decode reads only the member, its declaring
+    /// context and the mode, so the entry cannot answer another consumer or
+    /// reference set. A member object belongs to one metadata context, and the
+    /// entry lives as long as that member.
+    private let DecodedSignatures ConditionalWeakTable[object, DecodedSignature] = ConditionalWeakTable[
+        object,
+        DecodedSignature
+    ]()
+    private let CreateDecodedSignature ConditionalWeakTable[object, DecodedSignature].CreateValueCallback =
+    (_ object) -> DecodedSignature()
+
+    /// Gets the slots of [`member`](paramref). A caller holds the lock on the
+    /// slots while it reads or decodes, so each decode runs once per member and
+    /// mode, also under concurrent callers.
+    private func GetDecodedSignature(member object) DecodedSignature -> DecodedSignatures.GetValue(
+        member,
+        CreateDecodedSignature
+    )
+
+    /// Reads the decoded symbol of the current nullability mode, or `nil`
+    /// when this member and mode were not decoded yet. Call under the slots lock.
+    private func ReadDecodedSignature(slots DecodedSignature) TypeSymbol? {
+        let cached = if NullabilityOptions.PlatformTypesEnabled {
+            slots.PlatformTypes
+        } else {
+            slots.Legacy
+        }
+        if cached != nil {
+            CompilationMeasurements.Count("metadata.signature-cache-hits")
+        }
+        return cached
+    }
+
+    private class FailureCounter {
+        internal var Count int32
+    }
+
+    private let MetadataReadFailures ThreadLocal[FailureCounter] = ThreadLocal[FailureCounter](() -> FailureCounter())
+
+    /// Records a metadata read that failed and fell back to a default. A decode
+    /// that sees such a failure must not be cached, because the read can
+    /// succeed later (issue #5125, issue #5070).
+    internal func RecordMetadataReadFailure() {
+        MetadataReadFailures.Value.Count++
+    }
+
+    /// Returns a mark to pass to (cref:StoreDecodedSignature) after the decode.
+    private func BeginDecode() int32 -> MetadataReadFailures.Value.Count
+
+    /// Stores a decoded symbol for the current nullability mode, unless a metadata
+    /// read failed on this thread since [`mark`](paramref). A failed decode returns
+    /// its fallback symbol and leaves the slot empty, so the next call decodes again.
+    /// Call under the slots lock.
+    private func StoreDecodedSignature(slots DecodedSignature, decoded TypeSymbol, mark int32) TypeSymbol {
+        if MetadataReadFailures.Value.Count != mark {
+            CompilationMeasurements.Count("metadata.signature-decode-failures")
+            return decoded
+        }
+        CompilationMeasurements.Count("metadata.signature-decodes")
+        if NullabilityOptions.PlatformTypesEnabled {
+            slots.PlatformTypes = decoded
+        } else {
+            slots.Legacy = decoded
+        }
+        return decoded
+    }
+
     /// Returns the GSharp (cref:TypeSymbol) for a property's
     /// declared type, with reference-type nullability applied (both
     /// top-level and inner generic argument positions — issue #209).
@@ -67,6 +145,19 @@ shared class ClrNullability {
     /// @returns The mapped type symbol.
     @NullabilityFunnel
     func GetPropertyTypeSymbol(property PropertyInfo) TypeSymbol {
+        let slots = GetDecodedSignature(property)
+        lock slots {
+            let cached = ReadDecodedSignature(slots)
+            if cached != nil {
+                return cached
+            }
+            let mark = BeginDecode()
+            return StoreDecodedSignature(slots, DecodePropertyTypeSymbol(property), mark)
+        }
+    }
+
+    @NullabilityFunnel
+    private func DecodePropertyTypeSymbol(property PropertyInfo) TypeSymbol {
         if property.PropertyType.IsByRef {
             // PropertyType.IsByRef guarantees that GetElementType returns the referent type.
             return ByRefTypeSymbol.Get(GetPropertyElementTypeSymbol(property, property.PropertyType.GetElementType()!!))
@@ -120,6 +211,19 @@ shared class ClrNullability {
     /// @returns The mapped type symbol.
     @NullabilityFunnel
     func GetFieldTypeSymbol(field FieldInfo) TypeSymbol {
+        let slots = GetDecodedSignature(field)
+        lock slots {
+            let cached = ReadDecodedSignature(slots)
+            if cached != nil {
+                return cached
+            }
+            let mark = BeginDecode()
+            return StoreDecodedSignature(slots, DecodeFieldTypeSymbol(field), mark)
+        }
+    }
+
+    @NullabilityFunnel
+    private func DecodeFieldTypeSymbol(field FieldInfo) TypeSymbol {
         let baseSymbol = TypeSymbol.FromClrType(field.FieldType)
         // ADR-0172 Phase B: surface imported tuple element names.
         return TupleElementNamesReader.ApplyNames(
@@ -145,6 +249,19 @@ shared class ClrNullability {
     /// @returns The mapped type symbol.
     @NullabilityFunnel
     func GetReturnTypeSymbol(method MethodInfo) TypeSymbol {
+        let slots = GetDecodedSignature(method)
+        lock slots {
+            let cached = ReadDecodedSignature(slots)
+            if cached != nil {
+                return cached
+            }
+            let mark = BeginDecode()
+            return StoreDecodedSignature(slots, DecodeReturnTypeSymbol(method), mark)
+        }
+    }
+
+    @NullabilityFunnel
+    private func DecodeReturnTypeSymbol(method MethodInfo) TypeSymbol {
         // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
         let returnType = if method.ReturnType.IsByRef {
             method.ReturnType.GetElementType()!!
@@ -176,6 +293,19 @@ shared class ClrNullability {
     /// @returns The mapped type symbol.
     @NullabilityFunnel
     func GetParameterTypeSymbol(parameter ParameterInfo) TypeSymbol {
+        let slots = GetDecodedSignature(parameter)
+        lock slots {
+            let cached = ReadDecodedSignature(slots)
+            if cached != nil {
+                return cached
+            }
+            let mark = BeginDecode()
+            return StoreDecodedSignature(slots, DecodeParameterTypeSymbol(parameter), mark)
+        }
+    }
+
+    @NullabilityFunnel
+    private func DecodeParameterTypeSymbol(parameter ParameterInfo) TypeSymbol {
         let parameterType = if parameter.ParameterType.IsByRef {
             parameter.ParameterType.GetElementType()
         } else {
@@ -1159,7 +1289,7 @@ shared class ClrNullability {
             exception is NotSupportedException ||
             exception is FileNotFoundException {
             // An unresolvable open definition reads as before: no layout.
-
+            RecordMetadataReadFailure()
         }
         return nil
     }
@@ -1247,11 +1377,13 @@ shared class ClrNullability {
                 default: default(List[CustomAttributeData]?)
             }
             return if attrs == nil {
+                RecordMetadataReadFailure()
                 default(IList[CustomAttributeData]?)
             } else {
                 AttributesCache.GetValue(provider, (_ ICustomAttributeProvider) -> attrs)
             }
         } catch {
+            RecordMetadataReadFailure()
             return nil
         }
     }
