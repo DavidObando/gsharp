@@ -87,31 +87,28 @@ Package sizes (zipped, from the linux-x64 probe): `gsc` and its closure is
 1. **The IL payload stays where it is.** `Gsharp.NET.Sdk` keeps `tools/compiler`,
    `tools/gsgen` and `tools/formatter` as portable IL. This is the fallback and
    the base contract.
-2. **R2R `gsc` ships in six RID packages.** Package id:
-   `Gsharp.NET.Sdk.Tools.<rid>` for the six RIDs above. Each has the same
-   version as the SDK. Each carries `tools/compiler/` with the same file names
-   as the IL layout (R2R `gsc.dll`, `GSharp.Core.dll`, the runtime assemblies
-   `gsc` needs). A consumer can use the directory in place of the IL directory.
-3. **How the SDK gets the RID package (recommended):** the SDK props add a
-   `PackageDownload` for the host RID with the exact version `[<SDK version>]`.
-   The RID is `$(NETCoreSdkPortableRuntimeIdentifier)`, which is the RID of the
-   `dotnet` host that runs `gsc`. Only RIDs in the supported list are requested.
-   Alternative: the SDK package lists all six RID packages as NuGet
-   dependencies (result 1 above). It needs no restore step and works offline
-   with one SDK download. It downloads about 49 MB more for every user.
+2. **R2R `gsc` ships in six RID packages.** The package id is
+   `Gsharp.NET.Sdk.Compiler.<rid>` for `linux-x64`, `linux-arm64`, `win-x64`,
+   `win-arm64`, `osx-x64` and `osx-arm64`. Each package has the version of its
+   SDK. Section "Naming and layout" gives the reasons for the names.
+3. **The SDK gets the host RID package with `PackageDownload`.** The SDK adds a
+   `PackageDownload` item for the RID of the `dotnet` host that runs `gsc`
+   (`$(NETCoreSdkPortableRuntimeIdentifier)`). The version is the exact range
+   `[<SDK version>]`. A RID that is not in the supported list gets no
+   `PackageDownload`. A NuGet dependency meta-package is rejected (see
+   Alternatives).
 4. **One probe selects the directory.** The MSBuild property
-   `GsharpCompilerFullPath` (already in `Gsharp.NET.Sdk.props`) is the only
-   place that decides. Order:
+   `GsharpCompilerFullPath` (already in `Gsharp.NET.Sdk.props`) is the only place
+   that decides. Order:
    1. A value set by the user (`GsharpCompilerFullPath`). It wins.
    2. `GsharpUseReadyToRunCompiler=false` selects the IL path.
-   3. The directory `<packages>/gsharp.net.sdk.tools.<rid>/<version>/tools/compiler/`
-      if `gsc.dll` is in it.
+   3. The file `tools/<tfm>/<rid>/gsc.dll` inside the RID package in the NuGet
+      packages folder, if the file exists.
    4. The IL path `$(MSBuildThisFileDirectory)../tools/compiler/gsc.dll`.
    Other consumers (`Program.gs` driver probe, the selfhost scripts, the
    language server and the extensions) call one shared function with the same
-   order. Where they run outside MSBuild, they find the SDK package directory
-   first and then use the relative path `../../gsharp.net.sdk.tools.<rid>/<same
-   version>/tools/compiler/`.
+   order. Outside MSBuild, they find the packages folder of the SDK package and
+   use the id and version rule in "Naming and layout".
 5. **Fallback is silent and always correct.** If the RID is not supported, the
    package is absent, or the file is missing, the IL path is used. The build
    logs one low-importance message with the reason. A missing RID package never
@@ -119,11 +116,93 @@ Package sizes (zipped, from the linux-x64 probe): `gsc` and its closure is
 6. **Cross-compilation.** The pack host runs crossgen2 with explicit target OS
    and architecture for each RID. A pack host needs the crossgen2 pack of its
    own RID and the runtime pack of each target RID at restore.
-7. **CI verifies each RID.** An artifact-consumption smoke installs the packages
-   built on the pack host on `linux-x64`, `linux-arm64`, `win-x64`, `win-arm64`,
-   `osx-x64` and `osx-arm64` runners. It runs `gsc`, `gsgen` and `gsfmt` on a
-   sample and compares the output hashes with the IL payload. A RID without a
-   runner is listed as unverified in the release notes.
+7. **CI verifies all six RIDs.** An artifact-consumption smoke runs on all six
+   RIDs (see "CI plan"). A RID that was not verified in a given release is
+   named in the release notes of that release.
+
+### Naming and layout
+
+The names follow the .NET SDK and Roslyn conventions. These are the sources:
+
+| Convention | Source |
+| --- | --- |
+| A pack id is a base identity plus `.<rid>`: `Microsoft.NETCore.App.Crossgen2.<rid>`, `Microsoft.NETCore.App.Host.<rid>`, `Microsoft.NETCore.App.Runtime.<rid>`. | `KnownCrossgen2Pack` and `KnownAppHostPack` in `src/Layout/redist/targets/GenerateBundledVersions.targets` (`dotnet/sdk`): `Crossgen2PackNamePattern="Microsoft.NETCore.App.Crossgen2.**RID**"`, `AppHostPackNamePattern="Microsoft.NETCore.App.Host.**RID**"`. |
+| Known packs are items with the base identity as `Include`, a `TargetFramework`, a name pattern, a version and a RID list (`Crossgen2PackVersion`, `Crossgen2RuntimeIdentifiers`). | Same file. |
+| The SDK turns a known pack into a `PackageDownload` item with a `Version` metadata for the host RID. | `ProcessFrameworkReferences.cs` (`packagesToDownload.Add`, `AddToolPack`), `Microsoft.NET.Sdk.FrameworkReferenceResolution.targets` (target runs before `CollectPackageDownloads`). |
+| A RID-specific .NET tool package has the id `$(PackageId).$(RuntimeIdentifier)`, the package type `DotnetToolRidPackage` and the layout `tools/<tfm>/<rid>/`. | `Microsoft.NET.PackTool.targets` (`dotnet/sdk`): `<PackageId>$(PackageId).$(RuntimeIdentifier)</PackageId>`, `PackagePath` `tools/$(_ToolPackShortTargetFrameworkName)/$(_ToolRidPath)/`. |
+| Roslyn publishes its language server for eight RIDs with `RuntimeIdentifiers`, `SelfContained=false` and `PublishReadyToRun=true`. | `src/LanguageServer/LanguageServerPublish.props` (`dotnet/roslyn`). |
+
+The G# choices:
+
+- **Package id**: `Gsharp.NET.Sdk.Compiler.<rid>`. The base identity names the
+  content (`Compiler`, like `Crossgen2` in the .NET id), and the prefix
+  `Gsharp.NET.Sdk.` keeps the ownership of the id with the SDK. An earlier idea,
+  `Gsharp.NET.Sdk.Tools.<rid>`, named the folder and not the content, so it was
+  dropped. `gsgen` and `gsfmt` can get `Gsharp.NET.Sdk.Gsgen.<rid>` and
+  `Gsharp.NET.Sdk.Formatter.<rid>` later.
+- **Layout inside the package**: `tools/<tfm>/<rid>/` with the same flat file
+  names as `tools/compiler/` in the SDK package (`gsc.dll`, `GSharp.Core.dll`,
+  and the other files that `gsc` needs). The `<tfm>` is
+  `$(GsharpCompilerPackageTargetFramework)` (`net10.0` now). It records the
+  runtime band that the R2R code was compiled for. This is the
+  `DotnetToolRidPackage` layout.
+- **Package type**: the default (`Dependency`). The pack is not a .NET tool and
+  `dotnet tool install` must not accept it.
+- **MSBuild items** (mirror of `KnownCrossgen2Pack`): `KnownGsharpCompilerPack`
+  with `Include="Gsharp.NET.Sdk.Compiler"`, `TargetFramework`,
+  `GsharpCompilerPackNamePattern="Gsharp.NET.Sdk.Compiler.**RID**"`,
+  `GsharpCompilerPackVersion` (the SDK version) and
+  `GsharpCompilerRuntimeIdentifiers` (the six RIDs). A target that runs before
+  `CollectPackageDownloads` adds the `PackageDownload`. The resolved pack is the
+  item `GsharpCompilerPack` with the metadata `PackageDirectory`.
+- **Properties**: `GsharpCompilerFullPath` is unchanged (existing public
+  property). `GsharpUseReadyToRunCompiler` is the opt-out, in the style of
+  `UseAppHost`.
+- **Version range**: exact, `[<version>]`. The .NET packs are pinned the same
+  way, with one version for each pack set.
+
+Deviations, with reasons:
+
+- The .NET SDK maps the host RID to the best pack RID through the RID graph
+  (`NuGetUtils.GetBestMatchingRid`). G# compares the portable host RID with the
+  list. A distro RID such as `linux-musl-x64` is not in the list and uses IL.
+  This keeps the probe simple. We can add RID-graph matching later.
+- The .NET packs ship a runtime, so their RID is a runtime RID. Our packs ship
+  code for `dotnet gsc.dll`, so only the host RID of the `dotnet` process counts.
+- The RID package is not a .NET tool, so it has no `DotnetToolSettings.xml`
+  file and no `DotnetToolRidPackage` package type.
+
+### CI plan
+
+The smoke job installs the packages that the pack host built, then runs `gsc`,
+`gsgen` and `gsfmt` on a sample, and compares the output hashes with the IL
+payload. It runs on all six RIDs. The first RID package check also confirms that
+`PackageDownload` fetched the matching RID.
+
+The runner labels that this repository already uses are `ubuntu-latest`,
+`windows-latest`, `macos-latest` and `macos-26`. The `DavidObando/Oahu`
+workflow `build-clients.yml` builds all six RIDs, but it does not run the
+cross-built ones. It uses `ubuntu-latest` for `linux-x64` and `linux-arm64`,
+`macos-latest` for `osx-arm64` and `osx-x64`, and `windows-latest` for `win-x64`
+and `win-arm64`. So that file shows the build side only. Running a RID needs a
+runner of that architecture:
+
+| RID | Runner label | Note |
+| --- | --- | --- |
+| `linux-x64` | `ubuntu-latest` | Hosted runner. Also the pack host. |
+| `linux-arm64` | `ubuntu-24.04-arm` | Hosted arm64 runner. Free for public repositories. |
+| `win-x64` | `windows-latest` | Hosted runner. |
+| `win-arm64` | `windows-11-arm` | Hosted arm64 runner. Free for public repositories. |
+| `osx-arm64` | `macos-latest` | Hosted arm64 runner. |
+| `osx-x64` | An Intel macOS label, for example `macos-15-intel` | Hosted. Intel images are being retired. If the label disappears, fall back to Rosetta on `macos-latest`: install the x64 .NET and run with `arch -x86_64`. |
+
+The arm64 labels and the Intel macOS label come from the GitHub-hosted runner
+documentation. They were not read from a workflow in this repository, so the
+implementation PR must confirm each label before it relies on it. Arm64 runners
+are free for public repositories. For a private repository they are billed as
+larger runners. Hosted runners can have a long queue time. A smoke job that
+cannot get a runner must not block the release, so the release notes name the
+unverified RID (see the compatibility section).
 
 ## Compatibility promise
 
@@ -137,7 +216,7 @@ lists what becomes a promise if this ADR is accepted.
 | IL fallback | `tools/compiler` in `Gsharp.NET.Sdk` always holds a working portable `gsc`. This is the main promise. |
 | Failure mode | A missing or unsupported RID package never breaks a build. It only costs speed. |
 | Probe order | The four-step order in Decision 4, including `GsharpCompilerFullPath` and `GsharpUseReadyToRunCompiler`. |
-| Same layout | A RID package has the same file names under `tools/compiler/` as the IL layout. |
+| Same layout | A RID package has the same file names under `tools/<tfm>/<rid>/` as the IL layout under `tools/compiler/`. |
 | Version lock | A RID package has the exact version of its SDK. |
 | Supported set | The six RIDs are listed in the documentation for as long as they are published. |
 
@@ -149,16 +228,19 @@ lists what becomes a promise if this ADR is accepted.
 - That a package for a given RID exists for a given SDK version. Consumers must
   tolerate absence.
 - The location and form of `gsgen` and `gsfmt`. They stay IL for now.
-- Direct references to `Gsharp.NET.Sdk.Tools.<rid>` by third parties. The ids
-  are an internal detail of the SDK. The supported entry point is the SDK.
+- Direct references to `Gsharp.NET.Sdk.Compiler.<rid>` by third parties. The ids
+  are an internal detail of the SDK, but they follow the .NET naming convention.
+  The supported entry point is the SDK.
 
 ### Adding and removing a RID
 
 - Adding a RID is additive. Older SDKs fall back to IL on that RID.
-- Removing a RID changes speed only, because of the IL fallback. Do it in this
-  order: announce it in the release notes, keep publishing the package for at
-  least two further minor releases, then stop. Keep the id reserved so that it
-  is not reused with a different meaning.
+- Removing or deprecating a RID needs a major release of G#. A minor release
+  never removes a RID. Removal changes speed only, because of the IL fallback,
+  but the policy is still a major release. Before that major release, the
+  previous release must announce the removal in its release notes and must log a
+  message in the build when the host RID is deprecated. Keep the id reserved so
+  that it is not reused with a different meaning.
 - Changing the probe order, the property names or the fallback is a breaking
   change. It needs a new ADR that supersedes this one.
 - A new RID of the .NET runtime (for example `linux-riscv64`) falls back to IL
@@ -166,12 +248,15 @@ lists what becomes a promise if this ADR is accepted.
 
 ### Costs of the promise
 
-- Each release publishes seven packages (six RID packages and the SDK). The RID
-  packages must reach the feed before the SDK (result 3). The publish step
-  needs an ordering and a retry rule.
-- The release pipeline needs crossgen2 for six RIDs and a smoke runner for each.
-  Runners for `win-arm64` and `osx-x64` may not always exist. The ADR allows an
-  unverified RID, but the release notes must say so.
+- Each release publishes seven packages (six RID packages and the SDK). The
+  feed must have the RID packages before a user restores the SDK, because the
+  `PackageDownload` of the host RID fails the restore if its package is absent.
+  The publish step needs an ordering and a retry rule. (A missing package makes
+  the restore fail, not the build fall back, because NuGet cannot find a
+  version that `PackageDownload` names. The release process must prevent it.)
+- The release pipeline needs crossgen2 for six RIDs and a smoke job for each.
+  Any RID may ship unverified, but the team always tries to verify all six. The
+  release notes of a release name each RID that the smoke did not verify.
 - The runtime can change. An R2R image compiled for one major version of
   .NET may not be used by another. If the runtime rejects the image, it uses
   the JIT, and only speed is lost. This must be verified in the first
@@ -187,15 +272,16 @@ lists what becomes a promise if this ADR is accepted.
   which assemblies are R2R.
 - Whether `gsgen` and `gsfmt` get RID packages, by adding packages with the
   same pattern.
-- The way the SDK gets the RID package (`PackageDownload` or dependencies),
-  because consumers see only the probe result.
+- The mechanism that puts the RID package in the packages folder, because
+  consumers see only the probe result.
 
 ### What a deprecation needs
 
-1. A release-notes entry that names the RID and the last SDK version with its
-   package.
-2. A message in the build log when the host RID is deprecated.
-3. At least two minor releases of publishing before the stop.
+1. A major release of G# for the removal itself.
+2. In the release before it, a release-notes entry that names the RID and the
+   last SDK version that has its package.
+3. In the same release, a message in the build log when the host RID is
+   deprecated.
 4. An update of this ADR (status note) and of the documentation list.
 
 ## Consequences
@@ -227,21 +313,30 @@ Neutral:
    publish ordering, but every user downloads about 49 MB more, and every RID
    change republishes the SDK. This is the fallback if per-RID packages fail in
    practice.
-2. **Meta-package with dependencies on all six RID packages.** Works (results 1
-   to 3). Every user downloads all six. Keep as the alternative to
-   `PackageDownload`.
+2. **Meta-package with NuGet dependencies on all six RID packages (rejected).**
+   The tests show that it works: the resolver restores the dependencies into
+   the packages folder (results 1 and 2), and the SDK finds them by a relative
+   path. It was rejected for three reasons. Every user downloads all six RIDs
+   (result 4). A missing dependency makes the whole SDK fail with MSB4236
+   (result 3), which is a harder failure than a missing `PackageDownload`. And
+   it does not follow the .NET convention for RID-specific packs (result 5).
 3. **R2R at the shared path (PR #5154).** Rejected. It breaks other OSes.
 4. **Self-contained or composite R2R.** Still RID-specific, and it adds a runtime
    to the package.
 5. **No R2R, only `TieredPGO=false`.** Already shipped in #5150. It gives no start
    gain.
-6. **A RID-specific .NET tool package for `gsc`.** The .NET tool model installs
-   with `dotnet tool`. It does not fit the MSBuild SDK flow.
+6. **A RID-specific .NET tool package for `gsc`** (`DotnetToolRidPackage`). The
+   .NET tool model installs with `dotnet tool`. It does not fit the MSBuild SDK
+   flow. G# copies its id and folder conventions only.
 
-## Open questions for the maintainer
+## Open questions
 
-1. `PackageDownload` of the host RID (recommended), or dependencies on all six?
-2. Is the "internal id, not a public contract" position for the RID packages
-   acceptable?
-3. Is "removal needs two minor releases" the right period?
-4. Which RIDs may ship unverified when a runner is missing?
+The maintainer decided these points on 2026-10-22: `PackageDownload` of the host
+RID, internal RID package ids that follow the .NET conventions, removal of a RID
+only in a major release, and verification of all six RIDs with any RID allowed to
+ship unverified. The questions that remain are:
+
+1. Is `Gsharp.NET.Sdk.Compiler.<rid>` the right base identity, or does the
+   maintainer prefer another name?
+2. Should the implementation add RID-graph matching (as the .NET SDK does) in the
+   first release, or only the exact portable RID?
