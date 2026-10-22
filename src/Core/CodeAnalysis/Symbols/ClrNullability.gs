@@ -14,6 +14,7 @@ import System.IO
 import System.Linq
 import System.Reflection
 import System.Runtime.CompilerServices
+import System.Threading
 
 /// Phase 3.C.5 / ADR-0001 / issue #209: helpers for reading C# nullable-reference-types
 /// metadata (`[NullableAttribute]` / `[NullableContextAttribute]`)
@@ -101,8 +102,31 @@ shared class ClrNullability {
         return cached
     }
 
-    /// Stores a decoded symbol for the current nullability mode. Call under the slots lock.
-    private func StoreDecodedSignature(slots DecodedSignature, decoded TypeSymbol) TypeSymbol {
+    private class FailureCounter {
+        internal var Count int32
+    }
+
+    private let MetadataReadFailures ThreadLocal[FailureCounter] = ThreadLocal[FailureCounter](() -> FailureCounter())
+
+    /// Records a metadata read that failed and fell back to a default. A decode
+    /// that sees such a failure must not be cached, because the read can
+    /// succeed later (issue #5125, issue #5070).
+    internal func RecordMetadataReadFailure() {
+        MetadataReadFailures.Value.Count++
+    }
+
+    /// Returns a mark to pass to (cref:StoreDecodedSignature) after the decode.
+    private func BeginDecode() int32 -> MetadataReadFailures.Value.Count
+
+    /// Stores a decoded symbol for the current nullability mode, unless a metadata
+    /// read failed on this thread since [`mark`](paramref). A failed decode returns
+    /// its fallback symbol and leaves the slot empty, so the next call decodes again.
+    /// Call under the slots lock.
+    private func StoreDecodedSignature(slots DecodedSignature, decoded TypeSymbol, mark int32) TypeSymbol {
+        if MetadataReadFailures.Value.Count != mark {
+            CompilationMeasurements.Count("metadata.signature-decode-failures")
+            return decoded
+        }
         CompilationMeasurements.Count("metadata.signature-decodes")
         if NullabilityOptions.PlatformTypesEnabled {
             slots.PlatformTypes = decoded
@@ -123,7 +147,12 @@ shared class ClrNullability {
     func GetPropertyTypeSymbol(property PropertyInfo) TypeSymbol {
         let slots = GetDecodedSignature(property)
         lock slots {
-            return ReadDecodedSignature(slots) ?? StoreDecodedSignature(slots, DecodePropertyTypeSymbol(property))
+            let cached = ReadDecodedSignature(slots)
+            if cached != nil {
+                return cached
+            }
+            let mark = BeginDecode()
+            return StoreDecodedSignature(slots, DecodePropertyTypeSymbol(property), mark)
         }
     }
 
@@ -184,7 +213,12 @@ shared class ClrNullability {
     func GetFieldTypeSymbol(field FieldInfo) TypeSymbol {
         let slots = GetDecodedSignature(field)
         lock slots {
-            return ReadDecodedSignature(slots) ?? StoreDecodedSignature(slots, DecodeFieldTypeSymbol(field))
+            let cached = ReadDecodedSignature(slots)
+            if cached != nil {
+                return cached
+            }
+            let mark = BeginDecode()
+            return StoreDecodedSignature(slots, DecodeFieldTypeSymbol(field), mark)
         }
     }
 
@@ -217,7 +251,12 @@ shared class ClrNullability {
     func GetReturnTypeSymbol(method MethodInfo) TypeSymbol {
         let slots = GetDecodedSignature(method)
         lock slots {
-            return ReadDecodedSignature(slots) ?? StoreDecodedSignature(slots, DecodeReturnTypeSymbol(method))
+            let cached = ReadDecodedSignature(slots)
+            if cached != nil {
+                return cached
+            }
+            let mark = BeginDecode()
+            return StoreDecodedSignature(slots, DecodeReturnTypeSymbol(method), mark)
         }
     }
 
@@ -256,7 +295,12 @@ shared class ClrNullability {
     func GetParameterTypeSymbol(parameter ParameterInfo) TypeSymbol {
         let slots = GetDecodedSignature(parameter)
         lock slots {
-            return ReadDecodedSignature(slots) ?? StoreDecodedSignature(slots, DecodeParameterTypeSymbol(parameter))
+            let cached = ReadDecodedSignature(slots)
+            if cached != nil {
+                return cached
+            }
+            let mark = BeginDecode()
+            return StoreDecodedSignature(slots, DecodeParameterTypeSymbol(parameter), mark)
         }
     }
 
@@ -1245,7 +1289,7 @@ shared class ClrNullability {
             exception is NotSupportedException ||
             exception is FileNotFoundException {
             // An unresolvable open definition reads as before: no layout.
-
+            RecordMetadataReadFailure()
         }
         return nil
     }
@@ -1333,11 +1377,13 @@ shared class ClrNullability {
                 default: default(List[CustomAttributeData]?)
             }
             return if attrs == nil {
+                RecordMetadataReadFailure()
                 default(IList[CustomAttributeData]?)
             } else {
                 AttributesCache.GetValue(provider, (_ ICustomAttributeProvider) -> attrs)
             }
         } catch {
+            RecordMetadataReadFailure()
             return nil
         }
     }

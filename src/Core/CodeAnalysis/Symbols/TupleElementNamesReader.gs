@@ -52,6 +52,7 @@ shared class TupleElementNamesReader {
         } catch (ex Exception) when ex is TypeLoadException ||
             ex is FileNotFoundException ||
             ex is BadImageFormatException {
+            ClrNullability.RecordMetadataReadFailure()
             return ImmutableArray[string?].Empty
         }
         let attr CustomAttributeData? = attrs?.FirstOrDefault(
@@ -221,6 +222,7 @@ shared class TupleElementNamesReader {
                     } catch (ex Exception) when ex is TypeLoadException ||
                         ex is FileNotFoundException ||
                         ex is BadImageFormatException {
+                        ClrNullability.RecordMetadataReadFailure()
                         return type
                     }
                     let arguments = ImmutableArray.CreateBuilder[TypeSymbol](clrArguments.Length)
