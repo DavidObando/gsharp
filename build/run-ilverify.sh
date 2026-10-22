@@ -58,6 +58,7 @@ echo "==> Building gsc, Gsharp.Runtime.Channels, Gsharp.Runtime.Values and Gshar
 # its restore does not flow transitively; restore the solution like CI does.
 dotnet restore GSharp.slnx --nologo -v:q
 dotnet build src/Compiler/Compiler.gsproj -c "$CONFIG" --no-restore --nologo -v:q
+# This G# project deliberately retains its .csproj filename for existing tooling.
 dotnet build src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj -c "$CONFIG" --no-restore --nologo -v:q
 dotnet restore build/ilverify/IlVerifyDiagnostics.gsproj --locked-mode --nologo -v:q
 dotnet build build/ilverify/IlVerifyDiagnostics.gsproj -c "$CONFIG" --no-restore --nologo -v:q
