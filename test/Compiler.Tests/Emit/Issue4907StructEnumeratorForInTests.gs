@@ -296,7 +296,9 @@ func SequenceLoop(items sequence[Node]) int32 {
         Assert.Equal([]string{"a", "b"}, letters.ToArray())
         let awaited = Assert.IsAssignableFrom[Task[int32]](Invoke(program, "AwaitSum", Invoke(program, "MakeNodes")))
         Assert.Equal(11, awaited.GetAwaiter().GetResult())
-        let awaitedDict = Assert.IsAssignableFrom[Task[int32]](Invoke(program, "AwaitSumDict", Invoke(program, "MakeDict")))
+        let awaitedDict = Assert.IsAssignableFrom[Task[int32]](
+            Invoke(program, "AwaitSumDict", Invoke(program, "MakeDict"))
+        )
         Assert.Equal(30, awaitedDict.GetAwaiter().GetResult())
     }
 
