@@ -293,14 +293,14 @@ shared class ClrTypeUtilities {
     /// the last resort, so a runtime that hides the type only loses the fast path.
     /// @param type The type to inspect.
     /// @returns `true` when the type is a `TypeBuilderInstantiation`.
-    func IsTypeBuilderInstantiation(type Type?) bool -> type != nil &&
+    internal func IsTypeBuilderInstantiation(type Type?) bool -> type != nil &&
         typeBuilderInstantiationType != nil &&
         type.GetType() == typeBuilderInstantiationType
 
     /// Whether [`member`](paramref) was produced by a `System.Reflection.MetadataLoadContext`.
     /// @param member The reflection object to inspect.
     /// @returns `true` when the object belongs to the metadata load context assembly.
-    func IsMetadataLoadContextMember(member MemberInfo?) bool -> member != nil && object.ReferenceEquals(
+    internal func IsMetadataLoadContextMember(member MemberInfo?) bool -> member != nil && object.ReferenceEquals(
         member.GetType().Assembly,
         metadataLoadContextAssembly
     )
@@ -315,7 +315,7 @@ shared class ClrTypeUtilities {
     /// @param definition The generic type definition to close.
     /// @param arguments The type arguments to close it over.
     /// @returns `true` when the closure is certain to be rejected.
-    func MakeGenericTypeIsRejectedAcrossContexts(definition Type?, arguments[]Type) bool {
+    internal func MakeGenericTypeIsRejectedAcrossContexts(definition Type?, arguments[]Type) bool {
         if !IsMetadataLoadContextMember(definition) {
             return false
         }
