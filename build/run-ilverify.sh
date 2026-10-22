@@ -4,8 +4,8 @@
 # Compiles every golden sample under samples/ with gsc (the same corpus and
 # compile flags the SampleConformanceTests harness uses) and runs the
 # repo-pinned dotnet-ilverify local tool (.config/dotnet-tools.json) over each
-# emitted assembly. Any IL verification error that is not listed in
-# build/ilverify-known-failures.txt fails the gate, turning
+# emitted assembly. Metadata-checked verifier defects (#5112) and the explicit
+# build/ilverify-known-failures.txt baseline are the only exceptions, turning
 # silent-invalid-IL emitter bugs into loud CI failures without waiting on the
 # 45-minute test matrix.
 #
@@ -38,6 +38,7 @@ CONFIG=Release
 GSC_DLL="$ROOT/out/bin/$CONFIG/Compiler/gsc.dll"
 EXTENSIONS_DLL="$ROOT/out/bin/$CONFIG/Gsharp.Extensions/Gsharp.Extensions.dll"
 CHANNELS_DLL="$ROOT/out/bin/$CONFIG/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.dll"
+DIAGNOSTICS_DLL="$ROOT/out/bin/$CONFIG/IlVerifyDiagnostics/IlVerifyDiagnostics.dll"
 SAMPLES_DIR="$ROOT/samples"
 BASELINE_FILE="$ROOT/build/ilverify-known-failures.txt"
 TMP_BASE="${TMPDIR:-/tmp}"
@@ -57,6 +58,8 @@ echo "==> Building gsc, Gsharp.Runtime.Channels and Gsharp.Extensions ($CONFIG)"
 dotnet restore GSharp.slnx --nologo -v:q
 dotnet build src/Compiler/Compiler.gsproj -c "$CONFIG" --no-restore --nologo -v:q
 dotnet build src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj -c "$CONFIG" --no-restore --nologo -v:q
+dotnet restore build/ilverify/IlVerifyDiagnostics.gsproj --locked-mode --nologo -v:q
+dotnet build build/ilverify/IlVerifyDiagnostics.gsproj -c "$CONFIG" --no-restore --nologo -v:q
 [[ -f "$GSC_DLL" ]] || { echo "ERROR: gsc not found at $GSC_DLL"; exit 1; }
 [[ -f "$EXTENSIONS_DLL" ]] || { echo "ERROR: Gsharp.Extensions not found at $EXTENSIONS_DLL"; exit 1; }
 # ADR-0174 D1: the channel runtime is a Compiler ProjectReference, so it is built transitively.
@@ -160,6 +163,15 @@ verify_sample() {
     verify_output="$(dotnet tool run ilverify "$dll" -s System.Private.CoreLib \
         "${REF_ARGS[@]}" ${extra_refs[@]+"${extra_refs[@]}"} \
         ${ignore_args[@]+"${ignore_args[@]}"} 2>&1)" || rc=$?
+
+    # #5112: no category or sample allowlist. Check the reported method,
+    # instruction offset, slot metadata and generic constraint before accepting.
+    if [[ $rc -eq 2 ]] && printf '%s\n' "$verify_output" | dotnet "$DIAGNOSTICS_DLL" "$dll"; then
+        echo "PASS(verifier limitation, structurally checked) $name"
+        SUPPRESSED=$((SUPPRESSED + 1))
+        PASSED=$((PASSED + 1))
+        return 0
+    fi
 
     # Match on the file name, not the full path: ilverify echoes a normalized
     # path that may differ from $dll (e.g. collapsed double slashes).

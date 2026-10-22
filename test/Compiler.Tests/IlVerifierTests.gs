@@ -11,8 +11,12 @@ import System
 import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Reflection
+import System.Reflection.Emit
 import System.Reflection.Metadata
+import System.Reflection.Metadata.Ecma335
 import System.Reflection.PortableExecutable
+import System.Runtime.Loader
 import Xunit
 import Xunit.Sdk
 
@@ -20,6 +24,271 @@ import Xunit.Sdk
 /// gate: if these break, every Compile…+Verify call elsewhere in this assembly
 /// is producing meaningless results.
 open class IlVerifierTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func StaticInterfaceDispatch_UnlistedRoslynAndGSharpAssemblies_RunAndVerify(gsharp bool) {
+        let dir = Path.Combine(AppContext.BaseDirectory, "static-interface-${Guid.NewGuid():N}")
+        Directory.CreateDirectory(dir)
+        try {
+            let dll = CompileStaticInterface(dir, gsharp)
+            let report = StaticInterfaceReport(dll)
+            Assert.Contains("[CallAbstract]", report, StringComparison.Ordinal)
+            Assert.Contains("[Constrained]", report, StringComparison.Ordinal)
+            Assert.True(IlVerifyFalsePositives.OnlyKnown(dll, report), report)
+            Assert.Equal(0, RunStandaloneAdapter(dll, report))
+            IlVerifier.Verify(dll)
+            let context = AssemblyLoadContext("static-interface-${Guid.NewGuid():N}", isCollectible: true)
+            try {
+                let assembly = context.LoadFromStream(MemoryStream(File.ReadAllBytes(dll)))
+                let program = assembly.GetTypes().Single((t Type) -> t.GetMethod("Apply") != nil)
+                let plus = assembly.GetTypes().Single((t Type) -> t.Name == "Plus")
+                let method = program.GetMethod("Apply") ?? throw XunitException("Apply not emitted")
+                Assert.Equal(
+                    7,
+                    method.MakeGenericMethod(plus).Invoke(nil, []object{Activator.CreateInstance(plus)!!, 3, 4})
+                )
+            } finally {
+                context.Unload()
+            }
+        } finally {
+            Directory.Delete(dir, recursive: true)
+        }
+    }
+
+    @Fact
+    func StaticInterfaceDispatch_UnconstrainedCallInSameMethod_StillFails() {
+        let dir = Path.Combine(AppContext.BaseDirectory, "static-interface-invalid-${Guid.NewGuid():N}")
+        Directory.CreateDirectory(dir)
+        try {
+            let dll = CompileStaticInterface(dir, gsharp: false)
+            let report = StaticInterfaceReport(dll)
+            let bytes = File.ReadAllBytes(dll)
+            let (codeStart, prefixOffset, callOffset) = StaticInterfaceCallLayout(bytes)
+            // Six nops leave the abstract call's offset and token unchanged.
+
+            // A category-wide or method-wide suppression would hide this defect.
+
+            Array.Fill(bytes, uint8(0), codeStart + prefixOffset, 6)
+            File.WriteAllBytes(dll, bytes)
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report))
+            let error = Assert.Throws[XunitException](() -> IlVerifier.Verify(dll))
+            Assert.Contains("[CallAbstract]", error.Message, StringComparison.Ordinal)
+            Assert.Contains("[offset 0x${callOffset:X8}]", error.Message, StringComparison.Ordinal)
+        } finally {
+            Directory.Delete(dir, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData(int32(0))
+    @InlineData(int32(1))
+    @InlineData(int32(2))
+    @InlineData(int32(3))
+    @InlineData(int32(4))
+    @InlineData(int32(5))
+    @InlineData(int32(6))
+    func StaticInterfaceDispatch_RejectsWrongSlotMetadataAndConstraint(mutant int32) {
+        let dir = Path.Combine(AppContext.BaseDirectory, "static-interface-metadata-${Guid.NewGuid():N}")
+        Directory.CreateDirectory(dir)
+        try {
+            let dll = CompileStaticInterface(dir, gsharp: false)
+            let report = StaticInterfaceReport(dll)
+            let bytes = File.ReadAllBytes(dll)
+            let (codeStart, _, callOffset) = StaticInterfaceCallLayout(bytes)
+            using let pe = PEReader(MemoryStream(bytes, writable: false))
+            let md = pe.GetMetadataReader()
+            let slotHandle = md.MethodDefinitions.Single(
+                (h MethodDefinitionHandle) -> md.GetString(md.GetMethodDefinition(h).Name) == "Add" &&
+                    (md.GetMethodDefinition(h).Attributes & MethodAttributes.Abstract) != 0
+            )
+            if mutant < 2 {
+                let row = pe.PEHeaders.MetadataStartOffset + md.GetTableMetadataOffset(TableIndex.MethodDef) +
+                    (MetadataTokens.GetRowNumber(slotHandle) - 1) * md.GetTableRowSize(TableIndex.MethodDef) + 6
+                let flags = BitConverter.ToUInt16(bytes, row)
+                let remove = if mutant == 0 {
+                    MethodAttributes.Static
+                } else {
+                    MethodAttributes.Virtual
+                }
+                let changed = BitConverter.GetBytes(uint16(flags & ~uint16(remove)))
+                Array.Copy(changed, 0, bytes, row, 2)
+            } else if mutant == 2 {
+                // Replace the constrained TypeSpec with a MethodDef token.
+
+                Array.Copy(
+                    BitConverter.GetBytes(MetadataTokens.GetToken(slotHandle)),
+                    0,
+                    bytes,
+                    codeStart + callOffset - 4,
+                    4
+                )
+            } else if mutant == 3 {
+                // Give T an unrelated class constraint instead of IAdd.
+
+                Assert.Equal(4, md.GetTableRowSize(TableIndex.GenericParamConstraint))
+                let unrelated = md.TypeDefinitions.Single(
+                    (h TypeDefinitionHandle) -> md.GetString(md.GetTypeDefinition(h).Name) == "P"
+                )
+                let row = pe.PEHeaders.MetadataStartOffset + md.GetTableMetadataOffset(
+                    TableIndex.GenericParamConstraint
+                ) +
+                    2
+                Array.Copy(BitConverter.GetBytes(uint16(MetadataTokens.GetRowNumber(unrelated) << 2)), 0, bytes, row, 2)
+            } else {
+                let signature = md.GetMethodDefinition(slotHandle).Signature
+                let length = md.GetBlobBytes(signature).Length
+                Assert.InRange(length, 1, 127)
+                let blob = pe.PEHeaders.MetadataStartOffset + md.GetHeapMetadataOffset(HeapIndex.Blob) +
+                    MetadataTokens.GetHeapOffset(signature)
+                Assert.Equal(uint8(length), bytes[blob])
+                Assert.Equal(uint8(0), bytes[blob + 1])
+                // HAS_THIS, EXPLICIT_THIS and VARARG are not default static signatures.
+                bytes[blob + 1] = if mutant == 4 {
+                    uint8(0x20)
+                } else if mutant == 5 {
+                    uint8(0x40)
+                } else {
+                    uint8(0x05)
+                }
+            }
+            File.WriteAllBytes(dll, bytes)
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report))
+        } finally {
+            Directory.Delete(dir, recursive: true)
+        }
+    }
+
+    @Fact
+    func StaticInterfaceDispatch_RejectsOtherOffsetsErrorsAndUnaccountedOutput() {
+        let dir = Path.Combine(AppContext.BaseDirectory, "static-interface-report-${Guid.NewGuid():N}")
+        Directory.CreateDirectory(dir)
+        try {
+            let dll = CompileStaticInterface(dir, gsharp: false)
+            let report = StaticInterfaceReport(dll)
+            let (_, _, callOffset) = StaticInterfaceCallLayout(File.ReadAllBytes(dll))
+            Assert.False(
+                IlVerifyFalsePositives.OnlyKnown(dll, report.Replace("0x${callOffset:X8}", "0x${callOffset + 1:X8}"))
+            )
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report.Replace("[CallAbstract]", "[StackUnderflow]")))
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report.Replace("2 Error(s)", "3 Error(s)")))
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report + "\nError: unparsed verifier failure"))
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report.Replace("::Apply(", "::Missing(")))
+        } finally {
+            Directory.Delete(dir, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func StaticInterfaceDispatch_UnderflowAfterCall_StillFails(successor bool) {
+        let dir = Path.Combine(AppContext.BaseDirectory, "static-interface-flow-${Guid.NewGuid():N}")
+        Directory.CreateDirectory(dir)
+        try {
+            let dll = CompileStaticInterface(dir, gsharp: false, callerBody: "T.Add(a,b); return 123456789;")
+            let bytes = File.ReadAllBytes(dll)
+            let (codeStart, _, callOffset) = StaticInterfaceCallLayout(bytes)
+            let tail = if successor {
+                []uint8{0x26, 0x2B, 0x00, 0x26, 0x16, 0x2A} // pop; br.s L; L: pop; ldc.i4.0; ret
+
+            } else {
+                []uint8{0x26, 0x26, 0x16, 0x2A} // pop; pop; ldc.i4.0; ret
+
+            }
+            Assert.Equal(uint8(2), bytes[codeStart - 1] & uint8(3))
+            let codeSize = callOffset + 5 + tail.Length
+            Assert.True(codeSize <= int32(bytes[codeStart - 1] >> 2))
+            Array.Copy(tail, 0, bytes, codeStart + callOffset + 5, tail.Length)
+            bytes[codeStart - 1] = uint8((codeSize << 2) | 2)
+            File.WriteAllBytes(dll, bytes)
+            let report = StaticInterfaceReport(dll)
+            Assert.Contains("[CallAbstract]", report, StringComparison.Ordinal)
+            Assert.Contains("[Constrained]", report, StringComparison.Ordinal)
+            if successor {
+                // The verifier does not import this successor after the false-positive pair.
+                Assert.DoesNotContain("[StackUnderflow]", report, StringComparison.Ordinal)
+                Assert.Contains("2 Error(s)", report, StringComparison.Ordinal)
+            } else {
+                // It does continue checking instructions in the current basic block.
+                Assert.Contains("[StackUnderflow]", report, StringComparison.Ordinal)
+            }
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report))
+            Assert.Throws[XunitException](() -> IlVerifier.Verify(dll))
+        } finally {
+            Directory.Delete(dir, recursive: true)
+        }
+    }
+
+    @Fact
+    func StaticInterfaceDispatch_ExceptionRegionsFailClosed() {
+        let dir = Path.Combine(AppContext.BaseDirectory, "static-interface-eh-${Guid.NewGuid():N}")
+        Directory.CreateDirectory(dir)
+        try {
+            let dll = CompileStaticInterface(
+                dir,
+                gsharp: false,
+                callerBody: "try { return T.Add(a,b); } finally { System.GC.KeepAlive(w); }"
+            )
+            let report = StaticInterfaceReport(dll)
+            Assert.Contains("[CallAbstract]", report, StringComparison.Ordinal)
+            Assert.Contains("[Constrained]", report, StringComparison.Ordinal)
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report))
+            Assert.Throws[XunitException](() -> IlVerifier.Verify(dll))
+        } finally {
+            Directory.Delete(dir, recursive: true)
+        }
+    }
+
+    @Fact
+    func StaticInterfaceDispatch_UninstantiatedGenericMethodDefFails() {
+        let dir = Path.Combine(AppContext.BaseDirectory, "static-interface-generic-${Guid.NewGuid():N}")
+        Directory.CreateDirectory(dir)
+        try {
+            let dll = CompileStaticInterface(dir, gsharp: false, genericSlot: true)
+            let bytes = File.ReadAllBytes(dll)
+            let (codeStart, _, callOffset) = StaticInterfaceCallLayout(bytes)
+            using let pe = PEReader(MemoryStream(bytes, writable: false))
+            let md = pe.GetMetadataReader()
+            let slot = md.MethodDefinitions.Single(
+                (h MethodDefinitionHandle) -> md.GetString(md.GetMethodDefinition(h).Name) == "Add" &&
+                    (md.GetMethodDefinition(h).Attributes & MethodAttributes.Abstract) != 0
+            )
+            Assert.Single(md.GetMethodDefinition(slot).GetGenericParameters())
+            Assert.Equal(
+                HandleKind.MethodSpecification,
+                MetadataTokens.EntityHandle(BitConverter.ToInt32(bytes, codeStart + callOffset + 1)).Kind
+            )
+            Array.Copy(BitConverter.GetBytes(MetadataTokens.GetToken(slot)), 0, bytes, codeStart + callOffset + 1, 4)
+            File.WriteAllBytes(dll, bytes)
+            let report = StaticInterfaceReport(dll)
+            Assert.Contains("[CallAbstract]", report, StringComparison.Ordinal)
+            Assert.Contains("[Constrained]", report, StringComparison.Ordinal)
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report))
+            Assert.Throws[XunitException](() -> IlVerifier.Verify(dll))
+        } finally {
+            Directory.Delete(dir, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func StandaloneAdapter_RejectsLegacyFilterWaiver(invalidTail bool) {
+        let dir = Path.Combine(AppContext.BaseDirectory, "standalone-filter-${Guid.NewGuid():N}")
+        Directory.CreateDirectory(dir)
+        try {
+            let dll = CompileFilterInFinally(dir, invalidTail)
+            let report = StaticInterfaceReport(dll)
+            Assert.Contains("[StackUnderflow]", report, StringComparison.Ordinal)
+            Assert.Contains("1 Error(s)", report, StringComparison.Ordinal)
+            Assert.Equal(1, RunStandaloneAdapter(dll, report))
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report))
+        } finally {
+            Directory.Delete(dir, recursive: true)
+        }
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)
@@ -364,6 +633,188 @@ unsafe func Visible(p *int32) int32 { return *p }`)
     }
 
     shared {
+        private func CompileFilterInFinally(dir string, invalidTail bool) string {
+            let dll = Path.Combine(dir, "filter.dll")
+            let compilation = CSharpCompilation.Create("filter", []SyntaxTree{CSharpSyntaxTree.ParseText(`public static class FilterFixture {
+public static int Run() {
+    try { return 1; }
+    finally {
+        try { throw new System.Exception(); }
+        catch (System.Exception ex) when (ex is System.InvalidOperationException) {}
+    }
+}
+}`)}, []PortableExecutableReference{
+                    MetadataReference.CreateFromFile(typeof(object).Assembly.Location)
+                }, CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary,
+                    optimizationLevel: OptimizationLevel.Release
+                ))
+            let emit = compilation.Emit(dll)
+            Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics))
+            if invalidTail {
+                let bytes = File.ReadAllBytes(dll)
+                using let pe = PEReader(MemoryStream(bytes, writable: false))
+                let md = pe.GetMetadataReader()
+                let method = md
+                    .MethodDefinitions
+                    .Select(md.GetMethodDefinition)
+                    .Single((m MethodDefinition) -> md.GetString(m.Name) == "Run")
+                let body = pe.GetMethodBody(method.RelativeVirtualAddress)
+                let filter = body.ExceptionRegions.Single((r ExceptionRegion) -> r.Kind == ExceptionRegionKind.Filter)
+                let il = body.GetILBytes() ?? throw XunitException("Run has no IL")
+                Assert.Equal(uint8(0x75), il[filter.FilterOffset])
+                Assert.True(filter.HandlerOffset - filter.FilterOffset >= 10)
+                let section = pe
+                    .PEHeaders
+                    .SectionHeaders
+                    .Single(
+                    (s SectionHeader) -> method.RelativeVirtualAddress >= s.VirtualAddress &&
+                        method.RelativeVirtualAddress < s.VirtualAddress +
+                        s.SizeOfRawData
+                )
+                let header = method.RelativeVirtualAddress - section.VirtualAddress + section.PointerToRawData
+                Assert.Equal(uint8(3), bytes[header] & uint8(3))
+                let code = header + int32(bytes[header + 1] >> 4) * 4
+                Array.Fill(
+                    bytes,
+                    uint8(0),
+                    code + filter.FilterOffset + 5,
+                    filter.HandlerOffset - filter.FilterOffset - 5
+                )
+                // Keep isinst intact, then pop its result and underflow on the second pop.
+                bytes[code + filter.FilterOffset + 5] = uint8(0x26)
+                bytes[code + filter.FilterOffset + 6] = uint8(0x26)
+                bytes[code + filter.HandlerOffset - 3] = uint8(0x16)
+                bytes[code + filter.HandlerOffset - 2] = uint8(0xFE)
+                bytes[code + filter.HandlerOffset - 1] = uint8(0x11)
+                File.WriteAllBytes(dll, bytes)
+            }
+            return dll
+        }
+
+        private func RunStandaloneAdapter(dll string, report string) int32 {
+            let adapter = Path.GetFullPath(
+                Path.Combine(AppContext.BaseDirectory, "..", "IlVerifyDiagnostics", "IlVerifyDiagnostics.dll")
+            )
+            Assert.True(File.Exists(adapter), "Standalone adapter was not built: $adapter")
+            let startInfo = ProcessStartInfo("dotnet"){
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            }
+            startInfo.ArgumentList.Add(adapter)
+            startInfo.ArgumentList.Add(dll)
+            using let process = Process.Start(startInfo) ?? throw XunitException("Standalone adapter did not start")
+            let stdout = process.StandardOutput.ReadToEndAsync()
+            let stderr = process.StandardError.ReadToEndAsync()
+            process.StandardInput.Write(report)
+            process.StandardInput.Close()
+            if !process.WaitForExit(30_000) {
+                process.Kill(entireProcessTree: true)
+                throw XunitException("Standalone adapter timed out")
+            }
+            Assert.Equal(string.Empty, stdout.GetAwaiter().GetResult())
+            Assert.Equal(string.Empty, stderr.GetAwaiter().GetResult())
+            return process.ExitCode
+        }
+
+        private func CompileStaticInterface(
+            dir string,
+            gsharp bool,
+            callerBody string? = nil,
+            genericSlot bool = false
+        ) string {
+            let dll = Path.Combine(dir, "unlisted.dll")
+            if gsharp {
+                let source = Path.Combine(dir, "input.gs")
+                File.WriteAllText(source, `package P
+interface IAdd { shared{func Add(a int32, b int32) int32;} }
+class Plus : IAdd { shared { func Add(a int32, b int32) int32 { return a+b } } }
+func Apply[T IAdd](w T, a int32, b int32) int32 { return T.Add(a,b) }`)
+                Assert.Equal(
+                    0,
+                    Program.Main([]string{"/out:" + dll, "/target:library", "/targetframework:net10.0", source})
+                )
+            } else {
+                var source = `public interface IAdd { static abstract int Add(int a,int b); }
+public class Plus : IAdd { public static int Add(int a,int b) => a+b; }
+public class P { public static int Apply<T>(T w,int a,int b) where T:IAdd => T.Add(a,b); }`
+                if callerBody != nil {
+                    source = source.Replace("=> T.Add(a,b);", "{ " + callerBody + " }")
+                }
+                if genericSlot {
+                    source = source.Replace("int Add(", "int Add<U>(").Replace("T.Add(a,b)", "T.Add<int>(a,b)")
+                }
+                let compilation = CSharpCompilation.Create(
+                    "unlisted",
+                    []SyntaxTree{CSharpSyntaxTree.ParseText(source)},
+                    []PortableExecutableReference{MetadataReference.CreateFromFile(typeof(object).Assembly.Location)},
+                    CSharpCompilationOptions(
+                        OutputKind.DynamicallyLinkedLibrary,
+                        optimizationLevel: OptimizationLevel.Release
+                    )
+                )
+                let emit = compilation.Emit(dll)
+                Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics))
+            }
+            return dll
+        }
+
+        private func StaticInterfaceReport(dll string) string {
+            let startInfo = ProcessStartInfo("dotnet"){
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            }
+            for arg in[]string{
+                "tool",
+                "run",
+                "ilverify",
+                dll,
+                "-s",
+                "System.Private.CoreLib",
+                "-r",
+                Path.Combine(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            } {
+                startInfo.ArgumentList.Add(arg)
+            }
+            startInfo.WorkingDirectory = IlVerifier.FindRepoRoot()
+            let result = IlVerifier.RunProcess(startInfo, dll, 30_000)
+            Assert.Equal(2, result.ExitCode)
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr)
+            return result.Stdout
+        }
+
+        private func StaticInterfaceCallLayout(bytes[]uint8)(CodeStart int32, PrefixOffset int32, CallOffset int32) {
+            using let pe = PEReader(MemoryStream(bytes, writable: false))
+            let md = pe.GetMetadataReader()
+            let method = md
+                .MethodDefinitions
+                .Select(md.GetMethodDefinition)
+                .Single((m MethodDefinition) -> md.GetString(m.Name) == "Apply")
+            let il = pe.GetMethodBody(method.RelativeVirtualAddress).GetILBytes()
+            let instructions = IlInstructionReader.Read(il)
+            let prefix = instructions.Single((i IlInstruction) -> i.OpCode == OpCodes.Constrained)
+            let call = instructions.Single((i IlInstruction) -> i.OpCode == OpCodes.Call)
+            Assert.Equal(prefix.Offset + 6, call.Offset)
+            let section = pe
+                .PEHeaders
+                .SectionHeaders
+                .Single(
+                (s SectionHeader) -> method.RelativeVirtualAddress >= s.VirtualAddress &&
+                    method.RelativeVirtualAddress < s.VirtualAddress +
+                    s.SizeOfRawData
+            )
+            let header = method.RelativeVirtualAddress - section.VirtualAddress + section.PointerToRawData
+            let headerSize = if (bytes[header] & uint8(3)) == uint8(2) {
+                1
+            } else {
+                int32(bytes[header + 1] >> 4) * 4
+            }
+            return (header + headerSize, prefix.Offset, call.Offset)
+        }
+
         private func CreateChildProcess(
             windowsCommand string,
             unixCommand string,

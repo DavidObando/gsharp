@@ -154,8 +154,8 @@ internal class IlVerifyFilterInFinallyRule {
 
         // [IL]: Error [StackUnderflow]: [<asm> : <Type>::<Method>(<sig>)][offset 0x000001C6] Stack underflow.
         // The location is lazy so `]` inside array signatures does not end it early.
-        private let StackUnderflowLine Regex = Regex(
-            "^\\[IL\\]:\\s*Error\\s*\\[StackUnderflow\\]:\\s*\\[(?<location>.*?)\\]\\s*\\[offset 0x(?<offset>[0-9A-Fa-f]+)\\]",
+        private let ErrorLine Regex = Regex(
+            "^\\[IL\\]:\\s*Error\\s*\\[(?<code>\\w+)\\]:\\s*\\[(?<location>.*?)\\]\\s*\\[offset 0x(?<offset>[0-9A-Fa-f]+)\\]",
             RegexOptions.CultureInvariant
         )
 
@@ -300,27 +300,29 @@ internal class IlVerifyFilterInFinallyRule {
             )
         }
 
-        /// Splits an ilverify `StackUnderflow` line into its declaring type,
+        /// Splits an ilverify error line into its declaring type,
         /// method-name-and-signature text, top-level parameter count and offset.
         /// @param errorLine The ilverify line.
         /// @param typePart The `Namespace.Outer+Inner` text.
         /// @param methodPart The text after `::` up to the signature.
         /// @param parameterCount The signature's top-level parameter count.
         /// @param offset The reported IL offset.
+        /// @param expectedCode The required diagnostic category.
         /// @returns `true` when the line has that shape.
         internal func TryParse(
             errorLine string?,
             out typePart string,
             out methodPart string,
             out parameterCount int32,
-            out offset int32
+            out offset int32,
+            expectedCode string = "StackUnderflow"
         ) bool {
             typePart = string.Empty
             methodPart = string.Empty
             parameterCount = 0
             offset = 0
-            let match = StackUnderflowLine.Match((errorLine ?? string.Empty).Trim())
-            if !match.Success || !int32.TryParse(
+            let match = ErrorLine.Match((errorLine ?? string.Empty).Trim())
+            if !match.Success || match.Groups["code"].Value != expectedCode || !int32.TryParse(
                 match.Groups["offset"].Value,
                 NumberStyles.HexNumber,
                 CultureInfo.InvariantCulture,
@@ -387,7 +389,7 @@ internal class IlVerifyFilterInFinallyRule {
         // metadata name matches the rendered text exactly or as a `<`-suffixed
         // prefix. G# synthesized names (`<Program>`, `<closure_…>`) contain angle
         // brackets themselves, so nothing is stripped from the rendered text.
-        private func NameMatches(rendered string, metadataName string) bool -> string.Equals(
+        internal func NameMatches(rendered string, metadataName string) bool -> string.Equals(
             rendered,
             metadataName,
             StringComparison.Ordinal
@@ -409,7 +411,7 @@ internal class IlVerifyFilterInFinallyRule {
 
         // The Param table can omit parameters or carry a return-value row, so read
         // the count from the method signature blob instead.
-        private func GetParameterCount(reader MetadataReader, method MethodDefinition) int32 {
+        internal func GetParameterCount(reader MetadataReader, method MethodDefinition) int32 {
             var blob = reader.GetBlobReader(method.Signature)
             var header = blob.ReadSignatureHeader()
             if header.IsGeneric {
@@ -418,7 +420,7 @@ internal class IlVerifyFilterInFinallyRule {
             return blob.ReadCompressedInteger()
         }
 
-        private func GetTypeName(reader MetadataReader, handle TypeDefinitionHandle) string {
+        internal func GetTypeName(reader MetadataReader, handle TypeDefinitionHandle) string {
             let type = reader.GetTypeDefinition(handle)
             let name = reader.GetString(type.Name)
             let declaring = type.GetDeclaringType()

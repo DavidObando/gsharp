@@ -8,10 +8,8 @@ import GSharp.Tests
 import System
 import System.Collections.Generic
 import System.Diagnostics
-import System.Globalization
 import System.IO
 import System.Text
-import System.Text.RegularExpressions
 import System.Threading.Tasks
 import SystemObject = System.Object
 import Xunit.Sdk
@@ -73,8 +71,8 @@ internal shared class IlVerifier {
         /// dispatches correctly.
         ///
         /// Track the upstream issue at
-        /// https://github.com/dotnet/runtime/issues/49558 (dotnet-ilverify
-        /// catch-up) and drop this bundle once a newer ilverify release
+        /// https://github.com/dotnet/runtime/issues/132820 (fixed upstream
+        /// by #132944) and drop this bundle once a stable ilverify release
         /// recognises the static-virtual pattern.
         let StaticVirtualInterface[]string = []string{"CallAbstract", "Constrained"}
     }
@@ -203,7 +201,11 @@ internal shared class IlVerifier {
             psi.ArgumentList.Add(a)
         }
         let (exitCode, stdout, stderr) = RunProcess(psi, assemblyPath, VerifyTimeoutMilliseconds)
-        if exitCode == 2 && OnlyFilterInFinallyFalsePositives(assemblyPath, stdout) {
+        if exitCode == 2 && string.IsNullOrWhiteSpace(stderr) && IlVerifyFalsePositives.OnlyKnown(
+            assemblyPath,
+            stdout,
+            allowFilterInFinally: true
+        ) {
             return
         }
         if exitCode != 0 {
@@ -227,38 +229,6 @@ internal shared class IlVerifier {
                     stdout.TrimEnd() + Environment.NewLine + stderr.TrimEnd()
             )
         }
-    }
-
-    // #4489 (upstream dotnet/runtime#134711): ilverify 10.0.8 reports
-    // StackUnderflow at a filter block's first instruction when the filter
-    // start lies inside a finally/fault handler; see IlVerifyFilterInFinallyRule
-    // for the exact scope. Passes only when every reported error is that false
-    // positive and the error lines account for ilverify's own error count, so
-    // an unparsed line or a format change still fails the test.
-    private func OnlyFilterInFinallyFalsePositives(assemblyPath string, stdout string) bool {
-        let errorLines = List[string]()
-        var reportedCount int32? = nil
-        for rawLine in stdout.Replace("\r\n", "\n").Split('\n') {
-            let line = rawLine.Trim()
-            if line.StartsWith("[IL]: Error", StringComparison.Ordinal) {
-                errorLines.Add(line)
-                continue
-            }
-            let summary = Regex.Match(line, "^(\\d+) Error\\(s\\) Verifying ")
-            if summary.Success {
-                reportedCount = int32.Parse(summary.Groups[1].Value, CultureInfo.InvariantCulture)
-            }
-        }
-        if errorLines.Count == 0 || reportedCount != errorLines.Count {
-            return false
-        }
-        let rule = IlVerifyFilterInFinallyRule.Load(assemblyPath)
-        for line in errorLines {
-            if !rule.Matches(errorCode: nil, line) {
-                return false
-            }
-        }
-        return true
     }
 
     internal func RunProcess(startInfo ProcessStartInfo, assemblyPath string, timeoutMilliseconds int32)(
@@ -342,10 +312,7 @@ internal shared class IlVerifier {
     private let SampleKnownIssues Dictionary[string, (ErrorCodes IReadOnlyList[string], Scope string?)] = Dictionary[
         string,
         (ErrorCodes IReadOnlyList[string], Scope string?)
-    ](StringComparer.OrdinalIgnoreCase){
-        ["UserRefStruct"] = (KnownIssues.RefStruct, "<Program>\\.add$$"),
-        ["StaticVirtualInterfaces"] = (KnownIssues.StaticVirtualInterface, "<Program>\\.(Apply|IdentityOf)$$")
-    }
+    ](StringComparer.OrdinalIgnoreCase){["UserRefStruct"] = (KnownIssues.RefStruct, "<Program>\\.add$$")}
 
     private func LocateTool()(Command string, LeadingArgs IReadOnlyList[string]) {
         // Discovering the tool requires a `dotnet` lookup that may walk up the
