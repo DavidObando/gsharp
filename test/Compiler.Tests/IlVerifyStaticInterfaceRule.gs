@@ -12,7 +12,8 @@ import System.Reflection.PortableExecutable
 
 /// #5112: ILVerify 10.0.8 rejects the CLR's constrained static interface calls.
 /// Upstream dotnet/runtime#132944 fixes this. Until a stable tool includes it,
-/// accept only a reported call whose local slot and type constraint prove this shape.
+/// accept only nongeneric local slots in a single straight-line caller block.
+/// ILVerify suppresses successor scheduling after any block error, including these defects.
 internal shared class IlVerifyStaticInterfaceRule {
     func Matches(assemblyPath string, line string) bool {
         let code = if line.StartsWith("[IL]: Error [CallAbstract]:", StringComparison.Ordinal) {
@@ -56,30 +57,31 @@ internal shared class IlVerifyStaticInterfaceRule {
             if caller.RelativeVirtualAddress == 0 {
                 return false
             }
-            let il = pe.GetMethodBody(caller.RelativeVirtualAddress).GetILBytes()
-            if il == nil {
+            let body = pe.GetMethodBody(caller.RelativeVirtualAddress)
+            let il = body.GetILBytes()
+            if il == nil || body.ExceptionRegions.Length != 0 {
                 return false
             }
             let instructions = IlInstructionReader.Read(il)
+            // ponytail: one basic block only; remove this boundary after the stable verifier supports static dispatch.
+            if instructions.Length == 0 ||
+                instructions[instructions.Length - 1].OpCode != OpCodes.Ret ||
+                instructions
+                .Take(instructions.Length - 1).Any(
+                (i IlInstruction) -> {
+                    let flow = i.OpCode.FlowControl
+                    return i.OpCode == OpCodes.Jmp ||
+                        (flow != FlowControl.Next && flow != FlowControl.Call && flow != FlowControl.Meta)
+                }
+            ) {
+                return false
+            }
             let callIndex = Array.FindIndex(instructions, (i IlInstruction) -> i.Offset == offset)
             if callIndex < 1 ||
                 instructions[callIndex].OpCode != OpCodes.Call ||
                 instructions[callIndex - 1].OpCode != OpCodes.Constrained ||
                 instructions[callIndex - 1].Offset +
-                6 != offset ||
-                instructions.Any(
-                (i IlInstruction) -> i.BranchTarget == offset || i.OpCode.OperandType == OperandType.InlineSwitch
-            ) {
-                return false
-            }
-            // A handler or protected region must not enter after the prefix.
-
-            if pe
-                .GetMethodBody(caller.RelativeVirtualAddress)
-                .ExceptionRegions
-                .Any(
-                (r ExceptionRegion) -> r.TryOffset == offset || r.HandlerOffset == offset || r.FilterOffset == offset
-            ) {
+                6 != offset {
                 return false
             }
             let target = MetadataTokens.EntityHandle(instructions[callIndex].MetadataToken ?? 0)
@@ -91,10 +93,17 @@ internal shared class IlVerifyStaticInterfaceRule {
                 return false
             }
             let slot = reader.GetMethodDefinition(MethodDefinitionHandle(target))
+            let slotType = reader.GetTypeDefinition(slot.GetDeclaringType())
+            var signature = reader.GetBlobReader(slot.Signature)
             let flags = MethodAttributes.Static | MethodAttributes.Virtual
-            if (slot.Attributes & flags) != flags ||
+            if slot.GetGenericParameters().Count != 0 || slotType.GetGenericParameters()
+                .Count != 0 ||
+                signature
+                .ReadSignatureHeader()
+                .IsGeneric ||
+                (slot.Attributes & flags) != flags ||
                 (code == "CallAbstract" && (slot.Attributes & MethodAttributes.Abstract) == 0) ||
-                (reader.GetTypeDefinition(slot.GetDeclaringType()).Attributes & TypeAttributes.Interface) == 0 {
+                (slotType.Attributes & TypeAttributes.Interface) == 0 {
                 return false
             }
             let constraintType = MetadataTokens.EntityHandle(BitConverter.ToInt32(il, offset - 4))

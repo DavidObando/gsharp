@@ -162,6 +162,98 @@ open class IlVerifierTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func StaticInterfaceDispatch_UnderflowAfterCall_StillFails(successor bool) {
+        let dir = Path.Combine(AppContext.BaseDirectory, "static-interface-flow-${Guid.NewGuid():N}")
+        Directory.CreateDirectory(dir)
+        try {
+            let dll = CompileStaticInterface(dir, gsharp: false, callerBody: "T.Add(a,b); return 123456789;")
+            let bytes = File.ReadAllBytes(dll)
+            let (codeStart, _, callOffset) = StaticInterfaceCallLayout(bytes)
+            let tail = if successor {
+                []uint8{0x26, 0x2B, 0x00, 0x26, 0x16, 0x2A} // pop; br.s L; L: pop; ldc.i4.0; ret
+
+            } else {
+                []uint8{0x26, 0x26, 0x16, 0x2A} // pop; pop; ldc.i4.0; ret
+
+            }
+            Assert.Equal(uint8(2), bytes[codeStart - 1] & uint8(3))
+            let codeSize = callOffset + 5 + tail.Length
+            Assert.True(codeSize <= int32(bytes[codeStart - 1] >> 2))
+            Array.Copy(tail, 0, bytes, codeStart + callOffset + 5, tail.Length)
+            bytes[codeStart - 1] = uint8((codeSize << 2) | 2)
+            File.WriteAllBytes(dll, bytes)
+            let report = StaticInterfaceReport(dll)
+            Assert.Contains("[CallAbstract]", report, StringComparison.Ordinal)
+            Assert.Contains("[Constrained]", report, StringComparison.Ordinal)
+            if successor {
+                // The verifier does not import this successor after the false-positive pair.
+                Assert.DoesNotContain("[StackUnderflow]", report, StringComparison.Ordinal)
+                Assert.Contains("2 Error(s)", report, StringComparison.Ordinal)
+            } else {
+                // It does continue checking instructions in the current basic block.
+                Assert.Contains("[StackUnderflow]", report, StringComparison.Ordinal)
+            }
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report))
+            Assert.Throws[XunitException](() -> IlVerifier.Verify(dll))
+        } finally {
+            Directory.Delete(dir, recursive: true)
+        }
+    }
+
+    @Fact
+    func StaticInterfaceDispatch_ExceptionRegionsFailClosed() {
+        let dir = Path.Combine(AppContext.BaseDirectory, "static-interface-eh-${Guid.NewGuid():N}")
+        Directory.CreateDirectory(dir)
+        try {
+            let dll = CompileStaticInterface(
+                dir,
+                gsharp: false,
+                callerBody: "try { return T.Add(a,b); } finally { System.GC.KeepAlive(w); }"
+            )
+            let report = StaticInterfaceReport(dll)
+            Assert.Contains("[CallAbstract]", report, StringComparison.Ordinal)
+            Assert.Contains("[Constrained]", report, StringComparison.Ordinal)
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report))
+            Assert.Throws[XunitException](() -> IlVerifier.Verify(dll))
+        } finally {
+            Directory.Delete(dir, recursive: true)
+        }
+    }
+
+    @Fact
+    func StaticInterfaceDispatch_UninstantiatedGenericMethodDefFails() {
+        let dir = Path.Combine(AppContext.BaseDirectory, "static-interface-generic-${Guid.NewGuid():N}")
+        Directory.CreateDirectory(dir)
+        try {
+            let dll = CompileStaticInterface(dir, gsharp: false, genericSlot: true)
+            let bytes = File.ReadAllBytes(dll)
+            let (codeStart, _, callOffset) = StaticInterfaceCallLayout(bytes)
+            using let pe = PEReader(MemoryStream(bytes, writable: false))
+            let md = pe.GetMetadataReader()
+            let slot = md.MethodDefinitions.Single(
+                (h MethodDefinitionHandle) -> md.GetString(md.GetMethodDefinition(h).Name) == "Add" &&
+                    (md.GetMethodDefinition(h).Attributes & MethodAttributes.Abstract) != 0
+            )
+            Assert.Single(md.GetMethodDefinition(slot).GetGenericParameters())
+            Assert.Equal(
+                HandleKind.MethodSpecification,
+                MetadataTokens.EntityHandle(BitConverter.ToInt32(bytes, codeStart + callOffset + 1)).Kind
+            )
+            Array.Copy(BitConverter.GetBytes(MetadataTokens.GetToken(slot)), 0, bytes, codeStart + callOffset + 1, 4)
+            File.WriteAllBytes(dll, bytes)
+            let report = StaticInterfaceReport(dll)
+            Assert.Contains("[CallAbstract]", report, StringComparison.Ordinal)
+            Assert.Contains("[Constrained]", report, StringComparison.Ordinal)
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report))
+            Assert.Throws[XunitException](() -> IlVerifier.Verify(dll))
+        } finally {
+            Directory.Delete(dir, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func VerifyCore_AcceptsNativeAssemblyWithNoncanonicalPath(relative bool) {
         let tempDir = Path.GetFullPath(Directory.CreateTempSubdirectory("gs_ilv_path_").FullName)
         try {
@@ -503,7 +595,12 @@ unsafe func Visible(p *int32) int32 { return *p }`)
     }
 
     shared {
-        private func CompileStaticInterface(dir string, gsharp bool) string {
+        private func CompileStaticInterface(
+            dir string,
+            gsharp bool,
+            callerBody string? = nil,
+            genericSlot bool = false
+        ) string {
             let dll = Path.Combine(dir, "unlisted.dll")
             if gsharp {
                 let source = Path.Combine(dir, "input.gs")
@@ -516,14 +613,24 @@ func Apply[T IAdd](w T, a int32, b int32) int32 { return T.Add(a,b) }`)
                     Program.Main([]string{"/out:" + dll, "/target:library", "/targetframework:net10.0", source})
                 )
             } else {
-                let compilation = CSharpCompilation.Create("unlisted", []SyntaxTree{CSharpSyntaxTree.ParseText(`public interface IAdd { static abstract int Add(int a,int b); }
+                var source = `public interface IAdd { static abstract int Add(int a,int b); }
 public class Plus : IAdd { public static int Add(int a,int b) => a+b; }
-public class P { public static int Apply<T>(T w,int a,int b) where T:IAdd => T.Add(a,b); }`)}, []PortableExecutableReference{
-                        MetadataReference.CreateFromFile(typeof(object).Assembly.Location)
-                    }, CSharpCompilationOptions(
+public class P { public static int Apply<T>(T w,int a,int b) where T:IAdd => T.Add(a,b); }`
+                if callerBody != nil {
+                    source = source.Replace("=> T.Add(a,b);", "{ " + callerBody + " }")
+                }
+                if genericSlot {
+                    source = source.Replace("int Add(", "int Add<U>(").Replace("T.Add(a,b)", "T.Add<int>(a,b)")
+                }
+                let compilation = CSharpCompilation.Create(
+                    "unlisted",
+                    []SyntaxTree{CSharpSyntaxTree.ParseText(source)},
+                    []PortableExecutableReference{MetadataReference.CreateFromFile(typeof(object).Assembly.Location)},
+                    CSharpCompilationOptions(
                         OutputKind.DynamicallyLinkedLibrary,
                         optimizationLevel: OptimizationLevel.Release
-                    ))
+                    )
+                )
                 let emit = compilation.Emit(dll)
                 Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics))
             }
