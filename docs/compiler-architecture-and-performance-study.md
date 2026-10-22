@@ -64,11 +64,13 @@ The headline conclusions:
    retires on any analyzer, and `gsc` never adopts the metadata index that
    the language server already persists (section 7, P8 to P10).
 5. **The compiler's own code generation costs the compiler.** `for ... in`
-   over `ImmutableArray[T]` or `List[T]` boxes the enumerator through
-   `IEnumerable<T>` (decompiled from the built `GSharp.Core.dll`); boxing is
-   12.4% of main-thread samples and `src/Core` has 2,991 such loops. Set
-   copies in definite assignment and narrowing are another 5.8% (section 4.7;
-   P13, P3, S5).
+   over a generic collection whose element type is a compiler-defined type
+   boxes the enumerator through `IEnumerable<T>`, because the symbolic
+   lowering path trades the struct enumerator for a representable element
+   type (decompiled from the built `GSharp.Core.dll`); boxing is 12.4% of
+   main-thread samples and most of the compiler's 2,991 `for ... in` loops
+   have that shape. Set copies in definite assignment and narrowing are
+   another 5.8% (section 4.7; P13, P3, S5).
 6. **The nullability wrapper design is sound but its consumer migration has
    not happened.** ADR-0193 Phase 3 has not landed; open-coded
    `is NullableTypeSymbol` / `is PlatformTypeSymbol` tests grew from 503 to
@@ -457,17 +459,20 @@ of the code around it, not a measurement of the helper itself.
 
 Three facts fall out that the phase table alone does not show:
 
-1. **`for ... in` over `ImmutableArray[T]` and `List[T]` boxes.** The G#
-   compiler lowers `for item in items` over an `ImmutableArray[T]` or a
-   `List[T]` to `((IEnumerable<T>)items).GetEnumerator()` on an interface,
-   which boxes the struct enumerator (verified by decompiling
-   `BoundTreeWalker.VisitList`, `Binding/BoundTreeWalker.gs:828-836`, and
-   `RendezvousBatchAnalyzer.Run`). Arrays get an indexed loop. `src/Core`
-   has 2,991 `for ... in` loops and 3,194 mentions of `ImmutableArray`. This
-   is a code-generation finding (P13): one change in the compiler's for-in
-   lowering removes an allocation from most loops in the compiler and in
-   every user program, with the bootstrap caveat that the compiler's own
-   loops benefit after the pin moves.
+1. **`for ... in` over a generic collection of a same-compilation element
+   type boxes.** When the element type is symbolic (a compiler-defined type
+   or a type parameter), the lowering routes the loop through
+   `((IEnumerable<T>)items).GetEnumerator()` to keep the element type in
+   symbolic emit (`Lowering/Lowerer.gs:1400-1402, 1485-1576`), which boxes
+   the struct enumerator; closed CLR element types already get the struct
+   enumerator through `MemberLookup.ResolveGetEnumerator`. Verified by
+   decompiling `BoundTreeWalker.VisitList` (`Binding/BoundTreeWalker.gs:828-836`)
+   and `RendezvousBatchAnalyzer.Run`. Arrays get an indexed loop. `src/Core`
+   has 2,991 `for ... in` loops, most over its own types. This is a
+   code-generation finding (P13): extending symbolic emit to the known struct
+   enumerators removes an allocation from most loops in the compiler, with
+   the bootstrap caveat that the compiler's own loops benefit after the pin
+   moves.
 2. **Narrowing and definite assignment copy sets.** `HashSet` copy
    construction alone is 5.8% of main-thread samples, split between
    definite assignment (post-#5106, in `ClassifyConditionAssignments` and
@@ -481,6 +486,33 @@ Three facts fall out that the phase table alone does not show:
    non-allocating walk (recursion with a small fixed-size visited buffer, or
    a cached per-type "contains platform type" bit computed once when the
    type symbol is created) is an S-sized item (P12).
+
+### 4.8 ReadyToRun probe
+
+After the maintainer's decision that R2R is viable (section 10, decision 2),
+`gsc` was published once with `PublishReadyToRun=true` (framework-dependent,
+`linux-x64`, into a cache directory; `GSharp.Core.dll` grew to 14.0 MB and
+carries the `RTR` header) and timed against the JIT build from the same
+source. Same response files, one excluded warm-up, five runs for hello and
+three for Core, measured back to back on the same host.
+
+| Compiler image | Hello wall s median (samples) | Core wall s median (samples) | Core CPU s |
+| --- | ---: | ---: | ---: |
+| JIT `gsc` (control, re-measured in this run) | 0.56 (0.56, 0.57, 0.55, 0.55, 0.58) | 26.34 (26.91, 26.32, 26.34) | 29.69 |
+| R2R `gsc`, default tiering | **0.39** (0.38, 0.37, 0.40, 0.39, 0.40) | 23.78 (23.11, 23.78, 24.09) | 26.15 |
+| R2R `gsc`, `TieredPGO=0` | 0.39 (0.41, 0.36, 0.39, 0.39, 0.39) | **16.94** (16.94, 16.78, 16.99) | 18.03 |
+
+R2R alone takes the small-project compile from 0.56 s to 0.39 s (-30%; `csc`
+is 0.31 s on the same input, section 4.3) and Core from 26.3 s to 23.8 s
+(-10%, in line with the -8.5% the maintainer measured on the compiler
+graph). R2R plus `TieredPGO=0` gives 16.9 s on Core (-36%) and keeps the
+0.39 s hello world; the two settings compose. Output identity: Core compiled
+into the same output paths by the JIT and the R2R compiler produced
+byte-identical implementation DLL, PDB, reference DLL and XML (SHA-256
+prefixes `c42256b6…`, `cc03f26d…`, `8ab54f4b…`, `38df9350…`). The publish
+also wrote `linux-x64` entries into five `packages.lock.json` files, which
+were reverted; Q7 must decide how the R2R payload is restored (a RID-specific
+restore or a pre-populated runtime pack) so the lock files stay stable.
 
 ## 5. Architecture map
 
@@ -648,21 +680,28 @@ exist across `ClrNullability`, `NullabilityImportRule`, `NullableLifting`,
 sites), because that wrapper has no interning (`internal init`, 10 direct
 construction sites).
 
-**Proposal.** Finish ADR-0193 Phase 3 as written: add the query members,
-land GSA0008 in `src/Analyzers/InternalAnalyzers` beside GSA0007, then migrate
-consumers file by file starting with the five files above. Collapse the 13
+**Proposal.** Finish ADR-0193 Phase 3 as written. The ADR requires the phase
+to land as one atomic PR
+(`docs/adr/0193-nullability-queries-are-type-level-and-funnelled.md:1275-1282`):
+GSA0008 analyzes the whole compilation, so the query members, the analyzer in
+`src/Analyzers/InternalAnalyzers` beside GSA0007, and the full consumer
+migration (about 80 files; the five files above are the largest slices) land
+together, with the diff grouped by ownership for review. Collapse the 13
 strip helpers onto `StripReferenceNullability(deep)` and the three joins onto
-`JoinReferenceNullability`. Intern `NullabilityAnnotatedTypeSymbol` by
-`(inner, flags)` the way `NullableTypeSymbol.Get` already does, or cache the
-decoded signature symbol per `MemberInfo` (P5 below).
+`JoinReferenceNullability` in that same PR. Interning
+`NullabilityAnnotatedTypeSymbol` by `(inner, flags)` the way
+`NullableTypeSymbol.Get` already does, or caching the decoded signature
+symbol per `MemberInfo` (P5 below), changes no consumer and can land before
+it as its own PR.
 
 **Gain.** Mostly simplicity and defect rate (the ADR records that independent
 nullability computations are the most frequent root cause). The interning is
 also an allocation win: `TypeSymbol.GetWrappedTypes` was 9.8% of compiler
 allocation in the 0.5.199 profile and the annotated wrapper is one of its
 inputs. **Risk.** Low per file once GSA0008 enforces the funnel; the ADR's
-settled decisions must not be reopened. **Effort**: L, but every file is an
-independent S-sized PR after the API PR. N-1: ordinary source.
+settled decisions must not be reopened. **Effort**: L, one atomic PR for the API,
+the analyzer and the migration (as the ADR budgets), plus an optional S-sized
+interning PR before it. N-1: ordinary source.
 
 ### S3. Two conversion systems and two member-lookup systems
 
@@ -853,10 +892,11 @@ it on the `BoundStatement`, and have `InvalidateNarrowingsForAssignedVariables`,
 of walking (`StatementBinder.Narrowing.gs:249, 260-261, 330`;
 `StatementBinder.gs:696-737`). (2) Replace the if-join interpreter with a
 join over the frames the branches were bound under. (3) Keep the loop
-re-bind but make its invalidation check read the summaries. A full
-redesign (per-variable flow state in one pass, with types decided by that
-pass) is possible but is a language-semantics project; it belongs in an ADR
-if the maintainer wants it.
+re-bind but make its invalidation check read the summaries. The full
+redesign (per-variable flow state computed once, with binding consuming it
+through a query) is a language-semantics project in corner cases; the
+maintainer approved it (section 10, decision 3), so it proceeds as an ADR
+plus the pass, after the summaries land (roadmap M1a then M1b).
 
 **Gain.** Removes the O(depth x size) per-statement walks, which are inside
 the 65% body-binding phase; the exact share needs a profile with the
@@ -1077,18 +1117,24 @@ lever after binding itself, and it is what makes a shared compiler process
 (P9) cheap because a `PEReader`-backed module is reusable across
 compilations. **Risk.** High; it touches `MemberLookup` (9k lines),
 `ClrOverloadResolution` (9.6k), the nullability funnel and the emitter's
-`ImportedMemberRefFactory`. It must go through an ADR and land behind an
-adapter with the MLC path as the oracle. **Effort.** XL (a release or more).
+`ImportedMemberRefFactory`. It goes through an ADR, which the maintainer
+approved scoping now as a separate work item (section 10, decision 4), and
+lands behind an adapter with the MLC path as the oracle. **Effort.** XL (a release or more).
 **Dependencies.** P5 (the caches become the adapter's first layer) and S2
 (the nullability funnel is the only sanctioned entry).
 
 ### P8. Ship ReadyToRun compiler binaries and set tiering defaults
 
 **Problem.** `PublishReadyToRun=false` is explicit in the SDK packaging
-(`src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj:133, 155, 182`) and
-`build/sdk-publish.targets:21` treats R2R as incompatible with in-graph
-staging. No `TieredPGO`, `TieredCompilation` or GC setting is in
-`src/Compiler/Compiler.gsproj` or the runtimeconfig. **Evidence.**
+(`src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj:133, 155, 182`), and
+`build/sdk-publish.targets:21` lists `PublishReadyToRun` among the publish
+settings that make the normal build output ineligible for reuse by the #5103
+staging path (the payload then publishes through the isolated graph; it is a
+packaging-cost condition, not a build failure). The maintainer's decision
+(section 10, decision 2) is that R2R works for the compiler payload; the
+incompatibility that was found earlier was with NativeAOT. No `TieredPGO`,
+`TieredCompilation` or GC setting is in `src/Compiler/Compiler.gsproj` or the
+runtimeconfig. **Evidence.**
 `DOTNET_TieredPGO=0` cut Core from 26.7 s to 18.4 s (-31%) and
 `TieredCompilation=0` to 17.1 s (-36%) with no code change (section 4.4,
 re-measured in 4.5); JIT accounts for about 5 s of the default run (section
@@ -1097,15 +1143,19 @@ compiler graph (#2189, October 21). The two effects overlap: both reduce time
 spent in Tier-0 and instrumented code. **Change.** Two PRs. (1) Set
 `<TieredPGO>false</TieredPGO>` in `Compiler.gsproj` (and `Gsgen.Cli`,
 `Gsfmt.Cli`), which lands in `gsc.runtimeconfig.json`; measure Core, Oahu
-and hello world. (2) Re-enable `PublishReadyToRun` for the three published
-tool payloads, fixing the staging conflict that `sdk-publish.targets:21`
-records, and measure the same three with and without `TieredPGO`. Keep
-`TieredCompilation` on (hello world doubles without it). **Gain.** Measured
--31% on Core for (1) alone; (2) adds startup savings the maintainer already
-measured. **Risk.** Low; output bytes do not depend on the JIT mode (the
-follow-up run in 4.5 checks the hashes). The R2R payload is larger
-(crossgen output) and must stay deterministic for the stage-2 comparison; the
-SDK package size grows. **Effort.** S for (1), M for (2). **Bootstrap.** The
+and hello world. (2) Enable `PublishReadyToRun` for the three published
+tool payloads, either by extending the `sdk-publish.targets:21` reuse
+condition so an R2R publish of the normal build output still qualifies, or
+by accepting the isolated publish graph for those three projects; measure the
+same three inputs with and without `TieredPGO`. Keep `TieredCompilation` on
+(hello world doubles without it). **Gain.** Measured -28% on Core for (1)
+alone (section 4.5); (2) measured -30% on hello world and -10% on Core alone,
+and -36% on Core together with (1) (section 4.8).
+**Risk.** Low; output bytes do not depend on the JIT mode (section 4.5 checks
+the hashes). The R2R payload is larger (crossgen output) and the SDK package
+grows; the stage-2 comparison compares the IL assemblies the repository
+builds, not the published R2R images, so it is unaffected (confirm on the
+first pin move that carries R2R). **Effort.** S for (1), M for (2). **Bootstrap.** The
 compiler that builds the repository is the pinned release, so the repository
 build speeds up only after the pin moves to a release carrying the setting.
 
@@ -1125,18 +1175,32 @@ Roslyn's server caches `MetadataReference` by path and timestamp and runs
 requests concurrently. **Change.** (1) Move the 15 `TypeSymbol`-keyed and 5
 `MemberCache` process statics onto the resolver instance (this also fixes
 the language server, which never disposes its resolver,
-`src/LanguageServer/ProjectState.gs:126, 447, 469`); (2) keep a resolver
-cache keyed by the ordered reference path+size+mtime set (or content
-fingerprint) across requests, so a second project with the same framework
-references reuses the loaded images and the type-name index; (3) hash the
-tool identity once per worker process, not per request; (4) raise the
-request cap once (1) and (2) make retained memory a function of the live
-reference set. **Gain.** The maintainer's probe measured 3.3x to 3.7x on
-late calls with only JIT warm; metadata reuse makes a warm request cheaper
-still and makes turning the worker on by default defensible. **Risk.**
-Medium; cross-compilation symbol identity must stay per-resolver (GSA0003
-convention; ADR-0203 §3). **Effort.** M for (1) and (3), M for (2).
-**Dependencies.** (2) is much simpler after P7; (1) and (3) stand alone.
+`src/LanguageServer/ProjectState.gs:126, 447, 469`); (2) split the resolver
+into a consumer-independent part and a compilation-owned part, and cache only
+the first across requests. Consumer-independent: the loaded images, the
+`MetadataLoadContext`, and the type-name, namespace and arity indexes, keyed
+by the ordered reference set with path, size, mtime and content fingerprint.
+Compilation-owned and never shared: everything that depends on the consumer
+assembly's identity or access rights, in particular `semanticAggregateCache`
+(keyed by `Type` on the assumption of one consumer per resolver,
+`Symbols/ReferenceResolver.gs:57-79, 131-133`) and the aggregates
+`ImportedTypeSymbol.BuildSemanticAggregate` builds with the consumer's
+internal-access grant (`Symbols/ImportedTypeSymbol.gs:455-461`); a friend
+project must never see an aggregate a non-friend project filled. The same
+partition applies to B5; (3) keep the content-sensitive tool-identity check
+(`WorkerProcessClient.TryRun` recomputes it before every dispatch and
+restarts on a mismatch, `src/Sdk/Gsharp.NET.Sdk/WorkerProcessClient.gs:54-66`;
+`test/Sdk.Tests/CompilerWorkerTests.gs:833` `ChangedToolPayloadStartsANewWorker`
+pins the contract) but make it cheap: cache the hash per file by (path,
+size, mtime) and re-hash only files whose stat changed; (4) raise the request
+cap once (1) and (2) make retained memory a function of the live reference
+set. **Gain.** The maintainer's probe measured 3.3x to 3.7x on late calls
+with only JIT warm; metadata reuse makes a warm request cheaper still and
+makes turning the worker on by default defensible. **Risk.** Medium;
+cross-compilation symbol identity must stay per-resolver (GSA0003 convention;
+ADR-0203 §3), and the consumer-dependent partition in (2) is the correctness
+line. **Effort.** M for (1) and (3), M for (2). **Dependencies.** (2) is much
+simpler after P7; (1) and (3) stand alone.
 
 ### P10. Analyzer host: one load context per analyzer path per process
 
@@ -1174,41 +1238,59 @@ session and planner collectors; compute max-stack during emission (SRM's
 emits); cache `MethodSpec` and constructed-container `MemberRef` rows by
 `(open handle, TypeArgsKey)`. **Gain.** Allocation only; estimated 0.3 to
 0.6 GiB of the 1.1 GiB. **Risk.** Low. **Effort.** M. **Bootstrap.** Emit
-change: output must stay byte-identical, which is the witness.
+change. Pooling and max-stack computation are representation-preserving and
+must keep output byte-identical; row deduplication changes the metadata
+tables on purpose, so its acceptance is ILVerify, the conformance suite, an
+expected-IL or expected-table test that fails without the change (the
+ADR-0154 witness), and repeat-run determinism.
 
-### P13. Code generation: `for ... in` over `ImmutableArray[T]` and `List[T]` boxes the enumerator
+### P13. Code generation: `for ... in` over a generic collection of a same-compilation element type boxes the enumerator
 
-**Problem.** The compiler lowers a `for ... in` loop over a value-type
-collection with a struct enumerator (`ImmutableArray[T]`, `List[T]`,
-`Dictionary` views) to an interface call,
-`((IEnumerable<T>)items).GetEnumerator()`, which boxes the collection or its
-enumerator and dispatches `MoveNext`/`Current` through the interface. Only
-arrays get an indexed loop. C# uses the pattern-based `GetEnumerator()` on
-the collection's own type, which for these collections is a struct and
-allocates nothing. **Evidence.** Decompiled `BoundTreeWalker.VisitList`
-(`Binding/BoundTreeWalker.gs:828-836`) and `RendezvousBatchAnalyzer.Run`
-(`Binding/RendezvousBatchAnalyzer.gs:171-173`) from the built
-`GSharp.Core.dll`; `CastHelpers.Box` is 12.4% of main-thread samples with
-loop bodies as its callers (section 4.7); `src/Core` has 2,991 `for ... in`
-loops. ADR-0031 already admits the pattern-based `GetEnumerator()` shape
-as a discriminant beside `IEnumerable[T]`; today the interface case wins when
-a type offers both. **Change.** In the for-in binder, prefer a public
-instance `GetEnumerator()` whose return type is a value type over the
-`IEnumerable<T>` interface when both apply (the C# rule), and emit
-`MoveNext`/`Current` as direct calls on the struct; keep the interface path
-for everything else and for `sequence[T]`. Disposal must follow the same
-rule C# applies to struct enumerators (call `Dispose` when the struct
-implements `IDisposable`), and the #5037 nested-enumerator cleanup must keep
-working for the new path. Add an indexed fast path for `ImmutableArray[T]` and `List[T]`
-when the loop body cannot mutate the collection, as a second step. **Gain.**
-One allocation and one interface dispatch per loop removed, in the compiler
-and in every user program; estimated several percent of body-binding
-allocation, measurable through the `CastHelpers.Box` share. **Risk.** Medium
-(codegen; the ILVerify gate and the conformance suite are the witnesses;
-disposal semantics for struct enumerators must match C#). **Effort.** M.
-**Bootstrap.** The compiler's own loops get the benefit only after the pin
-moves to a release that carries the change; measure with a self-rebuilt
-compiler as #5107 did.
+**Problem.** The for-in lowering has two paths. For a closed CLR collection
+type, `Lowerer.TryBuildGetEnumeratorCall` calls
+`MemberLookup.ResolveGetEnumerator`, which prefers the collection's own
+public `GetEnumerator()` (a struct enumerator for `ImmutableArray[T]` and
+`List[T]`) over the interface (`Lowering/Lowerer.gs:1424-1437`;
+`Binding/MemberLookup.gs:802`). But when the collection is an imported generic
+whose type arguments are symbolic (a same-compilation type or an in-scope type
+parameter), `TryBuildSymbolicOpenGetEnumeratorCall` runs first and routes the
+loop through `IEnumerable<T>.GetEnumerator()` over a symbolic `IEnumerator<T>`
+so the element type survives emit; its comment accepts the allocation as the
+price of avoiding a nested struct enumerator in symbolic emit
+(`Lowering/Lowerer.gs:1401, 1485-1576`; the comment at `:1517-1523`). In the
+compiler, almost every collection is a collection of the compiler's own types
+(`ImmutableArray[BoundExpression]`, `List[FunctionSymbol]`), so almost every
+loop takes the symbolic path. **Evidence.** Decompiled
+`BoundTreeWalker.VisitList` (`Binding/BoundTreeWalker.gs:828-836`) and
+`RendezvousBatchAnalyzer.Run` (`Binding/RendezvousBatchAnalyzer.gs:171-173`)
+from the built `GSharp.Core.dll` show
+`((IEnumerable<T>)items).GetEnumerator()` for `ImmutableArray[BoundExpression]`
+and `List[(string, TextLocation)]`; `CastHelpers.Box` is 12.4% of main-thread
+samples with loop bodies as its callers (section 4.7); `src/Core` has 2,991
+`for ... in` loops, of which the share over symbolic element types is not
+counted here. **Change.** Teach the symbolic path to use the struct
+enumerator: encode the nested `Enumerator` of a known collection
+(`ImmutableArray<T>.Enumerator`, `List<T>.Enumerator`,
+`Dictionary<K,V>.Enumerator`) as a symbolic `TypeSpec` over the element
+symbol, the same way the symbolic `MemberRef` helper already re-encodes
+`IEnumerable<T>.GetEnumerator()`, and emit `MoveNext`/`Current` as direct
+calls on it. Start with the collections the compiler itself uses; keep the
+interface path for `sequence[T]`, for user types, and for any collection
+whose public `GetEnumerator()` and `IEnumerable<T>` implementation differ in
+element type or values (the compatibility tests must include such a type,
+since switching methods is not automatically semantics-preserving).
+Disposal follows the C# rule for struct enumerators, and the #5037
+nested-enumerator cleanup must keep working. ADR-0031 already admits the
+pattern-based shape as a discriminant, so no ADR change is needed. **Gain.**
+One allocation and one interface dispatch per loop over a compiler-typed
+collection, in the compiler and in user programs with the same shape;
+estimated several percent of body-binding allocation, measurable through the
+`CastHelpers.Box` share. **Risk.** Medium (codegen in symbolic emit; ILVerify,
+the conformance suite and the compatibility tests above are the gates; the
+ADR-0154 witness is an expected-IL test that fails on the pre-change
+lowering). **Effort.** M. **Bootstrap.** The compiler's own loops get the
+benefit only after the pin moves to a release that carries the change;
+measure with a self-rebuilt compiler as #5107 did.
 
 ### P12. Small, measured quick wins
 
@@ -1251,11 +1333,20 @@ phase JSON before and after as the measurement.
 Each item is sized for one coding agent and one PR (an "L" item is a short
 series of PRs with one owner). "Parallel" means the items touch different
 files and can run in separate worktrees at the same time; "after" names the
-PR that must merge first. Every item keeps the ADR-0154 rule: byte-identical
-implementation, reference, PDB and XML output and identical diagnostics on
-Core, Core.Tests and the pinned Oahu inputs, plus the phase JSON before and
-after as the performance witness. None may use a language feature newer than
-the pin (N-1). Items marked **bootstrap** change code generation or the
+PR that must merge first. Two kinds of evidence apply, and they are not the
+same thing. (a) The ADR-0154 witness: every new or changed behavioral test
+fails on the pre-change code or under a product mutant and passes with the
+change; a byte comparison alone is not that witness. (b) The regression
+check: for a representation-preserving change (caches, indexes, pooling,
+scope and binder restructuring, JIT settings) the implementation, reference,
+PDB and XML output and the diagnostics on Core, Core.Tests and the pinned
+Oahu inputs stay byte-identical; for a change that alters output on purpose
+(Q8's enumeration IL, M8's metadata-row deduplication) the check is instead
+ILVerify, the conformance suite, public-contract and expected-IL or
+expected-table tests, and repeat-run determinism. The phase JSON before and
+after is the performance evidence in both cases. "Identical outputs" in the
+tables below means (b) for a representation-preserving item. None may use a
+language feature newer than the pin (N-1). Items marked **bootstrap** change code generation or the
 compiler's runtime configuration: their effect on the compiler's own speed
 appears only after the next pin move, and their measurement must use a
 compiler rebuilt by itself where the maintainer's #5107 caveat applies.
@@ -1265,27 +1356,30 @@ compiler rebuilt by itself where the maintainer's #5107 caveat applies.
 | # | Item | Section | Effort | Run with | Acceptance |
 | --- | --- | --- | --- | --- | --- |
 | Q1 | `TieredPGO=false` in the three published tool projects | P8 (1) | S | anything | Core median wall down 25% or more over five interleaved pairs (this study measured -27.8%); hello-world not slower; hashes identical. **Bootstrap** (repository build benefits after the pin moves) |
-| Q8 | `for ... in` lowering uses the collection's struct `GetEnumerator()` | P13 | M | Q2 to Q6 | ILVerify and conformance green; decompiled `VisitList` shows no interface cast; `CastHelpers.Box` share down in a self-rebuilt compiler. **Bootstrap** |
+| Q8 | Symbolic for-in path uses the known struct enumerators (`ImmutableArray<T>`, `List<T>`, `Dictionary<K,V>`) | P13 | M | Q2 to Q6 | Intentional IL change: expected-IL test red on the pre-change lowering (witness); ILVerify and conformance green; compatibility tests for a type whose public and interface enumerators differ; decompiled `VisitList` shows no interface cast; `CastHelpers.Box` share down in a self-rebuilt compiler. **Bootstrap** |
 | Q2 | `ContainsSyntheticBodySideEffects` behind `cache != nil`; `Enum.GetValues` statics; `TextLocation` line caching; `BoundProgramOrder` sort once; memoize `GetDeclared*` | P12, S9 | S | Q1, Q3, Q4 | Identical outputs; phase JSON shows the walks gone |
 | Q3 | Imported-extension holder index owned by the compilation | P2 | S to M | Q1, Q2, Q4 | `references.extension-holders` count 1 per compile on Core (was 812); identical outputs; Oahu.Core direct-compile time |
 | Q4 | Reflection probes stop throwing: guard `TypeBuilderInstantiation` and MLC cases before the call | P12 | S | Q1, Q2, Q3 | `dotnet-counters` exception total under 100 on Core; identical outputs |
 | Q5 | `gsc` adopts the ADR-0107 content-fingerprinted type-name index from a cache directory the SDK passes; name index built from `MetadataReader` names | P6 | M | Q1 to Q4 | Hello-world `declarations` phase under 150 ms warm; identical outputs; cache invalidation tests for changed reference bytes and order |
 | Q6 | Decoded imported signature cache; intern `ImportedTypeSymbol.GetConstructed`; memoize `SubstituteType` | P5 | M | Q1 to Q5 | `metadata.contract-requests` unchanged and a new `metadata.signature-cache-hits` counter near it; Core allocation down; identical outputs |
-| Q7 | ReadyToRun for the published `gsc`, `gsgen`, `gsfmt` payloads; fix the staging conflict in `sdk-publish.targets` | P8 (2) | M | after Q1 | Oahu whole-build and hello-world medians down; stage-2 comparison still byte-identical for `GSharp.Core.dll` and `gsc.dll` (R2R code is in the published payload, not in the IL compared by stage 2; confirm). **Bootstrap** |
+| Q9 | `build/compiler-bench.py`: the Core, LanguageServer and hello-world cells of section 11 on demand (decision 7) | section 11 | S | anything | Reproduces the section 4 tables on this host within run-to-run variation |
+| Q7 | ReadyToRun for the published `gsc`, `gsgen`, `gsfmt` payloads (decision 2: R2R is viable, probe in section 4.8; extend or bypass the `sdk-publish.targets:21` reuse condition; keep `packages.lock.json` stable) | P8 (2) | M | Q1 (measure both settings together) | Oahu whole-build and hello-world medians down (probe: hello 0.56 s to 0.39 s, Core -10% alone and -36% with Q1); stage-2 comparison still byte-identical for `GSharp.Core.dll` and `gsc.dll` (R2R code is in the published payload, not in the IL compared by stage 2; confirm). **Bootstrap** |
 
 ### Medium items (one to two months, medium risk)
 
 | # | Item | Section | Effort | Run with | Acceptance |
 | --- | --- | --- | --- | --- | --- |
-| M1 | Per-statement effect summaries; if-join from bound-under frames | S7, P3 | M | M2, M4 | Narrowing conformance suite green; Core body-binding phase down; identical outputs |
+| M1a | Per-statement effect summaries; if-join from bound-under frames | S7, P3 | M | M2, M4 | Narrowing conformance suite green; Core body-binding phase down; identical outputs |
+| M1b | Narrowing as a flow-state computation consumed by binding through a query (decision 3): ADR first, then the pass | S7 | L (ADR + 2 PRs) | after M1a | ADR accepted; the loop re-bind, the if-join interpreter and `AssignedRootsCollector` removed; conformance green with the ADR's listed corner-case changes as new tests (ADR-0154 witness) |
 | M2 | `BodyFacts` record; single lambda lowering; one `SideEffectAnalyzer` | S4 | M | M1, M4 | Walk count per body (add a debug counter) down by 8 or more; identical outputs. **Bootstrap** for the lambda change |
 | M3 | `LoweringPipeline`: one ordered pass over bodies, facts-gated rewriters, entry-point aliasing handled once | S6 | M | after M2 | Identical outputs; lowering allocation down |
-| M4 | Nullability query API + GSA0008; migrate `Conversion.gs`, `ExpressionBinder.Operators.gs`, `MemberLookup.gs`, `MethodBodyEmitter.Conversions.gs`, `ConversionClassifier.gs` first; intern `NullabilityAnnotatedTypeSymbol` | S2 | L (API PR, then one PR per file) | M1, M2, Q6 | GSA0008 count trends to zero; identical outputs |
-| M5 | Resolver-owned caches (move the 20 process statics); tool identity hashed once per worker; language-server resolver disposal | P9 (1), (3) | M | M1 to M4 | Language-server soak (`build/lsp-soak.py`) memory flat; worker request cap raised with retained memory flat |
+| M4 | ADR-0193 Phase 3 as one atomic PR: query API, GSA0008 and the full consumer migration (about 80 files, reviewed in ownership slices); `NullabilityAnnotatedTypeSymbol` interning may land before it as its own PR | S2 | L (one PR) | M1, M2, Q6 | GSA0008 reports zero sites in Core with no suppressions or path filters; identical outputs |
+| M5 | Resolver-owned caches (move the 20 process statics); tool identity hashed per file by (path, size, mtime) with content re-hash on change; language-server resolver disposal | P9 (1), (3) | M | M1 to M4 | Language-server soak (`build/lsp-soak.py`) memory flat; worker request cap raised with retained memory flat; `CompilerWorkerTests.ChangedToolPayloadStartsANewWorker` stays green |
 | M6 | Conversion and signature-equality owners (`Conversion` owns classification; one `SignatureEquality`; one `EnumerateSelfAndInterfaces`) | S3 | S x 3 to 5 | M1 to M5 | Identical outputs; duplicated functions deleted |
 | M7 | Generated `GetChildren`/`ChildCount`/`GetChild(i)` in source order; `Span` from first and last child | S8 | M | M1 to M6 | `GetChildPropertiesInEnumerationOrder` oracle test; identical outputs; parse allocation down |
-| M8 | Emit and planner pooling; max-stack during emission; cached `MethodSpec`/constructed `MemberRef` rows | P11 | M | M1 to M7 | Identical outputs; emit allocation down. **Bootstrap** |
+| M8 | Emit and planner pooling; max-stack during emission; cached `MethodSpec`/constructed `MemberRef` rows | P11 | M | M1 to M7 | Pooling and max-stack: identical outputs. Row deduplication (an intentional table change): ILVerify, conformance, an expected-table test red on the pre-change emitter, repeat-run determinism; emit allocation down. **Bootstrap** |
 | M9 | Analyzer load-context reuse in the worker | P10 | M | after M5 | Worker survives analyzer requests; `analyzers` phase warm on the second project |
+| M10 | Language-server surface (decision 6): a semantic-query API on `Compilation`/`SemanticModel` with the visibility the server needs; `BoundBodyCache`, `IncrementalGlobalScopeReuse` and the submission paths behind it or moved out of `Binder` | section 5, "language-server weight" | L | M1a to M5; binder side after B1 | Core line count for server-only code down; `Binder.gs` carries no submission or body-cache logic; language-server tests green |
 
 ### Big bets (a release or more, high risk, each needs an ADR)
 
@@ -1294,20 +1388,20 @@ compiler rebuilt by itself where the maintainer's #5107 caveat applies.
 | B1 | `BindingServices` / `BodyBinder` split | S1, P1 | L (3 PRs) | M1, M2 | Identical outputs; per-body allocation down; `Binder.gs` constructor gone |
 | B2 | Stable synthesized identities; concurrent synthesis caches; widened body-worker eligibility | P4 | L (3 PRs) | B1 | Identical outputs at workers 1, 2, 4, 8 on Core, Core.Tests, Oahu; measured speedup at 4 |
 | B3 | One region-aware CFG per body shared by definite-return, definite assignment and liveness | S5 | L | M2 | Dataflow oracle tests green; definite-assignment allocation down |
-| B4 | Handle-backed imported symbols; retire `MetadataLoadContext` | P7 | XL | Q6, M4 | Adapter lands first with the MLC path as oracle; identical outputs; Core wall and hello-world down |
-| B5 | Resolver reuse across worker requests; worker on by default | P9 (2), (4) | M after B4 (L before) | M5, B4 | Oahu whole-build with shared compilation faster than without on five pairs; no retained-memory growth over 50 requests |
+| B4 | Handle-backed imported symbols; retire `MetadataLoadContext` (decision 4: ADR written now, as a separate work item; Q6 and M4 are its first layer) | P7 | XL | ADR, then Q6, M4 | Adapter lands first with the MLC path as oracle; identical outputs; Core wall and hello-world down |
+| B5 | Reuse of the consumer-independent resolver part (images, MLC, name indexes) across worker requests; compilation-owned state (semantic aggregates, internal-access-dependent symbols) never shared; worker on by default (decision 5) | P9 (2), (4) | M after B4 (L before) | M5, B4 | Oahu whole-build with shared compilation faster than without on five pairs; no retained-memory growth over 50 requests; a friend/non-friend project pair compiled in either order produces identical output to standalone compiles |
 
 ### Sequencing
 
 ```text
-Q1 ─┐
-Q2  │ (parallel, week 1-2)        M1 ─┐
-Q3  ├────────────────────────────► M2  ├─► M3 ─► B1 ─► B2
-Q4  │                              M4  │
-Q5 ─┘                              M5 ─┘─► M9
-Q6 ─────────────────────────────► M4, B4
-Q7 (after Q1)                     M6, M7, M8 (parallel with M1-M5)
-                                  B3 (after M2)      B5 (after M5, B4)
+Q1, Q7 ─┐
+Q2      │ (parallel, week 1-2)     M1a ─► M1b (after the narrowing ADR)
+Q3      ├─────────────────────────► M2  ─┐
+Q4      │                           M4   ├─► M3 ─► B1 ─► B2, M10 (binder side)
+Q5, Q9 ─┘                           M5  ─┘─► M9
+Q6 ───────────────────────────────► M4, B4 (B4 ADR written now)
+                                    M6, M7, M8, M10 (parallel with M1-M5)
+                                    B3 (after M2)      B5 (after M5, B4; flips the worker default)
 ```
 
 What I would not do yet: a red/green syntax tree (no batch-compile gain until
@@ -1325,65 +1419,116 @@ after binding is metadata import and startup, both of which are structural.
 These figures combine independent estimates and must be re-measured after
 each landing; the maintainer's rule that gains are not additive applies.
 
-## 10. Open questions for the maintainer
+## 10. Decisions
 
-1. **Tiering default.** `TieredPGO=false` is a one-line, zero-risk change with
-   a measured 31% on Core. Is there a reason it was not set (for example a
-   measured regression on a short-lived `gsi`/REPL process)? If not, Q1 can
-   land this week and the next pin move carries it.
-2. **ReadyToRun packaging.** `build/sdk-publish.targets:21` treats
-   `PublishReadyToRun=true` as incompatible with in-graph staging. Is that a
-   fixed constraint of the #5103 staging design or a conflict that can be
-   resolved (separate publish directory for the R2R payload)?
-3. **Narrowing semantics.** S7 keeps narrowed types as types. Would you
-   consider an ADR that makes narrowing a flow-state pass whose results are
-   consumed by binding through a query (as C# does for nullability) so the
-   per-statement re-walks and the loop re-bind disappear structurally? That
-   is a language-semantics change in corner cases and I did not assume it.
-4. **Metadata model.** B4 is the largest single change proposed. Do you want
-   it scoped as an ADR now (so Q6 and M4 are built as its first layer), or
-   deferred until B1 and B2 have shown what binding alone can reach?
-5. **Compiler worker default.** Is the plan to turn shared compilation on by
-   default once P9 lands, or to keep it opt-in for the 0.5 line?
-6. **Language-server weight in Core.** Should `BoundBodyCache`,
-   `IncrementalGlobalScopeReuse` and the submission paths move behind an
-   interface (a `Compilation` subclass or a strategy object) so `Binder`
-   stops carrying them, or is their current inlined form acceptable?
-7. **Measurement discipline.** The phase JSON is excellent. Would you accept
-   a `build/compiler-bench.py` that runs the Core, LanguageServer and
-   hello-world cells from this study on demand (not in CI) so every PR in the
-   roadmap reports the same table? Section 11 lists the commands it would
-   wrap.
+The study asked the maintainer seven questions. The decisions, recorded on
+2026-10-22, and what each one changes in the roadmap:
+
+1. **Tiering default: evaluate and set it per the measurements.** There was
+   no prior analysis and no reason the setting was left at the default. Q1
+   (`TieredPGO=false` for the published `gsc`, `gsgen` and `gsfmt`) proceeds
+   on the section 4.5 evidence (-27.8% on Core over five interleaved pairs,
+   -19% on LanguageServer, byte-identical output, hello world not slower).
+   `TieredCompilation` stays on because it doubles the hello-world time when
+   off. The next pin move after the release that carries the setting is when
+   the repository build itself speeds up.
+2. **ReadyToRun: viable.** The incompatibility recorded in the packaging
+   targets was found with NativeAOT (the maintainer's October 21 report
+   describes 658 and 486 IL-analysis diagnostics under strict NativeAOT
+   publish), not with ReadyToRun; R2R works, and the maintainer measured it
+   at -37% on the Oahu build and -8.5% on the compiler graph with the 0.5.199
+   payload. `build/sdk-publish.targets:21` only excludes an R2R publish from
+   the #5103 build-output reuse path; the payload still publishes through
+   the isolated graph. Q7 is therefore a packaging and measurement item, not
+   a research item: enable `PublishReadyToRun` for the three tool payloads,
+   extend the reuse condition if the packaging time matters, and measure
+   with and without `TieredPGO`. Section 4.8 records the probe run after the
+   decision: R2R alone gives -30% on hello world and -10% on Core, and R2R
+   with `TieredPGO=0` gives -36% on Core with byte-identical output. Text
+   elsewhere in this document that described R2R as incompatible with staging
+   has been corrected to this reading.
+3. **Narrowing semantics change: approved.** S7 and P3 are no longer limited
+   to "compute the facts once and stop re-walking". The approved direction is
+   an ADR that makes narrowing a flow-state computation whose results binding
+   consumes through a query, so that the per-statement re-walks, the if-join
+   interpreter and the loop re-bind disappear structurally. M1 becomes two
+   steps: M1a (per-statement effect summaries, which the final design needs
+   anyway and which lands without the ADR) and M1b (the ADR plus the
+   flow-state pass). Corner cases where the result changes are a language
+   change and go through the ADR's compatibility section.
+4. **Metadata model (B4): approved, scoped as an ADR now.** The ADR is a
+   separate work item from this PR. Q6 (decoded signature cache, interned
+   imported constructions) and M4 (the nullability funnel completion) are
+   built as the first layer of that design: the cache lives behind the
+   `NullabilityImportRule` funnel and the interned constructions are what the
+   handle-backed symbols will replace. B4 no longer waits for B1 and B2 to
+   show what binding alone can reach.
+5. **Compiler worker default: approved to turn on, after P9.** M5 (resolver-
+   owned caches, cheap content-sensitive tool identity) and B5 (reuse of the
+   consumer-independent resolver part only) are the prerequisites; B5's
+   acceptance row includes the friend/non-friend ordering test from the
+   review of this study. The default flips in the PR that lands B5, and the
+   SDK property stays as the opt-out.
+6. **Language-server weight in Core: simplify; less code in Core.** The
+   language-server-specific APIs in Core exist because member access is
+   internal or private, so the server reached in. The work item is to design
+   the abstraction and the visibility the server needs to operate (a
+   semantic-query surface on `Compilation` and `SemanticModel`, with
+   `BoundBodyCache`, `IncrementalGlobalScopeReuse` and the submission paths
+   behind it or outside Core), then move the code. This is a new medium item,
+   M10, that runs with M1 to M5 and depends on B1 for the binder side.
+7. **Measurement discipline: approved.** A `build/compiler-bench.py` that
+   runs the Core, LanguageServer and hello-world cells from section 11 on
+   demand (not in CI) is a quick-win item, Q9, so every roadmap PR reports the
+   same table.
+
+Roadmap changes that follow: Q7 moves up to run with Q1 (R2R is viable);
+Q9 is added; M1 is split into M1a and M1b with M1b gated on the narrowing
+ADR; M10 is added; B4's ADR is written now and Q6 and M4 are its first layer;
+B5 flips the worker default. The tables in section 9 carry these rows.
 
 ## 11. Reproduction
 
-All commands run from the repository root after
-`dotnet build GSharp.slnx --configuration Release -graph`. Work roots must be
-off `/tmp` (`CLAUDE.md`).
+Build first with `dotnet build GSharp.slnx --configuration Release -graph`
+from the repository root. Work roots must be off `/tmp` (`CLAUDE.md`).
+
+The response file MSBuild writes for Core lists its sources relative to the
+project directory and the SDK task launches `gsc` from there
+(`src/Sdk/Gsharp.NET.Sdk/BuildTask.gs:337-339, 429-433`); `gsc` does not
+rebase them. So every direct replay below runs from `src/Core` with absolute
+compiler and response-file paths, after copying the response file to a work
+directory and rewriting only its `/out`, `/pdb`, `/refout`, `/doc` and
+`/sourcelink` values to point into that directory (`build/selfhost-bench.py`
+does this itself and takes `--cwd`).
 
 ```sh
+REPO=$PWD
+GSC=$REPO/out/bin/Release/Compiler/gsc.dll
+WORK=~/.cache/compiler-study/work   # holds the rewritten core.rsp
+
 # Core: published pin against the fresh build, interleaved
 python3 build/selfhost-bench.py \
-  --rsp $PWD/out/obj/Core/Release/GSharp.Core.rsp --cwd $PWD/src/Core \
+  --rsp $REPO/out/obj/Core/Release/GSharp.Core.rsp --cwd $REPO/src/Core \
   --native ~/.nuget/packages/gsharp.net.sdk/0.5.212/tools/compiler/gsc.dll \
-  --migrated $PWD/out/bin/Release/Compiler/gsc.dll \
+  --migrated $GSC \
   --runs 3 --warmup 1 --budget 1.5 --work ~/.cache/compiler-study/bench-core
 
-# Phase JSON for one compile (rewrite /out, /pdb, /refout, /doc into a work dir first)
-GSHARP_MEASURE_PHASES=~/.cache/compiler-study/core.json \
-  dotnet out/bin/Release/Compiler/gsc.dll @work/core.rsp
+cd $REPO/src/Core
+
+# Phase JSON for one compile
+GSHARP_MEASURE_PHASES=~/.cache/compiler-study/core.json dotnet $GSC @$WORK/core.rsp
 
 # Runtime knobs: same response file, environment variable per run
-DOTNET_TieredPGO=0 dotnet out/bin/Release/Compiler/gsc.dll @work/core.rsp
+DOTNET_TieredPGO=0 dotnet $GSC @$WORK/core.rsp
 
 # GC and JIT counters
 dotnet-counters collect --counters System.Runtime --format csv \
-  --output core-counters.csv -- dotnet out/bin/Release/Compiler/gsc.dll @work/core.rsp
+  --output ~/.cache/compiler-study/core-counters.csv -- dotnet $GSC @$WORK/core.rsp
 
 # Sample profile
 dotnet-trace collect --providers Microsoft-DotNETCore-SampleProfiler \
-  --output core.nettrace -- dotnet out/bin/Release/Compiler/gsc.dll @work/core.rsp
-dotnet-trace report core.nettrace topN -n 40 --inclusive
+  --output ~/.cache/compiler-study/core.nettrace -- dotnet $GSC @$WORK/core.rsp
+dotnet-trace report ~/.cache/compiler-study/core.nettrace topN -n 40 --inclusive
 ```
 
 The hello-world response files take the `/r:` lines from the Core response
