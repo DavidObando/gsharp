@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "checkedAt": "2026-10-21T22:55:13.312975+00:00",
+  "checkedAt": "2026-10-22T00:08:00.105836+00:00",
   "sdkVersion": "0.5.199",
   "dotnetSdk": "10.0.402",
   "goVersion": "go version go1.27.0 windows/arm64",
   "goRaceDetector": false,
-  "bundleSha256": "911a5f2fee928f4f5df949c5df03dbe3eecfe4946a4f261cb2cb2bcd0de854f9",
+  "bundleSha256": "591d4a709528aedf0fbdc48d54ca3ae7d3c3ade76f20c321a983f4d9b45e9e08",
   "patterns": [
     {
       "id": "worker-pool",

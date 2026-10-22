@@ -135,8 +135,9 @@ language guarantee.
 
 ## 4. Combine `scope` with an async operation
 
-A `scope` can wrap any async-call site and become its join point. When
-the scope returns, the work has either completed or thrown.
+A `scope` owns and joins its `go` children, not arbitrary async calls.
+In the following example, `work().Wait()` itself waits for the returned task
+and propagates its failure; the surrounding `scope` has no `go` children to join.
 
 ```gsharp title="ScopeAsync.gs"
 package GSharp.Tour.ScopeAsync

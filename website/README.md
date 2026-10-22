@@ -35,7 +35,7 @@ Requires Node.js 24 (matching CI) and Python 3. Python's standard library packag
 
 The site is built and deployed by `.github/workflows/pages.yml`. Pull requests build only; pushes to `main` deploy. Docs versioning is enabled: the unreleased docs are the "current" version, and released snapshots are cut with `npm run docusaurus docs:version <x.y>`.
 
-The current docs are served at `/docs/next`; the first entry of `versions.json` supplies the default `/docs` snapshot. The 0.4 documentation was refreshed from `v0.4.591`, not from unreleased main. Preserve historical semantics and document IDs when updating a snapshot. Use relative Markdown file links within docs so Next articles stay in Next.
+The current docs are served at `/docs/next`; the first entry of `versions.json` supplies the default `/docs` snapshot. The 0.5 documentation was refreshed from `v0.5.199`, not from unreleased main. The 0.4 snapshot retains its v0.4.591 provenance. Preserve historical semantics and document IDs when updating a snapshot. Use relative Markdown file links within docs so Next articles stay in Next.
 
 ## Search and production preview
 
@@ -89,11 +89,11 @@ After deployment, verify `/gsharp/`, direct documentation URLs, search assets an
 
 `scripts/prepare-showcase.py` builds a deterministic, versioned download and the bundled demo's expected JSON. Versioned ZIPs are retained under `static/downloads` so published guides can keep linking to their matching project. The generated `src/data/trail-report.json` is not committed. `python3 website/tests/verify-trail.py` builds the actual download and verifies it against independent file hashes and failure cases.
 
-The Kotlin and Swift bridges are available in current and 0.4 documentation and linked from the homepage, Learn, introduction, Tour, and sidebars. The G# counterparts are compiled with the published SDK; the Swift counterpart has its own runnable check.
+The Kotlin and Swift bridges are available in Next and the 0.5/0.4 snapshots and linked from the homepage, Learn, introduction, Tour, and sidebars. The G# counterparts are compiled with the published SDK; the Swift counterpart has its own runnable check.
 
 Complete teaching examples are mapped to their source/golden fixtures in `tests/content.test.mjs`. Extend that mapping for new runnable examples; label excerpts and illustrative declarations instead of pretending every fence is standalone code. Focused assertions prevent the retired concurrency-import guidance from returning without banning legitimate historical explanations.
 
-Editor images are captured from a real isolated VS Code profile, not generated imitations. `static/img/trail-editor.json` records the tool versions and source hash. Refresh the images and evidence when the demonstrated source or toolchain changes; do not bypass the consistency check.
+Editor images are captured from a real isolated VS Code profile, not generated imitations. The original 0.4.591 captures are explicitly historical: `static/img/trail-editor.json` records the VS Code extension, application SDK, .NET SDK and source hash separately. Preserve those images and metadata rather than relabeling their pixels. Current 0.5 examples and downloads are independently executed with the published SDK; historical editor evidence is not a claim of a new capture.
 
 ## Visual baselines
 
@@ -105,7 +105,7 @@ npm run test:visual -- --update-snapshots
 
 The visual project uses Playwright's pinned Chromium on macOS 26 arm64, matching the dedicated `macos-26` CI job. Baselines cover representative desktop/narrow surfaces in both themes. Run them in the matching environment, wait for fonts and hydration, and review diffs rather than automatically accepting new images. The existing Chromium/WebKit/Firefox functional suite remains separate.
 
-Release changes must keep `src/data/release.json`, SDK pins, matching snapshot instructions, downloadable examples, and capture evidence consistent. Retain old versioned downloads when creating a new one. Human participant studies and a hands-on screen-reader/touch-device publication review are not replaced by automated checks and must not be reported as performed when unavailable.
+Release changes must keep `src/data/release.json`, SDK pins, matching snapshot instructions, downloads and their executed evidence consistent. Retain old versioned downloads and authentic historical capture provenance when creating a new release cut. Human participant studies and a hands-on screen-reader/touch-device publication review are not replaced by automated checks and must not be reported as performed when unavailable.
 
 ## Ten-pattern comparison and benchmark evidence
 

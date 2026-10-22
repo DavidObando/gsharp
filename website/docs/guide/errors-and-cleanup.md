@@ -115,9 +115,11 @@ let display = user?.Name ?? "anonymous"
 `defer call` schedules a call to run when the current scope exits. The parser accepts an expression, but binding requires a call. Keep deferred calls short and side-effect focused, such as unlocking, closing, or logging.
 
 ```gsharp
-lock.Enter
-defer lock.Exit
+gate.Enter()
+defer gate.Exit()
 ```
+
+Here `gate` is a lock-like receiver supplied by the surrounding program; both operations are explicit calls.
 
 ## Using
 

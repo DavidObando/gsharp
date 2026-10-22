@@ -22,13 +22,7 @@ internal shared class SampleReferences {
     /// Builds the resolver for a sample compilation.
     /// @returns A resolver over the ref pack and the bundled G# runtime assemblies.
     internal func CreateResolver() ReferenceResolver -> ReferenceResolver.WithReferences(
-        ReferenceResolver.ResolveDriverReferencePaths(RefPackAssemblies()).Where(
-            (path string) -> !string.Equals(
-                Path.GetFileName(path),
-                "Gsharp.Extensions.dll",
-                StringComparison.OrdinalIgnoreCase
-            )
-        )
+        ReferenceResolver.ResolveDriverReferencePaths(RefPackAssemblies())
     )
 
     /// The `Microsoft.NETCore.App.Ref` facades matching the running runtime.
