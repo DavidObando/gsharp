@@ -9,6 +9,14 @@
     <AssemblyName>gsgen</AssemblyName>
       <!-- Disable tiered PGO instrumentation in the published payload (#5120). Tiered compilation stays on. -->
     <TieredPGO>false</TieredPGO>
+    <!-- ReadyToRun images in the SDK package (#5126). The fixed RID keeps lock files independent of the host.
+         Only restore sees these two properties. It then downloads the crossgen2 pack and writes the RID target.
+         A RuntimeIdentifiers value at build time changes dotnet tool packing (gsfmt) and output paths.
+         The SDK package staging publish passes RuntimeIdentifier and PublishReadyToRun itself.
+         Other hosts keep the portable IL payload until per-platform images exist. -->
+    <RuntimeIdentifiers Condition="'$(MSBuildRestoreSessionId)' != ''">linux-x64</RuntimeIdentifiers>
+    <PublishReadyToRun Condition="'$(MSBuildRestoreSessionId)' != '' and '$(NETCoreSdkRuntimeIdentifier)' == 'linux-x64'">true</PublishReadyToRun>
+    <GsharpPublishReadyToRunPayload Condition="'$(NETCoreSdkRuntimeIdentifier)' == 'linux-x64'">true</GsharpPublishReadyToRunPayload>
   </PropertyGroup>
 
   <ItemGroup>

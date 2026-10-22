@@ -234,7 +234,8 @@ class SdkPublishGraphTests(unittest.TestCase):
 
     def test_different_publish_settings_do_not_reuse_the_normal_graph(self) -> None:
         for prop, value in (("TargetFramework", "net9.0"), ("SelfContained", "true"),
-                            ("PublishReadyToRun", "true"), ("PublishSingleFile", "true"),
+                            ("PublishReadyToRun", "true"), ("GsharpPublishReadyToRunPayload", "true"),
+                            ("PublishSingleFile", "true"),
                             ("PublishAot", "true"), ("PublishTrimmed", "true"),
                             ("PublishDir", str(self.root / "custom-publish")),
                             ("NoBuild", "true"), ("BuildProjectReferences", "false")):

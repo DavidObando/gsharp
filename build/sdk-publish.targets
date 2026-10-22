@@ -2,6 +2,8 @@
   <PropertyGroup>
     <_GsharpSdkPublishDirOverridden Condition="'$(PublishDir)' != ''">true</_GsharpSdkPublishDirOverridden>
   </PropertyGroup>
+  <!-- A project that sets GsharpPublishReadyToRunPayload=true publishes ReadyToRun images in the isolated graph (#5126).
+       Its normal build output has no RID and no crossgen step, so the reuse path cannot supply them. -->
   <!-- Build and Publish use the same project instance and global properties.
        Only the publish destination changes after Build completes. -->
   <Target Name="_GsharpPrepareSdkPublish">
@@ -19,6 +21,7 @@
       <_GsharpSdkPublishCompatible Condition="'$(TargetFramework)' == '$(GsharpCompilerPackageTargetFramework)' and
                                              '$(SelfContained)' != 'true' and
                                              '$(PublishReadyToRun)' != 'true' and
+                                             '$(GsharpPublishReadyToRunPayload)' != 'true' and
                                              '$(PublishSingleFile)' != 'true' and
                                              '$(PublishAot)' != 'true' and
                                              '$(PublishTrimmed)' != 'true' and
@@ -29,7 +32,7 @@
                                              '$(ImportDirectoryBuildProps)' != 'false'">true</_GsharpSdkPublishCompatible>
     </PropertyGroup>
     <Message Importance="High" Condition="'$(_GsharpSdkPublishCompatible)' != 'true'"
-             Text="SDK staging uses an isolated Publish graph for $(MSBuildProjectName): TargetFramework=$(TargetFramework), package framework=$(GsharpCompilerPackageTargetFramework), SelfContained=$(SelfContained), PublishReadyToRun=$(PublishReadyToRun), PublishSingleFile=$(PublishSingleFile), PublishAot=$(PublishAot), PublishTrimmed=$(PublishTrimmed), PublishDir=$(PublishDir), default PublishDir=$(_GsharpSdkDefaultPublishDir), UseArtifactsOutput=$(UseArtifactsOutput), NoBuild=$(NoBuild), BuildProjectReferences=$(BuildProjectReferences)." />
+             Text="SDK staging uses an isolated Publish graph for $(MSBuildProjectName): TargetFramework=$(TargetFramework), package framework=$(GsharpCompilerPackageTargetFramework), SelfContained=$(SelfContained), PublishReadyToRun=$(PublishReadyToRun), GsharpPublishReadyToRunPayload=$(GsharpPublishReadyToRunPayload), PublishSingleFile=$(PublishSingleFile), PublishAot=$(PublishAot), PublishTrimmed=$(PublishTrimmed), PublishDir=$(PublishDir), default PublishDir=$(_GsharpSdkDefaultPublishDir), UseArtifactsOutput=$(UseArtifactsOutput), NoBuild=$(NoBuild), BuildProjectReferences=$(BuildProjectReferences)." />
   </Target>
 
   <Target Name="_GsharpSetSdkPublishDir" DependsOnTargets="Build">

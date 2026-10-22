@@ -116,6 +116,7 @@
           "Microsoft.VisualStudio.Validation": "[17.8.8, )"
         }
       }
-    }
+    },
+    "net10.0/linux-x64": {}
   }
 }

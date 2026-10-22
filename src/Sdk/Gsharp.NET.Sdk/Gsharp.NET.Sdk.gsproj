@@ -28,6 +28,9 @@
     <!-- TFM used to publish the gsc compiler payload into the NuGet. The host
          dotnet must have a runtime for this TFM installed for the SDK to work. -->
     <GsharpCompilerPackageTargetFramework Condition="'$(GsharpCompilerPackageTargetFramework)' == ''">net10.0</GsharpCompilerPackageTargetFramework>
+    <!-- RID of the ReadyToRun tool payloads (#5126). Keep in step with RuntimeIdentifiers in the tool projects. -->
+    <GsharpToolPayloadRuntimeIdentifier Condition="'$(GsharpToolPayloadRuntimeIdentifier)' == '' and '$(NETCoreSdkRuntimeIdentifier)' == 'linux-x64'">linux-x64</GsharpToolPayloadRuntimeIdentifier>
+    <GsharpToolPayloadReadyToRun Condition="'$(GsharpToolPayloadReadyToRun)' == '' and '$(NETCoreSdkRuntimeIdentifier)' == 'linux-x64'">true</GsharpToolPayloadReadyToRun>
   </PropertyGroup>
 
   <ItemGroup>
@@ -130,7 +133,7 @@
       <Output TaskParameter="TargetOutputs" ItemName="_GsharpCompilerPayload" />
     </MSBuild>
     <RemoveDir Directories="$(_GsharpCompilerPublishDir)" Condition="'@(_GsharpCompilerPayload)' == '' and Exists('$(_GsharpCompilerPublishDir)')" />
-    <MSBuild Projects="$(MSBuildThisFileDirectory)../../Compiler/Compiler.gsproj" Targets="Publish" Condition="'@(_GsharpCompilerPayload)' == ''" Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsharpCompilerPublishDir);BaseOutputPath=$(_GsharpCompilerStagingOutDir);GsharpObjRoot=$(IntermediateOutputPath)gsc-staging-obj;SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)../../Compiler/Compiler.gsproj" Targets="Publish" Condition="'@(_GsharpCompilerPayload)' == ''" Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsharpCompilerPublishDir);BaseOutputPath=$(_GsharpCompilerStagingOutDir);GsharpObjRoot=$(IntermediateOutputPath)gsc-staging-obj;RuntimeIdentifier=$(GsharpToolPayloadRuntimeIdentifier);SelfContained=false;PublishReadyToRun=$(GsharpToolPayloadReadyToRun);PublishSingleFile=false" />
     <ItemGroup Condition="'@(_GsharpCompilerPayload)' == ''">
       <_GsharpCompilerPayload Include="$(_GsharpCompilerPublishDir)**\*">
         <GsharpSdkPublishRoot>$(_GsharpCompilerPublishDir)</GsharpSdkPublishRoot>
@@ -152,7 +155,7 @@
       <Output TaskParameter="TargetOutputs" ItemName="_GsharpFormatterPayload" />
     </MSBuild>
     <RemoveDir Directories="$(_GsharpFormatterPublishDir)" Condition="'@(_GsharpFormatterPayload)' == '' and Exists('$(_GsharpFormatterPublishDir)')" />
-    <MSBuild Projects="$(MSBuildThisFileDirectory)../../Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj" Targets="Publish" Condition="'@(_GsharpFormatterPayload)' == ''" Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsharpFormatterPublishDir);BaseOutputPath=$(_GsharpFormatterStagingOutDir);GsharpObjRoot=$(IntermediateOutputPath)gsfmt-staging-obj;SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)../../Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj" Targets="Publish" Condition="'@(_GsharpFormatterPayload)' == ''" Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsharpFormatterPublishDir);BaseOutputPath=$(_GsharpFormatterStagingOutDir);GsharpObjRoot=$(IntermediateOutputPath)gsfmt-staging-obj;RuntimeIdentifier=$(GsharpToolPayloadRuntimeIdentifier);SelfContained=false;PublishReadyToRun=$(GsharpToolPayloadReadyToRun);PublishSingleFile=false" />
     <ItemGroup Condition="'@(_GsharpFormatterPayload)' == ''">
       <_GsharpFormatterPayload Include="$(_GsharpFormatterPublishDir)**\*">
         <GsharpSdkPublishRoot>$(_GsharpFormatterPublishDir)</GsharpSdkPublishRoot>
@@ -179,7 +182,7 @@
       <Output TaskParameter="TargetOutputs" ItemName="_GsgenPayload" />
     </MSBuild>
     <RemoveDir Directories="$(_GsgenPublishDir)" Condition="'@(_GsgenPayload)' == '' and Exists('$(_GsgenPublishDir)')" />
-    <MSBuild Projects="$(MSBuildThisFileDirectory)../../../tools/gsgen/Gsgen.Cli/Gsgen.Cli.gsproj" Targets="Publish" Condition="'@(_GsgenPayload)' == ''" Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsgenPublishDir);BaseOutputPath=$(_GsgenStagingOutDir);GsharpObjRoot=$(IntermediateOutputPath)gsgen-staging-obj;SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)../../../tools/gsgen/Gsgen.Cli/Gsgen.Cli.gsproj" Targets="Publish" Condition="'@(_GsgenPayload)' == ''" Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsgenPublishDir);BaseOutputPath=$(_GsgenStagingOutDir);GsharpObjRoot=$(IntermediateOutputPath)gsgen-staging-obj;RuntimeIdentifier=$(GsharpToolPayloadRuntimeIdentifier);SelfContained=false;PublishReadyToRun=$(GsharpToolPayloadReadyToRun);PublishSingleFile=false" />
     <ItemGroup Condition="'@(_GsgenPayload)' == ''">
       <_GsgenPayload Include="$(_GsgenPublishDir)**\*">
         <GsharpSdkPublishRoot>$(_GsgenPublishDir)</GsharpSdkPublishRoot>
