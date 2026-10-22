@@ -1514,12 +1514,25 @@ class Lowerer : BoundTreeRewriter {
             if openDef == nil {
                 return false
             }
+            // Issue #4907: a collection whose public `GetEnumerator()` returns a
+            // nested struct enumerator over the same element type iterates through
+            // that struct, as C# does. The interface route below boxes the
+            // enumerator on every loop.
+            if collectionType is ImportedTypeSymbol structEnumeratorReceiver &&
+                TryBuildSymbolicStructGetEnumeratorCall(
+                collection,
+                structEnumeratorReceiver,
+                openDef,
+                typeArguments,
+                out getEnumeratorCall,
+                out enumeratorType
+            ) {
+                return true
+            }
             // Determine the IEnumerable<X> element CLR type from the open
-            // definition. For Dictionary[K, V] we deliberately route through
-            // IEnumerable<KeyValuePair<TKey, TValue>>.GetEnumerator() instead of
-            // Dictionary<,>.GetEnumerator() (which returns a nested struct
-            // Enumerator that complicates symbolic emit on every Current/Key/Value
-            // read). The minor allocation cost is acceptable; correctness wins.
+            // definition. Collections outside the struct-enumerator list route
+            // through the IEnumerable<T> interface call, which allocates the
+            // enumerator.
             var openElementClr Type?
             if openDef.FullName == "System.Collections.Generic.IEnumerable`1" {
                 openElementClr = openDef.GetGenericArguments()[0]
@@ -1560,6 +1573,72 @@ class Lowerer : BoundTreeRewriter {
                 typeof(System.Collections.Generic.IEnumerator[_]),
                 ImmutableArray.Create[TypeSymbol](elementSym)
             )
+            getEnumeratorCall = BoundImportedInstanceCallExpression(
+                nil,
+                collection,
+                getEnumerator,
+                enumeratorType!!,
+                ImmutableArray[BoundExpression].Empty
+            )
+            return true
+        }
+
+        /// Issue #4907: the generic collections whose nested struct `Enumerator`
+        /// the symbolic for-in path may call directly. Each one declares a public
+        /// parameterless `GetEnumerator()` returning a nested value-type
+        /// `Enumerator` generic over the collection's own type parameters, and
+        /// that enumerator yields the same elements as the `IEnumerable<T>`
+        /// implementation. Any other collection keeps the interface route.
+        private func IsStructEnumeratorCollection(openDef Type) bool {
+            let fullName = openDef.FullName
+            return fullName == "System.Collections.Generic.List`1" ||
+                fullName == "System.Collections.Generic.Dictionary`2" ||
+                fullName == "System.Collections.Generic.HashSet`1" ||
+                fullName == "System.Collections.Immutable.ImmutableArray`1"
+        }
+
+        /// Issue #4907: builds a `GetEnumerator()` call that returns the nested
+        /// struct enumerator of [`receiver`](paramref), typed as the symbolic
+        /// `Enumerator` over the receiver's own type arguments so the loop
+        /// variable keeps the element symbol. Returns `false` (leaving the
+        /// interface route to run) unless the shape matches exactly.
+        private func TryBuildSymbolicStructGetEnumeratorCall(
+            collection BoundExpression,
+            receiver ImportedTypeSymbol,
+            openDef Type,
+            typeArguments ImmutableArray[TypeSymbol],
+            @NotNullWhen(true) out getEnumeratorCall BoundExpression?,
+            @NotNullWhen(true) out enumeratorType TypeSymbol?
+        ) bool {
+            getEnumeratorCall = nil
+            enumeratorType = nil
+            let erasedCollection Type? = receiver.ClrType
+            if erasedCollection == nil || !IsStructEnumeratorCollection(openDef) {
+                return false
+            }
+            let getEnumerator MethodInfo? = erasedCollection.GetMethod(
+                "GetEnumerator",
+                BindingFlags.Instance | BindingFlags.Public,
+                binder: nil,
+                types: Type.EmptyTypes,
+                modifiers: nil
+            )
+            if getEnumerator == nil {
+                return false
+            }
+            let erasedEnumerator = getEnumerator.ReturnType
+            let openEnumerator Type? = openDef.GetNestedType("Enumerator", BindingFlags.Public)
+            if !erasedEnumerator.IsValueType ||
+                openEnumerator == nil ||
+                !openEnumerator.IsGenericTypeDefinition ||
+                openEnumerator
+                .GetGenericArguments()
+                .Length != typeArguments.Length ||
+                typeArguments.Length != openDef
+                .GetGenericArguments().Length {
+                return false
+            }
+            enumeratorType = ImportedTypeSymbol.GetConstructed(erasedEnumerator, openEnumerator, typeArguments)
             getEnumeratorCall = BoundImportedInstanceCallExpression(
                 nil,
                 collection,
@@ -1612,7 +1691,21 @@ class Lowerer : BoundTreeRewriter {
                     // NOT the first type argument, e.g. Dictionary's
                     // KeyValuePair-returning Enumerator) keep the reflected type.
                     var currentType TypeSymbol? = nil
-                    if enumeratorType is ImportedTypeSymbol enumImp &&
+                    // Issue #4907: a symbolic nested struct enumerator
+                    // (`List<T>.Enumerator`) reads `Current` through the open
+                    // property type, bound to the enumerator's own arguments.
+                    if enumeratorType is ImportedTypeSymbol structEnum &&
+                        structEnum
+                        .OpenDefinition
+                        ?.DeclaringType != nil &&
+                        !structEnum
+                        .TypeArguments
+                        .IsDefaultOrEmpty &&
+                        currentMember is PropertyInfo currentProperty {
+                        currentType = MemberLookup.GetClrPropertyTypeSymbol(enumeratorType, currentProperty)
+                    }
+                    if currentType == nil &&
+                        enumeratorType is ImportedTypeSymbol enumImp &&
                         !enumImp
                         .TypeArguments
                         .IsDefaultOrEmpty &&
