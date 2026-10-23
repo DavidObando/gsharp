@@ -20,7 +20,7 @@
   persisted type-name index), [ADR-0186](0186-platform-types-for-oblivious-clr-interop.md)
   (platform types), [ADR-0193](0193-nullability-queries-are-type-level-and-funnelled.md)
   (the nullability funnel), [ADR-0199](0199-data-types-synthesize-the-csharp-record-abi.md)
-  (the Core public-API allowance list that `CorePublicApiSnapshotTests` checks),
+  (the record ABI; its allowance test runs beside `CorePublicApiSnapshotTests`),
   [ADR-0203](0203-measured-compiler-throughput-and-bounded-parallelism.md)
   (the compiler worker), [ADR-0156](0156-gsi-emit-to-memory-execution.md) (the
   REPL executes emitted images).
@@ -132,7 +132,10 @@ References; medians of three runs):
 | Walk the type of every custom attribute (44,839; 26,197 are `Nullable`/`NullableContext`) | 4.9 ms | `GetCustomAttributesData` on every type: 4.8 ms (5,988 attributes) |
 
 The closure also holds 6,539 `TypeRef`, 7,978 `MemberRef`, 1,366 `TypeSpec`,
-7,032 `ExportedType` and 585 `AssemblyRef` rows. The finding is that the cost
+7,032 `ExportedType` and 585 `AssemblyRef` rows. The handle-side heap figures
+are a floor for the API shape: the probe's provider returns an `int` per
+node and allocates no symbol, so a decoder that builds `TypeSymbol`s pays for
+the symbols it creates. The time comparison stands. The finding is that the cost
 is the API shape, not the library: `MetadataLoadContext` is itself a reader
 over `System.Reflection.Metadata`, but `System.Type`'s member API forces eager
 member and signature construction, answers "not applicable" with an exception,
@@ -173,8 +176,11 @@ let a reference set survive a compiler-worker request without carrying a
   memory. Memory-mapping was re-examined and rejected in #5167.
 - **Public API snapshot.** The public surface of `GSharp.Core` is pinned by
   `CorePublicApiSnapshotTests` (`test/Core.Tests/Baselines/gsharp-core-public-api.txt`);
-  an intentional change regenerates the snapshot, passes the ADR-0199
-  allowance test, and carries a release note.
+  an intentional change regenerates the snapshot (`GSHARP_UPDATE_GOLDENS=1`)
+  and carries a release note. The ADR-0199 allowance list permits only the
+  record-ABI `Deconstruct` additions and nothing else
+  (`test/Core.Tests/PublicApi/CorePublicApiAllowance.gs:14-18`); a removal is
+  a snapshot change, not an allowance entry.
 - **Concurrency.** One resolver serves parallel body binding
   (`Binding/Binder.gs:8704`, `CompilationWorkBudget.gs:99`) and parallel emit
   (`Emit/FunctionEmitter.gs:119`); the language server hands one resolver to
@@ -260,11 +266,20 @@ CompilationImportContext          per compilation: consumer assembly name, Inter
   the whole `TypeBuilderInstantiation` class of probes. A well-known type that
   the reference set does not supply is a `MissingTypeSymbol`, and the use site
   reports GS0546 (today's "target framework member unavailable" diagnostic)
-  instead of falling back to the host type. The nineteen built-in symbols
-  (`TypeSymbol.Int32`, `String`, `Object`, ...) keep their identity and gain
-  the `SpecialType` tag; they stop carrying a host `typeof(...)`
-  (`TypeSymbol.gs:113-164`), so a built-in's `ClrType` is `nil` like every
-  other symbol's, and the decoder maps `PrimitiveTypeCode` onto them directly.
+  instead of falling back to the host type. The eighteen built-in symbols
+  that carry a host `typeof(...)` today (`TypeSymbol.Bool` through `Void`,
+  `TypeSymbol.gs:113-164`) keep their identity and gain the `SpecialType` tag;
+  their `ClrType` is `nil` like every other symbol's. **Canonical form rule:**
+  the decoder never returns a `MetadataTypeSymbol` for a type that has a
+  process-wide symbol. `PrimitiveTypeCode` maps onto the built-ins directly;
+  `System.Decimal` (a `VALUETYPE` `TypeRef` in a blob, not a primitive code)
+  maps onto `TypeSymbol.Decimal`; `System.Nullable`1` over `V` maps onto
+  `NullableTypeSymbol.Get(V)`; `System.ValueTuple`N` maps onto
+  `TupleTypeSymbol`; the other `WellKnownTypes` entries map onto their
+  composite symbols. Source binding reaches the same objects, so `List<decimal>`
+  from a signature and from source is one interned construction. The emitter
+  resolves a built-in or composite back to the set's definition through the
+  table when it needs a `TypeRef`.
 - **Hosts without an image.** `Default()` and `WithRuntimeReferences` read
   the image of each host assembly from `Assembly.Location` into the same
   `ReferenceImageSet`, so the REPL, `gsc` without `/out` and the tests bind
@@ -286,6 +301,7 @@ CompilationImportContext          per compilation: consumer assembly name, Inter
 | Nested type | `MetadataTypeSymbol` with `ContainingType`; name spelled `Outer+Inner` for the name index, as #5166 does | `TypeDefinition.GetDeclaringType` |
 | Type forward | the destination definition; the facade never gets a symbol of its own; a chain is followed with a cycle guard | `ExportedType` with an `AssemblyReference` implementation, resolved through the set |
 | Unresolvable `TypeRef` | `MissingTypeSymbol(assembly identity, full name)`, interned; equal to itself, to nothing else | `TypeReference` whose scope is not in the set or whose name is absent |
+| `Nullable<V>` | `NullableTypeSymbol.Get(V)`, never a construction over the `Nullable`1` definition (today `FromClrType` does this first, `TypeSymbol.gs:198-199`) | `GENERICINST` over the `System.Nullable`1` well-known type |
 | By-ref, pointer, pinned | `ByRefTypeSymbol`, `PointerTypeSymbol`, `PinnedTypeSymbol` (locals only) | `ELEMENT_TYPE_BYREF`, `PTR`, `PINNED` |
 | Array | `ArrayTypeSymbol` (SZ), `RectangularArrayTypeSymbol` (rank, bounds) | `SZARRAY`, `ARRAY` |
 | Function pointer | `FunctionPointerTypeSymbol` with calling convention and `CallConv*` modifiers | `FNPTR` |
@@ -584,7 +600,7 @@ are replaced by `MissingTypeSymbol` and the reader.
   `GetCoreType`), replacing each with the symbol it wraps. The in-repository
   consumers (`tools/gsgen` 22 sites, the language server 38 sites, tests 251
   sites in 106 files) move in stage 6. This is a breaking change for external
-  analyzers, recorded in the allowance file and the release notes, and the
+  analyzers, recorded by the regenerated snapshot and the release notes, and the
   reason stage 7 is its own PR (open question 1). An analyzer that needs the
   CLR type can still load the reference itself; the compiler no longer hands
   one out.
@@ -694,7 +710,7 @@ proceed for the worker-reuse and correctness benefits alone.
   differs.** Mitigation: the `mlc` mode stays selectable until stage 7; the
   nightly apps run (`cs2gs-apps-nightly`) and the conformance suites run in
   `handles` mode from stage 5.
-- **Public API break.** Mitigation: its own PR, allowance file, release note,
+- **Public API break.** Mitigation: its own PR, regenerated snapshot, release note,
   and the in-repository consumers moved first; open question 1.
 - **Memory growth** from sets pinned by process-wide caches until M5 moves
   them. Mitigation: `build/lsp-soak.py` and the worker's retained-memory
@@ -721,7 +737,7 @@ the decoder, the resolver or the intern table, recorded in the PR).
 | 4 | Overload resolution, conversions, inference, override resolution on symbols (Q13, Q14, Q15). Constraint checks are structural; no `MakeGenericType`. | Zero disagreements; conformance suites green in `handles`; first-chance exceptions from import 0 (the #5157 counting hook); `compiler-bench.py` reflection share reported (kill criterion, section 17). |
 | 5 | Emit on symbols: `SignatureEncoder`, `ImportedMemberRefFactory`, `CustomAttributeEncoder`, `NullableFlagsBuilder`, `UserTokenResolver`, `WellKnownReferences`; `MetadataTokenCache` keyed by symbols; comparers deleted. Intentional output change (#5158). | Per-table row-count change shown on Core and Core.Tests, each removed row a duplicate; ILVerify green; conformance green; repeat-run determinism; release-notes bullet; the four silent encodings of section 13 are diagnostics with tests. |
 | 6 | Remaining binder, lowering and symbol sites; language server; `tools/gsgen`; `Default()` and `WithRuntimeReferences` on images. | Zero disagreements; LanguageServer.Tests and Interpreter.Tests green in `handles`; `handles` becomes the default, `mlc` stays selectable. |
-| 7 | Public API change per section 14; delete the MLC path, the adapter accessors and the 21 `ClearCache` calls from `Dispose`; `CorePublicApiSnapshot` regenerated with allowance entries; release note (breaking change). | Full CI green; `ResourceLeakRegressionTests` green; `lsp-soak` memory flat; `compiler-bench.py` final table against the stage-0 base. |
+| 7 | Public API change per section 14; delete the MLC path, the adapter accessors and the 21 `ClearCache` calls from `Dispose`; `gsharp-core-public-api.txt` regenerated (the ADR-0199 allowance test stays green: nothing is added); release note (breaking change). | Full CI green; `ResourceLeakRegressionTests` green; `lsp-soak` memory flat; `compiler-bench.py` final table against the stage-0 base. |
 
 PR 2 adds a corpus row per section 15 gap and files the issues that section
 15 does not already name; an issue moves to P1 when its corpus row shows wrong
@@ -732,7 +748,7 @@ bound names, skipped constraints).
 
 1. **Public API break.** Remove the `System.Type` and `System.Reflection`
    members from the public surface in stage 7 (recommended; one release note,
-   allowance entries, external analyzers adapt), or keep a `Type`-producing
+   regenerated snapshot, external analyzers adapt), or keep a `Type`-producing
    adapter on the public surface, which means the `MetadataLoadContext` is
    never retired and the model pays for both.
 2. **Hosts without an image.** Read `Assembly.Location` for `Default()` and
