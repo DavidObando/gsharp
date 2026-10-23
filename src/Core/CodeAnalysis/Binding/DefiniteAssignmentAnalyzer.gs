@@ -177,6 +177,33 @@ internal shared class DefiniteAssignmentAnalyzer {
         if capturedTracked != nil {
             tracked.UnionWith(capturedTracked)
         }
+        // ponytail: fail-safe, not fail-open (issue #1642 secondary defect).
+        // ControlFlowGraph.Create is already called unguarded against this
+        // same lowered body a few lines above in Binder.cs
+        // (ControlFlowGraph.AllPathsReturn) for every non-void function, so
+        // this path is realistically only reachable for void functions or
+        // a genuine bug in this analyzer's own recursion. Either way,
+        // silently returning (the previous behavior) would let a possibly-
+        // unassigned `out` parameter compile with no diagnostic at all.
+        // Report it instead of swallowing the failure; GS0239 (ref-read)
+        // and GS0522 (no-zero-value local use) checks are best-effort and
+        // are simply skipped on this rare path.
+        let reportUnanalyzable = func () {
+            for op in outParams {
+                diagnostics?.ReportOutParameterNotAssigned(
+                    function.Declaration?.Location ?? default(TextLocation),
+                    op.Name
+                )
+            }
+        }
+        // A body the control flow graph cannot model (a nested block that was not
+        // flattened, as in a function literal's pre-emit body) takes the fail-safe path
+        // without paying for the throw that would report it. The catch stays as the last
+        // resort for nested regions.
+        if !ControlFlowGraph.CanCreate(body) {
+            reportUnanalyzable()
+            return
+        }
         try {
             AnalyzeRegion(
                 body,
@@ -190,23 +217,7 @@ internal shared class DefiniteAssignmentAnalyzer {
                 isFunctionBody: true
             )
         } catch {
-            // ponytail: fail-safe, not fail-open (issue #1642 secondary defect).
-            // ControlFlowGraph.Create is already called unguarded against this
-            // same lowered body a few lines above in Binder.cs
-            // (ControlFlowGraph.AllPathsReturn) for every non-void function, so
-            // this branch is realistically only reachable for void functions or
-            // a genuine bug in this analyzer's own recursion. Either way,
-            // silently returning (the previous behavior) would let a possibly-
-            // unassigned `out` parameter compile with no diagnostic at all.
-            // Report it instead of swallowing the failure; GS0239 (ref-read)
-            // and GS0522 (no-zero-value local use) checks are best-effort and
-            // are simply skipped on this rare path.
-            for op in outParams {
-                diagnostics?.ReportOutParameterNotAssigned(
-                    function.Declaration?.Location ?? default(TextLocation),
-                    op.Name
-                )
-            }
+            reportUnanalyzable()
         }
     }
 

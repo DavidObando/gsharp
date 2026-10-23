@@ -1144,6 +1144,26 @@ class ReferenceResolver : IDisposable {
             return nil
         }
 
+        /// Whether this resolver holds an image for [`simpleName`](paramref), so that
+        /// (cref:Resolve) can answer it. A `false` answer is what makes the context raise
+        /// (cref:FileNotFoundException) for the name.
+        /// @param simpleName The simple assembly name.
+        /// @returns `true` when an image is held for the name.
+        func HasImage(simpleName string) bool -> !string.IsNullOrEmpty(simpleName) && assemblyBytes.ContainsKey(
+            simpleName
+        )
+
+        /// Records [`simpleName`](paramref) as unresolved, as (cref:Resolve) does when it
+        /// returns `null`.
+        /// @param simpleName The simple assembly name.
+        func RecordUnresolved(simpleName string) {
+            if !string.IsNullOrEmpty(simpleName) {
+                lock gate {
+                    unresolved.Add(simpleName)
+                }
+            }
+        }
+
         override func Resolve(context MetadataLoadContext, assemblyName AssemblyName) Assembly? {
             let simpleName = assemblyName?.Name
             if !string.IsNullOrEmpty(simpleName) && assemblyBytes.TryGetValue(simpleName!!, out var bytes) {
@@ -2367,6 +2387,17 @@ class ReferenceResolver : IDisposable {
             return paths
         }
 
+        /// Whether [`mlc`](paramref) has already loaded an assembly with the simple name
+        /// [`simpleName`](paramref).
+        private func IsLoadedBySimpleName(mlc MetadataLoadContext, simpleName string) bool {
+            for loaded in mlc.GetAssemblies() {
+                if string.Equals(loaded.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase) {
+                    return true
+                }
+            }
+            return false
+        }
+
         /// Eagerly verifies that the supplied reference set forms a complete
         /// transitive closure. For every primary reference, each assembly it names
         /// (one hop) is probed against the load context's resolver; any name that
@@ -2391,6 +2422,16 @@ class ReferenceResolver : IDisposable {
                 }
                 for refName in referenced {
                     if string.IsNullOrEmpty(refName?.Name) {
+                        continue
+                    }
+                    // The context raises (cref:FileNotFoundException) for a name that neither
+                    // the resolver nor an already loaded assembly can supply. Answer that
+                    // case from the resolver without paying for the throw: the resolver
+                    // would record the name and return null, and the catch below would add
+                    // it to the missing set.
+                    if !resolver.HasImage(refName.Name!!) && !IsLoadedBySimpleName(mlc, refName.Name!!) {
+                        resolver.RecordUnresolved(refName.Name!!)
+                        missing.Add(refName.Name!!)
                         continue
                     }
                     try {
