@@ -146,11 +146,10 @@ without a `MetadataLoadContext` that every symbol points at.
 ### 4. Constraints
 
 - **N-1.** Repository source uses only features the pinned release (0.5.212)
-  compiles. Implementing a generic BCL interface such as
-  `ISignatureTypeProvider[TType, TGenericContext]` is proven under the pin
-  (`tools/cs2gs/Cs2Gs.Tests/Issue4777InheritedDataEqualityTranslationTests.gs:207`),
-  as are struct-like reference keys (`Symbols/TypeArgsKey.gs`),
-  `ConditionalWeakTable`, `ConcurrentDictionary` and `Lazy`.
+  compiles. Implementing `ISignatureTypeProvider[TType, TGenericContext]` is
+  proven under the pin (`tools/cs2gs/Cs2Gs.Tests/Issue4777InheritedDataEqualityTranslationTests.gs:207`),
+  as are reference keys (`Symbols/TypeArgsKey.gs`), `ConditionalWeakTable`,
+  `ConcurrentDictionary` and `Lazy`.
 - **ADR-0193.** Nullability decisions go through `NullabilityImportRule`; no
   new independent "is this nullable" computation; GSA0007 stays green.
 - **ADR-0186.** Oblivious positions are `PlatformTypeSymbol`; the legacy
@@ -296,13 +295,12 @@ CompilationImportContext          per compilation: consumer assembly name, Inter
   names to module index, first writer wins in reference order, forwards
   verified against the target image). #5166 keeps one conservative rule: an
   image with a type name that reflection escapes (`,`, `+`, `&`, `*`, `[`,
-  `]`, `\`) is read through reflection instead
-  (`MetadataTypeNameReader.gs:28-29, 109-111`). The handle model has no
-  reflection to fall back to, so PR 1 extends the reader to spell those names
-  as reflection does, and the ordered-names test of `Issue5124TypeNameIndexTests`
-  (exact order against `GetTypes()` plus `GetForwardedTypes()` for the 178
-  assemblies of the Core closure) stays the witness, with a synthetic image
-  that carries an escaped name added to it.
+  `]`, `\`) is read through reflection (`MetadataTypeNameReader.gs:28-29,
+  109-111`). The handle model has no fallback, so PR 1 extends the reader to
+  spell those names as reflection does; the ordered-names test of
+  `Issue5124TypeNameIndexTests` (178 Core-closure assemblies against
+  `GetTypes()` plus `GetForwardedTypes()`) stays the witness, plus a synthetic
+  image with an escaped name.
 - **Hosts without an image.** `Default()` and `WithRuntimeReferences` read
   the image of each host assembly from `Assembly.Location` into the same
   `ReferenceImageSet`, so the REPL, `gsc` without `/out` and the tests bind
@@ -424,8 +422,7 @@ site is mapped there before it is migrated.
 | `tools/gsgen` type speller | 11 | Q28 | stage 6 |
 
 Total `.ClrType` reads: 1,242 in 138 files of `src/Core`; every family above
-is either a row or a named disposition. No read was found outside these
-families.
+is a row or a named disposition, and no read was found outside them.
 
 **7b. Legacy fallback kept during the parity stages, and the fail-closed
 answer it becomes.** Each row is a corpus entry in PR 2 that records today's
@@ -438,6 +435,7 @@ answer; the follow-up issue flips it after stage 7.
 | Q7, Q8 | member dropped (as Q6) | as Q6 | #5183 |
 | Q9 | "no default value", "not `params`" on a failed read | GS9998 for a malformed constant; attribute absent otherwise | #5183 |
 | Q11 | same method definition handle; name-suffix rule | `MethodImpl` and base-chain walk | #5174 |
+| Q1 | a second module with an already-loaded simple name is loaded silently; first writer wins | first writer still wins; a diagnostic names both paths (decision Q3) | #5183 |
 | Q12 | internal access denied on a failed `InternalsVisibleTo` read | unchanged (deny) | none |
 | Q13 | the parameter's type-bound constraint list skipped, candidate viable | constraint unsatisfiable | #5176 |
 | Q16 | attribute treated as absent on a failed read; 12 attribute kinds never read | read; malformed blob GS9998 | #5177 |
@@ -464,40 +462,41 @@ rule of section 5.
 | `MetadataArrayTypeSymbol`, `PointerTypeSymbol`, `ByRefTypeSymbol`, `PinnedTypeSymbol`, `FunctionPointerTypeSymbol`, `TupleTypeSymbol`, `NullableTypeSymbol`, `PlatformTypeSymbol`, `NullabilityAnnotatedTypeSymbol` | element or parts | the parts' owner | every part consumer-independent; these are process-wide today and `Dispose` clears them, M5 moves them |
 | Extension holder index (#5108, names and holder definitions) | set | set | the consumer's visibility filter is applied by the compilation, not stored |
 | Semantic aggregates, `InternalsVisibleTo` grants | (type, consumer) | compilation | consumer-dependent by definition |
+| Emitter row caches (`TypeRefs`, `TypeSpecs`, `MethodRefs`, `MethodSpecs`, `CtorRefs`, `FieldRefs`) | symbol, plus `RemapScope` where a type parameter can occur | one emit session | not shared; D1 applies within equal scopes |
 | Comparison answers (`compare` mode) | (question, symbol) | one run | not a cache |
 
 **7d. Permitted differences and parity exceptions.** The single source of
-truth for both gates. The **compare gate**: zero disagreements between `mlc`
-and `handles` on every question of section 7 over Core, Core.Tests and the
-pinned Oahu inputs, except the rows below. The **output gate**: implementation,
-reference, PDB and XML output and the diagnostics text are byte-identical
-between the two modes and against the previous stage, except the rows below.
-Every other difference is a defect of the stage that introduced it. Sections
-10, 14, 16 and 19 refer here and do not restate the criteria.
+truth for both gates. **Compare gate**: zero disagreements between `mlc` and
+`handles` on every question of section 7 over Core, Core.Tests and the pinned
+Oahu inputs, except the rows below. **Output gate**: implementation, reference,
+PDB and XML output and the diagnostics text byte-identical between the two
+modes and against the previous stage, except the rows below. Every other
+difference is a defect of the stage that introduced it; sections 10, 14, 16
+and 19 refer here.
 
 | # | Permitted difference | Accepted by | Appears | Checked by |
 | --- | --- | --- | --- | --- |
-| D1 | Row deduplication: `TypeRef`, `TypeSpec` and `MemberRef` rows keyed by symbol identity, `AssemblyRef` rows by assembly identity; fewer rows, same program | #5158 (maintainer, 2026-10-22) | PR 5 in `handles` and `compare`; every user from PR 6 | per-table row counts on Core and Core.Tests, every removed row a duplicate; ILVerify; conformance suites; repeat-run determinism |
-| D2 | The `System.Runtime` `AssemblyRef` version read from the reference set instead of the host runtime (`ImportedMemberRefFactory.gs:477-523`) | decision Q5 | PR 5; visible only when the host runtime version differs from the target reference pack | a corpus case that compiles a `net8.0`-targeted program on the `net10.0` host and checks that one version field, everything else byte-identical |
-| D3 | Member and candidate order for host-backed sets (`Default()`, `WithRuntimeReferences`): table order instead of `RuntimeType`'s unspecified `GetMethods` order | section 12 | PR 6 | the compare gate compares those sets' member lists as sets; their compiles emit to memory (REPL, `gsi`) and are not an output-gate input |
+| D1 | Row deduplication: `TypeRef`, `TypeSpec` and `MemberRef` rows keyed by symbol identity, `AssemblyRef` rows by assembly identity; fewer rows, same program. A row key that involves a type-parameter symbol also carries the active `RemapScope` (section 9), so rows that differ by VAR/MVAR ordinal are not merged | #5158 (maintainer, 2026-10-22) | PR 5 in `handles` and `compare`; every user from PR 6 | per-table row counts on Core and Core.Tests, every removed row a duplicate with an equal scope; ILVerify; conformance suites; repeat-run determinism |
+| D2 | The `System.Runtime` `AssemblyRef` version read from the reference set instead of the host runtime (`ImportedMemberRefFactory.gs:477-523`), and with it the fields derived from the PE content hash: the MVID, the PE timestamp, the reference assembly's `.mvid` section and the PDB id and checksum (`ReflectionMetadataEmitter.gs:4085-4141, 5001-5010`) | decision Q5 | PR 5; visible only when the host runtime version differs from the target reference pack | a corpus case that compiles a `net8.0`-targeted program on the `net10.0` host: the version field and the derived identity fields differ (the regions `build/compiler-bench.py` already masks), everything else byte-identical |
+| D3 | Member and candidate order for host-backed sets (`Default()`, `WithRuntimeReferences`): table order instead of `RuntimeType`'s unspecified `GetMethods` order | section 12 | PR 6 | the compare gate compares those sets' member lists as sets. The output gate includes the on-disk host-backed path (`gsc /out:` with no `/reference`, `src/Compiler/Program.gs:415-420`) with **no** exception: an output difference there is attributed to one of the order-dependent sites (GS0160 listing order, `FindReferenceTypeConstraintPlaceholder`, the first-interface `fallback ??=` in `ResolveGetEnumerator`) and fixed in PR 6 by sorting the legacy answer, or the stage does not land |
 
 Nothing else is permitted during PRs 1 to 7: no diagnostic text or count
 change (table 7b keeps every legacy answer), no candidate or tie change for a
 `WithReferences` compile, no custom-modifier change (decision Q6), no
-fail-closed answer before its follow-up issue (#5183, #5176, #5174, #5177). A
-stage that needs a new row adds it here first, with its decision.
+fail-closed answer or new diagnostic before its follow-up issue (#5183,
+#5176, #5174, #5177; the duplicate-simple-name diagnostic of decision Q3 lands
+with #5183). A stage that needs a new row adds it here first, with its
+decision.
 
 ### 8. What stays on runtime reflection, and why
 
 - **Executing code.** `EmittedProgramHost`, `InteractiveSessionHost` and the
   REPL value formatter load the emitted image into a collectible
-  `AssemblyLoadContext` and invoke it (`Execution/EmittedProgramHost.gs:112-150`).
-  Analyzer and generator hosts load analyzer assemblies into collectible
-  contexts and run them (`Analyzers/GSharpAnalyzerHost.gs:34-131`,
-  `tools/gsgen/GSharp.GeneratorHost/GeneratorRunner.gs:33-89`). Hot reload
-  diffs images with `PEReader` and applies them with `MetadataUpdater` in the
-  running process (`src/Sdk/Gsharp.HotReload.Runtime`). None of these imports
-  symbols; none changes.
+  `AssemblyLoadContext` and invoke it (`Execution/EmittedProgramHost.gs:112-150`);
+  analyzer and generator hosts load and run analyzer assemblies
+  (`Analyzers/GSharpAnalyzerHost.gs:34-131`, `GeneratorRunner.gs:33-89`); hot
+  reload applies deltas with `MetadataUpdater`. None imports symbols; none
+  changes.
 - **The layout oracle** (`StructValue.TryGetStorageSize`, `StructValue.gs:258-343`;
   consumer `StructLayoutBinder.TryGetStorageSize`, `StructLayoutBinder.gs:170-229`,
   which feeds overlap validation) defines a runtime type with
@@ -535,6 +534,13 @@ stage that needs a new row adds it here first, with its decision.
   consulted first and defers to the set's table when every argument is
   consumer-independent, so a construction never has two objects, and a
   construction over a source type is never reachable from the set.
+- Symbol identity is binding identity, not row identity. The emitter encodes
+  one `TypeParameterSymbol` as different VAR/MVAR ordinals under an active
+  iterator or lambda remap (`SignatureEncoder.gs:242-275`), so every emitted
+  row key that can involve a type parameter carries the `RemapScope`, as
+  `MethodSpecSymbolKey` and `CtorRefSymbolKey` do today
+  (`MetadataTokenCache.gs:439-537`); D1 deduplicates only rows with equal
+  scopes.
 - Cross-assembly identity: a `TypeRef` resolves to the definition in the
   module its `AssemblyRef` names, following `ExportedType` forwards; the
   resulting symbol is the destination's, so two references that reach the same
@@ -543,9 +549,9 @@ stage that needs a new row adds it here first, with its decision.
   so rows do not move.
 - Two reference assemblies with the same simple name in one set: the set keeps
   today's rule (the name index and `AssemblyRef` binding are first-writer-wins
-  by simple name, in reference order) and records a diagnostic when a second
-  module with that simple name is loaded (decision Q3; Roslyn's version
-  unification is not adopted).
+  by simple name, in reference order; Roslyn's version unification is not
+  adopted) and, after stage 7 with #5183, reports a diagnostic when a second
+  module with that simple name is loaded (decision Q3; table 7b).
 - Same-compilation types as arguments of imported constructions need no
   erasure: `ConstructedTypeSymbol` holds the symbol, and the emitter's
   symbolic parent (`TryNormalizeToSymbolicContainer`,
@@ -657,9 +663,8 @@ both. No other statement in this ADR moves that point.
   decode per member under a per-entry lock, as #5162 does; a decode that saw a
   `MissingTypeSymbol` or a blob error is stored, because the answer is stable
   for the set (the handle model has no retryable read).
-- Images stay `byte[]` (#853). Memory-mapping remains rejected (#5167). A
-  `PEReader` over an `ImmutableArray[uint8]` view of the array is zero-copy
-  (`MetadataTypeNameReader.gs:48`).
+- Images stay `byte[]` (#853; mapping rejected again in #5167); a `PEReader`
+  over an `ImmutableArray[uint8]` view is zero-copy (`MetadataTypeNameReader.gs:48`).
 
 ### 12. Determinism
 
@@ -708,21 +713,20 @@ In the new model:
   after stage 7 (table 7b).
 
 The remaining 84 first-chance exceptions of #5157 that come from import are
-gone, because the model has no probe that throws; the `FileNotFoundException`
-and `ReflectionTypeLoadException` of the transitive probe and the name index
-are replaced by `MissingTypeSymbol` and the reader.
+gone: the model has no probe that throws, and the transitive probe and the
+name index are replaced by `MissingTypeSymbol` and the reader.
 
 ### 14. Compatibility and observable changes
 
-- **Diagnostics.** Text of existing diagnostics is unchanged during the
-  parity stages (table 7b keeps every legacy answer). The follow-ups after
-  stage 7 add GS9105, GS9106, GS0546 where the emitter fell back to a host
+- **Diagnostics.** Unchanged during the parity stages (table 7b keeps every
+  legacy answer). The follow-ups after stage 7 add GS9105, GS9106, the
+  duplicate-simple-name report, GS0546 where the emitter fell back to a host
   type, and GS9998 for malformed blobs and unlisted questions, and turn the
   fail-open probes fail-closed.
 - **Overload resolution.** Candidate order and ties are unchanged for
-  `WithReferences` compiles (table order before and after); `Default()`
-  compiles gain a stable order. Section 15's silent wrong answers are not
-  corrected inside a parity stage (decision Q4).
+  `WithReferences` compiles (table order before and after); host-backed sets
+  are D3 of section 7d. Section 15's silent wrong answers are not corrected
+  inside a parity stage (decision Q4).
 - **Emitted metadata.** Identical to the `mlc` mode except the permitted
   differences D1 (row deduplication) and D2 (the `System.Runtime` `AssemblyRef`
   version) of section 7d, both from PR 5 and both in PR 6's release note.
@@ -876,24 +880,23 @@ whole.
    is never retired and the model pays for both. **Decided: remove in stage 7.**
 2. **Hosts without an image.** Read `Assembly.Location` for `Default()` and
    `WithRuntimeReferences` into the same set (section 5), rather than keep a
-   reflection-backed module kind for those resolvers, which would keep two
-   models alive forever. **Decided: read the images into the same set.**
+   reflection-backed module kind that would keep two models alive forever.
+   **Decided: read the images into the same set.**
 3. **Duplicate simple names in one reference set.** Keep first-writer-wins
    and report a diagnostic when a second module with the same simple name is
    loaded, rather than adopt Roslyn's version unification (bind to the
    highest version, `CS1702`-style warnings). **Decided: first-writer-wins
-   plus the diagnostic.**
+   plus the diagnostic**; the diagnostic is a new report, so it lands after
+   stage 7 with #5183 (table 7b, row Q1), not in a parity stage.
 4. **The pre-existing silent wrong answers of section 15.** Fix them after
-   stage 7 in their own PRs, keeping each stage a parity stage, rather than
-   inside the stage that touches the site. **Decided: after stage 7.** Q11
-   therefore keeps its legacy answer behind a switch until the #5174 PR.
+   stage 7 in their own PRs, keeping each stage a parity stage. **Decided:
+   after stage 7**; Q11 and Q13 keep their legacy answers behind a switch.
 5. **`System.Runtime` `AssemblyRef` version from the reference set** rather
    than from the host (section 14), accepting the one-row change on a build
    whose host runtime is newer than its target. **Decided: from the
    reference set; the change is listed in the stage 5 release note.**
 6. **Custom modifier fidelity.** Keep today's encoder shape through stage 7
-   and change it afterwards, rather than write modifiers in blob order now.
-   **Decided: keep today's shape through stage 7.**
+   rather than write modifiers in blob order now. **Decided: keep it.**
 7. **Comparison mode in release builds.** Keep `GSHARP_METADATA_MODEL=compare`
    available in the shipped `gsc` until stage 7, rather than debug-only.
    **Decided: keep it until stage 7** (the transition point of section 10).
@@ -920,13 +923,11 @@ whole.
   erased-shape work-arounds and the `TypeBuilderInstantiation` probes go away;
   equal constructions are one symbol and the emitter's caches hit (#5158).
 - Import cost is proportional to what the compile touches; no exception is an
-  answer, and after the follow-ups every failure is a diagnostic that names
-  the type and the assembly.
-- The reference set is reusable across compilations in one process (#5145),
-  and the language server stops depending on a `Dispose` that is unsafe to
-  call.
-- One decoder behind the ADR-0193 funnel; the compiler's own build is the
-  first beneficiary once the pin moves to a release carrying the model.
+  answer, and after the follow-ups every failure is a diagnostic.
+- The reference set is reusable across compilations in one process (#5145);
+  the language server stops depending on an unsafe `Dispose`; one decoder
+  behind the ADR-0193 funnel; the compiler's own build benefits after the pin
+  moves to a release carrying the model.
 
 ### Negative
 
@@ -988,9 +989,10 @@ whole.
   `out/obj/Gsharp.Extensions/Release/Gsharp.Extensions.rsp`; three runs,
   medians in section 2). Both sources are published in full in
   [a comment on PR #5173](https://github.com/DavidObando/gsharp/pull/5173#issuecomment-6356684287).
-  They are not repository tools (the probe is C#, which `CONTRIBUTING.md`
-  keeps out of the tree); the gate numbers for #5144 come from the tracked
-  `build/compiler-bench.py`.
+  The published text was copied back out, compiled and run (exit 0, same
+  counts). They are not repository tools (the probe is C#, which
+  `CONTRIBUTING.md` keeps out of the tree); the gate numbers for #5144 come
+  from the tracked `build/compiler-bench.py`.
 - Site inventories were taken by reading the files named in sections 7, 13
   and 15 at `c3cce6b81`; line numbers refer to that commit.
 - Study tables: sections 4.2, 4.6, 4.7 and 5 of
