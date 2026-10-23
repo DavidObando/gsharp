@@ -352,8 +352,10 @@ internal partial class StatementBinder {
         }
         {
             using let _ = binderCtx.PushUnsafeContext(entersUnsafe)
+            let shadowEntry = ShadowBegin()
             let fallsThrough = BindBlockStatements(syntax.Statements, 0, statements)
             let block = BoundBlockStatement(syntax, statements.ToImmutable())
+            ShadowRecordBlock(block, shadowEntry)
             if !reachableOnEntry && fallsThrough {
                 internallyReachableFallthroughStatements.Add(block)
             }
@@ -463,6 +465,8 @@ internal partial class StatementBinder {
         let inheritedPotentialReachabilityLabel = binderCtx.PotentialReachabilityLabel
         binderCtx.BeginNarrowingProof(memberNotNullFrame)
         binderCtx.NarrowedVariables.Add(memberNotNullFrame)
+        let shadowSavedOverlay = ShadowEnterList()
+        let shadowSavedBase = binderCtx.ShadowOverlayBase
         try {
             for var i = startIndex; i < statementSyntaxes.Length; i++ {
                 let statementSyntax = statementSyntaxes[i]
@@ -735,6 +739,7 @@ internal partial class StatementBinder {
                 // assignment narrowing above.
                 ApplyIfJoinNarrowings(statement, memberNotNullFrame)
                 ApplyTryFinallyFallthroughNarrowings(statement, memberNotNullFrame)
+                ShadowAfterStatement(statement)
                 let hasInternallyReachableFallthrough = HasInternallyReachableFallthrough(statement)
                 let canCompleteNormally = CanCompleteNormally(statement)
                 currentStatementListFallsThrough = (
@@ -750,6 +755,7 @@ internal partial class StatementBinder {
             }
             return currentStatementListFallsThrough
         } finally {
+            ShadowLeaveList(shadowSavedOverlay, shadowSavedBase)
             binderCtx.EndNarrowingProof()
             binderCtx.AssignmentNarrowingGenerations.Clear()
             for entry in inheritedAssignmentGenerations {

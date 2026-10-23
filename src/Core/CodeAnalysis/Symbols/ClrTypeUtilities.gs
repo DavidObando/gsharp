@@ -297,6 +297,24 @@ shared class ClrTypeUtilities {
         typeBuilderInstantiationType != nil &&
         type.GetType() == typeBuilderInstantiationType
 
+    /// The `System.Reflection.Emit.SymbolType` runtime type (an array, pointer or by-ref
+    /// over a type that is still being defined), or `nil` when this runtime does not
+    /// expose it by that name.
+    private let symbolTypeType Type? = typeof(TypeBuilder).Assembly.GetType("System.Reflection.Emit.SymbolType", false)
+
+    /// Whether [`type`](paramref) is a type that reflection emit is still defining: a
+    /// `TypeBuilder`, an `EnumBuilder`, a `GenericTypeParameterBuilder`, or a
+    /// `SymbolType` (an array, pointer or by-ref over one of those).
+    /// @remarks Those types answer `IsByRefLike` by throwing (cref:NotSupportedException)
+    /// until they are created. Probes test this first and keep their `catch` as the last
+    /// resort, so a runtime that hides `SymbolType` only loses the fast path.
+    /// @param type The type to inspect.
+    /// @returns `true` when the type is an unfinished emit type.
+    internal func IsUnfinishedEmitType(type Type?) bool -> type is TypeBuilder ||
+        type is EnumBuilder ||
+        type is GenericTypeParameterBuilder ||
+        (symbolTypeType != nil && type != nil && type.GetType() == symbolTypeType)
+
     /// Whether [`member`](paramref) was produced by a `System.Reflection.MetadataLoadContext`.
     /// @param member The reflection object to inspect.
     /// @returns `true` when the object belongs to the metadata load context assembly.
@@ -341,7 +359,7 @@ shared class ClrTypeUtilities {
     /// @param type The candidate type.
     /// @returns `true` when the type is a by-ref-like value type.
     func IsByRefLike(type Type?) bool {
-        if type == nil || IsTypeBuilderInstantiation(type) {
+        if type == nil || IsTypeBuilderInstantiation(type) || IsUnfinishedEmitType(type) {
             return false
         }
         try {
@@ -1239,6 +1257,12 @@ shared class ClrTypeUtilities {
         return MemberCache[TMember].Cache.GetOrAdd(
             (type, flags),
             (key(Type Type, Flags BindingFlags)) -> {
+                // A `TypeBuilderInstantiation` answers every member enumeration by throwing
+                // (cref:NotSupportedException), which the catch below turns into the empty set.
+                // Answer the empty set without paying for the throw.
+                if IsTypeBuilderInstantiation(key.Type) {
+                    return Array.Empty[TMember]()
+                }
                 var all[]TMember
                 try {
                     all = getAll(key.Type)
@@ -1294,6 +1318,12 @@ shared class ClrTypeUtilities {
                 }
             }
             return nil
+        }
+        // A `TypeBuilderInstantiation` answers a direct lookup by throwing
+        // (cref:NotSupportedException); the catch below recovers through the guarded
+        // enumeration. Take that path without paying for the throw.
+        if IsTypeBuilderInstantiation(type) {
+            return FindCanonical()
         }
         try {
             let member TMember? = directLookup(type, flags)

@@ -51,12 +51,10 @@ internal partial class StatementBinder {
     /// (cref:MayShareStorage).
     private func NewCollector(
         assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?,
-        externalFunctionValues IEnumerable[VariableSymbol]? = nil,
-        trackSourceCallGlobalMutations bool = false
+        externalFunctionValues IEnumerable[VariableSymbol]? = nil
     ) AssignedRootsCollector -> AssignedRootsCollector(
         assignmentPreservesNarrowing,
         externalFunctionValues,
-        trackSourceCallGlobalMutations,
         (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second)
     )
 
@@ -347,7 +345,7 @@ internal partial class StatementBinder {
             var toRemove List[AccessPath]? = nil
             for key in frame.Keys {
                 let drop = (statementCollector != nil && MayBeMutatedByUnknownWrite(statementCollector, key)) ||
-                    (dropGlobalRoots && key.Root is GlobalVariableSymbol) ||
+                    (dropGlobalRoots && key.Root is GlobalVariableSymbol && !key.Root.IsReadOnly) ||
                     (
                     if statementCollector != nil {
                         statementCollector.AssignsRoot(key.Root)
@@ -982,8 +980,7 @@ internal partial class StatementBinder {
                 }
                 let mutations = NewCollector(
                     AssignmentPreservesNarrowing,
-                    snapshot.ExternalCallableAliases,
-                    trackSourceCallGlobalMutations: true
+                    snapshot.ExternalCallableAliases
                 )
                 mutations.Visit(cleanup)
                 summary = FinallyFlowSummary(
@@ -1024,8 +1021,7 @@ internal partial class StatementBinder {
     ) FinallyFlowSummary {
         let mutations = NewCollector(
             AssignmentPreservesNarrowing,
-            callableAliases,
-            trackSourceCallGlobalMutations: true
+            callableAliases
         )
         mutations.Visit(finallyBlock)
         let nonNullOnNormalExit = if !CanCompleteNormally(finallyBlock) {
@@ -1085,8 +1081,7 @@ internal partial class StatementBinder {
             let aliasesAtEntry = aliases.ToArray()
             let mutations = NewCollector(
                 AssignmentPreservesNarrowing,
-                aliasesAtEntry,
-                trackSourceCallGlobalMutations: true
+                aliasesAtEntry
             )
             mutations.Visit(statement)
             ApplyMutationsToState(state, mutations)
@@ -1653,7 +1648,10 @@ internal partial class StatementBinder {
             }
         }
         if collector.MayMutateGlobalRoots {
-            for path in state.Keys.Where((path AccessPath) -> path.Root is GlobalVariableSymbol).ToArray() {
+            for path in state
+                .Keys
+                .Where((path AccessPath) -> path.Root is GlobalVariableSymbol && !path.Root.IsReadOnly)
+                .ToArray() {
                 state.Remove(path)
             }
         }
@@ -1673,7 +1671,6 @@ internal partial class StatementBinder {
     /// join narrowings across constructs the flow analysis does not model.
     private open class AssignedRootsCollector : BoundTreeWalker {
         private let assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?
-        private let trackSourceCallGlobalMutations bool
         private let assignedFields HashSet[AssignedField] = HashSet[AssignedField]()
         private let assignedProperties HashSet[AssignedProperty] = HashSet[AssignedProperty]()
         private let assignments Dictionary[VariableSymbol, List[BoundAssignmentExpression]] = Dictionary[
@@ -1705,14 +1702,12 @@ internal partial class StatementBinder {
         init(
             assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?,
             externalFunctionValues IEnumerable[VariableSymbol]? = nil,
-            trackSourceCallGlobalMutations bool = false,
             mayShareStorage((VariableSymbol, VariableSymbol) -> bool)? = nil
         ) {
             this.mayShareStorage = mayShareStorage
             Roots = HashSet[VariableSymbol]()
             WritableReferenceRoots = HashSet[VariableSymbol]()
             this.assignmentPreservesNarrowing = assignmentPreservesNarrowing
-            this.trackSourceCallGlobalMutations = trackSourceCallGlobalMutations
             if externalFunctionValues != nil {
                 this.externalFunctionValues.UnionWith(externalFunctionValues)
             }
@@ -1813,21 +1808,38 @@ internal partial class StatementBinder {
             if node is BoundPropertyAccessExpression && node.Property.IsAutoProperty == false {
                 MayMutateMemberPaths = true
             }
-            let sourceConstructionRunsUserCode = node is BoundConstructorCallExpression construction &&
-                (construction.SelectedConstructor != nil || !construction.StructType.InstanceFieldInitializers.IsEmpty)
+            let sourceConstructionRunsUserCode = (
+                node is BoundConstructorCallExpression construction &&
+                    (
+                    construction.SelectedConstructor != nil || StatementBinder.ConstructionRunsUserCode(
+                        construction.StructType
+                    )
+                )
+            ) ||
+                (
+                node is BoundStructLiteralExpression literal &&
+                    (
+                    StatementBinder.ConstructionRunsUserCode(literal.StructType) || literal.Initializers.Any(
+                        (initializer BoundFieldInitializer) -> initializer.Property != nil &&
+                            !initializer
+                            .Property
+                            .IsAutoProperty
+                    )
+                )
+            )
             let sourcePropertyRunsUserCode = (
                 node is BoundPropertyAccessExpression and
                     {Property: {IsAutoProperty: false}} or
                     BoundPropertyAssignmentExpression and
                     {Property: {IsAutoProperty: false}}
             )
-            if trackSourceCallGlobalMutations && (sourcePropertyRunsUserCode || sourceConstructionRunsUserCode) {
+            // ADR-0208 R11 (#5170): any call, property getter or constructor
+            // with user code may assign a mutable global.
+            if sourcePropertyRunsUserCode || sourceConstructionRunsUserCode {
                 MarkMayMutateGlobalRoots()
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function, Arguments: var arguments} {
-                if trackSourceCallGlobalMutations {
-                    MarkMayMutateGlobalRoots()
-                }
+                MarkMayMutateGlobalRoots()
                 if function.HasCaptures {
                     MayMutateAnyRoot = true
                 }
@@ -1910,6 +1922,7 @@ internal partial class StatementBinder {
 
         func MayMutateGlobalRoot(root VariableSymbol, narrowedType TypeSymbol) bool -> MayMutateGlobalRoots &&
             root is GlobalVariableSymbol &&
+            !root.IsReadOnly &&
             (
             globalMutationProtectedRoots == nil || !globalMutationProtectedRoots!!.Contains(root) ||
                 InvalidatesNarrowing(root, narrowedType)
@@ -1984,6 +1997,10 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitBaseClassCallExpression(node BoundBaseClassCallExpression) {
+            // ADR-0208 R11 (#5170): a base method or computed accessor runs user code.
+            if node.Method != nil {
+                MarkMayMutateGlobalRoots()
+            }
             AnalyzeCallableArguments(node.Arguments)
             base.VisitBaseClassCallExpression(node)
         }
@@ -2099,11 +2116,17 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitForRangeStatement(node BoundForRangeStatement) {
+            // ADR-0208 R11 (#5170): lowering adds GetEnumerator, MoveNext and Current calls, and an
+            // iterator body runs inside them. Indexed iteration runs no user code.
+            if node.IterationKind != ForRangeKind.Indexed {
+                MarkMayMutateGlobalRoots()
+            }
             VisitExpression(node.Collection)
             VisitPossiblySkippedBody(node.Body)
         }
 
         protected open override func VisitAwaitForRangeStatement(node BoundAwaitForRangeStatement) {
+            MarkMayMutateGlobalRoots()
             VisitExpression(node.Stream)
             VisitPossiblySkippedBody(node.Body)
         }
@@ -2333,6 +2356,11 @@ internal partial class StatementBinder {
                 MarkMayMutateGlobalRoots()
                 MayMutateWritableReferenceRoots = true
             }
+        }
+
+        // ADR-0208 R11 (#5170): the loop header runs user code before every body run.
+        func MarkIterationRunsUserCode() {
+            MarkMayMutateGlobalRoots()
         }
 
         private func MarkMayMutateGlobalRoots() {
@@ -2649,7 +2677,7 @@ internal partial class StatementBinder {
         init(
             assignmentPreservesNarrowing(BoundAssignmentExpression, TypeSymbol) -> bool,
             mayShareStorage(VariableSymbol, VariableSymbol) -> bool
-        ) : base(assignmentPreservesNarrowing, nil, false, mayShareStorage) { }
+        ) : base(assignmentPreservesNarrowing, nil, mayShareStorage) { }
     }
 
     private func HasInternallyReachableFallthrough(statement BoundStatement) bool {
@@ -3948,31 +3976,10 @@ internal partial class StatementBinder {
             return mayMutateMemberPaths
         }
 
+        // ADR-0208 section 6: the forward-`goto` join and the shadow join share
+        // one rule, which lives on NarrowingState.
         private func FindCommonImplicitSupertype(path AccessPath, sourceTypes IReadOnlyList[TypeSymbol]) TypeSymbol? {
-            if sourceTypes.Count == 0 {
-                return nil
-            }
-            let commonType TypeSymbol? = sourceTypes.FirstOrDefault(
-                (candidate TypeSymbol) -> sourceTypes.All(
-                    (source TypeSymbol) -> IsRepresentationPreservingJoin(source, candidate)
-                )
-            )
-            if commonType != nil {
-                return commonType
-            }
-            if path.HasMembers {
-                return nil
-            }
-            let declaredType = if path.Root.Type is NullableTypeSymbol nullable {
-                nullable.UnderlyingType
-            } else {
-                path.Root.Type
-            }
-            return if sourceTypes.All((source TypeSymbol) -> IsRepresentationPreservingJoin(source, declaredType)) {
-                declaredType
-            } else {
-                default(TypeSymbol?)
-            }
+            return NarrowingState.JoinTypes(path, sourceTypes)
         }
 
         private func IsRepresentationPreservingJoin(source TypeSymbol, target TypeSymbol) bool {
@@ -4282,6 +4289,26 @@ internal partial class StatementBinder {
                 if secondChain.Contains(member) {
                     return true
                 }
+            }
+            return false
+        }
+
+        /// ADR-0208 R11 (#5170): whether constructing [`type`](paramref) can run user code: a
+        /// field initializer or constructor of the generic definition, or of any base class.
+        internal func ConstructionRunsUserCode(type StructSymbol) bool {
+            var current StructSymbol? = type
+            for var depth = 0; current != nil && depth < 64; depth++ {
+                let definition = current.Definition ?? current
+                if !definition
+                    .InstanceFieldInitializers
+                    .IsEmpty ||
+                    definition.HasPrimaryConstructor ||
+                    !definition
+                    .EffectiveExplicitConstructors
+                    .IsDefaultOrEmpty {
+                    return true
+                }
+                current = definition.BaseClass
             }
             return false
         }

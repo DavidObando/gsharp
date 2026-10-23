@@ -8971,12 +8971,18 @@ internal shared class ClrOverloadResolution {
             return true
         }
         try {
-            if existing.IsAssignableFrom(argumentType) {
-                bounds[parameterType.Name] = argumentType
-                return true
-            }
-            if argumentType.IsAssignableFrom(existing) {
-                return true
+            // A type still being defined cannot answer `IsAssignableFrom`; leave it to the
+            // classifier below without paying for the thrown (cref:NotSupportedException).
+            if !ClrTypeUtilities.IsTypeBuilderInstantiation(existing) && !ClrTypeUtilities.IsTypeBuilderInstantiation(
+                argumentType
+            ) {
+                if existing.IsAssignableFrom(argumentType) {
+                    bounds[parameterType.Name] = argumentType
+                    return true
+                }
+                if argumentType.IsAssignableFrom(existing) {
+                    return true
+                }
             }
         } catch (InvalidOperationException) {
             // Cross-context types are compared by the shared classifier below.
@@ -9020,12 +9026,19 @@ internal shared class ClrOverloadResolution {
                 // when one is assignable from the other. Otherwise the bounds
                 // genuinely conflict and inference fails.
                 try {
-                    if existing.IsAssignableFrom(argumentType) {
-                        return true
-                    }
-                    if argumentType.IsAssignableFrom(existing) {
-                        bounds[parameterType.Name] = argumentType
-                        return true
+                    // A type still being defined cannot answer `IsAssignableFrom`; leave it
+                    // to the classifier below without paying for the thrown
+                    // (cref:NotSupportedException).
+                    if !ClrTypeUtilities.IsTypeBuilderInstantiation(existing) &&
+                        !ClrTypeUtilities
+                        .IsTypeBuilderInstantiation(argumentType) {
+                        if existing.IsAssignableFrom(argumentType) {
+                            return true
+                        }
+                        if argumentType.IsAssignableFrom(existing) {
+                            bounds[parameterType.Name] = argumentType
+                            return true
+                        }
                     }
                 } catch (InvalidOperationException) {
                     // MLC cross-context: fall through to the classifier below,

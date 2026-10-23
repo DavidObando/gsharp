@@ -19,6 +19,7 @@ import System.Reflection
 import System.Reflection.Metadata
 import System.Reflection.PortableExecutable
 import System.Runtime.CompilerServices
+import System.Runtime.InteropServices
 import System.Runtime.Loader
 import System.Security.Cryptography
 import System.Threading
@@ -46,6 +47,9 @@ import SystemObject = System.Object
 class ReferenceResolver : IDisposable {
     private let assemblies ImmutableArray[Assembly]
     private let metadataContext MetadataLoadContext?
+    // ADR-0209 PR 1: the handle-backed reference set, built beside the MetadataLoadContext
+    // when GSHARP_METADATA_MODEL is `handles` or `compare`. No binder code reads it yet.
+    private var imageSet ReferenceImageSet?
     private let runtimeContext AssemblyLoadContext?
     private let missingTransitiveReferences ImmutableArray[string]
     private let hostFallbackAssemblyNames ImmutableHashSet[string]
@@ -779,6 +783,46 @@ class ReferenceResolver : IDisposable {
         throw InvalidOperationException("Core type '$fullName' could not be resolved from the supplied references.")
     }
 
+    /// Gets the handle-backed reference set, or `null` in `mlc` mode or when a reference has no image.
+    internal prop ImageSet ReferenceImageSet? -> imageSet
+
+    /// Discards the memoized results of (cref:TryResolveType).
+    /// The comparison mode calls it, so that its lookups leave no state behind.
+    internal func DiscardResolutionCache() {
+        resolveCache.Clear()
+    }
+
+    /// Gives, for each assembly in search order, the type names that this resolver indexes.
+    /// This is the answer of the `MetadataLoadContext` model, in the order that reflection reports.
+    internal func ReadIndexedTypeNames() List[List[string]] {
+        let result = List[List[string]](assemblies.Length)
+        for names in ReadTypeNames(assemblies) {
+            result.Add(names.Defined)
+        }
+        return result
+    }
+
+    /// Finds a type in the `MetadataLoadContext` by assembly simple name and full name, for the comparison mode.
+    /// An assembly that the resolver already loaded answers from that assembly.
+    /// Another assembly is loaded through the context, as a member signature would load it.
+    /// @returns The type, or `null` when the assembly or the type is not there.
+    internal func FindTypeForComparison(assemblySimpleName string, fullName string) Type? {
+        try {
+            for asm in assemblies {
+                if string.Equals(asm.GetName().Name, assemblySimpleName, StringComparison.OrdinalIgnoreCase) {
+                    return asm.GetType(fullName)
+                }
+            }
+            return metadataContext?.LoadFromAssemblyName(assemblySimpleName)?.GetType(fullName)
+        } catch (ex Exception) when ex is FileNotFoundException ||
+            ex is FileLoadException ||
+            ex is BadImageFormatException ||
+            ex is TypeLoadException ||
+            ex is ArgumentException {
+            return nil
+        }
+    }
+
     /// ADR-0107: captures this resolver's full-type-name surface — every
     /// assembly's identity plus the defined and forwarded type full-names it
     /// contributes, in search order — into a serialisable
@@ -1098,6 +1142,26 @@ class ReferenceResolver : IDisposable {
                 return image
             }
             return nil
+        }
+
+        /// Whether this resolver holds an image for [`simpleName`](paramref), so that
+        /// (cref:Resolve) can answer it. A `false` answer is what makes the context raise
+        /// (cref:FileNotFoundException) for the name.
+        /// @param simpleName The simple assembly name.
+        /// @returns `true` when an image is held for the name.
+        func HasImage(simpleName string) bool -> !string.IsNullOrEmpty(simpleName) && assemblyBytes.ContainsKey(
+            simpleName
+        )
+
+        /// Records [`simpleName`](paramref) as unresolved, as (cref:Resolve) does when it
+        /// returns `null`.
+        /// @param simpleName The simple assembly name.
+        func RecordUnresolved(simpleName string) {
+            if !string.IsNullOrEmpty(simpleName) {
+                lock gate {
+                    unresolved.Add(simpleName)
+                }
+            }
         }
 
         override func Resolve(context MetadataLoadContext, assemblyName AssemblyName) Assembly? {
@@ -1528,7 +1592,7 @@ class ReferenceResolver : IDisposable {
             }
             let loaded = builder.ToImmutable()
             let missing = ComputeMissingTransitiveReferences(loaded, mlc, resolver)
-            return ReferenceResolver(
+            let created = ReferenceResolver(
                 loaded,
                 mlc,
                 missing,
@@ -1537,6 +1601,78 @@ class ReferenceResolver : IDisposable {
                     .OfType[string]()
                     .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase)
             )
+            AttachImageSet(created, resolver, resolverPaths)
+            return created
+        }
+
+        // ADR-0209 PR 1: in `handles` and `compare` mode, build the handle-backed set over the
+        // same images, in the same order. In `compare` mode, also compare the two models by name.
+        private func AttachImageSet(
+            created ReferenceResolver,
+            supplier FallbackMetadataAssemblyResolver,
+            resolverPaths List[string]
+        ) {
+            let mode = MetadataModel.Current
+            if mode == MetadataModelMode.Mlc {
+                return
+            }
+            using let measurement = CompilationMeasurements.BeginPhase("references.image-set")
+            let set = TryBuildImageSet(created.assemblies, supplier, resolverPaths)
+            created.imageSet = set
+            if mode == MetadataModelMode.Compare {
+                MetadataModelComparison.CompareAndReport(created, set)
+            }
+        }
+
+        private func HasAssemblyMetadata(image[]uint8) bool {
+            try {
+                using let peReader = PEReader(ImmutableCollectionsMarshal.AsImmutableArray(image))
+                return peReader.HasMetadata && peReader.GetMetadataReader().IsAssembly
+            } catch (ex Exception) when ex is BadImageFormatException || ex is InvalidOperationException {
+                return false
+            }
+        }
+
+        // The searched modules are the loaded assemblies. The other images of the resolver closure follow,
+        // because the MetadataLoadContext reaches them through a type reference. Returns null when an
+        // assembly has no image (a host assembly; PR 6 of ADR-0209 covers them) or an image is unreadable.
+        private func TryBuildImageSet(
+            loaded ImmutableArray[Assembly],
+            supplier FallbackMetadataAssemblyResolver,
+            resolverPaths List[string]
+        ) ReferenceImageSet? {
+            let images = ImmutableArray.CreateBuilder[ReferenceImage]()
+            let seen = HashSet[object](ReferenceEqualityComparer.Instance)
+            for asm in loaded {
+                if !AssemblyImages.TryGetValue(asm, out var image) {
+                    return nil
+                }
+                seen.Add(image)
+                images.Add(
+                    ReferenceImage(
+                        image,
+                        if TryGetAssemblyPath(asm, out var path) {
+                            path
+                        } else {
+                            nil
+                        },
+                        true
+                    )
+                )
+            }
+            for path in resolverPaths {
+                let image = supplier.GetImage(Path.GetFileNameWithoutExtension(path))
+                // The context loads a dependency only when a signature needs it, and skips an unreadable one.
+                // The set skips it at construction, so one bad dependency does not hide the others.
+                if image != nil && seen.Add(image) && HasAssemblyMetadata(image) {
+                    images.Add(ReferenceImage(image, path, false))
+                }
+            }
+            try {
+                return ReferenceImageSet(images.ToImmutable())
+            } catch (ex Exception) when ex is BadImageFormatException || ex is InvalidOperationException {
+                return nil
+            }
         }
 
         internal func FindBundledExtensionPath(baseDirectory string) string? {
@@ -2251,6 +2387,17 @@ class ReferenceResolver : IDisposable {
             return paths
         }
 
+        /// Whether [`mlc`](paramref) has already loaded an assembly with the simple name
+        /// [`simpleName`](paramref).
+        private func IsLoadedBySimpleName(mlc MetadataLoadContext, simpleName string) bool {
+            for loaded in mlc.GetAssemblies() {
+                if string.Equals(loaded.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase) {
+                    return true
+                }
+            }
+            return false
+        }
+
         /// Eagerly verifies that the supplied reference set forms a complete
         /// transitive closure. For every primary reference, each assembly it names
         /// (one hop) is probed against the load context's resolver; any name that
@@ -2275,6 +2422,16 @@ class ReferenceResolver : IDisposable {
                 }
                 for refName in referenced {
                     if string.IsNullOrEmpty(refName?.Name) {
+                        continue
+                    }
+                    // The context raises (cref:FileNotFoundException) for a name that neither
+                    // the resolver nor an already loaded assembly can supply. Answer that
+                    // case from the resolver without paying for the throw: the resolver
+                    // would record the name and return null, and the catch below would add
+                    // it to the missing set.
+                    if !resolver.HasImage(refName.Name!!) && !IsLoadedBySimpleName(mlc, refName.Name!!) {
+                        resolver.RecordUnresolved(refName.Name!!)
+                        missing.Add(refName.Name!!)
                         continue
                     }
                     try {

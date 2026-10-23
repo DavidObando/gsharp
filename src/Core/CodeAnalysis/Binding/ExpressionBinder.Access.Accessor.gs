@@ -317,7 +317,7 @@ internal partial class ExpressionBinder {
                             implicitField.Field
                         ),
                         implicitField.Field.Type,
-                        TryGetNarrowedType(implicitField),
+                        TryGetNarrowedType(implicitField, leftName.Location),
                         makeNarrowedField
                     )
                 } else if variable is ImplicitStaticFieldVariableSymbol implicitStaticField {
@@ -397,7 +397,7 @@ internal partial class ExpressionBinder {
                     receiver = BuildNarrowedRead(
                         BoundVariableExpression(leftName, variable),
                         variable.Type,
-                        TryGetNarrowedType(variable),
+                        TryGetNarrowedType(variable, leftName.Location),
                         makeNarrowedVariable
                     )
                 }
