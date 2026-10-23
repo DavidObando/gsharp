@@ -2,6 +2,7 @@
 
 package GSharp.Core.CodeAnalysis.Binding
 
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
@@ -23,14 +24,28 @@ internal shared class NativeProtocolSafety {
     @ThreadStatic
     private var memoAny Dictionary[TypeSymbol, bool]?
 
+    @ThreadStatic
+    private var memoDepth int32
+
+    // Re-entrant: only the outermost Begin installs the memo and only the
+    // matching outermost End drops it, so a nested pass cannot clear the outer
+    // pass's answers. Callers pair them in try/finally.
     internal func BeginMemo() {
-        memoSaved = Dictionary[TypeSymbol, bool]()
-        memoAny = Dictionary[TypeSymbol, bool]()
+        if memoDepth == 0 {
+            memoSaved = Dictionary[TypeSymbol, bool]()
+            memoAny = Dictionary[TypeSymbol, bool]()
+        }
+        memoDepth++
     }
 
     internal func EndMemo() {
-        memoSaved = nil
-        memoAny = nil
+        if memoDepth > 0 {
+            memoDepth--
+            if memoDepth == 0 {
+                memoSaved = nil
+                memoAny = nil
+            }
+        }
     }
 
     internal func ContainsSavedProtocol(type TypeSymbol) bool {
@@ -39,9 +54,11 @@ internal shared class NativeProtocolSafety {
             return ContainsDependency(type, true, HashSet[TypeSymbol](), HashSet[System.Type]())
         }
         if memo.TryGetValue(type, out var known) {
+            CompilationMeasurements.Count("nativeprotocol.memo-hits")
             return known
         }
-        let found = ContainsDependency(type, true, HashSet[TypeSymbol](), HashSet[System.Type]())
+        CompilationMeasurements.Count("nativeprotocol.memo-walks")
+        let found = ContainsDependency(type, true,HashSet[TypeSymbol](), HashSet[System.Type]())
         memo[type] = found
         return found
     }
@@ -52,9 +69,11 @@ internal shared class NativeProtocolSafety {
             return ContainsDependency(type, false, HashSet[TypeSymbol](), HashSet[System.Type]())
         }
         if memo.TryGetValue(type, out var known) {
+            CompilationMeasurements.Count("nativeprotocol.memo-hits")
             return known
         }
-        let found = ContainsDependency(type, false, HashSet[TypeSymbol](), HashSet[System.Type]())
+        CompilationMeasurements.Count("nativeprotocol.memo-walks")
+        let found = ContainsDependency(type, false,HashSet[TypeSymbol](), HashSet[System.Type]())
         memo[type] = found
         return found
     }
