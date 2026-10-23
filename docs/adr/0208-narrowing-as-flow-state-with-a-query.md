@@ -151,10 +151,35 @@ on the nullable receiver unless stated.
 | c3a | `if skip { goto Inside }; if s == nil { return }; Again: Consume(s.Length); Inside: goto Again` | rejected |
 | c3b | guard; `A: Consume(s.Length); if flag { goto C }; B: goto A; C: s = nil; goto B` | rejected |
 | out-alias | `func Run(out c C?, ref alias C?)`: guard on `c`; loop `c.M(); c = C(); alias = nil` (`Issue2943LoopBackEdgeNarrowingTests.gs:326-338`) | rejected |
+| c5 | guard; `var action = External; let clear = func() { s = nil }`; loop `s.Length; action(); action = clear` | rejected |
+| c6 | guard; `let clear = func() { s = nil }`; loop `s.Length; Invoke(clear)` where `func Invoke(f () -> void) { f() }` | rejected |
+| c7 | `func Run(ref text string?, callback () -> void)`: guard; loop `text.Length; callback()`; caller passes `ref t` and a callback that sets `t = nil` | rejected |
+| c8 | `Animal.Name -> "animal"`, `Dog.Name -> "dog"` (hiding); `if x is Dog { loop { last = x.Name; x = Dog{} } }` | accepted, prints `animal` |
+| c8b | same with `x = Dog()` | accepted, prints `dog` |
+| cA | guard; `try { throw } catch when Clear(ref s) { return 1 } catch { return s.Length }` where `Clear` stores nil and returns false | accepted (warning GS0612 only); throws `NullReferenceException` at run time |
+| cB | guard; `let clear = func() { s = nil }`, `let twice = func() { clear(); clear() }` (a direct-call local function group); loop `s.Length; twice()` | rejected |
+| cC | `Again: let length = x.Length; if count == 0 { count++; try { x = nil; goto Again } finally { x = "safe" } }` (`Issue4519:3609-3631`) | accepted, prints `4` |
 
-The last four are review counterexamples against a first draft of this ADR
-(PR #5164 threads on sections 9 and 10); each is rejected today and the
-rules in sections 6, 9 and 10 keep them rejected.
+c1, c3a, c3b, `out-alias`, c5, c6, c7, c8, cA, cB and cC are review
+counterexamples against drafts of this ADR (PR #5164 threads on sections 9,
+10 and 16). c1, c3a, c3b, `out-alias`, c5, c6, c7 and cB are rejected
+today and the rules in sections 6, 9 and 10 keep them rejected. cA is a
+soundness hole in 0.5.212 that the rules close (row R10). c8 and c8b show
+that today's back-edge proof depends on the construction syntax; row R7
+records the uniform rule. cC is accepted today and rejected after (row R8
+outcome (a')).
+
+A third experiment measured section 10 rule 4: whole-loop kill, today's
+bound non-null proof kept, and every call (direct, indirect, constructor)
+marking the loop as able to write closure-assigned and by-reference roots
+(`MayMutateAnyRoot` and `MayMutateWritableReferenceRoots` set on any call
+in the loop collector). Result: 22 errors in three functions of
+`src/Core` (`Binding/BinderContext.gs:906-923`, an `out` parameter read in
+a loop that calls `TryGetValue`; `Binding/MemberLookup.gs:1108-1120` and
+`:3100-3172`, locals that a closure elsewhere in the same function assigns,
+read in loops that call), of which 5 are `GS0532` cascades; 0 errors in
+Core.Tests and gsc. This is the whole measured cost of the conservative
+call rule on the compiler's own source.
 
 e20 contradicts ADR-0069's #712 addendum and `website/docs/ref/spec.md`,
 which say a read-only top-level `let` narrows; the test
@@ -236,9 +261,12 @@ on every control-flow edge that reaches that point: fall-through, structured
 branches, `break`/`continue`/`return`/`throw`/`goto` edges (through the
 cleanup regions they leave), the exceptional edge from every point inside a
 `try` block, catch filter or catch body into the handlers and the `finally`,
-and writes through an alias of the storage (a `ref`/`out` parameter, a
-`ref` local, a pointer). Every rule in sections 8 to 11 is derived from this
-invariant, and a rule that cannot be derived from it is wrong, whatever
+writes through an alias of the storage (a `ref`/`out` parameter, a `ref`
+local, a pointer), and writes performed by code a call can run: a closure
+of the function that assigns the root, a callable passed as an argument, a
+callable stored in a variable, or a caller-supplied callback that writes the
+caller's variable behind a `ref`/`out` parameter. Every rule in sections 8
+to 11 is derived from this invariant, and a rule that cannot be derived from it is wrong, whatever
 shape it happens to accept. Where a rule has to approximate, it approximates
 toward fewer facts.
 
@@ -350,12 +378,22 @@ Facts out, from a node's `StatementEffects` (section 13):
 - An assignment to a root removes every path with that root.
 - A member, index or indirect assignment, or any call, removes every
   member-bearing path (ADR-0069 #1180 rule, unchanged).
-- A call to a function with captures, or an indirect call whose target is
-  not a known external callable, removes paths whose root a closure of the
-  function may assign (`MayBeAssignedByClosure`, `BinderContext.gs:731`),
-  by-reference roots and member paths (`MayBeMutatedByUnknownCallable`,
-  `:1540`). A write through a pointer of unknown origin removes every
-  mutable root (`MayMutateAnyRootViaPointer`).
+- A call, in straight-line code where the bound callee and arguments are
+  known, removes: every member-bearing path (any call); paths whose root a
+  closure of the function may assign (`MayBeAssignedByClosure`,
+  `BinderContext.gs:731`) when the callee has captures, when the call is
+  indirect through a target not known to be external, or when a callable
+  argument is not a known external or known-literal callable (today's
+  `AnalyzeCallableArguments`, `:1930-1949`); and paths on by-reference or
+  aliased roots (section 10 rule 5) for every indirect call and every call
+  with a callable argument, external or not, because a caller-supplied
+  callback can write the caller's variable behind a `ref` parameter
+  (today's `AnalyzeCallableVariable` sets `MayMutateWritableReferenceRoots`
+  for external callables too, `:2246-2248`; probe c7). A write through a
+  pointer of unknown origin removes every mutable root
+  (`MayMutateAnyRootViaPointer`). An external-callable alias is a fact like
+  any other: it is removed when its variable is assigned and it never
+  exempts the by-reference class.
 - An `out` or `ref` argument and an address-of operand write their root.
 - A callable alias is removed when its variable is assigned a non-external
   value; it is added when assigned an external one
@@ -378,10 +416,16 @@ Facts out, from a node's `StatementEffects` (section 13):
   longer pops a frame; the scope ends, the facts about outer variables do
   not.
 - `try { T } catch when (f) { C } finally { F }`, with entry state `S`:
-  - Every point in `T` can throw, so the handlers' entry state is
-    `Lower(S, T)`. Each catch filter and body is bound under `Lower(S, T)`
-    (a filter's effects are applied before its body, as
-    `ApplyHeaderCallableEffects` does today).
+  - Every point in `T` can throw, and every filter of an earlier clause can
+    run (and write, through a `ref` argument or a callback) before the
+    matching clause is found, whether it returned false or threw (ADR-0177).
+    So the i-th clause's filter is bound under `Lower(S, T ∪ filters of
+    clauses 1..i-1)`, and its body under that state with its own filter's
+    effects applied (today only the alias effects are applied,
+    `ApplyHeaderCallableEffects`). Probe cA (`catch when Clear(ref s) { }
+    catch { s.Length }`) compiles today and throws `NullReferenceException`
+    at run time; this rule rejects it (row R10). Using all filters instead
+    of the preceding ones is also correct.
   - Every point in `T`, in every filter and in every catch body can throw or
     jump into `F`, and `F` is bound before the pending jumps out of the
     statement are released. So the finally entry state is
@@ -446,45 +490,67 @@ once per loop node, by a walker that extends today's
    whose target resolves to a root that `SmartCastStability.
    IsAssignmentNarrowingRoot` accepts (a plain local, a by-value parameter
    or a global; never a `ref`/`out`/`in` parameter or a `ref` local,
-   `SmartCastStability.gs:41-47`) and whose right side is a non-nil
-   literal, an object construction (`T(...)`, `T{...}` where the name
-   resolves to a type and not to a function at loop entry; today's
-   `IsDefinitelyNonNullSyntax`, `:1274-1288`), or an `!!` expression does
-   not kill a nullability fact about its target. It still kills a type-test
-   fact. Any other target or right side kills. This is the restriction
-   today's collector applies in `InvalidatesNarrowing`
-   (`:1809-1822`); without it, the `out-alias` row of
-   `RuntimeNullableSource_DoesNotPreserveInheritedNarrowing`
+   `SmartCastStability.gs:41-47`) and whose right side is syntactically a
+   definite non-null value keeps the facts the value's syntactic type
+   proves:
+   - a non-nil literal keeps a nullability fact, and a type-test fact when
+     the literal's type converts to the fact's type;
+   - an object construction, `T(...)` or `T{...}`, where `T` resolves at
+     loop entry to a type (not to a function; today's
+     `IsDefinitelyNonNullSyntax`, `:1274-1288`) keeps a nullability fact,
+     and a type-test fact when `T` converts to the fact's type. Both
+     syntaxes count: today `T(...)` preserves (`BoundConstructorCallExpression`
+     in `IsDefinitelyNonNullValue`, `:1234`) and `T{...}` does not
+     (`BoundStructLiteralExpression` is absent), which probes c8b and c8
+     show as `"dog"` versus `"animal"` for the same program; the uniform
+     rule is the deliberate choice (row R7);
+   - `value!!` keeps a nullability fact only.
+   Any other target or right side kills every fact on the root, including a
+   variable or a call whose declared type would prove it. Requiring an
+   exact-storage root is the restriction today's collector applies in
+   `InvalidatesNarrowing` (`:1809-1822`); without it, the `out-alias` row
+   of `RuntimeNullableSource_DoesNotPreserveInheritedNarrowing`
    (`Issue2943LoopBackEdgeNarrowingTests.gs:326-338`: `out c` and `ref
    alias` name the same storage, the loop assigns `c = C()` then
-   `alias = nil`) would be accepted and dereference nil. It keeps e3 with
-   a constructor and drops `FunctionReturnsDefinitelyNonNull`
-   (`:1248-1272`), which reads another function's syntax to decide a flow
-   fact.
-4. **Closures, references, pointers.** An assignment inside a lambda literal
-   in the region kills. A call whose callee resolves at loop entry to a
-   variable (an indirect call through a callable-typed local or parameter),
-   or whose callee the walker cannot resolve, kills every root in the
-   function's closure-assigned name set (`ComputeClosureAssignedNames`,
-   already syntactic and function-wide), unless the variable is a known
-   external callable in the entry state. A call whose callee resolves to a
-   declared function or method does not kill locals, matching today's
-   `function.HasCaptures` and `AnalyzeCallableInvocation` rule at the same
-   precision (a declared function has no captures; a function literal is a
-   variable). `out`/`ref` arguments and `&x` operands kill their root. An
-   indirect assignment through anything other than an address-of operand
-   kills every mutable root. This rule is unmeasured by the section 4
-   experiments; PR 3 measures it.
+   `alias = nil`) would be accepted and dereference nil. The rule keeps e3
+   and drops `FunctionReturnsDefinitelyNonNull` (`:1248-1272`), which reads
+   another function's syntax to decide a flow fact, and the
+   variable-right-side proof through `IsDefinitelyNonNullVariable`
+   (`:3910-3920`), which needs the bound tree.
+4. **Any call may write indirectly.** An assignment inside a lambda literal
+   in the region kills. Any call in the region, whatever its callee (a
+   declared function, a method, a constructor, a property with a custom
+   getter, or a callable value), kills every root in the function's
+   closure-assigned name set (`ComputeClosureAssignedNames`, already
+   syntactic and function-wide) and every root in the alias class of rule
+   5. The walker does not classify callees and the entry state's
+   external-callable aliases grant no exemption, because before the body is
+   bound none of the facts that would justify one is invariant over the
+   region: a callable variable can be reassigned inside the region to a
+   closure that writes the root (probe c5), a declared callee can invoke a
+   callable argument that writes it (probe c6), a direct-call local
+   function (`FunctionSymbol.HasCaptures`, set by
+   `BindLocalFunctionLiteralGroup`, `StatementBinder.gs:425-443`, and
+   honoured by today's collector at `:1769-1771`) can write a captured
+   root (probe cB), and an external callback can write a `ref` parameter's
+   storage without any `ref` at the call site (probe c7). All four are
+   rejected today and stay rejected: the rule never infers "no captures"
+   from callee resolution. The
+   straight-line rule of section 8 keeps today's finer classification,
+   because there the bound callee is known. `out`/`ref` arguments and `&x`
+   operands kill their root. An indirect assignment through anything other
+   than an address-of operand kills every mutable root. Cost, measured in
+   section 4: three functions in `src/Core`, none in Core.Tests or gsc.
 5. **Aliased storage is one class.** By-reference roots (`ref`/`out`/`in`
    parameters, `ref` locals) and roots whose name appears under `&`, `ref`
    or `out` anywhere in the function (a function-wide syntactic set, like
    `ComputeClosureAssignedNames`) may share storage with each other and
    with the caller. When the region assigns any by-reference root, writes
-   through any pointer, passes any `ref`/`out` argument, or contains a call
-   whose callee rule 4 does not clear, every fact on a root in this class is
-   killed. This is today's `MayMutateWritableReferenceRoots` rule
-   (`:1809-1813`) widened to the whole class, so it also covers an alias
-   taken before the loop.
+   through any pointer, passes any `ref`/`out` argument, or contains any
+   call, every fact on a root in this class is killed. This is today's
+   `MayMutateWritableReferenceRoots` rule (`:1809-1813`, set for external
+   callables too at `:2246-2248`) widened to the whole class, so it also
+   covers an alias taken before the loop and the callback of probe c7.
 
 Facts proven inside the body (`while x != nil`, a guard, an assignment that
 narrows) are per iteration and unaffected; e13 keeps compiling. The exit
@@ -613,10 +679,15 @@ here.
   move, and that is where the semantics change meets the compiler's own
   source. Two hazards:
   1. **Less permissive rows** (section 16) can reject repository source. The
-     measurement in section 4 found one function
-     (`ExpressionBinder.Assignments.gs:5435-5494`) for the loop rule. The
-     fix is a restructuring (declare `access` non-nullable from the first
-     element), not `!!`: under the pin, the pinned compiler proves the
+     measurements in section 4 found four functions for the loop rule:
+     `ExpressionBinder.Assignments.gs:5435-5494` (reassignment from a
+     pattern variable), `BinderContext.gs:906-923` (an `out` parameter
+     read in a loop with a call) and `MemberLookup.gs:1108-1120`,
+     `:3100-3172` (locals a closure in the same function assigns, read in
+     loops with calls). The fix is a restructuring (declare `access`
+     non-nullable from the first element; copy a parameter or
+     closure-shared local into a `let` before the loop), not `!!`: under
+     the pin, the pinned compiler proves the
      value non-null there and reports `GS0536`, and warnings are errors, so
      `!!` cannot bridge the two compilers. The implementation PRs compile
      Core, Core.Tests and gsc with the built compiler (the response-file
@@ -649,9 +720,10 @@ compatibility note. "Probe" refers to section 4.
 | R4 | Facts established in switch arms join after the switch: arms assign `s` non-null, `default` returns, then `s.Length` (e9); nested loops, `try`, labelled blocks inside branches contribute their exit state instead of `ClearAssignedRoots` | GS0158 | accepted | more permissive |
 | R5 | Member paths and type-test facts take part in every join, not only in the early-exit lift; a `[NotNullWhen]`-derived member-path fact lifts past an early return like a nil-guard fact does (ADR-0069 #4216 addendum, second bullet) | GS0158 / GS0159 | accepted | more permissive |
 | R6 | A user label or `goto` elsewhere in the function no longer disables lifts and joins: e5 (`goto` after an `if` join), e18/Run (guard, label, read, backward `goto`, no write) | GS0158 (#4285, #4290) | accepted | more permissive |
-| R7 | Loop entry kills every inherited fact whose root the loop assigns: read before an exit-path write (e2b; the `break-only` shape of `Issue2943LoopBackEdgeNarrowingTests`), and reassignment from a variable or a call (the `access = inner` shape in Core; the function/variable rows of `NonNullAssignmentAfterUse_PreservesInheritedNarrowing`) | accepted | GS0158 / GS0159 / GS0503 | less permissive |
-| R8 | Backward `goto`: labels in the backward-jump region are bound under the region lower bound (section 10) and the optimistic bind with deferred re-reporting is gone. Three outcomes: (a) a region that reassigns the root from a variable or a call, which the deferred proof accepted, is rejected at the read; (b) a type-test fact killed at the label makes a read bind at the declared type, so a conversion that today fails against the stale narrowed type (`let result object = x` after `x = Cat{}; goto Again`, `Issue4519GotoAssignmentNarrowingTests.gs:1314-1411`) is accepted; (c) everything else keeps its id at the same read | (a) accepted; (b) GS0155; (c) GS0158/GS0159/GS0155 | (a) GS0158/GS0159; (b) accepted; (c) same | mixed: less permissive in (a), more permissive in (b) |
+| R7 | Loop entry kills every inherited fact whose root the loop assigns or may write indirectly: (a) read before an exit-path write (e2b; the `break-only` shape of `Issue2943LoopBackEdgeNarrowingTests`); (b) reassignment from a variable or a call (the `access = inner` shape in Core; the `local`/`function` rows of `NonNullAssignmentAfterUse_PreservesInheritedNarrowing`); (c) a loop containing any call, for a root some closure of the function assigns or a by-reference/aliased root (three functions in Core); (d) output change in accepted programs: `x = Dog{}` now keeps a type-test fact like `x = Dog()` (c8 prints `dog`, not `animal`), and a reassignment from a variable or call drops a type-test fact that today's bound proof kept, so a hidden member read in the loop binds on the declared type | (a)-(c) accepted; (d) accepted | (a)-(c) GS0158 / GS0159 / GS0503; (d) accepted, different member selected | less permissive in (a)-(c); output change in (d) |
+| R8 | Backward `goto`: labels in the backward-jump region are bound under the region lower bound (section 10) and the optimistic bind with deferred re-reporting is gone. Four outcomes: (a) a region that reassigns the root from a variable or a call, which the deferred proof accepted, is rejected at the read; (a') a region that assigns nil inside a `try` whose `finally` restores a non-null value before the jump (probe cC) is rejected at the read, because the kill set does not model cleanup order; (b) a type-test fact killed at the label makes a read bind at the declared type, so a conversion that today fails against the stale narrowed type (`let result object = x` after `x = Cat{}; goto Again`) is accepted, or reports the declared type's own diagnostic; (c) everything else keeps its id at the same read | (a), (a') accepted; (b) GS0155; (c) GS0158/GS0159/GS0155 | (a), (a') GS0158/GS0159; (b) accepted, or GS0159/GS0116 at the same read; (c) same | mixed: less permissive in (a) and (a'), more permissive or a changed id in (b) |
 | R9 | Invalidation is expression-granular: `s != nil ? consume((s = nil), s.Length) : 0` (ADR-0064 L576-581, #4985) | accepted, dereferences nil at run time | GS0158 | less permissive (soundness) |
+| R10 | A catch clause sees the writes of every earlier clause's filter: `try { throw } catch when Clear(ref s) { } catch { s.Length }` where the filter stores nil and returns false (probe cA) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
 
 Details per row:
 
@@ -686,12 +758,28 @@ Details per row:
   `SpeculativeRebind_*` (`:444-551`) test
   the re-bind and are deleted or rewritten against the kill set; the
   `Issue2943LoopBackEdgeNarrowingEmittedOracleTests` rows are re-run.
-  Compatibility: one function in `src/Core` needs a restructuring (section
-  15). Users see `GS0158`/`GS0159` where they relied on the exemption; the
-  fix is to re-test inside the loop or to declare the loop variable
-  non-nullable. ADR-0069's #2943 addendum paragraphs "A write on a path that
-  exits the loop ... does not invalidate the body" and "user functions whose
-  returns are all proven non-null may preserve a narrowing" are superseded.
+  New tests, each with an ADR-0154 witness: c5, c6, c7 and the `out-alias`
+  row stay rejected (mutants: callee classification restored, callable
+  arguments ignored, external alias exempting the by-reference class,
+  exemption without the exact-storage test); c8 and c8b are emitted-output
+  tests expecting `dog` for both (red today on c8), and they are the
+  output-parity exception of outcome (d) in PR 3's acceptance. The
+  `ForwardGoto_FinallyExternalCallbackInvalidatesWritableRefParameter` test
+  of `Issue4519` keeps its rejection through rule 5 and section 8.
+  Compatibility: four functions in `src/Core` need a restructuring
+  (section 15). Users see `GS0158`/`GS0159` where they relied on the
+  exemption, on a variable or call as non-null proof, or on a loop with a
+  call not touching a closure-assigned or aliased local; the fix is to
+  re-test inside the loop, to declare the loop variable non-nullable, or to
+  copy the value into a `let` before the loop. Outcome (d) changes which
+  member a hidden-member read selects without a diagnostic; the comparison
+  mode reports every such site on Core, Core.Tests and Oahu as an IL
+  difference and PR 3 lists them (open question 6 asks whether a warning
+  should accompany the change). ADR-0069's #2943 addendum paragraphs "A
+  write on a path that exits the loop ... does not invalidate the body",
+  "user functions whose returns are all proven non-null may preserve a
+  narrowing" and "immutable variables initialized from a proven-non-null
+  value" are superseded.
 - **R8.** `Issue4519GotoAssignmentNarrowingTests` has 102 `BackwardGoto_*`
   tests. By family:
   - `*DoesNotRequireNarrowedType`, `Inherited*`, `Interface*`,
@@ -711,19 +799,33 @@ Details per row:
     today by the deferred re-report, rejected after by the ordinary
     diagnostic at the same read. Outcome (c); the implementation PR shows
     id and location are unchanged for each, and GS0155 `NonNullUse`
-    re-reports become the ordinary GS0155 at the conversion site.
+    re-reports become the ordinary GS0155 at the conversion site. Where a
+    read bound at the declared type produces a different id than the
+    deferred re-report did (as `AtForSource` and `ThroughNullSafeCall` do
+    below), the implementation PR records the new id here.
   - `TypeTestNarrowingAtForSource_ReportsConversion`,
     `TypeTestNarrowingThroughUpcast_ReportsConversion`,
     `TypeTestNarrowingThroughNullableUpcast_ReportsConversion`,
     `TypeTestNarrowingThroughNullSafeCall_ReportsConversion`
     (`:1314-1411`): today they report GS0155 only because the optimistic
-    bind kept the stale `Dog` fact across `x = Cat{}; goto Again`. After,
-    `x` is `Animal` at the label. The first three programs are valid
-    (`Animal` converts to `object` and `object?`, and is a valid `for`
-    source) and are accepted with no diagnostic (outcome (b)). The fourth
-    binds `x?.Bark()` at `Animal`, where `Bark` does not exist, so it moves
-    from GS0155 to GS0159 at the same read (outcome (c) with a changed id).
-    These are the new expected results #5129 asks for.
+    bind kept the stale type-test fact across the reassignment and jump.
+    After, `x` has its declared type at the label. The two upcast tests
+    (`:1335-1384`, `x Animal` converted to `object` and `object?`) are
+    valid programs and are accepted with no diagnostic (outcome (b)).
+    `AtForSource` (`:1314-1333`, `x object` iterated by `for ch in x`)
+    moves from GS0155 to GS0116 (not iterable, `StatementBinder.Loops.gs:
+    381-394`) at `x`. `ThroughNullSafeCall` (`:1387-1411`) binds
+    `x?.Bark()` at `Animal`, where `Bark` does not exist, and moves from
+    GS0155 to GS0159 at the same read. These are the new expected results
+    #5129 asks for.
+  - `ThroughNonNullFinallyAssignment_RemainsNarrowed` (`:3609-3631`, probe
+    cC): accepted today because the deferred check applies the `finally`'s
+    `x = "safe"` to the jump before testing the label's reads. After, the
+    region's kill set contains `x = nil` and the label loses the fact, so
+    `x.Length` reports GS0158 (outcome (a')). This is the same result the
+    loop rule gives `while ... { x.Length; x = nil; x = "safe" }` and is
+    accepted as the price of not modelling cleanup order before binding;
+    the test's expectation changes to GS0158.
   - `AfterDominatingAssignment_RemainsNarrowed` (`:136`),
     `StackedLabeledGuardReestablishesNarrowing` (`:1414`),
     `ExistingEdgeReceivesLaterMemberAccess` (`:1294`),
@@ -742,6 +844,11 @@ Details per row:
   running the program). Compatibility: the program is wrong today; the
   diagnostic is the fix. `a ??= b` narrowing afterwards (#4978) becomes
   expressible in the same model; whether to enable it is #4978's decision.
+- **R10.** New test from probe cA with an ADR-0154 witness (today's
+  compiler accepts it and the program throws). Compatibility: the program
+  is wrong today; the diagnostic is the fix. ADR-0177's filter semantics
+  (a false or throwing filter continues the handler search) is what makes
+  the earlier filter's write reach the later clause.
 
 ### 17. Not changed
 
@@ -819,16 +926,18 @@ each predicted change listed in the PR body; the benchmark table of section
    of section 16 (the shadow join is the new rule, so R1-R6 are expected to
    appear there), and none outside the table.
 2. **Joins from exit states (R1-R6, R9).** `if`, `switch`, blocks, `try`,
-   cleanup regions, forward `goto`, labels; expression-granular state
-   updates; delete `ApplyIfJoinNarrowings`, `ComputeIfJoinNonNull`,
+   cleanup regions, forward `goto`, labels; the catch-clause entry rule
+   (R10); expression-granular state updates; delete `ApplyIfJoinNarrowings`,
+   `ComputeIfJoinNonNull`,
    `ProcessBranchStatement`, `ClearAssignedRoots`,
    `RestoreEarlyExitLiftsWrittenOnlyByCondition`, `PendingEarlyExitFrames`,
    `PendingSwitchExitFrames`, the #4285/#4290 suppressions; the `try`
    handler and `finally` entry states of section 9. Acceptance: the
    comparison mode's disagreements on Core, Core.Tests and Oahu all fall
-   under R1-R6 or R9; the listed tests re-expected with witnesses; c1 and
-   e6 added as tests (red under a mutant that builds the `finally` entry
-   from normal exits); the `GS0536` sites the new compiler reports in
+   under R1-R6, R9 or R10; the listed tests re-expected with witnesses; c1
+   and e6 added as tests (red under a mutant that builds the `finally`
+   entry from normal exits) and cA (red on today's compiler by running the
+   program); the `GS0536` sites the new compiler reports in
    repository source are listed in the PR body for the pin-move PR.
 3. **Loops and backward jumps (R7, R8).** The kill-set walker; delete
    `BindLoopBody`'s snapshot and re-bind, `CollectLoopBackEdgeMutations`,
@@ -860,15 +969,25 @@ that `GS0536` newly reports (section 15).
   PR 1's comparison mode runs both on Core, Core.Tests and Oahu before any
   rule changes; a disagreement there is a defect in the new model, not a
   row.
-- **A rule that is not derived from the invariant.** The first draft of this
-  ADR had three: a finally entry built from normal exits, a non-null proof
-  without the exact-storage restriction, and a backward-`goto` region that
-  ignored other entries. Each accepted a program that 0.5.212 rejects and
-  that dereferences nil. Mitigation: section 6 states the invariant and the
-  region lower bound; every entry-state rule in sections 9 and 10 is an
-  instance of the lower bound; PR 2 and PR 3 add the four counterexamples
-  of section 4 (c1, c3a, c3b, `out-alias`) as tests with witnesses, and a
-  review that finds a rule not derivable from the invariant blocks the PR.
+- **A rule that is not derived from the invariant.** Three review rounds on
+  the drafts of this ADR found nine: a finally entry built from normal
+  exits, a catch entry that ignored earlier filters, a non-null proof
+  without the exact-storage restriction, a backward-`goto` region that
+  ignored other entries, an external-alias exemption that is not invariant
+  over the loop, a callee classification that missed callable arguments
+  and captured-writing local functions, a by-reference parameter that a
+  callback writes without a `ref` at the call, a construction-syntax
+  dependence in the non-null proof, and an inventory entry that misread a
+  test. Each of the first seven accepted a program that dereferences nil
+  (one of them, cA, is accepted by 0.5.212 too). Mitigation: section 6
+  states
+  the invariant and the region lower bound with indirect writes named;
+  every entry-state rule in sections 9 and 10 is an instance of the lower
+  bound and, where a classification would need bound information before
+  binding, the rule does not classify; PR 2 and PR 3 add every
+  counterexample of section 4 (c1, c3a, c3b, `out-alias`, c5, c6, c7, c8,
+  c8b, cA, cB, cC) as tests with witnesses, and a review that finds a rule
+  not derivable from the invariant blocks the PR.
 - **The kill-set walker misses a write form** (a new assignment syntax, a
   deconstruction, a compound operator). The failure direction is unsound
   (a fact survives a write). Mitigation: the walker treats every syntax kind
@@ -906,6 +1025,39 @@ that `GS0536` newly reports (section 15).
 5. Should the per-statement entry states be kept for `SemanticModel`
    (section 14) in PR 1, since they are free, or left out until a consumer
    exists?
+6. R7 outcome (d): a type-test fact dropped at loop entry because the loop
+   reassigns the root from a variable or a call changes which hidden member
+   a read selects, with no diagnostic. Accept it as documented (the
+   comparison mode lists every site on Core, Core.Tests and Oahu), add a
+   warning when a hidden-member read's selection changes because a fact
+   was dropped at a loop entry, or extend rule 3 to right sides that are
+   names of locals declared with an explicit non-nullable type outside the
+   loop? This ADR proposes to accept it as documented; member hiding plus
+   reassignment inside a narrowed loop is rare.
+7. Rule 4 kills on any call. Should PR 3 keep a syntactic exemption for
+   calls whose callee is a `static`/top-level function name with no
+   callable-typed arguments, which cannot reach a closure of the current
+   function or a `ref` alias? The three Core functions it costs are listed
+   in section 4; this ADR proposes the uniform rule and a measured
+   decision in PR 3.
+8. Three review rounds found the entry-state rules for loops, backward
+   jumps and handlers to be where this design can go wrong, and every fix
+   moved toward fewer facts (R7 (a)-(d), R8 (a) and (a'), R10). The
+   alternative is to keep today's bind-once-then-re-bind for loops and
+   backward jumps (with the whole-loop kill set from the bound body
+   instead of the per-loop CFG, and the deferred-check machinery replaced
+   by the same re-bind) and take only the join representation of sections
+   6 to 9. That alternative keeps today's loop precision (R7 (a), (b), (d)
+   and R8 (a), (a') do not happen), still removes the `if`-join
+   interpreter, `ClearAssignedRoots`, the #4285/#4290 suppressions and the
+   `goto` proof generations, but keeps a second bind of every loop body
+   whose inherited fact is killed (frequency unmeasured; PR 1's
+   `narrowing.loop-rebinds` counter measures it), the 21-structure
+   snapshot, and the diagnostics truncation. This ADR proposes the
+   kill-set design because its entry rule is one lemma and its cost is
+   measured at four functions in `src/Core`; the maintainer may instead
+   choose the re-bind alternative for PR 3, and PR 1 and PR 2 are the same
+   under both.
 
 ## Consequences
 
@@ -926,9 +1078,11 @@ Positive:
 
 Negative:
 
-- Less permissive changes (R7, R8 outcome (a), R9) and a known
-  restructuring in `src/Core`. Users who relied on the loop exit-path
-  exemption or the cross-function non-null proof get a diagnostic.
+- Less permissive changes (R7 (a)-(c), R8 outcomes (a) and (a'), R9,
+  R10), one accepted-program output change (R7 (d)) and four
+  restructurings in `src/Core`. Users who relied on the loop exit-path exemption, on a
+  variable or call as non-null proof, or on calls in a loop not touching a
+  closure-assigned or aliased local get a diagnostic.
 - IL can change at join points for type-test facts (section 15).
 - A pin-move PR with `!!` removals.
 - The kill-set walker is a second syntactic notion of "assigns" beside the
@@ -961,11 +1115,17 @@ Neutral:
 - **Memoize the interpreter** (`ComputeBranchFallthroughNonNull` per node).
   Keeps the interpreter and its approximations, needs invalidation when a
   frame mutates, and does not touch the loop re-bind. Rejected.
-- **Keep the loop fixpoint with re-bind** (today's semantics exactly).
-  Keeps the exit-path exemption and the bound non-null proof that one Core
-  function uses. Rejected by #5130's acceptance ("no second bind of loop
-  bodies") and by the measurement in section 4: the exemption is never
-  load-bearing and the proof is load-bearing once.
+- **Keep the loop fixpoint with re-bind** (today's loop and backward-`goto`
+  semantics, with the join representation of this ADR everywhere else).
+  Keeps the bound non-null proof, the cleanup-order modelling of probe cC
+  and today's call classification, so R7 (a), (b), (d) and R8 (a), (a')
+  do not happen. Not chosen because #5130's acceptance asks for no second
+  bind of loop bodies, because the measured cost of the kill set on the
+  compiler's own source is four functions, and because the re-bind keeps
+  the snapshot and truncation machinery that three review rounds showed to
+  be the hardest part of this area to reason about. It is the fallback the
+  maintainer can choose for PR 3 (open question 8); PR 1 and PR 2 do not
+  depend on the choice.
 - **Bind loops once optimistically and report deferred diagnostics**, the
   backward-`goto` mechanism generalised to loops. Rejected because the
   optimistic bind has effects the deferred checker cannot see or undo: a
@@ -1062,6 +1222,67 @@ goto A
 C:
 s = nil
 goto B
+// c5: rejected today, stays rejected (any call kills closure-assigned roots)
+var s string? = Get()
+if s == nil { return 0 }
+var action (() -> void) = External
+let clear = func() { s = nil }
+for var i = 0; i < n; i++ {
+    total = total + s.Length
+    action()
+    action = clear
+}
+// c6: rejected today, stays rejected (a callable argument may be invoked)
+let clear = func() { s = nil }
+for var i = 0; i < n; i++ {
+    total = total + s.Length
+    Invoke(clear)          // func Invoke(f () -> void) { f() }
+}
+// c7: rejected today, stays rejected (callback writes the ref storage)
+func Run(ref text string?, callback () -> void, n int32) int32 {
+    if text == nil { return 0 }
+    for var i = 0; i < n; i++ {
+        total = total + text.Length
+        callback()         // caller: Run(ref t, () -> { t = nil }, 2)
+    }
+}
+// cA: accepted today and throws at run time; rejected by R10
+var s string? = Get()
+if s == nil { return 0 }
+try {
+    throw Exception("x")
+} catch when Clear(ref s) {    // func Clear(ref s string?) bool { s = nil; return false }
+    return 1
+} catch {
+    return s.Length
+}
+// cC: accepted today (prints 4); rejected by R8 (a')
+var x string? = nil
+x = "safe"
+var count = 0
+Again:
+let length = x.Length
+if count == 0 {
+    count++
+    try {
+        x = nil
+        goto Again
+    } finally {
+        x = "safe"
+    }
+}
+return length
+// c8 / c8b: accepted; today prints "animal" with `Dog{}` and "dog" with
+// `Dog()`; after R7(d) both print "dog"
+open class Animal { prop Name string -> "animal" }
+class Dog : Animal { prop Name string -> "dog" }
+var x Animal = Dog{}
+if x is Dog {
+    for var i = 0; i < n; i++ {
+        last = x.Name
+        x = Dog{}          // c8b: x = Dog()
+    }
+}
 ```
 
 - Repository compile with a built compiler (used for the two loop-rule
