@@ -280,6 +280,14 @@ internal class ReflectionMetadataEmitter {
     // wellKnown.
     private var methodBodyPlanner MethodBodyPlanner
 
+    // Reusable slot collections for method-body emit sessions that run one at a
+    // time on the coordinator thread (see MethodBodyEmitSession).
+    internal let sessionScratchPool ScratchPool[SessionScratch] = ScratchPool[SessionScratch](
+        "emit.session-scratch",
+        () -> SessionScratch(),
+        (scratch SessionScratch) -> scratch.Reset()
+    )
+
     // PR-E-5: SlotPlanner's sibling — ConversionEmitter — owns conversion-
     // shaped IL emission. In this PR it hosts the two stateless top-level
     // helpers (EmitBoxIfNeeded, EmitDefaultValue) that take an
@@ -4184,54 +4192,69 @@ internal class ReflectionMetadataEmitter {
     /// 22-argument planner call and the 25-argument emitter construction keeps
     /// them in exactly one place so a fix applies to every scaffold at once and
     /// can no longer drift between the near-identical copies.
-    internal class MethodBodyEmitSession {
+    internal class MethodBodyEmitSession : IDisposable {
         private let outer ReflectionMetadataEmitter
-        private let locals Dictionary[VariableSymbol, int32] = Dictionary[VariableSymbol, int32]()
-        private let labels Dictionary[BoundLabel, LabelHandle] = Dictionary[BoundLabel, LabelHandle]()
-        private let localTypes List[TypeSymbol] = List[TypeSymbol]()
-        private let structLiteralSlots Dictionary[BoundStructLiteralExpression, int32] = Dictionary[
-            BoundStructLiteralExpression,
-            int32
-        ]()
-        private let defaultExpressionSlots Dictionary[BoundDefaultExpression, int32] = Dictionary[
-            BoundDefaultExpression,
-            int32
-        ]()
-        private let mapIndexSlots Dictionary[BoundIndexExpression, int32] = Dictionary[BoundIndexExpression, int32]()
-        private let patternSwitchSlots Dictionary[BoundPatternSwitchStatement, int32] = Dictionary[
-            BoundPatternSwitchStatement,
-            int32
-        ]()
-        private let typePatternScratchSlots Dictionary[BoundTypePattern, int32] = Dictionary[BoundTypePattern, int32]()
-        private let switchExpressionSlots Dictionary[
-            BoundSwitchExpression,
-            (Result int32, Discriminant int32)
-        ] = Dictionary[BoundSwitchExpression, (Result int32, Discriminant int32)]()
-        private let channelOpSlots Dictionary[BoundNode, (VT int32, TA int32, Result int32, Spare int32)] = Dictionary[
-            BoundNode,
-            (VT int32, TA int32, Result int32, Spare int32)
-        ]()
-        private let receiverSpillSlots Dictionary[BoundExpression, int32] = Dictionary[BoundExpression, int32]()
-        private let stackAllocResultSlots Dictionary[BoundStackAllocExpression, int32] = Dictionary[
-            BoundStackAllocExpression,
-            int32
-        ]()
-        private let indexAssignmentValueSlots Dictionary[BoundExpression, int32] = Dictionary[BoundExpression, int32]()
-        private let liftedBinarySlots Dictionary[BoundExpression, LiftedBinarySlots] = Dictionary[
-            BoundExpression,
-            LiftedBinarySlots
-        ]()
-        private let nullableCoalesceSpillSlots Dictionary[BoundBinaryExpression, int32] = Dictionary[
-            BoundBinaryExpression,
-            int32
-        ]()
-        private let constValues Dictionary[VariableSymbol, object] = Dictionary[VariableSymbol, object]()
+        private var scratch SessionScratch?
+        private var lease ScratchLease[SessionScratch]?
+        private let locals Dictionary[VariableSymbol, int32]
+        private let labels Dictionary[BoundLabel, LabelHandle]
+        private let localTypes List[TypeSymbol]
+        private let structLiteralSlots Dictionary[BoundStructLiteralExpression, int32]
+        private let defaultExpressionSlots Dictionary[BoundDefaultExpression, int32]
+        private let mapIndexSlots Dictionary[BoundIndexExpression, int32]
+        private let patternSwitchSlots Dictionary[BoundPatternSwitchStatement, int32]
+        private let typePatternScratchSlots Dictionary[BoundTypePattern, int32]
+        private let switchExpressionSlots Dictionary[BoundSwitchExpression, (Result int32, Discriminant int32)]
+        private let channelOpSlots Dictionary[BoundNode, (VT int32, TA int32, Result int32, Spare int32)]
+        private let receiverSpillSlots Dictionary[BoundExpression, int32]
+        private let stackAllocResultSlots Dictionary[BoundStackAllocExpression, int32]
+        private let indexAssignmentValueSlots Dictionary[BoundExpression, int32]
+        private let liftedBinarySlots Dictionary[BoundExpression, LiftedBinarySlots]
+        private let nullableCoalesceSpillSlots Dictionary[BoundBinaryExpression, int32]
+        private let constValues Dictionary[VariableSymbol, object]
         private var hasFixedReturns bool
         private var fixedReturnSlot int32 = -1
 
-        init(outer ReflectionMetadataEmitter, il InstructionEncoder) {
+        /// Creates a session over fresh slot collections, or over pooled ones.
+        /// @param outer The owning emitter.
+        /// @param il The instruction encoder the body is emitted into.
+        /// @param pooled When `true`, the collections come from the emitter's pool and
+        /// go back to it on (cref:Dispose); the session must then not be used after
+        /// it is disposed, and must not outlive the body it plans.
+        init(outer ReflectionMetadataEmitter, il InstructionEncoder, pooled bool = false) {
             this.outer = outer
             this.Il = il
+            var scratch SessionScratch
+            if pooled {
+                let lease = outer.sessionScratchPool.Rent()
+                this.lease = lease
+                scratch = lease.Item
+            } else {
+                scratch = SessionScratch()
+            }
+            this.scratch = scratch
+            this.locals = scratch.Locals
+            this.labels = scratch.Labels
+            this.localTypes = scratch.LocalTypes
+            this.structLiteralSlots = scratch.StructLiteralSlots
+            this.defaultExpressionSlots = scratch.DefaultExpressionSlots
+            this.mapIndexSlots = scratch.MapIndexSlots
+            this.patternSwitchSlots = scratch.PatternSwitchSlots
+            this.typePatternScratchSlots = scratch.TypePatternScratchSlots
+            this.switchExpressionSlots = scratch.SwitchExpressionSlots
+            this.channelOpSlots = scratch.ChannelOpSlots
+            this.receiverSpillSlots = scratch.ReceiverSpillSlots
+            this.stackAllocResultSlots = scratch.StackAllocResultSlots
+            this.indexAssignmentValueSlots = scratch.IndexAssignmentValueSlots
+            this.liftedBinarySlots = scratch.LiftedBinaryOperatorSlots
+            this.nullableCoalesceSpillSlots = scratch.NullableCoalesceSpillSlots
+            this.constValues = scratch.ConstValues
+        }
+
+        /// Returns pooled collections to the emitter's pool. Safe to call more than once.
+        func Dispose() {
+            this.scratch = nil
+            this.lease?.Release()
         }
 
         /// Gets the instruction encoder that all planned/emitted IL flows through.
@@ -4286,7 +4309,8 @@ internal class ReflectionMetadataEmitter {
                 this.liftedBinarySlots,
                 this.nullableCoalesceSpillSlots,
                 this.Il,
-                this.stackAllocResultSlots
+                this.stackAllocResultSlots,
+                this.scratch?.GetPlanner()
             )
         }
 

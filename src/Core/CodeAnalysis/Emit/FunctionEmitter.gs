@@ -210,7 +210,7 @@ internal class FunctionEmitter {
             let moveNextBody = MoveNextBodyRewriter.Build(plan)
             let body = moveNextBody.Body
             let il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
-            let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il)
+            using let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il, pooled: true)
             // Issue #216: collect compile-time const bindings before slot allocation.
             session.CollectConstValues(body)
             session.Plan(body)
@@ -403,7 +403,7 @@ internal class FunctionEmitter {
                 bodyOffset = this.outer.stateMachines.EmitAsyncKickoffBody(function, asyncPlan, driveSynchronously)
             } else {
                 let il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
-                let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il)
+                using let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il, pooled: true)
                 // Issue #216: collect compile-time const bindings before slot allocation.
                 session.CollectConstValues(body)
                 session.Plan(body, function)

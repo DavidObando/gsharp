@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Emit
 
 import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Lowering.Iterators
 import GSharp.Core.CodeAnalysis.Symbols
 import System
@@ -213,8 +214,17 @@ internal class MethodBodyPlanner {
         liftedBinarySlots Dictionary[BoundExpression, LiftedBinarySlots],
         nullableCoalesceSpillSlots Dictionary[BoundBinaryExpression, int32],
         il InstructionEncoder,
-        stackAllocResultSlots Dictionary[BoundStackAllocExpression, int32]? = nil
+        stackAllocResultSlots Dictionary[BoundStackAllocExpression, int32]? = nil,
+        plannerScratch PlannerScratch? = nil
     ) {
+        let scratch = plannerScratch ?? PlannerScratch()
+        CompilationMeasurements.Count(
+            if scratch.Clears > 0 {
+                "emit.planner-scratch.reused"
+            } else {
+                "emit.planner-scratch.fresh"
+            }
+        )
         this.CollectStatements(body.Statements, function, locals, localTypes, labels, il, pass: 1)
         this.CollectBlockExpressionLocals(body, locals, localTypes)
         this.CollectStatements(body.Statements, function, locals, localTypes, labels, il, pass: 2)
@@ -238,7 +248,7 @@ internal class MethodBodyPlanner {
         )
         // Phase 3.C.3b: each `?.` access introduces a synthetic capture
         // local in the bound tree; pre-allocate a slot for it.
-        for nc in this.CollectNullConditionalCaptures(body) {
+        for nc in this.CollectNullConditionalCaptures(body, scratch) {
             if !locals.ContainsKey(nc.Capture) {
                 locals[nc.Capture] = localTypes.Count
                 localTypes.Add(nc.Capture.Type)
@@ -274,7 +284,7 @@ internal class MethodBodyPlanner {
                 receiverSpillSlots[nc.Receiver] = wrapperSlot
             }
         }
-        for literal in this.CollectStructLiterals(body) {
+        for literal in this.CollectStructLiterals(body, scratch) {
             // Class literals do not need a pre-allocated local slot — they
             // use newobj rather than initobj-into-a-slot.
             if literal.StructType.IsClass {
@@ -291,7 +301,7 @@ internal class MethodBodyPlanner {
         // Phase 3.A.4 emit: each map index READ lowers to a Dictionary.TryGetValue
         // pattern that needs a V-typed scratch local for the out parameter so that
         // missing keys yield the Go zero value (matching the interpreter).
-        for idx in this.CollectMapIndexReads(body) {
+        for idx in this.CollectMapIndexReads(body, scratch) {
             let slot = localTypes.Count
             localTypes.Add(idx.Type)
             Debug.Assert(
@@ -308,7 +318,7 @@ internal class MethodBodyPlanner {
         // any value-type instantiation. The `ldloca tmp; initobj T; ldloc tmp`
         // shape zero-inits the storage uniformly (null for ref types, zeroed
         // bytes for value types) and IL-verifies for every closed argument.
-        for def in this.CollectDefaultExpressions(body) {
+        for def in this.CollectDefaultExpressions(body, scratch) {
             let needsSlot = ReflectionMetadataEmitter.IsValueTypeSymbol(def.Type) ||
                 def.Type is TypeParameterSymbol ||
                 (def.Type is ImportedTypeSymbol erasedGen && erasedGen.HasTypeParameterArgument) ||
@@ -336,7 +346,7 @@ internal class MethodBodyPlanner {
         // `localloc` must sit beneath the length on the stack, and CIL has no
         // swap). Reuse receiverSpillSlots — keyed by the stackalloc node it
         // cannot collide with any receiver/assignment spill.
-        for sa in this.CollectStackAllocs(body) {
+        for sa in this.CollectStackAllocs(body, scratch) {
             if receiverSpillSlots.ContainsKey(sa) {
                 continue
             }
@@ -355,8 +365,8 @@ internal class MethodBodyPlanner {
         // zero-inits the block and the localloc lifetime is the whole frame, so
         // spilling the Span/pointer to a local is safe.
         if stackAllocResultSlots != nil {
-            let rootStackAllocs = this.CollectRootStackAllocs(body)
-            for sa in this.CollectStackAllocs(body) {
+            let rootStackAllocs = this.CollectRootStackAllocs(body, scratch)
+            for sa in this.CollectStackAllocs(body, scratch) {
                 if rootStackAllocs.Contains(sa) || stackAllocResultSlots.ContainsKey(sa) {
                     continue
                 }
@@ -365,7 +375,7 @@ internal class MethodBodyPlanner {
                 stackAllocResultSlots[sa] = slot
             }
         }
-        for receiver in this.CollectReceiverSpills(body, function, locals) {
+        for receiver in this.CollectReceiverSpills(body, function, locals, scratch) {
             if receiverSpillSlots.ContainsKey(receiver) {
                 continue
             }
@@ -378,7 +388,7 @@ internal class MethodBodyPlanner {
         // + store + ldloc tmp so the index/argument expressions are evaluated
         // exactly once even though the assignment expression's result is the
         // assigned value.
-        for ixa in this.CollectIndexAssignmentValueSpills(body) {
+        for ixa in this.CollectIndexAssignmentValueSpills(body, scratch) {
             if indexAssignmentValueSlots.ContainsKey(ixa) {
                 continue
             }
@@ -396,7 +406,7 @@ internal class MethodBodyPlanner {
         // tmp` instead. The slot is keyed by the assignment expression so it
         // does not collide with receiver-spill entries (which are keyed by
         // the receiver subexpression).
-        for assn in this.CollectAssignmentValueSpills(body) {
+        for assn in this.CollectAssignmentValueSpills(body, scratch) {
             if receiverSpillSlots.ContainsKey(assn) {
                 continue
             }
@@ -425,7 +435,7 @@ internal class MethodBodyPlanner {
         // receiver-address slot. The slot is typed as the operand's
         // NullableTypeSymbol, which `EncodeTypeSymbol` lowers to
         // `System.Nullable<T>` in the local-sig blob.
-        for unwrap in this.CollectNullableValueTypeUnwraps(body) {
+        for unwrap in this.CollectNullableValueTypeUnwraps(body, scratch) {
             if receiverSpillSlots.ContainsKey(unwrap.Operand) {
                 continue
             }
@@ -450,7 +460,7 @@ internal class MethodBodyPlanner {
         // produced invalid IL (issue #752): the receiver slot's type
         // overwrote the Nullable<T> spill type and the HasValue call
         // received the wrong receiver address.
-        for coalesce in this.CollectNullableValueTypeCoalesces(body) {
+        for coalesce in this.CollectNullableValueTypeCoalesces(body, scratch) {
             if nullableCoalesceSpillSlots.ContainsKey(coalesce) {
                 continue
             }
@@ -472,7 +482,7 @@ internal class MethodBodyPlanner {
         // liftedBinarySlots so the emitter can look it up at lowering time.
         // Skip nodes already owned by other collectors (NullCoalesce uses
         // receiverSpillSlots) to avoid double allocation.
-        for lifted in this.CollectLiftedBinaryOperators(body) {
+        for lifted in this.CollectLiftedBinaryOperators(body, scratch) {
             if liftedBinarySlots.ContainsKey(lifted) {
                 continue
             }
@@ -507,7 +517,7 @@ internal class MethodBodyPlanner {
         // slot as source + 1. Reference-result lifts share the source spill;
         // type-parameter results use a typed default, others produce ldnull.
         // Skip nodes already owned by another collector.
-        for conversion in this.CollectNullableValueTypeConversions(body) {
+        for conversion in this.CollectNullableValueTypeConversions(body, scratch) {
             if receiverSpillSlots.ContainsKey(conversion) {
                 continue
             }
@@ -602,8 +612,11 @@ internal class MethodBodyPlanner {
         }
     }
 
-    private func CollectStructLiterals(body BoundBlockStatement) IEnumerable[BoundStructLiteralExpression] {
-        let list = List[BoundStructLiteralExpression]()
+    private func CollectStructLiterals(body BoundBlockStatement, scratch PlannerScratch) IEnumerable[
+        BoundStructLiteralExpression
+    ] {
+        let list = scratch.StructLiterals
+        list.Clear()
         for s in body.Statements {
             this.slotPlanner.CollectStructLiterals(s, list)
         }
@@ -982,32 +995,39 @@ internal class MethodBodyPlanner {
         }
     }
 
-    private func CollectMapIndexReads(root BoundNode) IEnumerable[BoundIndexExpression] {
-        let sink = List[BoundIndexExpression]()
+    private func CollectMapIndexReads(root BoundNode, scratch PlannerScratch) IEnumerable[BoundIndexExpression] {
+        let sink = scratch.MapIndexReads
+        sink.Clear()
         this.slotPlanner.CollectMapIndexReads(cast[BoundStatement](root), sink)
         return sink
     }
 
-    private func CollectIndexAssignmentValueSpills(root BoundNode) IEnumerable[BoundExpression] {
-        let sink = List[BoundExpression]()
+    private func CollectIndexAssignmentValueSpills(root BoundNode, scratch PlannerScratch) IEnumerable[
+        BoundExpression
+    ] {
+        let sink = scratch.IndexAssignmentValueSpills
+        sink.Clear()
         this.slotPlanner.CollectIndexAssignmentValueSpills(cast[BoundStatement](root), sink)
         return sink
     }
 
-    private func CollectDefaultExpressions(root BoundNode) IEnumerable[BoundDefaultExpression] {
-        let sink = List[BoundDefaultExpression]()
+    private func CollectDefaultExpressions(root BoundNode, scratch PlannerScratch) IEnumerable[BoundDefaultExpression] {
+        let sink = scratch.DefaultExpressions
+        sink.Clear()
         this.slotPlanner.CollectDefaultExpressions(cast[BoundStatement](root), sink)
         return sink
     }
 
-    private func CollectStackAllocs(root BoundNode) IEnumerable[BoundStackAllocExpression] {
-        let sink = List[BoundStackAllocExpression]()
+    private func CollectStackAllocs(root BoundNode, scratch PlannerScratch) IEnumerable[BoundStackAllocExpression] {
+        let sink = scratch.StackAllocs
+        sink.Clear()
         this.slotPlanner.CollectStackAllocs(cast[BoundStatement](root), sink)
         return sink
     }
 
-    private func CollectRootStackAllocs(root BoundNode) HashSet[BoundStackAllocExpression] {
-        let sink = HashSet[BoundStackAllocExpression]()
+    private func CollectRootStackAllocs(root BoundNode, scratch PlannerScratch) HashSet[BoundStackAllocExpression] {
+        let sink = scratch.RootStackAllocs
+        sink.Clear()
         this.slotPlanner.CollectRootStackAllocs(cast[BoundStatement](root), sink)
         return sink
     }
@@ -1015,9 +1035,11 @@ internal class MethodBodyPlanner {
     private func CollectReceiverSpills(
         root BoundNode,
         function FunctionSymbol?,
-        locals IReadOnlyDictionary[VariableSymbol, int32]
+        locals IReadOnlyDictionary[VariableSymbol, int32],
+        scratch PlannerScratch
     ) IEnumerable[BoundExpression] {
-        let sink = List[BoundExpression]()
+        let sink = scratch.ReceiverSpills
+        sink.Clear()
         this.slotPlanner.CollectReceiverSpills(cast[BoundStatement](root), function, locals, sink)
         return sink
     }
@@ -1027,8 +1049,9 @@ internal class MethodBodyPlanner {
     // so the emitter can spill the assigned value (`dup; stloc tmp; setter;
     // ldloc tmp`) instead of re-evaluating the receiver and calling the
     // getter to recover the expression result.
-    private func CollectAssignmentValueSpills(root BoundNode) IEnumerable[BoundExpression] {
-        let sink = List[BoundExpression]()
+    private func CollectAssignmentValueSpills(root BoundNode, scratch PlannerScratch) IEnumerable[BoundExpression] {
+        let sink = scratch.AssignmentValueSpills
+        sink.Clear()
         this.slotPlanner.CollectAssignmentValueSpills(cast[BoundStatement](root), sink)
         return sink
     }
@@ -1038,8 +1061,11 @@ internal class MethodBodyPlanner {
     // temp slot must be typed as `Nullable<T>` (so the local-sig blob encodes
     // the struct) and pre-allocated alongside the other body-emit scratch
     // locals so it appears in the locals signature.
-    private func CollectNullableValueTypeUnwraps(root BoundNode) IEnumerable[BoundUnaryExpression] {
-        let sink = List[BoundUnaryExpression]()
+    private func CollectNullableValueTypeUnwraps(root BoundNode, scratch PlannerScratch) IEnumerable[
+        BoundUnaryExpression
+    ] {
+        let sink = scratch.NullableUnwraps
+        sink.Clear()
         this.slotPlanner.CollectNullableValueTypeUnwraps(cast[BoundStatement](root), sink)
         return sink
     }
@@ -1049,8 +1075,11 @@ internal class MethodBodyPlanner {
     // slot. The slot is keyed by the binary expression node and typed as the
     // LHS's NullableTypeSymbol so `EncodeTypeSymbol` emits the proper
     // `System.Nullable<T>` token in the local-sig blob.
-    private func CollectNullableValueTypeCoalesces(root BoundNode) IEnumerable[BoundBinaryExpression] {
-        let sink = List[BoundBinaryExpression]()
+    private func CollectNullableValueTypeCoalesces(root BoundNode, scratch PlannerScratch) IEnumerable[
+        BoundBinaryExpression
+    ] {
+        let sink = scratch.NullableCoalesces
+        sink.Clear()
         this.slotPlanner.CollectNullableValueTypeCoalesces(cast[BoundStatement](root), sink)
         return sink
     }
@@ -1066,20 +1095,27 @@ internal class MethodBodyPlanner {
     // C/D `BoundClrBinaryOperatorExpression` (custom-equality operator on
     // `Nullable<T>` operands) shares the same slot bundle as the built-in
     // operator table's `BoundBinaryExpression` shape.
-    internal func CollectLiftedBinaryOperators(root BoundNode) IEnumerable[BoundExpression] {
-        let sink = List[BoundExpression]()
+    internal func CollectLiftedBinaryOperators(root BoundNode, scratch PlannerScratch) IEnumerable[BoundExpression] {
+        let sink = scratch.LiftedBinaryOperators
+        sink.Clear()
         this.slotPlanner.CollectLiftedBinaryOperators(cast[BoundStatement](root), sink)
         return sink
     }
 
-    internal func CollectNullableValueTypeConversions(root BoundNode) IEnumerable[BoundExpression] {
-        let sink = List[BoundExpression]()
+    internal func CollectNullableValueTypeConversions(root BoundNode, scratch PlannerScratch) IEnumerable[
+        BoundExpression
+    ] {
+        let sink = scratch.NullableConversions
+        sink.Clear()
         this.slotPlanner.CollectNullableValueTypeConversions(cast[BoundStatement](root), sink)
         return sink
     }
 
-    private func CollectNullConditionalCaptures(node BoundNode) IEnumerable[BoundNullConditionalAccessExpression] {
-        let list = List[BoundNullConditionalAccessExpression]()
+    private func CollectNullConditionalCaptures(node BoundNode, scratch PlannerScratch) IEnumerable[
+        BoundNullConditionalAccessExpression
+    ] {
+        let list = scratch.NullConditionals
+        list.Clear()
         this.slotPlanner.CollectNullConditional(node, list)
         return list
     }
