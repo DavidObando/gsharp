@@ -62,12 +62,20 @@ An `is var copy` capture retains the validated entry too. Native-discriminator
 `switch` statements/expressions and compound total-capture/concrete-payload
 patterns currently require an explicit `is`/`as` intermediate view; unsupported
 forms diagnose instead of testing the entry's CLR type.
+Native inputs nested in property/list patterns likewise need an intermediate
+view. Recovery cannot hide native-bearing saved state behind an `object` or
+nominal target. Overload applicability uses the finite positive conformance
+records, not a guessed runtime shape.
 
 Required `P` storage must be initialized. `P?` permits outer absence, not a
 present nullable payload. This core rejects typed-nil insertion, open/generic
 payloads, enums, generic/rich/ref protocol slots, `managed[P]` projections,
 equality/hash/object/delegate/generic escapes and general foreign export.
 Public native contracts currently require accessible concrete payload types.
+Native-bearing auto-properties (including data-primary properties) and imported
+native constructors/base initializers are not yet admitted; use initialized
+ordinary fields and explicit checked methods. Equality/hash operations on
+aggregates containing native storage are blocked too.
 Existing nominal `interface`, `adapt`, concrete `as` restrictions and ordinary
 pattern/flow rules are unchanged.
 

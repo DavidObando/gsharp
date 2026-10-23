@@ -99,23 +99,84 @@ internal shared class NativeProtocolMetadata {
         .ToString() + ":" + TypeSignature(method.Type, localAssembly)
 
     private func TypeSignature(type TypeSymbol, localAssembly string) string ->
-    type.ToDisplayString(DisplayFormat.FullyQualified) +
-        "@" +
-        (type.ClrType?.Assembly.FullName ?? localAssembly) +
-        "[" +
-        string.Join(",", NullableFlagsBuilder.Build(type)) +
-        "]" +
-        (
-        if type.ConstructedTypeArguments.IsDefaultOrEmpty {
-            string.Empty
-        } else {
-            "<" + string.Join(
-                ",",
-                type.ConstructedTypeArguments.Select((argument TypeSymbol) -> TypeSignature(argument, localAssembly))
-            ) +
-                ">"
+    TypeShape(type, localAssembly) + "[" + string.Join(",", NullableFlagsBuilder.Build(type)) + "]"
+
+    internal func TypesMatch(left TypeSymbol, right TypeSymbol) bool -> left == right ||
+        left.ClrType != nil &&
+        right.ClrType != nil &&
+        TypeSignature(left, string.Empty) == TypeSignature(right, string.Empty)
+
+    private func TypeShape(type TypeSymbol, localAssembly string) string {
+        if type is NullabilityAnnotatedTypeSymbol annotated {
+            return TypeShape(annotated.BaseType, localAssembly)
         }
-    )
+        if type is PlatformTypeSymbol platform {
+            return TypeShape(platform.UnderlyingType, localAssembly)
+        }
+        if type is NullableTypeSymbol nullable {
+            let shape = TypeShape(nullable.UnderlyingType, localAssembly)
+            return if nullable.UnderlyingType.IsValueType {
+                "nullable-value(" + shape + ")"
+            } else {
+                shape
+            }
+        }
+        if type is ArrayTypeSymbol array {
+            return "array[" + array.Length.ToString() + "](" + TypeShape(array.ElementType, localAssembly) + ")"
+        }
+        if type is SliceTypeSymbol slice {
+            return "array[0](" + TypeShape(slice.ElementType, localAssembly) + ")"
+        }
+        if type is RectangularArrayTypeSymbol rectangular {
+            return "rectangular[" + rectangular.Rank.ToString() +
+                "](" +
+                TypeShape(rectangular.ElementType, localAssembly) +
+                ")"
+        }
+        let clr = type.ClrType
+        let definition = if clr is {IsGenericType: true} generic {
+            generic.GetGenericTypeDefinition()
+        } else {
+            clr
+        }
+        let positions = type.GetElementPositions()
+        if clr is {IsArray: true} importedArray {
+            return (
+                if importedArray.IsSZArray {
+                    "array[0]"
+                } else {
+                    "rectangular[" + importedArray.GetArrayRank().ToString() + "]"
+                }
+            ) +
+                "(" +
+                TypeShape(positions.Single(), localAssembly) +
+                ")"
+        }
+        if type is TupleTypeSymbol || definition?.FullName is {} definitionName && definitionName.StartsWith(
+            "System.ValueTuple`",
+            StringComparison.Ordinal
+        ) {
+            return "tuple(" + string.Join(
+                ",",
+                positions.Select((position TypeSymbol) -> TypeShape(position, localAssembly))
+            ) +
+                ")"
+        }
+        let identity = if definition != nil {
+            definition.Assembly.FullName + "|" + definition.FullName
+        } else {
+            Identity(type, localAssembly)
+        }
+        return identity +
+            (
+            if positions.IsDefaultOrEmpty {
+                string.Empty
+            } else {
+                "<" + string.Join(",", positions.Select((position TypeSymbol) -> TypeShape(position, localAssembly))) +
+                    ">"
+            }
+        )
+    }
 
     internal func Require(element JsonElement, name string, kind JsonValueKind) JsonElement {
         if element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(name, out var value) ||

@@ -2495,6 +2495,9 @@ class Conversion {
         /// @param type The candidate (non-nullable-wrapper) target type.
         /// @returns `true` when `nil` converts to [`type`](paramref) without a `T?` wrapper.
         internal func IsNilAssignableWithoutNullableWrapper(type TypeSymbol?) bool {
+            if type != nil && NativeProtocolMetadata.IsProtocol(type) {
+                return false
+            }
             return type is InterfaceSymbol ||
                 type is StructSymbol &&
                 type.IsClass == true ||

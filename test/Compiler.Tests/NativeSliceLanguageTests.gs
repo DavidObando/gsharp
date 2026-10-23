@@ -498,6 +498,17 @@ True
         }
 
         func CompileCSharp(source string, name string, extra ...string) string {
+            return CompileCSharpCore(source, name, nil, extra)
+        }
+
+        func CompileCSharpWithReference(
+            source string,
+            name string,
+            reference string,
+            extra ...string
+        ) string -> CompileCSharpCore(source, name, reference, extra)
+
+        private func CompileCSharpCore(source string, name string, reference string?, extra ...string) string {
             let paths = (cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")))
                 .Split(Path.PathSeparator)
                 .Concat([]string{typeof(Slice[_]).Assembly.Location})
@@ -513,8 +524,19 @@ True
                 )
             )
             let path = Path.Combine(Directory, name + ".dll")
-            let result = compilation.Emit(path)
-            Assert.True(result.Success, string.Join("\n", result.Diagnostics))
+            if reference != nil {
+                using let implementation = File.Create(path)
+                using let refStream = File.Create(reference)
+                let result = compilation.Emit(
+                    implementation,
+                    metadataPEStream: refStream,
+                    options: Microsoft.CodeAnalysis.Emit.EmitOptions(includePrivateMembers: false)
+                )
+                Assert.True(result.Success, string.Join("\n", result.Diagnostics))
+            } else {
+                let result = compilation.Emit(path)
+                Assert.True(result.Success, string.Join("\n", result.Diagnostics))
+            }
             return path
         }
 

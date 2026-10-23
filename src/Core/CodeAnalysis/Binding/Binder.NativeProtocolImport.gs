@@ -361,7 +361,11 @@ partial class Binder {
         )
             .ToArray()
         if !expected.SequenceEqual(actual, StringComparer.Ordinal) {
-            throw InvalidDataException("stale or incomplete native protocol contract revision")
+            throw InvalidDataException(
+                "stale or incomplete native protocol contract revision; imported [" + string.Join("; ", expected) +
+                    "], recorded [" +
+                    string.Join("; ", actual) + "]"
+            )
         }
         return slots
     }

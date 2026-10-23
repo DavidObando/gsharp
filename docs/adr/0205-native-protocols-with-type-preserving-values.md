@@ -28,11 +28,17 @@ instance/ordinary-extension witnesses, target-typed conversions and paired
 capability tests. Exact nongeneric structs and closed classes are admitted;
 open classes, enums, typed-nil payloads and generic/rich/ref slots diagnose.
 Public contracts conservatively require accessible payload signature types.
-Required initialization uses the existing complete initialization/safety walk.
+Required ordinary-field initialization uses the existing initialization/safety
+walk. Native-bearing auto-properties, including synthesized data-primary
+properties, are not admitted until accessor initialization and hostile-boundary
+validation are proved; explicit checked storage and methods remain available.
 Total `is var` captures retain the validated entry. Mixed total captures and
 concrete-payload tests require an intermediate view. Native-discriminator
 switch statements/expressions are not yet admitted: they diagnose explicitly
 rather than testing a carrier or treating unknown coverage as mismatch.
+Native inputs nested inside ordinary property/list patterns also require an
+intermediate protocol view. Applicability uses finite positive coverage;
+conformance is not a blanket nominal relation for overload target ranking.
 
 The selected backend differs from the illustrative sealed-per-protocol carrier
 in section 9: `P` is a feature-marked CLR interface reference to an internal
@@ -61,9 +67,19 @@ entry identity. Feature markers are cooperative diagnostics, not CLR security
 against arbitrary foreign IL/reflection. General foreign export, projections,
 typed-nil recovery, equality/hash/object/generic/delegate escapes and Go
 translation remain blocked. Existing nominal interfaces/adapt are unchanged.
-Saved-storage restrictions include inherited state and source generic
+Native-bearing storage restrictions include instance/static inherited state and source generic
 arguments; feature markers cover transitive signature storage and instance
 receivers consistently in implementation and reference assemblies.
+The storage walk is finite over aggregate definitions and inspects argument
+dependencies without expanding recursive generic constructions indefinitely.
+Concrete recovery cannot erase saved-native-storage restrictions through an
+object/nominal target, and aggregate equality/hash operations remain blocked.
+Public signature accessibility includes container positions and properties.
+Imported accessors require the same member-level contract as ordinary methods.
+Native-bearing field access requires the owning type's validated storage contract.
+Native-bearing imported constructors/base initializers are explicitly unproved
+boundaries. Slot identities use structural type shapes and separate nullability
+flags, rather than a symbolic type's temporary CLR representation.
 
 `NativeProtocolLanguageTests` exercises real emitted execution, IL verification,
 contract/producer/consumer implementation/ref imports, hostile boundaries,

@@ -42,6 +42,9 @@ internal class NativeProtocolPatternInspector(
             }
         } else {
             HasConcreteTests = true
+            if node.HasBinding && source is {} sourceProtocol {
+                NativeProtocolOperations.RequirePayloadRecovery($scope, sourceProtocol, node.TargetType, location)
+            }
         }
         base.VisitTypePattern(node)
     }

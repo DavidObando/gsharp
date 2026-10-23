@@ -41,8 +41,9 @@ partial class Binder {
 
     private func CanConvertNativeProtocol(source TypeSymbol, target TypeSymbol) bool {
         let protocol = NativeProtocolOperations.GetProtocol(target)!!
-        if NativeProtocolOperations.GetProtocol(source) != nil {
-            return source is not NullableTypeSymbol || target is NullableTypeSymbol
+        if NativeProtocolOperations.GetProtocol(source) is {} sourceProtocol {
+            return (source is not NullableTypeSymbol || target is NullableTypeSymbol) &&
+                NativeProtocolOperations.HasPositiveCoverage($scope, sourceProtocol, protocol)
         }
         if !IsSupportedNativeProtocolPayload(source) {
             return false
@@ -752,17 +753,16 @@ partial class Binder {
                 offset != candidate
                 .Parameters
                 .Length ||
-                slot.Type != candidate.Type ||
+                !NativeProtocolMetadata.TypesMatch(slot.Type, candidate.Type) ||
                 slot.ReturnRefKind != RefKind.None ||
                 candidate.ReturnRefKind != RefKind.None {
                 return false
             }
             for var index = 0; index < slot.Parameters.Length; index++ {
-                if slot
-                    .Parameters[index]
-                    .Type != candidate
-                    .Parameters[index + offset]
-                    .Type ||
+                if !NativeProtocolMetadata.TypesMatch(
+                    slot.Parameters[index].Type,
+                    candidate.Parameters[index + offset].Type
+                ) ||
                     slot
                     .Parameters[index]
                     .RefKind != RefKind.None ||

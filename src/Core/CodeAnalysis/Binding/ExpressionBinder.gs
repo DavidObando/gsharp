@@ -2259,6 +2259,13 @@ internal partial class ExpressionBinder {
                     targetProtocol,
                     syntax.Location
                 )
+            } else {
+                NativeProtocolOperations.RequirePayloadRecovery(
+                    binderCtx.RootScope,
+                    sourceProtocol,
+                    targetType,
+                    syntax.Location
+                )
             }
             expression = NativeProtocolOperations.PrepareInput(
                 binderCtx.RootScope,

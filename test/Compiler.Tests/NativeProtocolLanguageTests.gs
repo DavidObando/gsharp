@@ -5,7 +5,9 @@ package GSharp.Compiler.Tests
 import GSharp.Tests
 import System
 import System.IO
+import System.Linq
 import System.Reflection.Metadata
+import System.Reflection.Metadata.Ecma335
 import System.Reflection.PortableExecutable
 import System.Text.Json
 import Xunit
@@ -14,36 +16,368 @@ class NativeProtocolLanguageTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
-    func AutoPropertyStorageCannotLoseItsNativeBoundary(imported bool) {
+    func NativeAutoPropertiesRequireAdmittedAccessorBoundaries(staticStorage bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
-        let source = `package AutoStorage
+        let property = "public prop Value P? { get; set; }"
+        let source = "public protocol P {}\npublic class Holder { " +
+            (
+            if staticStorage {
+                "shared { " + property + " }"
+            } else {
+                property
+            }
+        ) +
+            " }"
+        let (code, output) = fixture.TryCompile(source, "AutoStorage", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("auto-property"), output)
+    }
+
+    @Fact
+    func ProtocolArgumentOverloadsUseFinitePositiveCoverage() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`import System
+protocol Message {}
+protocol Readable { func Read() int32; }
+protocol Writable { func Write() int32; }
+struct Reader { func Read() int32 -> 17 }
+func Pick(value Readable) int32 -> value.Read()
+func Pick(value Writable) int32 -> value.Write()
+let message Message = Reader{}
+Console.WriteLine(Pick(message))
+`, "protocol-argument-overload", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("17\n", fixture.Run(dll))
+    }
+
+    @Fact
+    func ProtocolAndObjectTargetsHaveSoundOverloadOrdering() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`import System
+protocol P {}
+class Concrete {}
+func Pick(value P) int32 -> 17
+func Pick(value object) int32 -> 99
+Console.WriteLine(Pick(Concrete()))
+`, "protocol-object-overload", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("17\n", fixture.Run(dll))
+    }
+
+    @Fact
+    func ExpandingOrdinaryGenericStorageTerminatesWithoutNativeState() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`import System
+class Node[T] { var Next Node[[]T]? }
+func Read(value Node[int32]) int32 -> 17
+Console.WriteLine(Read(Node[int32]()))
+`, "protocol-free-expanding-storage", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("17\n", fixture.Run(dll))
+    }
+
+    @Fact
+    func RequiredProtocolOverloadDoesNotAdmitAbsentArguments() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`import System
+protocol P {}
+func Pick(value P) int32 -> 17
+func Pick(value object?) int32 -> 99
+Console.WriteLine(Pick(nil))
+`, "protocol-required-overload", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("99\n", fixture.Run(dll))
+    }
+
+    @Theory
+    @InlineData("let result = holder is { Saved: Counter captured }")
+    @InlineData("let result = holder is { Saved: Unknown captured }")
+    @InlineData("let result = []P{holder.Saved} is [Counter captured]")
+    @InlineData("let result = []P{holder.Saved} is [Unknown captured]")
+    @InlineData("switch holder { case { Saved: Counter captured } { } default { } }")
+    @InlineData("let result = switch holder { case { Saved: Counter captured }: 1\n default: 0 }")
+    func NestedNativePatternInputsRequireIntermediateViews(statement string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`protocol P {}
+protocol Unknown { func Missing() int32; }
+struct Counter {}
+class Holder { var Saved P
+init(value P) { Saved = value } }
+func Test(holder Holder) {
+` + statement + "\n}", "protocol-nested-pattern", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("nested native pattern"), output)
+    }
+
+    @Theory
+    @InlineData("init() {}")
+    @InlineData("init(value P) { Value = value }")
+    func RequiredNativeAutoPropertyCannotBypassTheAccessorGate(initializer string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(
+            "protocol P {}\nclass Holder { prop Value P { get; set; }\n" + initializer + "\n}",
+            "protocol-required-auto-property",
+            executable: false
+        )
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("auto-property"), output)
+    }
+
+    @Theory
+    @InlineData("public class Holder { public prop Value Hidden? { get; set; } }")
+    @InlineData("public func Take(values []Hidden) {}")
+    @InlineData("public func Take(values slice[Hidden]) {}")
+    @InlineData("public func Take(values (Hidden?, int32)) {}")
+    func NestedAndPropertyContractsRequireAccessibleProtocols(declaration string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(
+            "internal protocol Hidden {}\n" + declaration,
+            "protocol-private-contract",
+            executable: false
+        )
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("accessible contract"), output)
+    }
+
+    @Theory
+    @InlineData(false, "let escaped = wrapped as object")
+    @InlineData(false, "let escaped = wrapped is object captured")
+    @InlineData(true, "let escaped = wrapped as object")
+    @InlineData(true, "let escaped = wrapped is object captured")
+    func PayloadRecoveryCannotEraseSavedNativeStorage(imported bool, statement string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package SavedPayload
 public protocol P {}
-public class Holder { public prop Value P? { get; set; } }
+public struct Counter {}
+public class Holder { var Saved P
+public init(value P) { Saved = value } }
+public func Make() P -> Holder(Counter{})
 `
         if !imported {
             let (code, output) = fixture.TryCompile(
-                source + "\nfunc Bad(value Holder) object -> value",
-                "AutoStorageLocal",
+                source + "\nfunc Bad() { let wrapped = Make()\n" + statement + "\n}",
+                "saved-payload-local",
                 executable: false
             )
             Assert.NotEqual(0, code)
-            Assert.True(output.Contains("GS0629") && output.Contains("cannot escape"), output)
+            Assert.True(output.Contains("GS0629") && output.Contains("saved-storage"), output)
             return
         }
-        let refDirectory = Path.Combine(fixture.Directory, "ref")
-        Directory.CreateDirectory(refDirectory)
-        let reference = Path.Combine(refDirectory, "AutoStorage.dll")
-        let implementation = fixture.Compile(source, "AutoStorage", executable: false, "/refout:" + reference)
+        let reference = Path.Combine(fixture.Directory, "SavedPayload.ref.dll")
+        let implementation = fixture.Compile(source, "SavedPayload", executable: false, "/refout:" + reference)
         for image in[]string{implementation, reference} {
             let (code, output) = fixture.TryCompile(
-                "import AutoStorage\nfunc Bad(value Holder) object -> value",
-                "AutoStorageConsumer",
+                "import SavedPayload\nfunc Bad() { let wrapped = Make()\n" + statement + "\n}",
+                "saved-payload-caller",
                 executable: false,
                 "/r:" + image
             )
             Assert.NotEqual(0, code)
-            Assert.True(output.Contains("GS0629") && output.Contains("cannot escape"), output)
+            Assert.True(output.Contains("GS0629") && output.Contains("saved-storage"), output)
         }
+    }
+
+    @Theory
+    @InlineData(false, "left == right")
+    @InlineData(false, "left.Equals(right)")
+    @InlineData(false, "left.GetHashCode()")
+    @InlineData(true, "left == right")
+    @InlineData(true, "left.Equals(right)")
+    @InlineData(true, "left.GetHashCode()")
+    func NativeBearingDataEqualityAndHashAreNotAdmitted(imported bool, expression string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package SavedEquality
+public protocol P {}
+public struct Counter {}
+public data struct Box { public var Value P? }
+public func Make() Box -> Box{Value: Counter{}}
+`
+        if !imported {
+            let (code, output) = fixture.TryCompile(
+                source + "\nfunc Bad() { let left = Make()\nlet right = Make()\nlet result = " + expression + "\n}",
+                "saved-equality-local",
+                executable: false
+            )
+            Assert.NotEqual(0, code)
+            Assert.True(output.Contains("GS0629") && output.Contains("equality/hash"), output)
+            return
+        }
+        let reference = Path.Combine(fixture.Directory, "SavedEquality.ref.dll")
+        let implementation = fixture.Compile(source, "SavedEquality", executable: false, "/refout:" + reference)
+        for image in[]string{implementation, reference} {
+            let (code, output) = fixture.TryCompile(
+                "import SavedEquality\nfunc Bad() { let left = Make()\nlet right = Make()\nlet result = " +
+                    expression +
+                    "\n}",
+                "saved-equality-caller",
+                executable: false,
+                "/r:" + image
+            )
+            Assert.NotEqual(0, code)
+            Assert.True(output.Contains("GS0629") && output.Contains("equality/hash"), output)
+        }
+    }
+
+    @Fact
+    func UnrelatedSavedNativePayloadDoesNotBlockOrdinaryConcreteRecovery() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`import System
+protocol P {}
+struct Counter { var Number int32 }
+class Holder { var Saved P
+init(value P) { Saved = value } }
+func MakeHolder() P -> Holder(Counter{})
+let counter P = Counter{Number: 17}
+if counter is Counter captured { Console.WriteLine(captured.Number) }
+Console.WriteLine(MakeHolder() is Counter)
+Console.WriteLine(MakeHolder() is object)
+let absent P? = nil
+Console.WriteLine(absent is object)
+`, "saved-payload-compatible-recovery", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("17\nFalse\nTrue\nFalse\n", fixture.Run(dll))
+    }
+
+    @Theory
+    @InlineData("class Derived : Foreign(Make()) {}")
+    @InlineData("func Bad() { let value = Foreign(Make()) }")
+    @InlineData("class Derived : Stored {}")
+    @InlineData("func Bad() { let value = Stored() }")
+    func ImportedNativeConstructorsRequireAnAdmittedBoundary(declaration string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "ConstructorBoundary.ref.dll")
+        let implementation = fixture.Compile(`package ConstructorBoundary
+public protocol P {}
+public struct Counter {}
+public open class Foreign { public init(value P) {} }
+public open class Stored { private var Saved P?
+public init() {} }
+public func Make() P -> Counter{}
+`, "ConstructorBoundary", executable: false, "/refout:" + reference)
+        for image in[]string{implementation, reference} {
+            let (code, output) = fixture.TryCompile(
+                "import ConstructorBoundary\n" + declaration,
+                "constructor-boundary-caller",
+                executable: false,
+                "/r:" + image
+            )
+            Assert.NotEqual(0, code)
+            Assert.True(output.Contains("GS0629") && output.Contains("metadata-aware"), output)
+        }
+    }
+
+    @Theory
+    @InlineData("Item?", "nil", "value == nil")
+    @InlineData("(Item, int32)", "(Item(), 17)", "value.Item2 == 17")
+    @InlineData("[]Item", "[]Item{Item()}", "value.Length == 1")
+    func StructuralSlotIdentitiesSurviveImplementationAndReferenceImports(
+        type string,
+        argument string,
+        predicate string
+    ) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "StructuralSlots.ref.dll")
+        let implementation = fixture.Compile(`package StructuralSlots
+public class Item {}
+public protocol P { func Check(value ` + type + `) bool; }
+public struct Worker : P {
+public func Check(value ` + type + `) bool -> ` + predicate + `
+}
+public func Make() P -> Worker{}
+`, "StructuralSlots", executable: false, "/refout:" + reference)
+        for image in[]string{implementation, reference} {
+            let caller = fixture.Compile(
+                "import System\nimport StructuralSlots\nConsole.WriteLine(Make().Check(" + argument + "))",
+                "structural-slots-caller",
+                executable: true,
+                "/r:" + image
+            )
+            IlVerifier.Verify(caller, []string{implementation})
+            Assert.Equal("True\n", fixture.Run(caller))
+        }
+    }
+
+    @Theory
+    @InlineData("holder.Value = value")
+    @InlineData("let result = holder.Value")
+    @InlineData("Foreign.Global = value")
+    @InlineData("let result = Foreign.Global")
+    @InlineData("holder[0] = value")
+    @InlineData("let result = holder[0]")
+    @InlineData("holder.Field = value")
+    @InlineData("let result = holder.Field")
+    @InlineData("Foreign.GlobalField = value")
+    @InlineData("let result = Foreign.GlobalField")
+    func ImportedUnmarkedNativeAccessorsRequireMetadataAwareBoundaries(statement string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "ForeignAccess.ref.dll")
+        let implementation = fixture.CompileCSharpWithReference(`using System;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+[assembly: AssemblyMetadata("GSharp.NativeProtocolFeature", "6b105e95-6860-496a-9acb-d81bc250a275/1")]
+[assembly: AssemblyMetadata("GSharp.NativeProtocols", """{"schema":"6b105e95-6860-496a-9acb-d81bc250a275/1","declarations":[{"type":"ForeignAccess.P","slots":[]}],"entries":[]}""")]
+namespace ForeignAccess {
+[Obsolete("GSharp.NativeProtocols.v1")]
+public interface P {}
+public sealed class Foreign {
+public P? Value { get; set; }
+public static P? Global { get; set; }
+public P? this[int index] { get => null; set {} }
+public P? Field;
+public static P? GlobalField;
+public CompilerFeatureRequiredAttribute MarkerType => null!;
+}
+}`, "ForeignAccess", reference)
+        for image in[]string{implementation, reference} {
+            PromoteFixtureProtocolMarker(image)
+            let (code, output) = fixture.TryCompile(
+                "import ForeignAccess\nfunc Bad(holder Foreign, value P) {\n" + statement + "\n}",
+                "foreign-access-caller",
+                executable: false,
+                "/r:" + image
+            )
+            Assert.NotEqual(0, code)
+            Assert.True(output.Contains("GS0629") && output.Contains("metadata-aware"), output)
+        }
+    }
+
+    private func PromoteFixtureProtocolMarker(path string) {
+        // C# reserves the real attribute; author that exact BCL reference in the
+        // fixture metadata, leaving every foreign accessor deliberately unmarked.
+        let bytes = File.ReadAllBytes(path)
+        using let stream = MemoryStream(bytes)
+        using let pe = PEReader(stream)
+        let reader = pe.GetMetadataReader()
+        let feature = reader.TypeReferences.Single(
+            (handle TypeReferenceHandle) ->
+            reader.GetString(reader.GetTypeReference(handle).Name) == "CompilerFeatureRequiredAttribute"
+        )
+        let constructor = reader.MemberReferences.Single(
+            (handle MemberReferenceHandle) -> {
+                let member = reader.GetMemberReference(handle)
+                return member.Parent.Kind == HandleKind.TypeReference && reader.GetString(
+                    reader.GetTypeReference(cast[TypeReferenceHandle](member.Parent)).Name
+                ) ==
+                "ObsoleteAttribute" && reader.GetString(member.Name) == ".ctor"
+            }
+        )
+        let rva = pe.PEHeaders.CorHeader!!.MetadataDirectory.RelativeVirtualAddress
+        let section = pe
+            .PEHeaders
+            .SectionHeaders
+            .Single(
+            (item SectionHeader) -> rva >= item.VirtualAddress && rva < item.VirtualAddress + item.SizeOfRawData
+        )
+        let rowSize = reader.GetTableRowSize(TableIndex.MemberRef)
+        Assert.Equal(6, rowSize)
+        let offset = section.PointerToRawData + rva - section.VirtualAddress + reader.GetTableMetadataOffset(
+            TableIndex.MemberRef
+        ) +
+            (MetadataTokens.GetRowNumber(constructor) - 1) * rowSize
+        let parent = (MetadataTokens.GetRowNumber(feature) << 3) | 1
+        bytes[offset] = uint8(parent & 255)
+        bytes[offset + 1] = uint8(parent >> 8)
+        File.WriteAllBytes(path, bytes)
     }
 
     @Fact
@@ -67,6 +401,34 @@ Console.WriteLine(Make().Read())
 `, "OwnedWitnessCaller" + (image == reference).ToString(), executable: true, "/r:" + image)
             IlVerifier.Verify(caller, []string{implementation})
             Assert.Equal("41\n", fixture.Run(caller))
+        }
+    }
+
+    @Fact
+    func StaticNativeStorageHasEquivalentSourceAndImportedEscapeRestrictions() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package StaticStorage
+public protocol P {}
+public class Holder { shared { private var Saved P? } }
+`
+        let (localCode, localOutput) = fixture.TryCompile(
+            source + "\nfunc Bad(value Holder) object -> value",
+            "static-storage-local",
+            executable: false
+        )
+        Assert.NotEqual(0, localCode)
+        Assert.True(localOutput.Contains("GS0629") && localOutput.Contains("cannot escape"), localOutput)
+        let reference = Path.Combine(fixture.Directory, "StaticStorage.ref.dll")
+        let implementation = fixture.Compile(source, "StaticStorage", executable: false, "/refout:" + reference)
+        for image in[]string{implementation, reference} {
+            let (code, output) = fixture.TryCompile(
+                "import StaticStorage\nfunc Bad(value Holder) object -> value",
+                "static-storage-caller",
+                executable: false,
+                "/r:" + image
+            )
+            Assert.NotEqual(0, code)
+            Assert.True(output.Contains("GS0629") && output.Contains("cannot escape"), output)
         }
     }
 

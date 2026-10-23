@@ -613,14 +613,7 @@ internal class TypeDefEmitter {
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow)
         )
         this.cache.StructTypeDefs[structSym] = handle2
-        if structSym.IsNativeProtocolSupport || NativeProtocolSafety.ContainsSavedProtocol(structSym) ||
-            structSym
-            .Fields
-            .Concat(structSym.StaticFields)
-            .Any((field FieldSymbol) -> NativeProtocolSafety.ContainsSavedProtocol(field.Type)) ||
-            structSym
-            .PrimaryConstructorParameters
-            .Any((parameter ParameterSymbol) -> NativeProtocolSafety.ContainsSavedProtocol(parameter.Type)) {
+        if structSym.IsNativeProtocolSupport || NativeProtocolSafety.ContainsSavedProtocol(structSym) {
             this.EmitNativeProtocolFeature(handle2)
         }
         EmitGenericParamRows(this.emitCtx, handle2, structSym.TypeParameters)

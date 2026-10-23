@@ -94,6 +94,42 @@ internal class NativeProtocolOperations {
             .ProtocolQueries
             .Add(NativeProtocolQuery(source, target, positive, location))
 
+        internal func HasPositiveCoverage($scope BoundScope, source TypeSymbol, target TypeSymbol) bool {
+            if source == target {
+                return true
+            }
+            let registry = $scope.GetStructuralAdapterRegistry()
+            var known = false
+            for entry in registry.ProtocolEntries.Where(
+                (item NativeProtocolEntryPlan) -> item.Protocols.Contains(source)
+            ) {
+                known = true
+                if !entry.Protocols.Contains(target) {
+                    return false
+                }
+            }
+            for entry in registry.ImportedProtocolEntries.Where(
+                (item ImportedNativeProtocolEntry) ->
+                item.Decisions.TryGetValue(source, out var decision) && decision.Positive
+            ) {
+                known = true
+                if !entry.Decisions.TryGetValue(target, out var decision) || !decision.Positive {
+                    return false
+                }
+            }
+            return known
+        }
+
+        internal func RequirePayloadRecovery(
+            $scope BoundScope,
+            source TypeSymbol,
+            target TypeSymbol,
+            location TextLocation
+        ) -> $scope
+            .GetStructuralAdapterRegistry()
+            .ProtocolQueries
+            .Add(NativeProtocolQuery(source, target, false, location, recovery: true))
+
         internal func NegativeProbe($scope BoundScope, source BoundExpression, protocol TypeSymbol) BoundExpression {
             let registry = $scope.GetStructuralAdapterRegistry()
             let operations = GetOrCreate($scope, protocol)
@@ -180,6 +216,33 @@ internal class NativeProtocolOperations {
         internal func Complete($scope BoundScope, diagnostics DiagnosticBag) {
             let registry = $scope.GetStructuralAdapterRegistry()
             for query in registry.ProtocolQueries {
+                if query.IsPayloadRecovery {
+                    if !NativeProtocolSafety.ContainsSavedProtocol(query.Target) &&
+                        (
+                        registry.ProtocolEntries.Any(
+                            (entry NativeProtocolEntryPlan) -> entry.Protocols.Contains(query.Source) &&
+                                NativeProtocolSafety.ContainsSavedProtocol(entry.SourceType) &&
+                                Conversion
+                                .ClassifyNonStructural(entry.SourceType, query.Target).Exists
+                        ) ||
+                            registry
+                            .ImportedProtocolEntries
+                            .Any(
+                            (entry ImportedNativeProtocolEntry) ->
+                            entry.Decisions.TryGetValue(query.Source, out var decision) &&
+                                decision.Positive &&
+                                NativeProtocolSafety.ContainsSavedProtocol(entry.SourceType) &&
+                                Conversion
+                                .ClassifyNonStructural(entry.SourceType, query.Target).Exists
+                        )
+                    ) {
+                        diagnostics.ReportNativeProtocol(
+                            query.Location,
+                            "native payload recovery cannot erase saved-storage restrictions through object or nominal targets"
+                        )
+                    }
+                    continue
+                }
                 var known = 0
                 for entry in registry.ProtocolEntries.Where(
                     (item NativeProtocolEntryPlan) -> item.Protocols.Contains(query.Source)

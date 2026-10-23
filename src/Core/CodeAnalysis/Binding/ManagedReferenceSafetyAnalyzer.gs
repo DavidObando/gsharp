@@ -319,6 +319,16 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         if initializer == nil {
             return
         }
+        if initializer.ClrConstructor is {} imported {
+            NativeProtocolSafety.ValidateForeignCall(
+                imported,
+                initializer.Arguments.Any(
+                    (argument BoundExpression) -> NativeProtocolSafety.ContainsSavedProtocol(argument.Type)
+                ),
+                initializer.Arguments.FirstOrDefault()?.Syntax?.Location ?? default(TextLocation),
+                diagnostics
+            )
+        }
         this.CheckConstructorArguments(initializer.Arguments, initializer.GSharpConstructor)
         for argument in initializer.Arguments {
             this.VisitExpression(argument)
@@ -962,6 +972,15 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                 analyzer.AnalyzeFunction(function, body)
             }
             for type in types {
+                if type.BaseType is {} importedBase &&
+                    importedBase.ClrType != nil &&
+                    NativeProtocolSafety
+                    .ContainsSavedProtocol(importedBase) {
+                    diagnostics.ReportNativeProtocol(
+                        type.Declaration?.Location ?? default(TextLocation),
+                        "native-bearing imported base initialization requires a separately admitted metadata-aware constructor contract"
+                    )
+                }
                 for field in type.Fields.Concat(type.StaticFields) {
                     if NativeProtocolMetadata.IsPublic(type) && field.Accessibility == Accessibility.Public {
                         NativeProtocolSafety.ValidatePublicContractType(
@@ -975,6 +994,19 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                         field.Declaration?.Location ?? type.Declaration?.Location ?? default(TextLocation),
                         diagnostics
                     )
+                }
+                for property in type.Properties.Concat(type.StaticProperties) {
+                    let location = property.Declaration?.Location ?? type.Declaration?.Location ?? default(TextLocation)
+                    if NativeProtocolMetadata.IsPublic(type) && property.Accessibility == Accessibility.Public {
+                        NativeProtocolSafety.ValidatePublicContractType(property.Type, location, diagnostics)
+                    }
+                    NativeProtocolSafety.ValidateStorageType(property.Type, location, diagnostics)
+                    if property.IsAutoProperty && NativeProtocolSafety.ContainsSavedProtocol(property.Type) {
+                        diagnostics.ReportNativeProtocol(
+                            location,
+                            "native-bearing auto-property initialization/accessor boundaries are not admitted; use checked ordinary storage and explicit methods"
+                        )
+                    }
                 }
                 analyzer.CheckPrimaryConstructorParameters(type)
                 analyzer.CheckBaseInitializer(type.BaseConstructorInitializer)

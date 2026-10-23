@@ -133,6 +133,17 @@ use as a general foreign API.
 Calls carrying native arguments or returns require a nongeneric, feature-marked
 method and validated assembly evidence. An assembly marker alone is not an
 admitted method contract.
+The same admission check applies to imported property/indexer accessors.
+Native-bearing field reads/writes also require a marked owning type and validated
+assembly evidence; ordinary CLR fields cannot become an unmarked native export.
+Native-bearing imported constructors and base initializers remain unproved and
+diagnose explicitly. Source native-bearing auto-properties, including
+synthesized data-primary properties, are rejected until their required
+initialization and hostile setter/getter boundaries are implemented.
+Public contract accessibility is checked recursively through containers and
+property signatures. Slot metadata uses canonical structural shapes with
+separate nullability flags, including same-assembly nullable types, tuples and
+arrays; reference imports do not rely on their source-time CLR placeholders.
 
 ## Explicit interface implementations
 

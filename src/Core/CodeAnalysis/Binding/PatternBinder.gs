@@ -64,6 +64,7 @@ internal class PatternBinder {
     private let bindExpression(ExpressionSyntax) -> BoundExpression
     private let bindTypeClause(TypeClauseSyntax) -> TypeSymbol?
     private let isNilLiteral(BoundExpression) -> bool
+    private var currentPatternInput TypeSymbol?
 
     /// Initializes a new instance of the (cref:PatternBinder)
     /// class.
@@ -145,11 +146,24 @@ internal class PatternBinder {
         bindingContext PatternBindingContext,
         preferTypeNames bool
     ) BoundPattern {
-        // ADR-0169: guarantee the dispatch-level anchor so semantic-model and
-        // analyzer queries can resolve this pattern by its syntax.
-        let result = BindPatternCore(syntax, discriminantType, bindingContext, preferTypeNames)
-        result.AnchorSyntax(syntax)
-        return result
+        if currentPatternInput is {} parent && NativeProtocolOperations.GetProtocol(discriminantType) is {} protocol &&
+            NativeProtocolOperations.GetProtocol(parent) != protocol {
+            Diagnostics.ReportNativeProtocol(
+                syntax.Location,
+                "nested native pattern inputs require an explicit intermediate protocol view"
+            )
+            return BoundDiscardPattern(syntax, discriminantType)
+        }
+        let previous = currentPatternInput
+        currentPatternInput = discriminantType
+        try {
+            // Preserve the dispatch-level anchor for semantic-model queries.
+            let result = BindPatternCore(syntax, discriminantType, bindingContext, preferTypeNames)
+            result.AnchorSyntax(syntax)
+            return result
+        } finally {
+            currentPatternInput = previous
+        }
     }
 
     private func BindPatternCore(

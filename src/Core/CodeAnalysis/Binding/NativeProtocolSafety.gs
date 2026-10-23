@@ -16,24 +16,42 @@ internal shared class NativeProtocolSafety {
             return true
         }
         let seen = visited ?? HashSet[TypeSymbol]()
-        if !seen.Add(type) {
-            return false
-        }
         if type is NullableTypeSymbol nullable {
             return ContainsSavedProtocol(nullable.UnderlyingType, seen)
         }
         if type is StructSymbol aggregate {
+            // Inspect argument dependencies before cutting the finite definition graph.
+            // Node[T] -> Node[[]T] must not create an unbounded constructed-type walk.
+            if TypeArguments(type).Any((argument TypeSymbol) -> ContainsSavedProtocol(argument, seen)) {
+                return true
+            }
+            if !seen.Add(aggregate.Definition) {
+                return false
+            }
             return aggregate.BaseType is {} parent &&
                 ContainsSavedProtocol(parent, seen) ||
                 aggregate
+                .PrimaryConstructorParameters
+                .Any((parameter ParameterSymbol) -> ContainsSavedProtocol(parameter.Type, seen)) ||
+                aggregate
                 .Fields
+                .Concat(aggregate.StaticFields)
                 .Concat(
-                aggregate.Properties.Select((property PropertySymbol) -> property.BackingField).OfType[FieldSymbol]()
+                aggregate
+                    .Properties
+                    .Concat(aggregate.StaticProperties)
+                    .Select((property PropertySymbol) -> property.BackingField)
+                    .OfType[FieldSymbol]()
             )
                 .Any(
                 (field FieldSymbol) ->
-                !field.IsStatic && ContainsSavedProtocol(field.Type, seen)
-            )
+                ContainsSavedProtocol(field.Type, seen)
+            ) ||
+                aggregate.ClrType is {} importedAggregate &&
+                NativeProtocolMetadata.HasFeatureMarker(importedAggregate)
+        }
+        if !seen.Add(type) {
+            return false
         }
         if type is ArrayTypeSymbol array {
             return ContainsSavedProtocol(array.ElementType, seen)
@@ -151,6 +169,9 @@ internal shared class NativeProtocolSafety {
         if NativeProtocolOperations.GetProtocol(type) is {} protocol && !NativeProtocolMetadata.IsPublic(protocol) {
             diagnostics.ReportNativeProtocol(location, "public native signatures require accessible contract types")
         }
+        for position in type.GetElementPositions() {
+            ValidatePublicContractType(position, location, diagnostics)
+        }
     }
 
     internal func ValidateStorageType(type TypeSymbol, location TextLocation, diagnostics DiagnosticBag) {
@@ -200,11 +221,7 @@ internal shared class NativeProtocolSafety {
             }
             case binary is BoundBinaryExpression when
             (binary.Op.SyntaxKind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken) &&
-                (
-                NativeProtocolOperations.GetProtocol(binary.Left.Type) != nil || NativeProtocolOperations.GetProtocol(
-                    binary.Right.Type
-                ) != nil
-            ) &&
+                (ContainsSavedProtocol(binary.Left.Type) || ContainsSavedProtocol(binary.Right.Type)) &&
                 !IsNil(binary.Left) &&
                 !IsNil(binary.Right) {
                 diagnostics.ReportNativeProtocol(
@@ -220,6 +237,9 @@ internal shared class NativeProtocolSafety {
                 )
             }
             case call is BoundImportedInstanceCallExpression {
+                if ContainsSavedProtocol(call.Receiver.Type) && IsEqualityMember(call.Method.Name) {
+                    diagnostics.ReportNativeProtocol(location, "native-bearing aggregate equality/hash is not admitted")
+                }
                 if NativeProtocolOperations.GetProtocol(call.Receiver.Type) is {} protocol {
                     if call.Method.DeclaringType != protocol.ClrType {
                         diagnostics.ReportNativeProtocol(
@@ -270,6 +290,11 @@ internal shared class NativeProtocolSafety {
                 )
             }
             case call is BoundImportedCallExpression {
+                if IsEqualityMember(call.Function.Method.Name) && call.Arguments.Any(
+                    (argument BoundExpression) -> ContainsSavedProtocol(argument.Type)
+                ) {
+                    diagnostics.ReportNativeProtocol(location, "native-bearing aggregate equality/hash is not admitted")
+                }
                 ValidateForeignCall(
                     call.Function.Method,
                     ContainsSavedProtocol(call.Type) || call.Arguments.Any(
@@ -284,6 +309,97 @@ internal shared class NativeProtocolSafety {
                     location,
                     diagnostics
                 )
+            }
+            case call is BoundClrConstructorCallExpression {
+                ValidateForeignCall(
+                    call.Constructor,
+                    ContainsSavedProtocol(call.Type) || call.Arguments.Any(
+                        (argument BoundExpression) -> ContainsSavedProtocol(argument.Type)
+                    ),
+                    location,
+                    diagnostics
+                )
+            }
+            case access is BoundClrPropertyAccessExpression when access.Member is PropertyInfo property &&
+                property.GetMethod is {} getter {
+                ValidateForeignCall(
+                    getter,
+                    ContainsSavedProtocol(access.Type) ||
+                        access.Receiver != nil &&
+                        ContainsSavedProtocol(access.Receiver.Type),
+                    location,
+                    diagnostics
+                )
+            }
+            case assignment is BoundClrPropertyAssignmentExpression when assignment.Member is PropertyInfo property &&
+                property.SetMethod is {} setter {
+                ValidateForeignCall(
+                    setter,
+                    ContainsSavedProtocol(assignment.Type) ||
+                        ContainsSavedProtocol(assignment.Value.Type) ||
+                        assignment.Receiver != nil &&
+                        ContainsSavedProtocol(assignment.Receiver.Type),
+                    location,
+                    diagnostics
+                )
+            }
+            case access is BoundClrPropertyAccessExpression when access.Member is FieldInfo field {
+                ValidateForeignStorage(
+                    field,
+                    ContainsSavedProtocol(access.Type) ||
+                        access.Receiver != nil &&
+                        ContainsSavedProtocol(access.Receiver.Type),
+                    location,
+                    diagnostics
+                )
+            }
+            case assignment is BoundClrPropertyAssignmentExpression when assignment.Member is FieldInfo field {
+                ValidateForeignStorage(
+                    field,
+                    ContainsSavedProtocol(assignment.Type) ||
+                        ContainsSavedProtocol(assignment.Value.Type) ||
+                        assignment.Receiver != nil &&
+                        ContainsSavedProtocol(assignment.Receiver.Type),
+                    location,
+                    diagnostics
+                )
+            }
+            case access is BoundClrIndexExpression when access.Indexer.GetMethod is {} getter {
+                ValidateForeignCall(
+                    getter,
+                    ContainsSavedProtocol(access.Type) ||
+                        ContainsSavedProtocol(access.Target.Type) ||
+                        access
+                        .Arguments
+                        .Any((argument BoundExpression) -> ContainsSavedProtocol(argument.Type)),
+                    location,
+                    diagnostics
+                )
+            }
+            case assignment is BoundClrIndexAssignmentExpression when assignment.Indexer.SetMethod is {} setter {
+                ValidateForeignCall(
+                    setter,
+                    ContainsSavedProtocol(assignment.Type) ||
+                        ContainsSavedProtocol(assignment.Value.Type) ||
+                        assignment.Target != nil &&
+                        ContainsSavedProtocol(assignment.Target.Type) ||
+                        assignment.TargetExpression != nil &&
+                        ContainsSavedProtocol(assignment.TargetExpression.Type) ||
+                        assignment
+                        .Arguments
+                        .Any((argument BoundExpression) -> ContainsSavedProtocol(argument.Type)),
+                    location,
+                    diagnostics
+                )
+            }
+            case call is BoundCallExpression when IsEqualityMember(call.Function.Name) && call.Arguments.Any(
+                (argument BoundExpression) -> ContainsSavedProtocol(argument.Type)
+            ) {
+                diagnostics.ReportNativeProtocol(location, "native-bearing aggregate equality/hash is not admitted")
+            }
+            case call is BoundUserInstanceCallExpression when IsEqualityMember(call.Method.Name) &&
+                ContainsSavedProtocol(call.Receiver.Type) {
+                diagnostics.ReportNativeProtocol(location, "native-bearing aggregate equality/hash is not admitted")
             }
             case call is BoundCallExpression when call
                 .Function
@@ -322,27 +438,45 @@ internal shared class NativeProtocolSafety {
         }
     }
 
-    private func ValidateForeignCall(
-        method MethodInfo,
+    internal func ValidateForeignCall(
+        method MethodBase,
         hasNativeArguments bool,
         location TextLocation,
         diagnostics DiagnosticBag
     ) {
         if hasNativeArguments &&
-            (
-            method.IsGenericMethod || !NativeProtocolMetadata.HasSupportedFeatureMarker(method) ||
-                NativeProtocolMetadata
-                .Read(method.DeclaringType!!.Assembly)
-                .Manifest
-                .ValueKind ==
-            System.Text.Json.JsonValueKind.Undefined
-        ) {
+            (method is ConstructorInfo || method.IsGenericMethod || !HasValidatedForeignContract(method)) {
             diagnostics.ReportNativeProtocol(
                 location,
                 "native arguments require a nongeneric metadata-aware G# contract; general foreign export is blocked"
             )
         }
     }
+
+    private func ValidateForeignStorage(
+        field FieldInfo,
+        hasNativeStorage bool,
+        location TextLocation,
+        diagnostics DiagnosticBag
+    ) {
+        if hasNativeStorage && (field.DeclaringType is not{} owner || !HasValidatedForeignContract(owner)) {
+            diagnostics.ReportNativeProtocol(
+                location,
+                "native field access requires a metadata-aware G# storage contract; general foreign export is blocked"
+            )
+        }
+    }
+
+    private func HasValidatedForeignContract(member MemberInfo) bool ->
+    NativeProtocolMetadata.HasSupportedFeatureMarker(member) &&
+        NativeProtocolMetadata
+        .Read(member.Module.Assembly)
+        .Manifest
+        .ValueKind !=
+    System.Text.Json.JsonValueKind.Undefined
+
+    private func IsEqualityMember(name string) bool ->
+    name is "Equals" or "GetHashCode" or "op_Equality" or "op_Inequality"
 
     private func IsNil(value BoundExpression) bool -> switch value {
         case conversion is BoundConversionExpression: IsNil(conversion.Expression)
