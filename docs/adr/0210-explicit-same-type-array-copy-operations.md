@@ -278,7 +278,9 @@ design for review, not an admitted go2gs family. M0 still reports
    reference after initialization; whole-value assignment uses CopyInto.
 2. A new Go array value gets CopyNew storage: a new variable, a by-value
    argument, a return of a location, a struct literal field and a slice-literal
-   element. A fresh composite literal or call result needs no extra copy.
+   element. These boundaries are mandatory. A fresh composite literal or a
+   profile call result needs no extra copy, because the callee already copied
+   any returned location.
 3. Go evaluates index and indirection operands and right-hand sides, then
    stores left to right
    ([Go specification, assignment statements](https://go.dev/ref/spec#Assignment_statements)).
@@ -286,11 +288,32 @@ design for review, not an admitted go2gs family. M0 still reports
    final destination in the store phase. It does not check every destination
    before the first store, because Go permits an earlier store before a later
    store panics.
-4. A source value is snapshotted (CopyNew) only when an earlier store in the
-   same statement can overwrite it. When aliasing is unknown, snapshot.
-5. Element types are flat: numbers, booleans, strings and other values whose
+4. Go orders calls, method calls and receives lexically, but the order of
+   other operands relative to them is unspecified
+   ([Go specification, order of evaluation](https://go.dev/ref/spec#Order_of_evaluation)).
+   The frontend emits one permitted evaluation plan per statement. At each
+   mandatory boundary of rule 2, it captures a fresh owned value at that
+   boundary's point in the plan; a later call or callback cannot change a
+   value already captured. Where permitted plans give different results, the
+   frontend uses the plan observed for the reference toolchain and witnesses
+   it, or rejects the statement. It does not invent a universal left-to-right
+   rule (ADR-0191 section 6).
+5. Elsewhere, such as an operand that a later CopyInto store in the same
+   statement reads, an extra source snapshot is optional. The frontend may read
+   the live array only with a proof that nothing between the operand's point
+   in the plan and its last use can change it: no intervening evaluation,
+   call or callback, no earlier store in the statement, and no alias or escape
+   through which either can write it. An earlier store that overwrites the
+   source is one way the proof fails, not the only one. Without the proof, it
+   snapshots.
+6. Element types are flat: numbers, booleans, strings and other values whose
    G# copy matches Go's. Nested fixed arrays, struct elements with array
    fields, pointers to arrays and array equality are unsupported neighbors.
+7. Emitted `.copy()` must bind to the CopyNew operation: the proposed
+   intrinsic, or a member the frontend has proved equivalent. Because lookup
+   comes first, an extension named `copy` in scope can win. In that case the
+   frontend emits the existing `cast[[N]T](a.Clone())` form or reports a
+   diagnostic. It never assumes that a winning extension copies.
 
 #### Side-by-side examples
 
@@ -393,8 +416,39 @@ A real Go `int` index also needs its original-width check before narrowing
 requires a non-`nil` element, so slices whose elements can be `nil` are
 unsupported neighbors.
 
-**Swap.** `a` is overwritten by the first store and read by the second, so
-only `a` needs a snapshot.
+**Order-dependent operands.** Rule 4 protects a guaranteed order. In the
+first statement below, `id(a)` is a call, so it runs, and copies its argument,
+before `mutateA()` runs. In the second, Go does not say whether `a` is read
+before or after `mutateA()`, so `x[0]` can be 1 or 9.
+
+```go
+// mutateA sets a[0] = 9 and returns [2]int{5, 6}
+x, y = id(a), mutateA() // x[0] == 1 in every permitted order
+x, y = a, mutateA()     // x[0] is 1 or 9; Go 1.27.2 gave 9
+```
+
+```gsharp
+// First statement: the rule 2 argument copy happens before MutateA runs.
+let first = Id(a.copy())
+let second = MutateA()
+Array.Copy(first, x, 2)
+Array.Copy(second, y, 2)
+
+// Second statement, following the observed order: call first, then read a.
+let result = MutateA()
+Array.Copy(a, x, 2)
+Array.Copy(result, y, 2)
+```
+
+In the second form, the live read of `a` is allowed by rule 5 because nothing
+runs between the read and its use, and `x` and `y` own separate arrays. A
+frontend that emits the other permitted order captures `a.copy()` before the
+call instead. Both are valid Go results, but differential agreement needs the
+observed one or a rejection (W24, W25).
+
+**Swap.** `a` is overwritten by the first store and read by the second, so it
+needs a snapshot. `b` is read by the first store before anything can write
+it, so rule 5 allows the live read.
 
 ```go
 a, b = b, a
@@ -482,9 +536,9 @@ witnesses exist:
 
 #### Executed research probes
 
-Nine small probes ran outside the repository. They used only current language
-features. They are not a Go differential run, ILVerify, NativeAOT, mutation or
-performance campaign.
+Nine small G# probes and one Go probe ran outside the repository. The G#
+probes used only current language features. None is a Go differential run,
+ILVerify, NativeAOT, mutation or performance campaign.
 
 - P1-P5 ran before this record with a local Release `gsc.dll` built from the
   native-protocol core branch, SHA-256
@@ -496,6 +550,8 @@ performance campaign.
 - Both used .NET SDK 10.0.401. The repository pin did not change.
 - Command form: `dotnet gsc.dll /target:exe /targetframework:net10.0
   /out:<Name>.dll <Name>.gs`, then `dotnet <Name>.dll`.
+- P10 is a Go program run with `go run .` under Go 1.27.2 (darwin/arm64).
+  It records Go behavior only. No G# lowering of it was compiled or run.
 
 | Probe | Result | Covers |
 | --- | --- | --- |
@@ -508,6 +564,7 @@ performance campaign.
 | P7 `CopyLookupProbe.gs` | Compile 0, run 0, stdout `3` | W21 |
 | P8 `CopyMissingProbe.gs` | Compile 1, `GS0159` (expected) | W22 |
 | P9 `RangeCopyProbe.gs` | Compile 1, `GS0156` (expected) | W23 |
+| P10 Go `main.go` | Run 0, stdout `assign 9 5`, `consume 9 5`, `call-first 1 5`, `local-closure 9 9` | W24, W25 |
 
 | ID | Witness | Observation | Status |
 | --- | --- | --- | --- |
@@ -534,6 +591,8 @@ performance campaign.
 | W21 | Extension named `copy` on `[2]int32` | Binds and returns `3` | Executed P7 |
 | W22 | `pair.copy()` without an extension | `GS0159` | Executed P8 |
 | W23 | `pair[..]` result stored in a `[2]int32` slot | `GS0156`: the range copy has type `[]int32` | Executed P9 |
+| W24 | Go `x, y = id(a), mutateA()`, an order the specification guarantees | `x[0]` 1 | Go executed P10; G# lowering not run, future obligation |
+| W25 | Go `x, y = a, mutateA()` and `consume(a, mutateA())`, an unspecified order | Go 1.27.2 read `a` after the call: `x[0]` 9, `p[0]` 9 | Go executed P10; G# lowering not run, future obligation |
 
 #### Future implementation obligations
 
@@ -563,6 +622,10 @@ must provide ADR-0154 discriminating tests for at least:
 A go2gs family based on section 4 additionally needs everything that ADR-0191
 requires for admission: unchanged Go, JIT and AOT agreement, rejected-neighbor
 witnesses, deterministic text and maps, all four stages and the output review.
+It also needs witnesses for section 4 rules 4, 5 and 7: W24 and W25 lowered and
+run, a later call or callback that mutates an operand after its mandatory copy,
+and an in-scope extension named `copy` that forces the `Clone` form or a
+diagnostic.
 
 ### 7. Storage and performance stay separate
 
