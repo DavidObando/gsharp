@@ -1300,6 +1300,34 @@ internal partial class ExpressionBinder {
         )
     }
 
+    /// Issue #5189: the closed CLR constructor type erases a same-compilation
+    /// enum type argument to `object`, so its array parameter is `object[]`.
+    /// An enum array argument rides through overload resolution as `int32[]`,
+    /// which is not applicable to `object[]`. Use `object[]` for that argument
+    /// so `Span[E](array)` selects the array constructor.
+    /// @param argumentType The symbolic type of the bound argument.
+    /// @param clrType The CLR type that overload resolution uses for the argument.
+    /// @param symbolicTypeArgs The symbolic type arguments of the constructed type.
+    /// @returns The CLR type to use for overload resolution.
+    private func EraseEnumElementArrayForClosedConstruction(
+        argumentType TypeSymbol,
+        clrType Type,
+        symbolicTypeArgs ImmutableArray[TypeSymbol]
+    ) Type {
+        if symbolicTypeArgs.IsDefaultOrEmpty || !clrType.IsSZArray {
+            return clrType
+        }
+        let element TypeSymbol? = switch argumentType {
+            case slice is SliceTypeSymbol: slice.ElementType
+            case array is ArrayTypeSymbol: array.ElementType
+            default: nil
+        }
+        if element is EnumSymbol && symbolicTypeArgs.Contains(element) {
+            return typeof(object).MakeArrayType()
+        }
+        return clrType
+    }
+
     private func FinishClrConstructorBindingFailure(
         syntax CallExpressionSyntax,
         typeName string,
@@ -1695,7 +1723,11 @@ internal partial class ExpressionBinder {
             if (boundArguments[i].Type is StructSymbol and {IsClass: true}) {
                 hasUserClassArg = true
             }
-            argTypes[i] = t
+            argTypes[i] = if t != nil && openGenericDefinition != nil {
+                EraseEnumElementArrayForClosedConstruction(boundArguments[i].Type, t, symbolicTypeArgs)
+            } else {
+                t
+            }
         }
         var bestCtor ConstructorInfo? = nil
         var ctorMapping = default(ImmutableArray[int32])
