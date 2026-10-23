@@ -136,6 +136,72 @@ open class Issue5144MetadataTypeSymbolTests {
     }
 
     @Fact
+    func DelegateKind_IncludesTheDelegateBaseTypesAndTheTypesBelowThem() {
+        using let resolver = HandleResolver([]string{typeof(ReferenceResolver).Assembly.Location})
+        let set = resolver.ImageSet!!
+        let coreLib = set.FindModule("System.Private.CoreLib")!!
+        Assert.True(Symbol(coreLib, "System.Delegate").Kinds.IsDelegate)
+        Assert.True(Symbol(coreLib, "System.MulticastDelegate").Kinds.IsDelegate)
+        Assert.True(Symbol(coreLib, "System.Action").Kinds.IsDelegate)
+        Assert.False(Symbol(coreLib, "System.Object").Kinds.IsDelegate)
+        Assert.False(Symbol(coreLib, "System.IDisposable").Kinds.IsDelegate)
+        // The context's helper gives the same answers for the same types.
+        Assert.True(ClrTypeUtilities.IsDelegateType(typeof(Delegate)))
+        Assert.True(ClrTypeUtilities.IsDelegateType(typeof(MulticastDelegate)))
+    }
+
+    @Fact
+    func ABaseTheSetLacks_StillComparesTheTypesOwnRow() {
+        // Leaf<T> derives from a missing type. The name, the arity and the generic parameter rows are still compared.
+        using let lib = CSharpFixture("namespace N5144G { public class Root {} }", assemblyName: "RootG5144")
+        using let derived = CSharpFixture(
+            "public class Leaf5144<T, U> : N5144G.Root {}",
+            []MetadataReference{MetadataReference.CreateFromFile(lib.AssemblyPath)},
+            assemblyName: "LeafG5144"
+        )
+        using let resolver = HandleResolver([]string{derived.AssemblyPath})
+        let set = resolver.ImageSet!!
+        let module = set.FindModule("LeafG5144")!!
+        let leaf = Symbol(module, "Leaf5144`2")
+        Assert.False(leaf.BaseDefinition!!.IsResolved)
+        Assert.Equal(2, leaf.GenericParameters.Length)
+        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        // The description keeps the parameter rows although the base is missing, on both sides.
+        let described = MetadataModelComparison.DescribeSymbol(leaf)
+        Assert.Contains("T:0:0,U:1:0", described)
+        Assert.EndsWith("|base-missing", described)
+        Assert.Equal(
+            described,
+            MetadataModelComparison.DescribeType(resolver.FindTypeForComparison("LeafG5144", "Leaf5144`2")!!)
+        )
+    }
+
+    @Fact
+    func TwoAssembliesWithTheSameBaseName_AreToldApart() {
+        using let baseA = CSharpFixture("namespace N5144S { public class Base {} }", assemblyName: "BaseA5144")
+        using let baseB = CSharpFixture("namespace N5144S { public class Base {} }", assemblyName: "BaseB5144")
+        using let derived = CSharpFixture(
+            "public class Derived5144 : N5144S.Base {}",
+            []MetadataReference{MetadataReference.CreateFromFile(baseB.AssemblyPath)},
+            assemblyName: "DerivedS5144"
+        )
+        // BaseA5144 comes first, so a lookup by name alone would pick it.
+        using let resolver = HandleResolver([]string{baseA.AssemblyPath, baseB.AssemblyPath, derived.AssemblyPath})
+        let set = resolver.ImageSet!!
+        let module = set.FindModule("DerivedS5144")!!
+        let derivedSymbol = Symbol(module, "Derived5144")
+        Assert.Equal("BaseB5144", derivedSymbol.BaseDefinition!!.Module!!.Identity.Name)
+        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        // The comparison key holds the defining assembly, on both sides.
+        let described = MetadataModelComparison.DescribeSymbol(derivedSymbol)
+        Assert.EndsWith("BaseB5144!N5144S.Base", described)
+        Assert.Equal(
+            described,
+            MetadataModelComparison.DescribeType(resolver.FindTypeForComparison("DerivedS5144", "Derived5144")!!)
+        )
+    }
+
+    @Fact
     func OneSymbolForOneRow_EvenWhenManyThreadsAskAtOnce() {
         using let resolver = HandleResolver([]string{typeof(ReferenceResolver).Assembly.Location})
         let set = resolver.ImageSet!!

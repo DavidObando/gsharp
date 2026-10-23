@@ -211,11 +211,10 @@ internal shared class MetadataModelComparison {
         }
     }
 
-    private func DescribeSymbol(symbol MetadataTypeSymbol) string {
-        // The context cannot answer the kind flags of a type whose base it cannot load (ADR-0209 table 7b, Q4).
-        if symbol.BaseDefinition is {IsResolved: false} {
-            return "base-missing|" + symbol.FullName
-        }
+    // A description has two parts. The first part reads only the type's own row and always compares.
+    // The second part needs the base chain. When the context cannot load a base (table 7b, Q4), both sides
+    // write "base-missing" for the second part, and only that part is left out.
+    internal func DescribeSymbol(symbol MetadataTypeSymbol) string {
         let parameters = string.Join(
             ",",
             symbol.GenericParameters.Select(
@@ -225,13 +224,8 @@ internal shared class MetadataModelComparison {
             )
         )
         let kinds = symbol.Kinds
-        let containing = symbol.EnclosingType?.FullName ?? ""
-        let baseName = if symbol.BaseDefinition is {} resolvedBase {
-            resolvedBase.FullName
-        } else {
-            ""
-        }
-        return Describe(
+        let own = string.Join(
+            "|",
             symbol.FullName,
             MetadataTypeNameReader.Escape(symbol.Name),
             MetadataTypeNameReader.Escape(symbol.Namespace),
@@ -239,99 +233,65 @@ internal shared class MetadataModelComparison {
             kinds.IsInterface,
             kinds.IsAbstract,
             kinds.IsSealed,
-            kinds.IsValueType,
-            kinds.IsEnum,
-            kinds.IsDelegate,
-            containing,
-            baseName
+            symbol.EnclosingType?.FullName ?? ""
         )
-    }
-
-    private func DescribeType(type Type) string {
-        try {
-            return DescribeLoadedType(type)
-        } catch (ex Exception) when ex is FileNotFoundException ||
-            ex is FileLoadException ||
-            ex is BadImageFormatException ||
-            ex is TypeLoadException {
-            return "base-missing|" + (type.FullName ?? "")
+        if symbol.BaseDefinition is {IsResolved: false} {
+            return own + "|base-missing"
         }
+        let baseName = if symbol.BaseDefinition is {} resolvedBase {
+            Describe(resolvedBase)
+        } else {
+            ""
+        }
+        return own + "|" + string.Join("|", kinds.IsValueType, kinds.IsEnum, kinds.IsDelegate, baseName)
     }
 
-    private func DescribeLoadedType(type Type) string {
+    internal func DescribeType(type Type) string {
         let all = type.GetGenericArguments()
-        let own = List[string]()
+        let parameters = List[string]()
         for var i = 0; i < all.Length; i++ {
-            own.Add(
+            parameters.Add(
                 all[i].Name + ":" + i.ToString() + ":" + (cast[int32](all[i].GenericParameterAttributes)).ToString()
             )
         }
-        var baseName = ""
-        try {
-            if type.BaseType is {} baseType {
-                baseName = if baseType.IsGenericType {
-                    baseType.GetGenericTypeDefinition().FullName ?? ""
-                } else {
-                    baseType.FullName ?? ""
-                }
-            }
-        } catch (ex Exception) when ex is FileNotFoundException ||
-            ex is FileLoadException ||
-            ex is BadImageFormatException ||
-            ex is TypeLoadException {
-            baseName = "missing"
-        }
-        let name = type.Name
-        return Describe(
+        let own = string.Join(
+            "|",
             type.FullName ?? "",
-            name,
+            type.Name,
             if type.DeclaringType == nil {
                 type.Namespace ?? ""
             } else {
                 ""
             },
-            string.Join(",", own),
+            string.Join(",", parameters),
             type.IsInterface,
             type.IsAbstract,
             type.IsSealed,
-            // The raw properties answer false across reflection contexts (#3764); the safe form answers from the base name.
-            type.IsValueTypeSafe(),
-            type.BaseType?.FullName == "System.Enum" && type.FullName != "System.Enum",
-            type.BaseType?.FullName == "System.MulticastDelegate",
-            type.DeclaringType?.FullName ?? "",
-            baseName
+            type.DeclaringType?.FullName ?? ""
         )
+        try {
+            // The raw properties answer false across reflection contexts (#3764); the safe forms answer from the base name.
+            let valueType = type.IsValueTypeSafe()
+            let isEnum = type.BaseType?.FullName == "System.Enum" && type.FullName != "System.Enum"
+            let isDelegate = ClrTypeUtilities.IsDelegateType(type)
+            var baseName = ""
+            if type.BaseType is {} baseType {
+                // The defining assembly is part of the identity: two assemblies can define the same full name.
+                let definition = if baseType.IsGenericType {
+                    baseType.GetGenericTypeDefinition()
+                } else {
+                    baseType
+                }
+                baseName = Identify(definition)
+            }
+            return own + "|" + string.Join("|", valueType, isEnum, isDelegate, baseName)
+        } catch (ex Exception) when ex is FileNotFoundException ||
+            ex is FileLoadException ||
+            ex is BadImageFormatException ||
+            ex is TypeLoadException {
+            return own + "|base-missing"
+        }
     }
-
-    private func Describe(
-        fullName string,
-        name string,
-        namespaceName string,
-        parameters string,
-        isInterface bool,
-        isAbstract bool,
-        isSealed bool,
-        isValueType bool,
-        isEnum bool,
-        isDelegate bool,
-        containing string,
-        baseName string
-    ) string -> string
-        .Join(
-        "|",
-        fullName,
-        name,
-        namespaceName,
-        parameters,
-        isInterface,
-        isAbstract,
-        isSealed,
-        isValueType,
-        isEnum,
-        isDelegate,
-        containing,
-        baseName
-    )
 
     private func Describe(resolved ResolvedTypeReference) string -> if resolved.Module is {} module {
         module.Identity.Name + "!" + resolved.FullName

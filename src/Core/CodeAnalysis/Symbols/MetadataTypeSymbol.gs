@@ -131,6 +131,27 @@ internal class MetadataTypeSymbol : TypeSymbol {
         }
     }
 
+    private func ReachesDelegate() bool {
+        var current MetadataTypeSymbol? = this
+        for var links = 0; current != nil && links <= MetadataTypeNameReader.MaximumReferenceNesting; links++ {
+            let set = current.Module.Set
+            if set.IsWellKnown(current.Module, current.Handle, SpecialType.Delegate) || set.IsWellKnown(
+                current.Module,
+                current.Handle,
+                SpecialType.MulticastDelegate
+            ) {
+                return true
+            }
+            let next = current.BaseDefinition
+            current = if next == nil || !next.IsResolved {
+                nil
+            } else {
+                set.GetTypeSymbol(next)
+            }
+        }
+        return false
+    }
+
     // The one place that decides the kind flags.
     // Only the direct base decides value type, enum and delegate, as the runtime builds them.
     private func ComputeKinds() MetadataTypeKinds {
@@ -138,7 +159,6 @@ internal class MetadataTypeSymbol : TypeSymbol {
         let isInterface = (attributes & TypeAttributes.ClassSemanticsMask) == TypeAttributes.Interface
         var isValueType = false
         var isEnum = false
-        var isDelegate = false
         if baseDefinition.Value is {} resolvedBase && resolvedBase.IsResolved {
             let selfIsValueType = Module.Set.IsWellKnown(Module, Handle, SpecialType.ValueType)
             let selfIsEnum = Module.Set.IsWellKnown(Module, Handle, SpecialType.Enum)
@@ -146,8 +166,10 @@ internal class MetadataTypeSymbol : TypeSymbol {
             let baseIsEnum = Module.Set.IsWellKnown(resolvedBase, SpecialType.Enum)
             isValueType = (baseIsValueType || baseIsEnum) && !selfIsValueType && !selfIsEnum
             isEnum = baseIsEnum && !selfIsEnum
-            isDelegate = Module.Set.IsWellKnown(resolvedBase, SpecialType.MulticastDelegate)
         }
+        // A delegate type is System.Delegate, System.MulticastDelegate, or any type whose chain reaches one of them,
+        // as ClrTypeUtilities.IsDelegateType answers. A missing link ends the chain.
+        let isDelegate = ReachesDelegate()
         return MetadataTypeKinds(
             isInterface,
             (attributes & TypeAttributes.Abstract) != 0,
