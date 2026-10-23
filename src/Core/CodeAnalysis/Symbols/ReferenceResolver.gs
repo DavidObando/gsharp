@@ -87,7 +87,7 @@ class ReferenceResolver : IDisposable {
     // by Type.FullName, which uses '+' for nested types and the `arity backtick
     // suffix for open generics — exactly the spellings Assembly.GetType accepts
     // and the binder already constructs (e.g. "Ns.Type`1").
-    private let typeNameIndex Lazy[Dictionary[string, Type]]
+    private let typeNameIndex Lazy[ReferenceTypeNameIndex]
 
     private let emittedTypeNameIndex Lazy[Dictionary[string, string]]
     private let namespaceIndex Lazy[ImmutableHashSet[string]]
@@ -98,17 +98,13 @@ class ReferenceResolver : IDisposable {
     private let arityInsensitiveTypeNames Lazy[Dictionary[string, ImmutableArray[string]]]
 
     // ADR-0107 (cold-start cache): an optional, externally-supplied
-    // full-name -> declaring-assembly-index map that stands in for the eager
+    // full-name -> declaring-assembly-index map that stands in for the names in
     // `typeNameIndex` below. When set (via TryUseMetadataIndex), TryResolveType
-    // consults this map and materialises the actual CLR Type lazily by name —
-    // skipping the ~120ms Assembly.GetTypes()/GetForwardedTypes() enumeration of
-    // the whole reference closure that BuildTypeNameIndex performs. The map's
-    // keyset is, by construction, exactly the set of names that enumeration
-    // would have produced (it is built from a ReferenceMetadataIndex that the
-    // language server either persisted from a prior cold build or rebuilds via
-    // ExportMetadataIndex), so warm resolution is a superset of cold resolution.
-    // Null in the default/opt-out path, where the eager `typeNameIndex` is used
-    // and behaviour is byte-for-byte identical to before this ADR.
+    // consults this map instead of reading the names from the reference images.
+    // Its keyset is the set of names ExportMetadataIndex produced from the same
+    // reference set, which TryUseMetadataIndex checks by assembly identity and
+    // content fingerprint. Null when no index was adopted, where the names come
+    // from `typeNameIndex`.
     private var warmNameIndex Dictionary[string, int32]?
 
     /// Gets or sets the simple name of the assembly currently being compiled.
@@ -141,7 +137,7 @@ class ReferenceResolver : IDisposable {
         metadataContext MetadataLoadContext?,
         missingTransitiveReferences ImmutableArray[string],
         runtimeContext AssemblyLoadContext? = nil,
-        typeNameIndex Lazy[Dictionary[string, Type]]? = nil,
+        typeNameIndex Lazy[ReferenceTypeNameIndex]? = nil,
         hostFallbackAssemblyNames ImmutableHashSet[string]? = nil
     ) {
         this.assemblies = assemblies
@@ -161,13 +157,7 @@ class ReferenceResolver : IDisposable {
             LazyThreadSafetyMode.ExecutionAndPublication
         )
         this.emittedTypeNameIndex = Lazy[Dictionary[string, string]](
-            () -> BuildEmittedTypeNameIndex(
-                if this.warmNameIndex is {} warm {
-                    cast[IEnumerable[string]](warm.Keys)
-                } else {
-                    cast[IEnumerable[string]](this.typeNameIndex.Value.Keys)
-                }
-            ),
+            () -> BuildEmittedTypeNameIndex(cast[IEnumerable[string]](this.CurrentNameIndex().Keys)),
             LazyThreadSafetyMode.ExecutionAndPublication
         )
         // Issue #4023: a `map[K, V]` whose key or value is an IMPORTED type
@@ -793,26 +783,20 @@ class ReferenceResolver : IDisposable {
     /// assembly's identity plus the defined and forwarded type full-names it
     /// contributes, in search order — into a serialisable
     /// (cref:ReferenceMetadataIndex). The language server persists this to
-    /// its cold-start cache so a later process can skip the
-    /// `Assembly.GetTypes()`/`GetForwardedTypes()` enumeration. This
-    /// performs the same metadata walk as the eager type-name index, so calling
-    /// it costs roughly one index build.
+    /// its cold-start cache so a later process can skip reading the names from
+    /// the reference images. This performs the same read as the type-name index,
+    /// so calling it costs roughly one index build.
     /// @returns A snapshot of the resolver's type-name surface.
     func ExportMetadataIndex() ReferenceMetadataIndex {
         using let measurement = CompilationMeasurements.BeginPhase("references.metadata-index-export")
         let identities = ImmutableArray.CreateBuilder[string](assemblies.Length)
         let namesByAssembly = ImmutableArray.CreateBuilder[ImmutableArray[string]](assemblies.Length)
         let fingerprints = ImmutableArray.CreateBuilder[string](assemblies.Length)
+        let typeNames = ReadTypeNames(assemblies)
         for asm in assemblies {
             identities.Add(asm.GetName().FullName)
             fingerprints.Add(GetReferenceContentFingerprint(asm))
-            let names = ImmutableArray.CreateBuilder[string]()
-            for t in EnumerateDefinedAndForwardedTypes(asm) {
-                if t.FullName is {} fullName {
-                    names.Add(fullName)
-                }
-            }
-            namesByAssembly.Add(names.ToImmutable())
+            namesByAssembly.Add(typeNames[namesByAssembly.Count].Defined.ToImmutableArray())
         }
         return ReferenceMetadataIndex.Create(
             identities.MoveToImmutable(),
@@ -823,7 +807,7 @@ class ReferenceResolver : IDisposable {
 
     /// ADR-0107: adopts a previously-built (cref:ReferenceMetadataIndex)
     /// as this resolver's warm type-name index, so (cref:TryResolveType(string, out System.Type))
-    /// skips the eager metadata enumeration. The index is accepted only when its
+    /// skips reading the names from the reference images. The index is accepted only when its
     /// recorded assembly identities match this resolver's freshly-loaded
     /// assemblies <em>exactly</em> (same count, same
     /// (cref:System.Reflection.AssemblyName.FullName) in the same order);
@@ -883,11 +867,7 @@ class ReferenceResolver : IDisposable {
 
     private func BuildArityInsensitiveTypeNames() Dictionary[string, ImmutableArray[string]] {
         using let measurement = CompilationMeasurements.BeginPhase("references.arity-name-index")
-        let names IEnumerable[string] = if warmNameIndex != nil {
-            cast[IEnumerable[string]](warmNameIndex!!.Keys)
-        } else {
-            cast[IEnumerable[string]](typeNameIndex.Value.Keys)
-        }
+        let names = cast[IEnumerable[string]](CurrentNameIndex().Keys)
         let groups = Dictionary[string, List[string]](StringComparer.Ordinal)
         for name in names {
             var suffix = name.Length
@@ -924,12 +904,7 @@ class ReferenceResolver : IDisposable {
                 builder.Add(topLevelName.Substring(0, separator))
             }
         }
-        let indexedNames IEnumerable[string] = if warmNameIndex != nil {
-            cast[IEnumerable[string]](warmNameIndex!!.Keys)
-        } else {
-            cast[IEnumerable[string]](typeNameIndex.Value.Keys)
-        }
-        let names = indexedNames.ToArray()
+        let names = CurrentNameIndex().Keys.ToArray()
         let scopes = BuildTypeNameScopes(names)
         for name in names {
             AddNamespacePrefixes(name)
@@ -953,44 +928,40 @@ class ReferenceResolver : IDisposable {
             type = cached
             return true
         }
-        // ADR-0107: warm path. When a metadata index has been adopted, resolve
-        // by consulting the persisted name -> assembly map and materialising the
-        // Type lazily, rather than building (and scanning) the eager
-        // typeNameIndex. The keyset equals the cold path's, so a name absent here
-        // is a genuine miss; a present name is materialised with an
-        // order-preserving scan fallback so first-writer-wins is honoured even if
-        // the recorded declaring assembly cannot satisfy GetType.
-        if warmNameIndex != nil {
-            if warmNameIndex!!.TryGetValue(fullName, out var assemblyIndex) &&
-                TryMaterializeWarmType(fullName, assemblyIndex, out var warm) {
-                resolveCache.TryAdd(fullName, warm!!)
-                type = warm
-                return true
-            }
-            if TryFindRawTypeName(fullName, out var rawWarmName) && warmNameIndex!!.TryGetValue(
-                rawWarmName!!,
-                out assemblyIndex
-            ) &&
-                TryMaterializeWarmType(rawWarmName!!, assemblyIndex, out warm) {
-                resolveCache.TryAdd(fullName, warm!!)
-                type = warm
-                return true
-            }
-            resolveCache.TryAdd(fullName, MissTypeSentinel)
-            return false
-        }
-        if typeNameIndex.Value.TryGetValue(fullName, out var indexed) {
-            resolveCache.TryAdd(fullName, indexed)
+        // Look the name up in the name -> assembly map. The map is the adopted
+        // persisted index, or else the index read from the metadata names.
+        // Create the Type only for a name that is looked up.
+        // A name that is not in the map is a miss.
+        // If the recorded assembly cannot supply a name, scan the assemblies in order.
+        let nameIndex = CurrentNameIndex()
+        if nameIndex.TryGetValue(fullName, out var assemblyIndex) &&
+            TryMaterializeIndexedType(fullName, assemblyIndex, out var indexed) {
+            resolveCache.TryAdd(fullName, indexed!!)
             type = indexed
             return true
         }
-        if TryFindRawTypeName(fullName, out var rawName) && typeNameIndex.Value.TryGetValue(rawName!!, out indexed) {
+        if TryFindRawTypeName(fullName, out var rawName) && nameIndex.TryGetValue(rawName!!, out assemblyIndex) &&
+            TryMaterializeIndexedType(rawName!!, assemblyIndex, out indexed) {
             resolveCache.TryAdd(fullName, indexed!!)
             type = indexed
             return true
         }
         resolveCache.TryAdd(fullName, MissTypeSentinel)
         return false
+    }
+
+    private func CurrentNameIndex() Dictionary[string, int32] -> warmNameIndex ?? typeNameIndex.Value.Names
+
+    private func TryMaterializeIndexedType(
+        fullName string,
+        assemblyIndex int32,
+        @NotNullWhen(true) out type Type?
+    ) bool {
+        // Return a type that reflection found as it was found (assemblies with no image).
+        if warmNameIndex == nil && typeNameIndex.Value.LoadedTypes.TryGetValue(fullName, out type) {
+            return true
+        }
+        return TryMaterializeWarmType(fullName, assemblyIndex, out type)
     }
 
     private func TryFindRawTypeName(emittedName string, @NotNullWhen(true) out rawName string?) bool {
@@ -1107,17 +1078,26 @@ class ReferenceResolver : IDisposable {
             var asm Assembly
             if assemblyBytes.TryGetValue(fileName, out var bytes) {
                 asm = context.LoadFromByteArray(bytes)
-                ReferenceResolver.RegisterAssemblyContentFingerprint(asm, bytes)
+                ReferenceResolver.RegisterAssemblyContentFingerprint(asm, bytes, GetImage)
             } else {
                 // Fallback: read from disk with sharing flags.
                 using let fs = FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)
                 let buffer = [int32(fs.Length)]uint8
                 fs.ReadExactly(buffer)
                 asm = context.LoadFromByteArray(buffer)
-                ReferenceResolver.RegisterAssemblyContentFingerprint(asm, buffer)
+                ReferenceResolver.RegisterAssemblyContentFingerprint(asm, buffer, GetImage)
             }
             ReferenceResolver.RegisterAssemblyOriginalPath(asm, path)
             return asm
+        }
+
+        /// Gets the image of the assembly this resolver supplies for a simple name, or `null`
+        /// when it supplies none. A type forwarded to an assembly it cannot supply cannot be loaded.
+        func GetImage(simpleName string)([]uint8)? {
+            if assemblyBytes.TryGetValue(simpleName, out var image) {
+                return image
+            }
+            return nil
         }
 
         override func Resolve(context MetadataLoadContext, assemblyName AssemblyName) Assembly? {
@@ -1125,7 +1105,7 @@ class ReferenceResolver : IDisposable {
             if !string.IsNullOrEmpty(simpleName) && assemblyBytes.TryGetValue(simpleName!!, out var bytes) {
                 try {
                     let asm = context.LoadFromByteArray(bytes)
-                    ReferenceResolver.RegisterAssemblyContentFingerprint(asm, bytes)
+                    ReferenceResolver.RegisterAssemblyContentFingerprint(asm, bytes, GetImage)
                     if assemblyPaths.TryGetValue(simpleName!!, out var originalPath) {
                         ReferenceResolver.RegisterAssemblyOriginalPath(asm, originalPath)
                     }
@@ -1178,7 +1158,7 @@ class ReferenceResolver : IDisposable {
         }
         private let DefaultTypeNameIndexGate object = SystemObject()
         private var defaultTypeNameIndexAssemblies ImmutableArray[Assembly] = ImmutableArray[Assembly].Empty
-        private var defaultTypeNameIndex Lazy[Dictionary[string, Type]]?
+        private var defaultTypeNameIndex Lazy[ReferenceTypeNameIndex]?
 
         // Process-wide registry of original on-disk paths for assemblies loaded
         // via LoadFromByteArray (whose Assembly.Location is empty). Populated by
@@ -1192,8 +1172,25 @@ class ReferenceResolver : IDisposable {
         ]()
         private let AssemblyContentFingerprints ConditionalWeakTable[Assembly, Lazy[string]] =
         ConditionalWeakTable[Assembly, Lazy[string]]()
+        // The image bytes of each assembly that was loaded from memory.
+        // They give the type names from the metadata tables.
+        // The fingerprint above already keeps the same array alive.
+        private let AssemblyImages ConditionalWeakTable[Assembly, []uint8] = ConditionalWeakTable[Assembly, []uint8]()
 
-        private func RegisterAssemblyContentFingerprint(assembly Assembly, bytes[]uint8) {
+        // Gives the image of an assembly by simple name, from the load context
+        // that produced the assembly. Present for each assembly in AssemblyImages.
+        private let AssemblyImageLookups ConditionalWeakTable[
+            Assembly,
+            Func[string, ([]uint8)?]
+        ] = ConditionalWeakTable[Assembly, Func[string, ([]uint8)?]]()
+
+        private func RegisterAssemblyContentFingerprint(
+            assembly Assembly,
+            bytes[]uint8,
+            imageOf Func[string, ([]uint8)?]
+        ) {
+            AssemblyImages.AddOrUpdate(assembly, bytes)
+            AssemblyImageLookups.AddOrUpdate(assembly, imageOf)
             AssemblyContentFingerprints.GetValue(
                 assembly,
                 (key Assembly) -> Lazy[string](() -> Convert.ToHexString(SHA256.HashData(bytes)))
@@ -1688,22 +1685,11 @@ class ReferenceResolver : IDisposable {
             }
         }
 
-        // Issue #854: enumerate every assembly's defined types (top-level + nested)
-        // and exported type forwarders once, building the full-name -> Type index
-        // that backs TryResolveType. Mirrors the precedence of the previous per-miss
-        // scan: assemblies are visited in `assemblies` order and the first declarer
-        // of a given full name wins (later duplicates are ignored).
-        private func AddToTypeNameIndex(index Dictionary[string, Type], t Type) {
-            if t?.FullName is {} name && !index.ContainsKey(name) {
-                index[name] = t
-            }
-        }
-
         // ADR-0107: materialise the CLR Type for a name the warm index claims is
         // resolvable. Prefer the recorded declaring assembly; if that assembly cannot
         // satisfy GetType (e.g. a stale/edge forwarder), fall back to an in-order scan
         // of every assembly so resolution still finds the first declarer — exactly the
-        // precedence the eager index encodes. Returns false only if no assembly can
+        // precedence the type-name index encodes. Returns false only if no assembly can
         // produce the type, in which case the caller records a (conservative) miss.
         private func SafeGetType(assembly Assembly, fullName string) Type? {
             try {
@@ -1717,11 +1703,11 @@ class ReferenceResolver : IDisposable {
             }
         }
 
-        private func CreateTypeNameIndex(assemblies ImmutableArray[Assembly]) Lazy[Dictionary[string, Type]] -> Lazy[
-            Dictionary[string, Type]
+        private func CreateTypeNameIndex(assemblies ImmutableArray[Assembly]) Lazy[ReferenceTypeNameIndex] -> Lazy[
+            ReferenceTypeNameIndex
         ](() -> BuildTypeNameIndex(assemblies), LazyThreadSafetyMode.ExecutionAndPublication)
 
-        private func GetDefaultTypeNameIndex(assemblies ImmutableArray[Assembly]) Lazy[Dictionary[string, Type]] {
+        private func GetDefaultTypeNameIndex(assemblies ImmutableArray[Assembly]) Lazy[ReferenceTypeNameIndex] {
             lock DefaultTypeNameIndexGate {
                 if defaultTypeNameIndex == nil || !defaultTypeNameIndexAssemblies.SequenceEqual(assemblies) {
                     defaultTypeNameIndexAssemblies = assemblies
@@ -1731,25 +1717,193 @@ class ReferenceResolver : IDisposable {
             }
         }
 
-        private func BuildTypeNameIndex(assemblies ImmutableArray[Assembly]) Dictionary[string, Type] {
+        // Issue #854: build the full-name -> declaring-assembly-index map for TryResolveType.
+        // Visit the assemblies in `assemblies` order. The first assembly that declares a name wins.
+        // The names come from the metadata tables. No Type is created here.
+        private func BuildTypeNameIndex(assemblies ImmutableArray[Assembly]) ReferenceTypeNameIndex {
             using let measurement = CompilationMeasurements.BeginPhase("references.type-name-index")
-            let index = Dictionary[string, Type](StringComparer.Ordinal)
-            for asm in assemblies {
-                for t in EnumerateDefinedAndForwardedTypes(asm) {
-                    AddToTypeNameIndex(index, t)
+            let index = Dictionary[string, int32](StringComparer.Ordinal)
+            let loadedTypes = Dictionary[string, Type](StringComparer.Ordinal)
+            let namesByAssembly = ReadTypeNames(assemblies)
+            for var i = 0; i < assemblies.Length; i++ {
+                let names = namesByAssembly[i].Defined
+                let types = namesByAssembly[i].Types
+                for var n = 0; n < names.Count; n++ {
+                    if index.TryAdd(names[n], i) && types.Count > 0 {
+                        loadedTypes[names[n]] = types[n]
+                    }
                 }
             }
-            return index
+            return ReferenceTypeNameIndex(index, loadedTypes)
+        }
+
+        // Gives the type names of each assembly, in the order that reflection reports them.
+        // BuildTypeNameIndex and ExportMetadataIndex both use it, so the computed index
+        // and the persisted index have the same names.
+        // An assembly with an image is read from its metadata tables.
+        // Any other assembly (a host runtime assembly) is read through reflection.
+        // Its Types then hold the Type of each name.
+        // Each forwarded name follows the defined names, as reflection reports it.
+        private func ReadTypeNames(assemblies ImmutableArray[Assembly]) List[AssemblyTypeNames] {
+            let result = List[AssemblyTypeNames](assemblies.Length)
+            let bySimpleName = Dictionary[string, AssemblyTypeNames](StringComparer.OrdinalIgnoreCase)
+            for asm in assemblies {
+                let names = ReadAssemblyTypeNames(asm)
+                result.Add(names)
+                bySimpleName.TryAdd(asm.GetName().Name ?? string.Empty, names)
+            }
+            let visiting = HashSet[string](StringComparer.Ordinal)
+            let added = List[string]()
+            for var i = 0; i < result.Count; i++ {
+                let names = result[i]
+                added.Clear()
+                var exact = true
+                for forward in names.Forwarded {
+                    visiting.Clear()
+                    let declaring = FindDeclaringAssembly(
+                        forward.Key,
+                        forward.Value,
+                        names.ImageOf,
+                        bySimpleName,
+                        visiting,
+                        out var unverifiable
+                    )
+                    if unverifiable {
+                        exact = false
+                        break
+                    }
+                    if declaring != nil {
+                        // Reflection reports the type, then its public nested types
+                        // as the declaring assembly lists them.
+                        AddWithPublicNestedTypes(declaring, forward.Key, added)
+                    }
+                }
+                if exact {
+                    names.Defined.AddRange(added)
+                } else {
+                    // The reader cannot answer exactly for this forward. Never keep a
+                    // partial answer: read the whole assembly through reflection.
+                    let reflected = ReadThroughReflection(assemblies[i])
+                    result[i] = reflected
+                    if bySimpleName.TryGetValue(assemblies[i].GetName().Name ?? string.Empty, out var current) &&
+                        object.ReferenceEquals(current, names) {
+                        bySimpleName[assemblies[i].GetName().Name ?? string.Empty] = reflected
+                    }
+                }
+            }
+            return result
+        }
+
+        private func AddWithPublicNestedTypes(declaring AssemblyTypeNames, name string, destination List[string]) {
+            destination.Add(name)
+            if declaring.PublicNested.TryGetValue(name, out var children) {
+                for child in children {
+                    AddWithPublicNestedTypes(declaring, child, destination)
+                }
+            }
+        }
+
+        private func ReadAssemblyTypeNames(asm Assembly) AssemblyTypeNames {
+            let defined = List[string]()
+            let forwarded = List[KeyValuePair[string, string]]()
+            let publicNested = Dictionary[string, List[string]](StringComparer.Ordinal)
+            if AssemblyImages.TryGetValue(asm, out var image) && AssemblyImageLookups.TryGetValue(
+                asm,
+                out var imageOf
+            ) &&
+                MetadataTypeNameReader
+                .TryReadNames(image, defined, forwarded, publicNested) {
+                return AssemblyTypeNames(defined, forwarded, List[Type](), publicNested, imageOf)
+            }
+            return ReadThroughReflection(asm)
+        }
+
+        private func ReadThroughReflection(asm Assembly) AssemblyTypeNames {
+            let defined = List[string]()
+            let forwarded = List[KeyValuePair[string, string]]()
+            let publicNested = Dictionary[string, List[string]](StringComparer.Ordinal)
+            let types = List[Type]()
+            for t in EnumerateDefinedAndForwardedTypes(asm) {
+                if t.FullName is {} fullName {
+                    defined.Add(fullName)
+                    types.Add(t)
+                    // Build the same parent -> public nested types map that the
+                    // metadata reader builds, so a forward to this assembly is
+                    // followed by the same nested types on both paths.
+                    if t.IsNestedPublic && t.DeclaringType?.FullName is {} outer {
+                        if !publicNested.TryGetValue(outer, out var children) {
+                            children = List[string]()
+                            publicNested[outer] = children
+                        }
+                        if !children.Contains(fullName) {
+                            children.Add(fullName)
+                        }
+                    }
+                }
+            }
+            return AssemblyTypeNames(defined, forwarded, types, publicNested, nil)
+        }
+
+        // Reflection reports a forwarded type only when it loads.
+        // The same load context must supply the target assembly.
+        // The target must declare the type, or forward it to an assembly that does.
+        // Returns the assembly that declares the type, or null.
+        // `unverifiable` is set when the target image cannot be read here.
+        // The caller then reads the forwarding assembly through reflection.
+        private func FindDeclaringAssembly(
+            name string,
+            target string,
+            imageOf Func[string, ([]uint8)?]?,
+            known Dictionary[string, AssemblyTypeNames],
+            visiting HashSet[string],
+            out unverifiable bool
+        ) AssemblyTypeNames? {
+            unverifiable = false
+            if !known.TryGetValue(target, out var targetNames) {
+                let image = imageOf?.Invoke(target)
+                if image == nil {
+                    return nil
+                }
+                let defined = List[string]()
+                let forwarded = List[KeyValuePair[string, string]]()
+                let publicNested = Dictionary[string, List[string]](StringComparer.Ordinal)
+                if !MetadataTypeNameReader.TryReadNames(image, defined, forwarded, publicNested) {
+                    unverifiable = true
+                    return nil
+                }
+                targetNames = AssemblyTypeNames(defined, forwarded, List[Type](), publicNested, imageOf)
+                known[target] = targetNames
+            }
+            if targetNames.Declares(name) {
+                return targetNames
+            }
+            if !visiting.Add(target) {
+                return nil
+            }
+            for forward in targetNames.Forwarded {
+                if string.Equals(forward.Key, name, StringComparison.Ordinal) {
+                    let declaring = FindDeclaringAssembly(
+                        name,
+                        forward.Value,
+                        targetNames.ImageOf,
+                        known,
+                        visiting,
+                        out unverifiable
+                    )
+                    if declaring != nil || unverifiable {
+                        return declaring
+                    }
+                }
+            }
+            return nil
         }
 
         // Issue #854 / ADR-0107: enumerate one assembly's defined types (top-level +
-        // nested) followed by its exported type forwarders, tolerating the partial
-        // results that ReflectionTypeLoadException / GetForwardedTypes surface for a
-        // closure with an unresolvable member. This is the single source of truth for
-        // "which type names does this assembly contribute, and in what order"; both
-        // the eager BuildTypeNameIndex and the cache-export ExportMetadataIndex
-        // consume it so the warm and cold name sets (and their first-writer-wins
-        // precedence) are guaranteed to match.
+        // nested) followed by its exported type forwarders through reflection,
+        // tolerating the partial results that ReflectionTypeLoadException /
+        // GetForwardedTypes surface for a closure with an unresolvable member. It
+        // reads the assemblies that have no image (host runtime assemblies) and is
+        // the reference the metadata reader is tested against.
         private func EnumerateDefinedAndForwardedTypes(asm Assembly) sequence[Type] {
             var definedTypes[]Type?
             try {

@@ -126,7 +126,11 @@ class Hello {
         private func BindWithIssue4503Contracts(source string) BoundGlobalScope {
             using let contracts = Issue4503ImportedAttributeContracts()
             let tree = SyntaxTree.Parse(SourceText.From(source))
-            using let resolver = ReferenceResolver.WithReferences([]string{contracts.Path})
+            // The returned scope is inspected after this method returns, and its imported
+            // types are read from the resolver's load context on first use, so the
+            // resolver must outlive the call. It holds no file handles; the collector
+            // reclaims it.
+            let resolver = ReferenceResolver.WithReferences([]string{contracts.Path})
             return Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree), resolver)
         }
     }

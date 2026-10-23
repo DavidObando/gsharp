@@ -59,7 +59,7 @@ open class ReferenceMetadataIndexTests {
             BindingFlags.Instance | BindingFlags.NonPublic
         )
         Assert.NotNull(field)
-        let coldIndex = Assert.IsType[Lazy[Dictionary[string, Type]]](field!!.GetValue(warm))
+        let coldIndex = Assert.IsType[Lazy[ReferenceTypeNameIndex]](field!!.GetValue(warm))
         Assert.False(coldIndex.IsValueCreated)
         // The hidden-type probe below means something only while the type
         // exists and stays non-public; a rename would make it pass vacuously.
