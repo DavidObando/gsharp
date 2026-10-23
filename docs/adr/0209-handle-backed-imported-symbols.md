@@ -659,7 +659,7 @@ both. No other statement in this ADR moves that point.
   dead while the set and its `List<int>` construction stay alive.
 - `ReferenceResolver.Dispose` stops clearing the 21 process-wide caches. The
   wrapper tables that made that necessary move to the owner table 7c names
-  (study item M5, #5145 item 1); until they move, a set referenced from a
+  (study item M5, #5145 item 1, tracked as #5228); until they move, a set referenced from a
   process-wide cache stays alive with it, as the `MetadataLoadContext` does
   today, a memory cost and not an identity defect.
 - Host TPA images stay one copy per process per (path, size, mtime,
@@ -897,7 +897,8 @@ the ADR as a whole on 2026-10-23; the implementation is #5144, then #5145.
    than from the host, accepting the change on a host/target version mismatch
    (D2). **Decided: from the reference set; listed in PR 6's release note.**
 6. **Custom modifier fidelity.** Keep today's encoder shape through stage 7
-   rather than write modifiers in blob order now. **Decided: keep it.**
+   rather than write modifiers in blob order now. **Decided: keep it**; the
+   follow-up after stage 7 is #5229.
 7. **Comparison mode in release builds.** Keep `GSHARP_METADATA_MODEL=compare`
    in the shipped `gsc` until stage 7, rather than debug-only. **Decided: keep it.**
 8. **Diagnostic ids.** The maintainer has no preference and names the house
