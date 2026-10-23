@@ -458,7 +458,11 @@ partial class Binder {
                             } else {
                                 receiver
                             }
-                            return shape != nil && ClrTypeUtilities.AreSame(shape, importedReceiver) &&
+                            // An open receiver may apply after inference; it is not negative evidence.
+                            return shape != nil &&
+                                (
+                                shape.ContainsGenericParameters || ClrTypeUtilities.AreSame(shape, importedReceiver)
+                            ) &&
                                 (
                                 !ImportedMethodMetadataSupported(method) ||
                                     method.IsGenericMethod ||

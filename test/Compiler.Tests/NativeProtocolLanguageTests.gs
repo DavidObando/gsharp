@@ -88,6 +88,23 @@ let matched = Counter{} is NextValue
     }
 
     @Fact
+    func ImportedOpenGenericReceiverWitnessCannotBecomeKnownMismatch() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = fixture.CompileCSharp(`namespace GenericWitness {
+public struct Counter {}
+public static class Extensions {
+public static int Next<T>(this T value) => 1;
+}
+}`, "GenericWitness")
+        let (code, output) = fixture.TryCompile(`import GenericWitness
+protocol NextValue { func Next() int32; }
+let matched = Counter{} is NextValue
+`, "GenericWitnessConsumer", executable: true, "/r:" + source)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("unsupported witness"), output)
+    }
+
+    @Fact
     func OverloadApplicabilityUsesExactConformanceIncludingExtensions() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let dll = fixture.Compile(`import System
