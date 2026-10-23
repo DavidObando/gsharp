@@ -87,7 +87,7 @@ internal shared class DefiniteAssignmentAnalyzer {
                             return
                         }
                         let diagnostics = diagnostics!!
-                        let lowered = cast[BoundBlockStatement](Lowerer.Lower(literal.Body))
+                        let lowered = BodyFacts.LowerLambdaBody(literal.Body)
                         DefiniteAssignmentAnalyzer.AnalyzeWithCaptured(
                             lowered.PreEmitAnalysisBody ?? lowered,
                             literal.Function,

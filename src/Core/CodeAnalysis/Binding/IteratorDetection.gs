@@ -8,25 +8,12 @@ import GSharp.Core.CodeAnalysis.Syntax
 
 /// Detects whether a function body is an iterator body.
 shared class IteratorDetection {
-    private class BoundYieldDetector : BoundTreeWalker {
-        prop Found bool {
-            get;
-            private set;
-        }
-
-        protected override func VisitYieldStatement(node BoundYieldStatement) {
-            Found = true
-        }
-    }
-
     /// Returns whether [`body`](paramref) contains a yield in its own
     /// lexical scope. Nested function and lambda bodies are opaque.
     /// @param body The bound function body to inspect.
     /// @returns `true` when the body's own lexical scope contains a yield.
     func ContainsYield(body BoundStatement) bool {
-        let detector = BoundYieldDetector()
-        detector.Visit(body)
-        return detector.Found
+        return BodyFacts.ContainsYield(body)
     }
 
     /// Returns whether [`body`](paramref) contains a yield in its own
