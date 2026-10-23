@@ -452,10 +452,26 @@ internal partial class StatementBinder {
         for filter in filters {
             CollectAssignedNamesAndMemberMutation(filter, names)
             CollectNullCoalescingTargetNames(filter, names)
-            CollectRefArgumentNames(filter, names)
+            CollectWritableRefArgumentNames(filter, names)
             CollectAddressOfNames(filter, names)
         }
         return names
+    }
+
+    /// ADR-0208 R10 (#5168): collects the names under `ref` and `out` arguments. An `in` argument
+    /// cannot write its storage.
+    private func CollectWritableRefArgumentNames(node SyntaxNode, names HashSet[string]) {
+        if node is RefArgumentExpressionSyntax reference && !string.Equals(
+            reference.RefKindModifier.Text,
+            "in",
+            StringComparison.Ordinal
+        ) {
+            CollectAllNames(node, names)
+            return
+        }
+        for child in node.GetChildren() {
+            CollectWritableRefArgumentNames(child, names)
+        }
     }
 
     /// ADR-0208 R10 (#5168): drops the facts that [`filters`](paramref) may write. The filters

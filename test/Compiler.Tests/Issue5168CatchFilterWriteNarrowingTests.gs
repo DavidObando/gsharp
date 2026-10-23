@@ -508,6 +508,26 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `, []string{"3"}}
+            // An `in` argument cannot write its storage.
+            yield[]object{"filter-passes-in-argument", `
+package P
+import System
+
+func Get() string? { return "abc" }
+func Check(in value string?) bool { return false }
+func Run() int32 {
+    let s string? = Get()
+    if s == nil { return 0 }
+    try {
+        throw Exception("x")
+    } catch when Check(in s) {
+        return 1
+    } catch {
+        return s.Length
+    }
+}
+func Main() { Console.WriteLine(Run()) }
+`, []string{"3"}}
         }
 
         private func Compile(dir string, source string, outPath string)(Exit int32, Log string) {
