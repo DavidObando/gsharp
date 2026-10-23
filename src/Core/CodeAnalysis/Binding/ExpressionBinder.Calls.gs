@@ -1314,7 +1314,7 @@ internal partial class ExpressionBinder {
         clrType Type,
         symbolicTypeArgs ImmutableArray[TypeSymbol]
     ) Type {
-        if symbolicTypeArgs.IsDefaultOrEmpty || !clrType.IsArray {
+        if symbolicTypeArgs.IsDefaultOrEmpty || !clrType.IsSZArray {
             return clrType
         }
         let element TypeSymbol? = switch argumentType {
