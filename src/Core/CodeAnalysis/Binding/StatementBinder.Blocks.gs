@@ -272,6 +272,14 @@ internal partial class StatementBinder {
         tryMutations.Visit(tryBlock)
         let callableExceptionalEntry = HashSet[VariableSymbol](callableEntry)
         callableExceptionalEntry.ExceptWith(tryMutations.Roots)
+        // ADR-0208 R10 (#5168): an enclosing filter can run user code that assigns a callable alias.
+        let enclosingFilters = CollectEnclosingCatchFilters(syntax)
+        if enclosingFilters.Count > 0 {
+            let filterNames = CollectEnclosingFilterNames(enclosingFilters)
+            callableExceptionalEntry.RemoveWhere(
+                (alias VariableSymbol) -> filterNames.Contains(alias.Name) || binderCtx.MayBeAssignedByClosure(alias)
+            )
+        }
         var callableFinallyEntries = JoinExternalCallableAliases(
             HashSet[VariableSymbol](callableTryExit),
             callableExceptionalEntry
@@ -295,7 +303,6 @@ internal partial class StatementBinder {
         // a later sibling — which is exactly why C# only reports CS0160 for
         // unfiltered predecessors.
         let unfilteredCoverage = List[TypeSymbol]()
-        let enclosingFilters = CollectEnclosingCatchFilters(syntax)
         for catchSyntax in syntax.CatchClauses {
             RestoreExternalCallableAliases(callableExceptionalEntry)
             InvalidateNarrowingsForEnclosingFilters(enclosingFilters)
@@ -429,22 +436,29 @@ internal partial class StatementBinder {
         return filters
     }
 
+    /// ADR-0208 R10 (#5168): the names that [`filters`](paramref) mention or assign. Also
+    /// anchors the closure-assigned name set.
+    private func CollectEnclosingFilterNames(filters List[ExpressionSyntax]) HashSet[string] {
+        EnsureClosureAssignedNames(filters[0])
+        let names = HashSet[string]()
+        for filter in filters {
+            CollectAllNames(filter, names)
+            CollectAssignedNamesAndMemberMutation(filter, names)
+        }
+        return names
+    }
+
     /// ADR-0208 R10 (#5168): drops the facts that [`filters`](paramref) may write. The filters
-    /// are not bound yet, so every variable that a filter names counts as written, and a filter
-    /// with a call counts as an unknown call.
+    /// are not bound yet, so every variable that a filter names or assigns counts as written, and
+    /// a filter counts as an unknown call: a getter, an indexer or a conversion can run user code
+    /// without a call expression.
     private func InvalidateNarrowingsForEnclosingFilters(filters List[ExpressionSyntax]) {
         if filters.Count == 0 {
             return
         }
-        EnsureClosureAssignedNames(filters[0])
+        let names = CollectEnclosingFilterNames(filters)
         if !HasAnyActiveNarrowings() {
             return
-        }
-        let names = HashSet[string]()
-        var hasCall = false
-        for filter in filters {
-            CollectAllNames(filter, names)
-            hasCall |= SyntaxMayMutateMemberPaths(filter)
         }
         for frame in binderCtx.NarrowedVariables {
             if frame.Count == 0 {
@@ -452,7 +466,7 @@ internal partial class StatementBinder {
             }
             let toRemove = List[AccessPath]()
             for key in frame.Keys {
-                if names.Contains(key.Root.Name) || (hasCall && MayBeMutatedByUnknownCallable(key)) {
+                if names.Contains(key.Root.Name) || MayBeMutatedByUnknownCallable(key) {
                     toRemove.Add(key)
                 }
             }

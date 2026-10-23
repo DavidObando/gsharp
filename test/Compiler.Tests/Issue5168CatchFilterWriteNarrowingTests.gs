@@ -279,6 +279,85 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
+            // An enclosing filter assigns a callable alias, so the alias no longer proves an external call.
+            yield[]object{"enclosing-filter-callable-alias", `
+package P
+import System
+
+func Get() string? { return "a" }
+func Run(callback () -> void) int32 {
+    var s string? = Get()
+    let clear = func() { s = nil }
+    var action = callback
+    let flip = func() bool {
+        action = clear
+        return true
+    }
+    try {
+        try {
+            throw Exception("x")
+        } finally {
+            if s != nil {
+                action()
+                Console.WriteLine(s.Length)
+            }
+        }
+    } catch when flip() {
+        return 1
+    }
+    return 2
+}
+func Main() { Console.WriteLine(Run(() -> { })) }
+`}
+            // An enclosing filter reads a property whose factory clears the variable; the filter has no call expression.
+            yield[]object{"enclosing-filter-getter", `
+package P
+import System
+
+func Get() string? { return "a" }
+func Run() int32 {
+    var s string? = Get()
+    let box = Lazy[bool](() -> {
+        s = nil
+        return true
+    })
+    if s == nil { return 0 }
+    try {
+        try {
+            throw Exception("x")
+        } finally {
+            Console.WriteLine(s.Length)
+        }
+    } catch when box.Value {
+        return 1
+    }
+    return 2
+}
+func Main() { Console.WriteLine(Run()) }
+`}
+            // An enclosing filter assigns the variable directly.
+            yield[]object{"enclosing-filter-assignment", `
+package P
+import System
+
+func Get() string? { return "a" }
+func Run() int32 {
+    var s string? = Get()
+    var empty string? = nil
+    if s == nil { return 0 }
+    try {
+        try {
+            throw Exception("x")
+        } finally {
+            Console.WriteLine(s.Length)
+        }
+    } catch when (s = empty) == nil {
+        return 1
+    }
+    return 2
+}
+func Main() { Console.WriteLine(Run()) }
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
