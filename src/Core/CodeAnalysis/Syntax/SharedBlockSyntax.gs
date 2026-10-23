@@ -8,7 +8,7 @@ import System.Collections.Immutable
 
 /// Represents a `shared { … }` block inside a struct/class body (ADR-0053).
 /// Groups static member declarations (fields, properties, events, methods).
-class SharedBlockSyntax : SyntaxNode {
+partial class SharedBlockSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:SharedBlockSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param sharedKeyword The contextual `shared` identifier token.

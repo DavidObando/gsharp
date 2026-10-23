@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// `..` in `[1, .., 3]`, an optional named capture `..rest`
 /// binding the middle slice, or an optional sub-pattern `..[> 0]`
 /// matched against the middle slice.
-class SlicePatternSyntax : PatternSyntax {
+partial class SlicePatternSyntax : PatternSyntax {
     /// Initializes a new instance of the (cref:SlicePatternSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param dotDotToken The `..` token.

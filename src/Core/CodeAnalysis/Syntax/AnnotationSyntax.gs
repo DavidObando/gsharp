@@ -21,7 +21,7 @@ import System.Text
 /// will resolve the dotted name through the C#-style
 /// `Foo` / `FooAttribute` lookup and the emitter (Phase 3) will
 /// write the corresponding `CustomAttribute` metadata row.
-class AnnotationSyntax : SyntaxNode {
+partial class AnnotationSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:AnnotationSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param atToken The leading `@` token.

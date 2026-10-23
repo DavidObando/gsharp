@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a total `var name` pattern. The pattern always matches and
 /// binds the input at its static type; `var _` binds nothing.
-class VarPatternSyntax : PatternSyntax {
+partial class VarPatternSyntax : PatternSyntax {
     /// Initializes a new instance of the (cref:VarPatternSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param varKeyword The `var` keyword.

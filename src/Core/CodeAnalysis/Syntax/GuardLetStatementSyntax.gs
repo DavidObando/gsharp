@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// statement (ADR-0071 / issue #708). The new bindings extend the enclosing
 /// block's scope; the else-block must unconditionally exit the enclosing
 /// region (return / throw / break / continue) — see GS0297.
-class GuardLetStatementSyntax : StatementSyntax {
+partial class GuardLetStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:GuardLetStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param guardKeyword The `guard` keyword token.

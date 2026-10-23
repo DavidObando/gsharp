@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a field assignment `variable.Field = value` (Phase 3.B.1).
-class FieldAssignmentExpressionSyntax : ExpressionSyntax {
+partial class FieldAssignmentExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:FieldAssignmentExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param receiver The receiver identifier.

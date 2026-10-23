@@ -7,7 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 import System.Collections.Immutable
 
 /// Represents an indexed assignment `target[index] = value`.
-class IndexAssignmentExpressionSyntax : ExpressionSyntax {
+partial class IndexAssignmentExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:IndexAssignmentExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param targetIdentifier The identifier being indexed.

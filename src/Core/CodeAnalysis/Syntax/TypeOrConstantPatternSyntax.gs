@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a name-shaped pattern that can bind as either an existing value
 /// pattern or a bare type pattern.
-class TypeOrConstantPatternSyntax : PatternSyntax {
+partial class TypeOrConstantPatternSyntax : PatternSyntax {
     /// Initializes a new instance of the (cref:TypeOrConstantPatternSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param expression The value-pattern interpretation.

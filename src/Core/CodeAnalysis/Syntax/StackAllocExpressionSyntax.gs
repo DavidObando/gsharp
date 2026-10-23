@@ -18,7 +18,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// supplies the element values; the count-inferred shape
 /// (`stackalloc []T{a, b, …}`, empty brackets) takes the count from the
 /// initializer length (issue #1041).
-class StackAllocExpressionSyntax : ExpressionSyntax {
+partial class StackAllocExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:StackAllocExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param stackAllocKeyword The contextual `stackalloc` keyword token.

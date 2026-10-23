@@ -9,7 +9,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// identifier binds the int index; for maps / CLR dictionaries the first
 /// identifier binds the key. The second identifier (when present) binds
 /// the element / value.
-class ForRangeStatementSyntax : StatementSyntax {
+partial class ForRangeStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:ForRangeStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The `for` keyword.

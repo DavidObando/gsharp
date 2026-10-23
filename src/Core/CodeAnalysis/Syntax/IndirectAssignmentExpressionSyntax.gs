@@ -9,7 +9,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// writable ref-returning call (`GetRef() = expr`). The binder lowers
 /// both to a `BoundIndirectAssignmentExpression`; the emitter lowers to
 /// `<load-address> <value> stind.*`.
-class IndirectAssignmentExpressionSyntax : ExpressionSyntax {
+partial class IndirectAssignmentExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:IndirectAssignmentExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param target The pointer dereference or writable ref-returning call.

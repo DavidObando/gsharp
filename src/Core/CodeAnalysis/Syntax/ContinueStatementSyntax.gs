@@ -7,7 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// Represents the continue statement in the language. An optional trailing
 /// identifier (on the same source line) names an enclosing labeled loop
 /// (ADR-0070).
-open class ContinueStatementSyntax : StatementSyntax {
+open partial class ContinueStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:ContinueStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The continue keyword.

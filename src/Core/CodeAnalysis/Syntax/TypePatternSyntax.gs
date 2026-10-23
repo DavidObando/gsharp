@@ -7,7 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// Represents a type pattern: the bare `T`, the switch binding spelling
 /// `v is T`, or the ADR-0166 designation spelling `T v`. A recursive
 /// property-pattern suffix may follow the type in every spelling.
-class TypePatternSyntax : PatternSyntax {
+partial class TypePatternSyntax : PatternSyntax {
     /// Initializes a new instance of the (cref:TypePatternSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param identifier The binding identifier of the `v is T` spelling.

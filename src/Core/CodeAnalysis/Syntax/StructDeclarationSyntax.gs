@@ -8,7 +8,7 @@ import GSharp.Core.CodeAnalysis.Text
 import System.Collections.Immutable
 
 /// Represents a Go-style `struct Name { ... }` declaration (Phase 3.B.1).
-class StructDeclarationSyntax : MemberSyntax {
+partial class StructDeclarationSyntax : MemberSyntax {
     // Backing fields for the properties the parser assigns after construction. Their setters
     // invalidate the node's cached span (issue #1675) so a span computed before the mutation is
     // never served afterwards.

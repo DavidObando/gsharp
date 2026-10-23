@@ -28,7 +28,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// (cref:Parser).ParseTupleTypeClause already applies to the tuple
 /// TYPE grammar), so a single-element destructuring pattern can never
 /// correspond to a real tuple-typed argument.
-class TupleDeconstructionPatternSyntax : SyntaxNode {
+partial class TupleDeconstructionPatternSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:TupleDeconstructionPatternSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param openParenToken The opening `(`.

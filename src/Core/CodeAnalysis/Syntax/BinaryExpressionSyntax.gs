@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a binary expression in the language.
-open class BinaryExpressionSyntax : ExpressionSyntax {
+open partial class BinaryExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:BinaryExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param left The left side of the binary expression.

@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// and Phase 7.2 canonical `await for v in stream { ... }`. Iterates an
 /// `IAsyncEnumerable[T]`; each iteration awaits the underlying
 /// `MoveNextAsync()`.
-class AwaitForRangeStatementSyntax : StatementSyntax {
+partial class AwaitForRangeStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:AwaitForRangeStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param awaitKeyword The `await` keyword.

@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// open-ended forms `..hi`, `lo..`, and `..`. Currently produced
 /// only as the operand of an index expression (`a[lo..hi]`), where it
 /// lowers to a slice of the indexed array, slice, string, or span-like value.
-class RangeExpressionSyntax : ExpressionSyntax {
+partial class RangeExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:RangeExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param lowerBound The optional inclusive lower bound, or

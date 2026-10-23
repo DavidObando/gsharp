@@ -12,7 +12,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// generic type parameter constrained `unmanaged`. Emits the CIL
 /// `sizeof <T>` opcode (which accepts a generic type token), matching
 /// C# `sizeof(T)` over a `where T : unmanaged` parameter.
-class SizeOfExpressionSyntax : ExpressionSyntax {
+partial class SizeOfExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:SizeOfExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param sizeOfIdentifier The `sizeof` identifier token.

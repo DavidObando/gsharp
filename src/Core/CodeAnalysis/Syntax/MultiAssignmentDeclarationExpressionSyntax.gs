@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// A fresh local target inside a multi-assignment, for example
 /// `existing, let fresh = Pair()`.
-class MultiAssignmentDeclarationExpressionSyntax : ExpressionSyntax {
+partial class MultiAssignmentDeclarationExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:MultiAssignmentDeclarationExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The `let` or `var` keyword.

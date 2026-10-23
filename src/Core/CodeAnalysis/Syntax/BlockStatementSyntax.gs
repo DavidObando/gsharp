@@ -7,7 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 import System.Collections.Immutable
 
 /// Represents a block statement syntax in the language.
-class BlockStatementSyntax : StatementSyntax {
+partial class BlockStatementSyntax : StatementSyntax {
     // Backing field for the property the parser assigns after construction. Its setter
     // invalidates the node's cached span (issue #1675).
     private var unsafeKeyword SyntaxToken?

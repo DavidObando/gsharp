@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents the else clause syntax in the language.
-class ElseClauseSyntax : SyntaxNode {
+partial class ElseClauseSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:ElseClauseSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param elseKeyword The else keyword.

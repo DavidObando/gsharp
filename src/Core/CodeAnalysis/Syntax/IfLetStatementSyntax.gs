@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// statement (ADR-0071 / issue #708). The binder lowers this shape into
 /// existing if / declaration / block bound nodes; no new bound-node kind is
 /// introduced.
-class IfLetStatementSyntax : StatementSyntax {
+partial class IfLetStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:IfLetStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param ifKeyword The `if` keyword token.

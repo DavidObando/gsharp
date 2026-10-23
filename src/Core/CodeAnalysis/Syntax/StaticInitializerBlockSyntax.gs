@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// `shared { … }` block (ADR-0140 / issue #2131). Its statements run in the
 /// containing type's `.cctor` (static constructor) after the static-field
 /// initializers, matching a C# static constructor body.
-class StaticInitializerBlockSyntax : SyntaxNode {
+partial class StaticInitializerBlockSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:StaticInitializerBlockSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param initKeyword The contextual `init` identifier token.

@@ -7,7 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 import System.Collections.Immutable
 
 /// Represents a variable declaration syntax in the language.
-class VariableDeclarationSyntax : StatementSyntax {
+partial class VariableDeclarationSyntax : StatementSyntax {
     // Backing fields for the properties the parser assigns after construction. Their setters
     // invalidate the node's cached span (issue #1675).
     private var asyncModifier SyntaxToken?

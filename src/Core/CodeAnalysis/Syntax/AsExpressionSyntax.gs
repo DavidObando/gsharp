@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents an expression-level safe cast: `expr as T` → `T` or `null`.
 /// Issue #575.
-class AsExpressionSyntax : ExpressionSyntax {
+partial class AsExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:AsExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param expression The expression being cast.

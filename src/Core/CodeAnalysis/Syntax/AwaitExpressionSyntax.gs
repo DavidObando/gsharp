@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents an `await` expression (Phase 5.1 / ADR-0023).
-class AwaitExpressionSyntax : ExpressionSyntax {
+partial class AwaitExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:AwaitExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param awaitKeyword The `await` keyword token.

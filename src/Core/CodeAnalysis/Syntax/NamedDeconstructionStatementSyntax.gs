@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents `let { Field = local, ... } = expr` data-struct deconstruction.
-class NamedDeconstructionStatementSyntax : StatementSyntax {
+partial class NamedDeconstructionStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:NamedDeconstructionStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The `let` keyword.

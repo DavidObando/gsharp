@@ -9,7 +9,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// @remarks Each initializer is re-evaluated before every iteration. The bindings are
 /// visible only inside (cref:Body) and are observed there at their
 /// underlying non-null types.
-class WhileLetStatementSyntax : StatementSyntax {
+partial class WhileLetStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:WhileLetStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param whileKeyword The `while` keyword token.

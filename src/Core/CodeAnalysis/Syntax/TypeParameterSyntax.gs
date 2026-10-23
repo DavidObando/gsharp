@@ -8,7 +8,7 @@ import System.Collections.Immutable
 
 /// A single type parameter in a generic declaration, e.g. `T any` in
 /// `func Map[T any, U any](…)` (Phase 4.1 / ADR-0020).
-class TypeParameterSyntax : SyntaxNode {
+partial class TypeParameterSyntax : SyntaxNode {
     private var constraintType TypeClauseSyntax?
 
     /// Initializes a new instance of the (cref:TypeParameterSyntax) class.

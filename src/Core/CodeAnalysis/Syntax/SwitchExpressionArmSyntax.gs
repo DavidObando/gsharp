@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a single arm of a `switch` expression.
-class SwitchExpressionArmSyntax : SyntaxNode {
+partial class SwitchExpressionArmSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:SwitchExpressionArmSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The `case` or `default` keyword.

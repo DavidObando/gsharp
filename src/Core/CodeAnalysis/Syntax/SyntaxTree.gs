@@ -106,7 +106,9 @@ open class SyntaxTree {
         pending.Push(Root)
         while pending.Count > 0 {
             let current = pending.Pop()
-            for child in current.GetChildren() {
+            let count = current.ChildCount
+            for var i = 0; i < count; i++ {
+                let child = current.GetChild(i)
                 index[child] = current
                 pending.Push(child)
             }

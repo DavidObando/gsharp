@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// An explicit receiver member initializer, `.Member: value`, in an
 /// ordered collection initializer (ADR-0180).
-class MemberCollectionElementSyntax : CollectionElementSyntax {
+partial class MemberCollectionElementSyntax : CollectionElementSyntax {
     /// Initializes a new instance of the (cref:MemberCollectionElementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param dotToken The explicit receiver marker.

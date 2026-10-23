@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a property pattern `{ Name: pattern }`, optionally followed by a designation
 /// `{ Name: pattern } name`.
-class PropertyPatternSyntax : PatternSyntax {
+partial class PropertyPatternSyntax : PatternSyntax {
     /// Initializes a new instance of the (cref:PropertyPatternSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param openBraceToken The opening brace token.

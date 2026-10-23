@@ -12,7 +12,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// (cref:Expression) is a (cref:SpreadElementExpressionSyntax)
 /// the source is evaluated once, iterated once, and each item is added in
 /// order.
-class StructLiteralContentElementSyntax : StructLiteralElementSyntax {
+partial class StructLiteralContentElementSyntax : StructLiteralElementSyntax {
     /// Initializes a new instance of the (cref:StructLiteralContentElementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param expression The element expression (or a (cref:SpreadElementExpressionSyntax) for a content

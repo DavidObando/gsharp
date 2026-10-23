@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a `go f(args)` statement (Phase 5.3 / ADR-0022).
 /// The expression must be a call.
-class GoStatementSyntax : StatementSyntax {
+partial class GoStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:GoStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param goKeyword The `go` keyword token.

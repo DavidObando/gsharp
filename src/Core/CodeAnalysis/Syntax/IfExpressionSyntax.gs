@@ -11,7 +11,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// simple-statement initializer, `if init; cond { … } else { … }`.
 /// The else branch is either another (cref:IfExpressionSyntax) (for
 /// `else if` chains) or a (cref:BlockExpressionSyntax).
-class IfExpressionSyntax : ExpressionSyntax {
+partial class IfExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:IfExpressionSyntax) class
     /// without an initializer.
     /// @param syntaxTree The parent syntax tree.

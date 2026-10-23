@@ -116,6 +116,14 @@ jobs:
           dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --check .
           dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --check .
 
+      - name: Test the syntax child accessor generator
+        run: python3 build/test-generate-syntax-children.py
+
+      - name: Check the generated syntax child accessors are current
+        # Issue #5136: SyntaxNode.Children.g.gs is written by build/generate-syntax-children.py
+        # from the node classes. A property change without a regenerated file fails here.
+        run: python3 build/generate-syntax-children.py --check
+
       - name: Test the netstandard host-reference check
         run: python3 build/test-check-netstandard-host-refs.py
 

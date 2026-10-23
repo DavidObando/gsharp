@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents the return statement syntax in the language.
-class ReturnStatementSyntax : StatementSyntax {
+partial class ReturnStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:ReturnStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param returnKeyword The return keyword.

@@ -9,7 +9,7 @@ import System.Collections.Immutable
 /// Represents a `try { … } catch (e Exception) { … } finally { … }`
 /// statement. Either at least one catch clause or a finally clause
 /// must be present.
-class TryStatementSyntax : StatementSyntax {
+partial class TryStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:TryStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param tryKeyword The `try` keyword.

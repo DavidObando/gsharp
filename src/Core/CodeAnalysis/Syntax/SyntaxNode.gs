@@ -4,10 +4,12 @@
 
 package GSharp.Core.CodeAnalysis.Syntax
 
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Concurrent
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.IO
 import System.Linq
 import System.Linq.Expressions
@@ -104,14 +106,12 @@ abstract class SyntaxNode {
             let node = pending.Pop()
             yield node
             // Push in reverse so children pop in GetChildren() order.
-            let children = List[SyntaxNode]()
-            for child in node.GetChildren() {
+            let count = node.ChildCount
+            for var i = count - 1; i >= 0; i-- {
+                let child = node.GetChild(i)
                 if !(child is SyntaxToken) {
-                    children.Add(child)
+                    pending.Push(child)
                 }
-            }
-            for var i = children.Count - 1; i >= 0; i-- {
-                pending.Push(children[i])
             }
         }
     }
@@ -127,9 +127,37 @@ abstract class SyntaxNode {
         }
     }
 
+    /// Gets the number of children of this syntax node. Every concrete node class overrides this
+    /// in `SyntaxNode.Children.g.gs`, which `build/generate-syntax-children.py` writes (issue #5136).
+    /// The base implementation is the reflection fallback for a class without generated code.
+    internal open prop ChildCount int32 {
+        get {
+            CompilationMeasurements.Count("syntax.child-reflection-fallbacks")
+            return GetChildrenByReflection().Count()
+        }
+    }
+
+    /// Gets one child of this syntax node without allocating.
+    /// @param index The index of the child, from 0 to (cref:ChildCount) - 1.
+    /// @returns The child at that index, in the order of (cref:GetChildren).
+    internal open func GetChild(index int32) SyntaxNode {
+        CompilationMeasurements.Count("syntax.child-reflection-fallbacks")
+        return GetChildrenByReflection().ElementAt(index)
+    }
+
     /// Gets an enumeration of all the children of this syntax node.
     /// @returns An (cref:IEnumerable{SyntaxNode}) with the children of this syntax node.
     func GetChildren() sequence[SyntaxNode] {
+        let count = ChildCount
+        for var i = 0; i < count; i++ {
+            yield GetChild(i)
+        }
+    }
+
+    /// Enumerates the children by reflection over the public properties. This is the order and the
+    /// content that the generated (cref:GetChild) must reproduce, so tests use it as the oracle.
+    /// @returns The children of this syntax node.
+    internal func GetChildrenByReflection() sequence[SyntaxNode] {
         let accessors = ChildAccessorsByType.GetOrAdd(GetType(), (type Type) -> BuildChildAccessors(type))
         for accessor in accessors {
             // Kind comes from the property's static type, so a failed `as`
@@ -172,7 +200,7 @@ abstract class SyntaxNode {
             return token
         }
         // A syntax node should always contain at least 1 token.
-        return GetChildren().Last().GetLastToken()
+        return GetChild(ChildCount - 1).GetLastToken()
     }
 
     /// Gets the first token in this syntax node.
@@ -182,7 +210,7 @@ abstract class SyntaxNode {
             return token
         }
         // A syntax node should always contain at least 1 token.
-        return GetChildren().First().GetFirstToken()
+        return GetChild(0).GetFirstToken()
     }
 
     /// ```xmldoc
@@ -212,19 +240,18 @@ abstract class SyntaxNode {
     }
 
     private func ComputeSpan() TextSpan {
-        // Compute the bounding span from min(start) and max(end) across all children, rather
-        // than the first/last child in reflection order. The property-based enumeration in
-        // GetChildren() returns properties in C# declaration order, which is not always the
-        // source order: nodes that expose `{ get; set; }` properties assigned by the parser
-        // after construction (e.g. StructDeclarationSyntax.SharedBlock) are enumerated after
-        // the structural CloseBraceToken even though they sit inside the braces. Using
-        // first/last in that case truncates the span and breaks position-based traversals
-        // such as the language server's interpolated-string hole detection.
+        // Take the minimum start and the maximum end over all children. The children are not in
+        // source order for every node: a postfix `x!!` lists its operator before its operand, a
+        // struct keeps fields and methods in separate lists, and the parser sets some properties
+        // (for example StructDeclarationSyntax.SharedBlock) after construction. The first and last
+        // child would give a truncated span and break position-based walks such as the language
+        // server's interpolated-string hole detection (issue #5136).
         var hasChild = false
         var start = int32.MaxValue
         var end = int32.MinValue
-        for child in GetChildren() {
-            var childSpan = child.Span
+        let count = ChildCount
+        for var i = 0; i < count; i++ {
+            var childSpan = GetChild(i).Span
             if childSpan.Start < start {
                 start = childSpan.Start
             }
@@ -266,6 +293,63 @@ abstract class SyntaxNode {
     }
 
     shared {
+        /// Returns whether an optional child is present. The generated child accessors use this for
+        /// every single-node property.
+        /// @param node The property value.
+        /// @returns `true` when the value is not null.
+        internal func IsPresent(node SyntaxNode?) bool -> node != nil
+
+        /// Returns the number of nodes and separators of a separated list; a null list has none.
+        /// @param list The property value.
+        /// @returns The number of items.
+        internal func SeparatedLength(list SeparatedSyntaxList?) int32 {
+            return if list == nil {
+                0
+            } else {
+                list.GetWithSeparators().Length
+            }
+        }
+
+        /// Returns the nodes and separators of a separated list; a null list has none.
+        /// @param list The property value.
+        /// @returns The items in source order.
+        internal func SeparatedItems(list SeparatedSyntaxList?) ImmutableArray[SyntaxNode] {
+            return if list == nil {
+                ImmutableArray[SyntaxNode].Empty
+            } else {
+                list.GetWithSeparators()
+            }
+        }
+
+        /// Copies a computed sequence of child nodes. The generated accessors use this for
+        /// properties that build the sequence on each read.
+        /// @param items The property value.
+        /// @returns The items without nulls.
+        internal func EnumerableItems(items IEnumerable[SyntaxNode]?) ImmutableArray[SyntaxNode] {
+            let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
+            if items != nil {
+                for item in items {
+                    if item != nil {
+                        builder.Add(item)
+                    }
+                }
+            }
+            return builder.ToImmutable()
+        }
+
+        /// Returns the tokens of a list that allows absent entries, without the absent entries.
+        /// @param tokens The property value.
+        /// @returns The present tokens.
+        internal func PresentTokens(tokens ImmutableArray[SyntaxToken?]) ImmutableArray[SyntaxNode] {
+            let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
+            for token in tokens {
+                if token != nil {
+                    builder.Add(token)
+                }
+            }
+            return builder.ToImmutable()
+        }
+
         // ponytail: nodes are immutable once handed back to the caller -- the parser's
         // few `{ get; set; }` properties (e.g. StructDeclarationSyntax.SharedBlock) are
         // only ever assigned right after `new X(...)`, before anyone reads .Span. So a

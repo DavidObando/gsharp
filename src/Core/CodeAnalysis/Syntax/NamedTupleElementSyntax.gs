@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// a direct element of a tuple literal of two or more elements; derives from
 /// (cref:ExpressionSyntax) so it slots into the tuple literal's
 /// existing separated element list, and the binder unwraps it.
-class NamedTupleElementSyntax : ExpressionSyntax {
+partial class NamedTupleElementSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:NamedTupleElementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param nameToken The element-name identifier.

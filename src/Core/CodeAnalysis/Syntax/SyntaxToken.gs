@@ -7,7 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 
 /// Represents a syntax token in the language.
-open class SyntaxToken : SyntaxNode {
+open partial class SyntaxToken : SyntaxNode {
     /// Initializes a new instance of the (cref:SyntaxToken) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param kind The kind of syntax token.

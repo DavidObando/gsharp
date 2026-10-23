@@ -7,7 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// One `let name [T] = expr` clause inside an
 /// (cref:IfLetStatementSyntax), (cref:GuardLetStatementSyntax),
 /// or (cref:WhileLetStatementSyntax) header (ADR-0071 / ADR-0163).
-class IfLetBindingClauseSyntax : SyntaxNode {
+partial class IfLetBindingClauseSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:IfLetBindingClauseSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param letKeyword The `let` keyword token.

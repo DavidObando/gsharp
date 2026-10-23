@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a discard pattern `_`.
-class DiscardPatternSyntax : PatternSyntax {
+partial class DiscardPatternSyntax : PatternSyntax {
     /// Initializes a new instance of the (cref:DiscardPatternSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param underscoreToken The underscore identifier token.

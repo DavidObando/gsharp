@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents an if statement in the language.
-class IfStatementSyntax : StatementSyntax {
+partial class IfStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:IfStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param ifKeyword The if keyword.

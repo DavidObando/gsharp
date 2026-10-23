@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// (conjunction) or `< 0 or > 100` (disjunction). The operator is a
 /// contextual keyword (`and` / `or`) matched as an identifier in
 /// pattern position.
-class BinaryPatternSyntax : PatternSyntax {
+partial class BinaryPatternSyntax : PatternSyntax {
     /// Initializes a new instance of the (cref:BinaryPatternSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param left The left-hand sub-pattern.

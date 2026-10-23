@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a single `add` or `remove` accessor inside an event body (ADR-0052).
-class EventAccessorSyntax : SyntaxNode {
+partial class EventAccessorSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:EventAccessorSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param accessorKeyword The `add` or `remove` identifier token.

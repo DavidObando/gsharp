@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a `throw expr` statement.
-class ThrowStatementSyntax : StatementSyntax {
+partial class ThrowStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:ThrowStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param throwKeyword The `throw` keyword.

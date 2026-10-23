@@ -10,7 +10,7 @@ import System.Collections.Immutable
 /// `{ stmt1; stmt2; expr }`. The trailing expression (if present)
 /// is the value produced by the block. When there is no trailing expression
 /// the block is statement-only and is only legal in statement position.
-class BlockExpressionSyntax : ExpressionSyntax {
+partial class BlockExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:BlockExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param openBraceToken The opening `{` token.

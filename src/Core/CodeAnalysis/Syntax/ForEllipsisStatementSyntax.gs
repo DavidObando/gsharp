@@ -10,7 +10,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// ADR-0077 / issue #717; the parser still surfaces an (cref:InToken)
 /// (synthesised when recovering from the legacy `:=` form) so
 /// downstream binding and printing have a single, uniform shape.
-class ForEllipsisStatementSyntax : StatementSyntax {
+partial class ForEllipsisStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:ForEllipsisStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The for keyword.

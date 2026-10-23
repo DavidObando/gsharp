@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents an accessor expression syntax in the language.
-class AccessorExpressionSyntax : ExpressionSyntax {
+partial class AccessorExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:AccessorExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param leftPart The left part.

@@ -11,7 +11,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// single identifier on the left of the dot) by allowing the assigned target
 /// to be reached through any expression that produces a value with a settable
 /// member.
-class MemberFieldAssignmentExpressionSyntax : ExpressionSyntax {
+partial class MemberFieldAssignmentExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:MemberFieldAssignmentExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param receiver The expression producing the receiver (everything before the last dot).

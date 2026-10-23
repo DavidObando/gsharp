@@ -17,7 +17,7 @@ enum SelectCaseKind {
 }
 
 /// A single arm of a `select` statement.
-class SelectCaseSyntax : SyntaxNode {
+partial class SelectCaseSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:SelectCaseSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The `case` or `default` keyword.

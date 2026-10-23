@@ -9,7 +9,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// `(`. The argument must be a name reference (identifier, member access,
 /// or generic type instantiation); the binder lowers it to a compile-time
 /// string literal of the unqualified short name.
-class NameOfExpressionSyntax : ExpressionSyntax {
+partial class NameOfExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:NameOfExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param nameOfIdentifier The `nameof` identifier token.

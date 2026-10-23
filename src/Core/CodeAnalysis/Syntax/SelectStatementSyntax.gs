@@ -8,7 +8,7 @@ import System.Collections.Immutable
 
 /// Represents a `select { … }` statement that orchestrates one of
 /// several channel send/receive operations (Phase 5.6 / ADR-0022).
-class SelectStatementSyntax : StatementSyntax {
+partial class SelectStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:SelectStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param selectKeyword The `select` keyword.

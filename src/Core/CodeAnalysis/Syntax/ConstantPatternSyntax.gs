@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a constant pattern wrapping the legacy case expression form.
-class ConstantPatternSyntax : PatternSyntax {
+partial class ConstantPatternSyntax : PatternSyntax {
     /// Initializes a new instance of the (cref:ConstantPatternSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param expression The constant expression.

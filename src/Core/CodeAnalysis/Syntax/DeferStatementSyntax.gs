@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a `defer f(args)` statement (Phase 7.1 / ADR-0030).
 /// The expression must be a call.
-class DeferStatementSyntax : StatementSyntax {
+partial class DeferStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:DeferStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param deferKeyword The `defer` keyword token.

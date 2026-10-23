@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a single `get`, `set`, or `init` accessor inside a property body (ADR-0051, issue #946).
-class PropertyAccessorSyntax : SyntaxNode {
+partial class PropertyAccessorSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:PropertyAccessorSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param accessibilityModifier The optional accessor accessibility modifier.

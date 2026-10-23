@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a `for cond { body }` ("for-as-while") statement.
-class ForConditionStatementSyntax : StatementSyntax {
+partial class ForConditionStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:ForConditionStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The `for` keyword.

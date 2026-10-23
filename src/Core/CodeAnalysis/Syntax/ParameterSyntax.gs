@@ -7,7 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 import System.Collections.Immutable
 
 /// Represents a parameter in the language.
-class ParameterSyntax : SyntaxNode {
+partial class ParameterSyntax : SyntaxNode {
     // Backing fields for the properties the parser assigns after construction. Their setters
     // invalidate the node's cached span (issue #1675).
     private var scopedModifier SyntaxToken?

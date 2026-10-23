@@ -10,7 +10,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// (cref:IndexAssignmentExpressionSyntax) (which is restricted to a
 /// single identifier on the left of the brackets) by allowing the indexed
 /// target to be any expression that produces an indexable value.
-class MemberIndexAssignmentExpressionSyntax : ExpressionSyntax {
+partial class MemberIndexAssignmentExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:MemberIndexAssignmentExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param target The parsed indexer access on the left of the equals sign.

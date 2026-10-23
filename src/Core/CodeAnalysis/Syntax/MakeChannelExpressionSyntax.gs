@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// `make(chan T, capacity)` expression (Phase 5.4 / ADR-0022).
 /// `make` is recognized as a contextual identifier when followed by
 /// `(` and a type-clause starter such as `chan`.
-class MakeChannelExpressionSyntax : ExpressionSyntax {
+partial class MakeChannelExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:MakeChannelExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param makeIdentifier The `make` identifier token.

@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a `type Name = Other` alias declaration (Phase 2.7).
 /// Aliases are erased at bind time — they are not emitted into CIL.
-class TypeAliasDeclarationSyntax : MemberSyntax {
+partial class TypeAliasDeclarationSyntax : MemberSyntax {
     /// Initializes a new instance of the (cref:TypeAliasDeclarationSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param typeKeyword The `type` keyword.

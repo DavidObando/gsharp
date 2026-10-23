@@ -14,7 +14,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// constructs into a synthetic local, performs the assignments, and yields
 /// the local — so init-only setters are legal here even though they would be
 /// disallowed at a free-standing assignment site.
-class ObjectCreationExpressionSyntax : ExpressionSyntax {
+partial class ObjectCreationExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:ObjectCreationExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param target The underlying constructor call expression.

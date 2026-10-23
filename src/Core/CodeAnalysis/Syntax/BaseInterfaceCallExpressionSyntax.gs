@@ -12,7 +12,7 @@ import System.Collections.Immutable
 /// override delegate to a specific inherited default. The parser commits
 /// to this shape when an identifier whose text is `"base"` is
 /// immediately followed by `[`.
-class BaseInterfaceCallExpressionSyntax : ExpressionSyntax {
+partial class BaseInterfaceCallExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:BaseInterfaceCallExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param baseKeyword The contextual `base` identifier token.

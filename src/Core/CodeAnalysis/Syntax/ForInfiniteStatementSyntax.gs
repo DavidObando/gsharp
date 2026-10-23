@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a for infinite statement syntax in the language.
-class ForInfiniteStatementSyntax : StatementSyntax {
+partial class ForInfiniteStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:ForInfiniteStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The for keyword.

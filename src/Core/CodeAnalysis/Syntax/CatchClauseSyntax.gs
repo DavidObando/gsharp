@@ -10,7 +10,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// unbound), `catch` (catch-all, unbound), and any of those followed by a
 /// `when` filter. The pre-ADR-0177 untyped `catch (name)` form is
 /// retired: a parenthesized single identifier now names a type, not a binder.
-class CatchClauseSyntax : SyntaxNode {
+partial class CatchClauseSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:CatchClauseSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param catchKeyword The `catch` keyword.

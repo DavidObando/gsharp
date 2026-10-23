@@ -13,7 +13,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// a conditional address-of
 /// ((cref:GSharp.Core.CodeAnalysis.Binding.BoundConditionalAddressExpression)),
 /// preserving ADR-0061's byref semantics.
-class ConditionalExpressionSyntax : ExpressionSyntax {
+partial class ConditionalExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:ConditionalExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param condition The condition expression.

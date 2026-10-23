@@ -16,7 +16,7 @@ import System.Collections.Immutable
 /// Members are separated by newlines or semicolons (like the rest of the
 /// language), never commas. Field, method, and event members are supported;
 /// `init`/`deinit` are rejected.
-class AnonymousClassExpressionSyntax : ExpressionSyntax {
+partial class AnonymousClassExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:AnonymousClassExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param dataKeyword The optional `data` contextual keyword.

@@ -19,7 +19,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// binding supplies a target function type from which the parameter type can be inferred (e.g.
 /// `let f (int32) -> int32 = (x) -> x + 1`). When no target type is available, the binder reports
 /// GS0304.
-class LambdaExpressionSyntax : ExpressionSyntax {
+partial class LambdaExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:LambdaExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param asyncModifier Optional `async` modifier preceding the parameter list (ADR-0076 / issue #716).

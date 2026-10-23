@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents an expression statement in the language.
-open class ExpressionStatementSyntax : StatementSyntax {
+open partial class ExpressionStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:ExpressionStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param expression The expression.

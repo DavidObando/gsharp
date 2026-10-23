@@ -12,7 +12,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// branch shape of the ADR-0064 if-EXPRESSION. The binder lowers it into the
 /// existing `BoundBlockExpression` / `BoundConditionalExpression`
 /// pair, so no new bound-node kind or backend path is introduced.
-class IfLetExpressionSyntax : ExpressionSyntax {
+partial class IfLetExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:IfLetExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param ifKeyword The `if` keyword token.
