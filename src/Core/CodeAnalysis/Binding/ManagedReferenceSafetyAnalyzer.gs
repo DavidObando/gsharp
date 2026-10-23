@@ -983,6 +983,13 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                 analyzer.AnalyzeFunction(function, body)
             }
             for type in types {
+                ValidateDeclaredSignatures(
+                    type.Methods.Concat(type.StaticMethods),
+                    type.Properties.Concat(type.StaticProperties),
+                    type.Events.Concat(type.StaticEvents),
+                    functions,
+                    diagnostics
+                )
                 if type.BaseType is {} importedBase &&
                     importedBase.ClrType != nil &&
                     NativeProtocolSafety
@@ -1052,6 +1059,17 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                 }
             }
             for type in interfaces {
+                ValidateDeclaredSignatures(
+                    type
+                        .Methods
+                        .Concat(type.StaticMethods)
+                        .Concat(type.PrivateMethods)
+                        .Concat(type.StaticPrivateMethods),
+                    type.Properties,
+                    type.Events,
+                    functions,
+                    diagnostics
+                )
                 for field in type.StaticFields {
                     let location = field.Declaration?.Location ?? type.Declaration.Location
                     NativeProtocolSafety.ValidateStorageType(field.Type, location, diagnostics)
@@ -1079,6 +1097,36 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                             )
                         }
                     }
+                }
+            }
+        }
+
+        private func ValidateDeclaredSignatures(
+            methods IEnumerable[FunctionSymbol],
+            properties IEnumerable[PropertySymbol],
+            events IEnumerable[EventSymbol],
+            functions ImmutableDictionary[FunctionSymbol, BoundBlockStatement].Builder,
+            diagnostics DiagnosticBag
+        ) {
+            let signatures = methods.Concat(
+                properties.SelectMany(
+                    (property PropertySymbol) -> []FunctionSymbol? {property.GetterSymbol, property.SetterSymbol}
+                )
+                    .OfType[FunctionSymbol]()
+            )
+                .Concat(
+                events.SelectMany(
+                    (eventSymbol EventSymbol) -> []FunctionSymbol? {
+                        eventSymbol.AddMethodSymbol,
+                        eventSymbol.RemoveMethodSymbol,
+                        eventSymbol.RaiseMethodSymbol
+                    }
+                )
+                    .OfType[FunctionSymbol]()
+            )
+            for function in signatures.Distinct() {
+                if !functions.ContainsKey(function) {
+                    NativeProtocolSafety.ValidateSignature(function, diagnostics)
                 }
             }
         }

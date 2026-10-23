@@ -91,6 +91,11 @@ Nominal interface storage owners carry a distinct cooperative storage-identity
 marker, not a protocol declaration. Their static fields preserve nullability and
 are checked for storage legality/public accessibility even without initializers;
 abstract member contracts use the same feature-marker decision as bodied methods.
+Declaration validation includes bodyless nominal methods and property/event
+accessors, independently of executable bodies. Accessor metadata follows the
+same signature/receiver marker policy. Body-synthesized negative probes own
+bind-local support types and cannot append methods to global operation types
+shared with speculative coverage-planning binds.
 Native-bearing imported constructors/base initializers are explicitly unproved
 boundaries. Slot identities use structural type shapes and separate nullability
 flags, rather than a symbolic type's temporary CLR representation.

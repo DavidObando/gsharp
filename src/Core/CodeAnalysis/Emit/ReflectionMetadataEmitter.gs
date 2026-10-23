@@ -1036,7 +1036,13 @@ internal class ReflectionMetadataEmitter {
             this.customAttrEncoder.EmitNullableAttributeOnEvent,
             this.customAttrEncoder.EmitMethodNullability,
             this.customAttrEncoder.EmitTupleElementNamesAttribute,
-            this.customAttrEncoder.EmitUserAttributes
+            this.customAttrEncoder.EmitUserAttributes,
+            (handle EntityHandle) -> this.customAttrEncoder.EmitStringAttribute(
+                handle,
+                "System.Runtime.CompilerServices.CompilerFeatureRequiredAttribute",
+                typeof(System.Runtime.CompilerServices.CompilerFeatureRequiredAttribute),
+                NativeProtocolMetadata.FeatureName
+            )
         )
         // PR-E-8: TypeDefEmitter wires up after MemberDefEmitter. It depends
         // on the same EmitContext/MetadataTokenCache/WellKnownReferences

@@ -14,6 +14,66 @@ import Xunit
 
 class NativeProtocolLanguageTests {
     @Fact
+    func RoundSixBodyProbesDoNotMutateGlobalOperationMethodTables() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let executable = fixture.Compile(`import System
+protocol P { func Read() int32; }
+struct Payload { public func Read() int32 -> 17 }
+struct Other {}
+let required P = Payload{}
+let optional P? = required
+func Probe() P? -> Other{} as P
+func Tail() int32 -> 41
+Console.WriteLine(optional != nil)
+Console.WriteLine(Probe() == nil)
+Console.WriteLine(Tail())
+`, "probe-ownership", executable: true)
+        IlVerifier.Verify(executable)
+        Assert.Equal("True\nTrue\n41\n", fixture.Run(executable))
+    }
+
+    @Theory
+    @InlineData("func Read() Hidden?;", "accessible")
+    @InlineData("prop Value Hidden? { get; }", "accessible")
+    @InlineData("func Observe(value Box[P]?);", "delegate/generic")
+    @InlineData("func Read[T](value P) P;", "generic or suspending")
+    @InlineData("func Read(ref value P);", "by-reference")
+    @InlineData("shared { func Read() Hidden?; }", "accessible")
+    func RoundSixBodylessNominalContractsValidateBeforeExport(declaration string, reason string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`internal protocol Hidden {}
+public protocol P {}
+public class Box[T] { var Value T }
+public interface API { ` + declaration + ` }
+`, "bodyless-invalid", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains(reason), output)
+        let reference = Path.Combine(fixture.Directory, "Bodyless.ref.dll")
+        let implementation = fixture.Compile(`package Bodyless
+public protocol P {}
+public struct Value {}
+public func Make() P -> Value{}
+public interface API { func Read() P?; prop Optional P? { get; } }
+`, "Bodyless", executable: false, "/refout:" + reference)
+        for image in[]string{implementation, reference} {
+            let executable = fixture.Compile(`import System
+import Bodyless
+public class Reader : API {
+    public func Read() P? -> Make()
+    public prop Optional P? { get { return nil } }
+}
+func Show(value API) {
+    Console.WriteLine(value.Read() is Value)
+    Console.WriteLine(value.Optional == nil)
+}
+Show(Reader())
+`, "bodyless-caller", executable: true, "/r:" + image)
+            IlVerifier.Verify(executable, []string{implementation})
+            Assert.Equal("True\nTrue\n", fixture.Run(executable))
+        }
+    }
+
+    @Fact
     func RoundFiveRejectedOverloadProbesDoNotAddInsertionCoverage() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let dll = fixture.Compile(`import System

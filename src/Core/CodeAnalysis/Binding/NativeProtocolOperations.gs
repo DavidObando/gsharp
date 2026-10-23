@@ -164,16 +164,27 @@ internal class NativeProtocolOperations {
 
         internal func NegativeProbe($scope BoundScope, source BoundExpression, protocol TypeSymbol) BoundExpression {
             let registry = $scope.GetStructuralAdapterRegistry()
-            let operations = GetOrCreate($scope, protocol)
+            let support = StructSymbol(
+                "<>ProtocolProbe${registry.Counter++}",
+                ImmutableArray[FieldSymbol].Empty,
+                Accessibility.Internal,
+                declaration: nil,
+                protocol.ContainingNamespace ?? string.Empty,
+                isData: false,
+                isInline: false,
+                isClass: true
+            )
+            support.IsNativeProtocolSupport = true
             let method = FunctionSymbol(
-                "Absent${registry.Counter++}",
+                "Absent",
                 ImmutableArray.Create(ParameterSymbol("value", source.Type)),
                 NullableTypeSymbol.Get(protocol),
                 declaration: nil,
                 $package: nil,
                 Accessibility.Internal
-            ){IsStatic = true, StaticOwnerType = operations.Support}
-            operations.Support.SetStaticMethods(operations.Support.StaticMethods.Add(method))
+            ){IsStatic = true, StaticOwnerType = support}
+            support.SetStaticMethods(ImmutableArray.Create(method))
+            registry.Types.Add(support)
             registry.MethodBodies[method] = Lowerer.Lower(
                 BoundBlockStatement(
                     nil,

@@ -75,7 +75,7 @@ class Adr0193SymbolicProjectionGapCallersTests {
             "Binding/MemberLookup: MemberLookup.ResolveByRefParameterPointeeFromSymbolicTypeArgs -> MapOpenSignatureWithoutDeclarationMerge x1",
             "Binding/MemberLookup: MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs -> MapOpenSignatureWithoutDeclarationMerge x2",
             "Binding/OverloadResolution/OverloadResolver.Arguments: OverloadResolver.ExpandParamsArguments -> MapOpenSignatureWithoutDeclarationMerge x1",
-            "Symbols/ImportedClassSymbol: ImportedClassSymbol.TryLookupFunction -> ResolveCallReturnTypeFromSymbolicTypeArgs x1"
+            "Symbols/ImportedClassSymbol: ImportedClassSymbol.TryLookupNativeFunction -> ResolveCallReturnTypeFromSymbolicTypeArgs x1"
         }
 
         private func CSharpReferences(path string) IEnumerable[string] {

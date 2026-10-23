@@ -83,6 +83,9 @@ ordinary fields and explicit checked methods. Equality/hash operations on
 aggregates containing native storage are blocked too.
 Nominal interfaces with static native fields remain nominal interfaces; their
 uninitialized fields have the same accessibility/storage checks as initialized fields.
+Bodyless nominal methods and accessors also enforce native signature restrictions
+before export; accessible supported optional contracts remain callable through
+implementation and reference assemblies.
 This includes equality/hash method groups and lifted operators. Safe casts and
 capturing patterns cannot erase native-bearing storage to `object`; ordinary
 noncapturing tests and outer nil checks remain available. Named/anonymous

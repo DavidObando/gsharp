@@ -80,6 +80,7 @@ internal class MemberDefEmitter {
     ) -> void
     private let emitTupleElementNamesAttribute(EntityHandle, TypeSymbol) -> void
     private let emitUserAttributes(EntityHandle, Symbol, AttributeTargetKind) -> void
+    private let emitNativeProtocolFeature(EntityHandle) -> void
 
     init(
         emitCtx EmitContext,
@@ -100,7 +101,8 @@ internal class MemberDefEmitter {
             ImmutableArray[ParameterHandle]
         ) -> void,
         emitTupleElementNamesAttribute(EntityHandle, TypeSymbol) -> void,
-        emitUserAttributes(EntityHandle, Symbol, AttributeTargetKind) -> void
+        emitUserAttributes(EntityHandle, Symbol, AttributeTargetKind) -> void,
+        emitNativeProtocolFeature(EntityHandle) -> void
     ) {
         this.emitCtx = emitCtx ?? throw ArgumentNullException("emitCtx")
         this.cache = cache ?? throw ArgumentNullException("cache")
@@ -119,6 +121,8 @@ internal class MemberDefEmitter {
         this.emitTupleElementNamesAttribute = emitTupleElementNamesAttribute ??
             throw ArgumentNullException("emitTupleElementNamesAttribute")
         this.emitUserAttributes = emitUserAttributes ?? throw ArgumentNullException("emitUserAttributes")
+        this.emitNativeProtocolFeature = emitNativeProtocolFeature ??
+            throw ArgumentNullException("emitNativeProtocolFeature")
     }
 
     func EmitPropertyAccessors(structSym StructSymbol) {
@@ -286,7 +290,7 @@ internal class MemberDefEmitter {
     /// nullability, and tuple element names.
     /// @param handle The accessor's MethodDef.
     /// @param rows The rows minted for it.
-    private func StampAccessor(handle MethodDefinitionHandle, rows SignatureRows) {
+    private func StampAccessor(handle MethodDefinitionHandle, rows SignatureRows, owner FunctionSymbol?) {
         for var i = 0; i < rows.Rows.Length; i++ {
             this.emitUserAttributes(rows.Rows[i], rows.Parameters[i], AttributeTargetKind.Param)
         }
@@ -296,6 +300,13 @@ internal class MemberDefEmitter {
         }
         for var i = 0; i < rows.Rows.Length; i++ {
             this.emitTupleElementNamesAttribute(rows.Rows[i], rows.Parameters[i].Type)
+        }
+        if if owner != nil {
+            NativeProtocolSafety.RequiresFeatureMarker(owner)
+        } else {
+            NativeProtocolSafety.RequiresFeatureMarker(rows.ReturnType, rows.Parameters)
+        } {
+            this.emitNativeProtocolFeature(handle)
         }
     }
 
@@ -538,7 +549,7 @@ internal class MemberDefEmitter {
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First
         )
-        this.StampAccessor(accessor, accessorRows)
+        this.StampAccessor(accessor, accessorRows, prop.GetterSymbol)
         return accessor
     }
 
@@ -643,7 +654,7 @@ internal class MemberDefEmitter {
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First
         )
-        this.StampAccessor(accessor, accessorRows)
+        this.StampAccessor(accessor, accessorRows, prop.SetterSymbol)
         return accessor
     }
 
@@ -709,7 +720,15 @@ internal class MemberDefEmitter {
             bodyOffset: -1,
             parameterList: accessorRows.First
         )
-        this.StampAccessor(accessor, accessorRows)
+        this.StampAccessor(
+            accessor,
+            accessorRows,
+            if isGetter {
+                prop.GetterSymbol
+            } else {
+                prop.SetterSymbol
+            }
+        )
         return accessor
     }
 
@@ -810,7 +829,7 @@ internal class MemberDefEmitter {
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First
         )
-        this.StampAccessor(accessor, accessorRows)
+        this.StampAccessor(accessor, accessorRows, prop.GetterSymbol)
         return accessor
     }
 
@@ -841,7 +860,7 @@ internal class MemberDefEmitter {
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First
         )
-        this.StampAccessor(accessor, accessorRows)
+        this.StampAccessor(accessor, accessorRows, prop.SetterSymbol)
         return accessor
     }
 
@@ -953,7 +972,7 @@ internal class MemberDefEmitter {
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First
         )
-        this.StampAccessor(accessor, accessorRows)
+        this.StampAccessor(accessor, accessorRows, ev.AddMethodSymbol)
         return accessor
     }
 
@@ -1008,7 +1027,7 @@ internal class MemberDefEmitter {
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First
         )
-        this.StampAccessor(accessor, accessorRows)
+        this.StampAccessor(accessor, accessorRows, ev.RemoveMethodSymbol)
         return accessor
     }
 
@@ -1399,7 +1418,7 @@ internal class MemberDefEmitter {
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First
         )
-        this.StampAccessor(accessor, accessorRows)
+        this.StampAccessor(accessor, accessorRows, ev.AddMethodSymbol)
         return accessor
     }
 
@@ -1486,7 +1505,7 @@ internal class MemberDefEmitter {
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First
         )
-        this.StampAccessor(accessor, accessorRows)
+        this.StampAccessor(accessor, accessorRows, ev.RemoveMethodSymbol)
         return accessor
     }
 
@@ -1586,7 +1605,7 @@ internal class MemberDefEmitter {
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First
         )
-        this.StampAccessor(accessor, accessorRows)
+        this.StampAccessor(accessor, accessorRows, ev.RaiseMethodSymbol)
         return accessor
     }
 
@@ -1734,7 +1753,7 @@ internal class MemberDefEmitter {
                 bodyOffset: -1,
                 parameterList: accessorRows.First
             )
-            this.StampAccessor(emittedGetter, accessorRows)
+            this.StampAccessor(emittedGetter, accessorRows, prop.GetterSymbol)
         }
         return emittedGetter
     }
@@ -1792,7 +1811,7 @@ internal class MemberDefEmitter {
                 bodyOffset: -1,
                 parameterList: accessorRows.First
             )
-            this.StampAccessor(emittedSetter, accessorRows)
+            this.StampAccessor(emittedSetter, accessorRows, prop.SetterSymbol)
         }
         return emittedSetter
     }
@@ -1833,7 +1852,7 @@ internal class MemberDefEmitter {
                 bodyOffset: -1,
                 parameterList: addRows.First
             )
-            this.StampAccessor(emittedAdd, addRows)
+            this.StampAccessor(emittedAdd, addRows, ev.AddMethodSymbol)
             // Emit abstract remove_X MethodDef.
             let removeSigBlob = BlobBuilder()
             BlobEncoder(removeSigBlob).MethodSignature(isInstanceMethod: true).Parameters(
@@ -1854,7 +1873,7 @@ internal class MemberDefEmitter {
                 bodyOffset: -1,
                 parameterList: removeRows.First
             )
-            this.StampAccessor(emittedRemove, removeRows)
+            this.StampAccessor(emittedRemove, removeRows, ev.RemoveMethodSymbol)
             // Emit EventDef row.
             let eventTypeHandle = this.GetEventTypeHandle(ev.Type)
             let eventDef = this
@@ -1914,7 +1933,7 @@ internal class MemberDefEmitter {
                     bodyOffset: -1,
                     parameterList: raiseRows.First
                 )
-                this.StampAccessor(emittedRaise, raiseRows)
+                this.StampAccessor(emittedRaise, raiseRows, ev.RaiseMethodSymbol)
                 this.emitCtx.Metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Raiser, emittedRaise)
             }
         }

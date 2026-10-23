@@ -18,10 +18,17 @@ internal shared class NativeProtocolSafety {
     ContainsDependency(type, false, HashSet[TypeSymbol](), HashSet[System.Type]())
 
     internal func RequiresFeatureMarker(function FunctionSymbol) bool ->
-    ContainsSavedProtocol(function.Type) || function.Parameters.Any(
+    RequiresFeatureMarker(function.Type, function.Parameters, function.ReceiverType)
+
+    internal func RequiresFeatureMarker(
+        returnType TypeSymbol,
+        parameters ImmutableArray[ParameterSymbol],
+        receiverType TypeSymbol? = nil
+    ) bool ->
+    ContainsSavedProtocol(returnType) || parameters.Any(
         (parameter ParameterSymbol) -> ContainsSavedProtocol(parameter.Type)
     ) ||
-        function.ReceiverType is {} receiver &&
+        receiverType is {} receiver &&
         ContainsSavedProtocol(receiver)
 
     private func ContainsDependency(
@@ -136,7 +143,11 @@ internal shared class NativeProtocolSafety {
     }
 
     internal func ValidateSignature(function FunctionSymbol, diagnostics DiagnosticBag) {
-        let location = function.Declaration?.Location ?? default(TextLocation)
+        let location = function.Declaration?.Location ?? switch function.AssociatedSymbol {
+            case property is PropertySymbol: property.Declaration?.Location ?? default(TextLocation)
+            case eventSymbol is EventSymbol: eventSymbol.Declaration?.Location ?? default(TextLocation)
+            default: default(TextLocation)
+        }
         let receiver = function.ReceiverType
         let owner = function.StaticOwnerType
         if function.Accessibility == Accessibility.Public &&
