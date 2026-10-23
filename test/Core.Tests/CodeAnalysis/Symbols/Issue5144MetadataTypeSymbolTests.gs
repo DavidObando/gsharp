@@ -14,6 +14,7 @@ import System.IO
 import System.Linq
 import System.Reflection
 import System.Reflection.Metadata
+import System.Reflection.Metadata.Ecma335
 import System.Threading.Tasks
 import Xunit
 
@@ -207,6 +208,86 @@ open class Issue5144MetadataTypeSymbolTests {
             MetadataModelComparison.DescribeType(resolver.FindTypeForComparison("LeafH5144", "LeafH5144`1")!!)
         )
         Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+    }
+
+    @Fact
+    func AResolvedHierarchyLongerThanTheReferenceLimit_IsComplete() {
+        // 70 classes, each deriving from the one before. Inheritance has no depth limit.
+        let source = System.Text.StringBuilder("namespace N5144D { public class C0 {}")
+        for var i = 1; i < 70; i++ {
+            source.Append(" public class C").Append(i).Append(" : C").Append(i - 1).Append(" {}")
+        }
+        source.Append(" }")
+        using let fixture = CSharpFixture(source.ToString(), assemblyName: "Deep5144D")
+        using let resolver = HandleResolver([]string{fixture.AssemblyPath})
+        let set = resolver.ImageSet!!
+        let module = set.FindModule("Deep5144D")!!
+        let deepest = Symbol(module, "N5144D.C69")
+        Assert.True(deepest.IsBaseChainComplete)
+        Assert.False(deepest.Kinds.IsDelegate)
+        Assert.DoesNotContain("base-missing", MetadataModelComparison.DescribeSymbol(deepest))
+        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+    }
+
+    @Fact
+    func ACyclicBaseChain_EndsAndIsIncomplete() {
+        // Two classes that derive from each other. A malformed chain must end the walk, not hang it.
+        let metadata = MetadataBuilder()
+        metadata.AddModule(
+            0,
+            metadata.GetOrAddString("Cycle5144D.dll"),
+            metadata.GetOrAddGuid(Guid.NewGuid()),
+            GuidHandle(),
+            GuidHandle()
+        )
+        metadata.AddAssembly(
+            metadata.GetOrAddString("Cycle5144D"),
+            Version(1, 0, 0, 0),
+            StringHandle(),
+            BlobHandle(),
+            cast[AssemblyFlags](0),
+            AssemblyHashAlgorithm.None
+        )
+        metadata.AddTypeDefinition(
+            cast[TypeAttributes](0),
+            StringHandle(),
+            metadata.GetOrAddString("<Module>"),
+            EntityHandle(),
+            MetadataTokens.FieldDefinitionHandle(1),
+            MetadataTokens.MethodDefinitionHandle(1)
+        )
+        metadata.AddTypeDefinition(
+            TypeAttributes.Public,
+            metadata.GetOrAddString("N"),
+            metadata.GetOrAddString("A"),
+            MetadataTokens.TypeDefinitionHandle(3),
+            MetadataTokens.FieldDefinitionHandle(1),
+            MetadataTokens.MethodDefinitionHandle(1)
+        )
+        metadata.AddTypeDefinition(
+            TypeAttributes.Public,
+            metadata.GetOrAddString("N"),
+            metadata.GetOrAddString("B"),
+            MetadataTokens.TypeDefinitionHandle(2),
+            MetadataTokens.FieldDefinitionHandle(1),
+            MetadataTokens.MethodDefinitionHandle(1)
+        )
+        let image = System.Reflection.Metadata.BlobBuilder()
+        System
+            .Reflection
+            .PortableExecutable
+            .ManagedPEBuilder(
+            System.Reflection.PortableExecutable.PEHeaderBuilder.CreateLibraryHeader(),
+            System.Reflection.Metadata.Ecma335.MetadataRootBuilder(metadata),
+            System.Reflection.Metadata.BlobBuilder()
+        )
+            .Serialize(image)
+        let set = ReferenceImageSet(
+            System.Collections.Immutable.ImmutableArray.Create(ReferenceImage(image.ToArray(), nil, true))
+        )
+        let a = Symbol(set.Modules[0], "N.A")
+        Assert.False(a.IsBaseChainComplete)
+        Assert.False(a.Kinds.IsDelegate)
     }
 
     @Fact

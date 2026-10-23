@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Symbols
 
 import System
+import System.Collections.Generic
 import System.Collections.Immutable
 import System.Reflection
 import System.Reflection.Metadata
@@ -139,9 +140,11 @@ internal class MetadataTypeSymbol : TypeSymbol {
         var reachesDelegate = false
         var complete = true
         var current MetadataTypeSymbol? = this
-        for var links = 0; current != nil; links++ {
+        // Inheritance has no depth limit. Only a cycle ends the walk early, and a cycle is a malformed chain.
+        let visited = HashSet[MetadataTypeSymbol](ReferenceEqualityComparer.Instance)
+        while current != nil {
             let set = current.Module.Set
-            if links > MetadataTypeNameReader.MaximumReferenceNesting {
+            if !visited.Add(current) {
                 complete = false
                 break
             }
