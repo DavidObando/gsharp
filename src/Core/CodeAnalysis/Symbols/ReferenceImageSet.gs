@@ -39,6 +39,15 @@ internal class ReferenceImage {
 internal class ReferenceImageSet {
     private let modulesByName Dictionary[string, MetadataModule]
     private let indexedNames Lazy[IndexedNames]
+    // Constructions and arrays over imported symbols only. Each key holds its parts strongly, so a table that can
+    // see a compilation-owned symbol must belong to the compilation (ADR-0209 section 7c); this stage decodes
+    // imported signatures only.
+    private let constructions ConcurrentDictionary[(MetadataTypeSymbol, TypeArgsKey), ConstructedMetadataTypeSymbol] =
+    ConcurrentDictionary[(MetadataTypeSymbol, TypeArgsKey), ConstructedMetadataTypeSymbol]()
+    private let arrays ConcurrentDictionary[TypeSymbol, MetadataArrayTypeSymbol] = ConcurrentDictionary[
+        TypeSymbol,
+        MetadataArrayTypeSymbol
+    ]()
     private let missingTypes ConcurrentDictionary[MissingTypeKey, MissingTypeSymbol] = ConcurrentDictionary[
         MissingTypeKey,
         MissingTypeSymbol
@@ -214,6 +223,23 @@ internal class ReferenceImageSet {
         let module = resolved.Module
         return module != nil && IsWellKnown(module, resolved.Handle, special)
     }
+
+    /// Gets the interned construction of a definition over type arguments.
+    /// Two lists of the same argument objects give the same object.
+    internal func GetConstructed(
+        definition MetadataTypeSymbol,
+        typeArguments ImmutableArray[TypeSymbol]
+    ) ConstructedMetadataTypeSymbol -> constructions
+        .GetOrAdd(
+        (definition, TypeArgsKey(typeArguments)),
+        (key(MetadataTypeSymbol, TypeArgsKey)) -> ConstructedMetadataTypeSymbol(definition, typeArguments)
+    )
+
+    /// Gets the interned single-dimensional array of an element type.
+    internal func GetArray(elementType TypeSymbol) MetadataArrayTypeSymbol -> arrays.GetOrAdd(
+        elementType,
+        (key TypeSymbol) -> MetadataArrayTypeSymbol(key)
+    )
 
     /// Gets the interned missing type for a pair of assembly identity and full name.
     internal func GetMissing(identity AssemblyIdentity?, fullName string) MissingTypeSymbol -> missingTypes.GetOrAdd(

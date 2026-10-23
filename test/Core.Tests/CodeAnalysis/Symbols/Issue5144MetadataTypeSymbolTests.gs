@@ -308,7 +308,8 @@ open class Issue5144MetadataTypeSymbolTests {
         Assert.Empty(MetadataModelComparison.Compare(resolver, set))
         // The comparison key holds the defining assembly, on both sides.
         let described = MetadataModelComparison.DescribeSymbol(derivedSymbol)
-        Assert.EndsWith("BaseB5144!N5144S.Base", described)
+        Assert.Contains("BaseB5144!N5144S.Base", described)
+        Assert.DoesNotContain("BaseA5144", described)
         Assert.Equal(
             described,
             MetadataModelComparison.DescribeType(resolver.FindTypeForComparison("DerivedS5144", "Derived5144")!!)

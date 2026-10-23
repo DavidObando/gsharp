@@ -58,6 +58,9 @@ internal class MetadataTypeSymbol : TypeSymbol {
     private let genericParameters Lazy[ImmutableArray[MetadataGenericParameter]]
     private let baseDefinition Lazy[ResolvedTypeReference?]
     private let baseChain Lazy[MetadataBaseChain]
+    private let typeParameters Lazy[ImmutableArray[TypeParameterSymbol]]
+    private let decodedBase Lazy[TypeSymbol?]
+    private var publishedConstraints ImmutableArray[ImmutableArray[TypeSymbol]]
 
     internal init(module MetadataModule, handle TypeDefinitionHandle) : base(
         module.Reader.GetString(module.Reader.GetTypeDefinition(handle).Name)
@@ -72,6 +75,11 @@ internal class MetadataTypeSymbol : TypeSymbol {
         )
         baseDefinition = Lazy[ResolvedTypeReference?](ResolveBase, LazyThreadSafetyMode.ExecutionAndPublication)
         baseChain = Lazy[MetadataBaseChain](WalkBaseChain, LazyThreadSafetyMode.ExecutionAndPublication)
+        typeParameters = Lazy[ImmutableArray[TypeParameterSymbol]](
+            ReadTypeParameters,
+            LazyThreadSafetyMode.ExecutionAndPublication
+        )
+        decodedBase = Lazy[TypeSymbol?](DecodeBase, LazyThreadSafetyMode.ExecutionAndPublication)
     }
 
     /// Gets the module that defines the type.
@@ -123,6 +131,64 @@ internal class MetadataTypeSymbol : TypeSymbol {
             )
         }
         return builder.ToImmutable()
+    }
+
+    /// Gets the type parameter symbols, one for each generic parameter row, with their constraints.
+    internal prop TypeParameters ImmutableArray[TypeParameterSymbol] -> typeParameters.Value
+
+    /// Gets the base type with its type arguments, or `null` when the type has no base.
+    /// A base that the set lacks is a (cref:MissingTypeSymbol).
+    override prop BaseType TypeSymbol? -> decodedBase.Value
+
+    // Creates every parameter first, so that a constraint can name a parameter of its own list (`T : IComparable<T>`).
+    private func ReadTypeParameters() ImmutableArray[TypeParameterSymbol] {
+        let builder = ImmutableArray.CreateBuilder[TypeParameterSymbol](GenericParameters.Length)
+        for row in GenericParameters {
+            builder.Add(MetadataTypeParameters.Create(row.Name, row.Ordinal, row.Attributes))
+        }
+        let parameters = builder.MoveToImmutable()
+        let context = MetadataGenericContext(CastUp(parameters), ImmutableArray[TypeSymbol].Empty)
+        let reader = Module.Reader
+        let definitions = reader.GetTypeDefinition(Handle).GetGenericParameters()
+        let constraintTypes = ImmutableArray.CreateBuilder[ImmutableArray[TypeSymbol]]()
+        for var i = 0; i < parameters.Length; i++ {
+            let constraints = ImmutableArray.CreateBuilder[TypeSymbol]()
+            for constraintHandle in reader.GetGenericParameter(definitions[i]).GetConstraints() {
+                constraints.Add(
+                    Module.Decoder.Decode(reader.GetGenericParameterConstraint(constraintHandle).Type, context)
+                )
+            }
+            let decoded = constraints.ToImmutable()
+            constraintTypes.Add(decoded)
+            MetadataTypeParameters.Apply(parameters[i], decoded)
+        }
+        publishedConstraints = constraintTypes.ToImmutable()
+        return parameters
+    }
+
+    private func CastUp(parameters ImmutableArray[TypeParameterSymbol]) ImmutableArray[TypeSymbol] {
+        let builder = ImmutableArray.CreateBuilder[TypeSymbol](parameters.Length)
+        for parameter in parameters {
+            builder.Add(parameter)
+        }
+        return builder.MoveToImmutable()
+    }
+
+    /// Gets every constraint type of a generic parameter, in table order. A missing type stays in the list.
+    internal func GetConstraintTypes(ordinal int32) ImmutableArray[TypeSymbol] {
+        let parameters = TypeParameters
+        return publishedConstraints[ordinal]
+    }
+
+    private func DecodeBase() TypeSymbol? {
+        let baseType = Module.Reader.GetTypeDefinition(Handle).BaseType
+        if baseType.IsNil {
+            return nil
+        }
+        return Module.Decoder.Decode(
+            baseType,
+            MetadataGenericContext(CastUp(TypeParameters), ImmutableArray[TypeSymbol].Empty)
+        )
     }
 
     private func ResolveBase() ResolvedTypeReference? {

@@ -22,6 +22,7 @@ internal class MetadataModule {
     private let peReader PEReader
     private let names Lazy[MetadataModuleNames]
     private let isCoreLibrary Lazy[bool]
+    private let decoder Lazy[MetadataSignatureDecoder]
     // One slot for each TypeRef row. A race publishes one winner (ADR-0209 section 11).
     private let typeReferences[]ResolvedTypeReference?
     // One slot for each TypeDef row, indexed by row number.
@@ -53,6 +54,10 @@ internal class MetadataModule {
         typeSymbols = [Reader.GetTableRowCount(TableIndex.TypeDef) + 1]MetadataTypeSymbol?
         names = Lazy[MetadataModuleNames](ReadNames, LazyThreadSafetyMode.ExecutionAndPublication)
         isCoreLibrary = Lazy[bool](DefinesObject, LazyThreadSafetyMode.ExecutionAndPublication)
+        decoder = Lazy[MetadataSignatureDecoder](
+            () -> MetadataSignatureDecoder(this),
+            LazyThreadSafetyMode.ExecutionAndPublication
+        )
     }
 
     /// Gets the set that owns the module.
@@ -92,6 +97,9 @@ internal class MetadataModule {
         .Value
         .ByName
         .TryGetValue(fullName, out handle)
+
+    /// Gets the decoder of the signatures of this module.
+    internal prop Decoder MetadataSignatureDecoder -> decoder.Value
 
     /// Gets whether this module is a core library: it defines `System.Object`, and that type has no base.
     /// Inside a core library, `System.ValueType` and the other special types are the module's own definitions.
