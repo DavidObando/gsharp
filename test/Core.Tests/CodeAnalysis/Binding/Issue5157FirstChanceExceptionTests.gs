@@ -171,6 +171,40 @@ open class Issue5157FirstChanceExceptionTests : IDisposable {
     }
 
     @Fact
+    func TryInferTypeArguments_ContravariantUpperBoundIsTypeBuilderInstantiation_ComparesByNameWithoutThrowing() {
+        // `IComparer<in T>` reaches the upper-bound guard: the narrower bound wins, in both orders.
+        let instantiation = BuildTypeBuilderInstantiation()
+        let openMethod = typeof(Issue5157Probe).GetMethod("PairComparers")!!
+        let comparerOfInstantiation = typeof(IComparer[object]).GetGenericTypeDefinition().MakeGenericType(
+            instantiation
+        )
+        let comparerOfObject = typeof(IComparer[object])
+        var forward[]?Type = nil
+        var backward[]?Type = nil
+        var forwardInferred = false
+        var backwardInferred = false
+        let thrown = CountFirstChanceExceptions(
+            func () {
+                forwardInferred = ClrOverloadResolution.TryInferTypeArguments(
+                    openMethod,
+                    List[Type?]{comparerOfInstantiation, comparerOfObject},
+                    out forward
+                )
+                backwardInferred = ClrOverloadResolution.TryInferTypeArguments(
+                    openMethod,
+                    List[Type?]{comparerOfObject, comparerOfInstantiation},
+                    out backward
+                )
+            }
+        )
+        Assert.Empty(thrown)
+        Assert.True(forwardInferred)
+        Assert.True(backwardInferred)
+        Assert.Equal(instantiation, forward!![0])
+        Assert.Equal(instantiation, backward!![0])
+    }
+
+    @Fact
     func WithReferences_MissingTransitiveDependency_DoesNotRaiseFileNotFound() {
         let libPath = BuildLibraryWithMissingDependency()
         var resolver ReferenceResolver? = nil
@@ -294,5 +328,7 @@ open class Issue5157FirstChanceExceptionTests : IDisposable {
 internal class Issue5157Probe {
     shared {
         func Pair[T](first T, second T) T -> first
+
+        func PairComparers[T](first IComparer[T], second IComparer[T]) IComparer[T] -> first
     }
 }
