@@ -298,13 +298,18 @@ The rules:
 The implementation PR must add these tests:
 
 - An end-to-end build of a project with a source generator while the R2R
-  payload is selected. It must show that `GeneratedFile.g.gs` is compiled and
-  that `gsc` and `gsgen` ran from the expected directories.
+  payload is selected. The `gsc` command line that the SDK builds must contain
+  `/gsgentool:` and `/sdktoolsdir:` with the real SDK paths. The test must show
+  that `GeneratedFile.g.gs` is compiled and that `gsc` and `gsgen` ran from the
+  expected directories.
 - A direct `dotnet <rid package dir>/gsc.dll /analyzer:... /out:...` call
-  without `/gsgentool:`, in a copy of the two-package layout. It must find
-  `gsgen` by rule 3 and produce the same output bytes as the IL payload.
-- The same direct call with only the RID package present and no explicit input.
-  It must fail with the existing diagnostic that names `/gsgentool:`.
+  without `/gsgentool:`, with `GSHARP_SDK_TOOLS_DIR` set to the `tools` folder of
+  the SDK package (a second run passes `/sdktoolsdir:` instead). It must find
+  `gsgen` by the explicit lookup in rule 3 and produce the same output bytes as
+  the IL payload. Putting the two packages side by side must not matter.
+- The same direct call with only the RID package present and with
+  `/gsgentool:`, `/sdktoolsdir:`, `GSHARP_GSGEN_TOOL` and `GSHARP_SDK_TOOLS_DIR`
+  all unset. It must fail with the existing diagnostic that names `/gsgentool:`.
 - A split-root test. The SDK package is in one package root, and the RID package
   is in another (`dotnet restore --packages <dir>`). It builds a project with a
   source generator and a channel program through the SDK, and it makes a direct
@@ -313,9 +318,11 @@ The implementation PR must add these tests:
   directory. A mutant that computes the SDK directory from the RID package path
   (`../../../gsharp.net.sdk/...`) must make this test fail.
 - A direct call that compiles a program with a channel, from the RID package
-  layout. It must copy `Gsharp.Runtime.Channels.dll` beside the output. The
-  copy must be byte-identical to the SDK package copy, and its PE `Machine` must
-  be `0x14C`. The same check applies to `Gsharp.Runtime.Values.dll`.
+  layout, with `GSHARP_SDK_TOOLS_DIR` set to the SDK `tools` folder. It must copy
+  `Gsharp.Runtime.Channels.dll` beside the output. The copy must be
+  byte-identical to the SDK package copy, and its PE `Machine` must be `0x14C`.
+  The same check applies to `Gsharp.Runtime.Values.dll`. With the variable unset,
+  the call must succeed and copy nothing.
 - A mutant that adds `Gsharp.Runtime.Channels.dll` to the crossgen input must
   make the pack-time invariant fail the pack.
 - A mutant that makes the lookup prefer a copy with another `Machine` value must
@@ -415,11 +422,30 @@ unverified RID (see the compatibility section).
 The implementation PR measures with `build/compiler-bench.py` (issue #5127,
 PR #5163). The script runs a baseline compiler and a candidate compiler
 interleaved on the same response files. It reports medians and ranges for wall
-time, CPU time and peak memory, and it checks that the outputs are byte-identical.
+time, CPU time and peak memory, and it checks the outputs for parity.
 The baseline is the IL `gsc` of the SDK package. The candidate is the R2R `gsc`
 of the RID package. The cells are the Core compile and a hello-world compile, each
 with default tiered PGO settings and with the shipped `TieredPGO=false`. The PR
 records the arrays and the parity result for each RID that has a runner.
+
+The parity criterion is strict. The script allows an implementation DLL to
+differ from the baseline in its identity fields (the COFF timestamp, the PE
+checksum, the module version id and the debug-directory hashes), and it then
+still exits with status 0 (`unexpected(candidate)` is not strict). A successful
+exit is therefore not enough. The PR passes only if both conditions hold:
+
+1. The script exits with status 0.
+2. In `compiler-bench-report.json`, every
+   `cells.<cell>.parity.candidate[i].implementation.identical` is `true`, and
+   every `cells.<cell>.parity.candidate[i].diagnosticsIdentical` is `true`.
+
+Identity-field differences are not expected between the IL compiler and the R2R
+compiler. Both run the same inputs, write to the same output paths, and compile
+deterministically. R2R changes how the compiler runs, not what it emits. The
+probe in the study showed identical hashes for the implementation DLL, the PDB,
+the reference DLL and the XML file. If a real difference appears in an identity
+group, the PR does not pass. It must find the cause first. A change of the
+criterion needs a note in the PR that names the field and the reason.
 
 ## Interaction with other ADRs
 
