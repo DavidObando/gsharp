@@ -125,9 +125,11 @@ class Issue4446NullableSignatureEquivalenceTests {
             typeof(ValueTuple[_]),
             ImmutableArray.Create[TypeSymbol](TypeSymbol.Int32)
         )
+        // Equal constructions share one instance since #5158, so the second one omits the open
+        // definition to be a different object with the same shape.
         let exactUnderlyingB = ImportedTypeSymbol.GetConstructed(
             typeof(ValueTuple[int32]),
-            typeof(ValueTuple[_]),
+            nil,
             ImmutableArray.Create[TypeSymbol](TypeSymbol.Int32)
         )
         let exactNullableA = NullableTypeSymbol.Get(exactUnderlyingA)
