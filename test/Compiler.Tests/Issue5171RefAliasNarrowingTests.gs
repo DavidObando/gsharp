@@ -401,6 +401,83 @@ func Run(ref a C?) int32 {
 }
 Console.WriteLine(Run(ref g))
 `}
+            yield[]object{"getter-clears-aliased-member", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Box {
+    var Field C? = C{}
+    prop Clear int32 {
+        get {
+            Field = nil
+            return 1
+        }
+    }
+}
+func Run(ref a C?, box Box) int32 {
+    if a == nil { return 0 }
+    let n = box.Clear
+    return a.Value + n
+}
+func Main() {
+    let box = Box{}
+    Console.WriteLine(Run(ref box.Field, box))
+}
+`}
+            yield[]object{"nested-alias-write-in-assignment", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(flag bool) int32 {
+    var x C? = nil
+    var y C? = nil
+    let ref a C? = x
+    if flag {
+        x = C{}
+        y = (a = nil)
+    } else {
+        x = C{}
+    }
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(true)) }
+`}
+            yield[]object{"alias-of-global-call", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var g C? = C{}
+func Clear() { g = nil }
+func Run() int32 {
+    let ref a C? = g
+    if a == nil { return 0 }
+    Clear()
+    return a.Value
+}
+Console.WriteLine(Run())
+`}
+            yield[]object{"read-only-alias-closure-write", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Run() int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    let ref a C? = x
+    if a == nil { return 0 }
+    clear()
+    return a.Value
+}
+func Main() { Console.WriteLine(Run()) }
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).

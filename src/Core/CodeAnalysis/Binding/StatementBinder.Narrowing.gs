@@ -293,7 +293,7 @@ internal partial class StatementBinder {
         // statement effect summary, so the syntax walk only answers the
         // member-mutation question and caches that answer per statement.
         let assignedNames = HashSet[string]()
-        let dropAllMemberPaths = if boundStatement != nil {
+        var dropAllMemberPaths = if boundStatement != nil {
             SyntaxMayMutateMemberPaths(statementSyntax)
         } else {
             CollectAssignedNamesAndMemberMutation(statementSyntax, assignedNames)
@@ -311,6 +311,8 @@ internal partial class StatementBinder {
         if boundStatement != nil {
             let collector = GetStatementEffects(boundStatement, externalCallableAliases)
             statementCollector = collector
+            // A property getter with user code is no call expression in the syntax.
+            dropAllMemberPaths = dropAllMemberPaths || collector.MayMutateMemberPaths
             dropAllRoots = collector.MayMutateAnyRoot
             dropGlobalRoots = collector.MayMutateGlobalRoots
             // The summary is shared, so read it without adding roots to it.
@@ -1459,6 +1461,8 @@ internal partial class StatementBinder {
                 return false
             }
             case BoundExpressionStatement{Expression: BoundAssignmentExpression assign} {
+                // The right-hand side can write other roots, aliases included.
+                ClearAssignedRoots(assign, state, callableAliases)
                 if TryClassifyNonNullAssignment(assign, out var local, out var underlying) {
                     RemoveSharingStorage(
                         state,
@@ -1589,9 +1593,7 @@ internal partial class StatementBinder {
     // unrelated locals after any call to a local lambda.
     private func MayBeMutatedByUnknownCallable(path AccessPath) bool -> path.HasMembers ||
         (
-        !path
-            .Root
-            .IsReadOnly &&
+        (!path.Root.IsReadOnly || IsByReferenceRoot(path.Root)) &&
             (
             path.Root is not(LocalVariableSymbol or ParameterSymbol) ||
                 IsByReferenceRoot(path.Root) ||
@@ -1600,7 +1602,8 @@ internal partial class StatementBinder {
     )
 
     private func MayBeMutatedByUnknownWrite(mutations AssignedRootsCollector, path AccessPath) bool -> (
-        mutations.MayMutateAnyRootViaPointer && (path.HasMembers || !path.Root.IsReadOnly)
+        mutations.MayMutateAnyRootViaPointer &&
+            (path.HasMembers || !path.Root.IsReadOnly || IsByReferenceRoot(path.Root))
     ) ||
         (mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(path))
 
@@ -4258,7 +4261,11 @@ internal partial class StatementBinder {
             if last is ParameterSymbol lastParameter {
                 return lastParameter.RefKind != RefKind.None
             }
-            return last is LocalVariableSymbol lastLocal && lastLocal.RefKind != RefKind.None
+            if last is LocalVariableSymbol lastLocal {
+                return lastLocal.RefKind != RefKind.None
+            }
+            // A mutable global or field can be written by any call.
+            return !last.IsReadOnly
         }
 
         /// ADR-0208 R12 (#5171): whether [`first`](paramref) and [`second`](paramref) may name one

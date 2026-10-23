@@ -2936,7 +2936,9 @@ internal partial class OverloadResolver {
     }
 
     private func TryConstructConversionTarget(syntax CallExpressionSyntax, type TypeSymbol) TypeSymbol? {
-        if syntax.TypeArgumentList == nil {
+        // A computed property read drops member-path narrowing (ADR-0208 R12), so keep a local copy.
+        let typeArgumentList = syntax.TypeArgumentList
+        if typeArgumentList == nil {
             return type
         }
         var typeParameters ImmutableArray[TypeParameterSymbol]
@@ -2947,12 +2949,12 @@ internal partial class OverloadResolver {
         } else {
             return type
         }
-        if syntax.TypeArgumentList.Arguments.Count != typeParameters.Length {
+        if typeArgumentList.Arguments.Count != typeParameters.Length {
             Diagnostics.ReportWrongTypeArgumentCount(
-                syntax.TypeArgumentList.Location,
+                typeArgumentList.Location,
                 type.Name,
                 typeParameters.Length,
-                syntax.TypeArgumentList.Arguments.Count
+                typeArgumentList.Arguments.Count
             )
             return nil
         }
