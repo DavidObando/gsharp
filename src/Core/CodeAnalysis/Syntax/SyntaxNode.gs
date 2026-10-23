@@ -23,6 +23,10 @@ abstract class SyntaxNode {
     /// parser-time mutation replaces a child-bearing property after construction.
     private var cachedSpan SpanBox?
 
+    /// Children array for a node whose child properties cannot be indexed in place. `null` means
+    /// "not built yet". Published as one reference store, like (cref:cachedSpan).
+    private var childrenBox ChildrenBox?
+
     /// Initializes a new instance of the (cref:SyntaxNode) class.
     /// @param syntaxTree The parent syntax tree.
     protected init(syntaxTree SyntaxTree) {
@@ -129,20 +133,40 @@ abstract class SyntaxNode {
 
     /// Gets the number of children of this syntax node. Every concrete node class overrides this
     /// in `SyntaxNode.Children.g.gs`, which `build/generate-syntax-children.py` writes (issue #5136).
-    /// The base implementation is the reflection fallback for a class without generated code.
-    internal open prop ChildCount int32 {
-        get {
-            CompilationMeasurements.Count("syntax.child-reflection-fallbacks")
-            return GetChildrenByReflection().Count()
-        }
-    }
+    /// A class that the generator did not see, or a subclass of a generated open class, uses the
+    /// reflection projection instead (cref:CachedChildren).
+    internal open prop ChildCount int32 -> CachedChildren().Length
 
-    /// Gets one child of this syntax node without allocating.
+    /// Gets one child of this syntax node without allocating on the generated path.
     /// @param index The index of the child, from 0 to (cref:ChildCount) - 1.
     /// @returns The child at that index, in the order of (cref:GetChildren).
-    internal open func GetChild(index int32) SyntaxNode {
+    internal open func GetChild(index int32) SyntaxNode -> ChildAt(CachedChildren(), index)
+
+    /// Builds the children of this node as one array. The base implementation reads the public
+    /// properties by reflection on the runtime type. A generated class overrides it when a
+    /// property cannot be indexed in place, and guards the override by the exact runtime type.
+    /// @returns The children in the order of (cref:GetChildren).
+    internal open func BuildChildren() ImmutableArray[SyntaxNode] -> BuildChildrenByReflection()
+
+    /// Returns the children array of this node, built once per node. The parser clears it through
+    /// (cref:InvalidateCachedSpan) when it assigns a child-bearing property after construction.
+    /// @returns The children.
+    internal func CachedChildren() ImmutableArray[SyntaxNode] {
+        let box = childrenBox
+        if box != nil {
+            return box.Items
+        }
+        let built = BuildChildren()
+        CompilationMeasurements.Count("syntax.child-projections")
+        childrenBox = ChildrenBox(built)
+        return built
+    }
+
+    /// Builds the children by reflection over the public properties of the runtime type.
+    /// @returns The children in the order of (cref:GetChildren).
+    internal func BuildChildrenByReflection() ImmutableArray[SyntaxNode] {
         CompilationMeasurements.Count("syntax.child-reflection-fallbacks")
-        return GetChildrenByReflection().ElementAt(index)
+        return GetChildrenByReflection().ToImmutableArray()
     }
 
     /// Gets an enumeration of all the children of this syntax node.
@@ -237,6 +261,7 @@ abstract class SyntaxNode {
     /// a parent, so no ancestor can have cached a span that included this node yet.
     internal func InvalidateCachedSpan() {
         cachedSpan = nil
+        childrenBox = nil
     }
 
     private func ComputeSpan() TextSpan {
@@ -282,6 +307,16 @@ abstract class SyntaxNode {
         }
     }
 
+    private class ChildrenBox {
+        init(items ImmutableArray[SyntaxNode]) {
+            Items = items
+        }
+
+        prop Items ImmutableArray[SyntaxNode] {
+            get;
+        }
+    }
+
     private class SpanBox {
         init(value TextSpan) {
             Value = value
@@ -293,6 +328,17 @@ abstract class SyntaxNode {
     }
 
     shared {
+        /// Returns one element of a children array, with the argument check of the generated accessors.
+        /// @param items The children.
+        /// @param index The index.
+        /// @returns The child.
+        internal func ChildAt(items ImmutableArray[SyntaxNode], index int32) SyntaxNode {
+            if index < 0 || index >= items.Length {
+                throw ArgumentOutOfRangeException(nameof(index))
+            }
+            return items[index]
+        }
+
         /// Returns whether an optional child is present. The generated child accessors use this for
         /// every single-node property.
         /// @param node The property value.

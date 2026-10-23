@@ -144,6 +144,32 @@ class GeneratorCase(unittest.TestCase):
         node.write_text(NODE.replace("prop Right SyntaxToken", "prop Other SyntaxToken"), encoding="utf-8")
         self.assertEqual(self.run_script(root, "--check").returncode, 1)
 
+    def test_every_generated_class_keeps_both_invariants(self) -> None:
+        """Exact runtime type for open classes; no per-lookup copy of a computed property."""
+        classes = gen.parse_all(REPO)
+        nodes = gen.node_types(classes)
+        text = gen.generate(REPO)
+        parts = text.split("\npartial class ")[1:]
+        generated = {part.split(" ", 1)[0]: part for part in parts}
+        expected = {n for n in nodes if n != gen.ROOT_NODE and not classes[n].abstract}
+        self.assertEqual(set(generated), expected)
+        for name, part in sorted(generated.items()):
+            guard = f"GetType() != typeof({name})"
+            accessors = [m for m in ("ChildCount", "GetChild(", "BuildChildren(") if m in part]
+            self.assertTrue(accessors, name)
+            if classes[name].is_open:
+                bodies = part.split("internal override ")[1:]
+                self.assertTrue(bodies, name)
+                for body in bodies:
+                    self.assertIn(guard, body, f"{name}: open class accessor without the exact-type guard")
+            else:
+                self.assertNotIn("GetType()", part, name)
+            for body in part.split("internal override ")[1:]:
+                if body.startswith("func BuildChildren"):
+                    continue
+                for computed in ("EnumerableItems(", "PresentTokens("):
+                    self.assertNotIn(computed, body, f"{name}: lookup copies a computed property")
+
     def test_repository_file_is_current(self) -> None:
         result = self.run_script(REPO, "--check")
         self.assertEqual(result.returncode, 0, result.stderr)

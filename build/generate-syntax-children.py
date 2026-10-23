@@ -60,6 +60,7 @@ class Cls:
     path: Path
     abstract: bool
     base: str | None
+    is_open: bool = False
     props: list[Prop] = field(default_factory=list)
 
 
@@ -96,6 +97,7 @@ def parse_file(path: Path, text: str) -> list[Cls]:
                 path=path,
                 abstract="abstract" in m.group("mods").split(),
                 base=base,
+                is_open="open" in m.group("mods").split(),
             )
             classes.append(current)
             pending_attrs = []
@@ -217,14 +219,63 @@ def effective_props(name: str, classes: dict[str, Cls], nodes: set[str]) -> list
     return result
 
 
+COMPUTED_KINDS = ("enum", "tokens")
+
+
 def emit_class(cls: Cls, props: list[tuple[Prop, str]]) -> list[str]:
+    """Emit the generated part of one concrete class.
+
+    Two invariants hold for every class (tested in build/test-generate-syntax-children.py):
+    1. An open class guards every generated accessor by its exact runtime type. A subclass that
+       the generator did not see takes the reflection path, so a child property it adds is kept.
+    2. A class with a property that is computed on each read (a sequence, or a token list that
+       allows absent entries) builds its children once into an array, so each lookup is O(1).
+       The other classes read their properties in place.
+    """
     out: list[str] = []
+    guard = f"GetType() != typeof({cls.name})"
+    cached = any(kind in COMPUTED_KINDS for _, kind in props)
     out.append(f"partial class {cls.name} {{")
+    if cached:
+        out.append("    /// ```xmldoc")
+        out.append("    /// <inheritdoc />")
+        out.append("    /// ```")
+        out.append("    internal override func BuildChildren() ImmutableArray[SyntaxNode] {")
+        if cls.is_open:
+            out.append(f"        if {guard} {{")
+            out.append("            return BuildChildrenByReflection()")
+            out.append("        }")
+        out.append("        let builder = ImmutableArray.CreateBuilder[SyntaxNode]()")
+        for prop, kind in props:
+            if kind == "node":
+                out.append(f"        if IsPresent({prop.name}) {{")
+                suppress = "!!" if prop.type.strip().endswith("?") else ""
+                out.append(f"            builder.Add({prop.name}{suppress})")
+                out.append("        }")
+            elif kind == "sep":
+                out.append(f"        builder.AddRange(SeparatedItems({prop.name}))")
+            elif kind == "enum":
+                out.append(f"        builder.AddRange(EnumerableItems({prop.name}))")
+            elif kind == "tokens":
+                out.append(f"        builder.AddRange(PresentTokens({prop.name}))")
+            else:
+                out.append(f"        for item{prop.name} in {prop.name} {{")
+                out.append(f"            builder.Add(item{prop.name})")
+                out.append("        }")
+        out.append("        return builder.ToImmutable()")
+        out.append("    }")
+        out.append("}")
+        return out
+
     out.append("    /// ```xmldoc")
     out.append("    /// <inheritdoc />")
     out.append("    /// ```")
     out.append("    internal override prop ChildCount int32 {")
     out.append("        get {")
+    if cls.is_open:
+        out.append(f"            if {guard} {{")
+        out.append("                return CachedChildren().Length")
+        out.append("            }")
     if not props:
         out.append("            return 0")
     else:
@@ -236,10 +287,6 @@ def emit_class(cls: Cls, props: list[tuple[Prop, str]]) -> list[str]:
                 out.append("            }")
             elif kind == "sep":
                 out.append(f"            count += SeparatedLength({prop.name})")
-            elif kind == "enum":
-                out.append(f"            count += EnumerableItems({prop.name}).Length")
-            elif kind == "tokens":
-                out.append(f"            count += PresentTokens({prop.name}).Length")
             else:
                 out.append(f"            count += {prop.name}.Length")
         out.append("            return count")
@@ -250,6 +297,10 @@ def emit_class(cls: Cls, props: list[tuple[Prop, str]]) -> list[str]:
     out.append("    /// <inheritdoc />")
     out.append("    /// ```")
     out.append("    internal override func GetChild(index int32) SyntaxNode {")
+    if cls.is_open:
+        out.append(f"        if {guard} {{")
+        out.append("            return ChildAt(CachedChildren(), index)")
+        out.append("        }")
     if props:
         out.append("        var remaining = index")
         out.append("        if remaining >= 0 {")
@@ -264,9 +315,8 @@ def emit_class(cls: Cls, props: list[tuple[Prop, str]]) -> list[str]:
                 out.append("                }")
                 out.append("                remaining--")
                 out.append("            }")
-            elif kind in ("sep", "enum", "tokens"):
-                helper = {"sep": "SeparatedItems", "enum": "EnumerableItems", "tokens": "PresentTokens"}[kind]
-                out.append(f"            let {var} = {helper}({prop.name})")
+            elif kind == "sep":
+                out.append(f"            let {var} = SeparatedItems({prop.name})")
                 out.append(f"            if remaining < {var}.Length {{")
                 out.append(f"                return {var}[remaining]")
                 out.append("            }")
@@ -293,6 +343,7 @@ HEADER = """// <auto-generated>
 package GSharp.Core.CodeAnalysis.Syntax
 
 import System
+import System.Collections.Immutable
 """
 
 

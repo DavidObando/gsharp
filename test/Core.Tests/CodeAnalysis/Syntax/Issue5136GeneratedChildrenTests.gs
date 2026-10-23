@@ -4,6 +4,7 @@
 
 package GSharp.Core.Tests.CodeAnalysis.Syntax
 
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import GSharp.Tests
@@ -29,7 +30,9 @@ open class Issue5136GeneratedChildrenTests {
         let flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
         let missing = List[string]()
         for type in types {
-            if type.GetProperty("ChildCount", flags) == nil || type.GetMethod("GetChild", flags) == nil {
+            // A class with a computed child sequence overrides BuildChildren instead.
+            let direct = type.GetProperty("ChildCount", flags) != nil && type.GetMethod("GetChild", flags) != nil
+            if !direct && type.GetMethod("BuildChildren", flags) == nil {
                 missing.Add(type.Name)
             }
         }
@@ -148,6 +151,98 @@ open class Issue5136GeneratedChildrenTests {
             "A syntax node has children that are not in source order in a new shape. If the new shape is " +
                 "expected, regenerate with GSHARP_UPDATE_GOLDENS=1."
         )
+    }
+
+    /// A subclass of a public open node class can add a child property. The generated accessors of
+    /// the base class only know its own properties, so the subclass must take the reflection path
+    /// and keep the added child in `GetChildren`, the span and the walker.
+    @Fact
+    func UngeneratedSubclass_KeepsItsAddedChild() {
+        let tree = SyntaxTree.Parse("package p\nfunc F() int32 { return 1 + 2 }\n")
+        let binary = Descendants(tree.Root).OfType[BinaryExpressionSyntax]().First()
+        let extra = tree.Root.GetLastToken()
+        let sub = BinaryWithExtra(tree, binary.Left, binary.OperatorToken, binary.Right, extra)
+        using let measurements = CompilationMeasurements.Start("issue5136")
+        Assert.Equal(4, sub.ChildCount)
+        let children = sub.GetChildren().ToList()
+        Assert.Equal(4, children.Count)
+        // Reflection lists the properties of the runtime type before those of its base class.
+        Assert.Same(extra, children[0])
+        Assert.Same(extra, sub.GetChild(0))
+        Assert.Same(binary.Left, sub.GetChild(1))
+        Assert.Equal(extra.Span.End, sub.Span.End)
+        let walker = CollectingWalker()
+        walker.Visit(sub)
+        Assert.Contains(extra, walker.Visited)
+        Assert.True(measurements.GetCounter("syntax.child-reflection-fallbacks") > 0)
+        // The base class itself stays on the generated path.
+        Assert.Equal(3, binary.ChildCount)
+    }
+
+    /// A node with a computed child sequence builds it once. An interpolated string with 2,000
+    /// holes must not copy the holes again for each lookup.
+    @Fact
+    func ComputedChildSequence_IsBuiltOncePerNode() {
+        let holes = string.Join("", Enumerable.Repeat("$" + "{x}", 2000))
+        let tree = SyntaxTree.Parse("package p\nfunc F(x int32) string { return \"" + holes + "\" }\n")
+        let interpolated = Descendants(tree.Root).OfType[InterpolatedStringExpressionSyntax]().First()
+        using let measurements = CompilationMeasurements.Start("issue5136")
+        let count = interpolated.ChildCount
+        Assert.Equal(2001, count)
+        for var i = 0; i < count; i++ {
+            interpolated.GetChild(i)
+        }
+        let before = GC.GetAllocatedBytesForCurrentThread()
+        for var i = 0; i < count; i++ {
+            interpolated.GetChild(i)
+        }
+        let allocated = GC.GetAllocatedBytesForCurrentThread() - before
+        Assert.Equal(1L, measurements.GetCounter("syntax.child-projections"))
+        Assert.True(allocated < 16_384L, "lookups allocated $allocated bytes")
+    }
+
+    /// A call with 2,000 arguments reads its list in place and builds no projection.
+    @Fact
+    func LargeArgumentList_BuildsNoProjection() {
+        let arguments = string.Join(", ", Enumerable.Repeat("1", 2000))
+        let tree = SyntaxTree.Parse("package p\nfunc G(a int32) { }\nfunc F() { G(" + arguments + ") }\n")
+        let call = Descendants(tree.Root).OfType[CallExpressionSyntax]().First()
+        using let measurements = CompilationMeasurements.Start("issue5136")
+        let count = call.ChildCount
+        for var i = 0; i < count; i++ {
+            call.GetChild(i)
+        }
+        Assert.True(count > 3999, "only $count children")
+        Assert.Equal(0L, measurements.GetCounter("syntax.child-projections"))
+    }
+
+    private class BinaryWithExtra : BinaryExpressionSyntax {
+        init(
+            syntaxTree SyntaxTree,
+            left ExpressionSyntax,
+            operatorToken SyntaxToken,
+            right ExpressionSyntax,
+            extra SyntaxToken
+        ) : base(syntaxTree, left, operatorToken, right) {
+            Extra = extra
+        }
+
+        prop Extra SyntaxToken {
+            get;
+        }
+    }
+
+    private class CollectingWalker : GSharpSyntaxWalker {
+        private let visited List[SyntaxNode] = List[SyntaxNode]()
+
+        prop Visited List[SyntaxNode] -> visited
+
+        override func Visit(node SyntaxNode?) {
+            if node != nil {
+                Visited.Add(node)
+            }
+            base.Visit(node)
+        }
     }
 
     shared {

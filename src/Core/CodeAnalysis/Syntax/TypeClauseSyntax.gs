@@ -861,6 +861,7 @@ partial class TypeClauseSyntax : SyntaxNode {
         }
         internal set {
             _functionParameterRefKindTokens = value
+            InvalidateCachedSpan()
         }
     }
 

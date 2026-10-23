@@ -7,6 +7,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 import System
+import System.Collections.Immutable
 
 partial class AccessorExpressionSyntax {
     /// ```xmldoc
@@ -1010,6 +1011,9 @@ partial class BinaryExpressionSyntax {
     /// ```
     internal override prop ChildCount int32 {
         get {
+            if GetType() != typeof(BinaryExpressionSyntax) {
+                return CachedChildren().Length
+            }
             var count = 0
             if IsPresent(Left) {
                 count++
@@ -1028,6 +1032,9 @@ partial class BinaryExpressionSyntax {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
+        if GetType() != typeof(BinaryExpressionSyntax) {
+            return ChildAt(CachedChildren(), index)
+        }
         var remaining = index
         if remaining >= 0 {
             let child0 = Left
@@ -1250,6 +1257,9 @@ partial class BreakStatementSyntax {
     /// ```
     internal override prop ChildCount int32 {
         get {
+            if GetType() != typeof(BreakStatementSyntax) {
+                return CachedChildren().Length
+            }
             var count = 0
             if IsPresent(Keyword) {
                 count++
@@ -1265,6 +1275,9 @@ partial class BreakStatementSyntax {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
+        if GetType() != typeof(BreakStatementSyntax) {
+            return ChildAt(CachedChildren(), index)
+        }
         var remaining = index
         if remaining >= 0 {
             let child0 = Keyword
@@ -1742,6 +1755,9 @@ partial class CompilationUnitSyntax {
     /// ```
     internal override prop ChildCount int32 {
         get {
+            if GetType() != typeof(CompilationUnitSyntax) {
+                return CachedChildren().Length
+            }
             var count = 0
             count += FileAttributes.Length
             count += Members.Length
@@ -1756,6 +1772,9 @@ partial class CompilationUnitSyntax {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
+        if GetType() != typeof(CompilationUnitSyntax) {
+            return ChildAt(CachedChildren(), index)
+        }
         var remaining = index
         if remaining >= 0 {
             let child0 = FileAttributes
@@ -2174,6 +2193,9 @@ partial class ContinueStatementSyntax {
     /// ```
     internal override prop ChildCount int32 {
         get {
+            if GetType() != typeof(ContinueStatementSyntax) {
+                return CachedChildren().Length
+            }
             var count = 0
             if IsPresent(Keyword) {
                 count++
@@ -2189,6 +2211,9 @@ partial class ContinueStatementSyntax {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
+        if GetType() != typeof(ContinueStatementSyntax) {
+            return ChildAt(CachedChildren(), index)
+        }
         var remaining = index
         if remaining >= 0 {
             let child0 = Keyword
@@ -3116,6 +3141,9 @@ partial class ExpressionStatementSyntax {
     /// ```
     internal override prop ChildCount int32 {
         get {
+            if GetType() != typeof(ExpressionStatementSyntax) {
+                return CachedChildren().Length
+            }
             var count = 0
             if IsPresent(Expression) {
                 count++
@@ -3128,6 +3156,9 @@ partial class ExpressionStatementSyntax {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
+        if GetType() != typeof(ExpressionStatementSyntax) {
+            return ChildAt(CachedChildren(), index)
+        }
         var remaining = index
         if remaining >= 0 {
             let child0 = Expression
@@ -4490,6 +4521,9 @@ partial class GlobalStatementSyntax {
     /// ```
     internal override prop ChildCount int32 {
         get {
+            if GetType() != typeof(GlobalStatementSyntax) {
+                return CachedChildren().Length
+            }
             var count = 0
             if IsPresent(Statement) {
                 count++
@@ -4503,6 +4537,9 @@ partial class GlobalStatementSyntax {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
+        if GetType() != typeof(GlobalStatementSyntax) {
+            return ChildAt(CachedChildren(), index)
+        }
         var remaining = index
         if remaining >= 0 {
             let child0 = Statement
@@ -5640,37 +5677,13 @@ partial class InterpolatedStringExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override prop ChildCount int32 {
-        get {
-            var count = 0
-            if IsPresent(StringToken) {
-                count++
-            }
-            count += EnumerableItems(HoleExpressions).Length
-            return count
+    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+        let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
+        if IsPresent(StringToken) {
+            builder.Add(StringToken)
         }
-    }
-
-    /// ```xmldoc
-    /// <inheritdoc />
-    /// ```
-    internal override func GetChild(index int32) SyntaxNode {
-        var remaining = index
-        if remaining >= 0 {
-            let child0 = StringToken
-            if IsPresent(child0) {
-                if remaining == 0 {
-                    return child0
-                }
-                remaining--
-            }
-            let child1 = EnumerableItems(HoleExpressions)
-            if remaining < child1.Length {
-                return child1[remaining]
-            }
-            remaining -= child1.Length
-        }
-        throw ArgumentOutOfRangeException(nameof(index))
+        builder.AddRange(EnumerableItems(HoleExpressions))
+        return builder.ToImmutable()
     }
 }
 
@@ -6490,6 +6503,9 @@ partial class NameExpressionSyntax {
     /// ```
     internal override prop ChildCount int32 {
         get {
+            if GetType() != typeof(NameExpressionSyntax) {
+                return CachedChildren().Length
+            }
             var count = 0
             if IsPresent(IdentifierToken) {
                 count++
@@ -6502,6 +6518,9 @@ partial class NameExpressionSyntax {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
+        if GetType() != typeof(NameExpressionSyntax) {
+            return ChildAt(CachedChildren(), index)
+        }
         var remaining = index
         if remaining >= 0 {
             let child0 = IdentifierToken
@@ -8524,333 +8543,109 @@ partial class StructDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override prop ChildCount int32 {
-        get {
-            var count = 0
-            if IsPresent(AccessibilityModifier) {
-                count++
-            }
-            if IsPresent(TypeKeyword) {
-                count++
-            }
-            if IsPresent(Identifier) {
-                count++
-            }
-            if IsPresent(DataKeyword) {
-                count++
-            }
-            if IsPresent(InlineKeyword) {
-                count++
-            }
-            if IsPresent(OpenModifier) {
-                count++
-            }
-            if IsPresent(StructKeyword) {
-                count++
-            }
-            if IsPresent(PrimaryConstructorOpenParenthesisToken) {
-                count++
-            }
-            count += SeparatedLength(PrimaryConstructorParameters)
-            if IsPresent(PrimaryConstructorCloseParenthesisToken) {
-                count++
-            }
-            if IsPresent(BaseColonToken) {
-                count++
-            }
-            if IsPresent(BaseTypeIdentifier) {
-                count++
-            }
-            count += PresentTokens(AdditionalBaseTypeIdentifiers).Length
-            count += SeparatedLength(BaseTypeClauses)
-            if IsPresent(UnsafeModifier) {
-                count++
-            }
-            if IsPresent(PartialModifier) {
-                count++
-            }
-            if IsPresent(OpenBraceToken) {
-                count++
-            }
-            count += Fields.Length
-            count += Properties.Length
-            count += Events.Length
-            count += Methods.Length
-            if IsPresent(CloseBraceToken) {
-                count++
-            }
-            if IsPresent(TypeParameterList) {
-                count++
-            }
-            if IsPresent(RefModifier) {
-                count++
-            }
-            if IsPresent(AbstractModifier) {
-                count++
-            }
-            if IsPresent(SharedModifier) {
-                count++
-            }
-            count += SharedInitializers.Length
-            if IsPresent(SharedBlock) {
-                count++
-            }
-            if IsPresent(BaseConstructorOpenParenthesisToken) {
-                count++
-            }
-            count += SeparatedLength(BaseConstructorArguments)
-            if IsPresent(BaseConstructorCloseParenthesisToken) {
-                count++
-            }
-            if IsPresent(SealedKeyword) {
-                count++
-            }
-            count += Constructors.Length
-            if IsPresent(Deinitializer) {
-                count++
-            }
-            count += NestedTypes.Length
-            count += Annotations.Length
-            return count
+    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+        let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
+        if IsPresent(AccessibilityModifier) {
+            builder.Add(AccessibilityModifier!!)
         }
-    }
-
-    /// ```xmldoc
-    /// <inheritdoc />
-    /// ```
-    internal override func GetChild(index int32) SyntaxNode {
-        var remaining = index
-        if remaining >= 0 {
-            let child0 = AccessibilityModifier
-            if IsPresent(child0) {
-                if remaining == 0 {
-                    return child0!!
-                }
-                remaining--
-            }
-            let child1 = TypeKeyword
-            if IsPresent(child1) {
-                if remaining == 0 {
-                    return child1!!
-                }
-                remaining--
-            }
-            let child2 = Identifier
-            if IsPresent(child2) {
-                if remaining == 0 {
-                    return child2
-                }
-                remaining--
-            }
-            let child3 = DataKeyword
-            if IsPresent(child3) {
-                if remaining == 0 {
-                    return child3!!
-                }
-                remaining--
-            }
-            let child4 = InlineKeyword
-            if IsPresent(child4) {
-                if remaining == 0 {
-                    return child4!!
-                }
-                remaining--
-            }
-            let child5 = OpenModifier
-            if IsPresent(child5) {
-                if remaining == 0 {
-                    return child5!!
-                }
-                remaining--
-            }
-            let child6 = StructKeyword
-            if IsPresent(child6) {
-                if remaining == 0 {
-                    return child6
-                }
-                remaining--
-            }
-            let child7 = PrimaryConstructorOpenParenthesisToken
-            if IsPresent(child7) {
-                if remaining == 0 {
-                    return child7!!
-                }
-                remaining--
-            }
-            let child8 = SeparatedItems(PrimaryConstructorParameters)
-            if remaining < child8.Length {
-                return child8[remaining]
-            }
-            remaining -= child8.Length
-            let child9 = PrimaryConstructorCloseParenthesisToken
-            if IsPresent(child9) {
-                if remaining == 0 {
-                    return child9!!
-                }
-                remaining--
-            }
-            let child10 = BaseColonToken
-            if IsPresent(child10) {
-                if remaining == 0 {
-                    return child10!!
-                }
-                remaining--
-            }
-            let child11 = BaseTypeIdentifier
-            if IsPresent(child11) {
-                if remaining == 0 {
-                    return child11!!
-                }
-                remaining--
-            }
-            let child12 = PresentTokens(AdditionalBaseTypeIdentifiers)
-            if remaining < child12.Length {
-                return child12[remaining]
-            }
-            remaining -= child12.Length
-            let child13 = SeparatedItems(BaseTypeClauses)
-            if remaining < child13.Length {
-                return child13[remaining]
-            }
-            remaining -= child13.Length
-            let child14 = UnsafeModifier
-            if IsPresent(child14) {
-                if remaining == 0 {
-                    return child14!!
-                }
-                remaining--
-            }
-            let child15 = PartialModifier
-            if IsPresent(child15) {
-                if remaining == 0 {
-                    return child15!!
-                }
-                remaining--
-            }
-            let child16 = OpenBraceToken
-            if IsPresent(child16) {
-                if remaining == 0 {
-                    return child16
-                }
-                remaining--
-            }
-            let child17 = Fields
-            if remaining < child17.Length {
-                return child17[remaining]
-            }
-            remaining -= child17.Length
-            let child18 = Properties
-            if remaining < child18.Length {
-                return child18[remaining]
-            }
-            remaining -= child18.Length
-            let child19 = Events
-            if remaining < child19.Length {
-                return child19[remaining]
-            }
-            remaining -= child19.Length
-            let child20 = Methods
-            if remaining < child20.Length {
-                return child20[remaining]
-            }
-            remaining -= child20.Length
-            let child21 = CloseBraceToken
-            if IsPresent(child21) {
-                if remaining == 0 {
-                    return child21
-                }
-                remaining--
-            }
-            let child22 = TypeParameterList
-            if IsPresent(child22) {
-                if remaining == 0 {
-                    return child22!!
-                }
-                remaining--
-            }
-            let child23 = RefModifier
-            if IsPresent(child23) {
-                if remaining == 0 {
-                    return child23!!
-                }
-                remaining--
-            }
-            let child24 = AbstractModifier
-            if IsPresent(child24) {
-                if remaining == 0 {
-                    return child24!!
-                }
-                remaining--
-            }
-            let child25 = SharedModifier
-            if IsPresent(child25) {
-                if remaining == 0 {
-                    return child25!!
-                }
-                remaining--
-            }
-            let child26 = SharedInitializers
-            if remaining < child26.Length {
-                return child26[remaining]
-            }
-            remaining -= child26.Length
-            let child27 = SharedBlock
-            if IsPresent(child27) {
-                if remaining == 0 {
-                    return child27!!
-                }
-                remaining--
-            }
-            let child28 = BaseConstructorOpenParenthesisToken
-            if IsPresent(child28) {
-                if remaining == 0 {
-                    return child28!!
-                }
-                remaining--
-            }
-            let child29 = SeparatedItems(BaseConstructorArguments)
-            if remaining < child29.Length {
-                return child29[remaining]
-            }
-            remaining -= child29.Length
-            let child30 = BaseConstructorCloseParenthesisToken
-            if IsPresent(child30) {
-                if remaining == 0 {
-                    return child30!!
-                }
-                remaining--
-            }
-            let child31 = SealedKeyword
-            if IsPresent(child31) {
-                if remaining == 0 {
-                    return child31!!
-                }
-                remaining--
-            }
-            let child32 = Constructors
-            if remaining < child32.Length {
-                return child32[remaining]
-            }
-            remaining -= child32.Length
-            let child33 = Deinitializer
-            if IsPresent(child33) {
-                if remaining == 0 {
-                    return child33!!
-                }
-                remaining--
-            }
-            let child34 = NestedTypes
-            if remaining < child34.Length {
-                return child34[remaining]
-            }
-            remaining -= child34.Length
-            let child35 = Annotations
-            if remaining < child35.Length {
-                return child35[remaining]
-            }
-            remaining -= child35.Length
+        if IsPresent(TypeKeyword) {
+            builder.Add(TypeKeyword!!)
         }
-        throw ArgumentOutOfRangeException(nameof(index))
+        if IsPresent(Identifier) {
+            builder.Add(Identifier)
+        }
+        if IsPresent(DataKeyword) {
+            builder.Add(DataKeyword!!)
+        }
+        if IsPresent(InlineKeyword) {
+            builder.Add(InlineKeyword!!)
+        }
+        if IsPresent(OpenModifier) {
+            builder.Add(OpenModifier!!)
+        }
+        if IsPresent(StructKeyword) {
+            builder.Add(StructKeyword)
+        }
+        if IsPresent(PrimaryConstructorOpenParenthesisToken) {
+            builder.Add(PrimaryConstructorOpenParenthesisToken!!)
+        }
+        builder.AddRange(SeparatedItems(PrimaryConstructorParameters))
+        if IsPresent(PrimaryConstructorCloseParenthesisToken) {
+            builder.Add(PrimaryConstructorCloseParenthesisToken!!)
+        }
+        if IsPresent(BaseColonToken) {
+            builder.Add(BaseColonToken!!)
+        }
+        if IsPresent(BaseTypeIdentifier) {
+            builder.Add(BaseTypeIdentifier!!)
+        }
+        builder.AddRange(PresentTokens(AdditionalBaseTypeIdentifiers))
+        builder.AddRange(SeparatedItems(BaseTypeClauses))
+        if IsPresent(UnsafeModifier) {
+            builder.Add(UnsafeModifier!!)
+        }
+        if IsPresent(PartialModifier) {
+            builder.Add(PartialModifier!!)
+        }
+        if IsPresent(OpenBraceToken) {
+            builder.Add(OpenBraceToken)
+        }
+        for itemFields in Fields {
+            builder.Add(itemFields)
+        }
+        for itemProperties in Properties {
+            builder.Add(itemProperties)
+        }
+        for itemEvents in Events {
+            builder.Add(itemEvents)
+        }
+        for itemMethods in Methods {
+            builder.Add(itemMethods)
+        }
+        if IsPresent(CloseBraceToken) {
+            builder.Add(CloseBraceToken)
+        }
+        if IsPresent(TypeParameterList) {
+            builder.Add(TypeParameterList!!)
+        }
+        if IsPresent(RefModifier) {
+            builder.Add(RefModifier!!)
+        }
+        if IsPresent(AbstractModifier) {
+            builder.Add(AbstractModifier!!)
+        }
+        if IsPresent(SharedModifier) {
+            builder.Add(SharedModifier!!)
+        }
+        for itemSharedInitializers in SharedInitializers {
+            builder.Add(itemSharedInitializers)
+        }
+        if IsPresent(SharedBlock) {
+            builder.Add(SharedBlock!!)
+        }
+        if IsPresent(BaseConstructorOpenParenthesisToken) {
+            builder.Add(BaseConstructorOpenParenthesisToken!!)
+        }
+        builder.AddRange(SeparatedItems(BaseConstructorArguments))
+        if IsPresent(BaseConstructorCloseParenthesisToken) {
+            builder.Add(BaseConstructorCloseParenthesisToken!!)
+        }
+        if IsPresent(SealedKeyword) {
+            builder.Add(SealedKeyword!!)
+        }
+        for itemConstructors in Constructors {
+            builder.Add(itemConstructors)
+        }
+        if IsPresent(Deinitializer) {
+            builder.Add(Deinitializer!!)
+        }
+        for itemNestedTypes in NestedTypes {
+            builder.Add(itemNestedTypes)
+        }
+        for itemAnnotations in Annotations {
+            builder.Add(itemAnnotations)
+        }
+        return builder.ToImmutable()
     }
 }
 
@@ -9280,6 +9075,9 @@ partial class SyntaxToken {
     /// ```
     internal override prop ChildCount int32 {
         get {
+            if GetType() != typeof(SyntaxToken) {
+                return CachedChildren().Length
+            }
             return 0
         }
     }
@@ -9288,6 +9086,9 @@ partial class SyntaxToken {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
+        if GetType() != typeof(SyntaxToken) {
+            return ChildAt(CachedChildren(), index)
+        }
         throw ArgumentOutOfRangeException(nameof(index))
     }
 }
@@ -9738,501 +9539,151 @@ partial class TypeClauseSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override prop ChildCount int32 {
-        get {
-            var count = 0
-            if IsPresent(ReadOnlySliceModifier) {
-                count++
-            }
-            if IsPresent(ReadOnlyManagedModifier) {
-                count++
-            }
-            if IsPresent(OpenBracketToken) {
-                count++
-            }
-            if IsPresent(LengthToken) {
-                count++
-            }
-            count += ArrayCommaTokens.Length
-            if IsPresent(CloseBracketToken) {
-                count++
-            }
-            if IsPresent(Identifier) {
-                count++
-            }
-            count += QualifierDotTokens.Length
-            count += QualifierIdentifierTokens.Length
-            if IsPresent(ArrayElementType) {
-                count++
-            }
-            if IsPresent(QuestionToken) {
-                count++
-            }
-            if IsPresent(ArrayQuestionToken) {
-                count++
-            }
-            if IsPresent(ParenthesizedQuestionToken) {
-                count++
-            }
-            if IsPresent(TupleElementNameToken) {
-                count++
-            }
-            if IsPresent(OpenParenToken) {
-                count++
-            }
-            if IsPresent(CloseParenToken) {
-                count++
-            }
-            count += SeparatedLength(TupleElements)
-            if IsPresent(FuncKeyword) {
-                count++
-            }
-            if IsPresent(ArrowToken) {
-                count++
-            }
-            count += SeparatedLength(FunctionParameterTypes)
-            count += PresentTokens(FunctionParameterEllipsisTokens).Length
-            count += PresentTokens(FunctionParameterRefKindTokens).Length
-            if IsPresent(ReturnTypeClause) {
-                count++
-            }
-            if IsPresent(UnmanagedKeyword) {
-                count++
-            }
-            if IsPresent(CallingConventionOpenBracketToken) {
-                count++
-            }
-            if IsPresent(CallingConventionIdentifierToken) {
-                count++
-            }
-            count += EnumerableItems(CallingConventionRestTokens).Length
-            if IsPresent(CallingConventionCloseBracketToken) {
-                count++
-            }
-            if IsPresent(ManagedFunctionPointerStarToken) {
-                count++
-            }
-            if IsPresent(ManagedFunctionPointerFuncKeyword) {
-                count++
-            }
-            if IsPresent(TypeArgumentOpenBracketToken) {
-                count++
-            }
-            count += SeparatedLength(TypeArguments)
-            if IsPresent(TypeArgumentCloseBracketToken) {
-                count++
-            }
-            count += EnumerableItems(OuterSegmentTypeArgumentChildren).Length
-            if IsPresent(MapKeyword) {
-                count++
-            }
-            if IsPresent(MapOpenBracketToken) {
-                count++
-            }
-            if IsPresent(MapKeyType) {
-                count++
-            }
-            if IsPresent(MapCommaToken) {
-                count++
-            }
-            if IsPresent(MapCloseBracketToken) {
-                count++
-            }
-            if IsPresent(MapValueType) {
-                count++
-            }
-            if IsPresent(ChanDirectionToken) {
-                count++
-            }
-            if IsPresent(ChanKeyword) {
-                count++
-            }
-            if IsPresent(ChanOpenBracketToken) {
-                count++
-            }
-            if IsPresent(ChanElementType) {
-                count++
-            }
-            if IsPresent(ChanCloseBracketToken) {
-                count++
-            }
-            if IsPresent(PointerStarToken) {
-                count++
-            }
-            if IsPresent(PointerPointeeType) {
-                count++
-            }
-            if IsPresent(SequenceKeyword) {
-                count++
-            }
-            if IsPresent(SequenceOpenBracketToken) {
-                count++
-            }
-            if IsPresent(SequenceElementType) {
-                count++
-            }
-            if IsPresent(SequenceCloseBracketToken) {
-                count++
-            }
-            if IsPresent(AsyncModifier) {
-                count++
-            }
-            return count
+    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+        let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
+        if IsPresent(ReadOnlySliceModifier) {
+            builder.Add(ReadOnlySliceModifier!!)
         }
-    }
-
-    /// ```xmldoc
-    /// <inheritdoc />
-    /// ```
-    internal override func GetChild(index int32) SyntaxNode {
-        var remaining = index
-        if remaining >= 0 {
-            let child0 = ReadOnlySliceModifier
-            if IsPresent(child0) {
-                if remaining == 0 {
-                    return child0!!
-                }
-                remaining--
-            }
-            let child1 = ReadOnlyManagedModifier
-            if IsPresent(child1) {
-                if remaining == 0 {
-                    return child1!!
-                }
-                remaining--
-            }
-            let child2 = OpenBracketToken
-            if IsPresent(child2) {
-                if remaining == 0 {
-                    return child2!!
-                }
-                remaining--
-            }
-            let child3 = LengthToken
-            if IsPresent(child3) {
-                if remaining == 0 {
-                    return child3!!
-                }
-                remaining--
-            }
-            let child4 = ArrayCommaTokens
-            if remaining < child4.Length {
-                return child4[remaining]
-            }
-            remaining -= child4.Length
-            let child5 = CloseBracketToken
-            if IsPresent(child5) {
-                if remaining == 0 {
-                    return child5!!
-                }
-                remaining--
-            }
-            let child6 = Identifier
-            if IsPresent(child6) {
-                if remaining == 0 {
-                    return child6!!
-                }
-                remaining--
-            }
-            let child7 = QualifierDotTokens
-            if remaining < child7.Length {
-                return child7[remaining]
-            }
-            remaining -= child7.Length
-            let child8 = QualifierIdentifierTokens
-            if remaining < child8.Length {
-                return child8[remaining]
-            }
-            remaining -= child8.Length
-            let child9 = ArrayElementType
-            if IsPresent(child9) {
-                if remaining == 0 {
-                    return child9!!
-                }
-                remaining--
-            }
-            let child10 = QuestionToken
-            if IsPresent(child10) {
-                if remaining == 0 {
-                    return child10!!
-                }
-                remaining--
-            }
-            let child11 = ArrayQuestionToken
-            if IsPresent(child11) {
-                if remaining == 0 {
-                    return child11!!
-                }
-                remaining--
-            }
-            let child12 = ParenthesizedQuestionToken
-            if IsPresent(child12) {
-                if remaining == 0 {
-                    return child12!!
-                }
-                remaining--
-            }
-            let child13 = TupleElementNameToken
-            if IsPresent(child13) {
-                if remaining == 0 {
-                    return child13!!
-                }
-                remaining--
-            }
-            let child14 = OpenParenToken
-            if IsPresent(child14) {
-                if remaining == 0 {
-                    return child14!!
-                }
-                remaining--
-            }
-            let child15 = CloseParenToken
-            if IsPresent(child15) {
-                if remaining == 0 {
-                    return child15!!
-                }
-                remaining--
-            }
-            let child16 = SeparatedItems(TupleElements)
-            if remaining < child16.Length {
-                return child16[remaining]
-            }
-            remaining -= child16.Length
-            let child17 = FuncKeyword
-            if IsPresent(child17) {
-                if remaining == 0 {
-                    return child17!!
-                }
-                remaining--
-            }
-            let child18 = ArrowToken
-            if IsPresent(child18) {
-                if remaining == 0 {
-                    return child18!!
-                }
-                remaining--
-            }
-            let child19 = SeparatedItems(FunctionParameterTypes)
-            if remaining < child19.Length {
-                return child19[remaining]
-            }
-            remaining -= child19.Length
-            let child20 = PresentTokens(FunctionParameterEllipsisTokens)
-            if remaining < child20.Length {
-                return child20[remaining]
-            }
-            remaining -= child20.Length
-            let child21 = PresentTokens(FunctionParameterRefKindTokens)
-            if remaining < child21.Length {
-                return child21[remaining]
-            }
-            remaining -= child21.Length
-            let child22 = ReturnTypeClause
-            if IsPresent(child22) {
-                if remaining == 0 {
-                    return child22!!
-                }
-                remaining--
-            }
-            let child23 = UnmanagedKeyword
-            if IsPresent(child23) {
-                if remaining == 0 {
-                    return child23!!
-                }
-                remaining--
-            }
-            let child24 = CallingConventionOpenBracketToken
-            if IsPresent(child24) {
-                if remaining == 0 {
-                    return child24!!
-                }
-                remaining--
-            }
-            let child25 = CallingConventionIdentifierToken
-            if IsPresent(child25) {
-                if remaining == 0 {
-                    return child25!!
-                }
-                remaining--
-            }
-            let child26 = EnumerableItems(CallingConventionRestTokens)
-            if remaining < child26.Length {
-                return child26[remaining]
-            }
-            remaining -= child26.Length
-            let child27 = CallingConventionCloseBracketToken
-            if IsPresent(child27) {
-                if remaining == 0 {
-                    return child27!!
-                }
-                remaining--
-            }
-            let child28 = ManagedFunctionPointerStarToken
-            if IsPresent(child28) {
-                if remaining == 0 {
-                    return child28!!
-                }
-                remaining--
-            }
-            let child29 = ManagedFunctionPointerFuncKeyword
-            if IsPresent(child29) {
-                if remaining == 0 {
-                    return child29!!
-                }
-                remaining--
-            }
-            let child30 = TypeArgumentOpenBracketToken
-            if IsPresent(child30) {
-                if remaining == 0 {
-                    return child30!!
-                }
-                remaining--
-            }
-            let child31 = SeparatedItems(TypeArguments)
-            if remaining < child31.Length {
-                return child31[remaining]
-            }
-            remaining -= child31.Length
-            let child32 = TypeArgumentCloseBracketToken
-            if IsPresent(child32) {
-                if remaining == 0 {
-                    return child32!!
-                }
-                remaining--
-            }
-            let child33 = EnumerableItems(OuterSegmentTypeArgumentChildren)
-            if remaining < child33.Length {
-                return child33[remaining]
-            }
-            remaining -= child33.Length
-            let child34 = MapKeyword
-            if IsPresent(child34) {
-                if remaining == 0 {
-                    return child34!!
-                }
-                remaining--
-            }
-            let child35 = MapOpenBracketToken
-            if IsPresent(child35) {
-                if remaining == 0 {
-                    return child35!!
-                }
-                remaining--
-            }
-            let child36 = MapKeyType
-            if IsPresent(child36) {
-                if remaining == 0 {
-                    return child36!!
-                }
-                remaining--
-            }
-            let child37 = MapCommaToken
-            if IsPresent(child37) {
-                if remaining == 0 {
-                    return child37!!
-                }
-                remaining--
-            }
-            let child38 = MapCloseBracketToken
-            if IsPresent(child38) {
-                if remaining == 0 {
-                    return child38!!
-                }
-                remaining--
-            }
-            let child39 = MapValueType
-            if IsPresent(child39) {
-                if remaining == 0 {
-                    return child39!!
-                }
-                remaining--
-            }
-            let child40 = ChanDirectionToken
-            if IsPresent(child40) {
-                if remaining == 0 {
-                    return child40!!
-                }
-                remaining--
-            }
-            let child41 = ChanKeyword
-            if IsPresent(child41) {
-                if remaining == 0 {
-                    return child41!!
-                }
-                remaining--
-            }
-            let child42 = ChanOpenBracketToken
-            if IsPresent(child42) {
-                if remaining == 0 {
-                    return child42!!
-                }
-                remaining--
-            }
-            let child43 = ChanElementType
-            if IsPresent(child43) {
-                if remaining == 0 {
-                    return child43!!
-                }
-                remaining--
-            }
-            let child44 = ChanCloseBracketToken
-            if IsPresent(child44) {
-                if remaining == 0 {
-                    return child44!!
-                }
-                remaining--
-            }
-            let child45 = PointerStarToken
-            if IsPresent(child45) {
-                if remaining == 0 {
-                    return child45!!
-                }
-                remaining--
-            }
-            let child46 = PointerPointeeType
-            if IsPresent(child46) {
-                if remaining == 0 {
-                    return child46!!
-                }
-                remaining--
-            }
-            let child47 = SequenceKeyword
-            if IsPresent(child47) {
-                if remaining == 0 {
-                    return child47!!
-                }
-                remaining--
-            }
-            let child48 = SequenceOpenBracketToken
-            if IsPresent(child48) {
-                if remaining == 0 {
-                    return child48!!
-                }
-                remaining--
-            }
-            let child49 = SequenceElementType
-            if IsPresent(child49) {
-                if remaining == 0 {
-                    return child49!!
-                }
-                remaining--
-            }
-            let child50 = SequenceCloseBracketToken
-            if IsPresent(child50) {
-                if remaining == 0 {
-                    return child50!!
-                }
-                remaining--
-            }
-            let child51 = AsyncModifier
-            if IsPresent(child51) {
-                if remaining == 0 {
-                    return child51!!
-                }
-                remaining--
-            }
+        if IsPresent(ReadOnlyManagedModifier) {
+            builder.Add(ReadOnlyManagedModifier!!)
         }
-        throw ArgumentOutOfRangeException(nameof(index))
+        if IsPresent(OpenBracketToken) {
+            builder.Add(OpenBracketToken!!)
+        }
+        if IsPresent(LengthToken) {
+            builder.Add(LengthToken!!)
+        }
+        for itemArrayCommaTokens in ArrayCommaTokens {
+            builder.Add(itemArrayCommaTokens)
+        }
+        if IsPresent(CloseBracketToken) {
+            builder.Add(CloseBracketToken!!)
+        }
+        if IsPresent(Identifier) {
+            builder.Add(Identifier!!)
+        }
+        for itemQualifierDotTokens in QualifierDotTokens {
+            builder.Add(itemQualifierDotTokens)
+        }
+        for itemQualifierIdentifierTokens in QualifierIdentifierTokens {
+            builder.Add(itemQualifierIdentifierTokens)
+        }
+        if IsPresent(ArrayElementType) {
+            builder.Add(ArrayElementType!!)
+        }
+        if IsPresent(QuestionToken) {
+            builder.Add(QuestionToken!!)
+        }
+        if IsPresent(ArrayQuestionToken) {
+            builder.Add(ArrayQuestionToken!!)
+        }
+        if IsPresent(ParenthesizedQuestionToken) {
+            builder.Add(ParenthesizedQuestionToken!!)
+        }
+        if IsPresent(TupleElementNameToken) {
+            builder.Add(TupleElementNameToken!!)
+        }
+        if IsPresent(OpenParenToken) {
+            builder.Add(OpenParenToken!!)
+        }
+        if IsPresent(CloseParenToken) {
+            builder.Add(CloseParenToken!!)
+        }
+        builder.AddRange(SeparatedItems(TupleElements))
+        if IsPresent(FuncKeyword) {
+            builder.Add(FuncKeyword!!)
+        }
+        if IsPresent(ArrowToken) {
+            builder.Add(ArrowToken!!)
+        }
+        builder.AddRange(SeparatedItems(FunctionParameterTypes))
+        builder.AddRange(PresentTokens(FunctionParameterEllipsisTokens))
+        builder.AddRange(PresentTokens(FunctionParameterRefKindTokens))
+        if IsPresent(ReturnTypeClause) {
+            builder.Add(ReturnTypeClause!!)
+        }
+        if IsPresent(UnmanagedKeyword) {
+            builder.Add(UnmanagedKeyword!!)
+        }
+        if IsPresent(CallingConventionOpenBracketToken) {
+            builder.Add(CallingConventionOpenBracketToken!!)
+        }
+        if IsPresent(CallingConventionIdentifierToken) {
+            builder.Add(CallingConventionIdentifierToken!!)
+        }
+        builder.AddRange(EnumerableItems(CallingConventionRestTokens))
+        if IsPresent(CallingConventionCloseBracketToken) {
+            builder.Add(CallingConventionCloseBracketToken!!)
+        }
+        if IsPresent(ManagedFunctionPointerStarToken) {
+            builder.Add(ManagedFunctionPointerStarToken!!)
+        }
+        if IsPresent(ManagedFunctionPointerFuncKeyword) {
+            builder.Add(ManagedFunctionPointerFuncKeyword!!)
+        }
+        if IsPresent(TypeArgumentOpenBracketToken) {
+            builder.Add(TypeArgumentOpenBracketToken!!)
+        }
+        builder.AddRange(SeparatedItems(TypeArguments))
+        if IsPresent(TypeArgumentCloseBracketToken) {
+            builder.Add(TypeArgumentCloseBracketToken!!)
+        }
+        builder.AddRange(EnumerableItems(OuterSegmentTypeArgumentChildren))
+        if IsPresent(MapKeyword) {
+            builder.Add(MapKeyword!!)
+        }
+        if IsPresent(MapOpenBracketToken) {
+            builder.Add(MapOpenBracketToken!!)
+        }
+        if IsPresent(MapKeyType) {
+            builder.Add(MapKeyType!!)
+        }
+        if IsPresent(MapCommaToken) {
+            builder.Add(MapCommaToken!!)
+        }
+        if IsPresent(MapCloseBracketToken) {
+            builder.Add(MapCloseBracketToken!!)
+        }
+        if IsPresent(MapValueType) {
+            builder.Add(MapValueType!!)
+        }
+        if IsPresent(ChanDirectionToken) {
+            builder.Add(ChanDirectionToken!!)
+        }
+        if IsPresent(ChanKeyword) {
+            builder.Add(ChanKeyword!!)
+        }
+        if IsPresent(ChanOpenBracketToken) {
+            builder.Add(ChanOpenBracketToken!!)
+        }
+        if IsPresent(ChanElementType) {
+            builder.Add(ChanElementType!!)
+        }
+        if IsPresent(ChanCloseBracketToken) {
+            builder.Add(ChanCloseBracketToken!!)
+        }
+        if IsPresent(PointerStarToken) {
+            builder.Add(PointerStarToken!!)
+        }
+        if IsPresent(PointerPointeeType) {
+            builder.Add(PointerPointeeType!!)
+        }
+        if IsPresent(SequenceKeyword) {
+            builder.Add(SequenceKeyword!!)
+        }
+        if IsPresent(SequenceOpenBracketToken) {
+            builder.Add(SequenceOpenBracketToken!!)
+        }
+        if IsPresent(SequenceElementType) {
+            builder.Add(SequenceElementType!!)
+        }
+        if IsPresent(SequenceCloseBracketToken) {
+            builder.Add(SequenceCloseBracketToken!!)
+        }
+        if IsPresent(AsyncModifier) {
+            builder.Add(AsyncModifier!!)
+        }
+        return builder.ToImmutable()
     }
 }
 
@@ -10614,6 +10065,9 @@ partial class UnaryExpressionSyntax {
     /// ```
     internal override prop ChildCount int32 {
         get {
+            if GetType() != typeof(UnaryExpressionSyntax) {
+                return CachedChildren().Length
+            }
             var count = 0
             if IsPresent(OperatorToken) {
                 count++
@@ -10629,6 +10083,9 @@ partial class UnaryExpressionSyntax {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
+        if GetType() != typeof(UnaryExpressionSyntax) {
+            return ChildAt(CachedChildren(), index)
+        }
         var remaining = index
         if remaining >= 0 {
             let child0 = OperatorToken
