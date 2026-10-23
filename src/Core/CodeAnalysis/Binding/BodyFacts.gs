@@ -30,21 +30,8 @@ internal shared class BodyFacts {
         }
     }
 
-    private class FixedDetector : BoundTreeWalker {
-        prop Found bool {
-            get;
-            private set;
-        }
-
-        protected override func VisitFixedStatement(node BoundFixedStatement) {
-            Found = true
-            base.VisitFixedStatement(node)
-        }
-    }
-
     private class Slots {
         internal var ContainsYield bool?
-        internal var ContainsFixed bool?
         internal var LoweredLambdaBody BoundBlockStatement?
     }
 
@@ -67,24 +54,6 @@ internal shared class BodyFacts {
             detector.Visit(body)
             CompilationMeasurements.Count("bodyfacts.yield-walks")
             slots.ContainsYield = detector.Found
-            return detector.Found
-        }
-    }
-
-    /// Returns whether [`body`](paramref) contains a `fixed` statement.
-    /// @param body The bound body.
-    /// @returns `true` when a `fixed` statement occurs anywhere in the body.
-    func ContainsFixed(body BoundStatement) bool {
-        let slots = Entries.GetValue(body, CreateSlots)
-        lock slots {
-            if slots.ContainsFixed is {} cached {
-                CompilationMeasurements.Count("bodyfacts.fixed-reuses")
-                return cached
-            }
-            let detector = FixedDetector()
-            detector.Visit(body)
-            CompilationMeasurements.Count("bodyfacts.fixed-walks")
-            slots.ContainsFixed = detector.Found
             return detector.Found
         }
     }

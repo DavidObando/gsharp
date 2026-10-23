@@ -86,12 +86,7 @@ func Main() int32 {
         Assert.True(counters.YieldWalks > 0)
     }
 
-    private data struct Counters(
-        LambdaLowerings int64,
-        LambdaLoweringReuses int64,
-        YieldWalks int64,
-        YieldReuses int64
-    )
+    private data struct Counters(LambdaLowerings int64, LambdaLoweringReuses int64, YieldWalks int64, YieldReuses int64)
 
     shared {
         private func Bind(source string)(Diagnostics ImmutableArray[Diagnostic], Counters Counters) {

@@ -41,6 +41,18 @@ import System.Linq
 /// that skips the lambda-body rewrite breaks
 /// `Adr0174InferredSuspensionEmitTests.Lambda_CallingAnInferredFunction_Runs`.
 internal shared class SuspensionInference {
+    private class FixedFinder : BoundTreeWalker {
+        prop Found bool {
+            get;
+            private set;
+        }
+
+        protected override func VisitFixedStatement(node BoundFixedStatement) {
+            Found = true
+            base.VisitFixedStatement(node)
+        }
+    }
+
     /// Runs inference and the call rewrite over a bound program's bodies.
     /// @param bodies Every function body, keyed by symbol; rewritten in place.
     /// @param entryPoint The program's entry point — synthesized or a user `Main` — which is the root that
@@ -403,7 +415,9 @@ internal shared class SuspensionInference {
     }
 
     private func ContainsFixed(body BoundStatement) bool {
-        return BodyFacts.ContainsFixed(body)
+        let finder = FixedFinder()
+        finder.Visit(body)
+        return finder.Found
     }
 
     private func ImplementsInterfaceMember(owner StructSymbol, function FunctionSymbol) bool {
