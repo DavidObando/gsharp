@@ -356,13 +356,13 @@ internal sealed class NarrowingState {
     func Kill(effects StatementEffects) NarrowingState
     func KillRoots(roots IReadOnlyCollection[VariableSymbol]) NarrowingState
 
-    /// Merge (section 6), over ALL predecessors of a merge point at once: a
-    /// path survives with the incoming type every other converts to, else
-    /// with the declared non-null type of a plain root when every incoming
-    /// type preserves representation into it, else is dropped; aliases
-    /// intersect. Unreachable predecessors are skipped (identity). Callers
-    /// never fold this pairwise: Join([Dog, Cat, Animal]) on `x object?` is
-    /// Animal, while Join(Join(Dog, Cat), Animal) would be object.
+    /// Merge over ALL predecessors of a merge point at once. The type rule
+    /// is defined once, in section 6 ("Join", as amended by A1), and
+    /// implemented once, in NarrowingState.JoinTypes; this comment does not
+    /// restate it. Aliases intersect. Unreachable predecessors are skipped
+    /// (identity). Callers never fold this pairwise: Join([Dog, Cat,
+    /// Animal]) on `x object?` is Animal, while Join(Join(Dog, Cat),
+    /// Animal) would be object.
     static func Join(predecessors IReadOnlyList[NarrowingState]) NarrowingState
     /// The genuine two-way case (an `if` without jumps into its join, `?:`,
     /// `??`): Join([this, other]).
@@ -429,9 +429,9 @@ are closed: a construct or situation that is on neither list kills.
 - **P4 Bindings.** Pattern variables and `if let`/`guard let`/`while let`
   bindings keep their scoping rules (ADR-0166, ADR-0201); they are scope
   facts, not state facts. Unchanged.
-- **P5 Join.** As defined in section 6: the incoming type the others
-  convert to, the declared non-null type for a plain root whose incoming
-  types all preserve representation into it, else drop.
+- **P5 Join.** As defined in section 6 ("Join", as amended by A1), the one
+  definition of the join type rule in this document; `NarrowingState.
+  JoinTypes` is its one implementation. Not restated here.
 - **P6 Region lower bound.** As defined in section 6, for loops, backward
   jumps and handlers, with the kill sets computed from the construct table
   (bound effects where the region is already bound, the syntactic walker of
@@ -727,21 +727,27 @@ here.
   move, and that is where the semantics change meets the compiler's own
   source. Two hazards:
   1. **Less permissive rows** (section 16) can reject repository source.
-     Under the recorded scope the less permissive rows are R9 to R12, and
-     `src/Core` has no `when` filter that writes a narrowed root, no
-     top-level `var` and no `ref` local, so no restructuring is known. The
-     measurements in section 4 found four functions that the draft's loop
-     rule (deferred) would reject: `ExpressionBinder.Assignments.gs:
-     5435-5494` (reassignment from a pattern variable),
-     `BinderContext.gs:906-923` (an `out` parameter read in a loop with a
-     call) and `MemberLookup.gs:1108-1120`, `:3100-3172` (locals a closure
-     in the same function assigns, read in loops with calls); they are the
-     follow-up ADR's concern. If a restructuring is ever needed it must be
-     a restructuring, not `!!`: under the pin, the pinned compiler proves
-     the value non-null there and reports `GS0536`, and warnings are errors,
-     so `!!` cannot bridge the two compilers. The implementation PRs compile
-     Core, Core.Tests and gsc with the built compiler (the response-file
-     procedure in the References section) to confirm.
+     Under the recorded scope the less permissive rows are R9 to R14. R9 to
+     R13 reject nothing in `src/Core` (no `when` filter writes a narrowed
+     root, no top-level `var`, no `ref` local, no suspension point reading
+     a closure-assigned local was found by PR 1). R14 rejects two sites,
+     which the pin-move PR restructures by reading the property into a
+     `let` before the guard:
+     `src/Core/CodeAnalysis/Binding/ExpressionBinder.Access.MemberLookup.gs:3991`
+     and `src/Core/CodeAnalysis/Lowering/BaseCallForwarderRewriter.gs:490`
+     (section 19a, A2). The measurements in section 4 also found four
+     functions that the draft's loop rule (deferred) would reject:
+     `ExpressionBinder.Assignments.gs:5435-5494` (reassignment from a
+     pattern variable), `BinderContext.gs:906-923` (an `out` parameter read
+     in a loop with a call) and `MemberLookup.gs:1108-1120`, `:3100-3172`
+     (locals a closure in the same function assigns, read in loops with
+     calls); they are the follow-up ADR's concern. Every such restructuring
+     must be a restructuring, not `!!`: under the pin, the pinned compiler
+     proves the value non-null there and reports `GS0536`, and warnings are
+     errors, so `!!` cannot bridge the two compilers. The implementation PRs
+     compile Core, Core.Tests and gsc with the built compiler (the
+     response-file procedure in the References section) to confirm the
+     list.
   2. **More permissive rows** make some `!!` in repository source
      provably redundant (`GS0536`). `src/Core` has 3,746 `!!`. The pin-move
      PR for the release that carries this ADR removes the `!!` the new
@@ -959,9 +965,11 @@ today's mechanism (section 10), and their redesign moves to a follow-up ADR
 that starts from the measured spike described there. What follows from the
 split:
 
-- R-table: R1 to R6 and R9 to R13, including the accepted-program output
-  change of R1 (b) and the overload rejection of R1 (c) (open question 3).
-  R7 and R8 are deferred with section 10.
+- R-table: R1 to R6 and R9 to R14 (R14 added by amendment A2), including
+  the accepted-program output change of R1 (b) and the overload rejection
+  of R1 (c) (open question 3). R7 and R8 are deferred with section 10.
+  Section 16 is the one list of rows; every other mention of "the rows"
+  means that list.
 - Plan: PRs 1, 2 and 4. The loop-related deletions (per-loop CFG,
   21-structure snapshot, diagnostics truncation, `GotoNarrowingSnapshot`,
   proof generations) are deferred with them.
@@ -970,8 +978,11 @@ split:
   interpreter cost (the `AssignedRootsCollector` and `Update*`/`Invalidate*`
   frames, about 12.5% of main-thread samples); the loop re-bind cost is
   measured by the counter, not removed.
-- Bootstrap: no known restructuring in `src/Core`. The four functions that
-  the draft's loop rule rejected (section 15) were all loop cases.
+- Bootstrap: two known restructurings in `src/Core`, both from R14
+  (`ExpressionBinder.Access.MemberLookup.gs:3991`,
+  `BaseCallForwarderRewriter.gs:490`; section 15 and 19a), done in the
+  pin-move PR. The four functions that the draft's loop rule rejected were
+  all loop cases and stay with the follow-up ADR.
 
 Reasoning the maintainer accepted: four review rounds found defects only
 in the entry-state rules for loops and backward jumps, none in the join
@@ -1022,27 +1033,34 @@ each predicted change listed in the PR body; the benchmark table of section
    today's compiler for the soundness rows, a mutant for the others).
    Acceptance: byte-identical output; every disagreement on Core,
    Core.Tests and Oahu falls under a row of section 16 (the shadow join is
-   the new rule, so R1-R6 are expected to appear there), none outside the
-   table; the member-selection and cast report for open question 3. Result
+   the new rule, so R1 to R6 are expected to appear there), none outside
+   the table; the member-selection and cast report for open question 3.
+   Result
    (#5212): output identity met; the disagreement criterion not met, with
    four sites outside the table, resolved by amendments A1 and A2 of
    section 19a.
-2. **Joins from exit states (R1-R6, R9).** `if`, `switch`, blocks, `try`,
-   cleanup regions, forward `goto`, labels; the catch-clause entry rule
-   (R10); expression-granular state updates; delete `ApplyIfJoinNarrowings`,
-   `ComputeIfJoinNonNull`,
-   `ProcessBranchStatement`, `ClearAssignedRoots`,
+2. **Joins from exit states (every row of section 16 that is in scope: R1
+   to R6 and R9 to R14).** `if`, `switch`, blocks, `try`, cleanup regions,
+   forward `goto`, labels; the catch-clause entry rule (R10);
+   expression-granular state updates (R9); the construct table's `call`
+   effects for mutable globals, the alias class and suspension points (R11
+   to R13) and for property reads with user code (R14, amendment A2); the
+   join type rule as amended by A1 (`NarrowingState.JoinTypes`); the
+   frame list replaced by the threaded state; delete `ApplyIfJoinNarrowings`,
+   `ComputeIfJoinNonNull`, `ProcessBranchStatement`, `ClearAssignedRoots`,
    `RestoreEarlyExitLiftsWrittenOnlyByCondition`, `PendingEarlyExitFrames`,
    `PendingSwitchExitFrames`, the #4285/#4290 suppressions; the `try`
    handler and `finally` entry states of section 9. Acceptance: the
    comparison mode's disagreements on Core, Core.Tests and Oahu all fall
-   under R1-R6 or R9-R12; the listed tests re-expected with witnesses; c1
-   and e6 added as tests (red under a mutant that builds the `finally`
-   entry from normal exits), cA, d1, d3b and d4b (red on today's compiler
-   by running the program) and d5 (red under an equality-only join mutant);
-   the section 8 transfer for mutable globals and the alias class; the
-   `GS0536` sites the new compiler reports in
-   repository source are listed in the PR body for the pin-move PR.
+   under a row of section 16 that is in scope (R1 to R6, R9 to R14), none
+   outside; the listed tests re-expected with witnesses; c1 and e6 added as
+   tests (red under a mutant that builds the `finally` entry from normal
+   exits), cA, d1, d3b, d4b, f2, f3, f5 and g2 (red on today's compiler by
+   running the program), d5 and g1 (red under join mutants), the #5206 repro
+   (red under the fallback as first written) and the two R14 shapes (red
+   under a mutant that classes property reads `none`); the `GS0536` sites
+   the new compiler reports in repository source and the two R14 sites
+   (section 15) are listed in the PR body for the pin-move PR.
 3. **Loops and backward jumps: deferred.** Under the recorded scope
    (section 18a) there is no PR 3 in this ADR. The loop and backward-jump
    collectors are touched only by PR 1 (they read the state value) and PR 2
@@ -1194,8 +1212,9 @@ shadow's coverage and approximation (section 19).
   Oahu is large the maintainer can choose open question 3.
 - **Bootstrap**: a less permissive row rejects repository source only at
   the pin move. Mitigation: the response-file compile in every
-  implementation PR (the References section); no restructuring is known under the
-  recorded scope (section 15).
+  implementation PR (the References section); the two known restructurings
+  (R14, section 15) are listed for the pin-move PR, and no other is known
+  under the recorded scope.
 - **Performance regression from immutable states** in bodies with many
   facts. Mitigation: states are tiny arrays; the benchmark table gates each
   PR.
@@ -1266,7 +1285,9 @@ Positive:
   goto proof machinery in `BinderContext.gs` stay for the follow-up ADR
   (section 10), with a counter that measures what they cost.
 - Four soundness holes close (R9, R10, R11, R12), three of them present in
-  the current compiler (#5168, #5170, #5171); R13 closes a potential one.
+  the current compiler (#5168, #5170, #5171); R13 and R14 close potential
+  ones and remove an inconsistency between today's straight-line and loop
+  collectors.
 - The design has a conservative default and closed lists (sections 6 and
   8), so a later finding is a table entry or a corpus row.
 - The state is a value, which makes per-position queries for tooling
@@ -1275,10 +1296,12 @@ Positive:
 Negative:
 
 - Less permissive changes R9 to R12, all soundness fixes: a program that
-  dereferences nil today gets a diagnostic. R13 is a conservative-default
-  rejection of correct programs that read a closure-assigned local across a
-  suspension point; R1 (c) rejects an overload call that a newly surviving
-  type-test fact makes ambiguous.
+  dereferences nil today gets a diagnostic. R13 and R14 are
+  conservative-default rejections of programs that are correct today (a
+  closure-assigned local read across a suspension point; a member-path
+  fact read after a condition that calls a getter with user code), R14
+  costing two restructurings in `src/Core` at the pin move; R1 (c) rejects
+  an overload call that a newly surviving type-test fact makes ambiguous.
 - One accepted-program output change, R1 (b): a hidden member read after a
   join selects the narrowed type's member (open question 3).
 - IL can change at join points for type-test facts (section 15).
