@@ -58,7 +58,7 @@ internal shared class NativeProtocolSafety {
             return known
         }
         CompilationMeasurements.Count("nativeprotocol.memo-walks")
-        let found = ContainsDependency(type, true,HashSet[TypeSymbol](), HashSet[System.Type]())
+        let found = ContainsDependency(type, true, HashSet[TypeSymbol](), HashSet[System.Type]())
         memo[type] = found
         return found
     }
@@ -73,7 +73,7 @@ internal shared class NativeProtocolSafety {
             return known
         }
         CompilationMeasurements.Count("nativeprotocol.memo-walks")
-        let found = ContainsDependency(type, false,HashSet[TypeSymbol](), HashSet[System.Type]())
+        let found = ContainsDependency(type, false, HashSet[TypeSymbol](), HashSet[System.Type]())
         memo[type] = found
         return found
     }
