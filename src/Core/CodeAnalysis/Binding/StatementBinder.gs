@@ -459,12 +459,10 @@ internal partial class StatementBinder {
         // After each call statement whose method carries [MemberNotNull], the
         // named fields are added to this frame and remain narrowed for all
         // subsequent statements in the block (until assignment invalidates them).
-        let memberNotNullFrame = Dictionary[AccessPath, TypeSymbol]()
         let inheritedAssignmentGenerations = Dictionary[VariableSymbol, int32](binderCtx.AssignmentNarrowingGenerations)
         let inheritedFallthrough = currentStatementListFallsThrough
         let inheritedPotentialReachabilityLabel = binderCtx.PotentialReachabilityLabel
-        binderCtx.BeginNarrowingProof(memberNotNullFrame)
-        binderCtx.NarrowedVariables.Add(memberNotNullFrame)
+        let memberNotNullFrame = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol]())
         let shadowSavedOverlay = ShadowEnterList()
         let shadowSavedBase = binderCtx.ShadowOverlayBase
         try {

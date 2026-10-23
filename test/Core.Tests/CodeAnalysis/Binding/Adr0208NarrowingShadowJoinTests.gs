@@ -546,8 +546,8 @@ func Closures(items []string) int32 {
         outer[AccessPath.ForVariable(y)] = TypeSymbol.String
         let inner = Dictionary[AccessPath, TypeSymbol]()
         inner[AccessPath.ForVariable(x)] = TypeSymbol.String
-        context.NarrowedVariables.Add(outer)
-        context.NarrowedVariables.Add(inner)
+        context.NarrowedVariables.Push(outer)
+        context.NarrowedVariables.Push(inner)
         Assert.Equal(TypeSymbol.String, context.Narrowing.NarrowedType(AccessPath.ForVariable(x)))
         Assert.Equal(TypeSymbol.String, context.Narrowing.NarrowedType(AccessPath.ForVariable(y)))
         context.NarrowedVariables.RemoveAt(1)

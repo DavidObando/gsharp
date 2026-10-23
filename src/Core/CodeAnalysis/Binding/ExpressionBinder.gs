@@ -223,8 +223,7 @@ internal partial class ExpressionBinder {
                 BindExpression(syntax, targetType)
             }
         }
-        binderCtx.BeginNarrowingProof(frame)
-        binderCtx.NarrowedVariables.Add(frame)
+        binderCtx.PushNarrowingFrame(frame)
         try {
             return if targetType == nil {
                 BindExpression(syntax, canBeVoid)
@@ -247,8 +246,7 @@ internal partial class ExpressionBinder {
         if frame == nil {
             return BindExpression(syntax, TypeSymbol.Bool)
         }
-        binderCtx.BeginNarrowingProof(frame)
-        binderCtx.NarrowedVariables.Add(frame)
+        binderCtx.PushNarrowingFrame(frame)
         try {
             return BindExpression(syntax, TypeSymbol.Bool)
         } finally {
@@ -888,6 +886,9 @@ internal partial class ExpressionBinder {
 
     private func TryGetNarrowedType(variable VariableSymbol, location TextLocation? = nil) TypeSymbol? {
         let answer = LookUpNarrowedType(variable)
+        if NarrowingParity.Enabled {
+            NarrowingParity.Check(binderCtx.NarrowedVariables, AccessPath.ForVariable(variable), answer)
+        }
         if NarrowingComparison.Enabled {
             ReportShadowRead(AccessPath.ForVariable(variable), answer, variable.Type, location)
         }
@@ -927,13 +928,22 @@ internal partial class ExpressionBinder {
     /// @returns The narrowed type, or `null` when the path is not narrowed.
     private func TryGetNarrowedType(path AccessPath, declaredType TypeSymbol, location TextLocation?) TypeSymbol? {
         let answer = LookUpNarrowedType(path)
+        if NarrowingParity.Enabled {
+            NarrowingParity.Check(binderCtx.NarrowedVariables, path, answer)
+        }
         if NarrowingComparison.Enabled {
             ReportShadowRead(path, answer, declaredType, location)
         }
         return answer
     }
 
-    private func TryGetNarrowedType(path AccessPath) TypeSymbol? -> LookUpNarrowedType(path)
+    private func TryGetNarrowedType(path AccessPath) TypeSymbol? {
+        let answer = LookUpNarrowedType(path)
+        if NarrowingParity.Enabled {
+            NarrowingParity.Check(binderCtx.NarrowedVariables, path, answer)
+        }
+        return answer
+    }
 
     private func LookUpNarrowedType(path AccessPath) TypeSymbol? {
         for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {

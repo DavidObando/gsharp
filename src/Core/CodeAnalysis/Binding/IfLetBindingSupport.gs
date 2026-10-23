@@ -208,9 +208,7 @@ internal shared class IfLetBindingSupport {
     )(Clauses ImmutableArray[BoundIfLetClause], Guard BoundExpression?, Then TThen) {
         let clauses = ImmutableArray.CreateBuilder[BoundIfLetClause](bindings.Count)
         binderCtx.RootScope = BoundScope(binderCtx.RootScope)
-        let narrowing = Dictionary[AccessPath, TypeSymbol]()
-        binderCtx.BeginNarrowingProof(narrowing)
-        binderCtx.NarrowedVariables.Add(narrowing)
+        let narrowing = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol]())
         try {
             for var i = 0; i < bindings.Count; i++ {
                 let binding = bindings[i]
