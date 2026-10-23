@@ -617,10 +617,10 @@ internal class TypeDefEmitter {
             structSym
             .Fields
             .Concat(structSym.StaticFields)
-            .Any((field FieldSymbol) -> NativeProtocolSafety.ContainsProtocol(field.Type)) ||
+            .Any((field FieldSymbol) -> NativeProtocolSafety.ContainsSavedProtocol(field.Type)) ||
             structSym
             .PrimaryConstructorParameters
-            .Any((parameter ParameterSymbol) -> NativeProtocolSafety.ContainsProtocol(parameter.Type)) {
+            .Any((parameter ParameterSymbol) -> NativeProtocolSafety.ContainsSavedProtocol(parameter.Type)) {
             this.EmitNativeProtocolFeature(handle2)
         }
         EmitGenericParamRows(this.emitCtx, handle2, structSym.TypeParameters)

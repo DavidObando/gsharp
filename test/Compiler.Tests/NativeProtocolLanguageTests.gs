@@ -505,6 +505,31 @@ func Bad(value P) string -> "${value}"`, "formatting")
         Assert.True(output.Contains(reason), output)
     }
 
+    @Fact
+    func ImportedNestedNativeStorageCannotLoseItsBoundaryMarker() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let refDirectory = Path.Combine(fixture.Directory, "ref")
+        Directory.CreateDirectory(refDirectory)
+        let reference = Path.Combine(refDirectory, "NestedStorage.dll")
+        let implementation = fixture.Compile(`package NestedStorage
+public protocol P {}
+public class Inner { private var Value P
+init(value P) { Value = value } }
+public class Outer { private var Values []Inner
+init(values []Inner) { Values = values } }
+`, "NestedStorage", executable: false, "/refout:" + reference)
+        for imported in[]string{implementation, reference} {
+            let (code, output) = fixture.TryCompile(
+                "import NestedStorage\nfunc Bad(value Outer) object -> value",
+                "NestedStorageConsumer",
+                executable: false,
+                "/r:" + imported
+            )
+            Assert.NotEqual(0, code)
+            Assert.True(output.Contains("GS0629") && output.Contains("cannot escape"), output)
+        }
+    }
+
     @Theory
     @InlineData("\"name\":\"Next\"", "\"name\":\"Gone\"", "exact native protocol witness target")
     @InlineData("\"authority\":\"public\"", "\"authority\":\"prvate\"", "witness authority")
