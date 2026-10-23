@@ -75,6 +75,7 @@ internal class ConversionClassifier {
     private let getRefKindFromModifier(SyntaxToken?) -> RefKind
     private let refKindToString(RefKind) -> string
     private let bindNativeProtocolConversion(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression
+    private let canConvertNativeProtocol(TypeSymbol, TypeSymbol) -> bool
 
     /// Initializes a new instance of the (cref:ConversionClassifier)
     /// class.
@@ -135,7 +136,8 @@ internal class ConversionClassifier {
         isLvalue(BoundExpression) -> bool,
         getRefKindFromModifier(SyntaxToken?) -> RefKind,
         refKindToString(RefKind) -> string,
-        bindNativeProtocolConversion(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression
+        bindNativeProtocolConversion(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression,
+        canConvertNativeProtocol(TypeSymbol, TypeSymbol) -> bool
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.memberLookup = memberLookup ?? throw ArgumentNullException("memberLookup")
@@ -158,6 +160,18 @@ internal class ConversionClassifier {
         this.getRefKindFromModifier = getRefKindFromModifier ?? throw ArgumentNullException("getRefKindFromModifier")
         this.refKindToString = refKindToString ?? throw ArgumentNullException("refKindToString")
         this.bindNativeProtocolConversion = bindNativeProtocolConversion
+        this.canConvertNativeProtocol = canConvertNativeProtocol
+    }
+
+    internal func ClassifyArgumentConversion(source TypeSymbol, target TypeSymbol) Conversion {
+        if source != TypeSymbol.Null && NativeProtocolOperations.GetProtocol(target) != nil {
+            return if canConvertNativeProtocol(source, target) {
+                Conversion.Implicit
+            } else {
+                Conversion.None
+            }
+        }
+        return Conversion.Classify(source, target)
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics

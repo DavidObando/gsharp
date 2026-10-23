@@ -374,7 +374,7 @@ open class BoundNodeKindExhaustivenessTests {
 
         private prop EmitExpressionSignature string -> Signature(
             "private void EmitExpression(BoundExpression expression)",
-            "private func EmitExpression(expression BoundExpression)"
+            "private func EmitExpressionCore(expression BoundExpression)"
         )
 
         private prop EmitStatementSignature string -> Signature(

@@ -58,6 +58,10 @@ but unknown or invalid evidence diagnoses or fails an explicit runtime boundary.
 Ordinary compatible concrete recovery uses the original payload: class recovery
 retains its object, while struct recovery copies the current saved state.
 Referenced fields still share normally; replacing a copied field stays local.
+An `is var copy` capture retains the validated entry too. Native-discriminator
+`switch` statements/expressions and compound total-capture/concrete-payload
+patterns currently require an explicit `is`/`as` intermediate view; unsupported
+forms diagnose instead of testing the entry's CLR type.
 
 Required `P` storage must be initialized. `P?` permits outer absence, not a
 present nullable payload. This core rejects typed-nil insertion, open/generic

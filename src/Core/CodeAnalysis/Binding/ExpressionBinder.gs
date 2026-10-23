@@ -2157,17 +2157,17 @@ internal partial class ExpressionBinder {
         if NativeProtocolOperations.GetProtocol(expression.Type) is {} sourceProtocol {
             let inspector = NativeProtocolPatternInspector(binderCtx.RootScope, sourceProtocol, syntax.Location)
             inspector.VisitPattern(pattern)
-            if inspector.HasProtocolTests && inspector.HasConcreteTests {
+            if inspector.HasConcreteTests && (inspector.HasProtocolTests || inspector.HasCaptures) {
                 Diagnostics.ReportNativeProtocol(
                     syntax.Location,
-                    "mixed capability/concrete compound patterns require an explicit intermediate view"
+                    "mixed capability/capture and concrete compound patterns require an explicit intermediate view"
                 )
                 return BoundErrorExpression(syntax)
             }
             expression = NativeProtocolOperations.PrepareInput(
                 binderCtx.RootScope,
                 expression,
-                recoverPayload: !inspector.HasProtocolTests
+                recoverPayload: !inspector.HasProtocolTests && !inspector.HasCaptures
             )
         } else {
             let inspector = NativeProtocolPatternInspector(binderCtx.RootScope, nil, syntax.Location)

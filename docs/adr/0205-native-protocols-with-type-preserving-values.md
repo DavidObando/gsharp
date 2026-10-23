@@ -29,6 +29,10 @@ capability tests. Exact nongeneric structs and closed classes are admitted;
 open classes, enums, typed-nil payloads and generic/rich/ref slots diagnose.
 Public contracts conservatively require accessible payload signature types.
 Required initialization uses the existing complete initialization/safety walk.
+Total `is var` captures retain the validated entry. Mixed total captures and
+concrete-payload tests require an intermediate view. Native-discriminator
+switch statements/expressions are not yet admitted: they diagnose explicitly
+rather than testing a carrier or treating unknown coverage as mismatch.
 
 The selected backend differs from the illustrative sealed-per-protocol carrier
 in section 9: `P` is a feature-marked CLR interface reference to an internal
@@ -57,6 +61,9 @@ entry identity. Feature markers are cooperative diagnostics, not CLR security
 against arbitrary foreign IL/reflection. General foreign export, projections,
 typed-nil recovery, equality/hash/object/generic/delegate escapes and Go
 translation remain blocked. Existing nominal interfaces/adapt are unchanged.
+Saved-storage restrictions include inherited state and source generic
+arguments; feature markers cover transitive signature storage and instance
+receivers consistently in implementation and reference assemblies.
 
 `NativeProtocolLanguageTests` exercises real emitted execution, IL verification,
 contract/producer/consumer implementation/ref imports, hostile boundaries,

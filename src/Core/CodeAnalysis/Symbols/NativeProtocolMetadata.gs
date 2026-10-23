@@ -141,6 +141,9 @@ internal shared class NativeProtocolMetadata {
     }
 
     internal func IsProtocol(type TypeSymbol) bool {
+        if type is NullabilityAnnotatedTypeSymbol annotated {
+            return IsProtocol(annotated.BaseType)
+        }
         if type is NullableTypeSymbol || type is PlatformTypeSymbol || type is ByRefTypeSymbol {
             return false
         }
@@ -161,15 +164,7 @@ internal shared class NativeProtocolMetadata {
         member
         .GetCustomAttributesData().Any(
         (attribute CustomAttributeData) ->
-        attribute
-            .AttributeType
-            .FullName == typeof(CompilerFeatureRequiredAttribute).FullName &&
-            attribute
-            .AttributeType
-            .Assembly
-            .FullName == typeof(CompilerFeatureRequiredAttribute)
-            .Assembly
-            .FullName &&
+        IsAttributeType(attribute, typeof(CompilerFeatureRequiredAttribute)) &&
             attribute
             .ConstructorArguments
             .Count == 1 &&
@@ -187,15 +182,7 @@ internal shared class NativeProtocolMetadata {
             .GetCustomAttributesData()
             .Where(
             (attribute CustomAttributeData) ->
-            attribute
-                .AttributeType
-                .FullName == typeof(CompilerFeatureRequiredAttribute).FullName &&
-                attribute
-                .AttributeType
-                .Assembly
-                .FullName == typeof(CompilerFeatureRequiredAttribute)
-                .Assembly
-                .FullName &&
+            IsAttributeType(attribute, typeof(CompilerFeatureRequiredAttribute)) &&
                 attribute
                 .ConstructorArguments
                 .Count == 1 &&
@@ -221,15 +208,7 @@ internal shared class NativeProtocolMetadata {
         var featureCount = 0
         var manifest = default(JsonElement)
         for attribute in assembly.GetCustomAttributesData() {
-            if attribute
-                .AttributeType
-                .FullName != typeof(AssemblyMetadataAttribute).FullName ||
-                attribute
-                .AttributeType
-                .Assembly
-                .FullName != typeof(AssemblyMetadataAttribute)
-                .Assembly
-                .FullName ||
+            if !IsAttributeType(attribute, typeof(AssemblyMetadataAttribute)) ||
                 attribute
                 .ConstructorArguments
                 .Count != 2 ||
@@ -360,4 +339,13 @@ internal shared class NativeProtocolMetadata {
         }
     )
         .Value
+
+    private func IsAttributeType(attribute CustomAttributeData, expected Type) bool ->
+    ClrTypeUtilities.AreSame(attribute.AttributeType, expected) &&
+        attribute
+        .AttributeType
+        .Assembly
+        .FullName == expected
+        .Assembly
+        .FullName
 }

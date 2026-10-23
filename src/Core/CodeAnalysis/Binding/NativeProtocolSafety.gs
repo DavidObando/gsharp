@@ -6,6 +6,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
 import System.Reflection
 
@@ -22,7 +23,14 @@ internal shared class NativeProtocolSafety {
             return ContainsSavedProtocol(nullable.UnderlyingType, seen)
         }
         if type is StructSymbol aggregate {
-            return aggregate.Fields.Any(
+            return aggregate.BaseType is {} parent &&
+                ContainsSavedProtocol(parent, seen) ||
+                aggregate
+                .Fields
+                .Concat(
+                aggregate.Properties.Select((property PropertySymbol) -> property.BackingField).OfType[FieldSymbol]()
+            )
+                .Any(
                 (field FieldSymbol) ->
                 !field.IsStatic && ContainsSavedProtocol(field.Type, seen)
             )
@@ -53,9 +61,7 @@ internal shared class NativeProtocolSafety {
                 (parameter TypeSymbol) -> ContainsSavedProtocol(parameter, seen)
             )
         }
-        if !type.ConstructedTypeArguments.IsDefaultOrEmpty && type.ConstructedTypeArguments.Any(
-            (argument TypeSymbol) -> ContainsSavedProtocol(argument, seen)
-        ) {
+        if TypeArguments(type).Any((argument TypeSymbol) -> ContainsSavedProtocol(argument, seen)) {
             return true
         }
         return type.ClrType is {} imported && NativeProtocolMetadata.HasFeatureMarker(imported)
@@ -92,7 +98,13 @@ internal shared class NativeProtocolSafety {
         if type is TupleTypeSymbol tuple {
             return tuple.ElementTypes.Any(ContainsProtocol)
         }
-        return !type.ConstructedTypeArguments.IsDefaultOrEmpty && type.ConstructedTypeArguments.Any(ContainsProtocol)
+        return TypeArguments(type).Any(ContainsProtocol)
+    }
+
+    private func TypeArguments(type TypeSymbol) ImmutableArray[TypeSymbol] -> switch type {
+        case aggregate is StructSymbol: aggregate.TypeArguments.AddRange(aggregate.EnclosingTypeArguments)
+        case contract is InterfaceSymbol: contract.TypeArguments
+        default: type.ConstructedTypeArguments
     }
 
     internal func ValidateSignature(function FunctionSymbol, diagnostics DiagnosticBag) {
@@ -164,9 +176,7 @@ internal shared class NativeProtocolSafety {
                 type is MapTypeSymbol ||
                 type is ChannelTypeSymbol ||
                 type is SequenceTypeSymbol ||
-                !type
-                .ConstructedTypeArguments
-                .IsDefaultOrEmpty
+                !TypeArguments(type).IsDefaultOrEmpty
         ) &&
             ContainsProtocol(type) {
             diagnostics.ReportNativeProtocol(

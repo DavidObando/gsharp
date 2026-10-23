@@ -308,6 +308,8 @@ internal class AssemblyAttributeEmitter {
                         let target = source!!
                         if target.ReceiverType is {} receiver && !witness.IsExtension {
                             NativeProtocolMetadata.Identity(receiver, assemblyIdentity)
+                        } else if target.StaticOwnerType is {} staticOwner {
+                            NativeProtocolMetadata.Identity(staticOwner, assemblyIdentity)
                         } else {
                             assemblyIdentity + "|" + target.Package!!.Name + ".<Program>"
                         }

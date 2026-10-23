@@ -11,6 +11,250 @@ import System.Text.Json
 import Xunit
 
 class NativeProtocolLanguageTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func AutoPropertyStorageCannotLoseItsNativeBoundary(imported bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package AutoStorage
+public protocol P {}
+public class Holder { public prop Value P? { get; set; } }
+`
+        if !imported {
+            let (code, output) = fixture.TryCompile(
+                source + "\nfunc Bad(value Holder) object -> value",
+                "AutoStorageLocal",
+                executable: false
+            )
+            Assert.NotEqual(0, code)
+            Assert.True(output.Contains("GS0629") && output.Contains("cannot escape"), output)
+            return
+        }
+        let refDirectory = Path.Combine(fixture.Directory, "ref")
+        Directory.CreateDirectory(refDirectory)
+        let reference = Path.Combine(refDirectory, "AutoStorage.dll")
+        let implementation = fixture.Compile(source, "AutoStorage", executable: false, "/refout:" + reference)
+        for image in[]string{implementation, reference} {
+            let (code, output) = fixture.TryCompile(
+                "import AutoStorage\nfunc Bad(value Holder) object -> value",
+                "AutoStorageConsumer",
+                executable: false,
+                "/r:" + image
+            )
+            Assert.NotEqual(0, code)
+            Assert.True(output.Contains("GS0629") && output.Contains("cannot escape"), output)
+        }
+    }
+
+    @Fact
+    func ExplicitExtensionOwnerSurvivesImplementationAndReferenceImports() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let refDirectory = Path.Combine(fixture.Directory, "ref")
+        Directory.CreateDirectory(refDirectory)
+        let reference = Path.Combine(refDirectory, "OwnedWitness.dll")
+        let implementation = fixture.Compile(`package OwnedWitness
+public protocol P { func Read() int32; }
+public struct Value { var Number int32 }
+public shared class Witnesses {}
+@ExtensionOwner(typeof(Witnesses))
+public func (value Value) Read() int32 -> value.Number + 1
+public func Make() P -> Value{Number: 40}
+`, "OwnedWitness", executable: false, "/refout:" + reference)
+        for image in[]string{implementation, reference} {
+            let caller = fixture.Compile(`import System
+import OwnedWitness
+Console.WriteLine(Make().Read())
+`, "OwnedWitnessCaller" + (image == reference).ToString(), executable: true, "/r:" + image)
+            IlVerifier.Verify(caller, []string{implementation})
+            Assert.Equal("41\n", fixture.Run(caller))
+        }
+    }
+
+    @Fact
+    func ImportedByRefExtensionWitnessCannotBecomeKnownMismatch() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = fixture.CompileCSharp(`namespace RefWitness {
+public struct Counter { public int Step; }
+public static class Extensions {
+public static int Next(this ref Counter value) => ++value.Step;
+}
+}`, "RefWitness")
+        let (code, output) = fixture.TryCompile(`import RefWitness
+protocol NextValue { func Next() int32; }
+let matched = Counter{} is NextValue
+`, "RefWitnessConsumer", executable: true, "/r:" + source)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("unsupported witness"), output)
+    }
+
+    @Fact
+    func OverloadApplicabilityUsesExactConformanceIncludingExtensions() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`import System
+protocol Readable { func Read() int32; }
+protocol Writable { func Write() int32; }
+struct Reader : Readable { func Read() int32 -> 17 }
+struct Extended {}
+func (value Extended) Read() int32 -> 23
+func Pick(value Readable) int32 -> value.Read()
+func Pick(value Writable) int32 -> value.Write()
+func Fallback(value Writable) int32 -> 99
+func Fallback(value object) int32 -> 31
+class Sink { var Result int32
+init(value Readable) { Result = value.Read() }
+init(value Writable) { Result = value.Write() } }
+Console.WriteLine(Pick(Reader{}))
+Console.WriteLine(Pick(Extended{}))
+Console.WriteLine(Fallback(Reader{}))
+Console.WriteLine(Sink(Extended{}).Result)
+`, "protocol-overloads", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("17\n23\n31\n23\n", fixture.Run(dll))
+    }
+
+    @Fact
+    func TotalVarCaptureRetainsValidatedMutableEntry() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`import System
+protocol P { func Next() int32; }
+struct Counter { var Step int32
+func Next() int32 {
+Step += 1
+return Step
+} }
+let p P = Counter{Step: 10}
+if p is var q { Console.WriteLine(q.Next()) }
+Console.WriteLine(p.Next())
+`, "protocol-var-capture", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("11\n12\n", fixture.Run(dll))
+    }
+
+    @Fact
+    func MixedTotalCaptureAndConcreteRecoveryRequireAnIntermediateView() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`protocol P {}
+struct Counter {}
+func Bad(value P) bool -> value is var captured and Counter concrete
+`, "protocol-mixed-capture", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("capture"), output)
+    }
+
+    @Theory
+    @InlineData("switch p { case Counter c { } default { } }")
+    @InlineData("let result = switch p { case Counter c: 1\n default: 0 }")
+    @InlineData("switch p { case Future f { } default { } }")
+    @InlineData("let result = switch p { case Future f: 1\n default: 0 }")
+    func NativeSwitchPatternsRequireAnExplicitView(statement string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let producer = fixture.Compile(`package OldProducer
+public protocol P {}
+public struct Counter {}
+public func Make() P -> Counter{}
+`, "OldProducer", executable: false)
+        let (code, output) = fixture.TryCompile(
+            "import OldProducer\nprotocol Future {}\nlet p = Make()\n" + statement,
+            "protocol-switch-boundary",
+            executable: true,
+            "/r:" + producer
+        )
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("switch"), output)
+    }
+
+    @Theory
+    @InlineData("func Bad(value Derived) object -> value")
+    @InlineData(`func Bad(value Derived) string -> "${value}"`)
+    @InlineData("func Identity[T](value T) T -> value\nfunc Bad(value Derived) Derived -> Identity(value)")
+    @InlineData("interface I {}\nfunc Bad(value Derived) I -> adapt[I](value)")
+    func InheritedSavedStorageCannotEscape(statement string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`protocol P {}
+open class Base { private var Saved P?
+init() {} }
+class Derived : Base {}
+` + statement, "protocol-inherited-storage", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629"), output)
+    }
+
+    @Fact
+    func ImportedInheritedStorageCannotLoseItsBoundaryMarker() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let refDirectory = Path.Combine(fixture.Directory, "ref")
+        Directory.CreateDirectory(refDirectory)
+        let reference = Path.Combine(refDirectory, "InheritedStorage.dll")
+        let implementation = fixture.Compile(`package InheritedStorage
+public protocol P { func Next() int32; }
+public struct Counter { var Step int32
+func Next() int32 {
+Step += 1
+return Step
+} }
+public open class Base { private var Saved P
+init(value P) { Saved = value }
+public func Read() int32 -> Saved.Next() }
+public class Derived : Base { init(value P) : base(value) {} }
+public func Make() Derived -> Derived(Counter{Step: 10})
+`, "InheritedStorage", executable: false, "/refout:" + reference)
+        for imported in[]string{implementation, reference} {
+            let (code, output) = fixture.TryCompile(
+                "import InheritedStorage\nfunc Bad(value Derived) object -> value",
+                "InheritedEscape",
+                executable: false,
+                "/r:" + imported
+            )
+            Assert.NotEqual(0, code)
+            Assert.True(output.Contains("GS0629") && output.Contains("cannot escape"), output)
+        }
+    }
+
+    @Fact
+    func ImportedSavedStorageInstanceContractsAgreeAcrossReferenceImages() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let refDirectory = Path.Combine(fixture.Directory, "ref")
+        Directory.CreateDirectory(refDirectory)
+        let reference = Path.Combine(refDirectory, "SavedMethods.dll")
+        let implementation = fixture.Compile(`package SavedMethods
+public protocol P { func Next() int32; }
+public struct Counter { var Step int32
+func Next() int32 {
+Step += 1
+return Step
+} }
+public class Holder { private var Saved P
+init(value P) { Saved = value }
+public func Read() int32 -> Saved.Next() }
+public func Make() Holder -> Holder(Counter{Step: 10})
+`, "SavedMethods", executable: false, "/refout:" + reference)
+        for imported in[]string{implementation, reference} {
+            let caller = fixture.Compile(`import System
+import SavedMethods
+let value = Make()
+Console.WriteLine(value.Read())
+Console.WriteLine(value.Read())
+`, "SavedCaller" + (imported == reference).ToString(), executable: true, "/r:" + imported)
+            IlVerifier.Verify(caller, []string{implementation})
+            Assert.Equal("11\n12\n", fixture.Run(caller))
+        }
+    }
+
+    @Fact
+    func SourceGenericNativeContainerCannotBoxItsHiddenPayload() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`protocol P {}
+struct Value {}
+class Box[T] { var Value T
+func Leak() object -> Value }
+let p P = Value{}
+let box = Box[P]{Value: p}
+let escaped = box.Leak()
+`, "protocol-source-generic", executable: true)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("container"), output)
+    }
+
     @Fact
     func OrdinaryBclPayloadsAndExactWitnessesKeepSymbolicIdentityThroughReferenceImports() {
         using let fixture = NativeSliceLanguageTests.Fixture()

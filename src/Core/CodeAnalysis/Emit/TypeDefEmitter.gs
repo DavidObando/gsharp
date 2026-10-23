@@ -613,7 +613,7 @@ internal class TypeDefEmitter {
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow)
         )
         this.cache.StructTypeDefs[structSym] = handle2
-        if structSym.IsNativeProtocolSupport ||
+        if structSym.IsNativeProtocolSupport || NativeProtocolSafety.ContainsSavedProtocol(structSym) ||
             structSym
             .Fields
             .Concat(structSym.StaticFields)

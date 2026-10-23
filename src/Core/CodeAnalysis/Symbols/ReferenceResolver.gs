@@ -1257,11 +1257,18 @@ class ReferenceResolver : IDisposable {
             if AssemblyImages.TryGetValue(assembly, out var image) {
                 return MemoryStream(image, writable: false)
             }
-            return if TryGetAssemblyPath(assembly, out var path) {
-                File.OpenRead(path)
-            } else {
-                nil
+            if TryGetAssemblyPath(assembly, out var path) {
+                // Runtime assemblies can outlive deleted fixture files. No image
+                // means callers must inspect reflection metadata, not assume absence.
+                try {
+                    return File.OpenRead(path)
+                } catch (error FileNotFoundException) {
+                    return nil
+                } catch (error DirectoryNotFoundException) {
+                    return nil
+                }
             }
+            return nil
         }
 
         /// Gets a resolver that searches the runtime's currently loaded

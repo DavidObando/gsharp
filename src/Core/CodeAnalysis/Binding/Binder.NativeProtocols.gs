@@ -13,6 +13,54 @@ import System.Linq
 import System.Reflection
 
 partial class Binder {
+    private func IsSupportedNativeProtocolPayload(concrete TypeSymbol) bool ->
+    concrete is not NullableTypeSymbol &&
+        concrete is not PlatformTypeSymbol &&
+        concrete is not ByRefTypeSymbol &&
+        !TypeSymbol.IsByRefLike(concrete) &&
+        (
+        if concrete is StructSymbol owned {
+            !owned.IsGenericDefinition &&
+                owned
+                .TypeArguments
+                .IsDefaultOrEmpty &&
+                owned
+                .EnclosingTypeArguments
+                .IsDefaultOrEmpty &&
+                !owned.IsRefStruct &&
+                (!owned.IsClass || !owned.IsOpen && !owned.IsSealedHierarchy)
+        } else {
+            concrete.ClrType is {} imported &&
+                !imported.IsGenericType &&
+                !imported.IsEnum &&
+                !imported.IsInterface &&
+                !imported.IsByRefLike &&
+                (imported.IsValueType || imported.IsSealed)
+        }
+    )
+
+    private func CanConvertNativeProtocol(source TypeSymbol, target TypeSymbol) bool {
+        let protocol = NativeProtocolOperations.GetProtocol(target)!!
+        if NativeProtocolOperations.GetProtocol(source) != nil {
+            return source is not NullableTypeSymbol || target is NullableTypeSymbol
+        }
+        if !IsSupportedNativeProtocolPayload(source) {
+            return false
+        }
+        let registry = $scope.GetStructuralAdapterRegistry()
+        let imported = registry.ImportedProtocolEntries.FirstOrDefault(
+            (entry ImportedNativeProtocolEntry) -> entry.SourceType == source
+        )
+        if imported != nil {
+            return imported.Decisions.TryGetValue(protocol, out var decision) && decision.Positive
+        }
+        let plan = registry.ProtocolEntries.FirstOrDefault(
+            (entry NativeProtocolEntryPlan) -> entry.SourceType == source
+        ) ??
+            CreateNativeProtocolEntry(nil, source, protocol, default(TextLocation))
+        return plan != nil && plan.Protocols.Contains(protocol)
+    }
+
     private func CheckExplicitNativeProtocolConformance(types ImmutableArray[StructSymbol]) {
         for type in types.Where((item StructSymbol) -> !item.NativeProtocols.IsDefaultOrEmpty) {
             let syntax = type.Declaration
@@ -99,25 +147,7 @@ partial class Binder {
             return BoundErrorExpression(source.Syntax)
         }
         let concrete = source.Type
-        let supportedSource = if concrete is StructSymbol owned {
-            !owned.IsGenericDefinition &&
-                owned
-                .TypeArguments
-                .IsDefaultOrEmpty &&
-                owned
-                .EnclosingTypeArguments
-                .IsDefaultOrEmpty &&
-                !owned.IsRefStruct &&
-                (!owned.IsClass || !owned.IsOpen && !owned.IsSealedHierarchy)
-        } else {
-            concrete.ClrType is {} imported &&
-                !imported.IsGenericType &&
-                !imported.IsEnum &&
-                !imported.IsInterface &&
-                !imported.IsByRefLike &&
-                (imported.IsValueType || imported.IsSealed)
-        }
-        if !supportedSource {
+        if !IsSupportedNativeProtocolPayload(concrete) {
             Diagnostics.ReportNativeProtocol(
                 location,
                 "insertion requires an exact nongeneric non-null class or heap-storable struct"
@@ -324,7 +354,7 @@ partial class Binder {
                 )
                     .Distinct()
                     .ToImmutableArray()
-                let importedExtensions = memberLookup
+                let importedExtensionCandidates = memberLookup
                     .CollectImportedExtensionMethods(slot.Name)
                     .Where(
                     (method MethodInfo) -> method.IsPublic &&
@@ -332,11 +362,12 @@ partial class Binder {
                         method
                         .DeclaringType
                         ?.IsVisible == true &&
-                        ImportedMethodMetadataSupported(method) &&
-                        !method.IsGenericMethod &&
                         method
                         .GetParameters().Length > 0
                 )
+                    .ToArray()
+                let importedExtensions = importedExtensionCandidates
+                    .Where((method MethodInfo) -> ImportedMethodMetadataSupported(method) && !method.IsGenericMethod)
                     .Select(
                     (method MethodInfo) -> (
                         Method: method,
@@ -416,6 +447,28 @@ partial class Binder {
                                 method
                                 .GetParameters().Any((parameter ParameterInfo) -> parameter.ParameterType.IsByRef)
                         )
+                    ) ||
+                        concrete.ClrType is {} importedReceiver &&
+                        importedExtensionCandidates
+                        .Any(
+                        (method MethodInfo) -> {
+                            let receiver = method.GetParameters()[0].ParameterType
+                            let shape = if receiver.IsByRef {
+                                receiver.GetElementType()
+                            } else {
+                                receiver
+                            }
+                            return shape != nil && ClrTypeUtilities.AreSame(shape, importedReceiver) &&
+                                (
+                                !ImportedMethodMetadataSupported(method) ||
+                                    method.IsGenericMethod ||
+                                    method
+                                    .ReturnType
+                                    .IsByRef ||
+                                    method
+                                    .GetParameters().Any((parameter ParameterInfo) -> parameter.ParameterType.IsByRef)
+                            )
+                        }
                     )
                     if unsupported {
                         Diagnostics.ReportNativeProtocol(

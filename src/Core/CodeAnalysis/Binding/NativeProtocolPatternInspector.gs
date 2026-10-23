@@ -19,8 +19,19 @@ internal class NativeProtocolPatternInspector(
         get;
         private set;
     }
+    internal prop HasCaptures bool {
+        get;
+        private set;
+    }
     private let targets HashSet[TypeSymbol] = HashSet[TypeSymbol]()
     internal prop Targets HashSet[TypeSymbol] -> targets
+
+    override func VisitPattern(node BoundPattern?) {
+        if node is BoundDiscardPattern{Variable: not nil} {
+            HasCaptures = true
+        }
+        base.VisitPattern(node)
+    }
 
     protected override func VisitTypePattern(node BoundTypePattern) {
         if NativeProtocolOperations.GetProtocol(node.TargetType) is {} target {

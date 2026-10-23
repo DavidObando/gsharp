@@ -1036,7 +1036,7 @@ internal partial class OverloadResolver {
             // convertibility check below already reports it as non-applicable
             // — consistently, in every BindConversion position, not just this
             // multi-candidate positional filter.
-            let conversion = Conversion.Classify(argType, paramType)
+            let conversion = conversions.ClassifyArgumentConversion(argType, paramType)
             if conversion.Exists && (conversion.IsImplicit || conversion.IsIdentity) {
                 continue
             }
@@ -1079,7 +1079,7 @@ internal partial class OverloadResolver {
                     if argType == nil {
                         continue
                     }
-                    let conversion = Conversion.Classify(argType, elementType)
+                    let conversion = conversions.ClassifyArgumentConversion(argType, elementType)
                     if conversion.Exists && (conversion.IsImplicit || conversion.IsIdentity) {
                         continue
                     }

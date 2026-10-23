@@ -178,7 +178,8 @@ partial class Binder {
             getRefKindFromModifier: GetRefKindFromModifier,
             refKindToString: RefKindToString,
             bindNativeProtocolConversion: (location TextLocation, source BoundExpression, target TypeSymbol) ->
-            BindNativeProtocolConversion(location, source, target)
+            BindNativeProtocolConversion(location, source, target),
+            canConvertNativeProtocol: CanConvertNativeProtocol
         )
         overloads = OverloadResolver(
             binderCtx,

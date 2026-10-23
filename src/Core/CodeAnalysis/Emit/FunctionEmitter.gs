@@ -336,9 +336,12 @@ internal class FunctionEmitter {
         this.EmitGenericParametersAndConstraints(function, handle)
         this.RecordMethodDebugInfo(function, handle, bodyEmission)
         this.EmitFunctionAttributes(function, handle, parameterMetadata)
-        if NativeProtocolSafety.ContainsProtocol(function.Type) || function.Parameters.Any(
-            (parameter ParameterSymbol) -> NativeProtocolSafety.ContainsProtocol(parameter.Type)
-        ) {
+        if NativeProtocolSafety.ContainsSavedProtocol(function.Type) || function.Parameters.Any(
+            (parameter ParameterSymbol) -> NativeProtocolSafety.ContainsSavedProtocol(parameter.Type)
+        ) ||
+            function.ReceiverType != nil &&
+            NativeProtocolSafety
+            .ContainsSavedProtocol(function.ReceiverType) {
             this
                 .outer
                 .customAttrEncoder
