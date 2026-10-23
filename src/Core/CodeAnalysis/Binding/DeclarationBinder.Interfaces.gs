@@ -122,6 +122,10 @@ internal partial class DeclarationBinder {
             if syntax.IsProtocol {
                 for method in interfaceSymbol.Methods {
                     NativeProtocolSafety.ValidateSignature(method, Diagnostics)
+                    NativeProtocolSafety.ValidateProtocolSlotType(method.Type, syntax.Location, Diagnostics)
+                    for parameter in method.Parameters {
+                        NativeProtocolSafety.ValidateProtocolSlotType(parameter.Type, syntax.Location, Diagnostics)
+                    }
                 }
             }
         } finally {

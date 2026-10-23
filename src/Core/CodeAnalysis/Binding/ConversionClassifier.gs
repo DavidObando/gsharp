@@ -457,10 +457,10 @@ internal class ConversionClassifier {
         } else {
             methodGroupReceiver?.Type
         }
-        if methodGroupReceiverType != nil && NativeProtocolOperations.GetProtocol(methodGroupReceiverType) != nil {
+        if methodGroupReceiverType != nil && NativeProtocolSafety.ContainsSavedProtocol(methodGroupReceiverType) {
             Diagnostics.ReportNativeProtocol(
                 diagnosticLocation,
-                "native protocol method-group export requires a separately admitted delegate contract"
+                "native-bearing method-group export requires a separately admitted delegate contract"
             )
             return BoundErrorExpression(expression.Syntax)
         }

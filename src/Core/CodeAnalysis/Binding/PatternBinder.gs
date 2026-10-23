@@ -544,6 +544,9 @@ internal class PatternBinder {
             default(SyntaxToken?)
         }
         let hasBinding = bindingIdentifier != nil
+        if hasBinding && NativeProtocolOperations.GetProtocol(discriminantType) == nil {
+            NativeProtocolSafety.ValidateStorageErasure(discriminantType, targetType, syntax.Location, Diagnostics)
+        }
         let variableName = bindingIdentifier?.Text ?? "<type-pattern-value>"
         let isExpressionBinding = hasBinding &&
             (

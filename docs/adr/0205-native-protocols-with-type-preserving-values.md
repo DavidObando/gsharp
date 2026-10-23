@@ -80,6 +80,17 @@ Native-bearing field access requires the owning type's validated storage contrac
 Native-bearing imported constructors/base initializers are explicitly unproved
 boundaries. Slot identities use structural type shapes and separate nullability
 flags, rather than a symbolic type's temporary CLR representation.
+Fixed-array slot positions (including nested positions) diagnose until their
+length has an admitted implementation/reference contract; vector slots remain
+supported. Public witness targets require effectively accessible owners;
+internal-only conformance can retain an internal owner.
+One dependency traversal handles annotated/platform array positions, named and
+anonymous delegate signatures, and saved state. Native-bearing delegates and
+generic containers remain gated transitively. Storage-erasing safe casts and
+binding patterns, equality/hash method groups and lifted/imported equality are
+checked too. Method-group/function captures carrying native state remain gated:
+their ordinary delegate `Target` would otherwise erase that state. Nonbinding
+tests, outer nil checks and ordinary checked method calls retain their behavior.
 
 `NativeProtocolLanguageTests` exercises real emitted execution, IL verification,
 contract/producer/consumer implementation/ref imports, hostile boundaries,

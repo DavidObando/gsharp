@@ -11,117 +11,115 @@ import System.Linq
 import System.Reflection
 
 internal shared class NativeProtocolSafety {
-    internal func ContainsSavedProtocol(type TypeSymbol, visited HashSet[TypeSymbol]? = nil) bool {
-        if ContainsProtocol(type) {
-            return true
-        }
-        let seen = visited ?? HashSet[TypeSymbol]()
-        if type is NullableTypeSymbol nullable {
-            return ContainsSavedProtocol(nullable.UnderlyingType, seen)
-        }
-        if type is StructSymbol aggregate {
-            // Inspect argument dependencies before cutting the finite definition graph.
-            // Node[T] -> Node[[]T] must not create an unbounded constructed-type walk.
-            if TypeArguments(type).Any((argument TypeSymbol) -> ContainsSavedProtocol(argument, seen)) {
-                return true
-            }
-            if !seen.Add(aggregate.Definition) {
-                return false
-            }
-            return aggregate.BaseType is {} parent &&
-                ContainsSavedProtocol(parent, seen) ||
-                aggregate
-                .PrimaryConstructorParameters
-                .Any((parameter ParameterSymbol) -> ContainsSavedProtocol(parameter.Type, seen)) ||
-                aggregate
-                .Fields
-                .Concat(aggregate.StaticFields)
-                .Concat(
-                aggregate
-                    .Properties
-                    .Concat(aggregate.StaticProperties)
-                    .Select((property PropertySymbol) -> property.BackingField)
-                    .OfType[FieldSymbol]()
-            )
-                .Any(
-                (field FieldSymbol) ->
-                ContainsSavedProtocol(field.Type, seen)
-            ) ||
-                aggregate.ClrType is {} importedAggregate &&
-                NativeProtocolMetadata.HasFeatureMarker(importedAggregate)
-        }
-        if !seen.Add(type) {
-            return false
-        }
-        if type is ArrayTypeSymbol array {
-            return ContainsSavedProtocol(array.ElementType, seen)
-        }
-        if type is SliceTypeSymbol slice {
-            return ContainsSavedProtocol(slice.ElementType, seen)
-        }
-        if type is RectangularArrayTypeSymbol rectangular {
-            return ContainsSavedProtocol(rectangular.ElementType, seen)
-        }
-        if type is ChannelTypeSymbol channel {
-            return ContainsSavedProtocol(channel.ElementType, seen)
-        }
-        if type is SequenceTypeSymbol sequenceType {
-            return ContainsSavedProtocol(sequenceType.ElementType, seen)
-        }
-        if type is MapTypeSymbol mapType {
-            return ContainsSavedProtocol(mapType.KeyType, seen) || ContainsSavedProtocol(mapType.ValueType, seen)
-        }
-        if type is TupleTypeSymbol tuple {
-            return tuple.ElementTypes.Any((element TypeSymbol) -> ContainsSavedProtocol(element, seen))
-        }
-        if type is FunctionTypeSymbol function {
-            return ContainsSavedProtocol(function.ReturnType, seen) || function.ParameterTypes.Any(
-                (parameter TypeSymbol) -> ContainsSavedProtocol(parameter, seen)
-            )
-        }
-        if TypeArguments(type).Any((argument TypeSymbol) -> ContainsSavedProtocol(argument, seen)) {
-            return true
-        }
-        return type.ClrType is {} imported && NativeProtocolMetadata.HasFeatureMarker(imported)
-    }
+    internal func ContainsSavedProtocol(type TypeSymbol) bool ->
+    ContainsDependency(type, true, HashSet[TypeSymbol](), HashSet[System.Type]())
 
-    internal func ContainsProtocol(type TypeSymbol) bool {
+    internal func ContainsProtocol(type TypeSymbol) bool ->
+    ContainsDependency(type, false, HashSet[TypeSymbol](), HashSet[System.Type]())
+
+    private func ContainsDependency(
+        type TypeSymbol,
+        includeStorage bool,
+        seen HashSet[TypeSymbol],
+        importedDelegates HashSet[System.Type]
+    ) bool {
         if NativeProtocolOperations.GetProtocol(type) != nil {
             return true
         }
         if type is NullableTypeSymbol nullable {
-            return ContainsProtocol(nullable.UnderlyingType)
+            return ContainsDependency(nullable.UnderlyingType, includeStorage, seen, importedDelegates)
         }
-        if type is FunctionTypeSymbol function {
-            return ContainsProtocol(function.ReturnType) || function.ParameterTypes.Any(ContainsProtocol)
+        if type is PlatformTypeSymbol platform {
+            return ContainsDependency(platform.UnderlyingType, includeStorage, seen, importedDelegates)
         }
-        if type is ArrayTypeSymbol array {
-            return ContainsProtocol(array.ElementType)
+        if type is ByRefTypeSymbol byRef {
+            return ContainsDependency(byRef.PointeeType, includeStorage, seen, importedDelegates)
         }
-        if type is SliceTypeSymbol slice {
-            return ContainsProtocol(slice.ElementType)
+        if type is StructSymbol || type is DelegateTypeSymbol {
+            // Arguments precede the finite definition cut; signatures/storage follow it.
+            if TypeArguments(type).Any(
+                (argument TypeSymbol) -> ContainsDependency(argument, includeStorage, seen, importedDelegates)
+            ) {
+                return true
+            }
+        } else if !seen.Add(
+            if type is NullabilityAnnotatedTypeSymbol annotated {
+                annotated.BaseType
+            } else {
+                type
+            }
+        ) {
+            return false
         }
-        if type is RectangularArrayTypeSymbol rectangular {
-            return ContainsProtocol(rectangular.ElementType)
+        if type is StructSymbol aggregate {
+            if !seen.Add(aggregate.Definition) {
+                return false
+            }
+            return includeStorage &&
+                (
+                aggregate.BaseType is {} parent &&
+                    ContainsDependency(parent, true, seen, importedDelegates) ||
+                    aggregate
+                    .PrimaryConstructorParameters
+                    .Any(
+                    (parameter ParameterSymbol) -> ContainsDependency(parameter.Type, true, seen, importedDelegates)
+                ) ||
+                    aggregate
+                    .Fields
+                    .Concat(aggregate.StaticFields)
+                    .Concat(
+                    aggregate
+                        .Properties
+                        .Concat(aggregate.StaticProperties)
+                        .Select((property PropertySymbol) -> property.BackingField)
+                        .OfType[FieldSymbol]()
+                )
+                    .Any((field FieldSymbol) -> ContainsDependency(field.Type, true, seen, importedDelegates)) ||
+                    aggregate.ClrType is {} importedAggregate &&
+                    NativeProtocolMetadata.HasFeatureMarker(importedAggregate)
+            )
         }
-        if type is ChannelTypeSymbol channel {
-            return ContainsProtocol(channel.ElementType)
+        if type is DelegateTypeSymbol named {
+            if !seen.Add(named.Definition ?? named) {
+                return false
+            }
+            return ContainsDependency(named.ReturnType, includeStorage, seen, importedDelegates) ||
+                named
+                .Parameters
+                .Any(
+                (parameter ParameterSymbol) -> ContainsDependency(
+                    parameter.Type,
+                    includeStorage,
+                    seen,
+                    importedDelegates
+                )
+            )
         }
-        if type is SequenceTypeSymbol sequenceType {
-            return ContainsProtocol(sequenceType.ElementType)
+        if type.GetElementPositions().Any(
+            (position TypeSymbol) -> ContainsDependency(position, includeStorage, seen, importedDelegates)
+        ) {
+            return true
         }
-        if type is MapTypeSymbol mapType {
-            return ContainsProtocol(mapType.KeyType) || ContainsProtocol(mapType.ValueType)
+        if type.ClrType is {} imported && ClrTypeUtilities.IsDelegateType(imported) && importedDelegates.Add(
+            if imported.IsGenericType {
+                imported.GetGenericTypeDefinition()
+            } else {
+                imported
+            }
+        ) &&
+            MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var signature) &&
+            signature is {} targetSignature {
+            if ContainsDependency(targetSignature, includeStorage, seen, importedDelegates) {
+                return true
+            }
         }
-        if type is TupleTypeSymbol tuple {
-            return tuple.ElementTypes.Any(ContainsProtocol)
-        }
-        return TypeArguments(type).Any(ContainsProtocol)
+        return includeStorage && type.ClrType is {} marked && NativeProtocolMetadata.HasFeatureMarker(marked)
     }
 
     private func TypeArguments(type TypeSymbol) ImmutableArray[TypeSymbol] -> switch type {
         case aggregate is StructSymbol: aggregate.TypeArguments.AddRange(aggregate.EnclosingTypeArguments)
         case contract is InterfaceSymbol: contract.TypeArguments
+        case named is DelegateTypeSymbol: named.TypeArguments
         default: type.ConstructedTypeArguments
     }
 
@@ -165,16 +163,51 @@ internal shared class NativeProtocolSafety {
         }
     }
 
-    internal func ValidatePublicContractType(type TypeSymbol, location TextLocation, diagnostics DiagnosticBag) {
+    internal func ValidatePublicContractType(
+        type TypeSymbol,
+        location TextLocation,
+        diagnostics DiagnosticBag,
+        visited HashSet[TypeSymbol]? = nil
+    ) {
+        let seen = visited ?? HashSet[TypeSymbol]()
+        if type is DelegateTypeSymbol delegateType {
+            for argument in delegateType.TypeArguments {
+                ValidatePublicContractType(argument, location, diagnostics, seen)
+            }
+        }
+        if !seen.Add(
+            if type is DelegateTypeSymbol namedType {
+                namedType.Definition ?? namedType
+            } else {
+                type
+            }
+        ) {
+            return
+        }
         if NativeProtocolOperations.GetProtocol(type) is {} protocol && !NativeProtocolMetadata.IsPublic(protocol) {
             diagnostics.ReportNativeProtocol(location, "public native signatures require accessible contract types")
         }
+        if type is DelegateTypeSymbol named {
+            ValidatePublicContractType(named.ReturnType, location, diagnostics, seen)
+            for parameter in named.Parameters {
+                ValidatePublicContractType(parameter.Type, location, diagnostics, seen)
+            }
+        }
         for position in type.GetElementPositions() {
-            ValidatePublicContractType(position, location, diagnostics)
+            ValidatePublicContractType(position, location, diagnostics, seen)
         }
     }
 
-    internal func ValidateStorageType(type TypeSymbol, location TextLocation, diagnostics DiagnosticBag) {
+    internal func ValidateStorageType(
+        type TypeSymbol,
+        location TextLocation,
+        diagnostics DiagnosticBag,
+        visited HashSet[TypeSymbol]? = nil
+    ) {
+        let seen = visited ?? HashSet[TypeSymbol]()
+        if !seen.Add(type) || !ContainsSavedProtocol(type) {
+            return
+        }
         if type is PlatformTypeSymbol && NativeProtocolOperations.GetProtocol(type) != nil {
             diagnostics.ReportNativeProtocol(
                 location,
@@ -192,18 +225,67 @@ internal shared class NativeProtocolSafety {
                 "missing or invalid imported native protocol declaration evidence"
             )
         }
+        let shape = StorageShape(type)
+        let tuple = shape is TupleTypeSymbol ||
+            shape.ClrType is {IsGenericType: true} generic &&
+            generic
+            .GetGenericTypeDefinition().FullName is {} name && name.StartsWith(
+            "System.ValueTuple`",
+            System.StringComparison.Ordinal
+        )
         if (
-            type is FunctionTypeSymbol ||
-                type is MapTypeSymbol ||
-                type is ChannelTypeSymbol ||
-                type is SequenceTypeSymbol ||
-                !TypeArguments(type).IsDefaultOrEmpty
-        ) &&
-            ContainsProtocol(type) {
+            shape is FunctionTypeSymbol ||
+                shape is DelegateTypeSymbol ||
+                shape.ClrType is {} clr &&
+                ClrTypeUtilities.IsDelegateType(clr) ||
+                shape is MapTypeSymbol ||
+                shape is ChannelTypeSymbol ||
+                shape is SequenceTypeSymbol ||
+                shape is AsyncSequenceTypeSymbol ||
+                !tuple &&
+                !TypeArguments(shape).IsDefaultOrEmpty
+        ) {
             diagnostics.ReportNativeProtocol(
                 location,
                 "native protocol delegate/generic container contracts are not admitted by this core"
             )
+            return
+        }
+        for position in type.GetElementPositions() {
+            ValidateStorageType(position, location, diagnostics, seen)
+        }
+    }
+
+    private func StorageShape(type TypeSymbol) TypeSymbol -> switch type {
+        case nullable is NullableTypeSymbol: StorageShape(nullable.UnderlyingType)
+        case platform is PlatformTypeSymbol: StorageShape(platform.UnderlyingType)
+        case annotated is NullabilityAnnotatedTypeSymbol: StorageShape(annotated.BaseType)
+        default: type
+    }
+
+    internal func ValidateStorageErasure(
+        source TypeSymbol,
+        target TypeSymbol,
+        location TextLocation,
+        diagnostics DiagnosticBag
+    ) {
+        if ContainsSavedProtocol(source) && !ContainsSavedProtocol(target) {
+            diagnostics.ReportNativeProtocol(
+                location,
+                "native protocol values cannot escape through object, nominal or generic conversions"
+            )
+        }
+    }
+
+    internal func ValidateProtocolSlotType(type TypeSymbol, location TextLocation, diagnostics DiagnosticBag) {
+        if type is ArrayTypeSymbol {
+            diagnostics.ReportNativeProtocol(
+                location,
+                "fixed-array native protocol slots require a separately admitted reference contract"
+            )
+        }
+        for position in type.GetElementPositions() {
+            ValidateProtocolSlotType(position, location, diagnostics)
         }
     }
 
@@ -211,6 +293,14 @@ internal shared class NativeProtocolSafety {
         let location = (anchor ?? node.Syntax)?.Location ?? default(TextLocation)
         ValidateStorageType(node.Type, location, diagnostics)
         switch node {
+            case literal is BoundFunctionLiteralExpression when literal.CapturedVariables.Any(
+                (variable VariableSymbol) -> ContainsSavedProtocol(variable.Type)
+            ) {
+                diagnostics.ReportNativeProtocol(
+                    location,
+                    "native-bearing function capture requires a separately admitted delegate contract"
+                )
+            }
             case interpolation is BoundInterpolatedStringExpression when interpolation.Parts.Any(
                 (part BoundInterpolatedStringPart) -> part.Value != nil && ContainsSavedProtocol(part.Value.Type)
             ) {
@@ -229,12 +319,21 @@ internal shared class NativeProtocolSafety {
                     "native protocol equality/hash is not admitted; only outer presence checks are supported"
                 )
             }
-            case conversion is BoundConversionExpression when
-            ContainsSavedProtocol(conversion.Expression.Type) && !ContainsSavedProtocol(conversion.Type) {
+            case binary is BoundClrBinaryOperatorExpression when
+            (binary.OperatorKind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken) &&
+                (ContainsSavedProtocol(binary.Left.Type) || ContainsSavedProtocol(binary.Right.Type)) &&
+                !IsNil(binary.Left) &&
+                !IsNil(binary.Right) {
                 diagnostics.ReportNativeProtocol(
                     location,
-                    "native protocol values cannot escape through object, nominal or generic conversions"
+                    "native protocol equality/hash is not admitted; only outer presence checks are supported"
                 )
+            }
+            case conversion is BoundConversionExpression {
+                ValidateStorageErasure(conversion.Expression.Type, conversion.Type, location, diagnostics)
+            }
+            case safeCast is BoundAsExpression {
+                ValidateStorageErasure(safeCast.Expression.Type, safeCast.Type, location, diagnostics)
             }
             case call is BoundImportedInstanceCallExpression {
                 if ContainsSavedProtocol(call.Receiver.Type) && IsEqualityMember(call.Method.Name) {

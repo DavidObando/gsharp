@@ -8401,6 +8401,13 @@ partial class Binder {
             // is about the receiver's declaration rather than the call.
             RendezvousBatchAnalyzer.Run(functionBodies, diagnostics)
             let managedReferenceDiagnostics = DiagnosticBag()
+            for named in globalScope.Delegates {
+                let location = named.Declaration?.Location ?? default(TextLocation)
+                NativeProtocolSafety.ValidateStorageType(named, location, managedReferenceDiagnostics)
+                if named.Accessibility == Accessibility.Public {
+                    NativeProtocolSafety.ValidatePublicContractType(named, location, managedReferenceDiagnostics)
+                }
+            }
             ManagedReferenceSafetyAnalyzer.Analyze(
                 functionBodies,
                 allStructs,

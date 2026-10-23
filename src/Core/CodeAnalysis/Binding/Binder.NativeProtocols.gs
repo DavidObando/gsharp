@@ -493,6 +493,33 @@ partial class Binder {
                 )
                 continue
             }
+            if NativeProtocolMetadata.IsPublic(protocol) && selected.Any(
+                (
+                    witness(
+                        Slot FunctionSymbol,
+                        Target FunctionSymbol?,
+                        ImportedTarget MethodInfo?,
+                        ImportedSlot MethodInfo?,
+                        Extension bool
+                    )
+                ) ->
+                witness.Target is {} target &&
+                    (
+                    target.StaticOwnerType is {} owner && !NativeProtocolMetadata.IsPublic(owner) ||
+                        target.ReceiverType is {} receiver &&
+                        !NativeProtocolMetadata.IsPublic(receiver)
+                ) ||
+                    witness.ImportedTarget is {} importedTarget &&
+                    importedTarget
+                    .DeclaringType
+                    ?.IsVisible != true
+            ) {
+                Diagnostics.ReportNativeProtocol(
+                    location,
+                    "public native conformance requires an accessible exact witness owner"
+                )
+                return nil
+            }
             decisions.Add(
                 NativeProtocolDecision(
                     protocol,

@@ -14,6 +14,254 @@ import Xunit
 
 class NativeProtocolLanguageTests {
     @Theory
+    @InlineData("let read () -> int32 = value.Read")
+    @InlineData("let read = func () int32 { return value.Read() }")
+    func RoundThreeDelegateTargetsCannotEraseCapturedNativeStorage(binding string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`protocol P {}
+class Holder { private var Saved P?
+func Read() int32 -> 17 }
+func Bad(value Holder) object? {
+` + binding + `
+return read.Target
+}
+`, "captured-native-delegate", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("delegate"), output)
+    }
+
+    @Theory
+    @InlineData("func Bad(value Holder) object? -> value as object")
+    @InlineData("func Bad(value Holder) { if value is object escaped {} }")
+    @InlineData("func Bad(value Holder) { switch value { case object escaped {} default {} } }")
+    @InlineData("func Bad(value Wrapper) { if value is { Item: object escaped } {} }")
+    @InlineData("func Bad(value Holder) { let hash () -> int32 = value.GetHashCode }")
+    func RoundThreeStorageErasureAndHashGroupsRequireAdmission(declaration string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package StorageAdmission
+public protocol P {}
+public class Holder { private var Saved P? }
+public class Wrapper { public var Item Holder }
+`
+        let (localCode, localOutput) = fixture.TryCompile(
+            source + "\n" + declaration,
+            "storage-admission-local",
+            executable: false
+        )
+        Assert.NotEqual(0, localCode)
+        Assert.Contains("GS0629", localOutput)
+        let reference = Path.Combine(fixture.Directory, "StorageAdmission.ref.dll")
+        let implementation = fixture.Compile(source, "StorageAdmission", executable: false, "/refout:" + reference)
+        for image in[]string{implementation, reference} {
+            let (code, output) = fixture.TryCompile(
+                "import StorageAdmission\n" + declaration,
+                "storage-admission-caller",
+                executable: false,
+                "/r:" + image
+            )
+            Assert.NotEqual(0, code)
+            Assert.Contains("GS0629", output)
+        }
+    }
+
+    @Fact
+    func RoundThreeImportedArraysKeepAnnotatedNativeDependencies() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "NativeArrays.ref.dll")
+        let implementation = fixture.Compile(`package NativeArrays
+public protocol P {}
+public func Make() []P -> []P{}
+`, "NativeArrays", executable: false, "/refout:" + reference)
+        for image in[]string{implementation, reference} {
+            let (code, output) = fixture.TryCompile(
+                "import NativeArrays\nfunc Bad() object -> Make()",
+                "native-array-caller",
+                executable: false,
+                "/r:" + image
+            )
+            Assert.NotEqual(0, code)
+            Assert.True(output.Contains("GS0629") && output.Contains("cannot escape"), output)
+        }
+    }
+
+    @Theory
+    @InlineData("delegate D(value P)")
+    @InlineData("delegate D() P?")
+    @InlineData("delegate D(next D, value P)")
+    @InlineData("delegate D(value P)\nfunc Bad(value D) object -> value")
+    func RoundThreeNamedNativeDelegateDeclarationsAreNotAdmitted(declaration string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(
+            "protocol P {}\n" + declaration,
+            "native-named-delegate",
+            executable: false
+        )
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("delegate"), output)
+    }
+
+    @Fact
+    func RoundThreePublicNamedDelegatesRequireAccessibleSignaturePositions() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(
+            "internal protocol Hidden {}\npublic delegate D(value Hidden)",
+            "native-private-delegate-contract",
+            executable: false
+        )
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("accessible contract"), output)
+    }
+
+    @Theory
+    @InlineData("func Bad(value Box[Holder]) object -> value.Escape()")
+    @InlineData("func Bad(value (Holder) -> Holder) {}")
+    @InlineData("func Bad(value []Box[Holder]) {}")
+    func RoundThreeGenericAndDelegateContractsCannotEraseSavedStorage(declaration string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`protocol P {}
+class Holder { private var Saved P? }
+class Box[T] { var Value T
+func Escape() object -> Value }
+` + declaration, "native-transitive-generic", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("delegate/generic"), output)
+    }
+
+    @Fact
+    func RoundThreeUnmarkedForeignDelegateCannotCarrySavedNativeStorage() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "ForeignDelegates.ref.dll")
+        let implementation = fixture.CompileCSharpWithReference(`using System;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+[assembly: AssemblyMetadata("GSharp.NativeProtocolFeature", "6b105e95-6860-496a-9acb-d81bc250a275/1")]
+[assembly: AssemblyMetadata("GSharp.NativeProtocols", """{"schema":"6b105e95-6860-496a-9acb-d81bc250a275/1","declarations":[{"type":"ForeignDelegates.P","slots":[]}],"entries":[]}""")]
+namespace ForeignDelegates {
+[Obsolete("GSharp.NativeProtocols.v1")] public interface P {}
+[Obsolete("GSharp.NativeProtocols.v1")] public sealed class Holder { private P? saved; }
+public static class Foreign {
+public static Holder Identity(Holder value) => value;
+public static CompilerFeatureRequiredAttribute MarkerType => null!;
+}
+}`, "ForeignDelegates", reference)
+        for image in[]string{implementation, reference} {
+            PromoteFixtureProtocolMarker(image)
+            let (code, output) = fixture.TryCompile(
+                "import ForeignDelegates\nfunc Bad() { let callback (Holder) -> Holder = Foreign.Identity }",
+                "foreign-native-delegate-caller",
+                executable: false,
+                "/r:" + image
+            )
+            Assert.NotEqual(0, code)
+            Assert.True(output.Contains("GS0629") && output.Contains("delegate"), output)
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RoundThreeLiftedAndImportedEqualityCannotObserveNativeStorage(imported bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package LiftedNative
+public protocol P {}
+public struct Holder { private var Saved P? }
+public func (left Holder) operator ==(right Holder) bool -> true
+public func (left Holder) operator !=(right Holder) bool -> false
+`
+        let declaration = "func Bad(left Holder?, right Holder?) bool -> left == right"
+        if !imported {
+            let (code, output) = fixture.TryCompile(source + declaration, "lifted-native-local", executable: false)
+            Assert.NotEqual(0, code)
+            Assert.True(output.Contains("GS0629") && output.Contains("equality"), output)
+            return
+        }
+        let reference = Path.Combine(fixture.Directory, "LiftedNative.ref.dll")
+        let implementation = fixture.Compile(source, "LiftedNative", executable: false, "/refout:" + reference)
+        for image in[]string{implementation, reference} {
+            let (code, output) = fixture.TryCompile(
+                "import LiftedNative\n" + declaration,
+                "lifted-native-caller",
+                executable: false,
+                "/r:" + image
+            )
+            Assert.NotEqual(0, code)
+            Assert.True(output.Contains("GS0629") && output.Contains("equality"), output)
+        }
+    }
+
+    @Theory
+    @InlineData("[2]int32")
+    @InlineData("(int32, [2]int32)")
+    func RoundThreeFixedArraySlotsRequireAnAdmittedReferenceContract(type string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "FixedNative.ref.dll")
+        let (code, output) = fixture.TryCompile(
+            "public protocol P { func Check(value " +
+                type +
+                ") bool; }\n" +
+                "public struct Worker : P { public func Check(value " +
+                type +
+                ") bool -> true }",
+            "FixedNative",
+            executable: false,
+            "/refout:" + reference
+        )
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("fixed-array"), output)
+        Assert.False(File.Exists(reference))
+    }
+
+    @Fact
+    func RoundThreePublicConformanceCannotExportAnInternalExtensionOwner() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "HiddenWitness.ref.dll")
+        let (code, output) = fixture.TryCompile(`public protocol P { func Read() int32; }
+public struct Value : P {}
+internal shared class HiddenWitnesses {}
+@ExtensionOwner(typeof(HiddenWitnesses))
+public func (value Value) Read() int32 -> 17
+public func Make() P -> Value{}
+`, "HiddenWitness", executable: false, "/refout:" + reference)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("owner"), output)
+        Assert.False(File.Exists(reference))
+    }
+
+    @Fact
+    func RoundThreeInternalOwnersAndCheckedMethodsRemainUsable() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "ScopedWitness.ref.dll")
+        let implementation = fixture.Compile(`package ScopedWitness
+internal protocol P { func Read() int32; }
+public protocol Stored {}
+public struct Value : P { public var Number int32 }
+internal shared class HiddenWitnesses {}
+@ExtensionOwner(typeof(HiddenWitnesses))
+public func (value Value) Read() int32 -> value.Number + 1
+public class Holder { private var Saved Stored?
+private var Number int32 = 10
+public func Read() int32 { Number += 1
+return Number } }
+public func Make() Holder -> Holder()
+public func ReadHidden() int32 { let value P = Value{Number: 16}
+return value.Read() }
+`, "ScopedWitness", executable: false, "/refout:" + reference)
+        for image in[]string{implementation, reference} {
+            let caller = fixture.Compile(`import System
+import ScopedWitness
+Console.WriteLine(ReadHidden())
+let holder = Make()
+Console.WriteLine(holder.Read())
+Console.WriteLine(holder.Read())
+Console.WriteLine(holder is object)
+Console.WriteLine(holder != nil)
+`, "scoped-witness-caller", executable: true, "/r:" + image)
+            IlVerifier.Verify(caller, []string{implementation})
+            Assert.Equal("17\n11\n12\nTrue\nTrue\n", fixture.Run(caller))
+        }
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func NativeAutoPropertiesRequireAdmittedAccessorBoundaries(staticStorage bool) {

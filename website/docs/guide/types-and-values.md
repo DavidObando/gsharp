@@ -76,6 +76,13 @@ Native-bearing auto-properties (including data-primary properties) and imported
 native constructors/base initializers are not yet admitted; use initialized
 ordinary fields and explicit checked methods. Equality/hash operations on
 aggregates containing native storage are blocked too.
+This includes equality/hash method groups and lifted operators. Safe casts and
+capturing patterns cannot erase native-bearing storage to `object`; ordinary
+noncapturing tests and outer nil checks remain available. Named/anonymous
+delegates and generic containers are checked transitively. Fixed-array slot
+positions diagnose until their reference contract preserves the length.
+Method-group and function-literal captures of native-bearing values also require
+a separately admitted delegate contract; ordinary checked calls remain available.
 Existing nominal `interface`, `adapt`, concrete `as` restrictions and ordinary
 pattern/flow rules are unchanged.
 

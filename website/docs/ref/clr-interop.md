@@ -144,6 +144,15 @@ Public contract accessibility is checked recursively through containers and
 property signatures. Slot metadata uses canonical structural shapes with
 separate nullability flags, including same-assembly nullable types, tuples and
 arrays; reference imports do not rely on their source-time CLR placeholders.
+Fixed-length array slot positions are not admitted: the current CLR vector
+signature does not carry their length. Public conformance also requires an
+effectively public selected witness owner; internal-only conformance can use an
+internal owner. Annotated imported array elements retain native dependencies,
+and named/anonymous delegate and generic-container checks include saved native
+state rather than only direct protocol positions.
+Native-bearing method-group/function captures are gated too: an ordinary
+delegate's `Target` would erase that state to `object`. Checked direct calls do
+not require that unproved delegate boundary.
 
 ## Explicit interface implementations
 
