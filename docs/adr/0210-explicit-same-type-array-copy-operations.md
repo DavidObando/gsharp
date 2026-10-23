@@ -184,8 +184,8 @@ ranks the spellings.
 | Element copying | Shallow. Each element slot is copied as the CLR copies that slot. Value-type elements are copied by value. Reference elements, inner arrays of jagged arrays, slice descriptors and managed handles keep their sharing. No element is deep-copied. |
 | Length | No validation and no repair. A `[3]int32` value with physical length 2 copies to a `[3]int32` value with physical length 2. A length-checked copy is a different operation and is not proposed. |
 | Evaluation | The receiver expression is evaluated exactly once, before allocation. The copy itself runs no user code: no getters, conversions, callbacks or element constructors. |
-| Nullness | The receiver must have a non-nullable static type. A nullable array reference (`[N]?T`) needs the existing `?.` form, which gives `nil` or a fresh `[N]T` as `[N]?T`, or an explicit `!!`. A platform-typed imported array (`T!`, [ADR-0186](0186-platform-types-for-oblivious-clr-interop.md)) gives a non-null result and throws `NullReferenceException` at the copy site when it is null, as a member call does. |
-| Faults | Only `NullReferenceException` for the platform case above and `OutOfMemoryException`. |
+| Nullness | The receiver must have a non-nullable static type. A nullable array reference (`[N]?T`) needs the existing `?.` form, which gives `nil` or a fresh `[N]T` as `[N]?T`, or an explicit `!!`. A platform-typed imported array (`T!`, [ADR-0186](0186-platform-types-for-oblivious-clr-interop.md)) is accepted and gives a non-null result type. A non-nullable static type does not guarantee a non-`nil` reference: `= default`, CLR-default array elements of array type and platform-typed values can all hold `nil`. |
+| Faults | After the receiver has been evaluated, the copy itself can throw only `NullReferenceException`, when the evaluated reference is `nil` (whatever its static type, as a member call does), and `OutOfMemoryException`. Exceptions raised while evaluating the receiver expression, such as an index or getter fault, are that expression's own faults and happen before the copy starts. |
 | Concurrency | No cross-thread atomic snapshot. A concurrent writer can be observed per element as the CLR allows for an `Array.Clone` of that element type. |
 | Lowering | `Array.Clone()` on the evaluated receiver, then `castclass` to the receiver's CLR array type. The cast always succeeds because `Clone` preserves the runtime type; it exists for verifiable IL. |
 | Category | An rvalue. It is not an assignable location and creates no borrow, so it composes with indexing and calls (`a.copy()[0]`) like any call result and is legal across suspension points. |
@@ -549,7 +549,9 @@ must provide ADR-0154 discriminating tests for at least:
 - Length lenience: a cast `[3]int32` with physical length 2 copies to length 2.
 - Single evaluation: an effectful receiver runs once.
 - Nullness: `a.copy()` on `[N]?T` is rejected, `a?.copy()` gives `nil` or a
-  copy, and a null platform-typed receiver throws at the copy site.
+  copy, and a `nil` receiver with a non-nullable or platform static type
+  (`= default`, a CLR-default array element, a null import) throws
+  `NullReferenceException` at the copy site, after receiver faults.
 - Compatibility: an existing extension named `copy` still binds; data
   `.copy(...)` is unchanged; a named argument on an array keeps today's
   diagnostic; `copy` stays a legal identifier; rectangular arrays and native
