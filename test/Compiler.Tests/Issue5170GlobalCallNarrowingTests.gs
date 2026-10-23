@@ -37,8 +37,11 @@ open class Issue5170GlobalCallNarrowingTests {
             let (exit, log) = Compile(tempDir, source, appPath)
             Assert.NotEqual(0, exit)
             Assert.False(File.Exists(appPath), "'$name' must not emit an assembly. Log:\n$log")
-            Assert.Contains("error GS0158", log, StringComparison.Ordinal)
-            Assert.Contains("Length", log, StringComparison.Ordinal)
+            Assert.Contains(
+                ExpectedDiagnostic(Path.Combine(tempDir, name + ".gs"), source),
+                log,
+                StringComparison.Ordinal
+            )
         } finally {
             Directory.Delete(tempDir, recursive: true)
         }
@@ -72,6 +75,29 @@ open class Issue5170GlobalCallNarrowingTests {
     }
 
     shared {
+        /// Builds the driver line prefix of the `GS0158` that the unique `.Length` read of
+        /// [`source`](paramref) must report: file, 1-based line and column of `Length`, and its end.
+        private func ExpectedDiagnostic(path string, source string) string {
+            let dot = source.IndexOf(".Length", StringComparison.Ordinal)
+            Assert.True(dot >= 0, "the case must read `.Length` once")
+            Assert.True(
+                source.IndexOf(".Length", dot + 1, StringComparison.Ordinal) < 0,
+                "the case must read `.Length` once"
+            )
+            var line = 1
+            var lineStart = 0
+            for var i = 0; i < dot; i++ {
+                if source[i] == '\n' {
+                    line++
+                    lineStart = i + 1
+                }
+            }
+            let column = dot - lineStart + 2
+            return path + "(" + line.ToString() + "," + column.ToString() + "," + line.ToString() +
+                "," +
+                (column + 6).ToString() + "): error GS0158"
+        }
+
         /// Gets the rejected programs: each is (name, source).
         /// @returns The case data.
         func RejectedCases() sequence[[]object] {
