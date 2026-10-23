@@ -6,7 +6,7 @@
 - **Phase**: Historical design only; no implementation authorization
 - **Issue**: [#5099](https://github.com/DavidObando/gsharp/issues/5099)
 - **Related**: [#4333](https://github.com/DavidObando/gsharp/issues/4333),
-  [Proposed ADR-0205](0205-type-preserving-interface-values.md),
+  [Proposed ADR-0205](0205-native-protocols-with-type-preserving-values.md),
   [ADR-0191](0191-go-to-gsharp-migration-tool.md) section 7,
   [ADR-0182](0182-receiver-clause-is-always-extension.md),
   [ADR-0189](0189-capturing-anonymous-objects-and-structural-interface-adaptation.md),
@@ -33,8 +33,8 @@ Safe typed protocol forwarding still needs proof, not a new ordinary receiver.
 ADR-0205 remains Proposed. Neither its revision nor this withdrawal accepts
 new semantics, authorizes product implementation, changes ADR-0182/0188/0189,
 moves the SDK pin or admits Go operations under ADR-0191.
-Issue #5097 remains open for protocol design. After merge, the conductor may
-close #5099 with this withdrawal evidence; this document does not close it.
+Issue #5097 remains open for protocol design. The maintainer has already closed
+#5099. This follow-up does not reopen it or change its closure reason.
 
 ## Historical proposal — not current recommendation
 
