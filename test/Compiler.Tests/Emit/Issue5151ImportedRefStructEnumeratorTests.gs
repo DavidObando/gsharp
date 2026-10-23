@@ -25,7 +25,7 @@ import GSharp.Compiler.Tests
 open class Issue5151ImportedRefStructEnumeratorTests {
     @Fact
     func ClosedEnumeratorReturn_KeepsTheClosedRoute() {
-        let output = CompileAgainstLibrary(`package P
+        CompileAgainstLibrary(`package P
 import Probe
 
 class Node { var N int32 }
@@ -44,12 +44,11 @@ func CountNodes(v View[Node]) int32 {
     }
     return c
 }`)
-        Assert.DoesNotContain("GS9998", output)
     }
 
     @Fact
     func FieldCurrent_KeepsTheClosedRoute() {
-        let output = CompileAgainstLibrary(`package P
+        CompileAgainstLibrary(`package P
 import Probe
 
 func Sum(v Fld[object, (X int32, Y int32)]) int32 {
@@ -59,15 +58,14 @@ func Sum(v Fld[object, (X int32, Y int32)]) int32 {
     }
     return c
 }`)
-        Assert.DoesNotContain("GS9998", output)
     }
 
     shared {
         /// Compiles the source as a library against the in-process `ViewLib`.
-        /// When the compiler accepts the source, the output is ILVerified; when
-        /// it rejects it, the failure must be a diagnostic, not an internal
-        /// error. Returns the compiler's output.
-        private func CompileAgainstLibrary(source string) string {
+        /// The source is a valid program: the compile must exit with 0 (the
+        /// captured output is part of the failure message), and the emitted
+        /// assembly is then ILVerified.
+        private func CompileAgainstLibrary(source string) {
             let tempDir = Directory.CreateTempSubdirectory("gs_5151_view_").FullName
             try {
                 let libPath = Path.Combine(tempDir, "ViewLib.dll")
@@ -100,12 +98,8 @@ func Sum(v Fld[object, (X int32, Y int32)]) int32 {
                     Console.SetError(prevErr)
                 }
                 let output = "$compileOut" + "$compileErr"
-                if compileExit == 0 {
-                    IlVerifier.Verify(outPath, additionalReferences: []string{libPath})
-                } else {
-                    Assert.Contains("error GS", output)
-                }
-                return output
+                Assert.True(compileExit == 0, "gsc failed with exit code $compileExit:${Environment.NewLine}$output")
+                IlVerifier.Verify(outPath, additionalReferences: []string{libPath})
             } finally {
                 try {
                     Directory.Delete(tempDir, recursive: true)
