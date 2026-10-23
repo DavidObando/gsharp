@@ -15,17 +15,16 @@ import GSharp.Tests
 import Xunit
 import GSharp.Compiler.Tests
 
-/// Issue #5151 review: the struct-enumerator for-in path types the enumerator
-/// over the receiver's own type arguments, which is only correct when the
-/// collection's `GetEnumerator()` returns its nested `Enumerator` instantiated
-/// with the collection's own type parameters in declaration order. These tests
-/// build an imported by-ref-like collection that returns a closed
-/// (`View<int>.Enumerator`) or permuted (`Swap<B, A>.Enumerator`) enumerator and
-/// iterate it over a same-compilation element type and over a type parameter.
-/// The loop must compile to verifiable IL (or report a diagnostic).
+/// Issue #5151 review: only `Span<T>` and `ReadOnlySpan<T>` use the symbolic
+/// struct-enumerator route. Any other imported by-ref-like collection keeps the
+/// closed route it always had. These tests build such collections in-process
+/// and iterate them over a same-compilation element type and a type parameter:
+/// `View<T>` returns a closed `View<int>.Enumerator` and `Fld<A, B>` has an
+/// enumerator whose `Current` is a public field. Each loop
+/// must compile to verifiable IL.
 open class Issue5151ImportedRefStructEnumeratorTests {
     @Fact
-    func ClosedEnumeratorReturn_IsNotRetypedOverTheReceiversArguments() {
+    func ClosedEnumeratorReturn_KeepsTheClosedRoute() {
         let output = CompileAgainstLibrary(`package P
 import Probe
 
@@ -49,23 +48,14 @@ func CountNodes(v View[Node]) int32 {
     }
 
     @Fact
-    func PermutedEnumeratorReturn_IsNotRetypedOverTheReceiversArguments() {
+    func FieldCurrent_KeepsTheClosedRoute() {
         let output = CompileAgainstLibrary(`package P
 import Probe
 
-class Node { var N int32 }
-
-func CountGeneric[X, Y](v Swap[X, Y]) int32 {
+func Sum(v Fld[object, (X int32, Y int32)]) int32 {
     var c int32 = 0
     for x in v {
-        c += 1
-    }
-    return c
-}
-func CountNodes(v Swap[Node, string]) int32 {
-    var c int32 = 0
-    for x in v {
-        c += 1
+        c += x
     }
     return c
 }`)
@@ -123,11 +113,11 @@ func CountNodes(v Swap[Node, string]) int32 {
             }
         }
 
-        /// Emits `ViewLib.dll` with two by-ref-like generic collections whose
-        /// nested struct `Enumerator` is generic over the same parameters but
-        /// is not what `GetEnumerator()` returns:
-        /// `Probe.View<T>.GetEnumerator()` returns `View<int>.Enumerator` and
-        /// `Probe.Swap<A, B>.GetEnumerator()` returns `Swap<B, A>.Enumerator`.
+        /// Emits `ViewLib.dll` with by-ref-like generic collections whose
+        /// nested struct `Enumerator` is generic over the collection's parameters:
+        /// `Probe.View<T>` returns a closed `View<int>.Enumerator`,
+        /// and `Probe.Fld<A, B>` has an enumerator with a public `int Current`
+        /// field.
         private func BuildLibrary(dllPath string) {
             let asmBuilder = PersistedAssemblyBuilder(
                 AssemblyName("ViewLib"){Version = Version(1, 0, 0, 0)},
@@ -144,44 +134,42 @@ func CountNodes(v Swap[Node, string]) int32 {
             TypeAttributes.BeforeFieldInit
             const nestedAttrs = TypeAttributes.NestedPublic | TypeAttributes.Sealed | TypeAttributes.SequentialLayout |
             TypeAttributes.BeforeFieldInit
+            const methodAttrs = MethodAttributes.Public | MethodAttributes.HideBySig
 
-            // Probe.View<T>
+            // Probe.View<T>: GetEnumerator() returns View<int>.Enumerator.
             let view = moduleBuilder.DefineType("Probe.View`1", structAttrs, parent: typeof(ValueType))
-            let viewParams = view.DefineGenericParameters("T")
+            view.DefineGenericParameters("T")
             view.SetCustomAttribute(CustomAttributeBuilder(byRefLikeCtor, []object{}))
             let viewEnumerator = view.DefineNestedType("Enumerator", nestedAttrs, parent: typeof(ValueType))
             let viewEnumeratorParams = viewEnumerator.DefineGenericParameters("T")
             EmitEnumeratorMembers(viewEnumerator, viewEnumeratorParams[0])
-            let viewGetEnumerator = view.DefineMethod(
-                "GetEnumerator",
-                MethodAttributes.Public | MethodAttributes.HideBySig,
-                viewEnumerator.MakeGenericType(typeof(int32)),
-                Type.EmptyTypes
+            let closedEnumerator = viewEnumerator.MakeGenericType(typeof(int32))
+            EmitDefaultReturn(
+                view.DefineMethod("GetEnumerator", methodAttrs, closedEnumerator, Type.EmptyTypes),
+                closedEnumerator
             )
-            EmitDefaultReturn(viewGetEnumerator, viewEnumerator.MakeGenericType(typeof(int32)))
-            // Keep the T parameter referenced by a member so it is a real generic.
-            let _ = viewParams
 
-            // Probe.Swap<A, B>
-            let swap = moduleBuilder.DefineType("Probe.Swap`2", structAttrs, parent: typeof(ValueType))
-            let swapParams = swap.DefineGenericParameters("A", "B")
-            swap.SetCustomAttribute(CustomAttributeBuilder(byRefLikeCtor, []object{}))
-            let swapEnumerator = swap.DefineNestedType("Enumerator", nestedAttrs, parent: typeof(ValueType))
-            let swapEnumeratorParams = swapEnumerator.DefineGenericParameters("A", "B")
-            EmitEnumeratorMembers(swapEnumerator, swapEnumeratorParams[0])
-            let permuted = swapEnumerator.MakeGenericType(swapParams[1], swapParams[0])
-            let swapGetEnumerator = swap.DefineMethod(
-                "GetEnumerator",
-                MethodAttributes.Public | MethodAttributes.HideBySig,
-                permuted,
-                Type.EmptyTypes
+            // Probe.Fld<A, B>: the enumerator's Current is a public field.
+            let fld = moduleBuilder.DefineType("Probe.Fld`2", structAttrs, parent: typeof(ValueType))
+            let fldParams = fld.DefineGenericParameters("A", "B")
+            fld.SetCustomAttribute(CustomAttributeBuilder(byRefLikeCtor, []object{}))
+            let fldEnumerator = fld.DefineNestedType("Enumerator", nestedAttrs, parent: typeof(ValueType))
+            fldEnumerator.DefineGenericParameters("A", "B")
+            fldEnumerator.DefineField("Current", typeof(int32), FieldAttributes.Public)
+            let fldMoveNext = fldEnumerator.DefineMethod("MoveNext", methodAttrs, typeof(bool), Type.EmptyTypes)
+            let fldMoveNextIl = fldMoveNext.GetILGenerator()
+            fldMoveNextIl.Emit(OpCodes.Ldc_I4_0)
+            fldMoveNextIl.Emit(OpCodes.Ret)
+            let ownFldEnumerator = fldEnumerator.MakeGenericType(fldParams[0], fldParams[1])
+            EmitDefaultReturn(
+                fld.DefineMethod("GetEnumerator", methodAttrs, ownFldEnumerator, Type.EmptyTypes),
+                ownFldEnumerator
             )
-            EmitDefaultReturn(swapGetEnumerator, permuted)
 
             viewEnumerator.CreateType()
-            swapEnumerator.CreateType()
+            fldEnumerator.CreateType()
             view.CreateType()
-            swap.CreateType()
+            fld.CreateType()
             asmBuilder.Save(dllPath)
         }
 
