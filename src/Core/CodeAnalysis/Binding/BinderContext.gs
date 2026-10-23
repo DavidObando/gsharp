@@ -334,6 +334,67 @@ internal class BinderContext {
         get;
     }
 
+    /// Gets the narrowing facts that hold now, as a value (ADR-0208 section 7).
+    /// @remarks PR 1 derives the value from (cref:NarrowedVariables), where the
+    /// innermost frame that holds a path wins. The frame stack stays the
+    /// mechanism until the consuming PR replaces it. The value has no
+    /// external-callable facts, which the statement binder owns.
+    /// Gets or sets the facts that the shadow join proves and that no frame holds
+    /// (ADR-0208 section 19, PR 1). Only the comparison mode reads or writes it.
+    internal var ShadowOverlay NarrowingState = NarrowingState.Empty
+
+    /// Gets or sets, for each overlay path, the frame type at the time the overlay
+    /// fact was made. A frame fact that differs from it is newer than the overlay fact.
+    internal var ShadowOverlayBase NarrowingState = NarrowingState.Empty
+
+    /// Gets the paths whose frame facts a header or a guard removed in the shadow
+    /// flow, with the frame count at that time. A frame below that count holds an
+    /// inherited fact, which is gone; a frame at or above it holds a newer proof.
+    internal let ShadowSuppressed Dictionary[AccessPath, int32] = Dictionary[AccessPath, int32]()
+
+    /// Whether the innermost frame fact of [`path`](paramref) is an inherited
+    /// fact that the shadow flow removed.
+    internal func ShadowIsSuppressed(path AccessPath) bool {
+        if ShadowSuppressed.Count == 0 || !ShadowSuppressed.TryGetValue(path, out var depth) {
+            return false
+        }
+        for var i = NarrowedVariables.Count - 1; i >= 0; i-- {
+            if NarrowedVariables[i].ContainsKey(path) {
+                return i < depth
+            }
+        }
+        return false
+    }
+
+    /// Returns the type that the shadow flow gives a read of [`path`](paramref),
+    /// where [`frameType`](paramref) is the frame answer. The newer of the frame
+    /// fact and the overlay fact wins.
+    internal func ShadowEffectiveType(path AccessPath, legacyType TypeSymbol?) TypeSymbol? {
+        let frameType = if ShadowIsSuppressed(path) {
+            default(TypeSymbol?)
+        } else {
+            legacyType
+        }
+        let overlayType = ShadowOverlay.NarrowedType(path)
+        if overlayType == nil {
+            return frameType
+        }
+        if frameType == nil {
+            return overlayType
+        }
+        let baseType = ShadowOverlayBase.NarrowedType(path)
+        return if baseType != nil && object.Equals(baseType, frameType) {
+            overlayType
+        } else {
+            frameType
+        }
+    }
+
+    internal prop Narrowing NarrowingState -> NarrowingState.FromFrames(
+        NarrowedVariables,
+        ImmutableArray[VariableSymbol].Empty
+    )
+
     /// Gets the side-table that parks the else-branch narrowing frame of an
     /// `if`-statement keyed by the resulting bound
     /// (cref:BoundIfStatement) node identity. ADR-0069 / issue #700:

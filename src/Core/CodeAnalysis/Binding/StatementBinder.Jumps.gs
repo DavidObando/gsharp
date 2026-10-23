@@ -332,6 +332,8 @@ internal partial class StatementBinder {
         // Issue #2943: first bind supplies exact assignment symbols and lowered
         // control flow. If a write can reach the back-edge, restore speculative
         // state, remove only inherited narrowings, and bind the body again.
+        // Comparison mode: reports of a bind that is discarded must not reach the report.
+        let speculation = NarrowingComparison.BeginSpeculation()
         let firstBody = BindCore(out var firstBreakLabel, out var firstContinueLabel)
         let mutations = CollectLoopBackEdgeMutations(
             firstBody,
@@ -357,10 +359,14 @@ internal partial class StatementBinder {
         if narrowingInvalidations.Count == 0 && loopEntryExternalCallableAliases.SetEquals(
             externalCallableAliasesSnapshot
         ) {
+            NarrowingComparison.EndSpeculation(speculation, true)
             breakLabel = firstBreakLabel
             continueLabel = firstContinueLabel
             return firstBody
         }
+        NarrowingComparison.EndSpeculation(speculation, false)
+        // ADR-0208 section 18: counts the loop bodies that this design binds twice.
+        CompilationMeasurements.Count("narrowing.loop-rebinds")
         Diagnostics.TruncateTo(diagnosticCount)
         for var i = 0; i < narrowingSnapshots.Length; i++ {
             let frame = binderCtx.NarrowedVariables[i]
