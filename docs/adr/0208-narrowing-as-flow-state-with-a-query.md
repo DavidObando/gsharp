@@ -6,6 +6,10 @@
   decided as recommended on the same day, three of them deferred to
   [#5196](https://github.com/DavidObando/gsharp/issues/5196))
 - **Date**: 2026-10-22 (accepted 2026-10-23)
+- **Amendments**: A1 (join fallback, #5206) and A2 (property reads, row
+  R14, #5215) of section 19a, found by PR 1 of #5130 (#5212) and accepted by
+  the maintainer on 2026-10-23 (PR #5226); the clarifications of #5207 are
+  folded into the text
 - **Phase**: Compiler architecture (study roadmap item M1b; implementation
   is [#5130](https://github.com/DavidObando/gsharp/issues/5130))
 - **Issue**: [#5129](https://github.com/DavidObando/gsharp/issues/5129)
@@ -119,116 +123,23 @@ and the alias update still walks when no invalidation walk exists.
 
 ### 4. What the current rules accept and reject
 
-The probes below were compiled with the pinned released compiler, 0.5.212
-(`~/.nuget/packages/gsharp.net.sdk/0.5.212/tools/compiler/gsc.dll`). The
-sources are listed in section 24. "Accepted" means no diagnostic; the
-diagnostic is `GS0158 Cannot find member` or `GS0159 Cannot find function`
-on the nullable receiver unless stated.
+The probes that ground this section are compiled with the pinned released
+compiler, 0.5.212, and listed with their results in the companion document
+[ADR-0208 probe corpus](0208-narrowing-probe-corpus.md): 54 rows (e1 to e21,
+c1 to cC, `out-alias`, d1 to d6, f1 to f6, g1 to g5). "Accepted" means no
+diagnostic; the diagnostic is `GS0158 Cannot find member` or `GS0159 Cannot
+find function` on the nullable receiver unless stated. In short: the e rows
+are the shapes this ADR set out to change or to keep; the c, d, f and g rows
+are review counterexamples against drafts of this ADR, of which cA, d1, d3,
+d4, f2, f3, f5 and g2 are soundness holes in 0.5.212 (filed as #5168, #5170
+and #5171), c8/c8b show a construction-syntax dependence (#5169), and the
+rest are rejected today and stay rejected or are accepted programs whose
+result this ADR changes (rows R1 (b), R1 (c), R13 of section 16).
 
-| Probe | Shape | 0.5.212 |
-| --- | --- | --- |
-| e1 | `if s == nil { s = "a" }` then `s.Length` | accepted (`if` join, #2159) |
-| e2 | loop body: `if c { s = nil; break }` then `s.Length` | rejected |
-| e2b | loop body: `s.Length` then `if c { s = nil; break }` | accepted (exit-path write exemption, #2943) |
-| e3 | guard, then loop body: `node.Value` then `node = Make()` where `Make() Node` | accepted (non-null proof through the callee's syntax, #2943) |
-| e4 | same with `node = node.Next` (`Node?`) | rejected |
-| e5 | `if s == nil { s = "a" }`, an unrelated `goto`, then `s.Length` | rejected (#4290) |
-| e6 | guard; `try { s = nil; Boom() } catch { s.Length }` | rejected |
-| e7 | `if b.Pet == nil { return }` then `b.Pet.Name` (`let Pet`) | accepted (member path lifted) |
-| e7/Run2 | `if b.Pet is Dog { } else { return }` then `b.Pet.Bark()` | rejected |
-| e7/Run3 | `if b.Pet !is Dog { return }` then `b.Pet.Bark()` | accepted |
-| e8 | `if s != nil { ... } else { return }` then `s.Length` (`let s`) | rejected |
-| e9 | `switch k { case 1 { s = "a" } case 2 { s = "bb" } default { return } }` then `s.Length` | rejected |
-| e10 | `{ if s == nil { return } }` then `s.Length` | rejected |
-| e11 | `s!!.Length` then `s.Length` | rejected (`!!` does not narrow later reads) |
-| e12 | both branches assign; one branch also contains a loop | accepted |
-| e13 | `while node != nil { ...; node = node.Next }` | accepted (condition re-proves) |
-| e14 | guard, then `() -> s.Length` with `var s` | rejected (#2442) |
-| e15 | `again: i = i + s.Length; s = "ab"; if i < n { goto again }` | rejected |
-| e16 | loop body declares its own `var s` and assigns it | accepted (symbol identity, #2943) |
-| e17 | guard; `if c { s = nil; return -1 }` then `s.Length` | rejected |
-| e18 | guard; `again: i = i + s.Length; if i < n { goto again }` (no write) | rejected (#4285) |
-| e19 | try/finally inside a branch; `finally { s = "f" }` | accepted |
-| e20 | top-level `let a Animal = Dog()`; `if a is Dog { a.Bark() }` | rejected |
-| e21 | `if string.IsNullOrEmpty(b.Name) { return }` then `b.Name.Length` (`let Name string?`) | rejected; the nil-guard form `if b.Name == nil { return }` is accepted |
-| c1 | guard; `try { throw } catch { s = nil; return 0 } finally { Consume(s.Length) }` | rejected |
-| c3a | `if skip { goto Inside }; if s == nil { return }; Again: Consume(s.Length); Inside: goto Again` | rejected |
-| c3b | guard; `A: Consume(s.Length); if flag { goto C }; B: goto A; C: s = nil; goto B` | rejected |
-| out-alias | `func Run(out c C?, ref alias C?)`: guard on `c`; loop `c.M(); c = C(); alias = nil` (`Issue2943LoopBackEdgeNarrowingTests.gs:326-338`) | rejected |
-| c5 | guard; `var action = External; let clear = func() { s = nil }`; loop `s.Length; action(); action = clear` | rejected |
-| c6 | guard; `let clear = func() { s = nil }`; loop `s.Length; Invoke(clear)` where `func Invoke(f () -> void) { f() }` | rejected |
-| c7 | `func Run(ref text string?, callback () -> void)`: guard; loop `text.Length; callback()`; caller passes `ref t` and a callback that sets `t = nil` | rejected |
-| c8 | `Animal.Name -> "animal"`, `Dog.Name -> "dog"` (hiding); `if x is Dog { loop { last = x.Name; x = Dog{} } }` | accepted, prints `animal` |
-| c8b | same with `x = Dog()` | accepted, prints `dog` |
-| cA | guard; `try { throw } catch when Clear(ref s) { return 1 } catch { return s.Length }` where `Clear` stores nil and returns false | accepted (warning GS0612 only); throws `NullReferenceException` at run time |
-| cB | guard; `let clear = func() { s = nil }`, `let twice = func() { clear(); clear() }` (a direct-call local function group); loop `s.Length; twice()` | rejected |
-| cC | `Again: let length = x.Length; if count == 0 { count++; try { x = nil; goto Again } finally { x = "safe" } }` (`Issue4519:3609-3631`) | accepted, prints `4` |
-| d1 | guard; `try { try { throw } finally { Consume(s.Length) } } catch when Clear(ref s) { return 1 }` where the filter stores nil and returns true | accepted (GS0612 only); the finally dereferences nil, the resulting `NullReferenceException` is caught by the same handler, prints `1` (instrumented variant d1b shows the order `filter`, `finally: nil`, `filter`) |
-| d2 | guard on `s StringBuilder?`; `let StringBuilder = func() StringBuilder? { return nil }`; loop `s.Length; s = StringBuilder()` | rejected |
-| d3 / d3b | top-level `var text string?`; `func Clear() { text = nil }`; `text = "safe"` then `Clear()` then `text.Length` (d3 inside a loop, d3b straight-line) | accepted; both throw `NullReferenceException` |
-| d4 / d4b | `var x C? = C{}; let ref a C? = x; if a == nil { return }` then `x = nil` then `a.Value` (d4 inside a loop, d4b straight-line) | accepted; both throw `NullReferenceException` |
-| d5 | `x Animal?`; `if x != nil { if x is Dog { } return x.Name }` | accepted |
-| d6 | `BackwardGoto_ThroughNonCompletingFinally_DoesNotActivateTargetEdges` (`Issue4519:6195-6215`): `goto After; Enter: x = nil; goto Use; After: try { goto Enter } finally { return 4 }; Use: return x.Length` | accepted, prints `4` |
-| f1 | `x Animal?`; `if c { if x !is Dog { return } } else { if x !is Cat { return } }` then `x.Name` | rejected (branch joins never lift a parameter; the `goto` join would keep `Animal`) |
-| f2 | `let ref a C? = xs[0]; if a == nil { return }; xs[0] = nil; a.Value` | accepted; throws `NullReferenceException` |
-| f3 | guard; `try { try { try { throw f } finally { throw g } } catch (InvalidOperationException) { return s.Length } } catch (FormatException) when Clear(ref s) { return 0 }` | accepted (GS0612 only); throws `NullReferenceException` |
-| f4 | guard on `x object?`; loop `x.ToString(); x = System.Nullable[int32]()` | rejected |
-| f5 | top-level `var text`; iterator `Items()` assigns `text = nil` in its body; `text = "safe"; for item in items { }; text.Length` | accepted; throws `NullReferenceException` |
-| f6 | hiding `Animal.Name`/`Dog.Name`; `x Animal`; `if x is Dog { } else { return "" }; return x.Name` | accepted, prints `animal` |
-| g1 | `x object?`; three paths to `Done:` proving `Dog`, `Cat` and `Animal` through `!is` guards and `goto`; `x.Name` | rejected (the guard lifts are off in a function with `goto`, #4285) |
-| g2 | `Run(ref a C?, xs []C?)`: `if a == nil { return }; xs[0] = nil; a.Value`, called as `Run(ref xs[0], xs)` | accepted; throws `NullReferenceException` |
-| g3 | guard; `switch 1 { case 1 when Clear(ref s) { return 0 } }; s.Length` with `Clear` storing nil and returning false | rejected |
-| g4 | `x IA`; `class Both : IA, IB`; `Take(IA)`/`Take(IB)`; `if x is Both { } else { return "" }; Take(x)` | accepted, prints `IA` |
-| g5 | iterator: `let clear = func() { s = nil }`; `if s != nil { yield 0; yield s.Length }` | accepted, prints `0` and `1` |
-
-c1, c3a, c3b, `out-alias`, c5, c6, c7, c8, cA, cB and cC are review
-counterexamples against drafts of this ADR (PR #5164 threads on sections 9,
-10 and 16). c1, c3a, c3b, `out-alias`, c5, c6, c7 and cB are rejected
-today and the rules in sections 6, 9 and 10 keep them rejected. cA is a
-soundness hole in 0.5.212 that the rules close (row R10; filed as bug
-[#5168](https://github.com/DavidObando/gsharp/issues/5168), P1). c8 and
-c8b show that today's back-edge proof depends on the construction syntax
-(filed as [#5169](https://github.com/DavidObando/gsharp/issues/5169), P2);
-the draft's loop rule (deferred, section 10) made the two forms uniform. cC
-is accepted today and stays accepted under the recorded scope; the draft's
-loop rule rejected it, which is a design change, not a defect, for the
-follow-up ADR to weigh. The fourth review round added d1 to d6: d1 is a second shape
-of #5168 (an enclosing filter runs before an inner finally); d3/d3b and
-d4/d4b are two more soundness holes in 0.5.212, in straight-line code as
-well as in loops, filed as
-[#5170](https://github.com/DavidObando/gsharp/issues/5170) and
-[#5171](https://github.com/DavidObando/gsharp/issues/5171) (both P1) and
-closed by rows R11 and R12; d2 is rejected today and stays rejected; d5 and
-d6 are accepted today and stay accepted under the join and reachability
-rules of section 6. The fifth round added f1 to f6: f2, f3 and f5 are three
-more shapes of #5171, #5168 and #5170 (comments on the issues), all
-dereferencing nil today; f1 becomes accepted (row R1); f4 stays rejected;
-f6 is an accepted program whose output changes (row R1 (b)).
-
-The sixth round added g1 to g5: g2 is a fourth shape of #5171 (a `ref`
-parameter aliasing an element; comment on the issue) and R12 covers it; g1
-and g3 are rejected today and stay rejected (n-ary join; dispatch state
-threading); g4 is an accepted program that R1 (c) rejects with GS0266; g5
-is an accepted, correct program that R13 rejects under the conservative
-default.
-
-Every probe in this table is acceptance material: PR 1 of section 19 turns
-the table into a regression corpus (one test per row, expected result per
-row, ADR-0154 witness per row), and later rounds of this review add rows to
-the corpus, not rules to the design.
-
-A third experiment measured the draft's loop rule 4 (deferred with section
-10): whole-loop kill, today's
-bound non-null proof kept, and every call (direct, indirect, constructor)
-marking the loop as able to write closure-assigned and by-reference roots
-(`MayMutateAnyRoot` and `MayMutateWritableReferenceRoots` set on any call
-in the loop collector). Result: 22 errors in three functions of
-`src/Core` (`Binding/BinderContext.gs:906-923`, an `out` parameter read in
-a loop that calls `TryGetValue`; `Binding/MemberLookup.gs:1108-1120` and
-`:3100-3172`, locals that a closure elsewhere in the same function assigns,
-read in loops that call), of which 5 are `GS0532` cascades; 0 errors in
-Core.Tests and gsc. This is the whole measured cost of the conservative
-call rule on the compiler's own source.
+Every probe in that table is acceptance material: PR 1 of section 19 turned
+the table into the regression corpus `Adr0208NarrowingCorpusTests` (one test
+per row, expected result per row, ADR-0154 witness per row), and later
+findings add rows to the corpus, not rules to the design.
 
 e20 contradicts ADR-0069's #712 addendum and `website/docs/ref/spec.md`,
 which say a read-only top-level `let` narrows; the test
@@ -236,29 +147,12 @@ which say a read-only top-level `let` narrows; the test
 pins the rejection. This ADR does not change it; the documentation gap is
 filed separately.
 
-Two experiments measured the cost of the draft's loop rule (deferred to the
-follow-up ADR, section 10) on the compiler's own source; they are the
-spike's first data points. Both built the compiler from this worktree with a
-local, uncommitted edit to `CollectLoopBackEdgeMutations` and then compiled
-the `GSharp.Core`, `GSharp.Core.Tests` and `gsc` response files with it
-(0 errors with the unmodified build, as control):
-
-- Kill every inherited fact whose root is assigned anywhere in the loop, with
-  no non-null proof: 12 errors (`GS0158`), all in one function,
-  `src/Core/CodeAnalysis/Binding/ExpressionBinder.Assignments.gs:5435-5494`.
-  The shape is `var access T? = ...; if access == nil { return }; while true
-  { ...access.Member...; access = inner }` where `inner` is a pattern
-  variable. 0 errors in Core.Tests and in gsc.
-- Kill every inherited fact whose root is assigned anywhere in the loop,
-  keeping today's bound non-null proof (`AssignmentPreservesNarrowing`):
-  0 errors in all three.
-
-So on this code base the exit-path exemption is never load-bearing, and the
-non-null proof is load-bearing once. Both experiments used the bound
-collector: roots by symbol identity (not the draft's scope-aware name
-resolution) and today's call rule (not the draft's syntactic callee test).
-They measure the draft's rules 2 and 3; its rules 1 and 4 are unmeasured
-here, and the follow-up ADR's response-file compile is their measurement.
+The three experiments that measured the deferred loop rule on the
+compiler's own source (section 10) are recorded in the companion document
+under "Experiments": whole-loop kill without a non-null proof, 12 errors in
+one Core function; with today's bound proof, 0 errors; with every call also
+killing closure-assigned and by-reference roots, 22 errors in three Core
+functions; 0 errors in Core.Tests and gsc in every case.
 
 ### 5. Constraints
 
@@ -399,19 +293,28 @@ among the others, never joined afterwards with an already reduced result. For a
 path present in every incoming state, with incoming types `T1 ... Tn`, the
 join keeps the one `Ti` to which every other `Tj` converts by identity or an
 implicit reference conversion (`Dog` and `Animal` join to `Animal`; `T` and
-`T?` do not join, because `T?` is not a fact). When no such `Ti` exists and
-the path is a plain root whose every incoming type converts, with its
-representation preserved, to the root's declared type with one nullable
-layer removed, the join keeps that declared non-null type (`Dog` and `Cat`
-on `x Animal?` join to `Animal`); otherwise it drops the path. A binary fold
+`T?` do not join, because `T?` is not a fact). When no such `Ti` exists, the
+join keeps the path's declared type with one nullable layer removed: the
+root's declared type for a plain root, the last link's declared type for a
+stable member path. Every fact is a non-null refinement of the storage's
+declared type and a read of the storage at its declared type needs no cast,
+so this holds for any mix of incoming facts (`Dog` and `Cat` on `x Animal?`
+join to `Animal`; `IInit` and `T` on `settings T?` join to `T`, which is
+what `if settings is IInit init { ... }` yields when `T` does not implement
+`IInit`). A path is dropped only when some incoming state has no fact for
+it. This is amendment A1 (section 19a, #5206, accepted 2026-10-23): the
+fallback as first written required every incoming type to convert to the
+declared type with its representation preserved and applied to plain roots
+only, which dropped `settings -> T` at two sites of the pinned Oahu inputs
+(`SettingsManager.gs:51, 111`) that today's compiler keeps. A binary fold
 would lose this: for `x object?` with incoming `Dog`, `Cat` and `Animal`,
 `Join(Dog, Cat)` is `object` and `Join(object, Animal)` is `object`, while
-the n-ary join keeps `Animal` (probe g1). This is exactly the rule the
-`goto` join already uses (ADR-0069 #4989 addendum,
-`FindCommonImplicitSupertype`, `StatementBinder.Narrowing.gs:3860-3885`,
-over all incoming snapshots, including its declared-root fallback), applied
-to every merge; it never computes a least common supertype of unrelated
-types. It keeps an outer
+the n-ary join keeps `Animal` (probe g1). This is the rule the `goto` join
+already uses (ADR-0069 #4989 addendum, `FindCommonImplicitSupertype`,
+`StatementBinder.Narrowing.gs:3860-3885`, over all incoming snapshots),
+with its declared-root fallback widened by A1, applied to every merge; PR 1
+made both call one function, `NarrowingState.JoinTypes`. It never computes
+a least common supertype of unrelated types. It keeps an outer
 non-null proof when an inner branch strengthens it (`if x != nil { if x is
 Dog { } return x.Name }`: `x -> Dog` and `x -> Animal` join to `x ->
 Animal`, probe d5) and when sibling branches refine it differently (probe
@@ -451,15 +354,15 @@ internal sealed class NarrowingState {
 
     /// Facts out, from the effects of a bound node (section 8).
     func Kill(effects StatementEffects) NarrowingState
-    func KillRoots(roots LoopKillSet) NarrowingState
+    func KillRoots(roots IReadOnlyCollection[VariableSymbol]) NarrowingState
 
-    /// Merge (section 6), over ALL predecessors of a merge point at once: a
-    /// path survives with the incoming type every other converts to, else
-    /// with the declared non-null type of a plain root when every incoming
-    /// type preserves representation into it, else is dropped; aliases
-    /// intersect. Unreachable predecessors are skipped (identity). Callers
-    /// never fold this pairwise: Join([Dog, Cat, Animal]) on `x object?` is
-    /// Animal, while Join(Join(Dog, Cat), Animal) would be object.
+    /// Merge over ALL predecessors of a merge point at once. The type rule
+    /// is defined once, in section 6 ("Join", as amended by A1), and
+    /// implemented once, in NarrowingState.JoinTypes; this comment does not
+    /// restate it. Aliases intersect. Unreachable predecessors are skipped
+    /// (identity). Callers never fold this pairwise: Join([Dog, Cat,
+    /// Animal]) on `x object?` is Animal, while Join(Join(Dog, Cat),
+    /// Animal) would be object.
     static func Join(predecessors IReadOnlyList[NarrowingState]) NarrowingState
     /// The genuine two-way case (an `if` without jumps into its join, `?:`,
     /// `??`): Join([this, other]).
@@ -526,9 +429,9 @@ are closed: a construct or situation that is on neither list kills.
 - **P4 Bindings.** Pattern variables and `if let`/`guard let`/`while let`
   bindings keep their scoping rules (ADR-0166, ADR-0201); they are scope
   facts, not state facts. Unchanged.
-- **P5 Join.** As defined in section 6: the incoming type the others
-  convert to, the declared non-null type for a plain root whose incoming
-  types all preserve representation into it, else drop.
+- **P5 Join.** As defined in section 6 ("Join", as amended by A1), the one
+  definition of the join type rule in this document; `NarrowingState.
+  JoinTypes` is its one implementation. Not restated here.
 - **P6 Region lower bound.** As defined in section 6, for loops, backward
   jumps and handlers, with the kill sets computed from the construct table
   (bound effects where the region is already bound, the syntactic walker of
@@ -556,8 +459,18 @@ kind has one effect class. The implementation keeps the full table beside
 the walkers and a test enumerates every `BoundNode` subtype in the
 assembly against it, like `BoundNodeKindExhaustivenessTests` does for the
 rewriters; a kind that is absent from the table has the effect `call`. The
-classes, with representative kinds (93 kinds today: 18 statements, 59
-expressions, 16 patterns, arms, clauses and attributes):
+table covers every concrete `BoundNode` type in the assembly (102 at PR 1,
+`NarrowingConstructTable`, including the post-lowering kinds, which are
+`call`), checked by a test in both directions. The table gives one class
+per type; where a type carries two effects that the type alone does not
+decide (`BoundConversionExpression` with or without a user-defined
+conversion, `BoundPropertyAssignmentExpression` with or without a setter
+body, a `BoundBinaryExpression` that is `&&`/`||`/`??` or a plain operator,
+`BoundDereferenceExpression` as a target or a read) the table gives the
+more destructive class and a binder-side refinement is a later table
+change, not a rule change. Names below that are not classes (cleanup
+regions, `break`/`continue`) describe the lowered shape the listed class
+covers. The classes, with representative kinds:
 
 | Effect class | Kinds (representative) | Effect on the state |
 | --- | --- | --- |
@@ -566,7 +479,7 @@ expressions, 16 patterns, arms, clauses and attributes):
 | `member-write` | `BoundFieldAssignmentExpression`, `BoundPropertyAssignmentExpression`, `BoundIndexAssignmentExpression`, `BoundClrIndexAssignmentExpression`, `BoundClrPropertyAssignmentExpression`, `BoundIndirectAssignmentExpression` through an address-of operand | removes every member-bearing path and every fact on the alias class (a `ref` local or a by-reference parameter may alias the written element or member: probes f2, g2); a property setter with user code is also `call` |
 | `pointer-write` | `BoundIndirectAssignmentExpression` through anything else, `BoundDereferenceExpression` as a target | removes every mutable root (`MayMutateAnyRootViaPointer`) |
 | `alias` | `BoundAddressOfExpression`, `BoundConditionalAddressExpression` (both operands, whichever the condition selects; its condition and operands flow like `?:`), `BoundManagedReferenceExpression`, `BoundFixedStatement`, `BoundStackAllocExpression`, a `ref` local declaration | puts the operand's root (every operand's root, for a conditional address) in the alias class; the write rules above then apply to the class |
-| `call` | `BoundCallOperationExpression`, `BoundIndirectCallExpression`, `BoundFunctionPointerInvocationExpression`, `BoundConstructorCallExpression`, `BoundClrConstructorCallExpression`, `BoundTypeParameterConstructionExpression`, `BoundStructLiteralExpression` (field initializers), `BoundBaseClassCallExpression`, `BoundConstructorChainingExpression`, `BoundClrConversionCallExpression`, `BoundConversionExpression` with a user-defined conversion, `BoundBinaryOperationExpression`/`BoundUnaryExpression`/`BoundClrUnaryOperatorExpression` on user-defined operators, `BoundEventSubscriptionExpression`, `BoundClrEventSubscriptionExpression`, `BoundInterpolatedStringExpression` (`ToString`), `BoundAwaitExpression` (awaiter calls), `BoundForRangeStatement`/`BoundAwaitForRangeStatement` (`GetEnumerator`, `MoveNext`, `Current`, disposal; probe f5), `using`/`await using`/`lock`/`defer` cleanup regions (disposal, `Monitor`), `BoundGoStatement`, `BoundYieldStatement` (the consumer runs arbitrary code before resumption), property reads and `BoundPropertyPattern`/`BoundListPattern`/`BoundSlicePattern`/`BoundConstantPattern`/`BoundRelationalPattern` that invoke user code, `BoundMethodReferenceOperationExpression`/`BoundPropertyReferenceOperationExpression` when invoked, **and every kind not in the table** | removes every member-bearing path and every fact on the indirect-write class (mutable globals, closure-assigned locals, the alias class); in straight-line code with a bound callee, today's finer classification may keep closure-assigned locals when the callee has no captures, is not indirect through an unknown target and receives no unknown callable argument (`AnalyzeCallableArguments`, `:1930-1949`), and may keep mutable globals only when the callee is a declared function proven not to assign them, which this ADR does not define, so globals are always removed |
+| `call` | `BoundCallOperationExpression`, `BoundIndirectCallExpression`, `BoundFunctionPointerInvocationExpression`, `BoundConstructorCallExpression`, `BoundClrConstructorCallExpression`, `BoundTypeParameterConstructionExpression`, `BoundStructLiteralExpression` (field initializers), `BoundBaseClassCallExpression`, `BoundConstructorChainingExpression`, `BoundClrConversionCallExpression`, `BoundConversionExpression` with a user-defined conversion, `BoundBinaryOperationExpression`/`BoundUnaryExpression`/`BoundClrUnaryOperatorExpression` on user-defined operators, `BoundEventSubscriptionExpression`, `BoundClrEventSubscriptionExpression`, `BoundInterpolatedStringExpression` (`ToString`), `BoundAwaitExpression` (awaiter calls), `BoundForRangeStatement`/`BoundAwaitForRangeStatement` (`GetEnumerator`, `MoveNext`, `Current`, disposal; probe f5), `using`/`await using`/`lock`/`defer` cleanup regions (disposal, `Monitor`), `BoundGoStatement`, `BoundYieldStatement` (the consumer runs arbitrary code before resumption), property reads with user code (a non-auto getter; in any position, a condition included: row R14 and amendment A2, #5215) and `BoundPropertyPattern`/`BoundListPattern`/`BoundSlicePattern`/`BoundConstantPattern`/`BoundRelationalPattern` that invoke user code, `BoundMethodReferenceOperationExpression`/`BoundPropertyReferenceOperationExpression` when invoked, **and every kind not in the table** | removes every member-bearing path and every fact on the indirect-write class (mutable globals, closure-assigned locals, the alias class); in straight-line code with a bound callee, today's finer classification may keep closure-assigned locals when the callee has no captures, is not indirect through an unknown target and receives no unknown callable argument (`AnalyzeCallableArguments`, `:1930-1949`), and may keep mutable globals only when the callee is a declared function proven not to assign them, which this ADR does not define, so globals are always removed |
 | `jump` | `BoundReturnStatement`, `BoundThrowStatement`, `BoundRethrowStatement`, `BoundThrowExpression`, `BoundGotoStatement`, `break`/`continue` | one successor: records the state on the target (through pending cleanup) and yields `Unreachable` |
 | `conditional-jump` | `BoundConditionalGotoStatement` (the binder emits it before the then-body of a multi-clause `if let`, `StatementBinder.Conditionals.gs:299-305`, and the CFG connects both successors, `ControlFlowGraph.gs:298-314`) | two successors: binds the condition and applies its effects (P1 classification plus the condition's own writes and calls); records `Assume(condition, JumpIfTrue)` on the target through pending cleanup; continues with `Assume(condition, !JumpIfTrue)` as the fall-through state. It never yields `Unreachable` by itself. The rule this row fixes: no kind with a live fall-through successor may use the `jump` class, whose transfer ends the current path. A kind that selects between two operands or branches gets its control flow from the join rules (P1 on the condition, each operand under its derived state, P5 on their exits), whatever effect class names its other effect: statement-level branching is `join` or `region`, and an expression such as `BoundConditionalAddressExpression` keeps its `alias` class for the operands it may select while its two operands are joined like those of `?:` |
 | `join` | `BoundIfStatement`, `BoundConditionalExpression`, `BoundSwitchExpression`, `BoundPatternSwitchStatement`, `BoundNullConditionalAccessExpression`, `&&`/`||`/`??`, `BoundTryStatement` exits, labels | P1 on the condition, children under the derived states, P5 on the exits |
@@ -754,9 +667,19 @@ statement's effects are the union of its children's; a block's effects are
 the union of its statements'. The binder records a node's effects in a side
 table keyed by the bound statement when it finishes binding that statement,
 so every node is visited once over the whole body instead of once per
-enclosing block. This is where #5152's single-entry cache
-(`effectsNode`/`effects`, `:29-31`) becomes a table and the counter
-`narrowing.effect-walks` becomes equal to the statement count.
+enclosing block. The record holds raw sets and flags only; the answer that
+depends on the alias set at the statement's entry
+(`DefinitelyExternalFunctionValues`) is derived at the use site from the
+record and the entry state, not stored. A statement that contains a
+function literal is walked, not composed, because the collector analyses a
+closure's body at the sites that invoke it. This is where #5152's
+single-entry cache (`effectsNode`/`effects`, `:29-31`) becomes a table; the
+counter `narrowing.effect-walks` becomes equal to the statement count only
+when the callable-alias analysis is also made bottom-up, which PR 2 does
+when it folds the alias set into the state (PR 1 left the production path
+on the #5152 cache: 95,127 walks on Core, unchanged, while its comparison
+mode composed 92,577 statements from 50,010 reused child records with 2,042
+walked for function literals and 0 differences from a full walk).
 
 Caching and invalidation of the query itself are trivial: `NarrowedType` is
 a lookup in a small immutable array; there is no cache to invalidate because
@@ -804,21 +727,27 @@ here.
   move, and that is where the semantics change meets the compiler's own
   source. Two hazards:
   1. **Less permissive rows** (section 16) can reject repository source.
-     Under the recorded scope the less permissive rows are R9 to R12, and
-     `src/Core` has no `when` filter that writes a narrowed root, no
-     top-level `var` and no `ref` local, so no restructuring is known. The
-     measurements in section 4 found four functions that the draft's loop
-     rule (deferred) would reject: `ExpressionBinder.Assignments.gs:
-     5435-5494` (reassignment from a pattern variable),
-     `BinderContext.gs:906-923` (an `out` parameter read in a loop with a
-     call) and `MemberLookup.gs:1108-1120`, `:3100-3172` (locals a closure
-     in the same function assigns, read in loops with calls); they are the
-     follow-up ADR's concern. If a restructuring is ever needed it must be
-     a restructuring, not `!!`: under the pin, the pinned compiler proves
-     the value non-null there and reports `GS0536`, and warnings are errors,
-     so `!!` cannot bridge the two compilers. The implementation PRs compile
-     Core, Core.Tests and gsc with the built compiler (the response-file
-     procedure in section 24) to confirm.
+     Under the recorded scope the less permissive rows are R9 to R14. R9 to
+     R13 reject nothing in `src/Core` (no `when` filter writes a narrowed
+     root, no top-level `var`, no `ref` local, no suspension point reading
+     a closure-assigned local was found by PR 1). R14 rejects two sites,
+     which the pin-move PR restructures by reading the property into a
+     `let` before the guard:
+     `src/Core/CodeAnalysis/Binding/ExpressionBinder.Access.MemberLookup.gs:3991`
+     and `src/Core/CodeAnalysis/Lowering/BaseCallForwarderRewriter.gs:490`
+     (section 19a, A2). The measurements in section 4 also found four
+     functions that the draft's loop rule (deferred) would reject:
+     `ExpressionBinder.Assignments.gs:5435-5494` (reassignment from a
+     pattern variable), `BinderContext.gs:906-923` (an `out` parameter read
+     in a loop with a call) and `MemberLookup.gs:1108-1120`, `:3100-3172`
+     (locals a closure in the same function assigns, read in loops with
+     calls); they are the follow-up ADR's concern. Every such restructuring
+     must be a restructuring, not `!!`: under the pin, the pinned compiler
+     proves the value non-null there and reports `GS0536`, and warnings are
+     errors, so `!!` cannot bridge the two compilers. The implementation PRs
+     compile Core, Core.Tests and gsc with the built compiler (the
+     response-file procedure in the References section) to confirm the
+     list.
   2. **More permissive rows** make some `!!` in repository source
      provably redundant (`GS0536`). `src/Core` has 3,746 `!!`. The pin-move
      PR for the release that carries this ADR removes the `!!` the new
@@ -851,6 +780,7 @@ compatibility note. "Probe" refers to section 4.
 | R11 | Any call, written or introduced by lowering, kills a fact on a mutable global: `text = "safe"; Clear(); text.Length` where `Clear` assigns the global (probes d3, d3b); `for item in items { }` over an iterator that assigns it (probe f5) (bug [#5170](https://github.com/DavidObando/gsharp/issues/5170)) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
 | R12 | A write to any member of an alias class kills the facts on the whole class, and so does any member, index or indirect write, because a `ref` local or a by-reference parameter may alias the written element or member: `let ref a C? = x; ...; x = nil; a.Value` (probes d4, d4b); `let ref a C? = xs[0]; ...; xs[0] = nil; a.Value` (probe f2); `Run(ref xs[0], xs)` with `Run(ref a C?, xs []C?)` doing `xs[0] = nil; a.Value` (probe g2) (bug [#5171](https://github.com/DavidObando/gsharp/issues/5171)) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
 | R13 | A suspension point (`await`, `yield`) kills facts on mutable globals and on closure-assigned locals, because the code that runs while the function is suspended may invoke a closure that escaped: iterator with `let clear = func() { s = nil }`, `if s != nil { yield 0; yield s.Length }` (probe g5) | accepted, prints `0` and `1` | GS0158 | less permissive (conservative default; the program is correct) |
+| R14 | A read of a property with user code (a non-auto getter) is a `call` in every position, a condition included, and removes every member-bearing path: `if getResultCall.Receiver is not BoundImportedInstanceCallExpression getAwaiterCall { return }` after an earlier proof of a member path (`ExpressionBinder.Access.MemberLookup.gs:3991`, `BaseCallForwarderRewriter.gs:490`) | accepted (today's straight-line kill follows the statement's syntax: calls and member writes only) | GS0158 / GS0159 on the member-path read | less permissive |
 
 Details per row:
 
@@ -935,6 +865,21 @@ Details per row:
   Core.Tests and gsc have (unknown at the time of writing; the earlier
   experiments did not exercise suspension points). g5 joins the corpus with
   a mutant witness (suspension classified `none`).
+- **R14 (amendment A2, #5215, accepted 2026-10-23).** Found by PR 1's comparison
+  mode: two sites in `src/Core` where a condition reads a non-auto property
+  on a path an earlier guard narrowed. Today's straight-line invalidation
+  (`SyntaxMayMutateMemberPaths`) kills member paths on calls and member
+  writes only, so a getter with user code does not kill; today's loop
+  collector and `finally` summaries do kill on it
+  (`AssignedRootsCollector.VisitExpression`, `:1751-1753`), so today is
+  inconsistent. The row keeps the construct table as written: a getter
+  with user code is a call (ADR-0069 #1180: an intervening call
+  invalidates member paths), and the condition's effects apply before its
+  branches (section 9). Impact: Core 2 sites, Core.Tests 0, gsc 0, Oahu 0;
+  the two Core sites are restructured (read the property into a `let`
+  before the guard) in the pin-move PR, not with `!!` (section 15). The
+  rejected alternatives are in section 19a. Tests: the two shapes with a
+  mutant witness (property reads classed `none`).
 - **Join of strengthened facts (no row).** Probe d5 is accepted today and
   after; the join definition in section 6 keeps the common implied type.
   PR 2 adds d5 as a test with a mutant witness (equality-only join), and g1
@@ -1001,6 +946,13 @@ With the study's profile as the baseline (section 4.7) and #5152 landed:
   PRs report the measured table from `build/compiler-bench.py` (#5163,
   merged; `docs/self-host-benchmark.md`), over the Core, LanguageServer
   and hello-world cells, with `GSHARP_MEASURE_PHASES` phases and counters.
+- Measured by PR 1 (#5212, no semantic change, comparison mode off):
+  implementation DLL, reference assembly, PDB, XML and diagnostics
+  byte-identical on Core, Core.Tests, gsc and 12 Oahu projects; Core wall
+  57.06 s to 56.16 s and `bodies` 44,485 ms to 43,861 ms (noise; the PR made
+  no performance claim); `narrowing.loop-rebinds` Core 62, Core.Tests 0, gsc
+  0, Oahu 7, which is the follow-up ADR's first measurement of how often
+  today's second bind happens.
 
 ### 18a. Scope: the recorded decision
 
@@ -1013,9 +965,11 @@ today's mechanism (section 10), and their redesign moves to a follow-up ADR
 that starts from the measured spike described there. What follows from the
 split:
 
-- R-table: R1 to R6 and R9 to R13, including the accepted-program output
-  change of R1 (b) and the overload rejection of R1 (c) (open question 3).
-  R7 and R8 are deferred with section 10.
+- R-table: R1 to R6 and R9 to R14 (R14 added by amendment A2), including
+  the accepted-program output change of R1 (b) and the overload rejection
+  of R1 (c) (open question 3). R7 and R8 are deferred with section 10.
+  Section 16 is the one list of rows; every other mention of "the rows"
+  means that list.
 - Plan: PRs 1, 2 and 4. The loop-related deletions (per-loop CFG,
   21-structure snapshot, diagnostics truncation, `GotoNarrowingSnapshot`,
   proof generations) are deferred with them.
@@ -1024,8 +978,11 @@ split:
   interpreter cost (the `AssignedRootsCollector` and `Update*`/`Invalidate*`
   frames, about 12.5% of main-thread samples); the loop re-bind cost is
   measured by the counter, not removed.
-- Bootstrap: no known restructuring in `src/Core`. The four functions that
-  the draft's loop rule rejected (section 15) were all loop cases.
+- Bootstrap: two known restructurings in `src/Core`, both from R14
+  (`ExpressionBinder.Access.MemberLookup.gs:3991`,
+  `BaseCallForwarderRewriter.gs:490`; section 15 and 19a), done in the
+  pin-move PR. The four functions that the draft's loop rule rejected were
+  all loop cases and stay with the follow-up ADR.
 
 Reasoning the maintainer accepted: four review rounds found defects only
 in the entry-state rules for loops and backward jumps, none in the join
@@ -1044,14 +1001,27 @@ reference, PDB and XML output and identical diagnostics on Core, Core.Tests
 and the pinned Oahu inputs except where the PR's rows predict a change,
 each predicted change listed in the PR body; the benchmark table of section
 18; and a compile of Core, Core.Tests and gsc with the built compiler
-(section 24) with zero diagnostics outside the landed rows.
+(the References section) with zero diagnostics outside the landed rows.
 
-1. **Representation (no semantics change).** `NarrowingState`,
-   `StatementEffects` composed bottom-up in a side table, `BinderContext.
-   Narrowing`, and the query. The frame list becomes save/restore of a state
-   value; every existing pass keeps its rule. Adds `narrowing.loop-rebinds`.
-   Implements the section 9 join in shadow: computed from the branch exit
-   states at every merge point but not yet consumed. Adds the **comparison
+1. **Representation (no semantics change; landed as #5212).**
+   `NarrowingState`, `StatementEffects` composed bottom-up in a side table,
+   `BinderContext.Narrowing`, and the query. The frame list stays the
+   mechanism in this PR and `BinderContext.Narrowing` is its projection
+   (the innermost frame wins); every existing pass keeps its rule. PR 2
+   replaces the frames when it consumes the join, because two couplings
+   make a literal replacement a behaviour change: a block pop drops the
+   inner frame's facts while the lifts write into the enclosing frame (row
+   R3 is this), and the retained backward-`goto` checker is keyed by frame
+   identity (`NarrowingFrameIndices`, `GetNarrowingProofGeneration`,
+   `BinderContext.gs:795-800`). Adds `narrowing.loop-rebinds`. Implements
+   the section 9 join in shadow: computed from the branch exit states at
+   the merge points it covers (`if` with `else if` chains and initializers,
+   `switch` statements, bare blocks; `try`, labels, `goto` joins and
+   expression-level merges are PR 2's) but not yet consumed; because the
+   branches share the frame stack, the shadow restores a fact an earlier
+   branch killed for the later branch and carries nested proofs in an
+   overlay, an approximation of the exit states PR 2 computes exactly. Adds
+   the **comparison
    mode** `GSHARP_NARROWING_COMPARE=<path>`: the binder compares the shadow
    join with what the old passes lifted and writes every disagreement as
    `file:line, path, old type, new type, row`, and separately every read
@@ -1063,24 +1033,34 @@ each predicted change listed in the PR body; the benchmark table of section
    today's compiler for the soundness rows, a mutant for the others).
    Acceptance: byte-identical output; every disagreement on Core,
    Core.Tests and Oahu falls under a row of section 16 (the shadow join is
-   the new rule, so R1-R6 are expected to appear there), none outside the
-   table; the member-selection and cast report for open question 3.
-2. **Joins from exit states (R1-R6, R9).** `if`, `switch`, blocks, `try`,
-   cleanup regions, forward `goto`, labels; the catch-clause entry rule
-   (R10); expression-granular state updates; delete `ApplyIfJoinNarrowings`,
-   `ComputeIfJoinNonNull`,
-   `ProcessBranchStatement`, `ClearAssignedRoots`,
+   the new rule, so R1 to R6 are expected to appear there), none outside
+   the table; the member-selection and cast report for open question 3.
+   Result
+   (#5212): output identity met; the disagreement criterion not met, with
+   four sites outside the table, resolved by amendments A1 and A2 of
+   section 19a.
+2. **Joins from exit states (every row of section 16 that is in scope: R1
+   to R6 and R9 to R14).** `if`, `switch`, blocks, `try`, cleanup regions,
+   forward `goto`, labels; the catch-clause entry rule (R10);
+   expression-granular state updates (R9); the construct table's `call`
+   effects for mutable globals, the alias class and suspension points (R11
+   to R13) and for property reads with user code (R14, amendment A2); the
+   join type rule as amended by A1 (`NarrowingState.JoinTypes`); the
+   frame list replaced by the threaded state; delete `ApplyIfJoinNarrowings`,
+   `ComputeIfJoinNonNull`, `ProcessBranchStatement`, `ClearAssignedRoots`,
    `RestoreEarlyExitLiftsWrittenOnlyByCondition`, `PendingEarlyExitFrames`,
    `PendingSwitchExitFrames`, the #4285/#4290 suppressions; the `try`
    handler and `finally` entry states of section 9. Acceptance: the
    comparison mode's disagreements on Core, Core.Tests and Oahu all fall
-   under R1-R6 or R9-R12; the listed tests re-expected with witnesses; c1
-   and e6 added as tests (red under a mutant that builds the `finally`
-   entry from normal exits), cA, d1, d3b and d4b (red on today's compiler
-   by running the program) and d5 (red under an equality-only join mutant);
-   the section 8 transfer for mutable globals and the alias class; the
-   `GS0536` sites the new compiler reports in
-   repository source are listed in the PR body for the pin-move PR.
+   under a row of section 16 that is in scope (R1 to R6, R9 to R14), none
+   outside; the listed tests re-expected with witnesses; c1 and e6 added as
+   tests (red under a mutant that builds the `finally` entry from normal
+   exits), cA, d1, d3b, d4b, f2, f3, f5 and g2 (red on today's compiler by
+   running the program), d5 and g1 (red under join mutants), the #5206 repro
+   (red under the fallback as first written) and the two R14 shapes (red
+   under a mutant that classes property reads `none`); the `GS0536` sites
+   the new compiler reports in repository source and the two R14 sites
+   (section 15) are listed in the PR body for the pin-move PR.
 3. **Loops and backward jumps: deferred.** Under the recorded scope
    (section 18a) there is no PR 3 in this ADR. The loop and backward-jump
    collectors are touched only by PR 1 (they read the state value) and PR 2
@@ -1104,6 +1084,84 @@ each predicted change listed in the PR body; the benchmark table of section
 
 The pin-move PR after the release that carries PR 2 removes the `!!` that
 `GS0536` newly reports (section 15).
+
+### 19a. Findings of PR 1 and the amendments they led to
+
+PR 1 (#5212) ran the comparison mode on Core, Core.Tests, gsc and the 12
+pinned Oahu projects. Counts are first-divergence sites (a fact an earlier
+merge point already proved is not counted again):
+
+| Input | R1 | R2 | R3 | R4 | R5 | R6 | outside the table |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Core | 73 | 13 | 0 | 13 | 106 | 0 | 2 (#5215) |
+| Core.Tests | 2 | 0 | 0 | 0 | 0 | 0 | 0 |
+| gsc | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Oahu (12 projects) | 8 | 0 | 0 | 0 | 5 | 0 | 2 (#5206) |
+
+Reads for decided question 3 (reported at the read): Core 362 reads would
+narrow, 360 of them gain only a nil check (no cast, no member-selection
+change) and 2 are type-test facts (`ConversionClassifier.gs:5095-5096`,
+`inner` as `BoundLiteralExpression`, whose member `Type` both types have);
+Core.Tests 10 and Oahu 7, all nil-check only; gsc 0. R3 and R6 have no site
+because these inputs have no user `goto`. The four sites outside the table
+were two defects of this document. The maintainer decided both amendments
+on 2026-10-23 (PR #5226); for the implementation (#5130, PR 2) A1 is the
+one function `NarrowingState.JoinTypes` and A2 is one predicate of the
+construct table.
+
+**A1 (#5206, P1, accepted 2026-10-23): the join keeps the declared non-null
+type whenever every incoming state has a fact.** After `if settings is IInit
+init { ... }` with `settings T?`, the then-state has `settings -> IInit` and
+the else-state `settings -> T`; neither converts to the other, and `IInit`
+does not convert to `T` with its representation preserved, so the fallback
+as first written dropped the path and a later read saw `T?` (today's
+compiler keeps `T`; `Oahu.Foundation/Auxiliary/SettingsManager.gs:51,
+111`). Decision: drop the representation-preserving condition and extend
+the fallback to stable member paths, as section 6 now states. The
+maintainer's reason: do not break Oahu or other consumers. It is one rule
+for all incoming facts, it matches section 15's statement that a
+nullability fact emits no cast, and its only effect on today's results is
+more permissive (the `goto` join's fallback widens to member paths and to
+non-converting refinements). PR 2 adds the repro of #5206 as a corpus row
+with a mutant witness (the fallback as first written) and re-runs the
+`goto` join tests of `Issue4519` for the widened fallback. Rejected
+alternatives: counting only type-test refinements as convertible (a shape
+test); recording the drop as a less-permissive row (would reject the two
+Oahu sites and any program that tests a nullable local against an interface
+its type does not implement).
+
+**A2 (#5215, P1, accepted 2026-10-23): a property read with user code is a
+call, in a condition too, and row R14 records it.** Section 8 classes a
+non-auto property read as `call`; section 9 applies a condition's effects
+before its branches; together a condition that only reads such a property
+kills every member-path fact. Today's straight-line kill follows the
+statement's syntax (calls and member writes), so it keeps the fact; today's
+loop collector and `finally` summaries already kill on the read
+(`:1751-1753`). Decision: keep the kill, row R14 as written in section 16.
+It is the conservative default of section 6 applied as stated (ADR-0069
+#1180: an intervening call invalidates member paths), it removes the
+inconsistency between today's straight-line and loop collectors, and it
+costs two restructurings. The pin-move PR restructures these two sites of
+`src/Core` by reading the property into a `let` before the guard, not with
+`!!` (section 15): `src/Core/CodeAnalysis/Binding/ExpressionBinder.Access.
+MemberLookup.gs:3991` (`if getResultCall.Receiver is not
+BoundImportedInstanceCallExpression getAwaiterCall { return }`) and
+`src/Core/CodeAnalysis/Lowering/BaseCallForwarderRewriter.gs:490` (`if
+method.ReceiverType is not StructSymbol declaring { return }`). No site in
+Core.Tests, gsc or the pinned Oahu inputs. Rejected alternatives:
+exempting a read whose path is the fact's own subject (a shape test; the
+getter can still mutate other reachable state); classing every property
+read as `none` for member paths (today's straight-line rule, unsound in the
+same way: a getter with user code can write the member a path names).
+
+**Clarifications from #5207 (not design choices)** are folded into the text
+of this revision: PR 1 keeps the frame list (section 19), `KillRoots` takes
+`IReadOnlyCollection[VariableSymbol]` (section 7), the construct table
+covers every concrete `BoundNode` type and gives one class per type with
+binder-side refinement as a later table change (section 8), the effects
+record holds raw sets with the alias-dependent answer derived at the use
+site and statements with function literals walked (section 13), and the
+shadow's coverage and approximation (section 19).
 
 ### 20. Risks
 
@@ -1154,8 +1212,9 @@ The pin-move PR after the release that carries PR 2 removes the `!!` that
   Oahu is large the maintainer can choose open question 3.
 - **Bootstrap**: a less permissive row rejects repository source only at
   the pin move. Mitigation: the response-file compile in every
-  implementation PR (section 24); no restructuring is known under the
-  recorded scope (section 15).
+  implementation PR (the References section); the two known restructurings
+  (R14, section 15) are listed for the pin-move PR, and no other is known
+  under the recorded scope.
 - **Performance regression from immutable states** in bodies with many
   facts. Mitigation: states are tiny arrays; the benchmark table gates each
   PR.
@@ -1187,7 +1246,10 @@ with each question is the one that first depends on it.
    the change at the price of one more rule. Decided: uniform joins, with
    PR 1's comparison mode reporting every member-selection, overload (R1
    (c)) and cast difference on Core, Core.Tests and Oahu before PR 2 lands,
-   so the maintainer sees the numbers before the change ships. PR 2.
+   so the maintainer sees the numbers before the change ships. PR 2. The
+   numbers from PR 1 are in section 19a: of 362 Core reads that would
+   narrow, 2 are type-test facts and neither changes member selection;
+   Core.Tests 10 and Oahu 7 are nil-check only.
 4. Deferred with section 10 to the follow-up ADR (#5196): whether a call to
    a function whose declared return type is non-nullable counts as a
    non-null proof across a back edge (the draft dropped
@@ -1223,7 +1285,9 @@ Positive:
   goto proof machinery in `BinderContext.gs` stay for the follow-up ADR
   (section 10), with a counter that measures what they cost.
 - Four soundness holes close (R9, R10, R11, R12), three of them present in
-  the current compiler (#5168, #5170, #5171); R13 closes a potential one.
+  the current compiler (#5168, #5170, #5171); R13 and R14 close potential
+  ones and remove an inconsistency between today's straight-line and loop
+  collectors.
 - The design has a conservative default and closed lists (sections 6 and
   8), so a later finding is a table entry or a corpus row.
 - The state is a value, which makes per-position queries for tooling
@@ -1232,10 +1296,12 @@ Positive:
 Negative:
 
 - Less permissive changes R9 to R12, all soundness fixes: a program that
-  dereferences nil today gets a diagnostic. R13 is a conservative-default
-  rejection of correct programs that read a closure-assigned local across a
-  suspension point; R1 (c) rejects an overload call that a newly surviving
-  type-test fact makes ambiguous.
+  dereferences nil today gets a diagnostic. R13 and R14 are
+  conservative-default rejections of programs that are correct today (a
+  closure-assigned local read across a suspension point; a member-path
+  fact read after a condition that calls a getter with user code), R14
+  costing two restructurings in `src/Core` at the pin move; R1 (c) rejects
+  an overload call that a newly surviving type-test fact makes ambiguous.
 - One accepted-program output change, R1 (b): a hidden member read after a
   join selects the narrowed type's member (open question 3).
 - IL can change at join points for type-test facts (section 15).
