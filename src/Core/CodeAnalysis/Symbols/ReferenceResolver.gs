@@ -1806,6 +1806,18 @@ class ReferenceResolver : IDisposable {
                 if t.FullName is {} fullName {
                     defined.Add(fullName)
                     types.Add(t)
+                    // Build the same parent -> public nested types map that the
+                    // metadata reader builds, so a forward to this assembly is
+                    // followed by the same nested types on both paths.
+                    if t.IsNestedPublic && t.DeclaringType?.FullName is {} outer {
+                        if !publicNested.TryGetValue(outer, out var children) {
+                            children = List[string]()
+                            publicNested[outer] = children
+                        }
+                        if !children.Contains(fullName) {
+                            children.Add(fullName)
+                        }
+                    }
                 }
             }
             return AssemblyTypeNames(defined, forwarded, types, publicNested, nil)

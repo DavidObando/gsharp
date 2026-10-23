@@ -5,6 +5,7 @@
 package GSharp.Core.Tests.CodeAnalysis.Symbols
 
 import GSharp.Core.CodeAnalysis.Symbols
+import Microsoft.CodeAnalysis
 import System
 import System.Collections.Generic
 import System.IO
@@ -128,7 +129,58 @@ open class Issue5124TypeNameIndexTests {
         Assert.False(MetadataTypeNameReader.TryReadNames(stream.ToArray(), defined, forwarded, publicNested))
     }
 
+    @Fact
+    func ForwardToAnAssemblyReadThroughReflection_FollowsTheSameNestedTypes() {
+        // The target is read from metadata in one run and through reflection in the
+        // other, because only the second one has a name that reflection escapes.
+        // Both runs must produce the same names and the same first declarer.
+        let metadata = ForwardingIndex(withEscapedName: false)
+        let reflection = ForwardingIndex(withEscapedName: true)
+        Assert.Equal(metadata.FacadeNames, reflection.FacadeNames)
+        Assert.Contains("N5124.Outer+Inner", reflection.FacadeNames)
+        Assert.Equal("Target5124", metadata.InnerAssembly)
+        Assert.Equal("Target5124", reflection.InnerAssembly)
+    }
+
     shared {
+        // References are ordered [facade, rival, target]. The rival also declares
+        // N5124.Outer+Inner, so the facade must contribute that name for the target.
+        private func ForwardingIndex(withEscapedName bool) ForwardingResult5124 {
+            let directory = Path.Combine(AppContext.BaseDirectory, "csharp-fixtures", Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(directory)
+            let targetPath = Path.Combine(directory, "Target5124.dll")
+            let builder = PersistedAssemblyBuilder(AssemblyName("Target5124"), typeof(object).Assembly)
+            let module_ = builder.DefineDynamicModule("Target5124")
+            let outer = module_.DefineType("N5124.Outer", TypeAttributes.Public | TypeAttributes.Class)
+            let inner = outer.DefineNestedType("Inner", TypeAttributes.NestedPublic | TypeAttributes.Class)
+            outer.CreateType()
+            inner.CreateType()
+            if withEscapedName {
+                module_.DefineType("Odd5124[Name", TypeAttributes.Public | TypeAttributes.Class).CreateType()
+            }
+            builder.Save(targetPath)
+            using let facade = CSharpFixture(
+                "[assembly: System.Runtime.CompilerServices.TypeForwardedTo(typeof(N5124.Outer))]",
+                []MetadataReference{MetadataReference.CreateFromFile(targetPath)},
+                assemblyName: "Facade5124"
+            )
+            using let rival = CSharpFixture(
+                "namespace N5124 { public class Outer { public class Inner {} } }",
+                assemblyName: "Rival5124"
+            )
+            using let resolver = ReferenceResolver.WithReferences(
+                []string{facade.AssemblyPath, rival.AssemblyPath, targetPath}
+            )
+            let facadeIndex = Array.FindIndex(
+                resolver.Assemblies.ToArray(),
+                (a Assembly) -> a.GetName().Name == "Facade5124"
+            )
+            Assert.Equal(0, facadeIndex)
+            let names = resolver.ExportMetadataIndex().TypeNames[facadeIndex].ToList()
+            Assert.True(resolver.TryResolveType("N5124.Outer+Inner", out var found))
+            return ForwardingResult5124(names, found.Assembly.GetName().Name!!)
+        }
+
         private func ForwardedTypes(assembly Assembly)[]Type? {
             try {
                 return assembly.GetForwardedTypes()
@@ -158,4 +210,15 @@ open class Issue5124TypeNameIndexTests {
             return names
         }
     }
+}
+
+internal class ForwardingResult5124 {
+    internal init(facadeNames List[string], innerAssembly string) {
+        FacadeNames = facadeNames
+        InnerAssembly = innerAssembly
+    }
+
+    internal prop FacadeNames List[string]
+
+    internal prop InnerAssembly string
 }
