@@ -83,6 +83,9 @@
          auto-referenced by every consumer .gsproj (build/Gsharp.NET.Sdk.props). -->
     <ProjectReference Include="../Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
     <ProjectReference Include="../Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
+    <!-- ADR-0207: the SDK restores the ReadyToRun compiler of its RID from Gsharp.NET.Sdk.Compiler.<rid>.
+         Building the SDK package builds those six packages into the same folder. -->
+    <ProjectReference Include="../Gsharp.NET.Sdk.Compiler/Gsharp.NET.Sdk.Compiler.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
   </ItemGroup>
 
   <ItemGroup>

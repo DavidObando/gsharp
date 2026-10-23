@@ -8,6 +8,12 @@
     <!-- Compiler is shipped as gsc.dll so the Gsharp.NET.Sdk and end users
          can invoke `dotnet gsc.dll` (matching csc/vbc naming convention). -->
     <AssemblyName>gsc</AssemblyName>
+    <!-- ADR-0207: the ReadyToRun gsc packages (src/Sdk/Gsharp.NET.Sdk.Compiler) publish this project per RID.
+         Only restore sees these two properties. It then writes the RID targets and downloads the crossgen2
+         and runtime packs. A RuntimeIdentifiers value at build time would change output paths and tool
+         packing. The fixed list keeps the lock file independent of the host. -->
+    <RuntimeIdentifiers Condition="'$(MSBuildRestoreSessionId)' != ''">linux-x64;linux-arm64;win-x64;win-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
+    <PublishReadyToRun Condition="'$(MSBuildRestoreSessionId)' != '' and '$(GsharpSkipReadyToRunRestore)' != 'true'">true</PublishReadyToRun>
       <!-- Disable tiered PGO instrumentation in the published payload (#5120). Tiered compilation stays on. -->
     <TieredPGO>false</TieredPGO>
   </PropertyGroup>
@@ -20,6 +26,11 @@
          (ReferenceResolver.ResolveDriverReferencePaths) finds it outside MSBuild. -->
     <ProjectReference Include="../Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj" />
     <ProjectReference Include="../Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- ADR-0207: the portable runtime set reaches user output. It is never ReadyToRun-compiled. -->
+    <PublishReadyToRunExclude Include="Gsharp.Runtime.Channels.dll;Gsharp.Runtime.Values.dll;Gsharp.Extensions.dll;Gsharp.HotReload.Runtime.dll" />
   </ItemGroup>
 
   <ItemGroup>

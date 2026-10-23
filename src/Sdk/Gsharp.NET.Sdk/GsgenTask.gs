@@ -349,7 +349,7 @@ open class GsgenTask : Task, ICancelableTask {
                 "G# generator worker unavailable without IBuildEngine4; using standalone gsgen."
             )
         }
-        let psi = ProcessStartInfo("dotnet", "\"$gsgenToolFullPath\" @\"$responseFilePath\""){
+        let psi = ProcessStartInfo(DotnetHost.Path(), "\"$gsgenToolFullPath\" @\"$responseFilePath\""){
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,

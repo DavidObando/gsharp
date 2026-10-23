@@ -1157,6 +1157,11 @@ class ReferenceResolver : IDisposable {
             "mscorlib"
         }
         private let DefaultTypeNameIndexGate object = SystemObject()
+
+        /// The folder with the portable runtime files of the SDK package (`channels/`, `values/`,
+        /// `extensions/`). The driver sets it from /sdktoolsdir:. The variable GSHARP_SDK_TOOLS_DIR
+        /// is the fallback (ADR-0207).
+        internal var SdkToolsDirectory string? = nil
         private var defaultTypeNameIndexAssemblies ImmutableArray[Assembly] = ImmutableArray[Assembly].Empty
         private var defaultTypeNameIndex Lazy[ReferenceTypeNameIndex]?
 
@@ -1579,12 +1584,35 @@ class ReferenceResolver : IDisposable {
             projectFolder string,
             sdkFolder string
         ) string? {
-            let candidates = []string{
-                Path.Combine(baseDirectory, fileName),
-                Path.Combine(baseDirectory, "..", projectFolder, fileName),
-                Path.Combine(baseDirectory, "..", sdkFolder, fileName)
+            // ADR-0207: the SDK tools directory comes first. Its files are the portable
+            // copies. A candidate that is not portable IL is skipped, so an R2R image of a
+            // runtime assembly never reaches user output.
+            let candidates = List[string]()
+            let sdkToolsDirectory = SdkToolsDirectory ?? Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
+            if !string.IsNullOrEmpty(sdkToolsDirectory) {
+                candidates.Add(Path.Combine(sdkToolsDirectory, sdkFolder, fileName))
             }
-            return candidates.Select(Path.GetFullPath).FirstOrDefault(File.Exists)
+            candidates.Add(Path.Combine(baseDirectory, fileName))
+            candidates.Add(Path.Combine(baseDirectory, "..", projectFolder, fileName))
+            candidates.Add(Path.Combine(baseDirectory, "..", sdkFolder, fileName))
+            return candidates.Select(Path.GetFullPath).FirstOrDefault(IsPortableBundledFile)
+        }
+
+        private func IsPortableBundledFile(path string) bool {
+            if !File.Exists(path) {
+                return false
+            }
+            try {
+                using let stream = File.OpenRead(path)
+                let headers = PEHeaders(stream)
+                // 0x14C is the machine of a portable IL assembly. ReadyToRun images
+                // carry another value (the architecture XOR an OS tag).
+                return headers.CoffHeader.Machine == Machine.I386
+            } catch (IOException) {
+                return false
+            } catch (BadImageFormatException) {
+                return false
+            }
         }
 
         private func BuildEmittedTypeNameIndex(rawNames IEnumerable[string]) Dictionary[string, string] {

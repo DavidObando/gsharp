@@ -349,7 +349,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("if: startsWith(github.ref, 'refs/tags/v')", publish)
         needs = set(re.search(r"needs: \[(.*?)\]", publish).group(1).split(", "))
         self.assertEqual(needs, {"build", "tests", "test-partition", "harness", "e2e", "ilverify",
-                                 "cs2gs-corpus", "vsix", "visual-studio-extension", "desktop-msbuild-sdk-smoke"})
+                                 "cs2gs-corpus", "vsix", "visual-studio-extension", "desktop-msbuild-sdk-smoke",
+                                 "r2r-compiler-smoke"})
         for artifact in ("nuget-packages", "vscode-gsharp-vsix", "visual-studio-gsharp-vsix"):
             self.assertIn(f"name: {artifact}", publish)
         pages = (ROOT / ".github/workflows/pages.yml").read_text()

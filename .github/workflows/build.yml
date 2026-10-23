@@ -130,7 +130,7 @@ jobs:
       - name: Check packed netstandard2.0 SDK assemblies do not reference the host runtime
         # Issue #4921: tools/task/Gsharp.NET.Sdk.dll must load on .NET Framework
         # MSBuild, which has no System.Private.CoreLib.
-        run: python3 build/check-netstandard-host-refs.py out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg
+        run: python3 build/check-netstandard-host-refs.py out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg
 
       - name: Test the netstandard member-reference check
         run: python3 build/test-check-netstandard-member-refs.py
@@ -141,7 +141,7 @@ jobs:
         # against (NETStandard.Library + Microsoft.Build reference assemblies,
         # from the NuGet cache restored above); a host-only overload such as
         # String.Split(char, StringSplitOptions) fails on .NET Framework MSBuild.
-        run: python3 build/check-netstandard-member-refs.py out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg
+        run: python3 build/check-netstandard-member-refs.py out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg
 
       - name: Upload NuGet packages
         uses: actions/upload-artifact@v5
@@ -389,7 +389,9 @@ jobs:
         run: |
           case "$HARNESS" in
             counters) build/test-cs2gs-counters.sh ;;
-            stage1) python3 build/test-selfhost-pack-stage1.py ;;
+            stage1)
+              python3 build/test-selfhost-pack-stage1.py
+              python3 build/test-rid-compiler-packages.py ;;
             stage2)
               dotnet restore build/selfhost/PackageContentHash.gsproj --locked-mode
               dotnet restore build/selfhost/TestSupervisorLogger.gsproj --locked-mode
@@ -948,9 +950,50 @@ jobs:
           go test -count=1 ./...
           go vet ./...
 
+  r2r-compiler-smoke:
+    # ADR-0207 / #5155: install the packages built on Linux and run the ReadyToRun compiler on each OS and
+    # architecture. The script restores the Gsharp.NET.Sdk.Compiler.<rid> package of the host with an empty
+    # NuGet cache, builds a project and a generator project, and compares the output with the IL compiler.
+    # The labels are GitHub-hosted runners (arm64 runners are free for public repositories). A RID whose job
+    # cannot run must be named as unverified in the release notes.
+    name: r2r-compiler-smoke (${{ matrix.rid }})
+    needs: [select, build]
+    if: contains(fromJSON(needs.select.outputs.plan).jobs, 'r2r-compiler-smoke')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: linux-x64, os: ubuntu-latest }
+          - { rid: linux-arm64, os: ubuntu-24.04-arm }
+          - { rid: win-x64, os: windows-latest }
+          - { rid: win-arm64, os: windows-11-arm }
+          - { rid: osx-arm64, os: macos-latest }
+          - { rid: osx-x64, os: macos-15-intel }
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Download NuGet packages
+        uses: actions/download-artifact@v5
+        with:
+          name: nuget-packages
+          path: ./nupkgs-smoke
+
+      - name: Run the ReadyToRun compiler smoke
+        shell: bash
+        env:
+          GSHARP_R2R_NUPKG_DIR: nupkgs-smoke
+        run: bash e2etests/r2r-compiler-e2e.sh
+
   ci:
     if: always()
-    needs: [select, build, discover-tests, tests, test-partition, harness, format, e2e, ilverify, release-version-refs, cs2gs-corpus, vscode-extension, vsix, visual-studio-extension, desktop-msbuild-sdk-smoke, go2gs, go2gs-windows, go2gs-macos]
+    needs: [select, build, discover-tests, tests, test-partition, harness, format, e2e, ilverify, release-version-refs, cs2gs-corpus, vscode-extension, vsix, visual-studio-extension, desktop-msbuild-sdk-smoke, r2r-compiler-smoke, go2gs, go2gs-windows, go2gs-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -962,7 +1005,7 @@ jobs:
 
   publish:
     runs-on: ubuntu-latest
-    needs: [build, tests, test-partition, harness, e2e, ilverify, cs2gs-corpus, vsix, visual-studio-extension, desktop-msbuild-sdk-smoke]
+    needs: [build, tests, test-partition, harness, e2e, ilverify, cs2gs-corpus, vsix, visual-studio-extension, desktop-msbuild-sdk-smoke, r2r-compiler-smoke]
     if: startsWith(github.ref, 'refs/tags/v')
 
     permissions:
@@ -1000,8 +1043,36 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Push to NuGet
-        run: dotnet nuget push "./nupkgs/*.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+      # ADR-0207: Gsharp.NET.Sdk restores Gsharp.NET.Sdk.Compiler.<rid> of its exact version with
+      # PackageDownload. A restore fails if that package is missing, so the six RID packages go first.
+      # A failed push fails the job before the SDK package is pushed.
+      - name: Push the RID compiler packages to NuGet
+        run: |
+          set -euo pipefail
+          count=0
+          for pkg in ./nupkgs/Gsharp.NET.Sdk.Compiler.*.nupkg; do
+            for attempt in 1 2 3; do
+              if dotnet nuget push "$pkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate; then break; fi
+              if [ "$attempt" = 3 ]; then echo "push of $pkg failed three times"; exit 1; fi
+              sleep 30
+            done
+            count=$((count + 1))
+          done
+          test "$count" -eq 6 || { echo "expected six RID compiler packages, found $count"; exit 1; }
+
+      - name: Wait until the six RID compiler packages are on NuGet
+        run: python3 build/check-rid-packages.py --packages ./nupkgs --wait-minutes 30
+
+      - name: Push the remaining packages to NuGet
+        run: |
+          set -euo pipefail
+          for pkg in ./nupkgs/*.nupkg; do
+            case "$(basename "$pkg")" in Gsharp.NET.Sdk.Compiler.*) continue ;; esac
+            dotnet nuget push "$pkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+          done
+
+      - name: Check that the SDK and all six RID compiler packages exist on NuGet
+        run: python3 build/check-rid-packages.py --packages ./nupkgs --wait-minutes 15 --require-sdk
 
       - name: Setup Node.js
         uses: actions/setup-node@v5

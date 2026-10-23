@@ -89,6 +89,10 @@ open class Program {
         /// Gets or sets an explicit override for the resolved gsgen.dll path (from /gsgentool:<path>).
         prop GsgenToolPath string?
 
+        /// Gets or sets the SDK package tools folder (from /sdktoolsdir:<dir>). It holds the portable
+        /// gsgen and runtime files (ADR-0207).
+        prop SdkToolsDir string?
+
         prop OutputPath string?
         prop RefOutputPath string?
         prop AssemblyName string?
@@ -284,6 +288,7 @@ open class Program {
             var parsed CommandLineArgs
             try {
                 parsed = ParseCommandLine(args)
+                ReferenceResolver.SdkToolsDirectory = parsed.SdkToolsDir
             } catch (ex CommandLineException) {
                 Console.Error.WriteLine(ex.Message)
                 return Error
@@ -927,7 +932,7 @@ open class Program {
             rspLines.Add("/out:\"$outDir\"")
             rspLines.Add("/manifest:\"$manifestPath\"")
             File.WriteAllLines(rspPath, rspLines, Encoding.UTF8)
-            let psi = ProcessStartInfo("dotnet", "\"$gsgenPath\" @\"$rspPath\""){
+            let psi = ProcessStartInfo(ResolveLaunchHost(), "\"$gsgenPath\" @\"$rspPath\""){
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
@@ -994,14 +999,43 @@ open class Program {
             return false
         }
 
-        /// Resolves the gsgen.dll path: the explicit /gsgentool: override when
-        /// supplied, else the packaged-SDK sibling convention
-        /// (tools/compiler/gsc.dll + tools/gsgen/gsgen.dll under a shared tools/).
+        /// Resolves the gsgen.dll path (ADR-0207). The order is: the /gsgentool: switch, the
+        /// GSHARP_GSGEN_TOOL variable, gsgen/gsgen.dll under the SDK tools folder (the /sdktoolsdir:
+        /// switch or the GSHARP_SDK_TOOLS_DIR variable), and last the packaged-SDK sibling convention
+        /// (tools/compiler/gsc.dll + tools/gsgen/gsgen.dll under a shared tools/). The sibling
+        /// convention is valid only for the IL gsc inside the SDK package.
         private func ResolveGsgenToolPath(parsed CommandLineArgs) string {
             if !string.IsNullOrEmpty(parsed.GsgenToolPath) {
                 return parsed.GsgenToolPath!!
             }
+            let fromEnvironment = Environment.GetEnvironmentVariable("GSHARP_GSGEN_TOOL")
+            if !string.IsNullOrEmpty(fromEnvironment) {
+                return Path.GetFullPath(fromEnvironment)
+            }
+            let sdkToolsDir = if string.IsNullOrEmpty(parsed.SdkToolsDir) {
+                Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
+            } else {
+                parsed.SdkToolsDir
+            }
+            if !string.IsNullOrEmpty(sdkToolsDir) {
+                return Path.GetFullPath(Path.Combine(sdkToolsDir, "gsgen", "gsgen.dll"))
+            }
             return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "gsgen", "gsgen.dll"))
+        }
+
+        /// Gives the executable that starts gsgen: the host that runs this compiler, so that
+        /// the child process has the same architecture (ADR-0207). The bare name `dotnet` is the
+        /// fallback when the host is not the dotnet muxer.
+        private func ResolveLaunchHost() string {
+            let processPath = Environment.ProcessPath
+            if !string.IsNullOrEmpty(processPath) && string.Equals(
+                Path.GetFileNameWithoutExtension(processPath),
+                "dotnet",
+                StringComparison.OrdinalIgnoreCase
+            ) {
+                return processPath!!
+            }
+            return "dotnet"
         }
 
         private func ResolveFrameworkMoniker(tfm string)(Name string, Version string) {
@@ -1031,6 +1065,7 @@ Options:
                                 Embed a managed resource (alias: /res).
   /analyzer:<file>              Analyzer/generator assembly; runs gsgen before compiling (repeatable).
   /gsgentool:<file>             Override the resolved path to gsgen.dll (default: sibling of gsc.dll).
+  /sdktoolsdir:<dir>            SDK package tools folder with gsgen/ and the portable runtime files.
   /gsanalyzer:<file>            G# diagnostic analyzer assembly, run in-process after binding (repeatable, ADR-0169).
   /gsdiag:<ID>=<severity>       Per-diagnostic severity override: none, hidden, info, warning, or error (repeatable).
   /lib:<path>                   Accepted for csc compatibility (currently a no-op).
@@ -1234,6 +1269,11 @@ Options:
                             // sibling tools/gsgen/gsgen.dll next to gsc.dll (the packaged SDK
                             // layout). Mainly useful for tests and non-packaged (cs2gs) callers.
                             result.GsgenToolPath = value
+                        }
+                        case "sdktoolsdir" {
+                            // The SDK package tools folder (ADR-0207). Gives gsgen and the
+                            // portable runtime files when this gsc runs from another package.
+                            result.SdkToolsDir = value
                         }
                         case "implicitimports", "implicit-imports" {
                             result.ImplicitSystemImport = ParseBoolFlag(value!!, defaultIfEmpty: true)

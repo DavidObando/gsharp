@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="utf-8"?><Project Sdk="Gsharp.NET.Sdk">
+
+  <!-- ADR-0207: ReadyToRun gsc packages, one per RID. This project packs six nupkgs
+       (Gsharp.NET.Sdk.Compiler.<rid>) in one build. The outer build runs the empty project build.
+       Then it calls Pack for each RID in the list. The inner call publishes the compiler with
+       crossgen2 for that RID, checks the portable runtime set and packs the result. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn);NU5128;NU5100;NU5131;NU5017</NoWarn>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <IncludeSymbols>false</IncludeSymbols>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <IsPackable>true</IsPackable>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <NoPackageAnalysis>true</NoPackageAnalysis>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <PackageId>Gsharp.NET.Sdk.Compiler</PackageId>
+    <PackageTags>gsharp;dotnet;sdk;compiler;readytorun</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/DavidObando/gsharp</PackageProjectUrl>
+    <Description>ReadyToRun G# compiler for one runtime identifier. Gsharp.NET.Sdk restores it with PackageDownload. Reference the SDK, not this package.</Description>
+
+    <!-- Keep in step with src/Sdk/Gsharp.NET.Sdk/build/Gsharp.NET.Sdk.props. -->
+    <GsharpCompilerPackTargetFramework>net10.0</GsharpCompilerPackTargetFramework>
+    <GsharpCompilerPackRuntimeIdentifiers>linux-x64;linux-arm64;win-x64;win-arm64;osx-x64;osx-arm64</GsharpCompilerPackRuntimeIdentifiers>
+    <!-- The portable runtime set: files that reach user output or a user process. They stay
+         portable IL and are never in a RID package. -->
+    <GsharpPortableRuntimeSet>Gsharp.Runtime.Channels.dll;Gsharp.Runtime.Values.dll;Gsharp.Extensions.dll;Gsharp.HotReload.Runtime.dll</GsharpPortableRuntimeSet>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(GsharpCompilerPackRid)' != '' ">
+    <PackageId>Gsharp.NET.Sdk.Compiler.$(GsharpCompilerPackRid)</PackageId>
+    <Description>ReadyToRun G# compiler for $(GsharpCompilerPackRid). Gsharp.NET.Sdk restores it with PackageDownload. Reference the SDK, not this package.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Build-only references that order the compiler and the portable runtime projects before packing. -->
+    <ProjectReference Include="../../Compiler/Compiler.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
+    <ProjectReference Include="../Gsharp.Extensions/Gsharp.Extensions.csproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
+    <ProjectReference Include="../Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
+    <ProjectReference Include="../Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
+    <ProjectReference Include="../Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
+  </ItemGroup>
+
+  <!-- Reads the PE Machine field of files. 0x14C is portable IL. crossgen2 writes the target
+       architecture XOR an OS tag, so an R2R image has another value. -->
+  <UsingTask TaskName="GsharpAssertImages" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Portable ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="false" />
+      <ReadyToRun ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="false" />
+      <ForbiddenNames Required="false" />
+      <Packed ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="false" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Linq" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        Func<string, int> machine = path =>
+        {
+            using (var stream = File.OpenRead(path))
+            using (var reader = new BinaryReader(stream))
+            {
+                stream.Position = 0x3C;
+                var peOffset = reader.ReadInt32();
+                stream.Position = peOffset + 4;
+                return reader.ReadUInt16();
+            }
+        };
+        foreach (var item in Portable ?? new Microsoft.Build.Framework.ITaskItem[0])
+        {
+            if (!File.Exists(item.ItemSpec)) { Log.LogError("Portable runtime file is missing: " + item.ItemSpec); continue; }
+            var value = machine(item.ItemSpec);
+            if (value != 0x14C) Log.LogError("Portable runtime file " + item.ItemSpec + " has PE Machine 0x" + value.ToString("X") + ". It must be 0x14C (portable IL).");
+        }
+        foreach (var item in ReadyToRun ?? new Microsoft.Build.Framework.ITaskItem[0])
+        {
+            if (!File.Exists(item.ItemSpec)) { Log.LogError("ReadyToRun file is missing: " + item.ItemSpec); continue; }
+            if (machine(item.ItemSpec) == 0x14C) Log.LogError("File " + item.ItemSpec + " is portable IL. crossgen2 did not run for it.");
+        }
+        var forbidden = (ForbiddenNames ?? "").Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var item in Packed ?? new Microsoft.Build.Framework.ITaskItem[0])
+        {
+            if (forbidden.Contains(Path.GetFileName(item.ItemSpec), StringComparer.OrdinalIgnoreCase))
+                Log.LogError("The package must not contain " + Path.GetFileName(item.ItemSpec) + ". It is in the portable runtime set.");
+        }
+        return !Log.HasLoggedErrors;
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="GsharpPackCompilerRids" AfterTargets="Build" Condition=" '$(GsharpCompilerPackRid)' == '' ">
+    <ItemGroup>
+      <_GsharpCompilerPackRid Include="$(GsharpCompilerPackRuntimeIdentifiers)" />
+    </ItemGroup>
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="Pack"
+             Properties="GsharpCompilerPackRid=%(_GsharpCompilerPackRid.Identity);NoBuild=true"
+             BuildInParallel="false" />
+  </Target>
+
+  <Target Name="_GsharpStageCompilerRid" BeforeTargets="_GetPackageFiles" Condition=" '$(GsharpCompilerPackRid)' != '' ">
+    <PropertyGroup>
+      <_GsharpRidStageDir>$([MSBuild]::NormalizeDirectory('$(IntermediateOutputPath)', 'compiler-rid', '$(GsharpCompilerPackRid)'))</_GsharpRidStageDir>
+      <_GsharpRidStagingBin>$([MSBuild]::NormalizeDirectory('$(IntermediateOutputPath)', 'compiler-rid-staging', 'bin'))</_GsharpRidStagingBin>
+    </PropertyGroup>
+    <RemoveDir Directories="$(_GsharpRidStageDir)" Condition="Exists('$(_GsharpRidStageDir)')" />
+    <!-- Global properties flow into a nested MSBuild call. The inner Pack runs with NoBuild=true, and a
+         graph build sets BuildProjectReferences=false. The RID publish needs its own build of the compiler
+         closure, so the call sets both properties back. -->
+    <MSBuild Projects="$(MSBuildThisFileDirectory)../../Compiler/Compiler.gsproj"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackTargetFramework);RuntimeIdentifier=$(GsharpCompilerPackRid);SelfContained=false;PublishReadyToRun=true;UseAppHost=false;PublishSingleFile=false;BuildProjectReferences=true;NoBuild=false;PublishDir=$(_GsharpRidStageDir);BaseOutputPath=$(_GsharpRidStagingBin);GsharpObjRoot=$(IntermediateOutputPath)compiler-rid-staging-obj" />
+    <ItemGroup>
+      <GsharpPortableRuntimeSetName Include="$(GsharpPortableRuntimeSet)" />
+    </ItemGroup>
+    <ItemGroup>
+      <_GsharpRidPackItem Include="$(_GsharpRidStageDir)**\*" Exclude="$(_GsharpRidStageDir)**\*.pdb;$(_GsharpRidStageDir)**\*.xml;@(GsharpPortableRuntimeSetName->'$(_GsharpRidStageDir)%(Identity)')" />
+    </ItemGroup>
+    <ItemGroup>
+      <_GsharpPortableCopy Include="$(MSBuildThisFileDirectory)../../../out/bin/$(Configuration)/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.dll;$(MSBuildThisFileDirectory)../../../out/bin/$(Configuration)/Gsharp.Runtime.Values/Gsharp.Runtime.Values.dll;$(MSBuildThisFileDirectory)../../../out/bin/$(Configuration)/Gsharp.Extensions/Gsharp.Extensions.dll;$(MSBuildThisFileDirectory)../../../out/bin/$(Configuration)/Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.dll" />
+      <_GsharpRidReadyToRun Include="$(_GsharpRidStageDir)gsc.dll;$(_GsharpRidStageDir)GSharp.Core.dll" />
+    </ItemGroup>
+    <GsharpAssertImages Portable="@(_GsharpPortableCopy)"
+                        ReadyToRun="@(_GsharpRidReadyToRun)"
+                        ForbiddenNames="$(GsharpPortableRuntimeSet)"
+                        Packed="@(_GsharpRidPackItem)" />
+    <!-- The items come from a glob in this target, so they keep RecursiveDir and NuGet adds it to PackagePath. -->
+    <ItemGroup>
+      <None Include="@(_GsharpRidPackItem)" Pack="true" Visible="false" PackagePath="tools/$(GsharpCompilerPackTargetFramework)/$(GsharpCompilerPackRid)/" />
+    </ItemGroup>
+  </Target>
+
+</Project>

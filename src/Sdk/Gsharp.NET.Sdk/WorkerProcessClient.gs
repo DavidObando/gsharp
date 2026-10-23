@@ -312,7 +312,7 @@ internal class WorkerProcessClient : IDisposable {
         private let RegistrationGate object = SystemObject()
 
         internal func CreateStartInfo(path string, flag string, pipeName string) ProcessStartInfo {
-            let start = ProcessStartInfo("dotnet"){
+            let start = ProcessStartInfo(DotnetHost.Path()){
                 UseShellExecute = false,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,

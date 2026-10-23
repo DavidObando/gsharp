@@ -5,6 +5,7 @@
 package GSharp.Compiler.Tests
 
 import GSharp.Compiler
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Gsgen.Cli
 import GSharp.Tests
 import Microsoft.CodeAnalysis
@@ -288,10 +289,195 @@ namespace GscAnalyzerFlagTestGenerators
         }
     }
 
+    /// ADR-0207: the GSHARP_GSGEN_TOOL variable names gsgen when no /gsgentool: switch is given. Before
+    /// the change gsc ignored it and named the sibling path in its error.
+    @Fact
+    func Analyzer_GsgenToolEnvironment_IsUsedBeforeTheSiblingRule() {
+        let message = RunAnalyzerAndReadError(
+            []string{"/analyzer:/nonexistent/generator.dll"},
+            gsgenTool: "/nonexistent/env-gsgen/gsgen.dll",
+            sdkToolsDir: nil
+        )
+        Assert.Contains("GS9996", message)
+        Assert.Contains("env-gsgen", message)
+    }
+
+    /// ADR-0207: the order is /gsgentool:, GSHARP_GSGEN_TOOL, /sdktoolsdir:, GSHARP_SDK_TOOLS_DIR.
+    @Fact
+    func Analyzer_GsgenResolutionOrder_PrefersTheMostExplicitInput() {
+        let bySwitch = RunAnalyzerAndReadError(
+            []string{"/analyzer:/nonexistent/generator.dll", "/gsgentool:/nonexistent/by-switch/gsgen.dll"},
+            gsgenTool: "/nonexistent/by-env/gsgen.dll",
+            sdkToolsDir: "/nonexistent/by-dir"
+        )
+        Assert.Contains("by-switch", bySwitch)
+        let byEnvironmentTool = RunAnalyzerAndReadError(
+            []string{"/analyzer:/nonexistent/generator.dll", "/sdktoolsdir:/nonexistent/by-switch-dir"},
+            gsgenTool: "/nonexistent/by-env/gsgen.dll",
+            sdkToolsDir: "/nonexistent/by-dir"
+        )
+        Assert.Contains("by-env", byEnvironmentTool)
+        let bySdkSwitch = RunAnalyzerAndReadError(
+            []string{"/analyzer:/nonexistent/generator.dll", "/sdktoolsdir:/nonexistent/by-switch-dir"},
+            gsgenTool: nil,
+            sdkToolsDir: "/nonexistent/by-env-dir"
+        )
+        Assert.Contains("by-switch-dir", bySdkSwitch)
+        Assert.Contains("gsgen", bySdkSwitch)
+        let bySdkEnvironment = RunAnalyzerAndReadError(
+            []string{"/analyzer:/nonexistent/generator.dll"},
+            gsgenTool: nil,
+            sdkToolsDir: "/nonexistent/by-env-dir"
+        )
+        Assert.Contains("by-env-dir", bySdkEnvironment)
+    }
+
+    /// ADR-0207: with no explicit input gsc falls back to the sibling rule of the IL layout and tells
+    /// the user how to give the location.
+    @Fact
+    func Analyzer_NoExplicitInput_NamesTheSwitch() {
+        let message = RunAnalyzerAndReadError(
+            []string{"/analyzer:/nonexistent/generator.dll"},
+            gsgenTool: nil,
+            sdkToolsDir: nil
+        )
+        Assert.Contains("gsgen was not found", message)
+        Assert.Contains("/gsgentool:", message)
+    }
+
+    /// ADR-0207: gsgen found through the SDK tools folder runs the generator end to end, with the
+    /// folder given by the /sdktoolsdir: switch and then by the GSHARP_SDK_TOOLS_DIR variable. The folder
+    /// is not next to gsc, so the sibling rule cannot find it.
+    @Fact
+    func Analyzer_SdkToolsDir_FindsGsgenEndToEnd() {
+        let tools = Directory.CreateTempSubdirectory("gsc_sdktools_").FullName
+        let gsgenDir = Path.Combine(tools, "gsgen")
+        Directory.CreateDirectory(gsgenDir)
+        for file in Directory.GetFiles(Path.GetDirectoryName(GsgenToolPath)!!) {
+            File.Copy(file, Path.Combine(gsgenDir, Path.GetFileName(file)), overwrite: true)
+        }
+        let prevEnvironment = Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
+        try {
+            for useSwitch in []bool{true, false} {
+                let tempDir = Directory.CreateTempSubdirectory("gsc_sdktools_run_").FullName
+                let sample = Path.Combine(tempDir, "Foo.gs")
+                File.WriteAllText(sample, "package MyLib\n\n@Obsolete\npartial class Foo {\n}\n")
+                let outPath = Path.Combine(tempDir, "MyLib.dll")
+                var dirValue string? = nil
+                if !useSwitch {
+                    dirValue = tools
+                }
+                Environment.SetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR", dirValue)
+                let args = List[string]()
+                args.Add(sample)
+                args.Add("/analyzer:" + GeneratorDllFactory.Value)
+                args.Add("/target:library")
+                args.Add("/out:" + outPath)
+                if useSwitch {
+                    args.Add("/sdktoolsdir:" + tools)
+                }
+                using let outWriter = StringWriter()
+                using let errWriter = StringWriter()
+                let prevOut = Console.Out
+                let prevErr = Console.Error
+                Console.SetOut(outWriter)
+                Console.SetError(errWriter)
+                var exit int32
+                try {
+                    exit = Program.Main(args.ToArray())
+                } finally {
+                    Console.SetOut(prevOut)
+                    Console.SetError(prevErr)
+                }
+                Assert.True(exit == 0, "gsc failed (switch=$useSwitch): $errWriter")
+                let assembly = EmittedFixture.Load(outPath)
+                let foo = assembly.GetTypes().Single((t Type) -> t.Name == "Foo")
+                Assert.NotNull(foo.GetProperty("Greeting"))
+            }
+        } finally {
+            Environment.SetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR", prevEnvironment)
+            ReferenceResolver.SdkToolsDirectory = nil
+            try {
+                Directory.Delete(tools, recursive: true)
+            } catch (IOException) { }
+        }
+    }
+
+    /// ADR-0207: the bundled runtime lookup takes the portable copy from the SDK tools folder first.
+    @Fact
+    func BundledRuntime_SdkToolsDirectory_ReturnsThePortableCopy() {
+        let tools = Directory.CreateTempSubdirectory("gsc_sdkruntime_").FullName
+        try {
+            let folder = Path.Combine(tools, "channels")
+            Directory.CreateDirectory(folder)
+            let copy = Path.Combine(folder, "Gsharp.Runtime.Channels.dll")
+            File.Copy(PortableStandIn, copy)
+            ReferenceResolver.SdkToolsDirectory = tools
+            let found = ReferenceResolver.FindBundledChannelsRuntimePath("/nonexistent/gsc-dir")
+            Assert.Equal(Path.GetFullPath(copy), found)
+        } finally {
+            ReferenceResolver.SdkToolsDirectory = nil
+            Directory.Delete(tools, recursive: true)
+        }
+    }
+
+    /// ADR-0207: an R2R image is never used as a bundled runtime. Its PE Machine is not 0x14C, so the
+    /// lookup skips it. Before the change gsc copied whatever file it found.
+    @Fact
+    func BundledRuntime_ReadyToRunImage_IsSkipped() {
+        let tools = Directory.CreateTempSubdirectory("gsc_sdkruntime_r2r_").FullName
+        try {
+            let folder = Path.Combine(tools, "channels")
+            Directory.CreateDirectory(folder)
+            let copy = Path.Combine(folder, "Gsharp.Runtime.Channels.dll")
+            let bytes = File.ReadAllBytes(PortableStandIn)
+            let peOffset = BitConverter.ToInt32(bytes, 0x3C)
+            Assert.Equal(uint16(0x14C), BitConverter.ToUInt16(bytes, peOffset + 4))
+            // The Machine of a linux-x64 ReadyToRun image: 0x8664 XOR 0x7B79.
+            bytes[peOffset + 4] = uint8(0x1D)
+            bytes[peOffset + 5] = uint8(0xFD)
+            File.WriteAllBytes(copy, bytes)
+            ReferenceResolver.SdkToolsDirectory = tools
+            Assert.Null(ReferenceResolver.FindBundledChannelsRuntimePath("/nonexistent/gsc-dir"))
+        } finally {
+            ReferenceResolver.SdkToolsDirectory = nil
+            Directory.Delete(tools, recursive: true)
+        }
+    }
+
     shared {
         // Resolved from the Gsgen.Cli ProjectReference, so it always points at the
         // gsgen.dll this same test run just built — no fragile path guessing.
         private let GsgenToolPath string = typeof(GsgenProgram).Assembly.Location
+
+        // A portable IL assembly that the build just produced, used as a stand-in for a runtime file.
+        private let PortableStandIn string = typeof(Issue2215AnalyzerFlagTests).Assembly.Location
+
+        /// Runs `gsc` with /analyzer: and the given extra switches, and returns what it wrote to stderr.
+        /// The two environment variables are set for the call and restored after it.
+        private func RunAnalyzerAndReadError(extra []string, gsgenTool string?, sdkToolsDir string?) string {
+            let prevTool = Environment.GetEnvironmentVariable("GSHARP_GSGEN_TOOL")
+            let prevDir = Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
+            let sample = WriteTempGs("package P\n")
+            using let err = StringWriter()
+            let prevErr = Console.Error
+            Console.SetError(err)
+            try {
+                Environment.SetEnvironmentVariable("GSHARP_GSGEN_TOOL", gsgenTool)
+                Environment.SetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR", sdkToolsDir)
+                let args = List[string]()
+                args.Add(sample)
+                args.AddRange(extra)
+                let exit = Program.Main(args.ToArray())
+                Assert.NotEqual(0, exit)
+                return err.ToString()
+            } finally {
+                Console.SetError(prevErr)
+                Environment.SetEnvironmentVariable("GSHARP_GSGEN_TOOL", prevTool)
+                Environment.SetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR", prevDir)
+                File.Delete(sample)
+            }
+        }
 
         private func WriteTempGs(source string) string {
             let path = Path.Combine(Path.GetTempPath(), "gsc_analyzer_test_${Guid.NewGuid():N}.gs")
