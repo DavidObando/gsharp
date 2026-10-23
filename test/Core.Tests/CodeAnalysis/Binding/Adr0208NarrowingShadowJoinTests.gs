@@ -366,6 +366,50 @@ func Run() int32 {
     }
 
     @Fact
+    func AReadInALaterSiblingSeesTheFactAnEarlierSiblingKilled() {
+        // The frames are shared, so the first branch kills `t` for the second one.
+        // The shadow state of the second branch still has it.
+        let lines = Capture(`package T
+func Get() string? { return "a" }
+func Run(c bool) int32 {
+    var t string? = Get()
+    if t == nil { return 0 }
+    if c {
+        t = nil
+        return 1
+    } else {
+        return t.Length
+    }
+}`)
+        Assert.Equal([]string{"10|t|string?|string|nullability"}, Rows(lines, "R"))
+    }
+
+    @Fact
+    func AGuardAfterTheDefaultArm_DoesNotRemoveWhatTheDefaultArmWrote() {
+        // The default arm assigns `s` after the entry proof. The guard that follows
+        // runs first and removes the inherited proof, but the arm re-proves `s`.
+        // The shadow keeps it, so the join gains `s` where the legacy passes lose it (R4).
+        let lines = Capture(`package T
+func Get() string? { return "a" }
+func Clear(ref s string?) bool {
+    s = nil
+    return false
+}
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    switch 1 {
+        default { s = "ok" }
+        case 1 when Clear(ref s) { return 0 }
+    }
+    return s.Length
+}`)
+        Assert.Equal([]string{"10|s|nil|string|R4"}, Rows(lines, "J"))
+        // The reads: the guard argument `ref s`, and the read after the switch.
+        Assert.Equal([]string{"12|s|string?|string|nullability", "14|s|string?|string|nullability"}, Rows(lines, "R"))
+    }
+
+    @Fact
     func AgreementsAreNotReported() {
         // `if`-join (#2159), an early-exit lift (#700) and a plain narrowing
         // that no branch changes: the passes and the shadow agree.

@@ -62,6 +62,7 @@ internal partial class StatementBinder {
         binderCtx.LoopStack.Push((nil, switchBreakLabel, nil))
         try {
             for var caseIndex = 0; caseIndex < syntax.Cases.Length; caseIndex++ {
+                ShadowBeginBranch(shadowFlow)
                 let caseSyntax = syntax.Cases[caseIndex]
                 let callableArmEntry = HashSet[VariableSymbol](callableEntry)
                 if callableFallthrough != nil {

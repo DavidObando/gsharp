@@ -44,6 +44,25 @@ internal partial class StatementBinder {
             Current = entry
             Undo = List[(Path AccessPath, Previous int32)]()
             DefaultExit = -1
+            Restored = List[AccessPath]()
+            DefaultIn = entry
+            DefaultWritten = StatementEffects.Empty
+        }
+
+        // The paths that a branch start put back into the overlay.
+        prop Restored List[AccessPath] {
+            get;
+        }
+
+        // The start state and the writes of the default arm.
+        prop DefaultIn NarrowingState {
+            get;
+            set;
+        }
+
+        prop DefaultWritten StatementEffects {
+            get;
+            set;
         }
 
         // The suppressions that this merge point made, to undo at its end.
@@ -225,6 +244,10 @@ internal partial class StatementBinder {
             flow.Exits.Add(branchIn)
             return
         }
+        if isDefault {
+            flow.DefaultIn = branchIn
+            flow.DefaultWritten = ShadowEffectsOf(bound, branchIn)
+        }
         var exit NarrowingState
         if !CanCompleteNormally(bound) {
             exit = NarrowingState.Unreachable
@@ -234,18 +257,6 @@ internal partial class StatementBinder {
                 recorded
             } else {
                 ShadowSnapshot()
-            }
-            if flow.Lost.Count > 0 {
-                let survivors = branchIn.Kill(
-                    ShadowEffectsOf(bound, branchIn),
-                    (root VariableSymbol) -> binderCtx.MayBeAssignedByClosure(root)
-                )
-                for path in flow.Lost {
-                    let survivor = survivors.NarrowedType(path)
-                    if survivor != nil && exit.NarrowedType(path) == nil {
-                        exit = exit.With(path, survivor)
-                    }
-                }
             }
         }
         flow.Exits.Add(exit)
@@ -271,7 +282,16 @@ internal partial class StatementBinder {
         let kills = (root VariableSymbol) -> binderCtx.MayBeAssignedByClosure(root)
         flow.Current = before.Kill(effects, kills)
         if flow.DefaultExit >= 0 {
-            flow.Exits[flow.DefaultExit] = flow.Exits[flow.DefaultExit].Kill(effects, kills)
+            // A guard bound after the default arm runs before it. It removes what the
+            // default arm inherited, not what the arm wrote.
+            let removed = flow.DefaultIn.Kill(effects, kills)
+            var exit = flow.Exits[flow.DefaultExit]
+            for path in flow.DefaultIn.Paths {
+                if removed.NarrowedType(path) == nil && !flow.DefaultWritten.AssignsRoot(path.Root) {
+                    exit = exit.Remove(path)
+                }
+            }
+            flow.Exits[flow.DefaultExit] = exit
         }
         for path in before.Paths {
             if flow.Current.NarrowedType(path) == nil {
@@ -289,6 +309,24 @@ internal partial class StatementBinder {
                 )
                 binderCtx.ShadowSuppressed[path] = binderCtx.NarrowedVariables.Count
                 binderCtx.ShadowOverlay = binderCtx.ShadowOverlay.Remove(path)
+            }
+        }
+    }
+
+    /// Starts a branch. Facts that an earlier sibling removed from the shared
+    /// frames are put back into the overlay, so reads in this branch see them.
+    private func ShadowBeginBranch(flow ShadowFlow?) {
+        if flow == nil {
+            return
+        }
+        let frames = ShadowFrames()
+        for path in flow.Lost {
+            let restored = flow.Current.NarrowedType(path)
+            if restored != nil && frames.NarrowedType(path) == nil && binderCtx.ShadowOverlay.NarrowedType(
+                path
+            ) == nil {
+                flow.Restored.Add(path)
+                binderCtx.ShadowOverlay = binderCtx.ShadowOverlay.With(path, restored)
             }
         }
     }
@@ -316,6 +354,10 @@ internal partial class StatementBinder {
     ) {
         if flow == nil {
             return
+        }
+        // The restored facts belong to the branches, not to the state after the statement.
+        for path in flow.Restored {
+            binderCtx.ShadowOverlay = binderCtx.ShadowOverlay.Remove(path)
         }
         for var i = flow.Undo.Count - 1; i >= 0; i-- {
             if flow.Undo[i].Previous < 0 {

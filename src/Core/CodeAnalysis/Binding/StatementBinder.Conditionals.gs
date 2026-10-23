@@ -63,6 +63,7 @@ internal partial class StatementBinder {
             ShadowAddBranch(shadowFlow, thenNarrow, thenStatement)
             let callableThenExit = CaptureExternalCallableAliases()
             RestoreExternalCallableAliases(callableEntry)
+            ShadowBeginBranch(shadowFlow)
             let elseStatement = if syntax.ElseClause == nil {
                 default(BoundStatement?)
             } else {
@@ -123,6 +124,7 @@ internal partial class StatementBinder {
         ShadowAddBranch(initShadowFlow, initThenNarrow, initThen)
         let initCallableThenExit = CaptureExternalCallableAliases()
         RestoreExternalCallableAliases(initCallableEntry)
+        ShadowBeginBranch(initShadowFlow)
         let initElse = if syntax.ElseClause == nil {
             default(BoundStatement?)
         } else {
