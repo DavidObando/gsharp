@@ -1589,7 +1589,16 @@ class Lowerer : BoundTreeRewriter {
         /// `Enumerator` generic over the collection's own type parameters, and
         /// that enumerator yields the same elements as the `IEnumerable<T>`
         /// implementation. Any other collection keeps the interface route.
+        ///
+        /// Issue #5151: a by-ref-like collection (`Span<T>`, `ReadOnlySpan<T>`)
+        /// has no interface route: it cannot be boxed or converted to
+        /// `IEnumerable<T>`, so its own struct enumerator is the only correct
+        /// target, and the closed erased fallback would type the enumerator as
+        /// `Span<object>.Enumerator`.
         private func IsStructEnumeratorCollection(openDef Type) bool {
+            if openDef.IsByRefLike {
+                return true
+            }
             let fullName = openDef.FullName
             return fullName == "System.Collections.Generic.List`1" ||
                 fullName == "System.Collections.Generic.Dictionary`2" ||
