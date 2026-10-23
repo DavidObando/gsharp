@@ -2746,12 +2746,15 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             if !positional.IsTuple {
-                memberSymbol = positional.Members[index]
-                if memberSymbol == nil {
+                // A write to an out parameter drops the narrowing of the others (ADR-0208 R12), so
+                // the member is read from a local.
+                let member = positional.Members[index]
+                memberSymbol = member
+                if member == nil {
                     failure = positional.Failures[index]
                     return false
                 }
-                memberName = memberSymbol.Name
+                memberName = member.Name
                 return true
             }
             memberName = sub.NameColon?.Name.Identifier.ValueText ?? positional.Names[index]

@@ -1418,6 +1418,14 @@ internal partial class StatementBinder {
             }
             case BoundExpressionStatement{Expression: BoundAssignmentExpression assign} {
                 if TryClassifyNonNullAssignment(assign, out var local, out var underlying) {
+                    RemoveSharingStorage(
+                        state,
+                        Invariant.Required(
+                            local,
+                            "a successful assignment narrowing has a variable",
+                            expression: "local"
+                        )
+                    )
                     state[
                         AccessPath.ForVariable(
                             Invariant.Required(
@@ -1434,7 +1442,7 @@ internal partial class StatementBinder {
                 } else if assign.Variable != nil {
                     // Any other assignment to a tracked local (nullable value,
                     // value type, …) drops its narrowing.
-                    RemoveByRoot(state, assign.Variable)
+                    RemoveSharingStorage(state, assign.Variable)
                 }
                 return true
             }
@@ -1649,6 +1657,7 @@ internal partial class StatementBinder {
         private var tryAssignedVariables HashSet[VariableSymbol]?
         private var aliasExpandedRoots HashSet[VariableSymbol]?
         private var aliasExpandedCount int32 = -1
+        private var aliasAssignedExternal bool
 
         init(
             assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?,
@@ -1798,13 +1807,21 @@ internal partial class StatementBinder {
             }
             if aliasExpandedRoots == nil || aliasExpandedCount != Roots.Count {
                 let expanded = HashSet[VariableSymbol]()
+                aliasAssignedExternal = false
                 for assigned in Roots {
                     for member in StatementBinder.AliasChain(assigned) {
                         expanded.Add(member)
                     }
+                    if StatementBinder.IsExternalStorageAlias(assigned) {
+                        aliasAssignedExternal = true
+                    }
                 }
                 aliasExpandedRoots = expanded
                 aliasExpandedCount = Roots.Count
+            }
+            // Two external-storage aliases may name the same storage (`Run(ref x, ref x)`).
+            if aliasAssignedExternal && StatementBinder.IsExternalStorageAlias(root) {
+                return true
             }
             for member in StatementBinder.AliasChain(root) {
                 if aliasExpandedRoots!!.Contains(member) {
@@ -4004,6 +4021,14 @@ internal partial class StatementBinder {
             return result
         }
 
+        /// ADR-0208 R12 (#5171): removes every narrowing whose root may share storage with
+        /// [`root`](paramref).
+        private func RemoveSharingStorage(state Dictionary[AccessPath, TypeSymbol], root VariableSymbol) {
+            for key in state.Keys.Where((key AccessPath) -> SharesStorage(key.Root, root)).ToArray() {
+                state.Remove(key)
+            }
+        }
+
         /// Issue #2159: removes every narrowing whose access path is rooted at
         /// [`root`](paramref) from [`state`](paramref).
         private func RemoveByRoot(state Dictionary[AccessPath, TypeSymbol], root VariableSymbol) {
@@ -4185,7 +4210,7 @@ internal partial class StatementBinder {
             let chain = List[VariableSymbol]()
             chain.Add(root)
             var current = TryGetAliasedRoot(root)
-            while current != nil && chain.Count < 16 && !chain.Contains(current) {
+            while current != nil && !chain.Contains(current) {
                 chain.Add(current)
                 current = TryGetAliasedRoot(current)
             }
@@ -4210,6 +4235,24 @@ internal partial class StatementBinder {
                 return lastParameter.RefKind != RefKind.None
             }
             return last is LocalVariableSymbol lastLocal && lastLocal.RefKind != RefKind.None
+        }
+
+        /// ADR-0208 R12 (#5171): whether [`first`](paramref) and [`second`](paramref) may name one
+        /// storage: the same variable, an overlapping alias chain, or two external-storage aliases.
+        internal func SharesStorage(first VariableSymbol, second VariableSymbol) bool {
+            if object.ReferenceEquals(first, second) {
+                return true
+            }
+            if IsExternalStorageAlias(first) && IsExternalStorageAlias(second) {
+                return true
+            }
+            let secondChain = AliasChain(second)
+            for member in AliasChain(first) {
+                if secondChain.Contains(member) {
+                    return true
+                }
+            }
+            return false
         }
 
         /// ADR-0208 R12 (#5171): whether a member, index or indirect write, or a

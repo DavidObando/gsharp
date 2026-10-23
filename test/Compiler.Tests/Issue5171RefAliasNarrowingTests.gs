@@ -232,6 +232,88 @@ func Main() {
     Console.WriteLine(Run(ref xs[0], xs))
 }
 `}
+            yield[]object{"ref-parameters-overlap", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(ref a C?, ref b C?) int32 {
+    if a == nil { return 0 }
+    b = nil
+    return a.Value
+}
+func Main() {
+    var x C? = C{}
+    Console.WriteLine(Run(ref x, ref x))
+}
+`}
+            yield[]object{"ref-locals-same-element", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Run() int32 {
+    var xs = []C?{C{}}
+    let ref a C? = xs[0]
+    let ref b C? = xs[0]
+    if a == nil { return 0 }
+    b = nil
+    return a.Value
+}
+func Main() { Console.WriteLine(Run()) }
+`}
+            yield[]object{"branch-join-alias-write", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(flag bool) int32 {
+    var x C? = nil
+    let ref a C? = x
+    if flag {
+        x = C{}
+        a = nil
+    } else {
+        x = C{}
+    }
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(true)) }
+`}
+            yield[]object{"long-alias-chain", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Run() int32 {
+    var x C? = C{}
+    let ref a1 C? = x
+    let ref a2 C? = a1
+    let ref a3 C? = a2
+    let ref a4 C? = a3
+    let ref a5 C? = a4
+    let ref a6 C? = a5
+    let ref a7 C? = a6
+    let ref a8 C? = a7
+    let ref a9 C? = a8
+    let ref a10 C? = a9
+    let ref a11 C? = a10
+    let ref a12 C? = a11
+    let ref a13 C? = a12
+    let ref a14 C? = a13
+    let ref a15 C? = a14
+    let ref a16 C? = a15
+    let ref a17 C? = a16
+    if a17 == nil { return 0 }
+    x = nil
+    return a17.Value
+}
+func Main() { Console.WriteLine(Run()) }
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
@@ -302,6 +384,36 @@ func Main() {
     Console.WriteLine(Run(ref x))
 }
 `, []string{"2"}}
+            yield[]object{"long-alias-chain-no-write", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Run() int32 {
+    var x C? = C{}
+    let ref a1 C? = x
+    let ref a2 C? = a1
+    let ref a3 C? = a2
+    let ref a4 C? = a3
+    let ref a5 C? = a4
+    let ref a6 C? = a5
+    let ref a7 C? = a6
+    let ref a8 C? = a7
+    let ref a9 C? = a8
+    let ref a10 C? = a9
+    let ref a11 C? = a10
+    let ref a12 C? = a11
+    let ref a13 C? = a12
+    let ref a14 C? = a13
+    let ref a15 C? = a14
+    let ref a16 C? = a15
+    let ref a17 C? = a16
+    if a17 == nil { return 0 }
+    return a17.Value
+}
+func Main() { Console.WriteLine(Run()) }
+`, []string{"1"}}
         }
 
         private func Compile(dir string, source string, outPath string)(Exit int32, Log string) {

@@ -913,13 +913,14 @@ internal class BinderContext {
             narrowedType = variableNarrowed
             return true
         }
-        if !SmartCastStability.TryGetStableMemberPath(expression, out path, out _) || path == nil {
+        // A write to an out parameter or a call drops the narrowing of the others (ADR-0208 R12), so
+        // the loop reads a local copy.
+        let found = SmartCastStability.TryGetStableMemberPath(expression, out path, out _)
+        let stablePath = path
+        if !found || stablePath == nil {
             narrowedType = nil
             return false
         }
-        // A by-reference parameter keeps no narrowing across a call (ADR-0208 R12), so the
-        // loop reads a local copy.
-        let stablePath = path
         for var i = NarrowedVariables.Count - 1; i >= 0; i-- {
             if NarrowedVariables[i].TryGetValue(stablePath, out narrowedType) {
                 return true
