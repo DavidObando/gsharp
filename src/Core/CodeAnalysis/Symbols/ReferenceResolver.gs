@@ -1753,7 +1753,11 @@ class ReferenceResolver : IDisposable {
                 bySimpleName.TryAdd(asm.GetName().Name ?? string.Empty, names)
             }
             let visiting = HashSet[string](StringComparer.Ordinal)
-            for names in result {
+            let added = List[string]()
+            for var i = 0; i < result.Count; i++ {
+                let names = result[i]
+                added.Clear()
+                var exact = true
                 for forward in names.Forwarded {
                     visiting.Clear()
                     let declaring = FindDeclaringAssembly(
@@ -1764,12 +1768,26 @@ class ReferenceResolver : IDisposable {
                         visiting,
                         out var unverifiable
                     )
+                    if unverifiable {
+                        exact = false
+                        break
+                    }
                     if declaring != nil {
                         // Reflection reports the type, then its public nested types
                         // as the declaring assembly lists them.
-                        AddWithPublicNestedTypes(declaring, forward.Key, names.Defined)
-                    } else if unverifiable {
-                        names.Defined.Add(forward.Key)
+                        AddWithPublicNestedTypes(declaring, forward.Key, added)
+                    }
+                }
+                if exact {
+                    names.Defined.AddRange(added)
+                } else {
+                    // The reader cannot answer exactly for this forward. Never keep a
+                    // partial answer: read the whole assembly through reflection.
+                    let reflected = ReadThroughReflection(assemblies[i])
+                    result[i] = reflected
+                    if bySimpleName.TryGetValue(assemblies[i].GetName().Name ?? string.Empty, out var current) &&
+                        object.ReferenceEquals(current, names) {
+                        bySimpleName[assemblies[i].GetName().Name ?? string.Empty] = reflected
                     }
                 }
             }
@@ -1797,10 +1815,13 @@ class ReferenceResolver : IDisposable {
                 .TryReadNames(image, defined, forwarded, publicNested) {
                 return AssemblyTypeNames(defined, forwarded, List[Type](), publicNested, imageOf)
             }
-            // The image is not available or not readable. Discard what was read from it.
-            defined.Clear()
-            forwarded.Clear()
-            publicNested.Clear()
+            return ReadThroughReflection(asm)
+        }
+
+        private func ReadThroughReflection(asm Assembly) AssemblyTypeNames {
+            let defined = List[string]()
+            let forwarded = List[KeyValuePair[string, string]]()
+            let publicNested = Dictionary[string, List[string]](StringComparer.Ordinal)
             let types = List[Type]()
             for t in EnumerateDefinedAndForwardedTypes(asm) {
                 if t.FullName is {} fullName {
@@ -1828,7 +1849,7 @@ class ReferenceResolver : IDisposable {
         // The target must declare the type, or forward it to an assembly that does.
         // Returns the assembly that declares the type, or null.
         // `unverifiable` is set when the target image cannot be read here.
-        // The caller then keeps the name, and a lookup decides.
+        // The caller then reads the forwarding assembly through reflection.
         private func FindDeclaringAssembly(
             name string,
             target string,

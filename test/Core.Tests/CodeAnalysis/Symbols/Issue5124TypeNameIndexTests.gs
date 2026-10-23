@@ -142,7 +142,90 @@ open class Issue5124TypeNameIndexTests {
         Assert.Equal("Target5124", reflection.InnerAssembly)
     }
 
+    @Fact
+    func ForwardingMatrix_MatchesThePureReflectionIndex() {
+        // Every cell compares the index with the one reflection reports for the same
+        // assemblies: exact names and order per assembly, and the first declarer of
+        // the forwarded type and of its nested type.
+        let root = Path.Combine(AppContext.BaseDirectory, "csharp-fixtures", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root)
+        let plain = BuildTarget(Path.Combine(root, "plain"), escapedName: false)
+        let escaped = BuildTarget(Path.Combine(root, "escaped"), escapedName: true)
+        using let facade = CSharpFixture(
+            "[assembly: System.Runtime.CompilerServices.TypeForwardedTo(typeof(N5124.Outer))]",
+            []MetadataReference{MetadataReference.CreateFromFile(plain)},
+            assemblyName: "Facade5124"
+        )
+        using let rival = CSharpFixture(
+            "namespace N5124 { public class Outer { public class Inner {} } }",
+            assemblyName: "Rival5124"
+        )
+        let unreadable = Path.Combine(root, "unreadable", "Target5124.dll")
+        Directory.CreateDirectory(Path.GetDirectoryName(unreadable)!!)
+        File.WriteAllBytes(unreadable, []uint8{1, 2, 3, 4})
+        var cells = 0
+        for targetPath in[]string{plain, escaped, unreadable} {
+            for order in[]string{"frt", "rft", "trf", "fr", "rf"} {
+                let paths = List[string]()
+                for letter in order {
+                    if letter == 'f' {
+                        paths.Add(facade.AssemblyPath)
+                    } else if letter == 'r' {
+                        paths.Add(rival.AssemblyPath)
+                    } else {
+                        paths.Add(targetPath)
+                    }
+                }
+                AssertIndexMatchesReflection(paths.ToArray(), "${targetPath}/${order}")
+                cells++
+            }
+        }
+        Assert.Equal(15, cells)
+    }
+
     shared {
+        private func BuildTarget(directory string, escapedName bool) string {
+            Directory.CreateDirectory(directory)
+            let path = Path.Combine(directory, "Target5124.dll")
+            let builder = PersistedAssemblyBuilder(AssemblyName("Target5124"), typeof(object).Assembly)
+            let module_ = builder.DefineDynamicModule("Target5124")
+            let outer = module_.DefineType("N5124.Outer", TypeAttributes.Public | TypeAttributes.Class)
+            let inner = outer.DefineNestedType("Inner", TypeAttributes.NestedPublic | TypeAttributes.Class)
+            outer.CreateType()
+            inner.CreateType()
+            if escapedName {
+                module_.DefineType("Odd5124[Name", TypeAttributes.Public | TypeAttributes.Class).CreateType()
+            }
+            builder.Save(path)
+            return path
+        }
+
+        private func AssertIndexMatchesReflection(paths[]string, cell string) {
+            using let resolver = ReferenceResolver.WithReferences(paths)
+            let index = resolver.ExportMetadataIndex()
+            let oracle = Dictionary[string, Type](StringComparer.Ordinal)
+            for var i = 0; i < resolver.Assemblies.Length; i++ {
+                let expected = ReflectionNames(resolver.Assemblies[i])
+                let actual = index.TypeNames[i]
+                Assert.True(
+                    expected.SequenceEqual(actual),
+                    "${cell}: ${resolver.Assemblies[i].GetName().Name} expected [${string.Join(";", expected.Where((n string) -> n.StartsWith("N5124")))}] actual [${string.Join(";", actual.Where((n string) -> n.StartsWith("N5124")))}]"
+                )
+                for name in expected {
+                    if !oracle.ContainsKey(name) {
+                        oracle[name] = resolver.Assemblies[i].GetType(name)!!
+                    }
+                }
+            }
+            for name in[]string{"N5124.Outer", "N5124.Outer+Inner"} {
+                let found = resolver.TryResolveType(name, out var type)
+                Assert.True(oracle.ContainsKey(name) == found, "${cell}: ${name} found=${found}")
+                if found {
+                    Assert.Equal(oracle[name].Assembly.GetName().Name, type.Assembly.GetName().Name)
+                }
+            }
+        }
+
         // References are ordered [facade, rival, target]. The rival also declares
         // N5124.Outer+Inner, so the facade must contribute that name for the target.
         private func ForwardingIndex(withEscapedName bool) ForwardingResult5124 {
