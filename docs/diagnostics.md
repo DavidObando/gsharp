@@ -2,6 +2,12 @@
 
 Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severity level, a human-readable message, and a source location (file, line, column). This document enumerates all identifiers so that project files can suppress or promote them using standard MSBuild properties.
 
+## Native protocols (ADR-0205)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0629 | Error | Unsupported native protocol declaration, payload/signature/escape, absent required initialization, or unknown/invalid/incompatible canonical evidence. | Use the admitted nongeneric synchronous by-value core and exact accessible witnesses; initialize required storage, reference the canonical origin/contracts and matching implementation/ref metadata. Unknown evidence is not negative conformance. |
+
 ## Immutable byte strings (ADR-0204)
 
 | Code | Severity | Meaning | Remedy |

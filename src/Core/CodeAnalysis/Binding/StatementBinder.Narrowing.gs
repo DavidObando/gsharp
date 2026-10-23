@@ -2998,7 +2998,12 @@ internal partial class StatementBinder {
         // use a path can reach without a preceding assignment — the C# CS0165
         // model, and Go's declare-then-assign shape becomes legal.
         if channelSlotWithoutInitializer && !(variable is LocalVariableSymbol) {
-            if ManagedReferenceTypes.TryGetElement(variableType, out _, out _) {
+            if NativeProtocolMetadata.IsProtocol(variableType) {
+                Diagnostics.ReportNativeProtocol(
+                    syntax.Identifier.Location,
+                    "a required protocol global must be initialized"
+                )
+            } else if ManagedReferenceTypes.TryGetElement(variableType, out _, out _) {
                 Diagnostics.ReportManagedReference(
                     syntax.Identifier.Location,
                     "a non-null managed-reference global requires initialization"

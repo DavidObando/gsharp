@@ -1,4 +1,6 @@
 [
+  {"name":"contextual native protocol declaration","source":"protocol Capability { func Read() int32; }","tokens":[["protocol","keyword"],["Capability","type"]]},
+  {"name":"protocol remains an ordinary identifier","source":"let protocol = 1; let $protocol = protocol; protocol()","tokens":[["protocol","identifier"],["$protocol","identifier"]]},
   {"name":"readonly managed references and slices","source":"ref readonly managed[T]; readonly slice[int32]; managed[T]","tokens":[["readonly","keyword"],["managed","keyword"],["slice","keyword"]]},
   {"name":"select cancellation and checked casts","source":"case cancelled {}; cast[int32](value)","tokens":[["cancelled","keyword"],["cast","keyword"]]},
   {"name":"escaped keyword identifiers","source":"let $class = $return; $int32($if); $Class","tokens":[["$class","identifier"],["$return","identifier"],["$int32","identifier"],["$if","identifier"],["$Class","identifier"]]},

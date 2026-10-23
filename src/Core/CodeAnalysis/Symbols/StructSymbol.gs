@@ -21,6 +21,21 @@ import System.Threading
 /// types; classes are CLR reference types. Methods may be declared inside class
 /// bodies or added later through same-package receiver declarations.
 class StructSymbol : TypeSymbol {
+    internal prop NativeProtocolEntry NativeProtocolEntryPlan? {
+        get;
+        set;
+    }
+    internal prop IsNativeProtocolSupport bool {
+        get;
+        set;
+    }
+    private var nativeProtocols ImmutableArray[TypeSymbol] = ImmutableArray[TypeSymbol].Empty
+
+    internal prop NativeProtocols ImmutableArray[TypeSymbol] {
+        get -> nativeProtocols
+        set -> nativeProtocols = value
+    }
+
     // Issue #1341: backing stores for the generically-erased member tables whose
     // reads are forwarded to Definition on a constructed instance. On a
     // definition (or non-generic type) these hold the canonical member set; on a

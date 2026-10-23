@@ -66,6 +66,41 @@ internal partial class DeclarationBinder {
         interfaceSymbol InterfaceSymbol,
         $package PackageSymbol
     ) {
+        if syntax.IsProtocol {
+            if interfaceSymbol.ContainingType != nil ||
+                syntax.TypeParameterList != nil ||
+                syntax.HasBaseInterfaces ||
+                !syntax
+                .Properties
+                .IsDefaultOrEmpty ||
+                !syntax
+                .Events
+                .IsDefaultOrEmpty ||
+                !syntax
+                .StaticFields
+                .IsDefaultOrEmpty {
+                Diagnostics.ReportNativeProtocol(
+                    syntax.Identifier.Location,
+                    "only nongeneric protocols with synchronous by-value method slots are supported"
+                )
+            }
+            for method in syntax.Methods {
+                if method.TypeParameterList != nil ||
+                    method.Body != nil ||
+                    method.HasStaticModifier ||
+                    method.AccessibilityModifier != nil ||
+                    method.IsAsync ||
+                    method.ReturnRefModifier != nil ||
+                    method
+                    .Parameters
+                    .Any((parameter ParameterSyntax) -> parameter.RefKindModifier != nil) {
+                    Diagnostics.ReportNativeProtocol(
+                        method.Identifier.Location,
+                        "protocol slots must be public synchronous nongeneric by-value signatures without bodies"
+                    )
+                }
+            }
+        }
         // Phase 4.3c: push the interface's type parameters so that method
         // signatures can reference them.
         let previousTypeParameters = binderCtx.CurrentTypeParameters
@@ -84,6 +119,11 @@ internal partial class DeclarationBinder {
                 syntax.PartialPartLocations
             )
             BindInterfaceMembersCore(syntax, interfaceSymbol, $package)
+            if syntax.IsProtocol {
+                for method in interfaceSymbol.Methods {
+                    NativeProtocolSafety.ValidateSignature(method, Diagnostics)
+                }
+            }
         } finally {
             this.binderCtx.CurrentTypeParameters = previousTypeParameters
         }
@@ -108,6 +148,13 @@ internal partial class DeclarationBinder {
             let baseLocation = baseTypeSyntax.Identifier?.Location ?? syntax.Identifier.Location
             let resolved TypeSymbol? = bindTypeClause(baseTypeSyntax)
             if resolved == nil || resolved == TypeSymbol.Error {
+                continue
+            }
+            if NativeProtocolOperations.GetProtocol(resolved) != nil {
+                Diagnostics.ReportNativeProtocol(
+                    baseLocation,
+                    "nominal interface inheritance cannot include a native protocol"
+                )
                 continue
             }
             if resolved is InterfaceSymbol iface {

@@ -112,6 +112,8 @@ class InterfaceSymbol : TypeSymbol {
     /// must live in the same package; binder-enforced.
     prop IsSealed bool -> Declaration?.IsSealed ?? false
 
+    internal prop IsProtocol bool -> Declaration.IsProtocol
+
     /// Gets the abstract method signatures declared on this interface. Populated by the binder via
     /// (cref:SetMethods).
     prop Methods ImmutableArray[FunctionSymbol] {

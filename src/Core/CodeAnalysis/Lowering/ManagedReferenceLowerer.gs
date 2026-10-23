@@ -394,7 +394,8 @@ internal class ManagedReferenceLowerer : BoundTreeRewriter {
                 Imports = program.Imports,
                 FriendAssemblies = program.FriendAssemblies,
                 AssemblyAttributes = program.AssemblyAttributes,
-                ModuleAttributes = program.ModuleAttributes
+                ModuleAttributes = program.ModuleAttributes,
+                NativeProtocols = program.NativeProtocols
             }
         }
 

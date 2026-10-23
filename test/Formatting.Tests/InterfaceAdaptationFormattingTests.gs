@@ -10,6 +10,29 @@ import Xunit
 
 class InterfaceAdaptationFormattingTests {
     @Fact
+    func NativeProtocolsRetainContextualHeadsAndOrdinaryReceiverSyntax() {
+        let formatted = GSharpFormatter.Format(SourceText.From(`protocol P{func Next()int32;}
+
+struct S:P{
+func Next()int32->1
+}
+
+func use(x S){let protocol=P
+let p P=x
+if p is P view{let q=p as P}}
+`))
+        Assert.Empty(formatted.Diagnostics)
+        let text = formatted.Text!!.ToString()
+        Assert.Contains("protocol P {", text)
+        Assert.Contains("struct S : P {", text)
+        Assert.Contains("let protocol = P", text)
+        Assert.Contains("let p P = x", text)
+        Assert.Contains("p is P view", text)
+        Assert.Contains("p as P", text)
+        Assert.Equal(text, GSharpFormatter.Format(formatted.Text!!).Text!!.ToString())
+    }
+
+    @Fact
     func AdaptAndCapturingRichObjectsRoundTripCanonically() {
         const source = `interface Reader{func Read()int32;}
 func use(source Source,p managed[Source]){

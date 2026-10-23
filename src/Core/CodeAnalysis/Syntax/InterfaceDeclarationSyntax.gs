@@ -251,6 +251,9 @@ partial class InterfaceDeclarationSyntax : MemberSyntax {
         get;
     }
 
+    internal prop IsProtocol bool -> InterfaceKeyword.Kind == SyntaxKind.IdentifierToken &&
+        InterfaceKeyword.ValueText == "protocol"
+
     /// Gets the opening brace.
     prop OpenBraceToken SyntaxToken {
         get;

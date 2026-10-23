@@ -346,6 +346,15 @@ class Conversion {
         ) Conversion {
             var from = from
             var to = to
+            if to != nil && NativeProtocolMetadata.IsProtocol(to) &&
+                from != TypeSymbol.Null &&
+                from != TypeSymbol.Error &&
+                from is not NullableTypeSymbol &&
+                from is not PlatformTypeSymbol &&
+                from is not ByRefTypeSymbol &&
+                !TypeSymbol.IsByRefLike(from!!) {
+                return Implicit
+            }
             if NativeSliceTypes.HaveIncompatibleElements(from, to) || ManagedReferenceTypes.HaveIncompatibleElements(
                 from!!,
                 to!!

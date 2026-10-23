@@ -1253,6 +1253,17 @@ class ReferenceResolver : IDisposable {
             return false
         }
 
+        internal func OpenAssemblyImage(assembly Assembly) Stream? {
+            if AssemblyImages.TryGetValue(assembly, out var image) {
+                return MemoryStream(image, writable: false)
+            }
+            return if TryGetAssemblyPath(assembly, out var path) {
+                File.OpenRead(path)
+            } else {
+                nil
+            }
+        }
+
         /// Gets a resolver that searches the runtime's currently loaded
         /// assemblies plus the well-known BCL assemblies.
         /// @returns A default resolver.

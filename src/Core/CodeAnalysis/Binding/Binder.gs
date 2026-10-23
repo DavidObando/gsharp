@@ -28,7 +28,7 @@ import System.Runtime.InteropServices
 import GSharp.Core.CodeAnalysis.Compilation
 
 /// Binder.
-class Binder {
+partial class Binder {
     // PR-B-1: cross-cutting binder state lives on BinderContext so the
     // upcoming Binder-component extractions (MemberLookup, ConversionClassifier,
     // OverloadResolver, …) can consume it via constructor injection. The
@@ -176,7 +176,9 @@ class Binder {
             },
             isLvalue: ExpressionBinder.IsLvalue,
             getRefKindFromModifier: GetRefKindFromModifier,
-            refKindToString: RefKindToString
+            refKindToString: RefKindToString,
+            bindNativeProtocolConversion: (location TextLocation, source BoundExpression, target TypeSymbol) ->
+            BindNativeProtocolConversion(location, source, target)
         )
         overloads = OverloadResolver(
             binderCtx,
@@ -511,7 +513,9 @@ class Binder {
                 type TypeSymbol
             ) -> Declarations.BindVariableDeclaration(identifier, isReadOnly, type),
             bindRichAnonymousObject: BindRichAnonymousObject,
-            bindStructuralAdaptation: BindStructuralAdaptation
+            bindStructuralAdaptation: BindStructuralAdaptation,
+            bindNativeProtocolProbe: (location TextLocation, source BoundExpression, target TypeSymbol) ->
+            BindNativeProtocolConversion(location, source, target, testOnly: true)
         )
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor
@@ -1358,6 +1362,13 @@ class Binder {
         // synthesize, not a slot, so an oblivious scope's platform wrapper on
         // it is read through (its nested positions keep theirs).
         target = PlatformTypeSymbol.StripTopLevel(target)
+        if NativeProtocolSafety.ContainsProtocol(target) {
+            Diagnostics.ReportNativeProtocol(
+                syntax.Location,
+                "adapt remains a nominal CLR bridge; use a native target-typed conversion instead"
+            )
+            return BoundErrorExpression(syntax)
+        }
         let userTarget InterfaceSymbol? = target as InterfaceSymbol
         let clrTarget TypeSymbol? = if target.ClrType is {IsInterface: true} {
             target
@@ -1423,6 +1434,13 @@ class Binder {
         }
         if source is BoundErrorExpression {
             return source
+        }
+        if NativeProtocolSafety.ContainsSavedProtocol(sourceMemberType) {
+            Diagnostics.ReportNativeProtocol(
+                syntax.Location,
+                "native protocol values cannot escape through nominal adapt bridges"
+            )
+            return BoundErrorExpression(syntax)
         }
         if sourceMemberType == TypeSymbol.Null {
             Diagnostics.ReportStructuralAdaptation(
@@ -6608,6 +6626,7 @@ class Binder {
                 submissionImports: submission?.Imports
             )
             let binder = Binder(parentScope, function: nil)
+            binder.ImportNativeProtocols(syntaxTrees.FirstOrDefault()?.Root.Location ?? default(TextLocation))
             // Issues #4089/#4090: the declaration phase binds type clauses before
             // every same-compilation declaration's type-parameter constraints are
             // resolved, so the G#-declared generic constraint checks are queued
@@ -7765,12 +7784,39 @@ class Binder {
                 let adapters = parentScope.GetStructuralAdapterRegistry()
                 adapters.Counter = Math.Max(adapters.Counter, globalScope.StructuralAdapters.Counter)
                 adapters.Types.AddRange(globalScope.StructuralAdapters.Types)
+                adapters.ProtocolEntries.AddRange(globalScope.StructuralAdapters.ProtocolEntries)
+                adapters.ImportedProtocolEntries.AddRange(globalScope.StructuralAdapters.ImportedProtocolEntries)
+                adapters.ProtocolQueries.AddRange(globalScope.StructuralAdapters.ProtocolQueries)
+                for operation in globalScope.StructuralAdapters.ProtocolOperations {
+                    adapters.ProtocolOperations[operation.Key] = operation.Value
+                }
                 for pair in globalScope.StructuralAdapters.MethodBodies {
                     adapters.MethodBodies[pair.Key] = pair.Value
                 }
             }
             let functionBodies = ImmutableDictionary.CreateBuilder[FunctionSymbol, BoundBlockStatement]()
             let diagnostics = ImmutableArray.CreateBuilder[Diagnostic]()
+            let nativeBinder = Binder(parentScope, function: nil)
+            for protocol in globalScope.Interfaces.Where((item InterfaceSymbol) -> item.IsProtocol) {
+                NativeProtocolOperations.GetOrCreate(parentScope, protocol)
+            }
+            if parentScope.References is {} nativeReferences {
+                for assembly in nativeReferences.Assemblies.OrderBy(
+                    (item Assembly) -> item.FullName,
+                    StringComparer.Ordinal
+                ) {
+                    for protocol in NativeProtocolMetadata
+                        .Read(assembly)
+                        .Protocols
+                        .Where((item Type) -> item.IsVisible) {
+                        NativeProtocolOperations.GetOrCreate(
+                            parentScope,
+                            TypeSymbol.FromClrTypeWithoutNullability(protocol, NullabilityFreeReason.ResolvedTypeName)
+                        )
+                    }
+                }
+            }
+            nativeBinder.CheckExplicitNativeProtocolConformance(globalScope.Structs)
             for member in GetDeclaredBodyFunctions(globalScope) {
                 let function = member.Function
                 if function.Declaration?.Body != nil && HasInferredRichAnonymousReturn(function, parentScope) {
@@ -8284,6 +8330,8 @@ class Binder {
                 .OfType[GlobalVariableSymbol]()
                 .Where((g GlobalVariableSymbol) -> !g.Name.StartsWith("<>"))
                 .ToImmutableArray()
+            NativeProtocolOperations.Complete(parentScope, nativeBinder.Diagnostics)
+            diagnostics.AddRange(nativeBinder.Diagnostics)
             for pair in parentScope.GetStructuralAdapterRegistry().MethodBodies {
                 functionBodies[pair.Key] = pair.Value
             }
@@ -8395,7 +8443,11 @@ class Binder {
                 Imports = globalScope.GetCumulativeImports(),
                 FriendAssemblies = globalScope.FriendAssemblies,
                 AssemblyAttributes = globalScope.AssemblyAttributes,
-                ModuleAttributes = globalScope.ModuleAttributes
+                ModuleAttributes = globalScope.ModuleAttributes,
+                NativeProtocols = NativeProtocolCompilationPlan(
+                    parentScope.GetStructuralAdapterRegistry().ProtocolOperations.ToImmutableDictionary(),
+                    parentScope.GetStructuralAdapterRegistry().ImportedProtocolEntries.ToImmutableArray()
+                )
             }
         }
 
@@ -8637,7 +8689,13 @@ class Binder {
             budget CompilationWorkBudget?
         ) Dictionary[FunctionSymbol, BodyBindResult] {
             let results = Dictionary[FunctionSymbol, BodyBindResult]()
-            if budget == nil || budget.MaxWorkers <= 1 {
+            if budget == nil || budget.MaxWorkers <= 1 || globalScope.Interfaces.Any(
+                (item InterfaceSymbol) -> item.IsProtocol
+            ) ||
+                parentScope
+                .GetStructuralAdapterRegistry()
+                .ProtocolOperations
+                .Count > 0 {
                 return results
             }
             let jobs = List[(Function FunctionSymbol, Owner StructSymbol?)]()

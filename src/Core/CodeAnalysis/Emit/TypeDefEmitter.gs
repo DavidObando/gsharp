@@ -11,6 +11,7 @@ import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Globalization
+import System.Linq
 import System.Reflection
 import System.Reflection.Metadata
 import System.Reflection.Metadata.Ecma335
@@ -612,6 +613,16 @@ internal class TypeDefEmitter {
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow)
         )
         this.cache.StructTypeDefs[structSym] = handle2
+        if structSym.IsNativeProtocolSupport ||
+            structSym
+            .Fields
+            .Concat(structSym.StaticFields)
+            .Any((field FieldSymbol) -> NativeProtocolSafety.ContainsProtocol(field.Type)) ||
+            structSym
+            .PrimaryConstructorParameters
+            .Any((parameter ParameterSymbol) -> NativeProtocolSafety.ContainsProtocol(parameter.Type)) {
+            this.EmitNativeProtocolFeature(handle2)
+        }
         EmitGenericParamRows(this.emitCtx, handle2, structSym.TypeParameters)
         if structSym.IsInline {
             this.EmitIsReadOnlyAttribute(handle2)
@@ -897,6 +908,9 @@ internal class TypeDefEmitter {
             methodList: MetadataTokens.MethodDefinitionHandle(firstMethodRow)
         )
         this.cache.InterfaceTypeDefs[ifaceSym] = handle
+        if ifaceSym.IsProtocol {
+            this.EmitNativeProtocolFeature(handle)
+        }
         EmitGenericParamRows(this.emitCtx, handle, ifaceSym.TypeParameters)
         // ADR-0089 / issues #1030/#3519: emit interface static state and const
         // fields. ECMA constants use literal fields + Constant rows; decimal
@@ -2134,6 +2148,24 @@ internal class TypeDefEmitter {
     /// TypeDef as by-ref-like, plus the legacy `Obsolete` attribute that
     /// instructs downstream C# compilers without ref-struct awareness to emit
     /// an error if such a struct is consumed as a normal value type.
+    private func EmitNativeProtocolFeature(typeHandle TypeDefinitionHandle) {
+        let constructor = typeof(System.Runtime.CompilerServices.CompilerFeatureRequiredAttribute).GetConstructor(
+            []Type{typeof(string)}
+        )!!
+        let blob = BlobBuilder()
+        blob.WriteUInt16(0x0001)
+        blob.WriteSerializedString(NativeProtocolMetadata.FeatureName)
+        blob.WriteUInt16(0)
+        this
+            .emitCtx
+            .Metadata
+            .AddCustomAttribute(
+            typeHandle,
+            this.getCtorReference(constructor),
+            this.emitCtx.Metadata.GetOrAddBlob(blob)
+        )
+    }
+
     private func EmitIsByRefLikeAttribute(typeHandle TypeDefinitionHandle) {
         let ctorRef = this.wellKnown.GetIsByRefLikeAttributeCtorRef()
         let valueBlob = BlobBuilder()

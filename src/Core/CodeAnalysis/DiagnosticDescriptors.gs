@@ -2572,6 +2572,11 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "Invalid byte-string literal: {0}"
     )
+    internal let NativeProtocol DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0629",
+        DiagnosticSeverity.Error,
+        "Native protocol contract: {0}."
+    )
     internal let FatalCompilerIOError DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9997",
         DiagnosticSeverity.Error,

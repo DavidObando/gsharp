@@ -67,6 +67,7 @@ internal partial class ExpressionBinder {
     ]
     private let bindRichAnonymousObject(AnonymousClassExpressionSyntax, StructSymbol) -> BoundExpression
     private let bindStructuralAdaptation(CallExpressionSyntax) -> BoundExpression
+    private let bindNativeProtocolProbe(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression
 
     // ADR-0151: declares the local a value-position `if let` binding
     // introduces, routed through the same
@@ -103,7 +104,8 @@ internal partial class ExpressionBinder {
         bindStatementList(ImmutableArray[StatementSyntax], (() -> BoundStatement)?) -> ImmutableArray[BoundStatement],
         bindLocalVariable(SyntaxToken, bool, TypeSymbol) -> VariableSymbol,
         bindRichAnonymousObject(AnonymousClassExpressionSyntax, StructSymbol) -> BoundExpression,
-        bindStructuralAdaptation(CallExpressionSyntax) -> BoundExpression
+        bindStructuralAdaptation(CallExpressionSyntax) -> BoundExpression,
+        bindNativeProtocolProbe(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.memberLookup = memberLookup ?? throw ArgumentNullException("memberLookup")
@@ -125,6 +127,7 @@ internal partial class ExpressionBinder {
         this.bindLocalVariable = bindLocalVariable
         this.bindRichAnonymousObject = bindRichAnonymousObject
         this.bindStructuralAdaptation = bindStructuralAdaptation
+        this.bindNativeProtocolProbe = bindNativeProtocolProbe
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics
@@ -2149,8 +2152,43 @@ internal partial class ExpressionBinder {
     }
 
     private func BindIsExpression(syntax IsExpressionSyntax) BoundExpression {
-        let expression = BindExpression(syntax.Expression)
-        let pattern = patterns.BindPattern(syntax.Pattern, expression.Type, allowBindings: false, preferTypeNames: true)
+        var expression = BindExpression(syntax.Expression)
+        var pattern = patterns.BindPattern(syntax.Pattern, expression.Type, allowBindings: false, preferTypeNames: true)
+        if NativeProtocolOperations.GetProtocol(expression.Type) is {} sourceProtocol {
+            let inspector = NativeProtocolPatternInspector(binderCtx.RootScope, sourceProtocol, syntax.Location)
+            inspector.VisitPattern(pattern)
+            if inspector.HasProtocolTests && inspector.HasConcreteTests {
+                Diagnostics.ReportNativeProtocol(
+                    syntax.Location,
+                    "mixed capability/concrete compound patterns require an explicit intermediate view"
+                )
+                return BoundErrorExpression(syntax)
+            }
+            expression = NativeProtocolOperations.PrepareInput(
+                binderCtx.RootScope,
+                expression,
+                recoverPayload: !inspector.HasProtocolTests
+            )
+        } else {
+            let inspector = NativeProtocolPatternInspector(binderCtx.RootScope, nil, syntax.Location)
+            inspector.VisitPattern(pattern)
+            if inspector.HasProtocolTests {
+                if inspector.HasConcreteTests || inspector.Targets.Count != 1 {
+                    Diagnostics.ReportNativeProtocol(
+                        syntax.Location,
+                        "compound concrete capability probes require an explicit intermediate protocol value"
+                    )
+                    return BoundErrorExpression(syntax)
+                }
+                expression = bindNativeProtocolProbe(syntax.Location, expression, inspector.Targets.Single())
+                pattern = patterns.BindPattern(
+                    syntax.Pattern,
+                    expression.Type,
+                    allowBindings: false,
+                    preferTypeNames: true
+                )
+            }
+        }
         let result = BoundIsExpression(syntax, expression, pattern)
         // ADR-0166: designations are declared by the consumer of the
         // condition (see PatternVariables); here only record the names so a
@@ -2201,7 +2239,7 @@ internal partial class ExpressionBinder {
     ) BoundExpression -> PatternVariables.BindInScope(binderCtx, variables, bind)
 
     private func BindAsExpression(syntax AsExpressionSyntax) BoundExpression {
-        let expression = BindExpression(syntax.Expression)
+        var expression = BindExpression(syntax.Expression)
         let targetType TypeSymbol? = bindTypeClause(syntax.TypeClause)
         if targetType == nil || targetType == TypeSymbol.Error {
             return BoundErrorExpression(nil)
@@ -2212,6 +2250,23 @@ internal partial class ExpressionBinder {
         if !(targetType is NullableTypeSymbol) && IsNonNullableValueType(targetType) {
             Diagnostics.ReportAsRequiresReferenceOrNullableType(syntax.Location, targetType.Name)
             return BoundErrorExpression(nil)
+        }
+        if NativeProtocolOperations.GetProtocol(expression.Type) is {} sourceProtocol {
+            if NativeProtocolOperations.GetProtocol(targetType) is {} targetProtocol {
+                NativeProtocolOperations.RequireCoverage(
+                    binderCtx.RootScope,
+                    sourceProtocol,
+                    targetProtocol,
+                    syntax.Location
+                )
+            }
+            expression = NativeProtocolOperations.PrepareInput(
+                binderCtx.RootScope,
+                expression,
+                recoverPayload: NativeProtocolOperations.GetProtocol(targetType) == nil
+            )
+        } else if NativeProtocolOperations.GetProtocol(targetType) is {} targetProtocol {
+            expression = bindNativeProtocolProbe(syntax.Location, expression, targetProtocol)
         }
         // Issue #3349: `as` is a TESTING conversion — it yields nil when the test
         // fails, which is the entire reason the check above rejects a non-nullable

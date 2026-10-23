@@ -34,6 +34,9 @@ open partial class Parser {
         let saw = HashSet[string](StringComparer.Ordinal)
         while true {
             let k = Peek(offset)
+            if IsProtocolDeclarationHead(offset) {
+                return true
+            }
             if k.Kind == SyntaxKind.ClassKeyword ||
                 k.Kind == SyntaxKind.StructKeyword ||
                 k.Kind == SyntaxKind.EnumKeyword ||
@@ -69,6 +72,15 @@ open partial class Parser {
             return false
         }
     }
+
+    private func IsProtocolDeclarationHead(offset int32) bool -> Peek(offset).Kind == SyntaxKind.IdentifierToken &&
+        Peek(offset).Text == "protocol" && Peek(offset + 1).Kind == SyntaxKind.IdentifierToken &&
+        (
+        Peek(offset + 2).Kind == SyntaxKind.OpenBraceToken || Peek(
+            offset + 2
+        ).Kind == SyntaxKind.OpenSquareBracketToken ||
+            Peek(offset + 2).Kind == SyntaxKind.ColonToken
+    )
 
     /// ADR-0078 / issue #718: parses an aggregate declaration whose head is
     /// [open|sealed]? [data]? [inline]? [ref]? (class|struct|enum|interface) Name[TParams]? ...
@@ -188,6 +200,33 @@ open partial class Parser {
         let aggregateKw = Current
         let aggregateKind = aggregateKw.Kind
         let aggregateText = aggregateKw.Text
+        if IsProtocolDeclarationHead(0) {
+            let protocolKeyword = NextToken()
+            let protocolIdentifier = MatchToken(SyntaxKind.IdentifierToken)
+            let protocolTypeParameters = ParseOptionalTypeParameterList()
+            let declaration = ParseInterfaceDeclarationNew(
+                accessibilityModifier,
+                sealedModifier,
+                protocolKeyword,
+                protocolIdentifier,
+                protocolTypeParameters
+            )
+            if openModifier != nil ||
+                sealedModifier != nil ||
+                dataKeyword != nil ||
+                inlineKeyword != nil ||
+                refModifier != nil ||
+                unsafeModifier != nil ||
+                partialModifier != nil ||
+                abstractModifier != nil ||
+                sharedModifier != nil {
+                Diagnostics.ReportNativeProtocol(
+                    declaration.Location,
+                    "protocol declaration modifiers are not supported"
+                )
+            }
+            return declaration
+        }
         if aggregateKind != SyntaxKind.ClassKeyword &&
             aggregateKind != SyntaxKind.StructKeyword &&
             aggregateKind != SyntaxKind.EnumKeyword &&
@@ -418,6 +457,18 @@ open partial class Parser {
         // The aggregate `enum` keyword is already consumed. Read the body
         // directly, since ParseEnumDeclaration assumes it still has to match
         // the keyword.
+        if Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "conforms" {
+            Diagnostics.ReportNativeProtocol(
+                Current.Location,
+                "enum protocol conformance is not supported in this core"
+            )
+            NextToken()
+            ParseTypeClause()
+            while Current.Kind == SyntaxKind.CommaToken {
+                NextToken()
+                ParseTypeClause()
+            }
+        }
         let openBrace = MatchToken(SyntaxKind.OpenBraceToken)
         let members = ParseEnumMembers()
         let closeBrace = MatchToken(SyntaxKind.CloseBraceToken)

@@ -119,7 +119,7 @@ internal shared class MagicCollectionZeroValue {
     /// @param type The declared slot type.
     /// @returns True for a bare (non-`?`) channel type.
     func RequiresExplicitInitializer(type TypeSymbol) bool -> type is ChannelTypeSymbol ||
-        ManagedReferenceTypes.TryGetElement(type, out _, out _)
+        ManagedReferenceTypes.TryGetElement(type, out _, out _) || NativeProtocolMetadata.IsProtocol(type)
 
     /// Synthesizes a field value only when the definition's in-type zero
     /// constructor actually writes that storage.

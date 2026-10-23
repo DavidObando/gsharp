@@ -15,6 +15,61 @@ G# combines concise aggregate and collection syntax with CLR type identity. Use 
 
 If you type the C# spelling `null` in a value position and no symbol named `null` exists in scope, the binder reports `GS0273` ("`'null'` is not a literal in G#. Did you mean `'nil'`?") and recovers by treating the identifier as `nil`, so target-type contexts (`let x string? = null`, `Foo(null)` where `Foo` takes `T?`, `x == null`) continue to typecheck. The diagnostic is suppressed when `null` resolves to a real symbol (a function, local, or field named `null` is legal because `null` is not a keyword).
 
+## Native protocols (Next, ADR-0205)
+
+The bounded native protocol core is a development feature, not part of the
+published 0.5.212 SDK. `protocol` is contextual: ordinary identifiers with that
+name remain legal. A protocol currently contains only nongeneric, synchronous,
+by-value method signatures.
+
+```gsharp
+protocol Advance { func Next() int32; }
+struct Counter : Advance {
+    var Step int32
+    func Next() int32 {
+        Step += 1
+        return Step
+    }
+}
+var original = Counter{Step: 10}
+let p Advance = original
+let q = p
+original.Step = 30
+Console.WriteLine(q.Next()) // 11
+Console.WriteLine(p.Next()) // 12
+Console.WriteLine(original.Step) // 30
+```
+
+Owned class/struct colon claims are checked, not documentary. Exact accessible
+instance witnesses take precedence over exact ordinary by-value extensions.
+Retroactive conformance is also checked at a concrete conversion or probe.
+No nominal interface implementation is added to the original type.
+
+Concrete insertion evaluates once. A struct is shallow-copied once into mutable
+saved storage; a class retains the evaluated object even if its source variable
+is reassigned. Assignment, arguments, returns and successful capability views
+retain the **same entry**. Independent concrete insertion creates a different
+saved struct. Ordinary extension witnesses still receive parameter zero by
+value, so a scalar-incrementing extension can produce 11, 11 instead of 11, 12.
+
+`value is OtherProtocol view` and `value as OtherProtocol` use the same recorded
+decision; `as` returns `OtherProtocol?`. Known mismatch produces false/absence,
+but unknown or invalid evidence diagnoses or fails an explicit runtime boundary.
+Ordinary compatible concrete recovery uses the original payload: class recovery
+retains its object, while struct recovery copies the current saved state.
+Referenced fields still share normally; replacing a copied field stays local.
+
+Required `P` storage must be initialized. `P?` permits outer absence, not a
+present nullable payload. This core rejects typed-nil insertion, open/generic
+payloads, enums, generic/rich/ref protocol slots, `managed[P]` projections,
+equality/hash/object/delegate/generic escapes and general foreign export.
+Public native contracts currently require accessible concrete payload types.
+Existing nominal `interface`, `adapt`, concrete `as` restrictions and ordinary
+pattern/flow rules are unchanged.
+
+See the [native contract boundary](../ref/clr-interop.md#native-protocol-contract-boundary-next)
+before exposing native signatures across assemblies.
+
 ## Primitive values
 
 The built-in primitive names are explicit and CLR-backed: `bool`, signed and unsigned width-bearing integers, native integers, `float32`, `float64`, `decimal`, `char`, `string`, `object`, and `void`. `object` is the universal upper bound, so values can widen or box to it. Friendly numeric aliases (`int`, `uint`, `long`, `ulong`, `short`, `ushort`, `byte`, `sbyte`, `float`, `double`) are accepted everywhere a type name is accepted and resolve to the canonical width-bearing names at the binder; the canonical names remain the preferred spelling for documentation and public library APIs.

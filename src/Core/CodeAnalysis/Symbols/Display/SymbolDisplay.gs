@@ -149,6 +149,11 @@ shared class SymbolDisplay {
             case package_ is PackageSymbol {
                 AppendPackage(builder, package_)
             }
+            case protocol is InterfaceSymbol when protocol.IsProtocol {
+                builder.Keyword("protocol")
+                builder.Space()
+                builder.Type(FormatType(protocol))
+            }
             case type is TypeSymbol {
                 builder.Keyword("type")
                 builder.Space()
@@ -172,7 +177,13 @@ shared class SymbolDisplay {
         }
         // ADR-0078: the aggregate kind keyword comes first.
         if clrType.IsInterface {
-            builder.Keyword("interface")
+            builder.Keyword(
+                if NativeProtocolMetadata.HasFeatureMarker(clrType) {
+                    "protocol"
+                } else {
+                    "interface"
+                }
+            )
         } else if clrType.IsEnum {
             builder.Keyword("enum")
         } else if clrType.IsValueType {

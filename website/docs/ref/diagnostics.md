@@ -22,6 +22,12 @@ Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severi
 | GS0605 | Error | A rich anonymous field with an omitted type has no unambiguous heap-storable inferred type. | Add an explicit field type; `nil`, untyped lambdas/method groups, cycles, and ref-like values are not widened to `object`. |
 | GS0606 | Error | `adapt[I](source)` cannot produce a complete exact forwarding plan. | Supply an interface target and a non-null admitted source whose accessible public instance members exactly match every required slot. Static abstract/virtual members and operators require a separate design. |
 
+## Native protocols (Next, ADR-0205)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0629 | Error | Unsupported native protocol declaration, payload/signature/escape, absent required initialization, or unknown/invalid/incompatible canonical evidence. | Use the admitted nongeneric synchronous by-value core and exact accessible witnesses; initialize required storage, reference the canonical origin/contracts and matching implementation/ref metadata. Unknown evidence is not negative conformance. |
+
 ## Severity levels
 
 | Level | Meaning |
