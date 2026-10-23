@@ -98,11 +98,11 @@ class BoundScope {
     private var latestRichAnonymousObjectPlans Dictionary[StructSymbol, RichAnonymousObjectPlan]?
     private var structuralAdapterRegistry StructuralAdapterRegistry?
     private var independentBodyRoot bool
-    private var cachedOrderedTypeAliases ImmutableArray[KeyValuePair[string, TypeSymbol]]
-    private var cachedParentTypeAliases ImmutableArray[KeyValuePair[string, TypeSymbol]]
-    private var cachedOwnTypeAliases ImmutableDictionary[string, TypeSymbol]?
-    private var cachedStructAliases ImmutableArray[KeyValuePair[string, TypeSymbol]]
-    private var cachedStructs ImmutableArray[StructSymbol]
+    // Derived alias views are published as one immutable snapshot each (see
+    // AliasDerivedSnapshot), so readers on different threads never pair a value
+    // with inputs it was not built from.
+    private var orderedTypeAliasSnapshot AliasDerivedSnapshot[ImmutableArray[KeyValuePair[string, TypeSymbol]]]?
+    private var structSnapshot AliasDerivedSnapshot[ImmutableArray[StructSymbol]]?
 
     /// Creates a worker boundary over canonical declarations. Synthesis remains coordinator-owned.
     internal func CreateIndependentBodyScope() BoundScope -> BoundScope(this){independentBodyRoot = true}
@@ -1472,11 +1472,16 @@ class BoundScope {
             return Parent!!.GetDeclaredStructs()
         }
         let aliases = GetOrderedTypeAliases()
-        if cachedStructs.IsDefault || !cachedStructAliases.Equals(aliases) {
-            cachedStructs = GetDeclaredTypeSymbols[StructSymbol](aliases)
-            cachedStructAliases = aliases
+        if AliasDerivedSnapshot[ImmutableArray[StructSymbol]].TryGet(&structSnapshot, nil, aliases, out var published) {
+            return published
         }
-        return cachedStructs
+        return AliasDerivedSnapshot[ImmutableArray[StructSymbol]].Publish(
+            &structSnapshot,
+            nil,
+            aliases,
+            "scope.declared-structs",
+            GetDeclaredTypeSymbols[StructSymbol](aliases)
+        )
     }
 
     /// Gets the set of declared user-defined interface types in this scope chain (Phase 3.B.4).
@@ -2487,10 +2492,27 @@ class BoundScope {
         if typeAliases is not{} ownAliases {
             return parentAliases
         }
-        if !cachedOrderedTypeAliases.IsDefault && object.ReferenceEquals(cachedOwnTypeAliases, ownAliases) &&
-            cachedParentTypeAliases.Equals(parentAliases) {
-            return cachedOrderedTypeAliases
+        if AliasDerivedSnapshot[ImmutableArray[KeyValuePair[string, TypeSymbol]]].TryGet(
+            &orderedTypeAliasSnapshot,
+            ownAliases,
+            parentAliases,
+            out var published
+        ) {
+            return published
         }
+        return AliasDerivedSnapshot[ImmutableArray[KeyValuePair[string, TypeSymbol]]].Publish(
+            &orderedTypeAliasSnapshot,
+            ownAliases,
+            parentAliases,
+            "scope.ordered-type-aliases",
+            BuildOrderedTypeAliases(parentAliases, ownAliases)
+        )
+    }
+
+    private func BuildOrderedTypeAliases(
+        parentAliases ImmutableArray[KeyValuePair[string, TypeSymbol]],
+        ownAliases ImmutableDictionary[string, TypeSymbol]
+    ) ImmutableArray[KeyValuePair[string, TypeSymbol]] {
         // ADR-0203: readers share canonical declarations until this scope or an ancestor changes its aliases.
         let merged = Dictionary[string, TypeSymbol]()
         let order = List[string]()
@@ -2512,10 +2534,7 @@ class BoundScope {
         for key in order {
             result.Add(KeyValuePair[string, TypeSymbol](key, merged[key]))
         }
-        cachedOrderedTypeAliases = result.MoveToImmutable()
-        cachedParentTypeAliases = parentAliases
-        cachedOwnTypeAliases = ownAliases
-        return cachedOrderedTypeAliases
+        return result.MoveToImmutable()
     }
 
     private func GetDeclaredTypeSymbols[TSymbol TypeSymbol]() ImmutableArray[TSymbol] ->
