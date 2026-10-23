@@ -1739,14 +1739,22 @@ internal partial class StatementBinder {
             let sourceConstructionRunsUserCode = (
                 node is BoundConstructorCallExpression construction &&
                     (
-                    construction.SelectedConstructor != nil ||
-                        !construction
-                        .StructType
-                        .InstanceFieldInitializers
-                        .IsEmpty
+                    construction.SelectedConstructor != nil || StatementBinder.ConstructionRunsUserCode(
+                        construction.StructType
+                    )
                 )
             ) ||
-                (node is BoundStructLiteralExpression literal && !literal.StructType.InstanceFieldInitializers.IsEmpty)
+                (
+                node is BoundStructLiteralExpression literal &&
+                    (
+                    StatementBinder.ConstructionRunsUserCode(literal.StructType) || literal.Initializers.Any(
+                        (initializer BoundFieldInitializer) -> initializer.Property != nil &&
+                            !initializer
+                            .Property
+                            .IsAutoProperty
+                    )
+                )
+            )
             let sourcePropertyRunsUserCode = (
                 node is BoundPropertyAccessExpression and
                     {Property: {IsAutoProperty: false}} or
@@ -1892,6 +1900,10 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitBaseClassCallExpression(node BoundBaseClassCallExpression) {
+            // ADR-0208 R11 (#5170): a base method or computed accessor runs user code.
+            if node.Method != nil {
+                MarkMayMutateGlobalRoots()
+            }
             AnalyzeCallableArguments(node.Arguments)
             base.VisitBaseClassCallExpression(node)
         }
@@ -2007,11 +2019,17 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitForRangeStatement(node BoundForRangeStatement) {
+            // ADR-0208 R11 (#5170): lowering adds GetEnumerator, MoveNext and Current calls, and an
+            // iterator body runs inside them. Indexed iteration runs no user code.
+            if node.IterationKind != ForRangeKind.Indexed {
+                MarkMayMutateGlobalRoots()
+            }
             VisitExpression(node.Collection)
             VisitPossiblySkippedBody(node.Body)
         }
 
         protected open override func VisitAwaitForRangeStatement(node BoundAwaitForRangeStatement) {
+            MarkMayMutateGlobalRoots()
             VisitExpression(node.Stream)
             VisitPossiblySkippedBody(node.Body)
         }
@@ -2241,6 +2259,11 @@ internal partial class StatementBinder {
                 MarkMayMutateGlobalRoots()
                 MayMutateWritableReferenceRoots = true
             }
+        }
+
+        // ADR-0208 R11 (#5170): the loop header runs user code before every body run.
+        func MarkIterationRunsUserCode() {
+            MarkMayMutateGlobalRoots()
         }
 
         private func MarkMayMutateGlobalRoots() {
@@ -4114,6 +4137,26 @@ internal partial class StatementBinder {
             for child in node.GetChildren() {
                 CollectAllNames(child, names)
             }
+        }
+
+        /// ADR-0208 R11 (#5170): whether constructing [`type`](paramref) can run user code: a
+        /// field initializer or constructor of the generic definition, or of any base class.
+        internal func ConstructionRunsUserCode(type StructSymbol) bool {
+            var current StructSymbol? = type
+            for var depth = 0; current != nil && depth < 64; depth++ {
+                let definition = current.Definition ?? current
+                if !definition
+                    .InstanceFieldInitializers
+                    .IsEmpty ||
+                    definition.HasPrimaryConstructor ||
+                    !definition
+                    .EffectiveExplicitConstructors
+                    .IsDefaultOrEmpty {
+                    return true
+                }
+                current = definition.BaseClass
+            }
+            return false
         }
 
         /// Returns whether an expression kind can invoke user code or assign

@@ -196,6 +196,110 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `}
+            yield[]object{"generic-composite-literal-field-initializer", `
+import System
+
+var text string? = nil
+func Boom() int32 {
+    text = nil
+    return 1
+}
+class Resetter[T] {
+    var value int32 = Boom()
+}
+func Run() int32 {
+    text = "safe"
+    let r = Resetter[int32]{}
+    return text.Length + r.value
+}
+Console.WriteLine(Run())
+`}
+            yield[]object{"derived-literal-base-constructor", `
+import System
+
+var text string? = nil
+open class Base {
+    init() { text = nil }
+}
+class Derived : Base { }
+func Run() int32 {
+    text = "safe"
+    let d = Derived{}
+    return text.Length
+}
+Console.WriteLine(Run())
+`}
+            yield[]object{"literal-custom-setter", `
+import System
+
+var text string? = nil
+class Holder {
+    var store int32
+    prop Value int32 {
+        get -> store
+        set { text = nil }
+    }
+}
+func Run() int32 {
+    text = "safe"
+    let h = Holder{Value: 1}
+    return text.Length
+}
+Console.WriteLine(Run())
+`}
+            yield[]object{"base-call", `
+import System
+
+var text string? = nil
+open class Base {
+    func Clear() { text = nil }
+}
+class Derived : Base {
+    func Run() int32 {
+        text = "safe"
+        base.Clear()
+        return text.Length
+    }
+}
+let d = Derived{}
+Console.WriteLine(d.Run())
+`}
+            yield[]object{"iterator-for-in-after-loop", `
+import System
+
+var text string? = nil
+func Items() sequence[int32] {
+    text = nil
+    yield 1
+}
+func Run() int32 {
+    let items = Items()
+    text = "safe"
+    for item in items {
+    }
+    return text.Length
+}
+Console.WriteLine(Run())
+`}
+            yield[]object{"iterator-for-in-inside-loop", `
+import System
+
+var text string? = nil
+func Items() sequence[int32] {
+    text = nil
+    yield 1
+}
+func Run() int32 {
+    let items = Items()
+    var total int32 = 0
+    text = "safe"
+    for item in items {
+        total = total + text.Length
+    }
+    return total
+}
+Console.WriteLine(Run())
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
@@ -263,6 +367,20 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `, []string{"5"}}
+            yield[]object{"indexed-for-in", `
+import System
+
+var text string? = nil
+func Run() int32 {
+    text = "safe"
+    var total int32 = 0
+    for item in []int32{1, 2} {
+        total = total + item + text.Length
+    }
+    return total + text.Length
+}
+Console.WriteLine(Run())
+`, []string{"15"}}
         }
 
         private func Compile(dir string, source string, outPath string)(Exit int32, Log string) {
