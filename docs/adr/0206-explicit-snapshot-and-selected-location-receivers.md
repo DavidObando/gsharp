@@ -1,11 +1,12 @@
 # ADR-0206: Explicit snapshot and selected-location receiver modes
 
-- **Status**: Proposed
+- **Status**: Withdrawn
 - **Date**: 2026-10-21
-- **Phase**: Design only; no implementation authorization
+- **Withdrawn**: 2026-10-22
+- **Phase**: Historical design only; no implementation authorization
 - **Issue**: [#5099](https://github.com/DavidObando/gsharp/issues/5099)
 - **Related**: [#4333](https://github.com/DavidObando/gsharp/issues/4333),
-  [ADR-0205](0205-type-preserving-interface-values.md) sections 3, 6, 9, 11 and 12,
+  [Proposed ADR-0205](0205-type-preserving-interface-values.md),
   [ADR-0191](0191-go-to-gsharp-migration-tool.md) section 7,
   [ADR-0182](0182-receiver-clause-is-always-extension.md),
   [ADR-0189](0189-capturing-anonymous-objects-and-structural-interface-adaptation.md),
@@ -13,6 +14,37 @@
   [ADR-0186](0186-platform-types-for-oblivious-clr-interop.md),
   [ADR-0193](0193-nullability-queries-are-type-level-and-funnelled.md),
   [ADR-0154](0154-test-oracle-strength.md)
+
+## Withdrawal decision
+
+The maintainer withdrew this feature proposal. Independent Quote trials already
+fit ordinary G# local copies and forwarding bodies. The proposal did not
+establish why those application policies need new language receiver kinds.
+It also conflicted with the confirmed protocol direction: copy a struct once
+at conversion and preserve ordinary instance mutations in that saved copy.
+
+Only necessary protocol storage rules and open source-location view questions
+continue in Proposed ADR-0205, especially sections 3, 7 and 8. Its location
+investigation preserves original-source aliasing without redefining invariant
+`managed[T]`. It does not continue snapshot/location slot modes, automatic
+fresh-per-call receivers or reset semantics under a construction modifier.
+Safe typed protocol forwarding still needs proof, not a new ordinary receiver.
+
+ADR-0205 remains Proposed. Neither its revision nor this withdrawal accepts
+new semantics, authorizes product implementation, changes ADR-0182/0188/0189,
+moves the SDK pin or admits Go operations under ADR-0191.
+Issue #5097 remains open for protocol design. After merge, the conductor may
+close #5099 with this withdrawal evidence; this document does not close it.
+
+## Historical proposal — not current recommendation
+
+**Everything below preserves the withdrawn proposal as historical context.**
+Words such as “recommend”, “required”, “first proof” and “acceptance” below
+describe its former position, not current obligations. Historical links to
+ADR-0205 section numbers reflect the old revision and are not current authority.
+The former syntax, trial witnesses, receiver gates and metadata plan are not
+dependencies of the revised protocol proposal. Do not implement them from this
+record or interpret the old Proposed language below as its current status.
 
 ## Context
 

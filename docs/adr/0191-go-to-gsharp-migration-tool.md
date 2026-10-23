@@ -184,7 +184,7 @@ Reject a proposal that merely exports Go implementation bookkeeping.
 | Priority / semantic need | Existing reusable basis and remaining gap | Candidate design and decision gate | Intended application idiom |
 | --- | --- | --- | --- |
 | A: immutable arbitrary bytes | ADR-0204's core, UTF-8 conversion, scalar iteration and code-point collection APIs are implemented in-tree; native slices/arrays alone do not supply immutable ownership | Accepted [ADR-0204](0204-immutable-bytestring-values.md); release, separate verified pin movement and Go family admission remain distinct gates; section 6.2 | A byte-string type, ordinary operations and explicit text conversion, not string-runtime calls |
-| A: interface values and receiver copies | Nominal interfaces, `adapt`, rich objects and managed locations provide slots, forwarding and storage. They do not select original dynamic identity, typed presence or copy-per-call semantics | Proposed [ADR-0205](0205-type-preserving-interface-values.md) compares the three section 7 candidates and recommends a finite-evidence value category; snapshot/location calls require a separate receiver-mode ADR. No design acceptance or implementation is implied | Typed method calls and capability tests; hidden witness/dispatch metadata |
+| A: interface values and receiver copies | Nominal interfaces, `adapt`, rich objects and managed locations provide slots, forwarding and storage. They do not select original Go dynamic identity, typed presence or Go call-copy semantics | Proposed [ADR-0205](0205-type-preserving-interface-values.md) recommends native protocols, ordinary receivers and stable typed witnesses. ADR-0206 is withdrawn; Go call copies remain a separate frontend proof, not a new native receiver requirement. No design acceptance or implementation is implied | Typed method calls and paired capability tests/views; hidden witness metadata |
 | B: fixed value arrays and addressable aggregates | Structs copy values; native slices/ref indexers preserve locations. Existing `[N]T` remains CLR-array-backed | Separate additive value-array design, including length/type identity, copies, nested writes and view lifetimes. Start proofs with stereo and ten-element values, not a permanent shape-specific output ABI | Value assignment and indexed writes, not `Array2F64.Get/Set` calls |
 | B: slices, arithmetic and evaluation | Native `slice[T]`, nullable descriptors, concrete integers, factories, managed refs and capture cells already exist | First prove ordinary lowering. Where repeated source-width checks or nil/evaluation scaffolding obscure code, evaluate general checked-index/conversion or sequencing facilities in separate ADRs. Do not add a Go slice/index wrapper or resurrect `make` | `slice[T].Create`, ordinary indexing and clear, minimal evaluation temporaries |
 | C: faults, defer/recover, maps and iterator effects | Existing exceptions/control flow, native defer and collections supply mechanisms, not automatic Go equivalence | Separate semantic studies: reusable cleanup/unwinding or control-effect capabilities where justified; exact Go recovery eligibility, panic payload/version and map rules remain explicit mappings | Structured control flow and typed errors, not hand-expanded state/dispatch protocols |
@@ -981,50 +981,50 @@ The differences are specific, not a claim that G# cannot model Go:
 | Copy on each value-receiver call | Native struct adapters own one mutable field; repeated calls mutate that field. Go value receivers need a fresh call copy, even when selected through a pointer. Ordinary struct instance calls must continue to mutate addressable storage. |
 | Equality, hashing and assertions | Wrapper reference equality and nominal CLR tests do not implement dynamic Go comparability, copy-returning assertions or type switches. Type evidence and operation policies are needed, not necessarily a public runtime envelope. |
 
-**Selected direction:** design an opt-in reusable interface-value capability
-and explicit receiver/value semantics before admitting this family. There is
-no selected universal representation or syntax. A useful G# facility could
-offer type-preserving erased values, optional structural capabilities and
-explicit snapshot-versus-location dispatch. Handwritten composition and
-capability-oriented APIs must justify it independently of Go translation.
-Go-like typed presence and copy-per-call do not automatically become defaults.
-Candidate handwritten witnesses include heterogeneous messages retaining their
-concrete type through capability views, and value-backed strategies whose calls
-must not mutate stored configuration. Typed presence must distinguish "no
-value" from "a value with a nullable payload" without confusing ordinary null.
-Those are separate design choices, not an inseparable Go mode. If a choice
-has no useful general contract, keep its policy narrow rather than add it to
-the language merely for translation.
+**Selected direction:** design reusable native protocols before admitting this
+family. Proposed ADR-0205 recommends `protocol`, statically proved
+`let p MyProtocol = x`, ordinary extensions as typed-witness candidates, and
+paired `is`/`as` views. This is proposed syntax, not an available feature or
+accepted ABI. Handwritten heterogeneous messages retaining concrete evidence
+motivate that work independently of Go. Native struct conversion copies once;
+ordinary instance mutation persists in the saved copy. By-value extensions keep
+their existing copying semantics. Class conversion retains the evaluated object,
+not the source variable. Copied-protocol ownership remains an acceptance choice.
+Typed presence must distinguish absence from a present nullable payload.
+No native copy-per-call/reset policy follows from Go translation.
 
 The dedicated Proposed [ADR-0205](0205-type-preserving-interface-values.md)
-compares these candidates and recommends a finite-evidence category. It keeps
-receiver-mode acceptance separate. Its merge does not accept new semantics,
-implement this execution contract or admit a Go family.
-[Proposed ADR-0206](0206-explicit-snapshot-and-selected-location-receivers.md)
-addresses that separate receiver gate with explicit slot modes, capture timing
-and typed location witnesses. Neither proposal's merge admits Go method values
-or changes ordinary G# calls.
+compares the source/backend candidates below. It separates bounded finite
+evidence proofs from intended retroactive conformance, including future consumer
+protocols and separate-library coherence. Missing evidence cannot mean false.
+Its merge does not accept new semantics, implement this execution contract or
+admit a Go family.
+[Withdrawn ADR-0206](0206-explicit-snapshot-and-selected-location-receivers.md)
+is historical context, not a receiver-mode acceptance dependency. Independent
+trials already fit ordinary forwarding/local copies. Necessary protocol storage
+rules and open restricted source-location projections now belong to ADR-0205;
+the candidate `managed[MyProtocol](x)` is not current syntax or safe writable
+covariance. Existing invariant `managed[T]` is unchanged.
 
 The comparison must cover:
 
 | Candidate | Benefit / reusable implementation basis | Tradeoff and required decision |
 | --- | --- | --- |
-| Opt-in structural/interface-value type category | Ordinary typed calls, capability tests and pattern matching over preserved dynamic identity; reuse static slot resolution, rich synthesis and location machinery | Specify absence separately from nullable payloads, legal conversions, equality/comparability, generic use and emitted metadata. Keep ordinary CLR interfaces unchanged; no unrestricted dynamic member search. |
+| Native protocol type category | Ordinary typed calls, paired capability tests/views and concrete pattern candidates over preserved evidence; reuse static resolution and typed forwarding | Prove coherent extension witnesses, copied-value ownership, nullable recovery and emitted metadata. Location projections require separate storage/permission proofs. Keep ordinary CLR interfaces unchanged; no runtime shape search. |
 | Compiler-recognized library value plus type evidence | An ordinary runtime storage type can carry hidden identity/dispatch evidence; compiler integration can expose the same clear calls/tests | Library storage alone is insufficient if users must pass tags or call universal dispatch helpers. Decide which source operations and metadata are language contracts, and their cross-assembly versioning. |
 | Existing nominal interfaces with compiler-synthesized boxes/forwarders | Reuses CLR dispatch and existing adapter emission; may avoid a new runtime value layout | Separate opt-in boxing/conversion and type-inspection rules still need design. Wrapper identity, typed nil and copy receivers cannot change implicitly. Reject this route if it leaks wrappers or cannot preserve all observations. |
 
-An explicit receiver-mode design may be shared across these candidates.
 [ADR-0182](0182-receiver-clause-is-always-extension.md) already gives by-value
-extension receivers, but extensions are not nominal method-set members.
-Evaluate an additive snapshot-receiver contract, including method values,
-interface slots and imported metadata. Do not silently reinterpret in-body
-struct methods, readonly defensive copies or existing extension lookup.
-Pointer receivers must be callable with nil when their bodies permit it;
-that requires an explicit nullable-location call contract, not a null CLR
-instance call or eager dereference.
+extension receivers, but extensions are not nominal method-set members. The
+protocol proposal may validate them as exact typed witnesses without changing
+that rule. Do not reinterpret instance methods, readonly defensive copies or
+existing extension lookup. Go value receivers and nullable pointer receivers
+need separately proved frontend lowering, using ordinary constructs where
+sufficient. Neither a null CLR instance call nor eager dereference implements
+a Go pointer body that must handle nil.
 
 The public surface and hidden backend are different decisions. A compiler
-may need tags, immutable boxes, dictionaries of exact slots or witness tables.
+may need tags, typed storage cells, dictionaries of exact slots or witness tables.
 Generate such evidence deterministically from validated facts, not reflection
 proxies or arbitrary caller-supplied tags. It belongs behind the accepted
 capability's lowering/metadata boundary, not in every migrated function.
@@ -1041,11 +1041,12 @@ func ReadChunk(reader Reader, buffer slice[uint8]) int32 {
 }
 ```
 
-The implementation must make that call preserve the selected receiver mode
+The implementation must make that call preserve its proved Go receiver mapping
 without an application-visible tag, `object[]` ABI or dispatch helper.
 Capability queries need equally clear, statically checked source operations.
-Before selecting syntax, compare side-by-side handwritten and migrated
-examples for snapshots, typed absence, repeated calls and optional capabilities.
+Before admitting a mapping, compare side-by-side handwritten and migrated
+examples for conversion copies, typed absence, repeated calls and optional
+capabilities. Native protocol instance mutation is not Go call-copy semantics.
 
 #### Interface semantic and admission obligations
 
@@ -1086,10 +1087,10 @@ payload hashing, including signed-zero normalization; non-comparable payloads
 fault. Hash values need not equal Go's private hash implementation.
 Defining this obligation does not admit maps.
 
-The selected call mechanism copies a value receiver **on every call**,
+The Go frontend's selected call mechanism copies a value receiver **on every call**,
 including a value method selected through `*T`. In that case it reads/copies
 the current pointee; a nil pointer faults before entering the value-method
-body. Pointer-receiver lowering
+body. This is not a new native protocol receiver policy. Pointer-receiver lowering
 passes the nullable handle without eagerly dereferencing it, allowing a
 method to handle nil. This distinction is independent of native `adapt`.
 
@@ -1122,8 +1123,10 @@ through the existing nullability import/query rules.
 
 A Go value-receiver call copies the receiver for **each call**. A native
 adapter over a mutable struct retains one adapter-owned copy and therefore
-cannot by itself implement this rule. The selected receiver facility must
-preserve the call copy, including repeated calls through one interface value.
+cannot by itself implement this rule. The frontend mapping must preserve the
+call copy, including repeated calls through one interface value. Ordinary
+by-value extensions or explicit local copies are possible building blocks,
+not evidence of a complete admitted mapping or a need for withdrawn slot modes.
 
 Wrapper reuse or conversion hoisting is allowed only when all of these proof
 obligations hold:
@@ -1611,7 +1614,7 @@ authorizes unreleased language use in repository source.
 | Milestone | Semantic completion | Performance readiness |
 | --- | --- | --- |
 | M0: typed inventory (implemented) | Active versus ignored/test/native/embed inputs and relevant module/package edges have reproducible hashes, typed facts and classified gaps. Loader failures reproduce as incomplete inventory. Schema/profile v1 and offline analysis validation landed in #4562. No emitted/runtime semantic witnesses or `migrationReady=true` claim. | Record reproducible inventory measurements and prerequisite profiles with honest unsupported cases. Performance is evidence, not a condition for completing inventory. |
-| Capability design and release (proposed, independent tracks) | Resolve byte strings, opt-in interface values/receivers and value arrays through dedicated ADRs and clean-output proofs. Study control effects and concurrency on their own merits. Preserve existing native/CLR behavior; implement/release selected additions before dependent source uses them. A decision to retain a blocker is valid; a rushed wrapper ABI is not required. | Representation probes and handwritten same-runtime controls inform choices. No design approval implies a speed claim or substitutes for #4513 workload policy. |
+| Capability design and release (proposed, independent tracks) | Resolve byte strings, native protocols and value arrays through dedicated ADRs and clean-output proofs. Protocol storage/location questions stay in ADR-0205; withdrawn ADR-0206 imposes no receiver-mode gate. Study control effects and concurrency on their own merits. Preserve existing native/CLR behavior; implement/release selected additions before dependent source uses them. A decision to retain a blocker is valid; a rushed wrapper ABI is not required. | Representation probes and handwritten same-runtime controls inform choices. No design approval implies a speed claim or substitutes for #4513 workload policy. |
 | M1: capability-backed semantic corpus (proposed) | Bank `m1-text-values-v1` when its chosen facilities meet both fidelity and output gates; admit interface/location/capture, value-array and other families independently as their designs mature. Each needs unchanged Go, JIT/AOT, ADR-0154 discrimination, deterministic text/maps, all four stages and rejected-neighbor witnesses. Unused concurrency/control effects are not prerequisites, but no schedule forces the text corpus ahead of their design. | Preserve prerequisite evidence and applicable steady-state/adapter/#4511/#4512 gates. A text fixture does not claim readiness for an unused interface, array or concurrent workload. |
 | M2: real leaf packages | `internal/fuzzy`, then `internal/tomlutil`, then `internal/deeplink` are banked separately only when each complete selected test variant/closure and paired behavior pass. Required iterator, shared-capture, wrapping, byte-limit and rejection semantics remain blockers until admitted. | Each selected package closure passes approved JIT and AOT latency/allocation budgets against package-specific same-runtime controls. |
 | M3: offline audio fixtures | Source-attributed EQ/gapless and alias-sensitive ring-buffer fixtures preserve mutation, frame-copy independence, numerical/state/chunk behavior and avoid devices/network. Extracted fixtures do not mark the full `player` or Beep closure green. | The measured workload meets approved JIT/AOT latency and allocation budgets with no per-frame boxing/inner arrays, hidden slice copies, or avoidable per-sample conversion/location creation. |
@@ -1636,7 +1639,7 @@ The following decisions need separate approval and evidence:
 | Text/value design and corpus | Resolve the byte/value capabilities and review realistic output before implementing section 6.1's allowlist. Then pin released compiler/runtime contracts and exact support artifacts and pass the independent matrix. No product implementation is approved by a docs check or compelled by a first-witness schedule. |
 | Reusable bytestring | ADR-0204 is Accepted, with core/text/scalar/code-point APIs implemented in-tree. Release, separate verified N-1 pin movement, remaining witness certification and Go admission are independent gates. This ADR does not accept a migration mapping or change CLR `string`. |
 | Native integration | Implement the separate execution-contract handshake and demanded probes from section 7 without changing M0. Missing capabilities block only dependent families; never substitute copying arrays, unknown byrefs or reflection proxies. |
-| Interface values and receiver modes | Proposed ADR-0205 compares opt-in structural values, compiler-recognized library storage and hidden nominal boxes. Its recommended category covers presence, type/capability evidence, insertion snapshots and metadata; snapshot/location calls need a separate receiver-mode ADR. Both need explicit design acceptance and proof. No public `GoInterface` or universal tag layout is mandated. |
+| Protocol values and ordinary receivers | Proposed ADR-0205 covers native declarations/conversions, retroactive typed witnesses, paired is/as, one-time shallow copies, persistent instance mutation and open ownership/location-view decisions. ADR-0206 is Withdrawn, not an acceptance gate. Go call-copy and pointer mappings need independent proof without changing native receiver semantics. No public `GoInterface` or universal tag layout is mandated. |
 | CLR and separate-library boundary | Specify explicit conversion, wrapper identity, round trips, public ABI, package privacy and cross-unit type evidence before exposing interface values or distributing package assemblies. Unknown imported types stay blocked; ordinary BCL interop must not change. |
 | Maps and control effects | Design readable eager defer, direct recovery, panic payloads, map behavior and iterator nonlocal control flow. Evaluate reusable language support separately from Go-specific policy. Minimal internal fault transport and named results do not complete these contracts. |
 | Performance budgets | Carry the approved prerequisite control-relative threshold and integrated #4511/#4512 allocation ceilings forward, then approve representative M2-M5 profile budgets. The current spike does not approve universal application limits. |
