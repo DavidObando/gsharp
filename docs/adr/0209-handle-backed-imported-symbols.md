@@ -1,6 +1,6 @@
 # ADR-0209: Handle-backed imported symbols without `MetadataLoadContext`
 
-- **Status**: Proposed
+- **Status**: Accepted (maintainer, 2026-10-23)
 - **Date**: 2026-10-22
 - **Phase**: Compiler architecture (study roadmap item B4; design only, the
   implementation is #5144)
@@ -137,7 +137,8 @@ identity.
 and #5166 (`MetadataTypeNameReader`, the first handle-level reader in Core) are
 the study's first layer; #5158 prototyped interning of `GetConstructed`, found
 it changes the emitted PE (138 fewer `MemberRef` and 154 fewer `TypeSpec` rows
-on Core), and the maintainer accepted that output as the baseline. What the
+on Core), the maintainer accepted that output as the baseline, and #5184
+landed the interning on the `System.Type` model. What the
 first layer cannot do while the model is `System.Type`: reference identity,
 lazy member construction, no string identity or host-`typeof` projection, no
 exception-as-answer probe, and a reference set that survives a worker request
@@ -871,15 +872,14 @@ moves to P1 when its corpus row shows wrong code or a wrong diagnostic.
 
 ### 20. Open questions and the maintainer's decisions
 
-The maintainer answered on 2026-10-23: the recommended option of each question
-stands. The status stays Proposed until the maintainer accepts the ADR as a
-whole.
+The maintainer answered on 2026-10-23: the recommended option of each of Q1 to
+Q7 stands, and for Q8 the house rule below applies. The maintainer accepted
+the ADR as a whole on 2026-10-23; the implementation is #5144, then #5145.
 
 1. **Public API break.** Remove the `System.Type` and `System.Reflection`
    members from the public surface in stage 7 (one release note, regenerated
    snapshot, external analyzers adapt), rather than keep a `Type`-producing
-   adapter on the public surface, which would mean the `MetadataLoadContext`
-   is never retired and the model pays for both. **Decided: remove in stage 7.**
+   adapter, which would keep `MetadataLoadContext` forever. **Decided: remove in stage 7.**
 2. **Hosts without an image.** Read `Assembly.Location` for `Default()` and
    `WithRuntimeReferences` into the same set (section 5), rather than keep a
    reflection-backed module kind that would keep two models alive forever.
