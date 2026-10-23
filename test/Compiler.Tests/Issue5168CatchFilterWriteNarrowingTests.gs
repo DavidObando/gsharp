@@ -1,0 +1,322 @@
+// <copyright file="Issue5168CatchFilterWriteNarrowingTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Compiler.Tests
+
+import GSharp.Compiler
+import System
+import System.Collections.Generic
+import System.Diagnostics
+import System.IO
+import System.Linq
+import System.Text
+import Xunit
+
+/// Issue #5168 (ADR-0208 row R10): a `catch` clause's `when` filter runs
+/// before its handler is chosen, and a false or throwing filter continues the
+/// handler search (ADR-0177). A write that the filter makes to a narrowed
+/// variable therefore reaches the clause's own body, every later clause and the
+/// `finally` block. Before the correction, the binder bound those code regions
+/// with the narrowing of the `try` entry minus the `try` block's writes, so the
+/// program compiled and threw `NullReferenceException`.
+///
+/// Every rejected case goes through the compiler driver and asserts the exit
+/// code and the diagnostic. Every accepted case compiles, IL-verifies, runs and
+/// asserts the output.
+open class Issue5168CatchFilterWriteNarrowingTests {
+    /// A filter that stores nil makes the read in a later clause, in the own
+    /// clause and in the `finally` block report the nullable-receiver
+    /// diagnostic.
+    /// @param name The case name.
+    /// @param source The G# program.
+    @Theory
+    @MemberData("RejectedCases")
+    func FilterWrite_ReachesHandlerCode_ReportsNullableReceiver(name string, source string) {
+        let tempDir = Directory.CreateTempSubdirectory("gs_5168_").FullName
+        try {
+            let appPath = Path.Combine(tempDir, name + ".dll")
+            let (exit, log) = Compile(tempDir, source, appPath)
+            Assert.NotEqual(0, exit)
+            Assert.False(File.Exists(appPath), "'$name' must not emit an assembly. Log:\n$log")
+            Assert.Contains("error GS0158", log, StringComparison.Ordinal)
+            Assert.Contains("Length", log, StringComparison.Ordinal)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
+    /// Filters that leave the narrowed variable alone keep the narrowing, and a
+    /// guard that re-proves it after the filter is honored.
+    /// @param name The case name.
+    /// @param source The G# program.
+    /// @param expectedLines The expected stdout lines.
+    @Theory
+    @MemberData("AcceptedCases")
+    func FilterWithoutWrite_KeepsNarrowing_CompilesVerifiesAndRuns(name string, source string, expectedLines[]string) {
+        let tempDir = Directory.CreateTempSubdirectory("gs_5168_").FullName
+        try {
+            let appPath = Path.Combine(tempDir, name + ".dll")
+            let (exit, log) = Compile(tempDir, source, appPath)
+            Assert.True(exit == 0, "'$name' must compile. Log:\n$log")
+            IlVerifier.Verify(appPath)
+            let (runExit, output) = RunDotnet(appPath)
+            Assert.True(runExit == 0, "'$name' must run to completion. Exit $runExit:\n$output")
+            let lines = output
+                .Split('\n')
+                .Select((line string) -> line.TrimEnd('\r'))
+                .Where((line string) -> line.Length > 0)
+                .ToArray()
+            Assert.Equal(expectedLines, lines)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
+    shared {
+        /// Gets the rejected programs: each is (name, source).
+        /// @returns The case data.
+        func RejectedCases() sequence[[]object] {
+            // The reduction from the issue: the first filter stores nil and
+            // declines, so the second clause reads nil.
+            yield[]object{"later-clause", `
+package P
+import System
+
+func Get() string? { return "a" }
+func Clear(ref s string?) bool {
+    s = nil
+    return false
+}
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    try {
+        throw Exception("x")
+    } catch when Clear(ref s) {
+        return 1
+    } catch {
+        return s.Length
+    }
+}
+func Main() { Console.WriteLine(Run()) }
+`}
+            // The filter accepts, so its own handler body reads nil.
+            yield[]object{"own-clause", `
+package P
+import System
+
+func Get() string? { return "a" }
+func Clear(ref s string?) bool {
+    s = nil
+    return true
+}
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    try {
+        throw Exception("x")
+    } catch when Clear(ref s) {
+        return s.Length
+    }
+}
+func Main() { Console.WriteLine(Run()) }
+`}
+            // The write is made by a closure that the filter calls.
+            yield[]object{"callback-filter", `
+package P
+import System
+
+func Get() string? { return "a" }
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    let clear = func() bool {
+        s = nil
+        return false
+    }
+    try {
+        throw Exception("x")
+    } catch when clear() {
+        return 1
+    } catch {
+        return s.Length
+    }
+}
+func Main() { Console.WriteLine(Run()) }
+`}
+            // The filter of the second clause writes, and the third reads.
+            yield[]object{"third-clause", `
+package P
+import System
+
+func Get() string? { return "a" }
+func Clear(ref s string?) bool {
+    s = nil
+    return false
+}
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    try {
+        throw Exception("x")
+    } catch (InvalidOperationException) {
+        return 1
+    } catch (Exception) when Clear(ref s) {
+        return 2
+    } catch {
+        return s.Length
+    }
+}
+func Main() { Console.WriteLine(Run()) }
+`}
+            // The finally block runs after the declining filter.
+            yield[]object{"finally-block", `
+package P
+import System
+
+func Get() string? { return "a" }
+func Clear(ref s string?) bool {
+    s = nil
+    return false
+}
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    try {
+        try {
+            throw Exception("x")
+        } catch when Clear(ref s) {
+            return 1
+        } finally {
+            Console.WriteLine(s.Length)
+        }
+    } catch {
+        return 2
+    }
+}
+func Main() { Console.WriteLine(Run()) }
+`}
+        }
+
+        /// Gets the accepted programs: each is (name, source, expected stdout lines).
+        /// @returns The case data.
+        func AcceptedCases() sequence[[]object] {
+            // A filter that only reads keeps the narrowing in every clause.
+            yield[]object{"filter-without-write", `
+package P
+import System
+
+func Get() string? { return "abc" }
+func Check(value int32) bool { return value == 1 }
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    try {
+        throw Exception("x")
+    } catch when Check(s.Length) {
+        return 1
+    } catch {
+        return s.Length
+    }
+}
+func Main() { Console.WriteLine(Run()) }
+`, []string{"3"}}
+            // A filter that writes another variable leaves the narrowing alone.
+            yield[]object{"filter-writes-other-variable", `
+package P
+import System
+
+func Get() string? { return "abcd" }
+func Touch(ref t string?) bool {
+    t = nil
+    return false
+}
+func Run() int32 {
+    var s string? = Get()
+    var t string? = Get()
+    if s == nil { return 0 }
+    try {
+        throw Exception("x")
+    } catch when Touch(ref t) {
+        return 1
+    } catch {
+        return s.Length
+    }
+}
+func Main() { Console.WriteLine(Run()) }
+`, []string{"4"}}
+            // The write is real, and the program re-proves the fact first.
+            yield[]object{"guard-after-filter-write", `
+package P
+import System
+
+func Get() string? { return "a" }
+func Clear(ref s string?) bool {
+    s = nil
+    return false
+}
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    try {
+        throw Exception("x")
+    } catch when Clear(ref s) {
+        return 1
+    } catch {
+        if s == nil { return -1 }
+        return s.Length
+    }
+}
+func Main() { Console.WriteLine(Run()) }
+`, []string{"-1"}}
+        }
+
+        private func Compile(dir string, source string, outPath string)(Exit int32, Log string) {
+            let srcPath = Path.Combine(dir, Path.GetFileNameWithoutExtension(outPath) + ".gs")
+            File.WriteAllText(srcPath, source)
+            let args = List[string]{"/out:" + outPath, "/target:exe", "/targetframework:net10.0"}
+            for reference in TrustedPlatformAssemblies() {
+                args.Add("/reference:" + reference)
+            }
+            args.Add(srcPath)
+            using let compileOut = StringWriter()
+            using let compileErr = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(compileOut)
+            Console.SetError(compileErr)
+            var exit int32
+            try {
+                exit = Program.Main(args.ToArray())
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            return (exit, compileOut.ToString() + compileErr.ToString())
+        }
+
+        private func RunDotnet(assemblyPath string)(Exit int32, Output string) {
+            let psi = ProcessStartInfo("dotnet", "\"$assemblyPath\""){
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                WorkingDirectory = Path.GetDirectoryName(assemblyPath) ?? "."
+            }
+            using let process = Process.Start(psi) ?? throw InvalidOperationException("could not start dotnet")
+            let output = StringBuilder()
+            output.Append(process.StandardOutput.ReadToEnd())
+            output.Append(process.StandardError.ReadToEnd())
+            process.WaitForExit()
+            return (process.ExitCode, output.ToString())
+        }
+
+        private func TrustedPlatformAssemblies() IEnumerable[string] {
+            let tpa string? = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string
+            if string.IsNullOrEmpty(tpa) {
+                return Enumerable.Empty[string]()
+            }
+            return tpa.Split(Path.PathSeparator).Where(File.Exists)
+        }
+    }
+}
