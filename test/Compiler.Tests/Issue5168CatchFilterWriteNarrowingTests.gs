@@ -489,6 +489,25 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `, []string{"3", "1"}}
+            // A filter that only reads the narrowed local keeps the narrowing in the filter and the handlers.
+            yield[]object{"filter-reads-narrowed-local", `
+package P
+import System
+
+func Get() string? { return "abc" }
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    try {
+        throw Exception("x")
+    } catch when s.Length > 5 {
+        return 1
+    } catch {
+        return s.Length
+    }
+}
+func Main() { Console.WriteLine(Run()) }
+`, []string{"3"}}
         }
 
         private func Compile(dir string, source string, outPath string)(Exit int32, Log string) {

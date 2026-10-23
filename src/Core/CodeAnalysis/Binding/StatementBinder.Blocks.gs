@@ -443,20 +443,23 @@ internal partial class StatementBinder {
         return filters
     }
 
-    /// ADR-0208 R10 (#5168): the names that [`filters`](paramref) mention or assign. Also
-    /// anchors the closure-assigned name set.
+    /// ADR-0208 R10 (#5168): the names that [`filters`](paramref) may write: assignment targets,
+    /// `??=` targets, and `ref`, `out` and `&` operands. A name that a filter only reads is not
+    /// written. Also anchors the closure-assigned name set.
     private func CollectEnclosingFilterNames(filters List[ExpressionSyntax]) HashSet[string] {
         EnsureClosureAssignedNames(filters[0])
         let names = HashSet[string]()
         for filter in filters {
-            CollectAllNames(filter, names)
             CollectAssignedNamesAndMemberMutation(filter, names)
+            CollectNullCoalescingTargetNames(filter, names)
+            CollectRefArgumentNames(filter, names)
+            CollectAddressOfNames(filter, names)
         }
         return names
     }
 
     /// ADR-0208 R10 (#5168): drops the facts that [`filters`](paramref) may write. The filters
-    /// are not bound yet, so every variable that a filter names or assigns counts as written, and
+    /// are not bound yet, so every variable that a filter may write counts as written, and
     /// a filter counts as an unknown call: a getter, an indexer or a conversion can run user code
     /// without a call expression.
     private func InvalidateNarrowingsForEnclosingFilters(filters List[ExpressionSyntax]) {
