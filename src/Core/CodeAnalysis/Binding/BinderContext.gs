@@ -347,10 +347,34 @@ internal class BinderContext {
     /// fact was made. A frame fact that differs from it is newer than the overlay fact.
     internal var ShadowOverlayBase NarrowingState = NarrowingState.Empty
 
+    /// Gets the paths whose frame facts a header or a guard removed in the shadow
+    /// flow, with the frame count at that time. A frame below that count holds an
+    /// inherited fact, which is gone; a frame at or above it holds a newer proof.
+    internal let ShadowSuppressed Dictionary[AccessPath, int32] = Dictionary[AccessPath, int32]()
+
+    /// Whether the innermost frame fact of [`path`](paramref) is an inherited
+    /// fact that the shadow flow removed.
+    internal func ShadowIsSuppressed(path AccessPath) bool {
+        if ShadowSuppressed.Count == 0 || !ShadowSuppressed.TryGetValue(path, out var depth) {
+            return false
+        }
+        for var i = NarrowedVariables.Count - 1; i >= 0; i-- {
+            if NarrowedVariables[i].ContainsKey(path) {
+                return i < depth
+            }
+        }
+        return false
+    }
+
     /// Returns the type that the shadow flow gives a read of [`path`](paramref),
     /// where [`frameType`](paramref) is the frame answer. The newer of the frame
     /// fact and the overlay fact wins.
-    internal func ShadowEffectiveType(path AccessPath, frameType TypeSymbol?) TypeSymbol? {
+    internal func ShadowEffectiveType(path AccessPath, legacyType TypeSymbol?) TypeSymbol? {
+        let frameType = if ShadowIsSuppressed(path) {
+            default(TypeSymbol?)
+        } else {
+            legacyType
+        }
         let overlayType = ShadowOverlay.NarrowedType(path)
         if overlayType == nil {
             return frameType

@@ -175,6 +175,8 @@ func Run(x Animal?, c bool) string {
     return x.Name
 }`)
         Assert.Equal([]string{"9|x|Animal?|Dog|type-test"}, Rows(lines, "R"))
+        // The later merge points carry the refinement; only the `is` test reports it.
+        Assert.Equal([]string{"6|x|Animal|Dog|R1"}, Rows(lines, "J"))
     }
 
     @Fact
@@ -275,6 +277,89 @@ func Run(c bool, n int32) int32 {
         s = Get()
     }
     return total
+}`)
+        Assert.Empty(Rows(lines, "J"))
+        Assert.Empty(Rows(lines, "R"))
+    }
+
+    @Fact
+    func AFreshProofAfterTheHeaderSurvivesToTheExit() {
+        // `Update(ref s)` removes the entry proof. The `s == nil` test inside the
+        // branch proves `s` again, and that proof is newer than the removal.
+        let lines = Capture(`package T
+func Get() string? { return "a" }
+func Update(ref s string?) bool {
+    s = Get()
+    return true
+}
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    if Update(ref s) {
+        if s == nil { return 0 }
+    } else {
+        return 0
+    }
+    return s.Length
+}`)
+        Assert.Equal([]string{"10|s|nil|string|R1"}, Rows(lines, "J"))
+        Assert.Equal([]string{"15|s|string?|string|nullability"}, Rows(lines, "R"))
+    }
+
+    @Fact
+    func AReadInsideTheBranchDoesNotSeeTheFactTheHeaderRemoved() {
+        let lines = Capture(`package T
+func Get() string? { return "a" }
+func Clear(ref s string?) bool {
+    s = nil
+    return true
+}
+func Run() int32 {
+    var s string? = Get()
+    if s != nil { } else { return 0 }
+    if Clear(ref s) {
+        return s.Length
+    }
+    return 0
+}`)
+        Assert.Equal([]string{"9|s|nil|string|R1"}, Rows(lines, "J"))
+        // Only the argument `ref s` is read before the header takes effect.
+        Assert.Equal([]string{"10|s|string?|string|nullability"}, Rows(lines, "R"))
+    }
+
+    @Fact
+    func AJoinOfSiblingsOnANonNullableRoot_IsNotAReadChange() {
+        let lines = Capture(`package T
+open class Animal { prop Name string -> "animal" }
+class Dog : Animal { }
+class Cat : Animal { }
+func Run(x Animal, c bool) string {
+    if c {
+        if x !is Dog { return "" }
+    } else {
+        if x !is Cat { return "" }
+    }
+    return x.Name
+}`)
+        Assert.Empty(Rows(lines, "R"))
+    }
+
+    @Fact
+    func AGuardAfterTheDefaultArm_StillRunsBeforeIt() {
+        let lines = Capture(`package T
+func Get() string? { return "a" }
+func Clear(ref s string?) bool {
+    s = nil
+    return false
+}
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    switch 1 {
+        default { }
+        case 1 when Clear(ref s) { return 0 }
+    }
+    return s.Length
 }`)
         Assert.Empty(Rows(lines, "J"))
         Assert.Empty(Rows(lines, "R"))

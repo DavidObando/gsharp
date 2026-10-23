@@ -98,7 +98,7 @@ internal partial class StatementBinder {
                     }
                     hasDefault = true
                     var defaultBody = BindBlockStatement(caseSyntax.Body)
-                    ShadowAddBranch(shadowFlow, nil, defaultBody)
+                    ShadowAddBranch(shadowFlow, nil, defaultBody, true)
                     shadowApproximate = shadowApproximate || endsInFallthrough
                     defaultBody = PrependArmEntryLabel(defaultBody, armEntryLabels[caseIndex])
                     arms.Add(BoundPatternSwitchArm(nil, pattern: nil, $guard: nil, defaultBody))

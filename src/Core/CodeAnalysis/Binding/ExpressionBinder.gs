@@ -903,7 +903,8 @@ internal partial class ExpressionBinder {
         location TextLocation?
     ) {
         let shadowType = binderCtx.ShadowEffectiveType(path, frameAnswer)
-        if shadowType != nil && !object.Equals(shadowType, frameAnswer) {
+        // A read without a frame fact has the declared type today.
+        if shadowType != nil && !object.Equals(shadowType, frameAnswer ?? declaredType) {
             NarrowingComparison.ReportRead(location, path, declaredType, shadowType)
         }
     }

@@ -42,13 +42,20 @@ internal partial class StatementBinder {
             Lost = List[AccessPath]()
             AssignedByExiting = HashSet[VariableSymbol]()
             Current = entry
-            Killed = List[AccessPath]()
+            Undo = List[(Path AccessPath, Previous int32)]()
+            DefaultExit = -1
         }
 
-        // Entry facts that the header or a guard removed. A branch exit from the
-        // legacy frames still holds them, unless the branch writes the root.
-        prop Killed List[AccessPath] {
+        // The suppressions that this merge point made, to undo at its end.
+        prop Undo List[(Path AccessPath, Previous int32)] {
             get;
+        }
+
+        // The position of the default arm exit, or -1: guards bound after it still
+        // run before it at run time.
+        prop DefaultExit int32 {
+            get;
+            set;
         }
 
         // The dispatch state: the entry state with the effects of the header and of
@@ -112,10 +119,23 @@ internal partial class StatementBinder {
     }
 
     // What the frames hold now: the state of the current passes.
-    private func ShadowFrames() NarrowingState -> NarrowingState.FromFrames(
+    private func ShadowFramesRaw() NarrowingState -> NarrowingState.FromFrames(
         binderCtx.NarrowedVariables,
         externalCallableAliases
     )
+
+    // The frames without the inherited facts that a header or a guard removed.
+    private func ShadowFrames() NarrowingState {
+        var state = ShadowFramesRaw()
+        if binderCtx.ShadowSuppressed.Count > 0 {
+            for path in state.Paths.ToArray() {
+                if binderCtx.ShadowIsSuppressed(path) {
+                    state = state.Remove(path)
+                }
+            }
+        }
+        return state
+    }
 
     // The state the shadow flow sees now: the frames, plus the overlay facts for paths that no frame holds.
     private func ShadowSnapshot() NarrowingState {
@@ -185,9 +205,17 @@ internal partial class StatementBinder {
     /// Adds one branch. [`facts`](paramref) are the facts the branch's own
     /// condition proves. [`bound`](paramref) is the bound branch, or `nil` for
     /// the implicit empty branch.
-    private func ShadowAddBranch(flow ShadowFlow?, facts Dictionary[AccessPath, TypeSymbol]?, bound BoundStatement?) {
+    private func ShadowAddBranch(
+        flow ShadowFlow?,
+        facts Dictionary[AccessPath, TypeSymbol]?,
+        bound BoundStatement?,
+        isDefault bool = false
+    ) {
         if flow == nil {
             return
+        }
+        if isDefault {
+            flow.DefaultExit = flow.Exits.Count
         }
         var branchIn = flow.Current
         if facts != nil {
@@ -220,15 +248,6 @@ internal partial class StatementBinder {
                 }
             }
         }
-        if flow.Killed.Count > 0 && !exit.IsUnreachable {
-            // The legacy frames still hold what the header removed.
-            let written = ShadowEffectsOf(bound, flow.Entry)
-            for path in flow.Killed {
-                if !written.AssignsRoot(path.Root) {
-                    exit = exit.Remove(path)
-                }
-            }
-        }
         flow.Exits.Add(exit)
         if bound is BoundBlockStatement block {
             for child in block.Statements {
@@ -249,10 +268,27 @@ internal partial class StatementBinder {
     // Applies effects that run before the branches, and remembers what they removed.
     private func ShadowApplyEffects(flow ShadowFlow, effects StatementEffects) {
         let before = flow.Current
-        flow.Current = before.Kill(effects, (root VariableSymbol) -> binderCtx.MayBeAssignedByClosure(root))
+        let kills = (root VariableSymbol) -> binderCtx.MayBeAssignedByClosure(root)
+        flow.Current = before.Kill(effects, kills)
+        if flow.DefaultExit >= 0 {
+            flow.Exits[flow.DefaultExit] = flow.Exits[flow.DefaultExit].Kill(effects, kills)
+        }
         for path in before.Paths {
-            if flow.Current.NarrowedType(path) == nil && !flow.Killed.Any((known AccessPath) -> known.Equals(path)) {
-                flow.Killed.Add(path)
+            if flow.Current.NarrowedType(path) == nil {
+                // Later reads and exits must not see the inherited frame fact again.
+                let had = binderCtx.ShadowSuppressed.TryGetValue(path, out var previous)
+                flow.Undo.Add(
+                    (
+                        path,
+                        if had {
+                            previous
+                        } else {
+                            -1
+                        }
+                    )
+                )
+                binderCtx.ShadowSuppressed[path] = binderCtx.NarrowedVariables.Count
+                binderCtx.ShadowOverlay = binderCtx.ShadowOverlay.Remove(path)
             }
         }
     }
@@ -280,6 +316,13 @@ internal partial class StatementBinder {
     ) {
         if flow == nil {
             return
+        }
+        for var i = flow.Undo.Count - 1; i >= 0; i-- {
+            if flow.Undo[i].Previous < 0 {
+                binderCtx.ShadowSuppressed.Remove(flow.Undo[i].Path)
+            } else {
+                binderCtx.ShadowSuppressed[flow.Undo[i].Path] = flow.Undo[i].Previous
+            }
         }
         if reachesWithoutArm {
             // The guards have run on the path where no arm matches.
@@ -432,7 +475,7 @@ internal partial class StatementBinder {
         if join.Result.IsUnreachable {
             return
         }
-        let old = ShadowFrames()
+        let old = ShadowFramesRaw()
         let seen = List[AccessPath]()
         let candidates = List[AccessPath]()
         for path in join.Result.Paths {
@@ -460,7 +503,9 @@ internal partial class StatementBinder {
                 continue
             }
             // A fact that an earlier merge point already proved is carried, not new.
-            if oldType == nil && newType != nil && object.Equals(binderCtx.ShadowOverlay.NarrowedType(path), newType) {
+            // The shadow state before the statement already held the type, so the
+            // earlier merge point reported it.
+            if newType != nil && object.Equals(binderCtx.ShadowEffectiveType(path, oldType), newType) {
                 continue
             }
             var row = ShadowClassify(join, path, oldType, newType)
