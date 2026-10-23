@@ -13,6 +13,12 @@ import System.Collections.Immutable
 
 /// Bound program.
 class BoundProgram {
+    internal prop NativeProtocols NativeProtocolCompilationPlan? {
+        get;
+        set;
+    }
+    internal prop NativeProtocolOperations ImmutableDictionary[TypeSymbol, NativeProtocolOperations] ->
+    NativeProtocols?.Operations ?? ImmutableDictionary[TypeSymbol, NativeProtocolOperations].Empty
     private let orderedFunctions Lazy[ImmutableArray[KeyValuePair[FunctionSymbol, BoundBlockStatement]]]
 
     /// Initializes a new instance of the (cref:BoundProgram) class.

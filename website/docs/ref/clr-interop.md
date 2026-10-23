@@ -81,6 +81,85 @@ for kv in oddsAndEvens {
 
 The sample above relies on an imported extension method whose trailing optional comparer argument is omitted.
 
+## Native protocol contract boundary (Next)
+
+Native protocols are distinct from nominal interfaces and `adapt`. The admitted
+profile is metadata-aware G# to G# with finite, canonical conformance evidence.
+It does not admit general foreign export, runtime shape discovery, plugins or
+Go translation.
+
+The first backend represents `P` as a marked public CLR interface when `P` is
+public. Internal sealed typed entry classes implement the selected protocols
+and retain mutable typed saved storage. Successful views preserve that entry;
+ordinary concrete tests recover its payload rather than test the carrier.
+Dispatch is typed forwarding, not reflection, an argument array or universal
+invocation. The original concrete class/struct does not nominally implement `P`.
+
+Public native signatures and public typed `Create`, `Matches` and `Recover`
+support methods are real CLR ABI. Their generated support types, protocol and
+payload signature types must be accessible. The support names are compiler
+machinery, not a source packing API. Reference assemblies preserve their
+signatures and assembly evidence; import never requires usable bodies or the
+private entry layout.
+Internal protocols, private payloads and private-capability support members do
+not become public canonical records. Public native signatures cannot expose
+inaccessible contract types.
+
+`AssemblyMetadata("GSharp.NativeProtocols", ...)` contains schema
+`6b105e95-6860-496a-9acb-d81bc250a275/1`, paired with
+`GSharp.NativeProtocolFeature` and `CompilerFeatureRequired("GSharp.NativeProtocols.v1")`.
+The canonical JSON records exact assembly-qualified source/protocol identities,
+symbolic slot signatures including nullability/ref kinds, declaration revision,
+public exact selected targets, receiver convention, retaining-entry storage,
+typed support signatures, and finite positive/negative coverage. Metadata
+tokens are binary-local lookup details, never persistent identities.
+
+Imports validate required fields, schema, visibility/authority, signatures,
+coverage, support methods and canonical origins. Identical reexports retain the
+origin record. Conflicting origins and missing/stale/malformed/unsupported
+evidence diagnose `GS0629`; a later extension cannot rebind an old target.
+A new capability absent from an old producer's coverage is **unknown**, not a
+known negative. Keep the origin and required contract assemblies referenced.
+
+Reads and public entry parameters validate presence/evidence before native
+access or dispatch, including unused parameters. Required foreign null/default
+and unknown carrier implementations fail explicitly, rather than fabricating a
+payload or yielding a capability mismatch. Typed factories reject null class
+payloads; recovery checks entry identity before accessing saved storage.
+Compiler markers are cooperative diagnostics, **not CLR security or universal
+foreign-language enforcement** against arbitrary IL or reflection. Non-aware
+tools can see the public CLR contracts; that visibility does not admit their
+use as a general foreign API.
+Calls carrying native arguments or returns require a nongeneric, feature-marked
+method and validated assembly evidence. An assembly marker alone is not an
+admitted method contract.
+Imported conversion, unary and binary operators use this same member-level
+admission check, including lifted operators. Native-bearing exception transport
+is not admitted through either throw form.
+The same admission check applies to imported property/indexer accessors.
+Native-bearing field reads/writes also require a marked owning type and validated
+assembly evidence; ordinary CLR fields cannot become an unmarked native export.
+Native-bearing imported constructors and base initializers remain unproved and
+diagnose explicitly. Source native-bearing auto-properties, including
+synthesized data-primary properties, are rejected until their required
+initialization and hostile setter/getter boundaries are implemented.
+Public contract accessibility is checked recursively through containers and
+property signatures. Slot metadata uses canonical structural shapes with
+separate nullability flags, including same-assembly nullable types, tuples and
+arrays; reference imports do not rely on their source-time CLR placeholders.
+Fixed-length array slot positions are not admitted: the current CLR vector
+signature does not carry their length. Public conformance also requires an
+effectively public selected witness owner; internal-only conformance can use an
+internal owner. When an unrelated public capability cannot export that internal
+witness, that incidental capability remains unknown, not negative evidence.
+Nominal interfaces with native-bearing static fields carry a storage marker too.
+Annotated imported array elements retain native dependencies,
+and named/anonymous delegate and generic-container checks include saved native
+state rather than only direct protocol positions.
+Native-bearing method-group/function captures are gated too: an ordinary
+delegate's `Target` would erase that state to `object`. Checked direct calls do
+not require that unproved delegate boundary.
+
 ## Explicit interface implementations
 
 G# uses an interface qualifier clause to implement a CLR interface member

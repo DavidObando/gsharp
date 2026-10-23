@@ -64,7 +64,15 @@ internal class FunctionEmitter {
     ]()
 
     internal func PrepareIndependentBodies(budget CompilationWorkBudget) {
-        if this.emitCtx.MetadataOnly || budget.MaxWorkers <= 1 {
+        if this
+            .emitCtx
+            .MetadataOnly ||
+            budget.MaxWorkers <= 1 ||
+            this
+            .emitCtx
+            .Program
+            .NativeProtocolOperations
+            .Count > 0 {
             return
         }
         using let planning = CompilationMeasurements.BeginPhase("emit.method-bodies.planning")
@@ -328,6 +336,17 @@ internal class FunctionEmitter {
         this.EmitGenericParametersAndConstraints(function, handle)
         this.RecordMethodDebugInfo(function, handle, bodyEmission)
         this.EmitFunctionAttributes(function, handle, parameterMetadata)
+        if NativeProtocolSafety.RequiresFeatureMarker(function) {
+            this
+                .outer
+                .customAttrEncoder
+                .EmitStringAttribute(
+                handle,
+                "System.Runtime.CompilerServices.CompilerFeatureRequiredAttribute",
+                typeof(System.Runtime.CompilerServices.CompilerFeatureRequiredAttribute),
+                NativeProtocolMetadata.FeatureName
+            )
+        }
         return handle
     }
 
@@ -468,7 +487,10 @@ internal class FunctionEmitter {
                     parameters,
                     structThisParameter: structThis,
                     iteratorEmitCtx: iteratorEmitCtx,
-                    enclosingClosure: enclosingClosureInfo
+                    enclosingClosure: enclosingClosureInfo,
+                    suppressNativeProtocolValidation: function.StaticOwnerType is StructSymbol{
+                        IsNativeProtocolSupport: true
+                    }
                 )
                 // 6.2 SilentEmitFailure invariant: wrap the per-function
                 // EmitBlock in a try/catch so any exception that escapes the

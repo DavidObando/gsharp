@@ -37,6 +37,14 @@ internal partial class MethodBodyEmitter {
             this.EmitExpression(conv.Expression)
             return
         }
+        if NativeProtocolOperations.GetProtocol(conv.Expression.Type) != nil && NativeProtocolOperations.GetProtocol(
+            conv.Type
+        ) is {} targetProtocol {
+            this.EmitExpression(conv.Expression)
+            this.il.OpCode(ILOpCode.Castclass)
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(targetProtocol))
+            return
+        }
         // ADR-0174 D2: the channel lattice. Same direction is identity at the
         // IL level (`Chan<T>` IS a `Channel<T>`; a foreign `ChannelReader<T>`
         // IS an `in chan[T]`). Narrowing a bidirectional handle to a

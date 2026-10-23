@@ -42,6 +42,13 @@ internal partial class ExpressionBinder {
         let deferOnFailure = targetType == nil && binderCtx.DeferTargetlessConditional
         this.binderCtx.DeferTargetlessConditional = false
         let discriminant = BindExpression(syntax.Expression)
+        if NativeProtocolOperations.GetProtocol(discriminant.Type) != nil {
+            Diagnostics.ReportNativeProtocol(
+                syntax.Location,
+                "native protocol switch patterns require an explicit is/as intermediate view"
+            )
+            return BoundErrorExpression(syntax)
+        }
         let switchType = discriminant.Type
         if switchType == TypeSymbol.Error {
             return BoundErrorExpression(nil)

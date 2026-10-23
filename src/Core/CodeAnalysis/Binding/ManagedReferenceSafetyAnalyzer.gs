@@ -47,6 +47,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
     private var initializerAnchor SyntaxNode?
     private var overwrittenInitializerResult BoundExpression?
     private var analyzingStateMachine bool
+    private var analyzingNativeSupport bool
 
     private init(diagnostics DiagnosticBag) {
         this.diagnostics = diagnostics
@@ -58,14 +59,18 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
     }
 
     override func VisitExpression(node BoundExpression?) {
+        if node != nil && !this.analyzingNativeSupport {
+            NativeProtocolSafety.ValidateExpression(node, this.diagnostics, this.initializerAnchor)
+        }
         switch node {
             case literal is BoundFunctionLiteralExpression {
                 this.AnalyzeFunction(literal.Function, literal.Body)
                 return
             }
             case value is BoundDefaultExpression when this.RequiredHandle(this.InitializerType(value.Type)) != nil {
-                this.Report(
+                this.ReportRequired(
                     value,
+                    this.InitializerType(value.Type),
                     "default would synthesize a null non-null managed-reference slot; use a nullable handle or initialize the aggregate"
                 )
             }
@@ -109,7 +114,11 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                     array.LengthExpression != nil ||
                         (array.ContainerType is ArrayTypeSymbol fixedArray && fixedArray.Length > array.Elements.Length)
                 ) {
-                    this.Report(array, "array initialization must supply every non-null managed-reference element")
+                    this.ReportRequired(
+                        array,
+                        this.InitializerType(array.ElementType),
+                        "array initialization must supply every non-null managed-reference element"
+                    )
                 }
                 for element in array.Elements {
                     this.CheckScopedStore(element)
@@ -242,11 +251,27 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         base.VisitYieldStatement(node)
     }
 
+    protected override func VisitThrowStatement(node BoundThrowStatement) {
+        if !this.analyzingNativeSupport {
+            NativeProtocolSafety.ValidateThrow(
+                node.Expression,
+                (this.initializerAnchor ?? node.Syntax)?.Location ?? default(TextLocation),
+                this.diagnostics
+            )
+        }
+        base.VisitThrowStatement(node)
+    }
+
     private func AnalyzeFunction(function FunctionSymbol, body BoundBlockStatement) {
         if !this.analyzedFunctions.Add((function, this.initializerOwner, this.initializerAnchor)) {
             return
         }
         let previous = this.analyzingStateMachine
+        let previousNativeSupport = this.analyzingNativeSupport
+        this.analyzingNativeSupport = function.StaticOwnerType is StructSymbol{IsNativeProtocolSupport: true}
+        if !this.analyzingNativeSupport {
+            NativeProtocolSafety.ValidateSignature(function, this.diagnostics)
+        }
         this.analyzingStateMachine = function.IsAsyncOrSuspending || IteratorDetection.ContainsYield(body)
         if this.analyzingStateMachine {
             for parameter in function.Parameters {
@@ -265,6 +290,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         }
         this.Visit(body)
         this.analyzingStateMachine = previous
+        this.analyzingNativeSupport = previousNativeSupport
     }
 
     private func CheckArguments(
@@ -303,6 +329,16 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
     private func CheckBaseInitializer(initializer BaseConstructorInitializer?) {
         if initializer == nil {
             return
+        }
+        if initializer.ClrConstructor is {} imported {
+            NativeProtocolSafety.ValidateForeignCall(
+                imported,
+                initializer.Arguments.Any(
+                    (argument BoundExpression) -> NativeProtocolSafety.ContainsSavedProtocol(argument.Type)
+                ),
+                initializer.Arguments.FirstOrDefault()?.Syntax?.Location ?? default(TextLocation),
+                diagnostics
+            )
         }
         this.CheckConstructorArguments(initializer.Arguments, initializer.GSharpConstructor)
         for argument in initializer.Arguments {
@@ -437,8 +473,9 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                         continue
                     }
                     if requireInitializedResult {
-                        this.Report(
+                        this.ReportRequired(
                             zeroValue,
+                            storage.Value,
                             "zero initialization would synthesize a null non-null managed-reference field '${storage.Key.Name}'; explicitly construct the aggregate"
                         )
                     }
@@ -609,7 +646,11 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                 !suppliedNames.Contains(declaredField.Name) && !constructorStores.Contains(declaredField) &&
                 !constructorStoreNames
                 .Contains(declaredField.Name) {
-                this.Report(node, "construction must initialize non-null managed-reference field '${storage.Key.Name}'")
+                this.ReportRequired(
+                    node,
+                    storage.Value,
+                    "construction must initialize non-null managed-reference field '${storage.Key.Name}'"
+                )
             }
         }
     }
@@ -619,7 +660,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
             return found
         }
         this.required[type] = nil
-        if ManagedReferenceTypes.TryGetElement(type, out _, out _) {
+        if ManagedReferenceTypes.TryGetElement(type, out _, out _) || NativeProtocolMetadata.IsProtocol(type) {
             this.required[type] = type
             return type
         }
@@ -651,6 +692,19 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
     private func Report(node BoundNode, reason string, fallback BoundNode? = nil) {
         if (this.initializerAnchor ?? node.Syntax ?? fallback?.Syntax) is {} syntax {
             this.diagnostics.ReportManagedReference(syntax.Location, reason)
+        }
+    }
+
+    private func ReportRequired(node BoundNode, type TypeSymbol, reason string) {
+        let requiredType = this.RequiredHandle(type)
+        if requiredType != nil && NativeProtocolMetadata.IsProtocol(requiredType) &&
+            (this.initializerAnchor ?? node.Syntax) is {} syntax {
+            this.diagnostics.ReportNativeProtocol(
+                syntax.Location,
+                reason.Replace("managed-reference", "protocol").Replace("nullable handle", "nullable protocol value")
+            )
+        } else {
+            this.Report(node, reason)
         }
     }
 
@@ -929,6 +983,49 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                 analyzer.AnalyzeFunction(function, body)
             }
             for type in types {
+                ValidateDeclaredSignatures(
+                    type.Methods.Concat(type.StaticMethods),
+                    type.Properties.Concat(type.StaticProperties),
+                    type.Events.Concat(type.StaticEvents),
+                    functions,
+                    diagnostics
+                )
+                if type.BaseType is {} importedBase &&
+                    importedBase.ClrType != nil &&
+                    NativeProtocolSafety
+                    .ContainsSavedProtocol(importedBase) {
+                    diagnostics.ReportNativeProtocol(
+                        type.Declaration?.Location ?? default(TextLocation),
+                        "native-bearing imported base initialization requires a separately admitted metadata-aware constructor contract"
+                    )
+                }
+                for field in type.Fields.Concat(type.StaticFields) {
+                    if NativeProtocolMetadata.IsPublic(type) && field.Accessibility == Accessibility.Public {
+                        NativeProtocolSafety.ValidatePublicContractType(
+                            field.Type,
+                            field.Declaration?.Location ?? type.Declaration?.Location ?? default(TextLocation),
+                            diagnostics
+                        )
+                    }
+                    NativeProtocolSafety.ValidateStorageType(
+                        field.Type,
+                        field.Declaration?.Location ?? type.Declaration?.Location ?? default(TextLocation),
+                        diagnostics
+                    )
+                }
+                for property in type.Properties.Concat(type.StaticProperties) {
+                    let location = property.Declaration?.Location ?? type.Declaration?.Location ?? default(TextLocation)
+                    if NativeProtocolMetadata.IsPublic(type) && property.Accessibility == Accessibility.Public {
+                        NativeProtocolSafety.ValidatePublicContractType(property.Type, location, diagnostics)
+                    }
+                    NativeProtocolSafety.ValidateStorageType(property.Type, location, diagnostics)
+                    if property.IsAutoProperty && NativeProtocolSafety.ContainsSavedProtocol(property.Type) {
+                        diagnostics.ReportNativeProtocol(
+                            location,
+                            "native-bearing auto-property initialization/accessor boundaries are not admitted; use checked ordinary storage and explicit methods"
+                        )
+                    }
+                }
                 analyzer.CheckPrimaryConstructorParameters(type)
                 analyzer.CheckBaseInitializer(type.BaseConstructorInitializer)
                 for constructor in type.ExplicitConstructors {
@@ -962,21 +1059,74 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                 }
             }
             for type in interfaces {
+                ValidateDeclaredSignatures(
+                    type
+                        .Methods
+                        .Concat(type.StaticMethods)
+                        .Concat(type.PrivateMethods)
+                        .Concat(type.StaticPrivateMethods),
+                    type.Properties,
+                    type.Events,
+                    functions,
+                    diagnostics
+                )
                 for field in type.StaticFields {
+                    let location = field.Declaration?.Location ?? type.Declaration.Location
+                    NativeProtocolSafety.ValidateStorageType(field.Type, location, diagnostics)
+                    if NativeProtocolMetadata.IsPublic(type) && field.Accessibility == Accessibility.Public {
+                        NativeProtocolSafety.ValidatePublicContractType(field.Type, location, diagnostics)
+                    }
                     if type.StaticFieldInitializers.TryGetValue(field, out var initializer) {
                         analyzer.CheckScopedStore(initializer)
                         analyzer.VisitExpression(initializer)
                     } else if analyzer.RequiredHandle(field.Type) != nil {
-                        diagnostics.ReportManagedReference(
-                            Invariant.Required(
-                                field.Declaration ?? type.Declaration,
-                                "source interface fields have a declaration",
-                                expression: "field.Declaration ?? type.Declaration"
-                            )
-                                .Location,
-                            "interface field '${field.Name}' requires a non-null managed-reference initializer"
+                        let syntax = Invariant.Required(
+                            field.Declaration ?? type.Declaration,
+                            "source interface fields have a declaration",
+                            expression: "field.Declaration ?? type.Declaration"
                         )
+                        if NativeProtocolMetadata.IsProtocol(analyzer.RequiredHandle(field.Type)!!) {
+                            diagnostics.ReportNativeProtocol(
+                                syntax.Location,
+                                "interface field '${field.Name}' requires a present protocol initializer"
+                            )
+                        } else {
+                            diagnostics.ReportManagedReference(
+                                syntax.Location,
+                                "interface field '${field.Name}' requires a non-null managed-reference initializer"
+                            )
+                        }
                     }
+                }
+            }
+        }
+
+        private func ValidateDeclaredSignatures(
+            methods IEnumerable[FunctionSymbol],
+            properties IEnumerable[PropertySymbol],
+            events IEnumerable[EventSymbol],
+            functions ImmutableDictionary[FunctionSymbol, BoundBlockStatement].Builder,
+            diagnostics DiagnosticBag
+        ) {
+            let signatures = methods.Concat(
+                properties.SelectMany(
+                    (property PropertySymbol) -> []FunctionSymbol? {property.GetterSymbol, property.SetterSymbol}
+                )
+                    .OfType[FunctionSymbol]()
+            )
+                .Concat(
+                events.SelectMany(
+                    (eventSymbol EventSymbol) -> []FunctionSymbol? {
+                        eventSymbol.AddMethodSymbol,
+                        eventSymbol.RemoveMethodSymbol,
+                        eventSymbol.RaiseMethodSymbol
+                    }
+                )
+                    .OfType[FunctionSymbol]()
+            )
+            for function in signatures.Distinct() {
+                if !functions.ContainsKey(function) {
+                    NativeProtocolSafety.ValidateSignature(function, diagnostics)
                 }
             }
         }

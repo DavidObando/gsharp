@@ -619,6 +619,23 @@ internal partial class DeclarationBinder {
                     if resolved == nil || resolved == TypeSymbol.Error {
                         continue
                     }
+                    if NativeProtocolMetadata.IsProtocol(resolved) {
+                        if i == 0 && syntax.HasBaseConstructorArguments {
+                            Diagnostics.ReportNativeProtocol(
+                                baseLocation,
+                                "native protocol claims do not have constructor arguments"
+                            )
+                        }
+                        if structSymbol.NativeProtocols.Contains(resolved) {
+                            Diagnostics.ReportNativeProtocol(
+                                baseLocation,
+                                "duplicate conformance to '${resolved.Name}'"
+                            )
+                        } else {
+                            structSymbol.NativeProtocols = structSymbol.NativeProtocols.Add(resolved)
+                        }
+                        continue
+                    }
                     // Issue #976: a struct (value type) may only list
                     // interfaces. Reject any resolved type that is not an
                     // interface (a user/CLR class or another struct) with a
@@ -2540,7 +2557,9 @@ internal partial class DeclarationBinder {
                 } else if MagicCollectionZeroValue.RequiresExplicitInitializer(fieldType) {
                     // Issue #3310 / ADR-0159 channel carve-out: a bare
                     // `chan T` static field has no usable default.
-                    if !ManagedReferenceTypes.TryGetElement(fieldType, out _, out _) {
+                    if !ManagedReferenceTypes.TryGetElement(fieldType, out _, out _) &&
+                        !NativeProtocolMetadata
+                        .IsProtocol(fieldType) {
                         Diagnostics.ReportChannelRequiresInitializer(
                             fieldSyntax.Identifier.Location,
                             fieldName,

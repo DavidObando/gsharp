@@ -788,7 +788,8 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
                 Imports = program.Imports,
                 FriendAssemblies = program.FriendAssemblies,
                 AssemblyAttributes = program.AssemblyAttributes,
-                ModuleAttributes = program.ModuleAttributes
+                ModuleAttributes = program.ModuleAttributes,
+                NativeProtocols = program.NativeProtocols
             }
             return result
         }

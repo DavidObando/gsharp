@@ -1036,7 +1036,13 @@ internal class ReflectionMetadataEmitter {
             this.customAttrEncoder.EmitNullableAttributeOnEvent,
             this.customAttrEncoder.EmitMethodNullability,
             this.customAttrEncoder.EmitTupleElementNamesAttribute,
-            this.customAttrEncoder.EmitUserAttributes
+            this.customAttrEncoder.EmitUserAttributes,
+            (handle EntityHandle) -> this.customAttrEncoder.EmitStringAttribute(
+                handle,
+                "System.Runtime.CompilerServices.CompilerFeatureRequiredAttribute",
+                typeof(System.Runtime.CompilerServices.CompilerFeatureRequiredAttribute),
+                NativeProtocolMetadata.FeatureName
+            )
         )
         // PR-E-8: TypeDefEmitter wires up after MemberDefEmitter. It depends
         // on the same EmitContext/MetadataTokenCache/WellKnownReferences
@@ -4357,9 +4363,10 @@ internal class ReflectionMetadataEmitter {
             iteratorEmitCtx StateMachineEmitter.IteratorEmitContext? = nil,
             enclosingClosure ClosureEmitter.ClosureInfo? = nil,
             isolated bool = false,
-            recordLocalSequencePoint((int32, SyntaxNode?) -> void)? = nil
+            recordLocalSequencePoint((int32, SyntaxNode?) -> void)? = nil,
+            suppressNativeProtocolValidation bool = false
         ) MethodBodyEmitter {
-            return MethodBodyEmitter(
+            let emitter = MethodBodyEmitter(
                 if isolated {
                     nil
                 } else {
@@ -4391,6 +4398,9 @@ internal class ReflectionMetadataEmitter {
                 fixedReturnSlot: this.fixedReturnSlot,
                 recordLocalSequencePoint: recordLocalSequencePoint
             )
+            emitter.SuppressNativeProtocolValidation = suppressNativeProtocolValidation
+            emitter.EmitNativeProtocolParameterValidation()
+            return emitter
         }
 
         shared {

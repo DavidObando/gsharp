@@ -1253,6 +1253,24 @@ class ReferenceResolver : IDisposable {
             return false
         }
 
+        internal func OpenAssemblyImage(assembly Assembly) Stream? {
+            if AssemblyImages.TryGetValue(assembly, out var image) {
+                return MemoryStream(image, writable: false)
+            }
+            if TryGetAssemblyPath(assembly, out var path) {
+                // Runtime assemblies can outlive deleted fixture files. No image
+                // means callers must inspect reflection metadata, not assume absence.
+                try {
+                    return File.OpenRead(path)
+                } catch (error FileNotFoundException) {
+                    return nil
+                } catch (error DirectoryNotFoundException) {
+                    return nil
+                }
+            }
+            return nil
+        }
+
         /// Gets a resolver that searches the runtime's currently loaded
         /// assemblies plus the well-known BCL assemblies.
         /// @returns A default resolver.

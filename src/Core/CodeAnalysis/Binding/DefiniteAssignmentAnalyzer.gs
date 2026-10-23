@@ -1000,7 +1000,12 @@ internal shared class DefiniteAssignmentAnalyzer {
         ) {
             return
         }
-        if ManagedReferenceTypes.TryGetElement(read.Variable.Type, out _, out _) {
+        if NativeProtocolMetadata.IsProtocol(read.Variable.Type) {
+            diagnostics.ReportNativeProtocol(
+                read.Syntax?.Location ?? default(TextLocation),
+                "'${read.Variable.Name}' must contain a present protocol value on every path before use"
+            )
+        } else if ManagedReferenceTypes.TryGetElement(read.Variable.Type, out _, out _) {
             diagnostics.ReportManagedReference(
                 read.Syntax?.Location ?? default(TextLocation),
                 "'${read.Variable.Name}' must be assigned on every path before use"

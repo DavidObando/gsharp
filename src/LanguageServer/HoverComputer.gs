@@ -2416,6 +2416,7 @@ shared class CompletionComputer {
         yield "struct"
         yield "class"
         yield "enum"
+        yield "protocol"
         yield "import"
         yield "switch"
         yield "case"

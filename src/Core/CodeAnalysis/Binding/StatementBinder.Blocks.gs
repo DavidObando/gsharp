@@ -19,6 +19,13 @@ import System.Threading
 internal partial class StatementBinder {
     private func BindSwitchStatement(syntax SwitchStatementSyntax) BoundStatement {
         let discriminant = bindExpression(syntax.Expression, false)
+        if NativeProtocolOperations.GetProtocol(discriminant.Type) != nil {
+            Diagnostics.ReportNativeProtocol(
+                syntax.Location,
+                "native protocol switch patterns require an explicit is/as intermediate view"
+            )
+            return BindErrorStatement()
+        }
         ApplyHeaderCallableEffects(discriminant)
         let switchType = discriminant.Type
         if switchType == TypeSymbol.Error {

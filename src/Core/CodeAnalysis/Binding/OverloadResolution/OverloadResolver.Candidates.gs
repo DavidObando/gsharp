@@ -1036,7 +1036,7 @@ internal partial class OverloadResolver {
             // convertibility check below already reports it as non-applicable
             // — consistently, in every BindConversion position, not just this
             // multi-candidate positional filter.
-            let conversion = Conversion.Classify(argType, paramType)
+            let conversion = conversions.ClassifyArgumentConversion(argType, paramType)
             if conversion.Exists && (conversion.IsImplicit || conversion.IsIdentity) {
                 continue
             }
@@ -1079,7 +1079,7 @@ internal partial class OverloadResolver {
                     if argType == nil {
                         continue
                     }
-                    let conversion = Conversion.Classify(argType, elementType)
+                    let conversion = conversions.ClassifyArgumentConversion(argType, elementType)
                     if conversion.Exists && (conversion.IsImplicit || conversion.IsIdentity) {
                         continue
                     }
@@ -1731,8 +1731,17 @@ internal partial class OverloadResolver {
         /// user classes, interfaces, and imported/BCL reference types are all
         /// handled uniformly.
         private func CompareReferenceTargets(targetA TypeSymbol, targetB TypeSymbol) int32 {
-            let aToB = Conversion.Classify(targetA, targetB)
-            let bToA = Conversion.Classify(targetB, targetA)
+            // Finite insertion coverage is not a nominal target-type relation.
+            let aToB = if targetA != targetB && NativeProtocolOperations.GetProtocol(targetB) != nil {
+                Conversion.None
+            } else {
+                Conversion.Classify(targetA, targetB)
+            }
+            let bToA = if targetA != targetB && NativeProtocolOperations.GetProtocol(targetA) != nil {
+                Conversion.None
+            } else {
+                Conversion.Classify(targetB, targetA)
+            }
             let aToBImplicit = aToB.IsImplicit && !aToB.IsIdentity
             let bToAImplicit = bToA.IsImplicit && !bToA.IsIdentity
             if aToBImplicit && !bToAImplicit {

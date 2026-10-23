@@ -1725,7 +1725,10 @@ internal partial class ExpressionBinder {
                 },
                 supplementaryInterfaceCheck: supplementaryInterfaceCheck,
                 constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(boundArguments),
-                structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(boundArguments),
+                structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(
+                    boundArguments,
+                    nativeConversions: conversions
+                ),
                 erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(boundArguments),
                 delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(boundArguments)
             )

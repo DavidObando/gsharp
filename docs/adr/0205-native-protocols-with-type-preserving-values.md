@@ -1,9 +1,11 @@
 # ADR-0205: Native protocols with type-preserving values
 
-- **Status**: Proposed
+- **Status**: Accepted (maintainer approval, 2026-10-22)
 - **Date**: 2026-10-21
 - **Revised**: 2026-10-22
-- **Phase**: Design only; no implementation authorization or semantic acceptance
+- **Phase**: Accepted architecture; bounded core implementation tracked by #5182.
+  Backend, separate-compilation and deferred-feature gates remain independent
+  proof obligations, not consequences of design approval.
 - **Issue**: [#5097](https://github.com/DavidObando/gsharp/issues/5097)
 - **Related**: [#4333](https://github.com/DavidObando/gsharp/issues/4333),
   [#5099](https://github.com/DavidObando/gsharp/issues/5099),
@@ -18,6 +20,111 @@
 
 ## Context
 
+### Implemented core profile (#5182)
+
+The bounded implementation selects nongeneric native protocols with synchronous
+by-value method slots, checked owned class/struct colon claims, exact public
+instance/ordinary-extension witnesses, target-typed conversions and paired
+capability tests. Exact nongeneric structs and closed classes are admitted;
+open classes, enums, typed-nil payloads and generic/rich/ref slots diagnose.
+Public contracts conservatively require accessible payload signature types.
+Required ordinary-field initialization uses the existing initialization/safety
+walk. Native-bearing auto-properties, including synthesized data-primary
+properties, are not admitted until accessor initialization and hostile-boundary
+validation are proved; explicit checked storage and methods remain available.
+Total `is var` captures retain the validated entry. Mixed total captures and
+concrete-payload tests require an intermediate view. Native-discriminator
+switch statements/expressions are not yet admitted: they diagnose explicitly
+rather than testing a carrier or treating unknown coverage as mismatch.
+Native inputs nested inside ordinary property/list patterns also require an
+intermediate protocol view. Applicability uses finite positive coverage;
+conformance is not a blanket nominal relation for overload target ranking.
+Source and imported overloads share the scope-aware exact conformance query.
+Native compilations discover actual insertions across all bodies and rebind
+against their stable finite coverage before committing overload choices,
+including top-level calls. This planning transports facts, not old symbols or
+selected witnesses; an unstable closure diagnoses rather than selecting a guess.
+Rejected overload probes build detached candidate plans, never insertion evidence.
+Native compilations bypass body-only global reuse and bound-body caching until
+replay of synthesized entries and the complete coverage closure is proved.
+Imported applicability reads candidate parameter nullability through the existing
+producer funnel, preserving the distinction between required `P` and optional `P?`.
+
+The selected backend differs from the illustrative sealed-per-protocol carrier
+in section 9: `P` is a feature-marked CLR interface reference to an internal
+sealed typed entry implementing its finite positive capabilities. Its mutable
+typed struct field is copied once. Transport/views retain that entry; concrete
+recovery copies current struct state or retains the original class object.
+These are source semantics, not a public CLR box-identity contract. Typed
+forwarders preserve ordinary instance and by-value extension receiver rules.
+
+Public typed factory/match/recovery support methods and their signature types
+are a real G#-to-G# binary contract, including in reference assemblies. Import
+does not depend on private fields or usable reference bodies. Versioned
+canonical assembly metadata records symbolic exact targets/nullability,
+authority, storage/transport, origin and finite positive/negative coverage;
+tokens are binary-scoped. Reexports preserve origin; conflicting origins and
+missing/stale/malformed/unsupported evidence diagnose instead of rebinding.
+The first profile rejects multiple different origins for one insertion type,
+including unproved disjoint supplementation.
+Only accessible public declarations and coverage enter the public manifest.
+Private-capability bridges remain internal, including on otherwise public
+support types; implementation/ref imports do not acquire private authority.
+
+Reads and entry parameters validate required presence and known evidence before
+native dispatch. Factories reject absent class payloads and recovery validates
+entry identity. Feature markers are cooperative diagnostics, not CLR security
+against arbitrary foreign IL/reflection. General foreign export, projections,
+typed-nil recovery, equality/hash/object/generic/delegate escapes and Go
+translation remain blocked. Existing nominal interfaces/adapt are unchanged.
+Native-bearing storage restrictions include instance/static inherited state and source generic
+arguments; feature markers cover transitive signature storage and instance
+receivers consistently in implementation and reference assemblies.
+The storage walk is finite over aggregate definitions and inspects argument
+dependencies without expanding recursive generic constructions indefinitely.
+Concrete recovery cannot erase saved-native-storage restrictions through an
+object/nominal target, and aggregate equality/hash operations remain blocked.
+Public signature accessibility includes container positions and properties.
+Imported accessors require the same member-level contract as ordinary methods.
+Native-bearing field access requires the owning type's validated storage contract.
+Nominal interface storage owners carry a distinct cooperative storage-identity
+marker, not a protocol declaration. Their static fields preserve nullability and
+are checked for storage legality/public accessibility even without initializers;
+abstract member contracts use the same feature-marker decision as bodied methods.
+Declaration validation includes bodyless nominal methods and property/event
+accessors, independently of executable bodies. Accessor metadata follows the
+same signature/receiver marker policy. Body-synthesized negative probes own
+bind-local support types and cannot append methods to global operation types
+shared with speculative coverage-planning binds.
+Native-bearing imported constructors/base initializers are explicitly unproved
+boundaries. Slot identities use structural type shapes and separate nullability
+flags, rather than a symbolic type's temporary CLR representation.
+Fixed-array slot positions (including nested positions) diagnose until their
+length has an admitted implementation/reference contract; vector slots remain
+supported. Public witness targets require effectively accessible owners;
+internal-only conformance can retain an internal owner.
+An unexportable incidental capability is omitted as unknown evidence without
+discarding a valid internal entry; requesting that capability still diagnoses.
+One dependency traversal handles annotated/platform array positions, named and
+anonymous delegate signatures, and saved state. Native-bearing delegates and
+generic containers remain gated transitively. Storage-erasing safe casts and
+binding patterns, equality/hash method groups and lifted/imported equality are
+checked too. Method-group/function captures carrying native state remain gated:
+their ordinary delegate `Target` would otherwise erase that state. Nonbinding
+tests, outer nil checks and ordinary checked method calls retain their behavior.
+Native-bearing exception transport remains gated, for both throw forms.
+Imported conversion/unary/binary operator calls require the same marked member
+contract as other foreign calls, including lifted forms. Nominal interface
+static native storage carries the same owning-type contract as class storage.
+
+`NativeProtocolLanguageTests` exercises real emitted execution, IL verification,
+contract/producer/consumer implementation/ref imports, hostile boundaries,
+finite unknown coverage, canonical conflicts and corrupted reference evidence.
+Its bounded observations do not complete the deferred rows of section 11 or
+admit a general protocol ABI. See the first slice's PR for executed validation
+and ADR-0154 product-mutant evidence; architectural approval alone proves none
+of those results.
+
 ### 1. Handwritten programs first
 
 A message router needs heterogeneous storage, optional capabilities and concrete
@@ -25,9 +132,10 @@ recovery without carrying each nominal adapter beside its source. Ordinary
 interfaces and `adapt` already provide typed CLR forwarding. They do not preserve
 the source type through tests on the adapter itself.
 
-This revision recommends a native `protocol` declaration and target-typed
-conversion. All protocol examples are **hypothetical design sketches**.
-No published compiler supports them, and none was compiled for this document.
+The accepted architecture uses a native `protocol` declaration and target-typed
+conversion. The original design examples below include **future sketches**
+beyond the core profile above. The published 0.5.212 compiler supports none of
+the new syntax; in-tree implementation is not a release or pin movement.
 `Print` denotes an application function.
 
 ```gsharp
@@ -97,16 +205,17 @@ modifiers. ADR-0206 is withdrawn, not a remaining acceptance prerequisite.
 
 ## Decision
 
-**Recommend native protocols, statically proved target-typed conversion, and
+**Adopt native protocols, statically proved target-typed conversion, and
 paired `is`/`as` views with stable typed witnesses. Copy a concrete struct once
 at conversion; retain a concrete object reference. Preserve ordinary receiver
 semantics. Investigate source-location projections without changing
 `managed[T]`.**
 
-Every recommendation remains Proposed. The confirmed conversion direction does
-not settle representation, ownership of copied protocol values, location-view
-syntax or metadata. The explicit proposed choices and acceptance gates below
-must not be reported as accepted semantics.
+The maintainer accepted this architecture on 2026-10-22, including the
+retaining-entry baseline in section 7. Acceptance authorizes implementation;
+it does not itself prove a backend, binary contract, location-view syntax,
+foreign export or Go admission. The bounded implementation and deferred proof
+gates must be reported separately.
 
 ### 3. Declaration, conversion and stored mutation
 
@@ -165,7 +274,7 @@ protocol box as a new concrete payload or implicitly unwrap an ordinary adapter.
 
 **Recommend optional explicit conformance for owned classes, structs and enums,
 alongside retroactive conformance.** An explicit claim must check and export
-validated conformance, not merely document intent. Illustrative proposed syntax:
+validated conformance, not merely document intent. Intended syntax:
 
 ```gsharp
 protocol Auditable { func Describe() string; }
@@ -179,11 +288,11 @@ enum Signal conforms Auditable { Ready, Done }
 func (signal Signal) Describe() string -> "signal"
 ```
 
-None of these protocol declarations or claims is supported syntax. For
-classes/structs, propose classifying protocol entries in the existing colon
+The first core slice admits nongeneric method-only protocols and owned
+class/struct claims. For classes/structs, classify protocol entries in the existing colon
 list alongside nominal interfaces, without making them CLR base types.
 An actual base class remains first and alone may have constructor arguments:
-`class Event : BaseEvent(), IExisting, Auditable { ... }` is a hypothetical
+`class Event : BaseEvent(), IExisting, Auditable { ... }` is the intended
 combined head. Structs still cannot inherit classes. Name resolution must
 distinguish interfaces from protocols and diagnose invalid or duplicate entries.
 
@@ -213,8 +322,9 @@ errors. Emit the same canonical typed witness/evidence record as a retroactive
 proof, with declaration origin and export visibility. Neither form gets
 precedence over conflicting records from another library. An identical
 re-export preserves its canonical origin; a different target diagnoses.
-The explicit declaration head is proposed here; the source mechanism for
-authoring/exporting a retroactive canonical record remains an acceptance gate.
+The first slice produces a retroactive canonical record when a concrete
+insertion or probe is checked. General composition beyond its finite closure
+remains gated; later imports may not silently select different witnesses.
 
 The intended source experience includes adding a protocol and ordinary
 extensions for a type owned by another library. A user should then write
@@ -224,7 +334,7 @@ conformance declarations, global lookup/coherence rules or ABI. In particular,
 ADR-0182 extensions stay static and never enter the receiver's nominal method
 table. Their participation below is new protocol validation only.
 
-Proposed conformance binding rules:
+Accepted conformance binding rules:
 
 1. A conformance record identifies an exact concrete type `T`, protocol `P`,
    contract revision and one typed target for each slot. Identity includes
@@ -379,11 +489,10 @@ proved, keep the operation blocked rather than add an envelope.
 
 ### 7. Copying protocol values, views and extraction
 
-The maintainer confirmed one-time shallow concrete conversion and persistent
-stored mutation. That does **not** settle whether copying an already-created
-protocol duplicates its saved struct. This is a separate acceptance decision.
+The maintainer accepted one-time shallow concrete conversion, persistent
+stored mutation and the retaining-entry baseline together on 2026-10-22.
 
-**Coherent proposed baseline: protocol values retain a shared semantic entry.**
+**Accepted baseline: protocol values retain a shared semantic entry.**
 Concrete-to-protocol conversion creates independent saved struct storage once.
 Ordinary copies of that protocol value and successful capability views retain
 the entry, including its mutable saved struct. This is deliberate reference-like
@@ -392,7 +501,7 @@ It does not alias the original concrete variable.
 
 For saved `Step = 10`:
 
-| Operation sequence | Observation under this proposed baseline |
+| Operation sequence | Observation under the accepted retaining-entry baseline |
 | --- | --- |
 | Construct `p` from concrete `x`; construct `q` independently from `x` | Two independent saved struct copies. Mutating `p` does not advance `q` or `x`. |
 | Construct `p`; assign `q = p`; call `q.Next()`, then `p.Next()` | 11, 12: protocol assignment retains the same saved entry. |
@@ -403,14 +512,11 @@ For saved `Step = 10`:
 | Extract concrete class/managed handle | Retain the object/selected handle with its existing permission and identity. |
 | Pass or return a protocol by value | Same entry-retaining semantics as assignment, including across metadata-aware G# libraries. |
 
-This recommendation is **not confirmed ownership semantics**. An alternative
-is value-like protocol assignment with a logical struct copy, while reference
-payloads retain object references. That alternative must specify whether
-capability views also copy, or use a distinct retaining view category. Copying
-on every view would not preserve selected mutable storage; mixing copy/share
-based only on an invisible compiler box is unacceptable. Another alternative
-is an explicit language copy operation with retaining default transport.
-Acceptance must choose and document one complete model before implementation.
+Value-like protocol assignment with a fresh logical struct copy was an
+alternative, not the selected contract. Copying on every view would not preserve
+selected mutable storage. Mixing copy/share based only on an invisible compiler
+box is unacceptable: assignment, arguments, returns and successful views all
+retain the entry. Concrete insertion and concrete struct extraction copy.
 
 The baseline avoids mixing hidden ownership kinds on assignment: every protocol
 copy retains its entry; only independent concrete insertion/extraction copies
@@ -727,10 +833,10 @@ and concurrency remain separate tracks.
 
 ### 11. Obligation and observation matrix
 
-This is a **future design/test obligation**, not executed evidence. No new
-syntax tests, product mutants, probes or benchmarks were run for this docs PR.
-After semantic acceptance, behavioral tests need independent oracles and
-ADR-0154 discrimination using real compiler/driver paths.
+This matrix separates obligations from evidence. The original design PR ran no
+product proofs. Implementation #5182 must supply independent oracles and
+ADR-0154 discrimination through real compiler/driver paths for its admitted
+subset; deferred rows are not established by accepting this ADR.
 
 | Obligation | Expected observation / negative boundary | Error a future witness must distinguish |
 | --- | --- | --- |
@@ -742,7 +848,7 @@ ADR-0154 discrimination using real compiler/driver paths.
 | Paired capability tests | Match binds/presents; known mismatch returns false/absence for both `is` and `as`. `as` has `P?` result. | Different selection or witness rebinding by operation. |
 | Unknown evidence | Missing closure/unsupported revision rejects at compilation/import, not false or absence. | Treating unrecorded as negative conformance. |
 | Typed nil and absence | Absent has no evidence; present typed nil retains evidence. Non-null concrete pattern does not bind nil. Typed-nil recovery stays gated. | Counterfeit non-null binding or collapsed presence. |
-| Copies/views/evidence | Proposed retaining baseline: `q = p`, then two instance calls across q/p yield 11, 12. Independent concrete insertion and struct extraction copy. Views retain original evidence/storage. | Accidental sharing/detachment, nested adapter or unaccepted value-copy policy. |
+| Copies/views/evidence | Accepted retaining baseline: `q = p`, then two instance calls across q/p yield 11, 12. Independent concrete insertion and struct extraction copy. Views retain original evidence/storage. | Accidental sharing/detachment, nested adapter or a different value-copy policy. |
 | Invariant writes | Two unrelated conformers cannot be written into a narrower Counter slot through a projection. Ordinary `managed[Counter]` still permits exact Counter replacement. | Writable covariance, `ref P` fabrication or silent readonly fallback. |
 | Permissions/lifetime/fault timing | Selection once; evidence-only view does not read; current nil faults at the required call/read. Readonly/scoped/escaping unsupported paths reject. | Eager test dereference, retarget, permission gain or dangling byref. |
 | Separate-library coherence | A owns source, B protocol/extension, C witness consumer; implementation/ref imports agree. Conflicting D rejects. Later imports cannot rebind old records. | Ambient search, private-authority leak, incomplete manifest or ref metadata loss. |
@@ -751,21 +857,21 @@ ADR-0154 discrimination using real compiler/driver paths.
 | Existing language compatibility | Nominal tests, flow/short-circuit/negation/property/list scopes, safe-cast restrictions, managed writes and fresh nominal adapt behavior remain unchanged. | Protocol special cases escaping into ordinary code. |
 | Equality/export | Presence works; backing-box equality/hash and unproved CLR export reject, including generic escapes. Adapt still provides nominal CLR interop. | Wrapper identity becoming native semantics. |
 
-Acceptance must decide the ownership fork in section 7, canonical witness
-declaration/composition, nullable conversion/recovery, projected-location type
-and full fault traces. Unsupported cases need stable diagnostics/source
+The ownership fork in section 7 is settled. General witness composition,
+typed-nil conversion/recovery, projected-location types and their full fault
+traces remain gated. Unsupported cases need stable diagnostics/source
 locations and separately validated remedies, not a false success claim.
 Review handwritten and eventual translated output for ordinary calls/tests
 without public wrappers, tags or pervasive casts.
 
 ### 12. Delivery and acceptance boundaries
 
-1. Review/revise and explicitly accept a bounded protocol contract. This
-   document remains Proposed; docs CI or COMMENTED review is not acceptance.
+1. Architectural acceptance was recorded on 2026-10-22. Docs CI or COMMENTED
+   review alone was not acceptance; the maintainer's explicit approval was.
 2. Prove parsing, presence/flow, copy/view ownership, exact typed witnesses,
    coherent separate-library evidence and ref metadata. Investigate projections
    independently; do not advertise them until permissions/lifetimes are proved.
-3. Only after authorization, implement accepted surfaces with diagnostics,
+3. Implement the authorized first slice (#5182) with diagnostics,
    tooling and discriminating tests. Keep unproved neighbors blocked.
 4. Release compiler/runtime contracts. In-tree source alone grants no adoption.
 5. Move the released N-1 pin in a separate verified PR with a clean-clone build
@@ -773,18 +879,19 @@ without public wrappers, tags or pervasive casts.
 6. Bank exact released/pinned capability, cost and output evidence. Go family
    admission requires its own verified mapping under ADR-0191.
 
-No compiler/runtime/translator edits, prototypes, pin movement or Go admission
-belong in this revision. Keep #5097 open for design acceptance and #4333 outside
-migration readiness. Issue #5099 is already closed by the maintainer; this
-follow-up neither reopens it nor changes its closure reason. ADR-0206 remains
+The first implementation does not move the pin or admit Go. The conductor
+records design acceptance completion on #5097; it is not the tracker for all
+future implementation. Keep #4333 outside migration readiness. Issue #5099 is
+already closed by the maintainer; this follow-up neither reopens it nor changes
+its closure reason. ADR-0206 remains
 Withdrawn, not an acceptance prerequisite.
 
 ## Consequences
 
 - Native protocols aim at reusable retroactive capability programming without
   changing nominal CLR interfaces or ordinary receiver semantics.
-- Conversion copies once; persistent saved mutation and shallow sharing are
-  explicit. Copied protocol ownership remains a separately identified decision.
+- Conversion copies once; persistent saved mutation, shallow sharing and
+  entry-retaining transport are explicit accepted semantics.
 - Restricted source-location projections may preserve aliasing, but cannot be
   invariant writable `managed[P]` over arbitrary concrete storage.
 - Finite first proofs cannot promise arbitrary future protocols. Cross-library
@@ -798,7 +905,7 @@ Withdrawn, not an acceptance prerequisite.
 | Candidate | Assessment |
 | --- | --- |
 | Current language only | Working nominal adapters, rich forwarding and exact managed handles cover many APIs. Keep using them where sufficient. They do not transparently preserve concrete evidence across erased capability views. |
-| **Native protocol declarations and conversions** | **Recommended for further design.** Typed witnesses can admit ordinary extensions without changing their meaning. Requires explicit coherence, ownership, presence and metadata proofs. |
+| **Native protocol declarations and conversions** | **Accepted architecture.** Typed witnesses admit ordinary extensions without changing their meaning. Each implemented boundary still requires coherence, presence, storage and metadata proofs. |
 | Compiler-recognized public packing/extraction library | Reject as recommended spelling. It obscures language-level conversion and pattern intent without removing compiler obligations. Internal library storage remains possible. |
 | Hidden nominal boxes as backend | Possible only behind the protocol contract. Ordinary CLR wrapper identity, tests and equality cannot define source evidence/views. |
 | Universal shape registry or public Go envelope | Reject ambient/runtime search, caller tags and universal invocation. They neither establish stable authority nor provide the intended G# source experience. |

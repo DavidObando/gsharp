@@ -37,6 +37,10 @@ import System.Collections
 /// ~1500 LoC. Behaviour-preserving — IL is byte-identical with the
 /// pre-PR-E-11 baseline (see `RefactoringBaselineTests`).
 internal partial class MethodBodyEmitter {
+    internal prop SuppressNativeProtocolValidation bool {
+        get;
+        set;
+    }
     private let coordinator ReflectionMetadataEmitter?
     private prop outer ReflectionMetadataEmitter -> Invariant.Required(
         this.coordinator,

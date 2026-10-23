@@ -4491,13 +4491,19 @@ internal partial class ExpressionBinder {
             argumentNames: clrArgumentNames,
             recoverTypeArgSymbols: recoverTypeArgSymbols,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
-            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
+            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(
+                arguments,
+                nativeConversions: conversions
+            ),
             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
             symbolicArgTypes: symbolicArgTypes,
-            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments)
+            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
+                arguments,
+                nativeConversions: conversions
+            )
         )
         if resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous {
             Diagnostics.ReportAmbiguousOverload(

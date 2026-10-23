@@ -8,6 +8,7 @@ import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Symbols
 import System
+import System.Collections.Generic
 import System.Collections.Immutable
 import System.Diagnostics
 import System.Globalization
@@ -187,6 +188,7 @@ internal class AssemblyAttributeEmitter {
             )
         }
         this.EmitGSharpTypeSemantics(assemblyHandle)
+        this.EmitNativeProtocolDeclarations(assemblyHandle)
         this.EmitGSharpMagicCollectionFieldMarkers(assemblyHandle)
         // Issue #1929/#1953: producer-declared friend assemblies. Each
         // `@assembly:InternalsVisibleTo("Foo")` annotation becomes a real
@@ -243,6 +245,175 @@ internal class AssemblyAttributeEmitter {
                 friend
             )
         }
+    }
+
+    private func EmitNativeProtocolDeclarations(assemblyHandle AssemblyDefinitionHandle) {
+        let assemblyIdentity = (this.emitCtx.AssemblyNameOverride ?? this.emitCtx.Program.PackageName ?? "Default") +
+            ", Version=" +
+            this
+            .ParseAssemblyVersion().ToString() + ", Culture=neutral, PublicKeyToken=null"
+        let declarations = this
+            .emitCtx
+            .Program
+            .Interfaces
+            .Where((item InterfaceSymbol) -> item.IsProtocol && NativeProtocolMetadata.IsPublic(item))
+            .Select(
+            (item InterfaceSymbol) -> NativeProtocolRecord(
+                ("type", NativeProtocolMetadata.TypeName(item)),
+                (
+                    "slots",
+                    item
+                        .Methods
+                        .Select((method FunctionSymbol) -> NativeProtocolMetadata.Signature(method, assemblyIdentity))
+                        .OrderBy((signature string) -> signature, StringComparer.Ordinal)
+                        .ToArray()
+                )
+            )
+        )
+            .OrderBy((item Dictionary[string, object]) -> cast[string](item["type"]), StringComparer.Ordinal)
+            .ToArray()
+        let entries = List[object]()
+        for entry in this
+            .emitCtx
+            .Program
+            .Structs
+            .Where((item StructSymbol) -> item.NativeProtocolEntry != nil)
+            .Select((item StructSymbol) -> item.NativeProtocolEntry!!)
+            .OrderBy(
+            (item NativeProtocolEntryPlan) -> NativeProtocolMetadata.Identity(item.SourceType, assemblyIdentity),
+            StringComparer.Ordinal
+        ) {
+            if !NativeProtocolMetadata.IsPublic(entry.SourceType) {
+                continue
+            }
+            let coverage = List[object]()
+            for decision in entry
+                .Decisions
+                .Where((item NativeProtocolDecision) -> NativeProtocolMetadata.IsPublic(item.Protocol))
+                .OrderBy(
+                (item NativeProtocolDecision) -> NativeProtocolMetadata.Identity(item.Protocol, assemblyIdentity),
+                StringComparer.Ordinal
+            ) {
+                let targets = List[object]()
+                for witness in decision.Witnesses.OrderBy(
+                    (item NativeProtocolWitness) -> NativeProtocolMetadata.Signature(item.Slot, assemblyIdentity),
+                    StringComparer.Ordinal
+                ) {
+                    let imported = witness.ImportedTarget
+                    let source = witness.Target
+                    let owner = if imported != nil {
+                        let declaringType = imported.DeclaringType!!
+                        declaringType.Assembly.FullName + "|" + declaringType.FullName
+                    } else {
+                        let target = source!!
+                        if target.ReceiverType is {} receiver && !witness.IsExtension {
+                            NativeProtocolMetadata.Identity(receiver, assemblyIdentity)
+                        } else if target.StaticOwnerType is {} staticOwner {
+                            NativeProtocolMetadata.Identity(staticOwner, assemblyIdentity)
+                        } else {
+                            assemblyIdentity + "|" + target.Package!!.Name + ".<Program>"
+                        }
+                    }
+                    targets.Add(
+                        NativeProtocolRecord(
+                            ("slot", NativeProtocolMetadata.Signature(witness.Slot, assemblyIdentity)),
+                            ("owner", owner),
+                            ("name", imported?.Name ?? source!!.Name),
+                            (
+                                "signature",
+                                if source != nil {
+                                    NativeProtocolMetadata.Signature(source, assemblyIdentity)
+                                } else {
+                                    NativeProtocolMetadata.Signature(witness.Slot, assemblyIdentity)
+                                }
+                            ),
+                            (
+                                "kind",
+                                if witness.IsExtension {
+                                    "extension-value"
+                                } else {
+                                    "instance"
+                                }
+                            ),
+                            ("authority", "public")
+                        )
+                    )
+                }
+                let record = NativeProtocolRecord(
+                    ("protocol", NativeProtocolMetadata.Identity(decision.Protocol, assemblyIdentity)),
+                    (
+                        "slots",
+                        decision
+                            .Slots
+                            .Select(
+                            (method FunctionSymbol) -> NativeProtocolMetadata.Signature(method, assemblyIdentity)
+                        )
+                            .OrderBy((signature string) -> signature, StringComparer.Ordinal)
+                            .ToArray()
+                    ),
+                    ("positive", decision.Positive),
+                    ("targets", targets)
+                )
+                if decision.Positive {
+                    let bridge = entry.Bridges.Single((item NativeProtocolBridge) -> item.Protocol == decision.Protocol)
+                    record.Add("support", NativeProtocolMetadata.TypeName(entry.BridgeType!!))
+                    record.Add("factory", bridge.Factory.Name)
+                    record.Add("matches", bridge.Matches.Name)
+                    record.Add("recover", bridge.Recover.Name)
+                }
+                coverage.Add(record)
+            }
+            if coverage.Count > 0 {
+                entries.Add(
+                    NativeProtocolRecord(
+                        ("source", NativeProtocolMetadata.Identity(entry.SourceType, assemblyIdentity)),
+                        ("origin", assemblyIdentity),
+                        ("storage", "retaining-entry/shallow-copy/1"),
+                        ("coverage", coverage)
+                    )
+                )
+            }
+        }
+        if this.emitCtx.Program.NativeProtocols is {} nativePlan {
+            for imported in nativePlan.Imports.OrderBy(
+                (item ImportedNativeProtocolEntry) -> NativeProtocolMetadata.Identity(
+                    item.SourceType,
+                    assemblyIdentity
+                ),
+                StringComparer.Ordinal
+            ) {
+                entries.Add(imported.Record)
+            }
+        }
+        if declarations.Length == 0 && entries.Count == 0 && this.emitCtx.Program.NativeProtocolOperations.Count == 0 {
+            return
+        }
+        let payload = System.Collections.Generic.Dictionary[string, object]()
+        payload.Add("schema", NativeProtocolMetadata.Schema)
+        payload.Add("declarations", declarations)
+        payload.Add("entries", entries)
+        this.attrEncoder.EmitStringPairAttribute(
+            assemblyHandle,
+            "System.Reflection.AssemblyMetadataAttribute",
+            typeof(AssemblyMetadataAttribute),
+            NativeProtocolMetadata.FeatureKey,
+            NativeProtocolMetadata.Schema
+        )
+        this.attrEncoder.EmitStringPairAttribute(
+            assemblyHandle,
+            "System.Reflection.AssemblyMetadataAttribute",
+            typeof(AssemblyMetadataAttribute),
+            NativeProtocolMetadata.Key,
+            System.Text.Json.JsonSerializer.Serialize(payload)
+        )
+    }
+
+    private func NativeProtocolRecord(fields ...(Name string, Value object)) Dictionary[string, object] {
+        let result = Dictionary[string, object]()
+        for field in fields {
+            result.Add(field.Name, field.Value)
+        }
+        return result
     }
 
     private func EmitGSharpTypeSemantics(assemblyHandle AssemblyDefinitionHandle) {

@@ -298,6 +298,42 @@ class ImportedClassSymbol : Symbol {
                 MethodGroupSlots ImmutableArray[bool]
             )
         )? = nil
+    ) bool -> TryLookupNativeFunction(
+        text,
+        callExpression,
+        arguments,
+        out function,
+        out parameterMapping,
+        out isAmbiguous,
+        out ambiguousMethods,
+        out isExpanded,
+        explicitTypeArgs,
+        typeArgSymbols,
+        projectTypeArgument,
+        argumentNames,
+        refineSymbolicMethodGroupArgs
+    )
+
+    internal func TryLookupNativeFunction(
+        text string,
+        callExpression CallExpressionSyntax,
+        arguments ImmutableArray[BoundExpression],
+        @NotNullWhen(true) out function ImportedFunctionSymbol?,
+        out parameterMapping ImmutableArray[int32],
+        out isAmbiguous bool,
+        out ambiguousMethods ImmutableArray[MethodInfo],
+        out isExpanded bool,
+        explicitTypeArgs[]?Type = nil,
+        typeArgSymbols ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
+        projectTypeArgument((Type) -> Type)? = nil,
+        argumentNames IReadOnlyList[string]? = nil,
+        refineSymbolicMethodGroupArgs(
+            (MethodInfo, bool, ImmutableArray[TypeSymbol]) -> (
+                RefinedArgs ImmutableArray[TypeSymbol],
+                MethodGroupSlots ImmutableArray[bool]
+            )
+        )? = nil,
+        nativeConversions ConversionClassifier? = nil
     ) bool {
         function = nil
         parameterMapping = default(ImmutableArray[int32])
@@ -507,7 +543,10 @@ class ImportedClassSymbol : Symbol {
             },
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(arguments),
-            structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(arguments),
+            structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(
+                arguments,
+                nativeConversions: nativeConversions
+            ),
             erasedArgumentMismatchCheck: ExpressionBinder.MakeErasedArgumentMismatchCheck(arguments),
             explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
             explicitTypeArgumentMismatchCheck: ExpressionBinder.MakeExplicitTypeArgumentMismatchCheck(
@@ -529,7 +568,10 @@ class ImportedClassSymbol : Symbol {
             deferredInferenceArgs: deferredInferenceArgs,
             openLiteralArgumentCheck: ExpressionBinder.MakeOpenLiteralArgumentCheck(arguments),
             symbolicArgTypes: symbolicArgVector,
-            symbolicArgumentConversionClassifier: ExpressionBinder.MakeSymbolicArgumentConversionClassifier(arguments)
+            symbolicArgumentConversionClassifier: ExpressionBinder.MakeSymbolicArgumentConversionClassifier(
+                arguments,
+                nativeConversions: nativeConversions
+            )
         )
         switch result.Outcome {
             case ClrOverloadResolution.ResolutionOutcome.Resolved {

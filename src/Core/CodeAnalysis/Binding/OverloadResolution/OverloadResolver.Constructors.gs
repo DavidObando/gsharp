@@ -319,7 +319,11 @@ internal partial class OverloadResolver {
                 if ConversionClassifier.AcceptsNilAnnotatedArgument(parameter, argument.Type, parameter.Type) {
                     continue
                 }
-                if argument.Type != parameter.Type && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit {
+                if argument.Type != parameter.Type && !conversions.ClassifyArgumentConversion(
+                    argument.Type,
+                    parameter.Type
+                )
+                    .IsImplicit {
                     if TryBindConstantNarrowingArgument(
                         argument,
                         parameter.Type,
@@ -594,7 +598,8 @@ internal partial class OverloadResolver {
             if ConversionClassifier.AcceptsNilAnnotatedArgument(parameter, argument.Type, parameter.Type) {
                 continue
             }
-            if argument.Type != parameter.Type && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit {
+            if argument.Type != parameter.Type && !conversions.ClassifyArgumentConversion(argument.Type, parameter.Type)
+                .IsImplicit {
                 if TryConvertLiteralArgumentToExpressionTree(
                     argument,
                     parameter.Type,
@@ -1266,7 +1271,8 @@ internal partial class OverloadResolver {
                 convertedArguments.Add(argument)
                 continue
             }
-            if argument.Type != paramType && !Conversion.Classify(argument.Type, paramType).IsImplicit {
+            if argument.Type != paramType && !conversions.ClassifyArgumentConversion(argument.Type, paramType)
+                .IsImplicit {
                 if TryConvertLiteralArgumentToExpressionTree(
                     argument,
                     paramType,
@@ -1823,7 +1829,7 @@ internal partial class OverloadResolver {
                 continue
             }
             let isCompatible = if parameter.RefKind == RefKind.None {
-                Conversion.Classify(argumentType, parameterType).IsImplicit
+                conversions.ClassifyArgumentConversion(argumentType, parameterType).IsImplicit
             } else {
                 ByRefStorageMatching.AreSameStorageType(argumentType, parameterType, out _, out _, out _)
             }
@@ -2109,7 +2115,8 @@ internal partial class OverloadResolver {
                 convertedArgs.Add(argument)
                 continue
             }
-            if argument.Type != parameter.Type && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit {
+            if argument.Type != parameter.Type && !conversions.ClassifyArgumentConversion(argument.Type, parameter.Type)
+                .IsImplicit {
                 if TryConvertLiteralArgumentToExpressionTree(
                     argument,
                     parameter.Type,

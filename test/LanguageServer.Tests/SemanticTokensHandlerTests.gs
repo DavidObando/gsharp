@@ -13,6 +13,21 @@ import Xunit
 
 open class SemanticTokensHandlerTests {
     @Fact
+    func Tokenize_ContextualNativeProtocolHeadAndOrdinaryIdentifier() {
+        let content = LanguageServerTestHelpers.Content(
+            "protocol P { func Read() int32; }\nfunc use(protocol int32) int32 -> protocol\n"
+        )
+        let tokens = GetTokens(content)
+        Assert.Null(FindToken(tokens, 0, 0, 8))
+        let declaration = FindToken(tokens, 0, 9, 1)
+        Assert.NotNull(declaration)
+        Assert.Equal(TokenTypeIndex("Interface"), declaration!!.TokenType)
+        let parameter = FindToken(tokens, 1, 9, 8)
+        Assert.NotNull(parameter)
+        Assert.Equal(TokenTypeIndex("Parameter"), parameter!!.TokenType)
+    }
+
+    @Fact
     func Tokenize_DoesNotClassifyKeywords() {
         const source = "var x = 42\n"
         let content = LanguageServerTestHelpers.Content(source)

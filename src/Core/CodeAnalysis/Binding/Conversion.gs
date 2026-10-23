@@ -346,6 +346,15 @@ class Conversion {
         ) Conversion {
             var from = from
             var to = to
+            if to != nil && NativeProtocolMetadata.IsProtocol(to) &&
+                from != TypeSymbol.Null &&
+                from != TypeSymbol.Error &&
+                from is not NullableTypeSymbol &&
+                from is not PlatformTypeSymbol &&
+                from is not ByRefTypeSymbol &&
+                !TypeSymbol.IsByRefLike(from!!) {
+                return Implicit
+            }
             if NativeSliceTypes.HaveIncompatibleElements(from, to) || ManagedReferenceTypes.HaveIncompatibleElements(
                 from!!,
                 to!!
@@ -2486,6 +2495,9 @@ class Conversion {
         /// @param type The candidate (non-nullable-wrapper) target type.
         /// @returns `true` when `nil` converts to [`type`](paramref) without a `T?` wrapper.
         internal func IsNilAssignableWithoutNullableWrapper(type TypeSymbol?) bool {
+            if type != nil && NativeProtocolMetadata.IsProtocol(type) {
+                return false
+            }
             return type is InterfaceSymbol ||
                 type is StructSymbol &&
                 type.IsClass == true ||

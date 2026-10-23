@@ -558,6 +558,13 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
         punctuation: /[()]/,
       },
     },
+    'protocol-declaration': {
+      pattern: /(?<![\p{L}\p{Nd}_$])protocol\s+\$?[\p{L}_][\p{L}\p{Nd}_]*(?=\s*[{[:])/u,
+      inside: {
+        keyword: /^protocol\b/,
+        'class-name': /\$?[\p{L}_][\p{L}\p{Nd}_]*$/u,
+      },
+    },
     'function-declaration': {
       pattern: /((?<![\p{L}\p{Nd}_$])(?:func|sequence)\s+)\$?[\p{L}_][\p{L}\p{Nd}_]*/u,
       lookbehind: true,

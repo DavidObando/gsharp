@@ -630,6 +630,14 @@
           }
         },
         {
+          "comment": "Native protocol declaration; the spelling remains an ordinary identifier elsewhere.",
+          "match": "(?<![\\w$])\\b(protocol)\\s+(\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*)(?=\\s*(?:\\{|\\[|:))",
+          "captures": {
+            "1": { "name": "keyword.declaration.gsharp" },
+            "2": { "name": "entity.name.type.interface.gsharp" }
+          }
+        },
+        {
           "comment": "Named delegate type declaration (canonical form, issue #3510): `delegate Name(params) R;`",
           "match": "\\b(delegate)\\s+(\\$?[\\p{L}_][\\p{L}\\p{Nd}_]*)",
           "captures": {

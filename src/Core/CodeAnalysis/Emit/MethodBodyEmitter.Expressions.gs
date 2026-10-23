@@ -27,6 +27,13 @@ import System.Reflection.Metadata.Ecma335
 /// statement/expression dispatch, and small shared helpers).
 internal partial class MethodBodyEmitter {
     private func EmitExpression(expression BoundExpression) {
+        this.EmitExpressionCore(expression)
+        if !this.SuppressNativeProtocolValidation {
+            this.EmitNativeProtocolValidation(expression.Type)
+        }
+    }
+
+    private func EmitExpressionCore(expression BoundExpression) {
         if expression.Syntax != nil {
             this.currentNode = expression
         }
