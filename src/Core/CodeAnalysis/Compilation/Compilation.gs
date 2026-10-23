@@ -516,6 +516,9 @@ open class Compilation {
         if lowered == nil {
             return CreateEmitResult(success: false, diagnostics)
         }
+        // Emit asks the native protocol feature-marker question once per member
+        // and type; declarations are complete here, so answer each type once.
+        NativeProtocolSafety.BeginMemo()
         try {
             using let stagedPe = MemoryStream()
             using let stagedPdb = MemoryStream()
@@ -587,6 +590,8 @@ open class Compilation {
             let diagnostic = CreateInternalErrorDiagnostic(ex)
             let combined = diagnostics.Add(diagnostic)
             return CreateEmitResult(success: false, combined)
+        } finally {
+            NativeProtocolSafety.EndMemo()
         }
         return CreateEmitResult(success: true, diagnostics)
     }

@@ -11,11 +11,53 @@ import System.Linq
 import System.Reflection
 
 internal shared class NativeProtocolSafety {
-    internal func ContainsSavedProtocol(type TypeSymbol) bool ->
-    ContainsDependency(type, true, HashSet[TypeSymbol](), HashSet[System.Type]())
+    // The whole-program safety pass asks the same two questions about the same few
+    // types for every bound expression (issue #5197). Each answer is a finite walk
+    // that depends only on declarations, which are complete by then, so the pass
+    // keeps its answers for the span of one run. Outside a run (binding, emit) the
+    // memo is absent and every query walks, as before. Thread-static, so concurrent
+    // compilations never share it.
+    @ThreadStatic
+    private var memoSaved Dictionary[TypeSymbol, bool]?
 
-    internal func ContainsProtocol(type TypeSymbol) bool ->
-    ContainsDependency(type, false, HashSet[TypeSymbol](), HashSet[System.Type]())
+    @ThreadStatic
+    private var memoAny Dictionary[TypeSymbol, bool]?
+
+    internal func BeginMemo() {
+        memoSaved = Dictionary[TypeSymbol, bool]()
+        memoAny = Dictionary[TypeSymbol, bool]()
+    }
+
+    internal func EndMemo() {
+        memoSaved = nil
+        memoAny = nil
+    }
+
+    internal func ContainsSavedProtocol(type TypeSymbol) bool {
+        let memo = memoSaved
+        if memo == nil {
+            return ContainsDependency(type, true, HashSet[TypeSymbol](), HashSet[System.Type]())
+        }
+        if memo.TryGetValue(type, out var known) {
+            return known
+        }
+        let found = ContainsDependency(type, true, HashSet[TypeSymbol](), HashSet[System.Type]())
+        memo[type] = found
+        return found
+    }
+
+    internal func ContainsProtocol(type TypeSymbol) bool {
+        let memo = memoAny
+        if memo == nil {
+            return ContainsDependency(type, false, HashSet[TypeSymbol](), HashSet[System.Type]())
+        }
+        if memo.TryGetValue(type, out var known) {
+            return known
+        }
+        let found = ContainsDependency(type, false, HashSet[TypeSymbol](), HashSet[System.Type]())
+        memo[type] = found
+        return found
+    }
 
     internal func RequiresFeatureMarker(function FunctionSymbol) bool ->
     RequiresFeatureMarker(function.Type, function.Parameters, function.ReceiverType)

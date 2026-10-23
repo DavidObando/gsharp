@@ -978,6 +978,20 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
             interfaces ImmutableArray[InterfaceSymbol],
             diagnostics DiagnosticBag
         ) {
+            NativeProtocolSafety.BeginMemo()
+            try {
+                AnalyzeCore(functions, types, interfaces, diagnostics)
+            } finally {
+                NativeProtocolSafety.EndMemo()
+            }
+        }
+
+        private func AnalyzeCore(
+            functions ImmutableDictionary[FunctionSymbol, BoundBlockStatement].Builder,
+            types ImmutableArray[StructSymbol],
+            interfaces ImmutableArray[InterfaceSymbol],
+            diagnostics DiagnosticBag
+        ) {
             let analyzer = ManagedReferenceSafetyAnalyzer(diagnostics)
             for (function, body) in functions {
                 analyzer.AnalyzeFunction(function, body)
