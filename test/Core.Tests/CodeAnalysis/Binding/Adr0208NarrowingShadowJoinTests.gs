@@ -215,6 +215,72 @@ func Run() int32 {
     }
 
     @Fact
+    func AConditionThatWritesTheRoot_StartsTheBranchesWithoutTheFact() {
+        // `Clear(ref s)` stores nil. Neither branch starts from the guarded fact,
+        // so the join reports nothing and the read is not narrowed.
+        let lines = Capture(`package T
+func Get() string? { return "a" }
+func Clear(ref s string?) bool {
+    s = nil
+    return false
+}
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    if Clear(ref s) { } else { }
+    return s.Length
+}`)
+        Assert.Empty(Rows(lines, "J"))
+        Assert.Empty(Rows(lines, "R"))
+    }
+
+    @Fact
+    func AGuardThatWritesTheRoot_ReachesTheDefaultArm() {
+        let lines = Capture(`package T
+func Get() string? { return "a" }
+func Clear(ref s string?) bool {
+    s = nil
+    return false
+}
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    switch 1 {
+        case 1 when Clear(ref s) { return 0 }
+        default { }
+    }
+    return s.Length
+}`)
+        Assert.Empty(Rows(lines, "J"))
+        Assert.Empty(Rows(lines, "R"))
+    }
+
+    @Fact
+    func AReportOfADiscardedLoopBind_IsDropped() {
+        // The first bind of the loop body reports a join for `if c { s = nil; return 0 }`.
+        // The write `s = Get()` reaches the back edge, so the binder discards that bind
+        // and binds again without the inherited fact. The report keeps nothing of it.
+        let lines = Capture(`package T
+func Get() string? { return nil }
+func Run(c bool, n int32) int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        if c {
+            s = nil
+            return 0
+        }
+        total = total + s.Length
+        s = Get()
+    }
+    return total
+}`)
+        Assert.Empty(Rows(lines, "J"))
+        Assert.Empty(Rows(lines, "R"))
+    }
+
+    @Fact
     func AgreementsAreNotReported() {
         // `if`-join (#2159), an early-exit lift (#700) and a plain narrowing
         // that no branch changes: the passes and the shadow agree.

@@ -53,7 +53,7 @@ internal partial class StatementBinder {
             // else-branch (`if !(x is T t) { ... } else { use(t) }`).
             let (patternThen, patternElse) = PatternVariables.Classify(condition)
             let callableEntry = CaptureExternalCallableAliases()
-            let shadowFlow = ShadowBegin()
+            let shadowFlow = ShadowBegin(condition)
             let thenStatement = BindWithPatternVariables(
                 patternThen,
                 () -> {
@@ -113,7 +113,7 @@ internal partial class StatementBinder {
         let (initThenNarrow, initElseNarrow) = ClassifyIfConditionNarrowing(initCondition)
         let (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition)
         let initCallableEntry = CaptureExternalCallableAliases()
-        let initShadowFlow = ShadowBegin()
+        let initShadowFlow = ShadowBegin(initCondition, initStatement)
         let initThen = BindWithPatternVariables(
             initPatternThen,
             () -> {

@@ -41,11 +41,19 @@ internal partial class StatementBinder {
             Exits = List[NarrowingState]()
             Lost = List[AccessPath]()
             AssignedByExiting = HashSet[VariableSymbol]()
-            Dispatch = StatementEffects.Empty
+            Current = entry
+            Killed = List[AccessPath]()
         }
 
-        // The effects of the guards that ran before the "no arm matched" path.
-        prop Dispatch StatementEffects {
+        // Entry facts that the header or a guard removed. A branch exit from the
+        // legacy frames still holds them, unless the branch writes the root.
+        prop Killed List[AccessPath] {
+            get;
+        }
+
+        // The dispatch state: the entry state with the effects of the header and of
+        // every guard bound so far. A branch starts from it (ADR-0208 section 9).
+        prop Current NarrowingState {
             get;
             set;
         }
@@ -155,11 +163,23 @@ internal partial class StatementBinder {
     }
 
     /// Starts a merge point. Call it after the condition or discriminant is bound.
-    private func ShadowBegin() ShadowFlow? {
+    private func ShadowBegin(header BoundExpression? = nil, initializer BoundStatement? = nil) ShadowFlow? {
         if !NarrowingComparison.Enabled {
             return nil
         }
-        return ShadowFlow(ShadowSnapshot())
+        // The legacy passes invalidate after the whole statement. The condition,
+        // the discriminant and the initializer run before any branch, so the
+        // branches start from the state after their effects.
+        let flow = ShadowFlow(ShadowSnapshot())
+        if initializer != nil {
+            ShadowApplyEffects(flow, ShadowEffectsOf(initializer, flow.Current))
+        }
+        if header != nil {
+            let collector = AssignedRootsCollector(nil, externalCallableAliases)
+            collector.VisitExpression(header)
+            ShadowApplyEffects(flow, ShadowSnapshotEffects(collector, flow.Current))
+        }
+        return flow
     }
 
     /// Adds one branch. [`facts`](paramref) are the facts the branch's own
@@ -169,7 +189,7 @@ internal partial class StatementBinder {
         if flow == nil {
             return
         }
-        var branchIn = flow.Entry
+        var branchIn = flow.Current
         if facts != nil {
             branchIn = branchIn.WithAll(facts)
         }
@@ -200,6 +220,15 @@ internal partial class StatementBinder {
                 }
             }
         }
+        if flow.Killed.Count > 0 && !exit.IsUnreachable {
+            // The legacy frames still hold what the header removed.
+            let written = ShadowEffectsOf(bound, flow.Entry)
+            for path in flow.Killed {
+                if !written.AssignsRoot(path.Root) {
+                    exit = exit.Remove(path)
+                }
+            }
+        }
         flow.Exits.Add(exit)
         if bound is BoundBlockStatement block {
             for child in block.Statements {
@@ -217,6 +246,17 @@ internal partial class StatementBinder {
         }
     }
 
+    // Applies effects that run before the branches, and remembers what they removed.
+    private func ShadowApplyEffects(flow ShadowFlow, effects StatementEffects) {
+        let before = flow.Current
+        flow.Current = before.Kill(effects, (root VariableSymbol) -> binderCtx.MayBeAssignedByClosure(root))
+        for path in before.Paths {
+            if flow.Current.NarrowedType(path) == nil && !flow.Killed.Any((known AccessPath) -> known.Equals(path)) {
+                flow.Killed.Add(path)
+            }
+        }
+    }
+
     /// Adds the effects of a `switch` arm guard to the dispatch state.
     private func ShadowAddGuard(flow ShadowFlow?, guard_ BoundExpression?) {
         if flow == nil || guard_ == nil {
@@ -224,7 +264,7 @@ internal partial class StatementBinder {
         }
         let collector = AssignedRootsCollector(nil, externalCallableAliases)
         collector.VisitExpression(guard_)
-        flow.Dispatch = flow.Dispatch.Union(ShadowSnapshotEffects(collector, flow.Entry))
+        ShadowApplyEffects(flow, ShadowSnapshotEffects(collector, flow.Current))
     }
 
     /// Finishes a merge point and parks the shadow state on the bound statement.
@@ -242,10 +282,8 @@ internal partial class StatementBinder {
             return
         }
         if reachesWithoutArm {
-            // A guard that fails has run: its writes and calls reach the path where no arm matches.
-            flow.Exits.Add(
-                flow.Entry.Kill(flow.Dispatch, (root VariableSymbol) -> binderCtx.MayBeAssignedByClosure(root))
-            )
+            // The guards have run on the path where no arm matches.
+            flow.Exits.Add(flow.Current)
         }
         let result = NarrowingState.Join(flow.Exits)
         let record = ShadowJoin(kind, ShadowLocation(location), flow, result, approximate)

@@ -32,6 +32,7 @@ internal shared class NarrowingComparison {
     private let readLines List[string] = List[string]()
     private let environmentPath string? = ReadEnvironment()
     private let capture AsyncLocal[List[string]?] = AsyncLocal[List[string]?]()
+    private let pending AsyncLocal[List[string]?] = AsyncLocal[List[string]?]()
 
     /// Whether the binder should compute the shadow flow.
     prop Enabled bool -> environmentPath != nil || capture.Value != nil
@@ -84,22 +85,51 @@ internal shared class NarrowingComparison {
     }
 
     private func Report(isRead bool, line string) {
+        Emit(
+            if isRead {
+                "R\t" + line
+            } else {
+                "J\t" + line
+            }
+        )
+    }
+
+    // A speculative bind buffers its reports until the binder decides whether to keep it.
+    private func Emit(tagged string) {
+        let buffer = pending.Value
         let sink = capture.Value
         lock gate {
-            if sink != nil {
-                sink.Add(
-                    if isRead {
-                        "R\t" + line
-                    } else {
-                        "J\t" + line
-                    }
-                )
-                return
-            }
-            if isRead {
-                readLines.Add(line)
+            if buffer != nil {
+                buffer.Add(tagged)
+            } else if sink != nil {
+                sink.Add(tagged)
+            } else if tagged.StartsWith("R\t", StringComparison.Ordinal) {
+                readLines.Add(tagged.Substring(2))
             } else {
-                joinLines.Add(line)
+                joinLines.Add(tagged.Substring(2))
+            }
+        }
+    }
+
+    /// Starts buffering reports for a bind that the binder may discard.
+    func BeginSpeculation() NarrowingSpeculation? {
+        if !Enabled {
+            return nil
+        }
+        let speculation = NarrowingSpeculation(pending.Value, List[string]())
+        pending.Value = speculation.Buffer
+        return speculation
+    }
+
+    /// Ends the speculation. The buffered reports are kept or dropped together.
+    func EndSpeculation(speculation NarrowingSpeculation?, keep bool) {
+        if speculation == nil {
+            return
+        }
+        pending.Value = speculation.Previous
+        if keep {
+            for tagged in speculation.Buffer {
+                Emit(tagged)
             }
         }
     }
@@ -137,5 +167,21 @@ internal shared class NarrowingComparison {
         // The hook is set when comparison is enabled, so a clean run also writes its reports.
         AppDomain.CurrentDomain.ProcessExit += (sender object?, args EventArgs) -> Flush()
         return value
+    }
+}
+
+/// The reports of one speculative bind, and the buffer to restore when it ends.
+internal sealed class NarrowingSpeculation {
+    init(previous List[string]?, buffer List[string]) {
+        Previous = previous
+        Buffer = buffer
+    }
+
+    prop Previous List[string]? {
+        get;
+    }
+
+    prop Buffer List[string] {
+        get;
     }
 }

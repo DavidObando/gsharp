@@ -227,6 +227,29 @@ open class Adr0208NarrowingStateTests {
     }
 
     @Fact
+    func Kill_OfACallbackThatMayWriteReferenceStorage_RemovesFactsOnRefAndOutParameters() {
+        // The callback may overwrite the caller-owned storage behind a `ref` or
+        // `out` parameter, with no flag for an unknown write at all.
+        let refParameter = ParameterSymbol("p", NullableTypeSymbol.Get(TypeSymbol.Object), refKind: RefKind.Ref)
+        let valueParameter = ParameterSymbol("v", NullableTypeSymbol.Get(TypeSymbol.Object))
+        let state = NarrowingState
+            .Empty
+            .With(AccessPath.ForVariable(refParameter), TypeSymbol.String)
+            .With(AccessPath.ForVariable(valueParameter), TypeSymbol.String)
+        let killed = state.Kill(Effects(writableReference: true))
+        Assert.Null(killed.NarrowedType(AccessPath.ForVariable(refParameter)))
+        Assert.Equal(TypeSymbol.String, killed.NarrowedType(AccessPath.ForVariable(valueParameter)))
+    }
+
+    @Fact
+    func Kill_OfACallThatMayWriteGlobals_AlsoRemovesTheExternalCallableFact() {
+        let g = GlobalVariableSymbol("g", false, TypeSymbol.Object)
+        let state = NarrowingState.Empty.WithExternalCallable(g)
+        Assert.False(state.Kill(Effects(global: true)).IsExternalCallable(g))
+        Assert.True(state.Kill(StatementEffects.Empty).IsExternalCallable(g))
+    }
+
+    @Fact
     func Kill_RemovesIndirectlyWrittenRootsOnlyThroughTheCallersPredicate() {
         let x = Local("x", false, NullableTypeSymbol.Get(TypeSymbol.Object))
         let y = Local("y", false, NullableTypeSymbol.Get(TypeSymbol.Object))
@@ -313,10 +336,19 @@ open class Adr0208NarrowingStateTests {
             member bool = false,
             any bool = false,
             pointer bool = false,
-            global bool = false
+            global bool = false,
+            writableReference bool = false
         ) StatementEffects {
             let roots = assigned ?? Array.Empty[VariableSymbol]()
-            return StatementEffects.Create(roots, Array.Empty[VariableSymbol](), member, any, pointer, global, false)
+            return StatementEffects.Create(
+                roots,
+                Array.Empty[VariableSymbol](),
+                member,
+                any,
+                pointer,
+                global,
+                writableReference
+            )
         }
     }
 }

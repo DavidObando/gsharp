@@ -34,7 +34,7 @@ internal partial class StatementBinder {
         let arms = ImmutableArray.CreateBuilder[BoundPatternSwitchArm](syntax.Cases.Length)
         var hasDefault = false
         let callableEntry = CaptureExternalCallableAliases()
-        let shadowFlow = ShadowBegin()
+        let shadowFlow = ShadowBegin(discriminant)
         var shadowApproximate = false
         var callableExits HashSet[VariableSymbol]? = nil
         var callableFallthrough HashSet[VariableSymbol]? = nil

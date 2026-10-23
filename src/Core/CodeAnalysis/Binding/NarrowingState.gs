@@ -94,6 +94,12 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
         return NarrowingState(paths, types, callables.Add(variable), false)
     }
 
+    /// Removes the fact of one path.
+    func Remove(path AccessPath) NarrowingState -> Without(
+        (candidate AccessPath) -> candidate.Equals(path),
+        (variable VariableSymbol) -> false
+    )
+
     /// Removes every fact whose path root is in [`roots`](paramref), and the
     /// external-callable fact of each such root.
     func KillRoots(roots IReadOnlyCollection[VariableSymbol]) NarrowingState {
@@ -120,9 +126,12 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
             (path AccessPath) -> effects.AssignsRoot(path.Root) ||
                 (path.HasMembers && effects.MayMutateMemberPaths) ||
                 (effects.MayMutateGlobalRoots && path.Root is GlobalVariableSymbol) ||
+                (effects.MayMutateWritableReferenceRoots && IsByReferenceParameter(path.Root)) ||
                 (effects.MayMutateAnyRootViaPointer && (path.HasMembers || !path.Root.IsReadOnly)) ||
                 (effects.MayMutateAnyRoot && mayBeIndirectlyWritten != nil && mayBeIndirectlyWritten(path.Root)),
             (variable VariableSymbol) -> effects.AssignsRoot(variable) ||
+                (effects.MayMutateGlobalRoots && variable is GlobalVariableSymbol) ||
+                (effects.MayMutateWritableReferenceRoots && IsByReferenceParameter(variable)) ||
                 effects.MayMutateAnyRootViaPointer ||
                 (effects.MayMutateAnyRoot && mayBeIndirectlyWritten != nil && mayBeIndirectlyWritten(variable))
         )
@@ -201,6 +210,10 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
         }
         return "{" + string.Join(", ", parts) + "}"
     }
+
+    // A callback can overwrite the caller-owned storage behind a ref or out parameter.
+    private func IsByReferenceParameter(root VariableSymbol) bool -> root is ParameterSymbol &&
+        (root.RefKind == RefKind.Ref || root.RefKind == RefKind.Out)
 
     private func IndexOf(path AccessPath) int32 {
         if unreachable {
