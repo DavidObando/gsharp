@@ -161,7 +161,60 @@ Converting an already-erased protocol value is transport or a capability view,
 not a second concrete insertion. Preserve original evidence; do not store a
 protocol box as a new concrete payload or implicitly unwrap an ordinary adapter.
 
-### 4. Retroactive conformance, selection and coherence
+### 4. Explicit and retroactive conformance, selection and coherence
+
+**Recommend optional explicit conformance for owned classes, structs and enums,
+alongside retroactive conformance.** An explicit claim must check and export
+validated conformance, not merely document intent. Illustrative proposed syntax:
+
+```gsharp
+protocol Auditable { func Describe() string; }
+class OrderPlaced : Auditable {
+    func Describe() string -> "order"
+}
+struct Receipt : Auditable {
+    func Describe() string -> "receipt"
+}
+enum Signal conforms Auditable { Ready, Done }
+func (signal Signal) Describe() string -> "signal"
+```
+
+None of these protocol declarations or claims is supported syntax. For
+classes/structs, propose classifying protocol entries in the existing colon
+list alongside nominal interfaces, without making them CLR base types.
+An actual base class remains first and alone may have constructor arguments:
+`class Event : BaseEvent(), IExisting, Auditable { ... }` is a hypothetical
+combined head. Structs still cannot inherit classes. Name resolution must
+distinguish interfaces from protocols and diagnose invalid or duplicate entries.
+
+Enums need a separate parser choice. The current
+[aggregate parser](../../src/Core/CodeAnalysis/Syntax/Parser.Declarations.gs)
+reads the enum body immediately after its name; it has no explicit numeric
+underlying-type clause. Propose a contextual `conforms P, Q` clause for flat
+enums, rather than pretending their colon already accepts interface entries.
+If an underlying-type clause is added separately, it must still denote an
+integer representation, not a protocol. This revision does not add one.
+Keyword compatibility and combined declaration heads need a parser proof.
+Payload-bearing union enums have a different class-hierarchy lowering; their
+conformance propagation is outside this first flat-enum sketch.
+
+The enum's ordinary receiver-clause extension supplies the slot. Do not emit
+instance methods or nominal interface implementation on the CLR enum:
+ECMA-335, sixth edition, I.8.5.2 prohibits both ([CLR sources](#clr-sources)).
+An explicit claim does not change direct extension calls or grant private
+access. Selection still uses the rules below.
+
+Only the compilation declaring a type can put a claim on that declaration.
+A referencing compilation may define retroactive evidence using accessible
+targets; it cannot amend the foreign type declaration. Recommend compiling
+an explicit claim at the declaring assembly's validation boundary, with missing,
+inaccessible-only, unsupported or ambiguous requirements reported as compiler
+errors. Emit the same canonical typed witness/evidence record as a retroactive
+proof, with declaration origin and export visibility. Neither form gets
+precedence over conflicting records from another library. An identical
+re-export preserves its canonical origin; a different target diagnoses.
+The explicit declaration head is proposed here; the source mechanism for
+authoring/exporting a retroactive canonical record remains an acceptance gate.
 
 The intended source experience includes adding a protocol and ordinary
 extensions for a type owned by another library. A user should then write
@@ -196,9 +249,9 @@ Proposed conformance binding rules:
    be recognized by origin and exact contract identity.
 6. Calls/tests use that record, including its negative decisions. Local
    conversion sites cannot quietly create incompatible records. The mechanism
-   for declaring/exporting a canonical record and deliberately resolving
-   conflicts remains a source/metadata acceptance gate; no syntax is invented
-   here to conceal that requirement.
+   for exporting retroactive canonical records and deliberately resolving
+   conflicts remains a source/metadata acceptance gate. An explicit claim
+   cannot bypass it or override a previously validated record.
 
 A private extension cannot be exported as callable public witness authority.
 A defining library may expose an ordinary legal public forwarder which uses
@@ -369,7 +422,9 @@ retain. Raw byrefs cannot escape to implement any of these choices.
 No CLR box identity becomes a public protocol equality, hash or `GetType`
 contract. Initial native equality/hash operations other than outer presence
 checks remain rejected, including generic/default comparer or object escapes
-which expose backing storage. Foreign exports are likewise initially rejected.
+which expose backing storage. Unproved foreign-facing protocol exports are
+initially rejected by the G# compiler, not policed universally by the CLR.
+Section 9 defines the public-signature boundary and its required validation.
 Sharing mutation is an explicit semantic observation; `ReferenceEquals` on an
 implementation box is not. No concurrency isolation or deep immutability follows.
 
@@ -470,31 +525,173 @@ new projected view.
 
 ### 9. Lowering and separate-assembly proof gates
 
-A possible backend uses typed storage cells and exact typed forwarders.
-The saved struct is mutable. Entry evidence and selected witness bindings can
-be immutable without making the payload immutable. Class payloads retain object
-references; projected views retain original locations. No per-call reset,
-new ordinary receiver kind or invocation-time fresh-storage policy is needed.
+#### Proposed CLR mapping, not an accepted ABI
 
-Typed forwarding must preserve instance mutation versus extension by-value
-copying. It must also preserve ordinary evaluation, exceptions, readonly rules
-and safe receiver lifetime. Reusing adaptation emission does not prove those
-facts for native evidence/views, projections or escaping receiver locations.
-Reject unsupported member families rather than quietly use another receiver.
+Use ordinary CLR types and typed methods plus compiler-recognized G# semantic
+metadata, not a modified CLR. A nominal interface alone cannot establish
+retroactive conformance or tests on the original payload: `InterfaceImpl`
+names the implementing type, and `isinst` tests its operand's CLR type
+(ECMA-335 II.22.23 and III.4.6). The protocol importer and lowering must supply
+the additional semantics ([CLR sources](#clr-sources)).
 
-Use exact typed methods/delegates, not `object[]`, universal `Invoke` helpers,
-reflection proxies or public type tags. Internal cells, boxes and witness
-records are hypotheses, not an exposed CLR ABI or allocation promise.
-Method values and callbacks need a proof consistent with retained entry or
-selected location and current ordinary capture rules; no fresh-call policy
-is introduced here.
+Recommend evaluating a generated sealed reference carrier per protocol for
+the section 7 retaining baseline. This is a concrete review direction, not
+an accepted representation or cost claim. Illustrative mapping for a
+parameterless `NextValue.Next() int32` slot:
 
-Implementation and reference assemblies need versioned evidence for protocol
-identity, exact insertion identity/nullability, closure coverage including
-negative knowledge, canonical conformance origins/targets, receiver conventions,
-storage transport and permission/lifetime contracts. Exported signatures must
-preserve these facts. Unknown, stale, conflicting or malformed revisions fail
-the boundary; ordinary CLR attributes alone are insufficient.
+| Source concept | Proposed ordinary CLR representation | Visibility and contract obligation |
+| --- | --- | --- |
+| Protocol declaration | Generated `NextValueCarrier` type plus versioned declaration metadata containing protocol identity and exact slot signatures. The carrier is not the concrete payload's nominal base. | Internal when confined to an assembly; public if used in public signatures. Contract identity, signatures and nullability must survive reference emission. |
+| Saved entry | An internal typed cell such as `CounterEntry` with mutable `Counter Saved`, or a retained class-reference field, plus immutable evidence. | Keep payload fields/private helper layout inaccessible to consumers. A legal producer factory or dispatch path must cross assembly boundaries without consumer access to private fields. |
+| Slot witness | Exact forwarder such as `int CounterNext(CounterEntry entry)` and a closed typed slot delegate held by the carrier. `NextValueCarrier.Next(): int` invokes that delegate. | Forwarders may remain private/internal when producer code creates the delegate. A consumer-generated witness may call only accessible targets or an explicitly exported legal bridge, never private producer helpers. |
+| Public source signature `Consume(p NextValue)` | Candidate CLR signature `public void Consume(NextValueCarrier p)`. A protocol return similarly returns `NextValueCarrier`. | The public carrier and callable members are a binary contract visible to other compilers and tools. They cannot be described as invisible implementation machinery. Construction/evidence injection stays non-public unless a validated public bridge is explicitly designed. |
+| Capability tests/views and concrete recovery | Generated evidence-based typed operations over the entry and finite manifest, not `isinst` against the carrier. A successful view retains the same entry under the baseline. | Cross-assembly support must provide callable typed dispatch/view bridges with sufficient accessibility and matching metadata. Do not expose arbitrary evidence construction or a public universal extractor. Exact support signatures remain an ABI acceptance gate. |
+| Restricted source-location projection | Distinct owner/path-retaining support type, exact underlying storage type and permission-checked typed forwarding. | No fabricated `ref P`, arbitrary whole-protocol write or detached-cell fallback. Its signature and lifetime contract require separate acceptance under section 8. |
+
+For an instance struct witness, the forwarder calls on `entry.Saved` storage;
+mutations persist. For a static extension, it passes a by-value copy of that
+saved field as ordinary parameter zero. A class entry retains the evaluated
+object, not its former variable. Projection forwarders instead use the selected
+original location and section 8's preparation/borrow rules. No fresh-call reset
+or new ordinary receiver kind follows from this mapping.
+
+The carrier hypothesis depends on ownership acceptance. A reference carrier
+naturally retains an entry across assignments and views. If value-like protocol
+transport wins instead, assignment/argument/return lowering must perform the
+specified logical struct copy, and view transport needs its own chosen rule.
+A small value carrier holding an entry reference alone would still share that
+entry; calling it a struct would not prove value-like copying. Do not freeze a
+public carrier ABI before resolving this fork and validating presence, typed-nil
+encoding and cross-protocol view construction. No allocation count is promised.
+
+Use exact typed methods/delegates, not `object[]`, universal `Invoke`, reflection
+proxies or public Go tags. Evidence descriptors are compiler/runtime support,
+not caller-authored tags. Typed forwarding must preserve ordinary evaluation,
+exceptions, readonly rules and safe receiver lifetime. Existing adaptation
+emission does not prove these new facts. Method values/callbacks need a capture
+proof consistent with the accepted entry/location model. Unsupported member
+families remain rejected.
+
+#### Discovery from referenced projects and packages
+
+Recommend versioned compiler-recognized metadata records, carried by custom
+attributes on declaration types and the assembly. Exact attribute names and
+binary schema are unaccepted. Recognition must use an exact schema identity
+(including defining assembly/type and version), not short-name matching.
+Attributes are an encoding vehicle, not proof that arbitrary contents are valid.
+No source files, comments, runtime execution or method-body inspection may be
+required to discover declarations and canonical conformances.
+
+For a project reference, import the referenced compilation's emitted contract
+(normally its reference assembly). For a package, import the selected compile
+asset, whether reference or implementation DLL. Use the same validation path:
+
+1. Read declaration records: canonical protocol identity, contract revision,
+   accessibility, ordered slot identities and exact parameter/return types,
+   constructed substitutions, receiver conventions and nullability.
+2. Read canonical conformance records: exact insertion type/nullability,
+   protocol identity/revision, defining assembly and declaration origin,
+   exact targets or exported forwarders and their legal access authority.
+   Explicit and retroactive records have the same validation obligations.
+3. Read transport and coverage records: saved-entry versus restricted-location
+   storage, permission, lifetime/provenance, supported call/view contracts and
+   the finite insertion-type/protocol closure with positive and negative facts.
+   Absence of coverage is unknown, never a negative conformance.
+4. Resolve symbolic targets by assembly identity, declaring type, member name,
+   generic arity and exact signature; validate the schema's nullability and
+   receiver contracts too. Raw method tokens are not durable cross-emission
+   identities (ECMA-335 I.9.2.1). Re-resolve them separately for each DLL.
+5. Validate completeness, authority, revisions and one compatible canonical
+   record per `(T, P)` before admitting conversions/tests. Diagnose unknown
+   schemas, malformed records, stale targets/signatures and conflicts.
+   Never reinterpret those failures as false, absence or a request to search
+   again. Runtime version/contract mismatches must fail before dispatch.
+
+Both implementation and reference emission must retain **all compile-time
+facts** needed above, including opaque identities and exported bridge signatures
+when required. Import must make identical decisions without private helper
+layouts or usable method bodies. Reference assemblies omit implementations
+and may omit private helpers; the G# emitter must explicitly preserve the
+semantic contract rather than rely on incidental retention
+([.NET reference assemblies](#clr-sources)). A producer-private target may
+remain encapsulated behind its legal dispatch bridge, but import still needs
+its canonical symbolic binding/authority record, not its body.
+
+Compile-time discovery is not runtime dispatch installation. At execution,
+implementation assemblies must supply the typed factories/forwarders and
+validated evidence promised by the imported contract. A ref-only compile proves
+neither their execution nor compatibility with a mismatched deployed DLL.
+Consumer-generated supplemental evidence is a separate, validated composition
+step for a complete finite accessible set, as in section 5. Ordinary referenced
+CLR types without protocol metadata can supply accessible instance or extension
+targets in that defining G# compilation. This does not retrofit old opaque
+erased payloads with dynamic shape search or modify their original DLLs.
+
+#### Public signatures and consumers without protocol support
+
+Protocols used only inside an implementation can remain behind ordinary CLR
+public signatures. Keep `adapt` as today's nominal CLR bridge. Exposing a
+protocol-bearing public signature is different: whichever carrier/contract is
+emitted becomes a public binary dependency. CLS Rule 12 requires signature
+types to be accessible wherever the member is accessible; this proposal
+requires that accessibility discipline, without claiming overall CLS compliance
+(ECMA-335 I.8.6.1, [CLR sources](#clr-sources)).
+
+A C#, F# or other non-aware compiler may observe a public carrier, its methods
+and metadata, pass returned instances onward, and call accessible CLR members.
+It does not thereby gain G# structural conversions, retroactive conformance,
+payload-aware `is`/`as`, typed presence or copy/view guarantees. An ordinary
+foreign CLR type test sees the carrier, not the original source payload.
+Visibility is real even when direct foreign use is unsupported.
+
+**Proposed initial support boundary:** G# rejects declarations exporting
+protocol-bearing signatures for unproved foreign use; an eventual explicitly
+supported G#-to-G# public contract must first pass the ABI/import/runtime gates
+above. Do not ship such a public contract merely because its storage is hidden.
+For an eventual public metadata-aware API, consider a non-optional
+compiler-feature requirement marker on protocol-bearing members/types.
+`CompilerFeatureRequiredAttribute` expresses a compiler requirement, but this
+is a cooperative diagnostic convention, not enforcement by every compiler,
+the CLR or a security boundary ([feature marker source](#clr-sources)).
+Rejecting export in G# source is not a runtime ban on calls to members that
+have actually been emitted public.
+
+Before enabling any public protocol ABI, specify and prove its invalid-input
+boundary. Foreign code can at least pass null references or default values;
+non-public constructors do not eliminate that possibility. Public entry points
+and callable carrier operations must validate required presence, evidence
+identity/version/coverage and permission/lifetime invariants before payload
+access or dispatch. Invalid or missing evidence must fail an explicit contract
+boundary, not become a known mismatch or fabricate a payload. A default value
+carrier, if chosen instead, similarly needs validation. Exact exceptions,
+validation placement and guarantees for well-formed nullable input require
+acceptance tests. Markers alone do not establish these invariants.
+
+A deliberately supported ordinary-CLR facade or nominal-interface export is
+a separate proof, not automatically this carrier. Define and test null handling,
+identity/equality/hashing, original-payload retention/recovery and callbacks
+in both directions. If a nominal wrapper intentionally exposes its own identity,
+state that boundary rather than promise native payload tests to foreign code.
+Until proved, keep those export families rejected; internal protocol use can
+still be explored independently.
+
+#### CLR sources
+
+These sources establish CLR constraints, not acceptance or implementation of
+the proposed G# representation:
+
+- [ECMA-335, sixth edition, June 2012](https://dev.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf):
+  I.8.5.2 (enum restrictions), I.8.6.1 / CLS Rule 12 (signature accessibility),
+  I.9.2.1 (binary-scoped metadata tokens), II.22.10 (custom attributes),
+  II.22.23 (nominal interface records) and III.4.6 (`isinst`).
+- [.NET: Reference assemblies](https://learn.microsoft.com/en-us/dotnet/standard/assembly/reference-assemblies),
+  introduction, “Generating reference assemblies” and “Reference assemblies
+  structure”: compile-time contracts, package `ref` assets, omitted bodies and
+  compiler-dependent retention.
+- [.NET: CompilerFeatureRequiredAttribute](https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.compilerfeaturerequiredattribute?view=net-10.0),
+  definition and `IsOptional`: a requirement communicated to compilers.
+
+#### Remaining backend proof gates
 
 Generate identities and witness order deterministically from canonical
 declarations/signatures, never hash iteration, task completion or runtime handles.
@@ -549,6 +746,8 @@ ADR-0154 discrimination using real compiler/driver paths.
 | Invariant writes | Two unrelated conformers cannot be written into a narrower Counter slot through a projection. Ordinary `managed[Counter]` still permits exact Counter replacement. | Writable covariance, `ref P` fabrication or silent readonly fallback. |
 | Permissions/lifetime/fault timing | Selection once; evidence-only view does not read; current nil faults at the required call/read. Readonly/scoped/escaping unsupported paths reject. | Eager test dereference, retarget, permission gain or dangling byref. |
 | Separate-library coherence | A owns source, B protocol/extension, C witness consumer; implementation/ref imports agree. Conflicting D rejects. Later imports cannot rebind old records. | Ambient search, private-authority leak, incomplete manifest or ref metadata loss. |
+| Explicit declarations and import | Owned class/struct/flat enum claims validate and export the same records as retroactive proofs. Missing/ambiguous slots and stale symbolic targets diagnose in both implementation/ref imports. | Documentary-only claims, fabricated enum methods, token-only identities or a privileged conflicting claim. |
+| Public/foreign boundary | Ordinary internal-use facades hide protocol semantics. Before public protocol ABI admission, foreign null/default/evidence misuse fails validation; non-aware tools still see public carriers. | Treating a compiler marker/export diagnostic as universal enforcement or hidden storage as an invisible public ABI. |
 | Existing language compatibility | Nominal tests, flow/short-circuit/negation/property/list scopes, safe-cast restrictions, managed writes and fresh nominal adapt behavior remain unchanged. | Protocol special cases escaping into ordinary code. |
 | Equality/export | Presence works; backing-box equality/hash and unproved CLR export reject, including generic escapes. Adapt still provides nominal CLR interop. | Wrapper identity becoming native semantics. |
 
@@ -575,9 +774,10 @@ without public wrappers, tags or pervasive casts.
    admission requires its own verified mapping under ADR-0191.
 
 No compiler/runtime/translator edits, prototypes, pin movement or Go admission
-belong in this revision. Keep #5097 open for design acceptance. After a document
-merge, the conductor may close #5099 with withdrawal evidence; that is not
-acceptance of the former receiver proposal.
+belong in this revision. Keep #5097 open for design acceptance and #4333 outside
+migration readiness. Issue #5099 is already closed by the maintainer; this
+follow-up neither reopens it nor changes its closure reason. ADR-0206 remains
+Withdrawn, not an acceptance prerequisite.
 
 ## Consequences
 
