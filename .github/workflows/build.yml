@@ -985,6 +985,15 @@ jobs:
           name: nuget-packages
           path: ./nupkgs-smoke
 
+      # The script takes its expectations from the host it runs on. Check that this host is the one
+      # that the matrix entry names, so that an emulated or unsupported host cannot pass for another RID.
+      - name: Check the host RID
+        shell: bash
+        run: |
+          host=$(dotnet --info | sed -n 's/^ *RID: *//p' | head -1 | tr -d '\r')
+          echo "host RID: $host, matrix RID: ${{ matrix.rid }}"
+          test "$host" = "${{ matrix.rid }}"
+
       - name: Run the ReadyToRun compiler smoke
         shell: bash
         env:

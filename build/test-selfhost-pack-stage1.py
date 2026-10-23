@@ -552,6 +552,18 @@ class ReversionTests(unittest.TestCase):
 class RidPackageStampTests(unittest.TestCase):
     """ADR-0207: the stage-1 SDK and its RID compiler packages carry one private version."""
 
+    def test_bootstrap_feed_input_includes_the_rid_packages_of_its_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bootstrap = nupkg(root / "Gsharp.NET.Sdk.0.5.1-gabc.nupkg", {"x.nuspec": b"<package/>"})
+            nupkg(root / "Gsharp.NET.Sdk.Compiler.linux-x64.0.5.1-gabc.nupkg", {"x.nuspec": b"<package/>"})
+            nupkg(root / "Gsharp.NET.Sdk.Compiler.win-x64.0.5.1-gabc.nupkg", {"x.nuspec": b"<package/>"})
+            nupkg(root / "Gsharp.NET.Sdk.Compiler.osx-x64.9.9.9.nupkg", {"x.nuspec": b"<package/>"})
+            names = [path.name for path in packer.sibling_nupkgs(bootstrap, "0.5.1-gabc")]
+            self.assertEqual(["Gsharp.NET.Sdk.0.5.1-gabc.nupkg",
+                              "Gsharp.NET.Sdk.Compiler.linux-x64.0.5.1-gabc.nupkg",
+                              "Gsharp.NET.Sdk.Compiler.win-x64.0.5.1-gabc.nupkg"], names)
+
     def test_rid_packages_are_stamped_with_the_sdk_version(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             pack_out = Path(temp) / "pack-out"

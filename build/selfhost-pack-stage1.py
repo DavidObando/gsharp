@@ -243,6 +243,9 @@ def sibling_nupkgs(bootstrap: Path, version: str) -> list[Path]:
         candidate = bootstrap.with_name(f"{package_id}.{version}.nupkg")
         if candidate.exists():
             found.append(candidate)
+    # ADR-0207: the SDK restores Gsharp.NET.Sdk.Compiler.<rid> of its own exact version with PackageDownload,
+    # so the RID packages of the bootstrap version go to the feed with it.
+    found.extend(sorted(bootstrap.parent.glob(f"{SDK_ID}.Compiler.*.{version}.nupkg")))
     return found
 
 
