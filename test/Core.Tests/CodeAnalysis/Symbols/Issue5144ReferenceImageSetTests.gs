@@ -394,6 +394,40 @@ open class Issue5144ReferenceImageSetTests {
     }
 
     @Fact
+    func DeepTypeReferenceChain_GivesTheSameAnswerInEveryLookupOrder() {
+        // 70 nested definitions and 70 references to them. Rows deeper than the nesting limit are malformed.
+        // An answer must depend on the row, not on which row was asked first.
+        let count = 70
+        let target = BuildDeepTarget("DeepTarget5144", count)
+        let referencing = BuildDeepReferencing("DeepReferencing5144", "DeepTarget5144", count)
+        let forward = ReferenceImageSet(
+            ImmutableArray.Create(ReferenceImage(target, nil, true), ReferenceImage(referencing, nil, true))
+        )
+        let backward = ReferenceImageSet(
+            ImmutableArray.Create(ReferenceImage(target, nil, true), ReferenceImage(referencing, nil, true))
+        )
+        let forwardModule = forward.FindModule("DeepReferencing5144")!!
+        let backwardModule = backward.FindModule("DeepReferencing5144")!!
+        let resolvedForward = List[string]()
+        for var row = 1; row <= count; row++ {
+            let answer = forward.ResolveTypeReference(forwardModule, MetadataTokens.TypeReferenceHandle(row))
+            resolvedForward.Add(answer.IsResolved.ToString() + " " + answer.FullName)
+        }
+        // The deepest row first: the old memo cached its ancestors as missing.
+        let resolvedBackward = Dictionary[int32, string]()
+        for var row = count; row >= 1; row-- {
+            let answer = backward.ResolveTypeReference(backwardModule, MetadataTokens.TypeReferenceHandle(row))
+            resolvedBackward[row] = answer.IsResolved.ToString() + " " + answer.FullName
+        }
+        for var row = 1; row <= count; row++ {
+            Assert.Equal(resolvedForward[row - 1], resolvedBackward[row])
+        }
+        Assert.StartsWith("True N.T0", resolvedForward[0])
+        Assert.StartsWith("True N.T0+T1", resolvedForward[1])
+        Assert.StartsWith("False", resolvedForward[count - 1])
+    }
+
+    @Fact
     func Comparison_AsksTheContext_EvenWhenTheSetLacksTheAssembly() {
         using let resolver = HandleResolver([]string{typeof(ReferenceResolver).Assembly.Location})
         let good = resolver.ImageSet!!
@@ -634,6 +668,55 @@ open class Issue5144ReferenceImageSetTests {
                 metadata.GetOrAddString(outerName)
             )
             metadata.AddTypeReference(outer, StringHandle(), metadata.GetOrAddString(nestedName))
+            return Serialize(metadata)
+        }
+
+        // Writes an assembly that defines N.T0 and the types T1 to T(count-1), each nested in the one before.
+        private func BuildDeepTarget(name string, count int32)[]uint8 {
+            let metadata = NewMetadata(name)
+            for var i = 0; i < count; i++ {
+                metadata.AddTypeDefinition(
+                    if i == 0 {
+                        TypeAttributes.Public
+                    } else {
+                        TypeAttributes.NestedPublic
+                    },
+                    if i == 0 {
+                        metadata.GetOrAddString("N")
+                    } else {
+                        StringHandle()
+                    },
+                    metadata.GetOrAddString("T" + i.ToString()),
+                    EntityHandle(),
+                    MetadataTokens.FieldDefinitionHandle(1),
+                    MetadataTokens.MethodDefinitionHandle(1)
+                )
+                if i > 0 {
+                    // Row 1 is `<Module>`, so T(i) is row i + 2 and its enclosing type is row i + 1.
+                    metadata.AddNestedType(
+                        MetadataTokens.TypeDefinitionHandle(i + 2),
+                        MetadataTokens.TypeDefinitionHandle(i + 1)
+                    )
+                }
+            }
+            return Serialize(metadata)
+        }
+
+        // Writes an assembly with a chain of type references: row 1 names N.T0, row k names T(k-1) nested in row k-1.
+        private func BuildDeepReferencing(name string, target string, count int32)[]uint8 {
+            let metadata = NewMetadata(name)
+            var enclosing EntityHandle = AddAssemblyReference(metadata, target)
+            for var i = 0; i < count; i++ {
+                enclosing = metadata.AddTypeReference(
+                    enclosing,
+                    if i == 0 {
+                        metadata.GetOrAddString("N")
+                    } else {
+                        StringHandle()
+                    },
+                    metadata.GetOrAddString("T" + i.ToString())
+                )
+            }
             return Serialize(metadata)
         }
 
