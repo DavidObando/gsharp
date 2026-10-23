@@ -355,6 +355,14 @@ internal partial class StatementBinder {
         // The summary serves one statement; later statements recompute it.
         ClearStatementEffects()
         ApplyCallableAliasExitState(externalCallableAliases, statement, aliasesAtEntry, collector)
+        // A filter of an enclosing try can run between any two statements of its protected block,
+        // when a nested handler catches a replacement exception.
+        if externalCallableAliases.Count > 0 && statement.Syntax is {} syntax {
+            let filters = CollectCatchFiltersAbove(syntax)
+            if filters.Count > 0 {
+                RemoveFilterAffectedAliases(externalCallableAliases, filters)
+            }
+        }
     }
 
     // Returns the effect summary of [`statement`](paramref) for the entry alias

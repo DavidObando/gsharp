@@ -301,10 +301,7 @@ internal partial class StatementBinder {
         // ADR-0208 R10 (#5168): an enclosing filter can run user code that assigns a callable alias.
         let enclosingFilters = CollectEnclosingCatchFilters(syntax)
         if enclosingFilters.Count > 0 {
-            let filterNames = CollectEnclosingFilterNames(enclosingFilters)
-            callableExceptionalEntry.RemoveWhere(
-                (alias VariableSymbol) -> filterNames.Contains(alias.Name) || binderCtx.MayBeAssignedByClosure(alias)
-            )
+            RemoveFilterAffectedAliases(callableExceptionalEntry, enclosingFilters)
         }
         var callableFinallyEntries = JoinExternalCallableAliases(
             HashSet[VariableSymbol](callableTryExit),
@@ -453,8 +450,16 @@ internal partial class StatementBinder {
                 filters.Add(clause.Filter)
             }
         }
-        var child SyntaxNode = syntax
-        var parent = syntax.Parent
+        filters.AddRange(CollectCatchFiltersAbove(syntax))
+        return filters
+    }
+
+    /// ADR-0208 R10 (#5168): the `when` filters of every `try` whose protected block contains
+    /// [`start`](paramref).
+    private func CollectCatchFiltersAbove(start SyntaxNode) List[ExpressionSyntax] {
+        let filters = List[ExpressionSyntax]()
+        var child SyntaxNode = start
+        var parent = start.Parent
         while parent != nil {
             if parent is TryStatementSyntax outer && object.ReferenceEquals(outer.TryBlock, child) {
                 for clause in outer.CatchClauses {
@@ -467,6 +472,15 @@ internal partial class StatementBinder {
             parent = parent.Parent
         }
         return filters
+    }
+
+    /// ADR-0208 R10 (#5168): removes the external-callable aliases that a filter may reassign: a
+    /// name the filter writes, or a variable that a closure assigns.
+    private func RemoveFilterAffectedAliases(aliases HashSet[VariableSymbol], filters List[ExpressionSyntax]) {
+        let filterNames = CollectEnclosingFilterNames(filters)
+        aliases.RemoveWhere(
+            (alias VariableSymbol) -> filterNames.Contains(alias.Name) || binderCtx.MayBeAssignedByClosure(alias)
+        )
     }
 
     /// ADR-0208 R10 (#5168): the names that [`filters`](paramref) may write: assignment targets,

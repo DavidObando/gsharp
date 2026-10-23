@@ -389,6 +389,39 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
+            // An outer filter replaces a callable alias, and an inner catch handles a replacement exception.
+            yield[]object{"enclosing-filter-alias-after-inner-try", `
+package P
+import System
+
+func Run(callback () -> void) int32 {
+    var s string? = "abc"
+    let clear = func() { s = nil }
+    var action = callback
+    let flip = func() bool {
+        action = clear
+        return true
+    }
+    try {
+        try {
+            try {
+                throw FormatException("f")
+            } finally {
+                throw InvalidOperationException("g")
+            }
+        } catch (InvalidOperationException) {
+        }
+        if s != nil {
+            action()
+            return s.Length
+        }
+        return 0
+    } catch (FormatException) when flip() {
+        return 1
+    }
+}
+func Main() { Console.WriteLine(Run(() -> { })) }
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
