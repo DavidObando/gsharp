@@ -236,6 +236,7 @@ class ControlFlowGraph {
                         statements.Add(statement)
                     }
                     default {
+                        // Keep the supported kinds in step with (cref:ControlFlowGraph.CanCreate).
                         throw Exception("Unexpected statement: ${statement.Kind}")
                     }
                 }
@@ -525,6 +526,38 @@ class ControlFlowGraph {
     }
 
     shared {
+        /// Whether (cref:Create) can model every top-level statement of [`body`](paramref).
+        /// @remarks (cref:Create) throws (cref:Exception) for a statement kind it has no arm
+        /// for, such as a nested block that was not flattened. Callers that treat that failure
+        /// as "analysis not available" test this first so they do not pay for the throw. Nested
+        /// regions are not inspected; their failures still reach the caller's `catch`.
+        /// @param body The bound block statement.
+        /// @returns `true` when every top-level statement kind has a CFG arm.
+        internal func CanCreate(body BoundBlockStatement) bool {
+            for statement in body.Statements {
+                let kind = statement.Kind
+                let supported = kind == BoundNodeKind.LabelStatement ||
+                    kind == BoundNodeKind.GotoStatement ||
+                    kind == BoundNodeKind.ConditionalGotoStatement ||
+                    kind == BoundNodeKind.ReturnStatement ||
+                    kind == BoundNodeKind.VariableDeclaration ||
+                    kind == BoundNodeKind.LocalFunctionDeclaration ||
+                    kind == BoundNodeKind.ExpressionStatement ||
+                    kind == BoundNodeKind.PatternSwitchStatement ||
+                    kind == BoundNodeKind.FixedStatement ||
+                    kind == BoundNodeKind.ThrowStatement ||
+                    kind == BoundNodeKind.RethrowStatement ||
+                    kind == BoundNodeKind.TryStatement ||
+                    kind == BoundNodeKind.GoStatement ||
+                    kind == BoundNodeKind.AwaitForRangeStatement ||
+                    kind == BoundNodeKind.YieldStatement
+                if !supported {
+                    return false
+                }
+            }
+            return true
+        }
+
         /// Creates a control flow graph from the provided bound block statement.
         /// @param body The bound block statement.
         /// @returns The control flow graph.
