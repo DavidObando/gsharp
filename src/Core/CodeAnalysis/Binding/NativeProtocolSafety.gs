@@ -2,6 +2,7 @@
 
 package GSharp.Core.CodeAnalysis.Binding
 
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
@@ -11,11 +12,71 @@ import System.Linq
 import System.Reflection
 
 internal shared class NativeProtocolSafety {
-    internal func ContainsSavedProtocol(type TypeSymbol) bool ->
-    ContainsDependency(type, true, HashSet[TypeSymbol](), HashSet[System.Type]())
+    // The whole-program safety pass asks the same two questions about the same few
+    // types for every bound expression (issue #5197). Each answer is a finite walk
+    // that depends only on declarations, which are complete by then, so the pass
+    // keeps its answers for the span of one run. Outside a run (binding, emit) the
+    // memo is absent and every query walks, as before. Thread-static, so concurrent
+    // compilations never share it.
+    @ThreadStatic
+    private var memoSaved Dictionary[TypeSymbol, bool]?
 
-    internal func ContainsProtocol(type TypeSymbol) bool ->
-    ContainsDependency(type, false, HashSet[TypeSymbol](), HashSet[System.Type]())
+    @ThreadStatic
+    private var memoAny Dictionary[TypeSymbol, bool]?
+
+    @ThreadStatic
+    private var memoDepth int32
+
+    // Re-entrant: only the outermost Begin installs the memo and only the
+    // matching outermost End drops it, so a nested pass cannot clear the outer
+    // pass's answers. Callers pair them in try/finally.
+    internal func BeginMemo() {
+        if memoDepth == 0 {
+            memoSaved = Dictionary[TypeSymbol, bool]()
+            memoAny = Dictionary[TypeSymbol, bool]()
+        }
+        memoDepth++
+    }
+
+    internal func EndMemo() {
+        if memoDepth > 0 {
+            memoDepth--
+            if memoDepth == 0 {
+                memoSaved = nil
+                memoAny = nil
+            }
+        }
+    }
+
+    internal func ContainsSavedProtocol(type TypeSymbol) bool {
+        let memo = memoSaved
+        if memo == nil {
+            return ContainsDependency(type, true, HashSet[TypeSymbol](), HashSet[System.Type]())
+        }
+        if memo.TryGetValue(type, out var known) {
+            CompilationMeasurements.Count("nativeprotocol.memo-hits")
+            return known
+        }
+        CompilationMeasurements.Count("nativeprotocol.memo-walks")
+        let found = ContainsDependency(type, true, HashSet[TypeSymbol](), HashSet[System.Type]())
+        memo[type] = found
+        return found
+    }
+
+    internal func ContainsProtocol(type TypeSymbol) bool {
+        let memo = memoAny
+        if memo == nil {
+            return ContainsDependency(type, false, HashSet[TypeSymbol](), HashSet[System.Type]())
+        }
+        if memo.TryGetValue(type, out var known) {
+            CompilationMeasurements.Count("nativeprotocol.memo-hits")
+            return known
+        }
+        CompilationMeasurements.Count("nativeprotocol.memo-walks")
+        let found = ContainsDependency(type, false, HashSet[TypeSymbol](), HashSet[System.Type]())
+        memo[type] = found
+        return found
+    }
 
     internal func RequiresFeatureMarker(function FunctionSymbol) bool ->
     RequiresFeatureMarker(function.Type, function.Parameters, function.ReceiverType)

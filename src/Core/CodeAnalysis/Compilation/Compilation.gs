@@ -716,23 +716,31 @@ open class Compilation {
         targetFrameworkMoniker string? = nil,
         embeddedResources IReadOnlyList[(Name string, Data[]uint8, IsPublic bool)]? = nil
     ) {
-        ReflectionMetadataEmitter.Emit(
-            program,
-            peStream,
-            references,
-            assemblyName,
-            metadataOnly,
-            asyncRewriteResult,
-            iteratorRewriteResult,
-            asyncIteratorRewriteResult,
-            debugInformation,
-            pdbStream,
-            assemblyVersion,
-            targetFrameworkMoniker,
-            embeddedResources,
-            Optimize,
-            WorkBudget
-        )
+        // Emit asks the native protocol feature-marker question once per member
+        // and type; declarations are complete here, so answer each type once.
+        // Every Emit overload funnels through this method.
+        NativeProtocolSafety.BeginMemo()
+        try {
+            ReflectionMetadataEmitter.Emit(
+                program,
+                peStream,
+                references,
+                assemblyName,
+                metadataOnly,
+                asyncRewriteResult,
+                iteratorRewriteResult,
+                asyncIteratorRewriteResult,
+                debugInformation,
+                pdbStream,
+                assemblyVersion,
+                targetFrameworkMoniker,
+                embeddedResources,
+                Optimize,
+                WorkBudget
+            )
+        } finally {
+            NativeProtocolSafety.EndMemo()
+        }
     }
 
     private func CreateEmitResult(success bool, diagnostics ImmutableArray[Diagnostic]) EmitResult -> EmitResult(
