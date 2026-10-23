@@ -11,6 +11,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Tests
 import System
 import System.Collections.Generic
+import System.IO
 import System.Linq
 import Xunit
 
@@ -155,6 +156,62 @@ func Run() int32 {
     return s.Length
 }`)
         Assert.Equal([]string{"6|s|string?|string|nullability"}, Rows(lines, "R"))
+    }
+
+    @Fact
+    func AReadIsReportedWhenTheFrameFactIsOlderThanTheShadowFact() {
+        // The nil guard leaves `x -> Animal` in the frames. The type test then
+        // proves `Dog` in the shadow flow only. The read is reported although a
+        // frame fact exists, and the empty block and the empty `if` that follow
+        // do not erase the newer `Dog` fact.
+        let lines = Capture(`package T
+open class Animal { prop Name string -> "animal" }
+class Dog : Animal { prop Name string -> "dog" }
+func Run(x Animal?, c bool) string {
+    if x == nil { return "" }
+    if x is Dog { } else { return "" }
+    { }
+    if c { } else { }
+    return x.Name
+}`)
+        Assert.Equal([]string{"9|x|Animal?|Dog|type-test"}, Rows(lines, "R"))
+    }
+
+    @Fact
+    func AFailedGuardThatWritesTheRoot_KeepsTheNoArmPathHonest() {
+        // Probe g3: `Clear(ref s)` stores nil and returns false, so the path where
+        // no arm matched has no fact on `s`. The shadow must not report a gain.
+        let lines = Capture(`package T
+func Get() string? { return "a" }
+func Clear(ref s string?) bool {
+    s = nil
+    return false
+}
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    switch 1 {
+        case 1 when Clear(ref s) { return 0 }
+    }
+    return s.Length
+}`)
+        Assert.Empty(Rows(lines, "J"))
+        Assert.Empty(Rows(lines, "R"))
+    }
+
+    @Fact
+    func ACleanRunStillWritesEmptyReports() {
+        let path = Path.Combine(Path.GetTempPath(), "gs_adr0208_" + Guid.NewGuid().ToString("N"))
+        try {
+            File.WriteAllText(path, "stale")
+            File.WriteAllText(path + ".reads", "stale")
+            NarrowingComparison.FlushTo(path)
+            Assert.Equal("", File.ReadAllText(path))
+            Assert.Equal("", File.ReadAllText(path + ".reads"))
+        } finally {
+            File.Delete(path)
+            File.Delete(path + ".reads")
+        }
     }
 
     @Fact

@@ -103,9 +103,70 @@ open class Adr0208NarrowingCorpusTests {
     /// The corpus must keep one row for each probe of the ADR table.
     @Fact
     func Corpus_HasOneRowPerProbe() {
-        let names = Rows().Select((row[]object) -> cast[string](row[0])).ToArray()
+        let names = Rows()
+            .Select((row[]object) -> cast[string](row[0]))
+            .OrderBy((n string) -> n, StringComparer.Ordinal)
+            .ToArray()
         Assert.Equal(names.Length, names.Distinct().Count())
-        Assert.Equal(52, names.Length)
+        Assert.Equal(
+            []string{
+                "c1_catch_return_finally",
+                "c3a_goto_inside",
+                "c3b_goto_cycle",
+                "c5_alias_reassigned_in_loop",
+                "c6_callable_argument",
+                "c7_ref_param_callback",
+                "c8_member_hiding_loop",
+                "c8b_member_hiding_loop_ctor",
+                "cA_filter_write",
+                "cB_local_function_captures",
+                "cC_finally_restores_on_jump",
+                "d1_enclosing_filter_before_finally",
+                "d1b_enclosing_filter_order",
+                "d2_shadowed_type_name",
+                "d3_global_written_by_callee",
+                "d3b_global_straight_line",
+                "d4_ref_local_alias",
+                "d4b_ref_local_straight_line",
+                "d5_strengthened_fact_join",
+                "d6_nonCompleting_finally",
+                "e10_nested_block_lift",
+                "e11_bang_narrows",
+                "e12_loop_in_if_branch",
+                "e13_loop_while_cond",
+                "e14_closure_var",
+                "e15_backward_goto",
+                "e16_shadow_in_loop",
+                "e17_assign_in_exiting_branch",
+                "e18_backward_goto_nowrite",
+                "e19_try_in_branch_and_finally",
+                "e1_ifjoin",
+                "e20_global_let_narrows",
+                "e21_predicate_memberpath_lift",
+                "e2_loop_exitwrite",
+                "e2b_loop_read_before_exitwrite",
+                "e3_loop_nonnull_reassign",
+                "e4_loop_nullable_reassign",
+                "e5_goto_disables_join",
+                "e6_catch_sees_pretry",
+                "e7_memberpath_earlyexit",
+                "e8_else_exit",
+                "e9_switch_assign_join",
+                "f1_dog_cat_join",
+                "f2_ref_element_alias",
+                "f3_replacement_exception_filter",
+                "f4_nullable_construction_boxes_nil",
+                "f5_iterator_assigns_global",
+                "f6_else_exit_hidden_member",
+                "g1_three_predecessor_goto",
+                "g2_ref_param_aliases_element",
+                "g3_switch_failed_guard",
+                "g4_overload_ambiguity_after_join",
+                "g5_yield_after_guard",
+                "out-alias_out_ref_alias"
+            },
+            names
+        )
     }
 
     shared {
@@ -402,6 +463,24 @@ func Run(x Animal?) string {
     return ""
 }
 func Main() { Console.WriteLine(Run(Dog())) }`, "", "run", "a", ""}
+            yield[]object{"d6_nonCompleting_finally", `func Run() int32 {
+    var x string? = nil
+    x = "safe"
+    goto After
+Enter:
+    x = nil
+    goto Use
+After:
+    try {
+        goto Enter
+    }
+    finally {
+        return 4
+    }
+Use:
+    return x.Length
+}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "4", ""}
             yield[]object{"e10_nested_block_lift", `func Get() string? { return nil }
 func Run() int32 {
     var s string? = Get()
@@ -845,6 +924,21 @@ func Main() {
         Console.WriteLine(item)
     }
 }`, "", "run", "0|1", "R13 (GS0158 after)"}
+            yield[]object{"out-alias_out_ref_alias", `class C { func M() { } }
+func Run(out c C?, ref alias C?) {
+    c = C()
+    if c != nil {
+        for var i = 0; i < 2; i++ {
+            c.M()
+            c = C()
+            alias = nil
+        }
+    }
+}
+func Main() {
+    var x C? = nil
+    Run(out x, ref x)
+}`, "GS0159@6:15", "reject", "", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

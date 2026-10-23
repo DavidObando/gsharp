@@ -32,7 +32,6 @@ internal shared class NarrowingComparison {
     private let readLines List[string] = List[string]()
     private let environmentPath string? = ReadEnvironment()
     private let capture AsyncLocal[List[string]?] = AsyncLocal[List[string]?]()
-    private var exitHooked bool
 
     /// Whether the binder should compute the shadow flow.
     prop Enabled bool -> environmentPath != nil || capture.Value != nil
@@ -102,21 +101,23 @@ internal shared class NarrowingComparison {
             } else {
                 joinLines.Add(line)
             }
-            if !exitHooked {
-                exitHooked = true
-                AppDomain.CurrentDomain.ProcessExit += (sender object?, args EventArgs) -> Flush()
-            }
         }
     }
 
     /// Writes the report files. The compiler calls this at process exit.
     func Flush() {
+        let path = environmentPath
+        if path != nil {
+            FlushTo(path)
+        }
+    }
+
+    /// Writes both reports to [`path`](paramref) and `path.reads`. A run with no
+    /// difference writes empty files, so a report of an earlier run cannot remain.
+    func FlushTo(path string) {
         lock gate {
-            if environmentPath == nil {
-                return
-            }
-            WriteSorted(environmentPath!!, joinLines)
-            WriteSorted(environmentPath!!+ ".reads", readLines)
+            WriteSorted(path, joinLines)
+            WriteSorted(path + ".reads", readLines)
         }
     }
 
@@ -130,10 +131,11 @@ internal shared class NarrowingComparison {
 
     private func ReadEnvironment() string? {
         let value = Environment.GetEnvironmentVariable("GSHARP_NARROWING_COMPARE")
-        return if string.IsNullOrWhiteSpace(value) {
-            default(string?)
-        } else {
-            value
+        if string.IsNullOrWhiteSpace(value) {
+            return nil
         }
+        // The hook is set when comparison is enabled, so a clean run also writes its reports.
+        AppDomain.CurrentDomain.ProcessExit += (sender object?, args EventArgs) -> Flush()
+        return value
     }
 }

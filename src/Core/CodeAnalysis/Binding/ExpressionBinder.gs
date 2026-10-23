@@ -902,11 +902,8 @@ internal partial class ExpressionBinder {
         declaredType TypeSymbol,
         location TextLocation?
     ) {
-        if frameAnswer != nil {
-            return
-        }
-        let shadowType = binderCtx.ShadowOverlay.NarrowedType(path)
-        if shadowType != nil {
+        let shadowType = binderCtx.ShadowEffectiveType(path, frameAnswer)
+        if shadowType != nil && !object.Equals(shadowType, frameAnswer) {
             NarrowingComparison.ReportRead(location, path, declaredType, shadowType)
         }
     }

@@ -41,6 +41,13 @@ internal partial class StatementBinder {
             Exits = List[NarrowingState]()
             Lost = List[AccessPath]()
             AssignedByExiting = HashSet[VariableSymbol]()
+            Dispatch = StatementEffects.Empty
+        }
+
+        // The effects of the guards that ran before the "no arm matched" path.
+        prop Dispatch StatementEffects {
+            get;
+            set;
         }
 
         prop Entry NarrowingState {
@@ -106,9 +113,10 @@ internal partial class StatementBinder {
     private func ShadowSnapshot() NarrowingState {
         var state = ShadowFrames()
         for path in binderCtx.ShadowOverlay.Paths {
-            // A frame fact is newer than an overlay fact, so the frame wins.
-            if state.NarrowedType(path) == nil {
-                state = state.With(path, binderCtx.ShadowOverlay.NarrowedType(path)!!)
+            // The newer of the frame fact and the overlay fact wins.
+            let effective = binderCtx.ShadowEffectiveType(path, state.NarrowedType(path))
+            if effective != nil {
+                state = state.With(path, effective)
             }
         }
         return state
@@ -119,11 +127,12 @@ internal partial class StatementBinder {
 
     /// Records the exit state of a statement list and restores the overlay of
     /// the enclosing list. `BindBlockStatements` calls this before it pops its frame.
-    private func ShadowLeaveList(savedOverlay NarrowingState) {
+    private func ShadowLeaveList(savedOverlay NarrowingState, savedBase NarrowingState) {
         if NarrowingComparison.Enabled {
             shadowListExit = ShadowSnapshot()
         }
         binderCtx.ShadowOverlay = savedOverlay
+        binderCtx.ShadowOverlayBase = savedBase
     }
 
     /// Records the exit state of a bound block. A bare block statement also
@@ -208,6 +217,16 @@ internal partial class StatementBinder {
         }
     }
 
+    /// Adds the effects of a `switch` arm guard to the dispatch state.
+    private func ShadowAddGuard(flow ShadowFlow?, guard_ BoundExpression?) {
+        if flow == nil || guard_ == nil {
+            return
+        }
+        let collector = AssignedRootsCollector(nil, externalCallableAliases)
+        collector.VisitExpression(guard_)
+        flow.Dispatch = flow.Dispatch.Union(ShadowSnapshotEffects(collector, flow.Entry))
+    }
+
     /// Finishes a merge point and parks the shadow state on the bound statement.
     /// [`reachesWithoutArm`](paramref) adds the entry state as one more
     /// predecessor, for a `switch` that no arm may match.
@@ -223,7 +242,10 @@ internal partial class StatementBinder {
             return
         }
         if reachesWithoutArm {
-            flow.Exits.Add(flow.Entry)
+            // A guard that fails has run: its writes and calls reach the path where no arm matches.
+            flow.Exits.Add(
+                flow.Entry.Kill(flow.Dispatch, (root VariableSymbol) -> binderCtx.MayBeAssignedByClosure(root))
+            )
         }
         let result = NarrowingState.Join(flow.Exits)
         let record = ShadowJoin(kind, ShadowLocation(location), flow, result, approximate)
@@ -420,13 +442,19 @@ internal partial class StatementBinder {
         }
         // Past this statement, the shadow facts that the frames lack form the overlay.
         var next = NarrowingState.Empty
+        var nextBase = NarrowingState.Empty
         for path in join.Result.Paths {
             let proven = join.Result.NarrowedType(path)!!
-            if !object.Equals(old.NarrowedType(path), proven) {
+            let frameType = old.NarrowedType(path)
+            if !object.Equals(frameType, proven) {
                 next = next.With(path, proven)
+                if frameType != nil {
+                    nextBase = nextBase.With(path, frameType)
+                }
             }
         }
         binderCtx.ShadowOverlay = next
+        binderCtx.ShadowOverlayBase = nextBase
     }
 
     private func ShadowText(type TypeSymbol?) string -> if type == nil {

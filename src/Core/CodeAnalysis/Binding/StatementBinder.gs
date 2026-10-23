@@ -466,6 +466,7 @@ internal partial class StatementBinder {
         binderCtx.BeginNarrowingProof(memberNotNullFrame)
         binderCtx.NarrowedVariables.Add(memberNotNullFrame)
         let shadowSavedOverlay = ShadowEnterList()
+        let shadowSavedBase = binderCtx.ShadowOverlayBase
         try {
             for var i = startIndex; i < statementSyntaxes.Length; i++ {
                 let statementSyntax = statementSyntaxes[i]
@@ -754,7 +755,7 @@ internal partial class StatementBinder {
             }
             return currentStatementListFallsThrough
         } finally {
-            ShadowLeaveList(shadowSavedOverlay)
+            ShadowLeaveList(shadowSavedOverlay, shadowSavedBase)
             binderCtx.EndNarrowingProof()
             binderCtx.AssignmentNarrowingGenerations.Clear()
             for entry in inheritedAssignmentGenerations {

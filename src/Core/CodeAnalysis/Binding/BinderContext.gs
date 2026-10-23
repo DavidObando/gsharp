@@ -343,6 +343,29 @@ internal class BinderContext {
     /// (ADR-0208 section 19, PR 1). Only the comparison mode reads or writes it.
     internal var ShadowOverlay NarrowingState = NarrowingState.Empty
 
+    /// Gets or sets, for each overlay path, the frame type at the time the overlay
+    /// fact was made. A frame fact that differs from it is newer than the overlay fact.
+    internal var ShadowOverlayBase NarrowingState = NarrowingState.Empty
+
+    /// Returns the type that the shadow flow gives a read of [`path`](paramref),
+    /// where [`frameType`](paramref) is the frame answer. The newer of the frame
+    /// fact and the overlay fact wins.
+    internal func ShadowEffectiveType(path AccessPath, frameType TypeSymbol?) TypeSymbol? {
+        let overlayType = ShadowOverlay.NarrowedType(path)
+        if overlayType == nil {
+            return frameType
+        }
+        if frameType == nil {
+            return overlayType
+        }
+        let baseType = ShadowOverlayBase.NarrowedType(path)
+        return if baseType != nil && object.Equals(baseType, frameType) {
+            overlayType
+        } else {
+            frameType
+        }
+    }
+
     internal prop Narrowing NarrowingState -> NarrowingState.FromFrames(
         NarrowedVariables,
         ImmutableArray[VariableSymbol].Empty

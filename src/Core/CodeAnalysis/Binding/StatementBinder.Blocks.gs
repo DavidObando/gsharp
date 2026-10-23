@@ -160,6 +160,7 @@ internal partial class StatementBinder {
                         frame
                     )
                     callableEntry.ExceptWith(ApplyHeaderCallableEffects(guard_) ?? HashSet[VariableSymbol]())
+                    ShadowAddGuard(shadowFlow, guard_)
                 }
                 // ADR-0166: the arm body runs only when the guard was true, so the
                 // guard's when-true pattern variables (`when x.Tag is string tag`)
