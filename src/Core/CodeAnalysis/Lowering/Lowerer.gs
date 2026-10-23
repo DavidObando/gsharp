@@ -1589,9 +1589,17 @@ class Lowerer : BoundTreeRewriter {
         /// `Enumerator` generic over the collection's own type parameters, and
         /// that enumerator yields the same elements as the `IEnumerable<T>`
         /// implementation. Any other collection keeps the interface route.
+        ///
+        /// Issue #5151: `Span<T>` and `ReadOnlySpan<T>` are admitted too. They
+        /// are by-ref-like, so they have no interface route, and the closed
+        /// erased fallback would type their enumerator as
+        /// `Span<object>.Enumerator`. Other by-ref-like collections keep the
+        /// closed route: their enumerator shape is not known.
         private func IsStructEnumeratorCollection(openDef Type) bool {
             let fullName = openDef.FullName
-            return fullName == "System.Collections.Generic.List`1" ||
+            return fullName == "System.Span`1" ||
+                fullName == "System.ReadOnlySpan`1" ||
+                fullName == "System.Collections.Generic.List`1" ||
                 fullName == "System.Collections.Generic.Dictionary`2" ||
                 fullName == "System.Collections.Generic.HashSet`1" ||
                 fullName == "System.Collections.Immutable.ImmutableArray`1"
@@ -1616,13 +1624,7 @@ class Lowerer : BoundTreeRewriter {
             if erasedCollection == nil || !IsStructEnumeratorCollection(openDef) {
                 return false
             }
-            let getEnumerator MethodInfo? = erasedCollection.GetMethod(
-                "GetEnumerator",
-                BindingFlags.Instance | BindingFlags.Public,
-                binder: nil,
-                types: Type.EmptyTypes,
-                modifiers: nil
-            )
+            let getEnumerator MethodInfo? = MemberLookup.ResolveGetEnumerator(erasedCollection, out _)
             if getEnumerator == nil {
                 return false
             }
