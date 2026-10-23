@@ -358,6 +358,37 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
+            // A replacement exception reaches the first clause after the filter of the second clause ran.
+            yield[]object{"earlier-clause-after-later-filter", `
+package P
+import System
+
+func Get() string? { return "a" }
+func Clear(ref s string?) bool {
+    s = nil
+    return false
+}
+func Boom() {
+    try {
+        throw FormatException("f")
+    } finally {
+        throw InvalidOperationException("g")
+    }
+}
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    try {
+        Boom()
+    } catch (InvalidOperationException) {
+        return s.Length
+    } catch (FormatException) when Clear(ref s) {
+        return 0
+    }
+    return 2
+}
+func Main() { Console.WriteLine(Run()) }
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
@@ -375,7 +406,7 @@ func Run() int32 {
     if s == nil { return 0 }
     try {
         throw Exception("x")
-    } catch when Check(s.Length) {
+    } catch when Check(2) {
         return 1
     } catch {
         return s.Length

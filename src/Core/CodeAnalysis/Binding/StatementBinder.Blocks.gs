@@ -414,12 +414,19 @@ internal partial class StatementBinder {
         return BoundTryStatement(syntax, tryBlock, catches.ToImmutable(), finallyBlock)
     }
 
-    /// ADR-0208 R10 (#5168): the `when` filters of every enclosing `try` whose protected
-    /// block contains [`syntax`](paramref). The CLR runs those filters in the first pass,
+    /// ADR-0208 R10 (#5168): the `when` filters of [`syntax`](paramref) and of every enclosing `try`
+    /// whose protected block contains it. The CLR runs those filters in the first pass,
     /// before this `try` runs a `finally` block, and a replacement exception can reach a
     /// handler of this `try` after them.
     private func CollectEnclosingCatchFilters(syntax TryStatementSyntax) List[ExpressionSyntax] {
         let filters = List[ExpressionSyntax]()
+        // A replacement exception from a nested finally reaches an earlier clause of this try after
+        // the filter of a later clause has run for the original exception.
+        for clause in syntax.CatchClauses {
+            if clause.Filter != nil {
+                filters.Add(clause.Filter)
+            }
+        }
         var child SyntaxNode = syntax
         var parent = syntax.Parent
         while parent != nil {
