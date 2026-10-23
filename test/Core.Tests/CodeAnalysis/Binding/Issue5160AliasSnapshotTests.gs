@@ -66,6 +66,19 @@ class Issue5160AliasSnapshotTests {
     }
 
     @Fact
+    func ChangedOwnAliases_RepublishAndKeepEarlierSnapshotsIntact() {
+        let types = DeclareTypes(3)
+        let single = BoundScope(nil)
+        Assert.True(single.TryDeclareTypeAlias(types[0].Name, types[0]))
+        let before = single.GetDeclaredStructs()
+        Assert.True(single.TryDeclareTypeAlias(types[1].Name, types[1]))
+        let after = single.GetDeclaredStructs()
+        Assert.Equal(1, before.Length)
+        Assert.Equal(2, after.Length)
+        Assert.True(after.Equals(single.GetDeclaredStructs()))
+    }
+
+    @Fact
     func ChangedAliases_RepublishAndKeepEarlierSnapshotsIntact() {
         let types = DeclareTypes(3)
         let parent = BoundScope(nil)
