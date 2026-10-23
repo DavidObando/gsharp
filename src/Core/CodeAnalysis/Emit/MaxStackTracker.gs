@@ -4,6 +4,7 @@
 
 package GSharp.Core.CodeAnalysis.Emit
 
+import GSharp.Core.CodeAnalysis.Compilation
 import System
 import System.Collections.Generic
 import System.Reflection.Emit
@@ -71,14 +72,122 @@ internal shared class MaxStackTracker {
     // byte 0xFE-prefixed opcodes keyed as unchecked((short)(0xFE00 | second))).
     private let Table Dictionary[int16, OpCodeInfo] = BuildTable()
 
+    private const UnknownOperand int32 = -1
+    private const SwitchOperand int32 = -2
+
+    // Flat copies of `Table`: index 0..255 is a one-byte opcode, 256..511 is
+    // the second byte of a 0xFE-prefixed opcode. Built once, read-only after.
+    private let FlatOperand[]int32 = BuildFlatOperand(Table)
+    private let FlatPush[]int32 = BuildFlatPush(Table)
+
     /// Computes a valid `.maxstack` upper bound for the body currently
     /// accumulated in [`il`](paramref).
     /// @param il The instruction encoder holding the emitted IL.
     /// @returns The maximum evaluation-stack depth to declare, clamped to the
     /// (cref:ushort) range permitted by the metadata format.
     func ComputeMaxStack(il InstructionEncoder) int32 {
-        let code = il.CodeBuilder.ToArray()
-        return ComputeMaxStack(code)
+        CompilationMeasurements.Count("emit.maxstack.streamed")
+        return ComputeMaxStack(il.CodeBuilder)
+    }
+
+    // Decoder states for the chunk-by-chunk scan. An instruction can straddle
+    // two blob chunks, so the scan keeps its position inside the instruction
+    // between chunks instead of copying the stream into one array.
+    private const StateOpcode int32 = 0
+    private const StateSecondByte int32 = 1
+    private const StateOperand int32 = 2
+    private const StateSwitchCount int32 = 3
+    private const StateDone int32 = 4
+
+    /// Computes the same value as (cref:ComputeMaxStack(byte[])) by reading the
+    /// builder's chunks in place. The result is the sum of per-opcode push
+    /// counts, so it does not depend on chunk boundaries or on control flow.
+    /// @param code The builder holding the serialized IL instruction stream.
+    /// @returns The maximum evaluation-stack depth to declare.
+    func ComputeMaxStack(code BlobBuilder) int32 {
+        var pushes int64 = 0
+        var state = StateOpcode
+        var skip int64 = 0
+        var switchCount uint32 = 0
+        var switchBytes int32 = 0
+        for blob in code.GetBlobs() {
+            let segment = blob.GetBytes()
+            let bytes = segment.Array
+            if bytes == nil {
+                continue
+            }
+            var pos = segment.Offset
+            let end = segment.Offset + segment.Count
+            while pos < end && state != StateDone {
+                if state == StateOperand {
+                    let available = int64(end - pos)
+                    if skip >= available {
+                        skip -= available
+                        pos = end
+                    } else {
+                        pos += int32(skip)
+                        skip = 0
+                    }
+                    if skip == 0 {
+                        state = StateOpcode
+                    }
+                    continue
+                }
+                if state == StateSwitchCount {
+                    switchCount |= uint32(bytes[pos]) << (switchBytes * 8)
+                    switchBytes++
+                    pos++
+                    if switchBytes == 4 {
+                        skip = int64(checked(int32((switchCount * uint32(4)))))
+                        state = if skip == 0 {
+                            StateOpcode
+                        } else {
+                            StateOperand
+                        }
+                    }
+                    continue
+                }
+                var index int32
+                if state == StateSecondByte {
+                    index = 256 + int32(bytes[pos])
+                } else {
+                    index = int32(bytes[pos])
+                    if index == 0xFE {
+                        // A 0xFE prefix needs its second byte; the byte may be in the next chunk.
+                        state = StateSecondByte
+                        pos++
+                        continue
+                    }
+                }
+                pos++
+                state = StateOpcode
+                let operand = FlatOperand[index]
+                if operand == UnknownOperand {
+                    // Unknown/unsupported opcode: same conservative fallback as the array scan.
+                    pushes += int64(1)
+                    skip = 1
+                    state = StateOperand
+                    continue
+                }
+                pushes += int64(FlatPush[index])
+                if operand == SwitchOperand {
+                    switchCount = 0
+                    switchBytes = 0
+                    state = StateSwitchCount
+                } else if operand > 0 {
+                    skip = int64(operand)
+                    state = StateOperand
+                }
+            }
+        }
+        if state == StateSecondByte {
+            // A trailing 0xFE is decoded as the one-byte prefix opcode.
+            pushes += int64(FlatPush[0xFE])
+        }
+        if pushes > int64(uint16.MaxValue) {
+            return uint16.MaxValue
+        }
+        return int32(pushes)
     }
 
     /// Computes a valid `.maxstack` upper bound for the raw IL byte
@@ -125,6 +234,36 @@ internal shared class MaxStackTracker {
             return uint16.MaxValue
         }
         return int32(pushes)
+    }
+
+    private func FlatIndex(key int16) int32 -> if key >= 0 && key < 256 {
+        int32(key)
+    } else {
+        256 + (int32(key) & 0xFF)
+    }
+
+    private func BuildFlatOperand(table Dictionary[int16, OpCodeInfo])[]int32 {
+        let flat = GC.AllocateArray[int32](512)
+        for var i = 0; i < flat.Length; i++ {
+            flat[i] = UnknownOperand
+        }
+        for pair in table {
+            let info = pair.Value
+            flat[FlatIndex(pair.Key)] = if info.IsSwitch {
+                SwitchOperand
+            } else {
+                info.OperandSize
+            }
+        }
+        return flat
+    }
+
+    private func BuildFlatPush(table Dictionary[int16, OpCodeInfo])[]int32 {
+        let flat = GC.AllocateArray[int32](512)
+        for pair in table {
+            flat[FlatIndex(pair.Key)] = pair.Value.Push
+        }
+        return flat
     }
 
     private func BuildTable() Dictionary[int16, OpCodeInfo] {

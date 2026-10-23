@@ -247,7 +247,7 @@ internal class ConstructorBodyEmitter {
     /// @returns The resulting method body offset.
     private func EmitStaticConstructorBodyFromBlock(body BoundBlockStatement, anchor SyntaxNode) int32 {
         let il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
-        let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il)
+        using let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il, pooled: true)
         session.Plan(body)
         let localsSignature = session.BuildLocalsSignature()
         let emitter = session.CreateEmitter(Dictionary[ParameterSymbol, int32]())
@@ -283,7 +283,7 @@ internal class ConstructorBodyEmitter {
         }
         let body = Lowerer.Lower(BoundBlockStatement(nil, statements), classSym)
         let il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
-        let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il)
+        using let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il, pooled: true)
         session.Plan(body)
         let parameters = Dictionary[ParameterSymbol, int32]{[thisParam] = 0}
         let localsSignature = session.BuildLocalsSignature()
@@ -319,7 +319,7 @@ internal class ConstructorBodyEmitter {
         let statements = BuildInstanceFieldInitializerStatements(classSym, thisParam)
         let body = Lowerer.Lower(BoundBlockStatement(nil, statements), classSym)
         let il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
-        let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il)
+        using let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il, pooled: true)
         session.Plan(body)
         let paramSlots = Dictionary[ParameterSymbol, int32]{[thisParam] = 0}
         for var i = 0; i < parameters.Length; i++ {
@@ -408,7 +408,7 @@ internal class ConstructorBodyEmitter {
         )
         let body = BoundBlockStatement(nil, statements)
         let il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
-        let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il)
+        using let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il, pooled: true)
         session.Plan(body)
         let parameters = Dictionary[ParameterSymbol, int32]{[thisParam] = 0}
         let localsSignature = session.BuildLocalsSignature()
@@ -456,7 +456,7 @@ internal class ConstructorBodyEmitter {
             structSym
         )
         let il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
-        let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il)
+        using let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il, pooled: true)
         session.Plan(body)
         let parameterSlots = Dictionary[ParameterSymbol, int32]{[thisParam] = 0}
         for var i = 0; i < parameters.Length; i++ {
@@ -503,7 +503,7 @@ internal class ConstructorBodyEmitter {
         let il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
         // Synthesize a `this` parameter for the field-initializer receiver.
         let thisParam = ParameterSymbol("this", classSym)
-        let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il)
+        using let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il, pooled: true)
         // Pre-scan the base arguments so any scratch slots they require are
         // allocated and registered in the locals signature.
         if !init.Arguments.IsDefaultOrEmpty {
@@ -597,7 +597,7 @@ internal class ConstructorBodyEmitter {
         let function = ctor.Function
         let body = this.emitCtx.Program.Functions[function]
         let il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
-        let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il)
+        using let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il, pooled: true)
         // Pre-scan the base arguments so any scratch slots they require are
         // allocated and registered in the locals signature. ADR-0065 §2:
         // convenience inits skip the base-call emission so their `init`
@@ -717,7 +717,7 @@ internal class ConstructorBodyEmitter {
             return false
         }
         let il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
-        let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il)
+        using let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il, pooled: true)
         session.CollectConstValues(plan.Prologue)
         session.CollectConstValues(plan.Body)
         session.Plan(plan.Prologue, plan.Function)
@@ -806,7 +806,7 @@ internal class ConstructorBodyEmitter {
     ) int32 {
         let function = deinit.Function
         let il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
-        let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il)
+        using let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il, pooled: true)
         session.CollectConstValues(body)
         session.Plan(body, function)
         // Slot 0 is the implicit `this`; deinit has no user parameters.
