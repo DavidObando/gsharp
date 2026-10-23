@@ -1,12 +1,15 @@
 ---
 name: blazing-fast-dotnet
-description: High-performance .NET guidance for writing and tuning C# apps and benchmarks (BenchmarkDotNet, ASP.NET, challenges). Use when asked to make .NET code faster, reduce allocations or GC overhead, fix lock contention or thread pool starvation, inspect JIT codegen, profile apps, or tune runtime/NativeAOT settings.
+description: High-performance .NET guidance for writing and tuning G# apps and benchmarks (BenchmarkDotNet, ASP.NET, challenges). Use when asked to make .NET code faster, reduce allocations or GC overhead, fix lock contention or thread pool starvation, inspect JIT codegen, profile apps, or tune runtime/NativeAOT settings.
 ---
 
 # Blazing Fast .NET Performance
 
 > [!WARNING]
 > Much of the advice here might not age well: as .NET evolves, old hacks and custom knobs may become obsolete or even detrimental. Apply only after careful consideration and testing. Revisit periodically to ensure continued relevance.
+
+> [!NOTE]
+> Adapted from [EgorBo/BlazingFastDotnet](https://github.com/EgorBo/BlazingFastDotnet) (upstream `SKILL.md`; the upstream repository has no license file), with the C# snippets ported to G#. Every G# snippet below was compiled with Gsharp.NET.Sdk 0.5.212 on net10.0, and the runnable ones were run. Where G# has no spelling yet, the text says so and links the tracking issue. The tables, shell blocks and MSBuild settings are unchanged from upstream.
 
 This skill focuses on optimizing .NET applications for maximum performance, providing tips, techniques, and best practices to achieve blazing-fast execution times. It targets .NET 10.0 and 11.0. Older versions have not been tested.
 
@@ -20,7 +23,7 @@ This skill focuses on optimizing .NET applications for maximum performance, prov
   - [Low-level profiling with Linux `perf`](#low-level-profiling-with-linux-perf)
   - [Popular low-level problems](#popular-low-level-problems)
   - [Inspecting JIT codegen](#inspecting-jit-codegen)
-- [Best practices for high-performance C# code](#best-practices-for-high-performance-c-code)
+- [Best practices for high-performance G# code](#best-practices-for-high-performance-g-code)
   - [Quick tips](#quick-tips)
   - [Safe vectorization (SIMD or SWAR)](#safe-vectorization-simd-or-swar)
   - [Strings and globalization](#strings-and-globalization)
@@ -176,91 +179,109 @@ DOTNET_JitDisasmDiffable=1         # stable output (no addresses) for before/aft
 - BCL methods precompiled with ReadyToRun show up only once they get hot and are re-jitted at Tier1.
 - NativeAOT: pass the same options to ILC, e.g. `<IlcArg Include="--codegenopt:JitDisasm=Test" />` and `<IlcArg Include="--codegenopt:JitStdOutFile=jit.txt" />`.
 
-# Best practices for high-performance C# code
+# Best practices for high-performance G# code
 
 > [!IMPORTANT]
-> Only safe C# code is considered in these best practices. Unsafe code is highly discouraged and not covered here.
+> Only safe G# code is considered in these best practices. Unsafe code is highly discouraged and not covered here.
 
 ## Quick tips
 
-- Use [source-generated System.Text.Json](https://learn.microsoft.com/dotnet/standard/serialization/system-text-json/source-generation): pass generated `JsonTypeInfo<T>` to avoid reflection-based metadata discovery and enable supported serialization fast paths. Preserve existing serialization options and behavior.
-- Use [`[LoggerMessage]`](https://learn.microsoft.com/dotnet/core/extensions/logging/source-generation) source-generated logging to avoid template parsing, boxing, and temporary allocations. Still guard expensive argument computation with `IsEnabled`.
-- Use [`[GeneratedRegex]`](https://learn.microsoft.com/dotnet/standard/base-types/regular-expression-source-generators) for compile-time-known patterns instead of runtime pattern compilation. Preserve options, culture, and match timeouts.
+- Use [source-generated System.Text.Json](https://learn.microsoft.com/dotnet/standard/serialization/system-text-json/source-generation): pass generated `JsonTypeInfo[T]` to avoid reflection-based metadata discovery and enable supported serialization fast paths. Preserve existing serialization options and behavior. G# note: a `@JsonSerializable` context does not build in a G# project yet ([#5217](https://github.com/DavidObando/gsharp/issues/5217)), so this tip applies only where a C# project supplies the context.
+- Use [`@LoggerMessage`](https://learn.microsoft.com/dotnet/core/extensions/logging/source-generation) source-generated logging to avoid template parsing, boxing, and temporary allocations. Still guard expensive argument computation with `IsEnabled`.
+- Use [`@GeneratedRegex`](https://learn.microsoft.com/dotnet/standard/base-types/regular-expression-source-generators) for compile-time-known patterns instead of runtime pattern compilation. Preserve options, culture, and match timeouts.
+- In G#, both generators pair with a body-less `partial func` declared in a `shared` block (a static partial method):
+
+```gsharp
+partial class Patterns {
+    shared {
+        @GeneratedRegex("\\d+")
+        public partial func Digits() Regex;
+    }
+}
+
+partial class Log {
+    shared {
+        @LoggerMessage(EventId: 1, Level: LogLevel.Information, Message: "Hello {Name}")
+        public partial func Hello(logger ILogger, name string);
+    }
+}
+```
+
 - Prefer optimized bulk APIs over handwritten loops: `Span.CopyTo`, `Clear`, `Fill`, `SequenceEqual`, and `IndexOf` already have specialized implementations, including SIMD where appropriate.
-- Prefer static lambdas and state-passing overloads in hot paths to avoid capturing closures.
-- Parse and format UTF-8 directly: numeric `TryParse(ReadOnlySpan<byte>, ...)` and `TryFormat(Span<byte>, ...)` avoid intermediate strings and UTF-8/UTF-16 transcoding. Preserve culture and formatting semantics.
-- Cache `SearchValues<char>` / `SearchValues<byte>` for repeated searches against fixed sets; use `SearchValues<string>` for multi-substring searches. Construction has a cost, so do not create these per call.
+- Prefer state-passing overloads in hot paths to avoid capturing closures. C# also offers `static` lambdas to forbid captures; G# has no spelling for them yet ([#5218](https://github.com/DavidObando/gsharp/issues/5218)).
+- Parse and format UTF-8 directly: numeric `TryParse(ReadOnlySpan[uint8], ...)` and `TryFormat(Span[uint8], ...)` avoid intermediate strings and UTF-8/UTF-16 transcoding. Preserve culture and formatting semantics.
+- Cache `SearchValues[char]` / `SearchValues[uint8]` for repeated searches against fixed sets; use `SearchValues[string]` for multi-substring searches. Construction has a cost, so do not create these per call.
 - Consider `FrozenDictionary` / `FrozenSet` for build-once, read-many data. Their construction cost must be amortized over enough lookups; preserve the intended comparer.
-- Use dictionary alternate lookups from spans: `dictionary.GetAlternateLookup<ReadOnlySpan<char>>()` avoids allocating temporary string keys when the comparer supports it. Use `TryGetAlternateLookup` when comparer support is not known.
-- Implement `IEquatable<T>` and a good `GetHashCode` for struct dictionary/set keys. This can avoid expensive default equality paths, boxing, and collision-heavy hashes.
+- Use dictionary alternate lookups from spans: the C# call `dictionary.GetAlternateLookup<ReadOnlySpan<char>>()` avoids allocating temporary string keys when the comparer supports it. Use `TryGetAlternateLookup` when comparer support is not known. G# cannot call these yet: `dictionary.GetAlternateLookup[ReadOnlySpan[char]]()` fails with GS0159 ([#5216](https://github.com/DavidObando/gsharp/issues/5216)). The `<...>` spelling in this bullet is a C# fragment, kept for reference.
+- Implement `IEquatable[T]` and a good `GetHashCode` for struct dictionary/set keys. This can avoid expensive default equality paths, boxing, and collision-heavy hashes.
 - Try [`TensorPrimitives`](https://learn.microsoft.com/dotnet/api/system.numerics.tensors.tensorprimitives) before hand-vectorizing numeric operations. Its span-based implementations handle SIMD and tails; Prefer it over manual SIMD loops or LINQ for things like finding min/max, sums, etc..
-- Prefer [`[LibraryImport]`](https://learn.microsoft.com/dotnet/standard/native-interop/pinvoke-source-generation) over `[DllImport]` for supported signatures to generate marshalling at build time; Both `DllImport` and `LibraryImport` require `AllowUnsafeBlocks=true` under unsafe-v2, but if interop is not avoidable, `LibraryImport` is generally preferred.
-- Use `static readonly` flags for genuinely immutable process-wide configuration. Optimized JIT code can fold their values and eliminate disabled branches.
-- Cache fields in locals in hot loops (`var items = _items;`). The JIT often can't do it for you: calls and stores through references may modify the field, and the memory model restricts hoisting reads. Locals also enable bounds check elimination for arrays/spans.
+- Prefer [`@LibraryImport`](https://learn.microsoft.com/dotnet/standard/native-interop/pinvoke-source-generation) over `@DllImport` for supported signatures to generate marshalling at build time; Both `DllImport` and `LibraryImport` require `AllowUnsafeBlocks=true` under unsafe-v2, but if interop is not avoidable, `LibraryImport` is generally preferred.
+- Use `let` fields in a `shared` block (a `static readonly` field in IL) for genuinely immutable process-wide configuration, e.g. `shared { public let Verbose bool = Environment.GetEnvironmentVariable("VERBOSE") == "1" }`. Optimized JIT code can fold their values and eliminate disabled branches.
+- Cache fields in locals in hot loops (`let items = this.items`). The JIT often can't do it for you: calls and stores through references may modify the field, and the memory model restricts hoisting reads. Locals also enable bounds check elimination for arrays/spans.
 - Consider `Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping` for UTF-8 JSON-only responses ([documentation](https://learn.microsoft.com/dotnet/standard/serialization/system-text-json/character-encoding#serialize-all-characters)). Never embed its raw output in HTML or `<script>`; any custom encoder disables STJ's generated serialization fast path, so benchmark rather than assuming the gains add up.
 
 ## Safe vectorization (SIMD or SWAR)
 
 In .NET 11.0 the JIT got improvements in bounds check elimination and now recognizes the following shape for safely loading and processing multiple elements from an array/span:
 
-```cs
-while (data.Length >= CNS)
-{
+```gsharp
+for data.Length >= CNS {
     // JIT knows that the slice has at least CNS elements, so bounds checks can be elided.
     // e.g.:
-    //  VectorX.Create(data);
-    //  BitConverter.ToInt32(data);
-    //  BinaryPrimitives.ReadInt32LittleEndian(data);
+    //  VectorX.Create[T](data)
+    //  BitConverter.ToInt32(data)
+    //  BinaryPrimitives.ReadInt32LittleEndian(data)
     //  etc.
-    data = data.Slice(CNS);
+    data = data.Slice(CNS)
 }
 ```
 
-For example, the following C# snippet has no bounds checks in .NET 11.0:
+G# notes: a function parameter is read-only, so copy the span into a `var` before reassigning it. `Vector128.Create` needs its type argument spelled out (`Create[int32](data)`) when `data` is a `Span`.
 
-```cs
-int Sum(Span<int> data)
-{
-    Vector128<int> sum = default;
-    while (data.Length >= Vector128<int>.Count)
-    {
-        sum += Vector128.Create(data);
-        data = data.Slice(Vector128<int>.Count);
+For example, the following G# snippet (a port of the C# original; the .NET 11.0 bounds-check claim is upstream's and was not re-measured here) has no bounds checks in .NET 11.0:
+
+```gsharp
+func sum(input Span[int32]) int32 {
+    var data = input
+    var acc = Vector128[int32].Zero
+    for data.Length >= Vector128[int32].Count {
+        acc = acc + Vector128.Create[int32](data)
+        data = data.Slice(Vector128[int32].Count)
     }
-    int result = Vector128.Sum(sum);
-    foreach (var t in data)
-        result += t;
-    return result;
+    var result = Vector128.Sum(acc)
+    for t in data {
+        result += t
+    }
+    return result
 }
 ```
 
 .NET 12.0 (Preview 1) extends it to more complex loop shapes (e.g. multiple spans):
 
-```cs
-static bool Equal(ReadOnlySpan<ushort> a, ReadOnlySpan<ushort> b)
-{
-    if (a.Length != b.Length)
-        return false;
+```gsharp
+func equal(a ReadOnlySpan[uint16], b ReadOnlySpan[uint16]) bool {
+    if a.Length != b.Length {
+        return false
+    }
 
-    int i = 0;
-    if (Vector128.IsHardwareAccelerated)
-    {
-        for (; i <= a.Length - Vector128<ushort>.Count; i += Vector128<ushort>.Count)
-        {
-            var va = Vector128.Create(a.Slice(i));
-            var vb = Vector128.Create(b.Slice(i));
-            if (va != vb)
-                return false;
+    var i = 0
+    if Vector128.IsHardwareAccelerated {
+        for ; i <= a.Length - Vector128[uint16].Count; i += Vector128[uint16].Count {
+            let va = Vector128.Create[uint16](a.Slice(i))
+            let vb = Vector128.Create[uint16](b.Slice(i))
+            if va != vb {
+                return false
+            }
         }
     }
 
-    for (; i < a.Length; i++)
-    {
-        if (a[i] != b[i])
-            return false;
+    for ; i < a.Length; i++ {
+        if a[i] != b[i] {
+            return false
+        }
     }
 
-    return true;
+    return true
 }
 ```
 ^ has no bounds checks for the main loop in .NET 12.0 (Preview 1).
@@ -273,11 +294,11 @@ More info about vectorization and SIMD in .NET can be found in the official docu
 ## Strings and globalization
 
 - Prefer ordinal operations. Culture-sensitive comparisons go through ICU, are many times slower than ordinal ones, and are often a correctness bug anyway.
-- Culture-sensitive by default: `string.Compare`, `CompareTo`, `StartsWith(string)`, `EndsWith(string)`, `IndexOf(string)`, `LastIndexOf(string)`, `ToUpper()`, `ToLower()`, and default string sorting (`Array.Sort`, `List<T>.Sort`, `OrderBy`, `SortedDictionary`/`SortedSet` with the default comparer). Pass `StringComparison.Ordinal`/`OrdinalIgnoreCase` or `StringComparer.Ordinal`; analyzers CA1307, CA1309 and CA1310 find these calls.
+- Culture-sensitive by default: `string.Compare`, `CompareTo`, `StartsWith(string)`, `EndsWith(string)`, `IndexOf(string)`, `LastIndexOf(string)`, `ToUpper()`, `ToLower()`, and default string sorting (`Array.Sort`, `List[T].Sort`, `OrderBy`, `SortedDictionary`/`SortedSet` with the default comparer). Pass `StringComparison.Ordinal`/`OrdinalIgnoreCase` or `StringComparer.Ordinal`; analyzers CA1307, CA1309 and CA1310 find these calls.
 - Already ordinal: `==`, `Equals`, `Contains(string)`, `Replace(string, string)`, `IndexOf(char)`, `Split`, `GetHashCode`, and the default `Dictionary`/`HashSet` comparer.
 - Case-insensitive equality: `string.Equals(a, b, StringComparison.OrdinalIgnoreCase)` instead of `a.ToLower() == b.ToLower()` (two allocations plus culture rules). For ASCII data, `System.Text.Ascii` has vectorized `EqualsIgnoreCase`, `ToUpper`/`ToLower` (span to span) and `IsValid`.
-- `Dictionary<string, T>` / `HashSet<string>` use fast non-randomized hashing only with the default comparer, `StringComparer.Ordinal` or `StringComparer.OrdinalIgnoreCase` (falling back to randomized hashing only on heavy collisions). Any other comparer loses it.
-- Stay in UTF-8 when input and output are UTF-8: search, parse and format `ReadOnlySpan<byte>` directly (`u8` literals, `SearchValues<byte>`, `TryParse`/`TryFormat` on bytes, `Utf8.TryWrite`) and convert to `string` only when needed.
+- `Dictionary[string, T]` / `HashSet[string]` use fast non-randomized hashing only with the default comparer, `StringComparer.Ordinal` or `StringComparer.OrdinalIgnoreCase` (falling back to randomized hashing only on heavy collisions). Any other comparer loses it.
+- Stay in UTF-8 when input and output are UTF-8: search, parse and format `ReadOnlySpan[uint8]` directly (`u8` literals, which G# lacks, see [#5218](https://github.com/DavidObando/gsharp/issues/5218); `SearchValues[uint8]`, `TryParse`/`TryFormat` on bytes, `Utf8.TryWrite`) and convert to `string` only when needed.
 - If the app needs no culture data, `<InvariantGlobalization>true</InvariantGlobalization>` removes the ICU dependency (faster startup, less memory) and makes culture-sensitive string operations ordinal. This changes behavior, so verify the output.
 
 ## Contention on shared state
@@ -286,36 +307,40 @@ Writes to one shared location from many threads (`Interlocked.Increment` on a gl
 
 **1. Per-core stripes** - index an array by `Thread.GetCurrentProcessorId()` (cheap: cached and periodically refreshed). The id is only a hint: threads migrate, and ids can exceed `ProcessorCount` (hence the modulo), so keep `Interlocked` on the stripe - it's almost always uncontended. Fixed memory and allocation-free reads; works with any number of threads (thread pool, request handlers). Stripes must be padded, see [False sharing](#false-sharing).
 
-```cs
-sealed class StripedCounter
-{
-    private readonly PaddedLong[] _stripes = new PaddedLong[Environment.ProcessorCount];
+```gsharp
+class StripedCounter {
+    private let stripes []PaddedLong = [Environment.ProcessorCount]PaddedLong
 
-    public void Increment()
-    {
-        PaddedLong[] stripes = _stripes;
-        Interlocked.Increment(ref stripes[(uint)Thread.GetCurrentProcessorId() % (uint)stripes.Length].Value);
+    public func Increment() {
+        let s = stripes
+        Interlocked.Increment(ref s[uint32(Thread.GetCurrentProcessorId()) % uint32(s.Length)].Value)
     }
 
     // Not an atomic snapshot, which is fine for statistics.
-    public long Sum()
-    {
-        PaddedLong[] stripes = _stripes;
-        long sum = 0;
-        for (int i = 0; i < stripes.Length; i++)
-            sum += Volatile.Read(ref stripes[i].Value);
-        return sum;
+    public func Sum() int64 {
+        let s = stripes
+        var total int64 = 0
+        for var i = 0; i < s.Length; i++ {
+            total += Volatile.Read(ref s[i].Value)
+        }
+        return total
     }
 }
 ```
 
-**2. `ThreadLocal<T>` with `trackAllValues: true`** - each thread updates its own slot with no atomics at all; sum `Values` on read. `Values` allocates a list and includes values of threads that have already exited, and every thread that ever touched it keeps a slot, so this suits a bounded set of long-lived threads (e.g. `Parallel` workers) where writes vastly outnumber reads. Dispose the `ThreadLocal<T>` when done.
+**2. `ThreadLocal[T]` with `trackAllValues: true`** - each thread updates its own slot with no atomics at all; sum `Values` on read. `Values` allocates a list and includes values of threads that have already exited, and every thread that ever touched it keeps a slot, so this suits a bounded set of long-lived threads (e.g. `Parallel` workers) where writes vastly outnumber reads. Dispose the `ThreadLocal[T]` when done.
 
-```cs
-private readonly ThreadLocal<long> _count = new(trackAllValues: true);
+```gsharp
+// Inside a class (import System.Linq for Sum):
+private let hits ThreadLocal[int64] = ThreadLocal[int64](true) // trackAllValues
 
-void OnItem() => _count.Value++;
-long Total() => _count.Values.Sum();
+func OnItem() {
+    hits.Value = hits.Value + 1
+}
+
+func Total() int64 {
+    return hits.Values.Sum()
+}
 ```
 
 If the work structure allows it, aggregating into plain locals and combining once per task/partition (`Parallel.For` with `localInit`/`localFinally`) is cheaper than both.
@@ -324,23 +349,27 @@ If the work structure allows it, aggregating into plain locals and combining onc
 
 Threads writing *different* variables still contend if those variables share a cache line (64 bytes on most x64/arm64 CPUs, 128 bytes on Apple M-series): every write invalidates the line in the other cores' caches. The naive striped counter is the classic case:
 
-```cs
+```gsharp
 // 8 longs per 64-byte line: the per-core slots look independent, but cores keep stealing the line from each other.
-long[] stripes = new long[Environment.ProcessorCount];
-Interlocked.Increment(ref stripes[(uint)Thread.GetCurrentProcessorId() % (uint)stripes.Length]);
+let stripes = [Environment.ProcessorCount]int64
+Interlocked.Increment(ref stripes[uint32(Thread.GetCurrentProcessorId()) % uint32(stripes.Length)])
 ```
 
 Fix it by padding each slot so no two hot values can land on the same line:
 
-```cs
-struct PaddedLong
-{
-    public long Value;
-#pragma warning disable CS0169 // padding only
-    private InlineArray8<long> _padding; // 64 bytes: adjacent Values are 72 bytes apart
-#pragma warning restore CS0169
+```gsharp
+@InlineArray(8)
+struct Pad8 {
+    private var e0 int64
+}
+
+struct PaddedLong {
+    public var Value int64
+    private var padding Pad8 // 64 bytes: adjacent Values are 72 bytes apart
 }
 ```
+
+(The BCL has no ready-made `InlineArray8<T>`; the C# original assumed one, so G# declares the `@InlineArray(8)` buffer itself. Compiled and checked: `Marshal.SizeOf[PaddedLong]()` is 72, and `Unsafe.ByteOffset` between neighbouring `Value` fields in an array is 72. The C# `#pragma warning disable CS0169` is not needed.)
 
 - Most server hardware (all x64 CPUs and Neoverse-based arm64 CPUs such as Cobalt and Graviton) has 64-byte cache lines, so 64 bytes of padding is usually sufficient. Apple M-series CPUs have 128-byte cache lines, so consider padding to 128 bytes there.
 - The same applies to fields of one object written by different threads (e.g. a ring buffer's head and tail indices): put a padding field between them.
@@ -351,5 +380,5 @@ Code-level advice for HTTP throughput benchmarks.
 
 - Start from `WebApplication.CreateSlimBuilder(args)` (or `CreateEmptyBuilder` + `builder.WebHost.UseKestrelCore()`) and add only what's needed. Every middleware (HTTPS redirection, auth, CORS, response compression, static files, developer exception page) costs something per request.
 - Logging: without an `appsettings.json` that raises `Microsoft.AspNetCore` to `Warning`, the default level is `Information` and the host logs every request to the console - a massive bottleneck. Call `builder.Logging.ClearProviders()` or raise the level.
-- JSON: register source-generated metadata with `builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJsonContext.Default));`. For hand-written responses, serialize with a reused `Utf8JsonWriter` (`writer.Reset(response.BodyWriter)`) instead of allocating one per request.
+- JSON: register source-generated metadata with `builder.Services.ConfigureHttpJsonOptions((o JsonOptions) -> o.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJsonContext.Default))` (`JsonOptions` is in `Microsoft.AspNetCore.Http.Json`; `AppJsonContext` must be supplied by a C# project until [#5217](https://github.com/DavidObando/gsharp/issues/5217) is fixed). For hand-written responses, serialize with a reused `Utf8JsonWriter` (`writer.Reset(response.BodyWriter)`) instead of allocating one per request.
 
