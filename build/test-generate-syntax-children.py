@@ -154,7 +154,7 @@ class GeneratorCase(unittest.TestCase):
         expected = {n for n in nodes if n != gen.ROOT_NODE and not classes[n].abstract}
         self.assertEqual(set(generated), expected)
         for name, part in sorted(generated.items()):
-            guard = f"GetType() != typeof({name})"
+            guard = f"GetType() != ExactTypeOf{name}"
             accessors = [m for m in ("ChildCount", "GetChild(", "BuildChildren(") if m in part]
             self.assertTrue(accessors, name)
             if classes[name].is_open:
@@ -164,6 +164,7 @@ class GeneratorCase(unittest.TestCase):
                     self.assertIn(guard, body, f"{name}: open class accessor without the exact-type guard")
             else:
                 self.assertNotIn("GetType()", part, name)
+            self.assertNotRegex(part, r"[=!]=\s*typeof\(", f"{name}: Issue835 pattern")
             for body in part.split("internal override ")[1:]:
                 if body.startswith("func BuildChildren"):
                     continue

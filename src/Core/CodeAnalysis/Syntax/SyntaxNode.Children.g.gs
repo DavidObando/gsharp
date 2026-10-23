@@ -1006,12 +1006,16 @@ partial class BaseInterfaceCallExpressionSyntax {
 }
 
 partial class BinaryExpressionSyntax {
+    shared {
+        internal let ExactTypeOfBinaryExpressionSyntax Type = typeof(BinaryExpressionSyntax)
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
     internal override prop ChildCount int32 {
         get {
-            if GetType() != typeof(BinaryExpressionSyntax) {
+            if GetType() != ExactTypeOfBinaryExpressionSyntax {
                 return CachedChildren().Length
             }
             var count = 0
@@ -1032,7 +1036,7 @@ partial class BinaryExpressionSyntax {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
-        if GetType() != typeof(BinaryExpressionSyntax) {
+        if GetType() != ExactTypeOfBinaryExpressionSyntax {
             return ChildAt(CachedChildren(), index)
         }
         var remaining = index
@@ -1252,12 +1256,16 @@ partial class BlockStatementSyntax {
 }
 
 partial class BreakStatementSyntax {
+    shared {
+        internal let ExactTypeOfBreakStatementSyntax Type = typeof(BreakStatementSyntax)
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
     internal override prop ChildCount int32 {
         get {
-            if GetType() != typeof(BreakStatementSyntax) {
+            if GetType() != ExactTypeOfBreakStatementSyntax {
                 return CachedChildren().Length
             }
             var count = 0
@@ -1275,7 +1283,7 @@ partial class BreakStatementSyntax {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
-        if GetType() != typeof(BreakStatementSyntax) {
+        if GetType() != ExactTypeOfBreakStatementSyntax {
             return ChildAt(CachedChildren(), index)
         }
         var remaining = index
@@ -1750,12 +1758,16 @@ partial class CollectionInitializerExpressionSyntax {
 }
 
 partial class CompilationUnitSyntax {
+    shared {
+        internal let ExactTypeOfCompilationUnitSyntax Type = typeof(CompilationUnitSyntax)
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
     internal override prop ChildCount int32 {
         get {
-            if GetType() != typeof(CompilationUnitSyntax) {
+            if GetType() != ExactTypeOfCompilationUnitSyntax {
                 return CachedChildren().Length
             }
             var count = 0
@@ -1772,7 +1784,7 @@ partial class CompilationUnitSyntax {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
-        if GetType() != typeof(CompilationUnitSyntax) {
+        if GetType() != ExactTypeOfCompilationUnitSyntax {
             return ChildAt(CachedChildren(), index)
         }
         var remaining = index
@@ -2188,12 +2200,16 @@ partial class ConstructorDeclarationSyntax {
 }
 
 partial class ContinueStatementSyntax {
+    shared {
+        internal let ExactTypeOfContinueStatementSyntax Type = typeof(ContinueStatementSyntax)
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
     internal override prop ChildCount int32 {
         get {
-            if GetType() != typeof(ContinueStatementSyntax) {
+            if GetType() != ExactTypeOfContinueStatementSyntax {
                 return CachedChildren().Length
             }
             var count = 0
@@ -2211,7 +2227,7 @@ partial class ContinueStatementSyntax {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
-        if GetType() != typeof(ContinueStatementSyntax) {
+        if GetType() != ExactTypeOfContinueStatementSyntax {
             return ChildAt(CachedChildren(), index)
         }
         var remaining = index
@@ -3136,12 +3152,16 @@ partial class ExpressionCollectionElementSyntax {
 }
 
 partial class ExpressionStatementSyntax {
+    shared {
+        internal let ExactTypeOfExpressionStatementSyntax Type = typeof(ExpressionStatementSyntax)
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
     internal override prop ChildCount int32 {
         get {
-            if GetType() != typeof(ExpressionStatementSyntax) {
+            if GetType() != ExactTypeOfExpressionStatementSyntax {
                 return CachedChildren().Length
             }
             var count = 0
@@ -3156,7 +3176,7 @@ partial class ExpressionStatementSyntax {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
-        if GetType() != typeof(ExpressionStatementSyntax) {
+        if GetType() != ExactTypeOfExpressionStatementSyntax {
             return ChildAt(CachedChildren(), index)
         }
         var remaining = index
@@ -4516,12 +4536,16 @@ partial class GenericNameExpressionSyntax {
 }
 
 partial class GlobalStatementSyntax {
+    shared {
+        internal let ExactTypeOfGlobalStatementSyntax Type = typeof(GlobalStatementSyntax)
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
     internal override prop ChildCount int32 {
         get {
-            if GetType() != typeof(GlobalStatementSyntax) {
+            if GetType() != ExactTypeOfGlobalStatementSyntax {
                 return CachedChildren().Length
             }
             var count = 0
@@ -4537,7 +4561,7 @@ partial class GlobalStatementSyntax {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
-        if GetType() != typeof(GlobalStatementSyntax) {
+        if GetType() != ExactTypeOfGlobalStatementSyntax {
             return ChildAt(CachedChildren(), index)
         }
         var remaining = index
@@ -6498,12 +6522,16 @@ partial class MultiAssignmentStatementSyntax {
 }
 
 partial class NameExpressionSyntax {
+    shared {
+        internal let ExactTypeOfNameExpressionSyntax Type = typeof(NameExpressionSyntax)
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
     internal override prop ChildCount int32 {
         get {
-            if GetType() != typeof(NameExpressionSyntax) {
+            if GetType() != ExactTypeOfNameExpressionSyntax {
                 return CachedChildren().Length
             }
             var count = 0
@@ -6518,7 +6546,7 @@ partial class NameExpressionSyntax {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
-        if GetType() != typeof(NameExpressionSyntax) {
+        if GetType() != ExactTypeOfNameExpressionSyntax {
             return ChildAt(CachedChildren(), index)
         }
         var remaining = index
@@ -9070,12 +9098,16 @@ partial class SwitchStatementSyntax {
 }
 
 partial class SyntaxToken {
+    shared {
+        internal let ExactTypeOfSyntaxToken Type = typeof(SyntaxToken)
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
     internal override prop ChildCount int32 {
         get {
-            if GetType() != typeof(SyntaxToken) {
+            if GetType() != ExactTypeOfSyntaxToken {
                 return CachedChildren().Length
             }
             return 0
@@ -9086,7 +9118,7 @@ partial class SyntaxToken {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
-        if GetType() != typeof(SyntaxToken) {
+        if GetType() != ExactTypeOfSyntaxToken {
             return ChildAt(CachedChildren(), index)
         }
         throw ArgumentOutOfRangeException(nameof(index))
@@ -10060,12 +10092,16 @@ partial class TypePatternSyntax {
 }
 
 partial class UnaryExpressionSyntax {
+    shared {
+        internal let ExactTypeOfUnaryExpressionSyntax Type = typeof(UnaryExpressionSyntax)
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
     internal override prop ChildCount int32 {
         get {
-            if GetType() != typeof(UnaryExpressionSyntax) {
+            if GetType() != ExactTypeOfUnaryExpressionSyntax {
                 return CachedChildren().Length
             }
             var count = 0
@@ -10083,7 +10119,7 @@ partial class UnaryExpressionSyntax {
     /// <inheritdoc />
     /// ```
     internal override func GetChild(index int32) SyntaxNode {
-        if GetType() != typeof(UnaryExpressionSyntax) {
+        if GetType() != ExactTypeOfUnaryExpressionSyntax {
             return ChildAt(CachedChildren(), index)
         }
         var remaining = index

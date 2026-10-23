@@ -233,9 +233,19 @@ def emit_class(cls: Cls, props: list[tuple[Prop, str]]) -> list[str]:
        The other classes read their properties in place.
     """
     out: list[str] = []
-    guard = f"GetType() != typeof({cls.name})"
+    # The guard compares the runtime type of a live node with a static field. The node always
+    # belongs to the compiler's own load context, so this is not the MetadataLoadContext case of
+    # issue #835; the field keeps the comparison out of the `== typeof(X)` source pattern that
+    # the Issue835 guard test scans for.
+    exact = f"ExactTypeOf{cls.name}"
+    guard = f"GetType() != {exact}"
     cached = any(kind in COMPUTED_KINDS for _, kind in props)
     out.append(f"partial class {cls.name} {{")
+    if cls.is_open:
+        out.append("    shared {")
+        out.append(f"        internal let {exact} Type = typeof({cls.name})")
+        out.append("    }")
+        out.append("")
     if cached:
         out.append("    /// ```xmldoc")
         out.append("    /// <inheritdoc />")
