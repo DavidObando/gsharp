@@ -37,9 +37,6 @@ internal class ReferenceImage {
 /// This is the partition that the `MetadataLoadContext` has today between the loaded assemblies and the resolver closure.
 /// When two modules have the same simple name, the first one owns the name (ADR-0209 section 9).
 internal class ReferenceImageSet {
-    // A type reference whose resolutionScope chain is deeper than this is malformed.
-    private let MaximumNesting int32 = 64
-
     private let modulesByName Dictionary[string, MetadataModule]
     private let indexedNames Lazy[IndexedNames]
     private let missingTypes ConcurrentDictionary[MissingTypeKey, MissingTypeSymbol] = ConcurrentDictionary[
@@ -187,22 +184,21 @@ internal class ReferenceImageSet {
     ) ResolvedTypeReference {
         let reader = module.Reader
         let reference = reader.GetTypeReference(handle)
-        let typeName = MetadataTypeNameReader.Escape(reader.GetString(reference.Name))
+        let segment = MetadataTypeNameReader.SpellReferenceSegment(reader, reference)
         let resolutionScope = reference.ResolutionScope
         if resolutionScope.Kind == HandleKind.AssemblyReference {
             let target = AssemblyIdentity.FromReference(
                 reader.GetAssemblyReference(cast[AssemblyReferenceHandle](resolutionScope))
             )
-            let fullName = MetadataTypeNameReader.QualifyEscaped(reader.GetString(reference.Namespace), typeName)
-            return ResolveInAssembly(target, fullName)
+            return ResolveInAssembly(target, segment)
         }
         if resolutionScope.Kind == HandleKind.TypeReference {
             // A nested type: resolve the enclosing type first, then look for the nested name in the same module.
-            if depth >= MaximumNesting {
-                return ResolvedTypeReference(GetMissing(module.Identity, typeName))
+            if depth >= MetadataTypeNameReader.MaximumReferenceNesting {
+                return ResolvedTypeReference(GetMissing(module.Identity, segment))
             }
             let enclosing = ResolveTypeReference(module, cast[TypeReferenceHandle](resolutionScope), depth + 1)
-            let nestedName = enclosing.FullName + "+" + typeName
+            let nestedName = enclosing.FullName + "+" + segment
             if enclosing.Module is {} enclosingModule {
                 return if enclosingModule.TryGetDefinition(nestedName, out var nested) {
                     ResolvedTypeReference(enclosingModule, nested)
@@ -212,12 +208,11 @@ internal class ReferenceImageSet {
             }
             return ResolvedTypeReference(GetMissing(enclosing.Missing?.AssemblyIdentity, nestedName))
         }
-        let ownName = MetadataTypeNameReader.QualifyEscaped(reader.GetString(reference.Namespace), typeName)
-        if resolutionScope.Kind == HandleKind.ModuleDefinition && module.TryGetDefinition(ownName, out var own) {
+        if resolutionScope.Kind == HandleKind.ModuleDefinition && module.TryGetDefinition(segment, out var own) {
             return ResolvedTypeReference(module, own)
         }
-        // A module reference (multi-module assembly) and a nil resolutionScope (exported type) are not importable.
-        return ResolvedTypeReference(GetMissing(module.Identity, ownName))
+        // A module reference (multi-module assembly) and a nil scope (exported type) are not importable.
+        return ResolvedTypeReference(GetMissing(module.Identity, segment))
     }
 
     private func ResolveInAssembly(target AssemblyIdentity, fullName string) ResolvedTypeReference {
@@ -239,6 +234,22 @@ internal class ReferenceImageSet {
     ) ResolvedTypeReference? {
         if module.TryGetDefinition(fullName, out var handle) {
             return ResolvedTypeReference(module, handle)
+        }
+        // A nested name: a facade forwards the enclosing type, and the nested type goes with it.
+        let separator = MetadataTypeNameReader.NestingSeparatorIndex(fullName)
+        if separator > 0 {
+            let outer = ResolveInModule(
+                module,
+                fullName.Substring(0, separator),
+                HashSet[string](StringComparer.Ordinal)
+            )
+            let outerModule = outer?.Module
+            if outer != nil && outerModule != nil && outerModule.TryGetDefinition(
+                outer.FullName + fullName.Substring(separator),
+                out var nested
+            ) {
+                return ResolvedTypeReference(outerModule, nested)
+            }
         }
         // A cycle of forwards ends the search.
         if !visiting.Add(module.Identity.Name) {

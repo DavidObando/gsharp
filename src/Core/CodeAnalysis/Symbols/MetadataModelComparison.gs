@@ -67,6 +67,9 @@ internal shared class MetadataModelComparison {
     internal func CompareAndReport(resolver ReferenceResolver, set ReferenceImageSet?) {
         using let measurement = CompilationMeasurements.BeginPhase("references.model-compare")
         let disagreements = Compare(resolver, set)
+        // The oracle lookups fill the resolution cache of the resolver, before the consumer name is known.
+        // Discard them, so that comparison cannot change a later binding.
+        resolver.DiscardResolutionCache()
         CompilationMeasurements.Count(CounterName, disagreements.Count)
         if CompilationMeasurements.CurrentOutputPath is {} phasePath {
             File.AppendAllText(phasePath + ".model-disagreements.txt", FormatReport(disagreements))
@@ -135,18 +138,9 @@ internal shared class MetadataModelComparison {
             for handle in module.Reader.TypeReferences {
                 let actual = set.ResolveTypeReference(module, handle)
                 var assemblyName = ""
-                let fullName = SpellReference(module.Reader, handle, out assemblyName)
+                let fullName = SpellReference(module.Reader, handle, 0, out assemblyName)
                 if fullName == nil {
                     // The context has no name for a reference that a module scope or a nil scope holds.
-                    continue
-                }
-                if set.FindModule(assemblyName) == nil {
-                    // The assembly is not in the set, so the context cannot supply it either.
-                    if actual.IsResolved {
-                        result.Add(
-                            ModelDisagreement("Q1.type-reference", Subject(module, handle), "missing", Describe(actual))
-                        )
-                    }
                     continue
                 }
                 let found = resolver.FindTypeForComparison(assemblyName, fullName)
@@ -202,25 +196,33 @@ internal shared class MetadataModelComparison {
         .GetRowNumber(handle).ToString()
 
     // Spells a type reference as the context sees it: the simple name of the assembly that the outermost
-    // resolutionScope names, and the full name with `+` between the enclosing types. Returns null for a resolutionScope
-    // that is not an assembly reference or a type reference.
-    private func SpellReference(reader MetadataReader, handle TypeReferenceHandle, out assemblyName string) string? {
+    // scope names, and the full name with `+` between the enclosing types. Returns null for a scope
+    // that is not an assembly reference or a type reference, and for a chain deeper than the set resolves.
+    private func SpellReference(
+        reader MetadataReader,
+        handle TypeReferenceHandle,
+        depth int32,
+        out assemblyName string
+    ) string? {
         assemblyName = ""
+        if depth >= MetadataTypeNameReader.MaximumReferenceNesting {
+            return nil
+        }
         let reference = reader.GetTypeReference(handle)
-        let typeName = MetadataTypeNameReader.Escape(reader.GetString(reference.Name))
+        let segment = MetadataTypeNameReader.SpellReferenceSegment(reader, reference)
         let resolutionScope = reference.ResolutionScope
         if resolutionScope.Kind == HandleKind.AssemblyReference {
             assemblyName = reader.GetString(
                 reader.GetAssemblyReference(cast[AssemblyReferenceHandle](resolutionScope)).Name
             )
-            return MetadataTypeNameReader.QualifyEscaped(reader.GetString(reference.Namespace), typeName)
+            return segment
         }
         if resolutionScope.Kind == HandleKind.TypeReference {
-            let outer = SpellReference(reader, cast[TypeReferenceHandle](resolutionScope), out assemblyName)
+            let outer = SpellReference(reader, cast[TypeReferenceHandle](resolutionScope), depth + 1, out assemblyName)
             return if outer == nil {
                 nil
             } else {
-                outer + "+" + typeName
+                outer + "+" + segment
             }
         }
         return nil

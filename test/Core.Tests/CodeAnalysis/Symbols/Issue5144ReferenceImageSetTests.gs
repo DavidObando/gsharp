@@ -197,6 +197,12 @@ open class Issue5144ReferenceImageSetTests {
             checkedReferences++
         }
         Assert.Equal(2, checkedReferences)
+        // An assembly-qualified lookup of a nested type goes through the facade too.
+        let throughFacade = set.TryResolveNameInAssembly("Facade5144", "N5144.Outer+Inner")!!
+        Assert.True(throughFacade.IsResolved)
+        Assert.Equal("Target5144", throughFacade.Module!!.Identity.Name)
+        Assert.Equal("N5144.Outer+Inner", throughFacade.FullName)
+        Assert.Null(set.TryResolveNameInAssembly("Facade5144", "N5144.Outer+Missing"))
         // The facade lists the forwarded names, the nested one too, as reflection does.
         let facadeIndex = Array.FindIndex(
             resolver.Assemblies.ToArray(),
@@ -327,6 +333,114 @@ open class Issue5144ReferenceImageSetTests {
     }
 
     @Fact
+    func TypeReference_ToAnEscapedName_ResolvesToTheDefinition() {
+        // The reference keeps the raw metadata name. The set escapes it once, as the definition's name is escaped.
+        let escaping = SaveEscapingAssembly()
+        let set = ReferenceImageSet(
+            ImmutableArray.Create(
+                ReferenceImage(File.ReadAllBytes(escaping), escaping, true),
+                ReferenceImage(
+                    BuildReferencing("Referencing5144", "Escaping5144", "N5144,Ns", "Odd5144+Name", "Nested5144"),
+                    nil,
+                    true
+                ),
+                ReferenceImage(BuildReferencing("Nesting5144", "Escaping5144", "", "Out5144+er", "In*ner"), nil, true)
+            )
+        )
+        let plain = set.FindModule("Referencing5144")!!
+        let first = set.ResolveTypeReference(plain, MetadataTokens.TypeReferenceHandle(1))
+        Assert.True(first.IsResolved, first.FullName)
+        Assert.Equal("N5144\\,Ns.Odd5144\\+Name", first.FullName)
+        Assert.Equal("Escaping5144", first.Module!!.Identity.Name)
+        // The nested name does not exist in the definition: it is missing, with the escaped enclosing name.
+        let missing = set.ResolveTypeReference(plain, MetadataTokens.TypeReferenceHandle(2))
+        Assert.False(missing.IsResolved)
+        Assert.Equal("N5144\\,Ns.Odd5144\\+Name+Nested5144", missing.FullName)
+        let nesting = set.FindModule("Nesting5144")!!
+        let outer = set.ResolveTypeReference(nesting, MetadataTokens.TypeReferenceHandle(1))
+        let inner = set.ResolveTypeReference(nesting, MetadataTokens.TypeReferenceHandle(2))
+        Assert.True(outer.IsResolved && inner.IsResolved)
+        Assert.Equal("Out5144\\+er+In\\*ner", inner.FullName)
+        Assert.Equal("Escaping5144", inner.Module!!.Identity.Name)
+    }
+
+    @Fact
+    func NestingSeparator_IgnoresAPlusThatBelongsToAName() {
+        Assert.Equal(-1, MetadataTypeNameReader.NestingSeparatorIndex("N.Plain"))
+        Assert.Equal(-1, MetadataTypeNameReader.NestingSeparatorIndex("N.Odd\\+Name"))
+        Assert.Equal(5, MetadataTypeNameReader.NestingSeparatorIndex("Outer+Inner"))
+        Assert.Equal(9, MetadataTypeNameReader.NestingSeparatorIndex("Out\\+er+x+y"))
+        // An even count of backslashes escapes the backslash, not the plus.
+        Assert.Equal(3, MetadataTypeNameReader.NestingSeparatorIndex("A\\\\+B"))
+    }
+
+    @Fact
+    func SelfScopedTypeReference_EndsAtTheNestingLimit_InTheSetAndInTheComparison() {
+        let loop = ReferenceImageSet(
+            ImmutableArray.Create(ReferenceImage(BuildSelfScoped("Loop5144Assembly"), nil, true))
+        )
+        let module = loop.FindModule("Loop5144Assembly")!!
+        Assert.False(loop.ResolveTypeReference(module, MetadataTokens.TypeReferenceHandle(1)).IsResolved)
+        // The comparison spells the same chain, stops at the same depth and treats it as not comparable.
+        using let resolver = HandleResolver([]string{typeof(ReferenceResolver).Assembly.Location})
+        let withLoop = ReferenceImageSet(
+            resolver.ImageSet!!
+                .Modules
+                .Select((m MetadataModule) -> ReferenceImage(m.Image, m.Path, m.IsSearched))
+                .Append(ReferenceImage(BuildSelfScoped("Loop5144Assembly"), nil, false))
+                .ToImmutableArray()
+        )
+        Assert.Empty(MetadataModelComparison.Compare(resolver, withLoop))
+    }
+
+    @Fact
+    func Comparison_AsksTheContext_EvenWhenTheSetLacksTheAssembly() {
+        using let resolver = HandleResolver([]string{typeof(ReferenceResolver).Assembly.Location})
+        let good = resolver.ImageSet!!
+        // Remove a dependency-only module that some type reference resolves into.
+        var removed string? = nil
+        for other in good.Modules {
+            for handle in other.Reader.TypeReferences {
+                let answer = good.ResolveTypeReference(other, handle)
+                let target = answer.Module
+                if removed == nil && target != nil && !target.IsSearched {
+                    removed = target.Identity.Name
+                }
+            }
+        }
+        Assert.NotNull(removed)
+        let without = ReferenceImageSet(
+            good
+                .Modules
+                .Where((m MetadataModule) -> m.Identity.Name != removed)
+                .Select((m MetadataModule) -> ReferenceImage(m.Image, m.Path, m.IsSearched))
+                .ToImmutableArray()
+        )
+        let found = MetadataModelComparison.Compare(resolver, without)
+        Assert.Contains(found, (d ModelDisagreement) -> d.Question == "Q1.type-reference")
+    }
+
+    @Fact
+    func CompareMode_DoesNotChangeALaterBinding_WhenAnInternalShadowGrantsTheConsumer() {
+        // The shadow comes first and grants InternalsVisibleTo to the consumer. In `mlc` mode, once the consumer
+        // name is set, the shadow wins. Comparison must not cache the public copy before the name is known.
+        using let shadow = CSharpFixture(
+            "[assembly: System.Runtime.CompilerServices.InternalsVisibleTo(\"Friend5144\")] namespace System.Runtime.CompilerServices { internal sealed class NullableAttribute : System.Attribute {} }",
+            assemblyName: "FriendShadow5144"
+        )
+        let name = "System.Runtime.CompilerServices.NullableAttribute"
+        using let plain = ModeResolver(MetadataModelMode.Mlc, []string{shadow.AssemblyPath})
+        plain.CurrentAssemblyName = "Friend5144"
+        Assert.True(plain.TryResolveType(name, false, out var expected))
+        Assert.Equal("FriendShadow5144", expected.Assembly.GetName().Name)
+        using let compared = ModeResolver(MetadataModelMode.Compare, []string{shadow.AssemblyPath})
+        Assert.NotNull(compared.ImageSet)
+        compared.CurrentAssemblyName = "Friend5144"
+        Assert.True(compared.TryResolveType(name, false, out var actual))
+        Assert.Equal("FriendShadow5144", actual.Assembly.GetName().Name)
+    }
+
+    @Fact
     func ModeSwitch_ParsesNamesAndDefaultsToTheContextModel() {
         Assert.Equal(MetadataModelMode.Mlc, MetadataModel.Parse(nil))
         Assert.Equal(MetadataModelMode.Mlc, MetadataModel.Parse(""))
@@ -410,8 +524,10 @@ open class Issue5144ReferenceImageSetTests {
     }
 
     shared {
-        private func HandleResolver(paths[]string) ReferenceResolver {
-            using let handles = MetadataModel.Override(MetadataModelMode.Handles)
+        private func HandleResolver(paths[]string) ReferenceResolver -> ModeResolver(MetadataModelMode.Handles, paths)
+
+        private func ModeResolver(mode MetadataModelMode, paths[]string) ReferenceResolver {
+            using let override_ = MetadataModel.Override(mode)
             return ReferenceResolver.WithReferences(paths)
         }
 
@@ -441,8 +557,8 @@ open class Issue5144ReferenceImageSetTests {
             return path
         }
 
-        // Writes an assembly image that defines nothing and forwards one type to another assembly.
-        private func BuildForwarder(name string, target string, namespaceName string, typeName string)[]uint8 {
+        // Starts an assembly image that defines no type.
+        private func NewMetadata(name string) MetadataBuilder {
             let metadata = MetadataBuilder()
             metadata.AddModule(
                 0,
@@ -467,21 +583,20 @@ open class Issue5144ReferenceImageSetTests {
                 MetadataTokens.FieldDefinitionHandle(1),
                 MetadataTokens.MethodDefinitionHandle(1)
             )
-            let targetReference = metadata.AddAssemblyReference(
-                metadata.GetOrAddString(target),
-                Version(1, 0, 0, 0),
-                StringHandle(),
-                BlobHandle(),
-                cast[AssemblyFlags](0),
-                BlobHandle()
-            )
-            metadata.AddExportedType(
-                cast[TypeAttributes](0x00200000),
-                metadata.GetOrAddString(namespaceName),
-                metadata.GetOrAddString(typeName),
-                targetReference,
-                0
-            )
+            return metadata
+        }
+
+        private func AddAssemblyReference(metadata MetadataBuilder, name string) AssemblyReferenceHandle -> metadata
+            .AddAssemblyReference(
+            metadata.GetOrAddString(name),
+            Version(1, 0, 0, 0),
+            StringHandle(),
+            BlobHandle(),
+            cast[AssemblyFlags](0),
+            BlobHandle()
+        )
+
+        private func Serialize(metadata MetadataBuilder)[]uint8 {
             let image = BlobBuilder()
             ManagedPEBuilder(
                 PEHeaderBuilder.CreateLibraryHeader(),
@@ -489,6 +604,48 @@ open class Issue5144ReferenceImageSetTests {
                 BlobBuilder()
             ).Serialize(image)
             return image.ToArray()
+        }
+
+        // Writes an assembly image that defines nothing and forwards one type to another assembly.
+        private func BuildForwarder(name string, target string, namespaceName string, typeName string)[]uint8 {
+            let metadata = NewMetadata(name)
+            metadata.AddExportedType(
+                cast[TypeAttributes](0x00200000),
+                metadata.GetOrAddString(namespaceName),
+                metadata.GetOrAddString(typeName),
+                AddAssemblyReference(metadata, target),
+                0
+            )
+            return Serialize(metadata)
+        }
+
+        // Writes an assembly image with a reference to a type of another assembly and one to a type nested in it.
+        private func BuildReferencing(
+            name string,
+            target string,
+            namespaceName string,
+            outerName string,
+            nestedName string
+        )[]uint8 {
+            let metadata = NewMetadata(name)
+            let outer = metadata.AddTypeReference(
+                AddAssemblyReference(metadata, target),
+                metadata.GetOrAddString(namespaceName),
+                metadata.GetOrAddString(outerName)
+            )
+            metadata.AddTypeReference(outer, StringHandle(), metadata.GetOrAddString(nestedName))
+            return Serialize(metadata)
+        }
+
+        // Writes an assembly image whose only type reference names itself as its resolution scope.
+        private func BuildSelfScoped(name string)[]uint8 {
+            let metadata = NewMetadata(name)
+            metadata.AddTypeReference(
+                MetadataTokens.TypeReferenceHandle(1),
+                StringHandle(),
+                metadata.GetOrAddString("Loop5144")
+            )
+            return Serialize(metadata)
         }
 
         private func ForwardedTypes(assembly Assembly)[]Type? {

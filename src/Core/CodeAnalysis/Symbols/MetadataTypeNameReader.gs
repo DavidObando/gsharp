@@ -107,6 +107,45 @@ internal shared class MetadataTypeNameReader {
         }
     }
 
+    /// The depth at which a chain of enclosing type references is malformed.
+    /// The set and the comparison both stop there, so a cyclic scope cannot overflow the stack.
+    internal let MaximumReferenceNesting int32 = 64
+
+    /// Spells one row of the type reference table as reflection spells it.
+    /// A top-level reference gives the namespace-qualified full name.
+    /// A nested reference (its scope is a type reference) gives the escaped name alone.
+    /// @param reader The metadata reader.
+    /// @param reference The type reference row.
+    /// @returns The spelling. The caller joins the enclosing names with `+`.
+    func SpellReferenceSegment(reader MetadataReader, reference TypeReference) string {
+        let name = reader.GetString(reference.Name)
+        return if reference.ResolutionScope.Kind == HandleKind.TypeReference {
+            Escape(name)
+        } else {
+            QualifyEscaped(reader.GetString(reference.Namespace), name)
+        }
+    }
+
+    /// Finds the `+` that separates a nested name from its enclosing type.
+    /// A `+` after an odd number of backslashes is part of a name and does not count.
+    /// @param fullName A full name in the spelling of reflection.
+    /// @returns The index of the last separator, or -1 when the name is not nested.
+    func NestingSeparatorIndex(fullName string) int32 {
+        for var i = fullName.Length - 1; i > 0; i-- {
+            if fullName[i] != '+' {
+                continue
+            }
+            var backslashes = 0
+            for var j = i - 1; j >= 0 && fullName[j] == '\\'; j-- {
+                backslashes++
+            }
+            if backslashes % 2 == 0 {
+                return i
+            }
+        }
+        return -1
+    }
+
     // Reads all names. With spellEscaped set, every name is spelled and the result is always true.
     // Otherwise the result is false for a name that reflection escapes.
     private func ReadCore(

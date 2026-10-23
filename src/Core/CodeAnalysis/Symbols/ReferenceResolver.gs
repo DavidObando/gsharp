@@ -786,6 +786,12 @@ class ReferenceResolver : IDisposable {
     /// Gets the handle-backed reference set, or `null` in `mlc` mode or when a reference has no image.
     internal prop ImageSet ReferenceImageSet? -> imageSet
 
+    /// Discards the memoized results of (cref:TryResolveType).
+    /// The comparison mode calls it, so that its lookups leave no state behind.
+    internal func DiscardResolutionCache() {
+        resolveCache.Clear()
+    }
+
     /// Gives, for each assembly in search order, the type names that this resolver indexes.
     /// This is the answer of the `MetadataLoadContext` model, in the order that reflection reports.
     internal func ReadIndexedTypeNames() List[List[string]] {
