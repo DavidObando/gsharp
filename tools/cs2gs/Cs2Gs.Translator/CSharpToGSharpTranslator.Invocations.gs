@@ -796,10 +796,12 @@ partial class CSharpToGSharpTranslator {
             name = nil
             helperName = nil
             chainedReceiver = nil
-            if invocation == nil || method == nil || !this.TryGetStaticExtensionHelper(method, out owner, out name) {
+            // A by-reference parameter keeps no narrowing across a call (ADR-0208 R12).
+            let matched = invocation
+            if matched == nil || method == nil || !this.TryGetStaticExtensionHelper(method, out owner, out name) {
                 return false
             }
-            switch invocation.Expression {
+            switch matched.Expression {
                 case binding is MemberBindingExpressionSyntax {
                     helperName = binding.Name
                     return true

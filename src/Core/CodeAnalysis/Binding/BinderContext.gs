@@ -917,8 +917,11 @@ internal class BinderContext {
             narrowedType = nil
             return false
         }
+        // A by-reference parameter keeps no narrowing across a call (ADR-0208 R12), so the
+        // loop reads a local copy.
+        let stablePath = path
         for var i = NarrowedVariables.Count - 1; i >= 0; i-- {
-            if NarrowedVariables[i].TryGetValue(path, out narrowedType) {
+            if NarrowedVariables[i].TryGetValue(stablePath, out narrowedType) {
                 return true
             }
         }

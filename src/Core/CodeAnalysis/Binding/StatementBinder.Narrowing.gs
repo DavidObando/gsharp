@@ -204,7 +204,7 @@ internal partial class StatementBinder {
             if !path.HasMembers && condition.WritableReferenceRoots.Contains(path.Root) &&
                 !plainTargets
                 .Targets
-                .Contains(path.Root) && !branches.Roots.Contains(path.Root) {
+                .Contains(path.Root) && !branches.AssignsRoot(path.Root) {
                 SetPersistentNarrowing(persistentFrame, path, narrowedType)
             }
         }
@@ -317,7 +317,7 @@ internal partial class StatementBinder {
                         assignedRoots!!.Contains(key.Root)
                     }
                 ) ||
-                    (key.HasMembers && dropAllMemberPaths)
+                    (DropsOnMemberMutation(key) && dropAllMemberPaths)
                 if drop {
                     (
                         (
@@ -539,7 +539,7 @@ internal partial class StatementBinder {
                     frames[i][path]
                 ) ||
                     mutations.InvalidatesNarrowing(path.Root, frames[i][path]) ||
-                    (path.HasMembers && mayMutateMemberPaths) {
+                    (DropsOnMemberMutation(path) && mayMutateMemberPaths) {
                     invalidations.Add((i, path))
                 }
             }
@@ -1057,7 +1057,7 @@ internal partial class StatementBinder {
                 entry.Key.Root,
                 entry.Value
             ) ||
-                (entry.Key.HasMembers && mutations.MayMutateMemberPaths) ||
+                (DropsOnMemberMutation(entry.Key) && mutations.MayMutateMemberPaths) ||
                 mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value) {
                 state.Remove(entry.Key)
             }
@@ -1091,7 +1091,7 @@ internal partial class StatementBinder {
                     entry.Key.Root,
                     entry.Value
                 ) ||
-                    (entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths) ||
+                    (DropsOnMemberMutation(entry.Key) && summary.Mutations.MayMutateMemberPaths) ||
                     summary
                     .Mutations
                     .InvalidatesNarrowing(entry.Key.Root, entry.Value) {
@@ -1112,7 +1112,7 @@ internal partial class StatementBinder {
                 entry.Key.Root,
                 entry.Value
             ) ||
-                (entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths) ||
+                (DropsOnMemberMutation(entry.Key) && summary.Mutations.MayMutateMemberPaths) ||
                 summary
                 .Mutations
                 .InvalidatesNarrowing(entry.Key.Root, entry.Value) {
@@ -1607,6 +1607,12 @@ internal partial class StatementBinder {
         for root in collector.Roots {
             RemoveByRoot(state, root)
         }
+        for path in state
+            .Keys
+            .Where((path AccessPath) -> collector.SharesStorageWithAssignedRoot(path.Root))
+            .ToArray() {
+            state.Remove(path)
+        }
     }
 
     /// Issue #2159: bound-tree walker collecting the root variable of every
@@ -1641,6 +1647,8 @@ internal partial class StatementBinder {
         private let enclosingGlobalAssignments Stack[VariableSymbol] = Stack[VariableSymbol]()
         private var globalMutationProtectedRoots HashSet[VariableSymbol]?
         private var tryAssignedVariables HashSet[VariableSymbol]?
+        private var aliasExpandedRoots HashSet[VariableSymbol]?
+        private var aliasExpandedCount int32 = -1
 
         init(
             assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?,
@@ -1782,8 +1790,33 @@ internal partial class StatementBinder {
             base.VisitExpression(node)
         }
 
+        // ADR-0208 R12 (#5171): whether [`root`](paramref) names the storage of an assigned
+        // root. A `ref` local and the plain variable it aliases are one storage.
+        func SharesStorageWithAssignedRoot(root VariableSymbol) bool {
+            if Roots.Count == 0 {
+                return false
+            }
+            if aliasExpandedRoots == nil || aliasExpandedCount != Roots.Count {
+                let expanded = HashSet[VariableSymbol]()
+                for assigned in Roots {
+                    for member in StatementBinder.AliasChain(assigned) {
+                        expanded.Add(member)
+                    }
+                }
+                aliasExpandedRoots = expanded
+                aliasExpandedCount = Roots.Count
+            }
+            for member in StatementBinder.AliasChain(root) {
+                if aliasExpandedRoots!!.Contains(member) {
+                    return true
+                }
+            }
+            return false
+        }
+
         func AssignsRoot(root VariableSymbol) bool {
             return Roots.Contains(root) ||
+                SharesStorageWithAssignedRoot(root) ||
                 (
                 root is ImplicitFieldVariableSymbol field && assignedFields.Contains(
                     AssignedField(field.Receiver, field.Field)
@@ -4122,6 +4155,67 @@ internal partial class StatementBinder {
                 CollectAllNames(child, names)
             }
         }
+
+        /// ADR-0208 R12 (#5171): the plain variable that the `ref` local
+        /// [`root`](paramref) names in its initializer, or `null` when
+        /// [`root`](paramref) is not such a local.
+        internal func TryGetAliasedRoot(root VariableSymbol) VariableSymbol? {
+            if !(root is LocalVariableSymbol local) || local.RefKind == RefKind.None {
+                return nil
+            }
+            var origin BoundExpression? = local.ManagedReferenceOrigin
+            while true {
+                if origin is BoundConversionExpression conversion {
+                    origin = conversion.Expression
+                } else if origin is BoundUnaryExpression unary &&
+                    unary
+                    .Op
+                    .Kind == BoundUnaryOperatorKind.NullAssertion {
+                    origin = unary.Operand
+                } else {
+                    break
+                }
+            }
+            return (origin as BoundVariableExpression)?.Variable
+        }
+
+        /// ADR-0208 R12 (#5171): [`root`](paramref) followed by the variables
+        /// it aliases through plain `ref` local initializers.
+        internal func AliasChain(root VariableSymbol) List[VariableSymbol] {
+            let chain = List[VariableSymbol]()
+            chain.Add(root)
+            var current = TryGetAliasedRoot(root)
+            while current != nil && chain.Count < 16 && !chain.Contains(current) {
+                chain.Add(current)
+                current = TryGetAliasedRoot(current)
+            }
+            return chain
+        }
+
+        /// ADR-0208 R12 (#5171): whether [`root`](paramref) may name storage
+        /// that no other root names: a by-reference parameter, whose caller may
+        /// pass an element or a member, or a `ref` local whose initializer is
+        /// not a plain variable. A member, index or indirect write and any call
+        /// can change that storage.
+        internal func IsExternalStorageAlias(root VariableSymbol) bool {
+            if root is ParameterSymbol parameter {
+                return parameter.RefKind != RefKind.None
+            }
+            if !(root is LocalVariableSymbol local) || local.RefKind == RefKind.None {
+                return false
+            }
+            let chain = AliasChain(root)
+            let last = chain[chain.Count - 1]
+            if last is ParameterSymbol lastParameter {
+                return lastParameter.RefKind != RefKind.None
+            }
+            return last is LocalVariableSymbol lastLocal && lastLocal.RefKind != RefKind.None
+        }
+
+        /// ADR-0208 R12 (#5171): whether a member, index or indirect write, or a
+        /// call, invalidates the narrowing of [`path`](paramref).
+        internal func DropsOnMemberMutation(path AccessPath) bool -> path.HasMembers ||
+            IsExternalStorageAlias(path.Root)
 
         /// Returns whether an expression kind can invoke user code or assign
         /// through a member-bearing path.
