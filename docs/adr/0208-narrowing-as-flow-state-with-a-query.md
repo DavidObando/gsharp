@@ -164,10 +164,13 @@ c1, c3a, c3b, `out-alias`, c5, c6, c7, c8, cA, cB and cC are review
 counterexamples against drafts of this ADR (PR #5164 threads on sections 9,
 10 and 16). c1, c3a, c3b, `out-alias`, c5, c6, c7 and cB are rejected
 today and the rules in sections 6, 9 and 10 keep them rejected. cA is a
-soundness hole in 0.5.212 that the rules close (row R10). c8 and c8b show
-that today's back-edge proof depends on the construction syntax; row R7
-records the uniform rule. cC is accepted today and rejected after (row R8
-outcome (a')).
+soundness hole in 0.5.212 that the rules close (row R10; filed as bug
+[#5168](https://github.com/DavidObando/gsharp/issues/5168), P1). c8 and
+c8b show that today's back-edge proof depends on the construction syntax
+(filed as [#5169](https://github.com/DavidObando/gsharp/issues/5169), P2);
+row R7 records the uniform rule. cC is accepted today and rejected after
+(row R8 outcome (a')); it runs correctly today, so it is a design change,
+not a defect.
 
 A third experiment measured section 10 rule 4: whole-loop kill, today's
 bound non-null proof kept, and every call (direct, indirect, constructor)
@@ -502,8 +505,8 @@ once per loop node, by a walker that extends today's
      syntaxes count: today `T(...)` preserves (`BoundConstructorCallExpression`
      in `IsDefinitelyNonNullValue`, `:1234`) and `T{...}` does not
      (`BoundStructLiteralExpression` is absent), which probes c8b and c8
-     show as `"dog"` versus `"animal"` for the same program; the uniform
-     rule is the deliberate choice (row R7);
+     show as `"dog"` versus `"animal"` for the same program (filed as
+     #5169, P2); the uniform rule is the deliberate choice (row R7);
    - `value!!` keeps a nullability fact only.
    Any other target or right side kills every fact on the root, including a
    variable or a call whose declared type would prove it. Requiring an
@@ -723,7 +726,7 @@ compatibility note. "Probe" refers to section 4.
 | R7 | Loop entry kills every inherited fact whose root the loop assigns or may write indirectly: (a) read before an exit-path write (e2b; the `break-only` shape of `Issue2943LoopBackEdgeNarrowingTests`); (b) reassignment from a variable or a call (the `access = inner` shape in Core; the `local`/`function` rows of `NonNullAssignmentAfterUse_PreservesInheritedNarrowing`); (c) a loop containing any call, for a root some closure of the function assigns or a by-reference/aliased root (three functions in Core); (d) output change in accepted programs: `x = Dog{}` now keeps a type-test fact like `x = Dog()` (c8 prints `dog`, not `animal`), and a reassignment from a variable or call drops a type-test fact that today's bound proof kept, so a hidden member read in the loop binds on the declared type | (a)-(c) accepted; (d) accepted | (a)-(c) GS0158 / GS0159 / GS0503; (d) accepted, different member selected | less permissive in (a)-(c); output change in (d) |
 | R8 | Backward `goto`: labels in the backward-jump region are bound under the region lower bound (section 10) and the optimistic bind with deferred re-reporting is gone. Four outcomes: (a) a region that reassigns the root from a variable or a call, which the deferred proof accepted, is rejected at the read; (a') a region that assigns nil inside a `try` whose `finally` restores a non-null value before the jump (probe cC) is rejected at the read, because the kill set does not model cleanup order; (b) a type-test fact killed at the label makes a read bind at the declared type, so a conversion that today fails against the stale narrowed type (`let result object = x` after `x = Cat{}; goto Again`) is accepted, or reports the declared type's own diagnostic; (c) everything else keeps its id at the same read | (a), (a') accepted; (b) GS0155; (c) GS0158/GS0159/GS0155 | (a), (a') GS0158/GS0159; (b) accepted, or GS0159/GS0116 at the same read; (c) same | mixed: less permissive in (a) and (a'), more permissive or a changed id in (b) |
 | R9 | Invalidation is expression-granular: `s != nil ? consume((s = nil), s.Length) : 0` (ADR-0064 L576-581, #4985) | accepted, dereferences nil at run time | GS0158 | less permissive (soundness) |
-| R10 | A catch clause sees the writes of every earlier clause's filter: `try { throw } catch when Clear(ref s) { } catch { s.Length }` where the filter stores nil and returns false (probe cA) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
+| R10 | A catch clause sees the writes of every earlier clause's filter: `try { throw } catch when Clear(ref s) { } catch { s.Length }` where the filter stores nil and returns false (probe cA; bug [#5168](https://github.com/DavidObando/gsharp/issues/5168)) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
 
 Details per row:
 
@@ -848,7 +851,11 @@ Details per row:
   compiler accepts it and the program throws). Compatibility: the program
   is wrong today; the diagnostic is the fix. ADR-0177's filter semantics
   (a false or throwing filter continues the handler search) is what makes
-  the earlier filter's write reach the later clause.
+  the earlier filter's write reach the later clause. The defect in the
+  current compiler is filed as #5168 (P1); a narrower fix in the current
+  scheme (invalidate the roots a filter writes before binding the remaining
+  clauses) may land before this ADR, in which case R10 becomes a no-change
+  row.
 
 ### 17. Not changed
 
