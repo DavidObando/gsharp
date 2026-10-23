@@ -169,6 +169,9 @@ class CompilationMeasurements : IDisposable {
         /// Gets whether the current request records measurements.
         prop IsEnabled bool -> current.Value != nil
 
+        /// Gets the file that the current request writes its JSON to, or `null`.
+        internal prop CurrentOutputPath string? -> current.Value?.outputPath
+
         /// Starts an explicit request. Dispose it after disposing every phase.
         func Start(tool string, outputPath string? = nil) CompilationMeasurements -> CompilationMeasurements(
             tool,

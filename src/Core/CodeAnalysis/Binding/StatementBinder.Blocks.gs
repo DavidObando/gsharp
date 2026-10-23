@@ -34,6 +34,8 @@ internal partial class StatementBinder {
         let arms = ImmutableArray.CreateBuilder[BoundPatternSwitchArm](syntax.Cases.Length)
         var hasDefault = false
         let callableEntry = CaptureExternalCallableAliases()
+        let shadowFlow = ShadowBegin(discriminant)
+        var shadowApproximate = false
         var callableExits HashSet[VariableSymbol]? = nil
         var callableFallthrough HashSet[VariableSymbol]? = nil
         // ADR-0069 addendum / issue #712: track each non-exiting arm's
@@ -60,6 +62,7 @@ internal partial class StatementBinder {
         binderCtx.LoopStack.Push((nil, switchBreakLabel, nil))
         try {
             for var caseIndex = 0; caseIndex < syntax.Cases.Length; caseIndex++ {
+                ShadowBeginBranch(shadowFlow)
                 let caseSyntax = syntax.Cases[caseIndex]
                 let callableArmEntry = HashSet[VariableSymbol](callableEntry)
                 if callableFallthrough != nil {
@@ -96,6 +99,8 @@ internal partial class StatementBinder {
                     }
                     hasDefault = true
                     var defaultBody = BindBlockStatement(caseSyntax.Body)
+                    ShadowAddBranch(shadowFlow, nil, defaultBody, true)
+                    shadowApproximate = shadowApproximate || endsInFallthrough
                     defaultBody = PrependArmEntryLabel(defaultBody, armEntryLabels[caseIndex])
                     arms.Add(BoundPatternSwitchArm(nil, pattern: nil, $guard: nil, defaultBody))
                     let callableDefaultExit = CaptureExternalCallableAliases()
@@ -156,6 +161,7 @@ internal partial class StatementBinder {
                         frame
                     )
                     callableEntry.ExceptWith(ApplyHeaderCallableEffects(guard_) ?? HashSet[VariableSymbol]())
+                    ShadowAddGuard(shadowFlow, guard_)
                 }
                 // ADR-0166: the arm body runs only when the guard was true, so the
                 // guard's when-true pattern variables (`when x.Tag is string tag`)
@@ -169,6 +175,8 @@ internal partial class StatementBinder {
                     }
                 )
                 $scope = $scope.Pop()
+                ShadowAddBranch(shadowFlow, frame, body)
+                shadowApproximate = shadowApproximate || endsInFallthrough
                 body = PrependArmEntryLabel(body, armEntryLabels[caseIndex])
                 arms.Add(BoundPatternSwitchArm(nil, pattern, guard_, body))
                 let callableArmExit = CaptureExternalCallableAliases()
@@ -235,6 +243,7 @@ internal partial class StatementBinder {
             Diagnostics
         )
         let result = BoundPatternSwitchStatement(nil, discriminant, boundArms, isExhaustive)
+        let shadowBreaks = binderCtx.UsedBreakLabels.Contains(switchBreakLabel)
         // ADR-0069 addendum / issue #712: park the merged narrowing on the
         // bound switch so the enclosing block walker can lift it. Only do
         // so when at least one arm fell through (otherwise the switch
@@ -254,12 +263,29 @@ internal partial class StatementBinder {
         // there. Switches with no arm-level break keep their bare shape (so
         // exhaustive all-arms-return switches still read as unconditional
         // exits to the all-paths-return check).
-        if binderCtx.UsedBreakLabels.Contains(switchBreakLabel) {
-            return BoundBlockStatement(
+        if shadowBreaks {
+            let wrapped = BoundBlockStatement(
                 syntax,
                 ImmutableArray.Create[BoundStatement](result, BoundLabelStatement(nil, switchBreakLabel))
             )
+            ShadowFinish(
+                shadowFlow,
+                "switch",
+                syntax.SwitchKeyword.Location,
+                []BoundStatement{result, wrapped},
+                !(hasDefault || isExhaustive),
+                true
+            )
+            return wrapped
         }
+        ShadowFinish(
+            shadowFlow,
+            "switch",
+            syntax.SwitchKeyword.Location,
+            []BoundStatement{result},
+            !(hasDefault || isExhaustive),
+            shadowApproximate
+        )
         return result
     }
 
@@ -2158,7 +2184,13 @@ internal partial class StatementBinder {
             )
             typedVariablePrelude = BoundVariableDeclaration(syntax, declaredVariable, convertedValue)
         }
-        var body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel)
+        var body = BindLoopBody(
+            syntax.Body,
+            labelName,
+            out var breakLabel,
+            out var continueLabel,
+            iterationRunsUserCode: true
+        )
         if typedVariablePrelude != nil {
             body = BoundBlockStatement(originatingSyntax, ImmutableArray.Create(typedVariablePrelude, body))
         }

@@ -536,6 +536,8 @@ internal class LambdaBinder {
         let survivingNarrowed = FilterNarrowingsSurvivingClosureCapture(savedNarrowed)
         binderCtx.NarrowedVariables.Clear()
         binderCtx.NarrowedVariables.AddRange(survivingNarrowed)
+        let savedShadowOverlay = binderCtx.ShadowOverlay
+        binderCtx.ShadowOverlay = savedShadowOverlay.ForClosureBody()
         // Issue #2027: a function literal (lambda OR local function — this
         // method binds both) is its own goto/label frame; isolate it from
         // the enclosing function's labels and loop stack.
@@ -547,6 +549,7 @@ internal class LambdaBinder {
         } finally {
             binderCtx.NarrowedVariables.Clear()
             binderCtx.NarrowedVariables.AddRange(savedNarrowed)
+            binderCtx.ShadowOverlay = savedShadowOverlay
             RestoreNestedFrame(savedFrame)
         }
         Scope = outerScope
@@ -1361,6 +1364,8 @@ internal class LambdaBinder {
         let survivingNarrowed = FilterNarrowingsSurvivingClosureCapture(savedNarrowed)
         binderCtx.NarrowedVariables.Clear()
         binderCtx.NarrowedVariables.AddRange(survivingNarrowed)
+        let savedShadowOverlay = binderCtx.ShadowOverlay
+        binderCtx.ShadowOverlay = savedShadowOverlay.ForClosureBody()
         // Issue #2027: an arrow lambda is its own goto/label frame — a
         // block-bodied arrow lambda (`x => { ...; goto foo; foo: ...; }`)
         // can contain loops and labels of its own, so isolate it from the
@@ -1382,6 +1387,7 @@ internal class LambdaBinder {
         } finally {
             binderCtx.NarrowedVariables.Clear()
             binderCtx.NarrowedVariables.AddRange(savedNarrowed)
+            binderCtx.ShadowOverlay = savedShadowOverlay
             RestoreNestedFrame(savedFrame)
         }
         Scope = outerScope

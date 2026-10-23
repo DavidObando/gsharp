@@ -53,14 +53,17 @@ internal partial class StatementBinder {
             // else-branch (`if !(x is T t) { ... } else { use(t) }`).
             let (patternThen, patternElse) = PatternVariables.Classify(condition)
             let callableEntry = CaptureExternalCallableAliases()
+            let shadowFlow = ShadowBegin(condition)
             let thenStatement = BindWithPatternVariables(
                 patternThen,
                 () -> {
                     return BindStatementWithNarrowing(syntax.ThenStatement, thenNarrow)
                 }
             )
+            ShadowAddBranch(shadowFlow, thenNarrow, thenStatement)
             let callableThenExit = CaptureExternalCallableAliases()
             RestoreExternalCallableAliases(callableEntry)
+            ShadowBeginBranch(shadowFlow)
             let elseStatement = if syntax.ElseClause == nil {
                 default(BoundStatement?)
             } else {
@@ -71,6 +74,7 @@ internal partial class StatementBinder {
                     }
                 )
             }
+            ShadowAddBranch(shadowFlow, elseNarrow, elseStatement)
             let callableElseExit = if syntax.ElseClause == nil {
                 callableEntry
             } else {
@@ -78,6 +82,7 @@ internal partial class StatementBinder {
             }
             RestoreJoinedExternalCallableAliases(callableThenExit, callableElseExit)
             let result = BoundIfStatement(syntax, condition, thenStatement, elseStatement)
+            ShadowFinish(shadowFlow, "if", syntax.Location, []BoundStatement{result}, false, false)
             // ADR-0069 / issue #700: record the else-frame so `BindBlockStatements`
             // can lift it into the enclosing block when the then-branch ends in
             // an unconditional exit (`return`/`throw`/`break`/`continue`).
@@ -109,14 +114,17 @@ internal partial class StatementBinder {
         let (initThenNarrow, initElseNarrow) = ClassifyIfConditionNarrowing(initCondition)
         let (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition)
         let initCallableEntry = CaptureExternalCallableAliases()
+        let initShadowFlow = ShadowBegin(initCondition, initStatement)
         let initThen = BindWithPatternVariables(
             initPatternThen,
             () -> {
                 return BindStatementWithNarrowing(syntax.ThenStatement, initThenNarrow)
             }
         )
+        ShadowAddBranch(initShadowFlow, initThenNarrow, initThen)
         let initCallableThenExit = CaptureExternalCallableAliases()
         RestoreExternalCallableAliases(initCallableEntry)
+        ShadowBeginBranch(initShadowFlow)
         let initElse = if syntax.ElseClause == nil {
             default(BoundStatement?)
         } else {
@@ -127,6 +135,7 @@ internal partial class StatementBinder {
                 }
             )
         }
+        ShadowAddBranch(initShadowFlow, initElseNarrow, initElse)
         let initCallableElseExit = if syntax.ElseClause == nil {
             initCallableEntry
         } else {
@@ -138,7 +147,7 @@ internal partial class StatementBinder {
         if initElseNarrow != nil && initElseNarrow.Count > 0 {
             binderCtx.PendingEarlyExitFrames[inner] = initElseNarrow
         }
-        return BoundBlockStatement(
+        let initResult = BoundBlockStatement(
             syntax,
             ImmutableArray.Create[BoundStatement](
                 Invariant.Required(
@@ -149,6 +158,8 @@ internal partial class StatementBinder {
                 inner
             )
         )
+        ShadowFinish(initShadowFlow, "if", syntax.Location, []BoundStatement{inner, initResult}, false, false)
+        return initResult
     }
 
     // ──────────────────────────────────────────────────────────────────────

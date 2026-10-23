@@ -5076,12 +5076,20 @@ internal partial class ExpressionBinder {
             }
         }
 
-        private func SameClrMethodSlot(left MethodInfo, right MethodInfo) bool {
+        internal func SameClrMethodSlot(left MethodInfo, right MethodInfo) bool {
             var left = left
             var right = right
             try {
-                left = left.GetBaseDefinition()
-                right = right.GetBaseDefinition()
+                // A `MetadataLoadContext` method answers `GetBaseDefinition` by throwing
+                // (cref:NotSupportedException). Skip the call for it; the sequence keeps the
+                // outcome of the throwing form, where the left side is already replaced when
+                // only the right side throws.
+                if !ClrTypeUtilities.IsMetadataLoadContextMember(left) {
+                    left = left.GetBaseDefinition()
+                    if !ClrTypeUtilities.IsMetadataLoadContextMember(right) {
+                        right = right.GetBaseDefinition()
+                    }
+                }
             } catch (ex Exception) when ClrTypeUtilities.IsMetadataLoadFailure(ex) {
                 // MetadataLoadContext cannot expose override chains, so only exact
                 // member identity is safe.
