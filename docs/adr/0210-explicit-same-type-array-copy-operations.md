@@ -1,10 +1,11 @@
-# ADR-0210: Explicit same-type array copy operations
+# ADR-0210: Array copy operations and fixed-array value evaluation
 
 - **Status**: Proposed
 - **Date**: 2026-10-23
 - **Phase**: Design only. No compiler, runtime, translator or SDK-pin change
   is part of this record.
 - **Issue**: [#5208](https://github.com/DavidObando/gsharp/issues/5208),
+  evaluation follow-up [#5221](https://github.com/DavidObando/gsharp/issues/5221),
   part of [#4333](https://github.com/DavidObando/gsharp/issues/4333)
 - **Related**: [ADR-0191](0191-go-to-gsharp-migration-tool.md) sections 1.1,
   6.1, 7 and 12,
@@ -16,8 +17,9 @@
   [ADR-0154](0154-test-oracle-strength.md),
   [Withdrawn ADR-0206](0206-explicit-snapshot-and-selected-location-receivers.md)
 
-This record proposes a semantic contract and a ranked spelling. A merge of
-this document accepts neither. The maintainer approves semantics, and a
+This record evaluates fixed-array values and proposes an explicit-copy
+contract as the compatible baseline. A merge accepts neither proposal.
+The maintainer approves semantics, and a
 separate implementation issue, release and N-1 pin change follow only after
 that approval.
 
@@ -45,17 +47,40 @@ The intended outcome is:
 | `copy` | `{1.0, 0.75}` | The copy has independent element storage |
 | static type of `copy` | `[2]float64` | Same existing type, not a new category |
 
-Ordinary sharing stays. `b = a`, argument passing, returns, struct fields,
+In that original operation-only proposal, ordinary sharing stays.
+`b = a`, argument passing, returns, struct fields,
 slice-literal elements and generic slots continue to copy the array
 reference. The request is about an operation, not a change in what `[N]T`
-means.
+means. The follow-up request asks whether changing that meaning is preferable.
 
 An earlier internal investigation conditionally preferred a new value-array
 type such as `value [N]T`. A second investigation reversed that ranking: the
 example needs one operation over the existing type, and no new type is
-necessary for it. A new array category, inline storage and audio layout remain
-possible future topics. Each needs its own justification and is not part of
-this record.
+necessary for that operation. The maintainer subsequently authorized a serious
+evaluation of making existing `[N]T` assignments and swaps Go-like values.
+Section 8 evaluates that breaking alternative without treating the earlier
+ranking as settled. It does not authorize implementation or semantic acceptance.
+Audio layout remains a separate workload gate.
+
+### Why fixed arrays, not all buffer types?
+
+Go arrays contain element values. Current G# `[N]T` instead retains a CLR
+array reference. This is the gap under evaluation. G# `[]T` / `array[T]`
+deliberately means CLR `T[]`, not Go `[]T`; it remains the interop anchor.
+Native `slice[T]` already copies a descriptor while sharing outer element
+storage ([ADR-0190](0190-native-slices-and-clr-array-interoperability.md)).
+That resembles Go slices, but does not establish full Go equivalence.
+Native default descriptors are usable empty values and cannot compare to
+`nil`; Go has nil slices. See the specification's
+[native slice contract](../../website/docs/ref/spec.md#native-shared-storage-slices).
+
+The proposed inner value boundary must compose with that outer sharing:
+copying `slice[[N]T]` still shares its buffer, reading an element as a value
+copies the fixed array, and assigning an element stores into its selected
+location. `frames[i][j] += rhs` must write through that location, not a
+temporary element copy. This evaluation does not redesign `[]T`, native
+slices or their general Go mapping. Views over value-backed arrays require
+the separate lifetime decision in section 8.
 
 ### Current behavior that the contract must respect
 
@@ -171,6 +196,27 @@ arrays or promise an allocation count.
 
 ## Decision
 
+### 0. Recommendation after the value-array evaluation
+
+Keep the explicit-copy proposal as the compatible, implementable baseline,
+not as proof that fixed-array values are undesirable. Investigate a genuine
+CLR value representation as the preferred candidate **if ordinary, including
+uninstrumented generic, value copying is the approved goal**. The direct
+source footprint is small enough to justify that investigation. It is not
+evidence that a breaking release is safe.
+
+Do not select automatic copying over the existing `T[]` representation as
+a general solution. It can support a closed, instrumented lowering profile,
+but uninformed CLR generic bodies and struct copies bypass its copy hooks.
+Keeping the physical ABI would not solve that semantic problem.
+
+There is no complete arbitrary-`N` value-array design yet. Canonical
+cross-assembly carrier identity and owner-retaining escaping views are
+blocking acceptance gates, not implementation details to assume away.
+Section 8 records the alternatives, compatibility choices and evidence
+needed to resolve them. If those gates fail, explicit CopyNew/CopyInto
+remains a real outcome. No spelling or breaking semantics is accepted here.
+
 ### 1. Proposed semantic contract for a fresh same-type copy (CopyNew)
 
 Whatever spelling is selected, the operation has these semantics. Section 2
@@ -199,8 +245,10 @@ adds no receiver mode.
 
 ### 2. Ranked spelling
 
-The recommendation is to admit a zero-argument `.copy()` on single-dimensional
-arrays, under the contract above. Option 2 is a fully viable outcome. If the
+For the compatible explicit-copy direction, the recommendation is to admit
+a zero-argument `.copy()` on single-dimensional arrays, under the contract
+above. This does not select the breaking direction in section 8.
+Option 2 is a fully viable outcome. If the
 maintainer prefers no new surface, the contract becomes the documented meaning
 of the existing idiom, and the Go lowering in section 4 still works.
 
@@ -210,7 +258,7 @@ of the existing idiom, and the Go lowering in section 4 still works.
 | 2 (real alternative) | No language change: `cast[[N]T](a.Clone())`, or an ordinary user or library extension such as `CloneArray` | Works today (P1, P3). An extension also works in generic code over `T Array`, where an intrinsic does not apply. Costs: the cast restates the type and is unchecked; a shipped extension is a public API naming decision; an `Array` constraint also admits rectangular arrays and `System.Array`. |
 | 3 | Maintainer candidate `a.(value)` | Coherent: it can mean "the same type, as a fresh value", and it cannot collide with member lookup. Costs: a new postfix production after `.`, which must compose with later indexing, calls and `?.`. `value` would be contextual only inside that production, and it is also the property-setter parameter name, so `value.(value)` is legal but unclear. For Go readers, `x.(T)` is a type assertion, so `frame.(value)` can read as "assert to a type named `value`". This is not a G# grammar conflict, because G# has no `.(T)` form. It is a readability cost for the migration audience. |
 | 4 (rejected) | Retype `Array.Clone()` on `[N]T` receivers to return `[N]T` | Changes the type of existing expressions. `var o = a.Clone()` changes from `object`, which can change overload resolution and inference in source that compiles today. |
-| 5 (out of scope) | A new value-array type such as `value [N]T` | Not needed for this operation. Revisit only for a separately approved requirement that uninstrumented G# assignment, fields or generic code copy automatically, or for a storage requirement. |
+| Separate semantic decision | Existing `[N]T` becomes a value, or a distinct value-array type | Not a spelling for CopyNew. Evaluated in section 8 for automatic copying, generic composition and stable locations; not rejected merely because the original operation needs no new type. |
 
 Rules for the recommended `.copy()` admission:
 
@@ -497,7 +545,8 @@ data type for this purpose.
 These examples are readable ordinary G#. Long field lists, nested shapes and
 effectful destinations can make the output dense. Such output must pass the
 ADR-0191 side-by-side output review. Failure there is a reason to consider a
-reusable store facility, not evidence for a new type.
+reusable store facility. It does not by itself decide the value-type
+alternative in section 8.
 
 #### Unsupported neighbors in this profile
 
@@ -638,7 +687,249 @@ inner arrays. An ordinary struct such as `StereoFrame` in
 storage is therefore a separate decision. This record makes no allocation,
 latency or throughput claim and measured none.
 
+### 8. Evaluation: make existing `[N]T` a value?
+
+All contracts in this section are candidate obligations, not language rules.
+Sections 1-7 describe the reference-array baseline and explicit operations.
+They must be revised if the maintainer later selects breaking value semantics.
+
+#### Evidence and compatibility scope
+
+A parser census at `02a9eb8f5ab9fe2c8c0d66713e3cd9d3be3a8b60`
+traversed 4,507 `.gs` files. It found five live fixed-array literals in four
+samples: [`Arrays.gs`](../../samples/Arrays.gs) twice,
+[`CountWords.gs`](../../samples/CountWords.gs),
+[`ParenthesizedReceiver.gs`](../../samples/ParenthesizedReceiver.gs) and
+[`SliceLinqUntypedLambda.gs`](../../samples/SliceLinqUntypedLambda.gs).
+It found no live fixed-array type clauses, and no fixed-array literals in
+compiler, runtime or tool implementation source. Comments and embedded
+fixture programs were excluded. Twenty-six files had parser diagnostics;
+a separate numeric-array-line check found only
+[`Bench.gs`](../../bench/concurrency/gsharp/Bench.gs)'s empty numeric
+allocation among them. This is a syntax census, not a build, external-user
+survey or predicted count of failing tests.
+
+A prior current-behavior probe observed sharing through assignment,
+parameters, `List`, nested arrays and native slice elements. Its swap
+retained the old backing array, `default` was nil and reflection reported
+`Int32[]`. It used the local protocol-core compiler at
+`fa0d27cfe6b5424d182c52809312f9a205235025`, not a rebuilt census snapshot or
+published compiler. The audited array symbol, creation parser and literal
+binder had no diff from the census base. None of these results exercises
+a compiler with value-array semantics.
+
+The compatibility surface is larger than five literals:
+
+| Existing contract and source evidence | Effect of genuine fixed-array values |
+| --- | --- |
+| [`Issue3998FixedArrayLengthConversionTests`](../../test/Compiler.Tests/Issue3998FixedArrayLengthConversionTests.gs), `AcceptedCases`: implicit `[N]T -> []T` is sharing; explicit `[3]T -> [4]T` keeps physical length 3 | A real length-4 value cannot retain length 3. Reject mismatches or define an explicit checked copy; do not retain an unchecked false length. A value-to-reference bridge must say copy or retained view. Neither is today's no-op identity conversion. |
+| Same tests: `System.Array`, `IEnumerable[T]`, `object`, reflection name `Int32[]` | A CLR struct is not an array. Explicit materialization can preserve API access, not array identity. Sequence enumeration may copy or borrow under an explicit lifetime rule. Boxing reports the carrier type. |
+| [`Issue3962GenericOverFixedArrayIdentityTests`](../../test/Compiler.Tests/Issue3962GenericOverFixedArrayIdentityTests.gs), `InteropCases`: actual C# `List<int[]>` and nested lists cross both directions | `List<Carrier<int>>` is not `List<int[]>`. Elementwise adapters can copy and validate but cannot be identity conversions preserving foreign mutation. Generic invariance forbids reinterpreting either list. |
+| [`ArrayTypeSymbol`](../../src/Core/CodeAnalysis/Symbols/ArrayTypeSymbol.gs) and the [array specification](../../website/docs/ref/spec.md#arrays-and-slices): source shape retains `N`; imported `T[]` has no `N` and is length-lenient | Import needs validated shape metadata for new values, or explicit foreign-array conversion. Missing length is not evidence of a matching value shape. Old libraries remain reference-array libraries. |
+
+**Inference is a separate decision.** In expression position, `[5]T` and
+`[5]T{}` allocate zero-initialized **`[]T`** today. Only a nonempty
+`[5]T{...}` literal gives fixed `[5]T`; in type position `[5]T` is fixed.
+See [`Parser.Expressions.Creation`](../../src/Core/CodeAnalysis/Syntax/Parser.Expressions.Creation.gs)
+and [`ExpressionBinder.Literals`](../../src/Core/CodeAnalysis/Binding/ExpressionBinder.Literals.gs).
+Changing the fixed type while preserving that inference limits the direct
+source migration. It leaves an ergonomic surprise: an empty numeric
+allocation is not a value-array literal. Typed zero declarations or a
+separately designed construction form must remain unambiguous, including
+length zero.
+
+Revising constant numeric allocations to infer value arrays is a larger,
+independent breaking choice, not a harmless consistency fix. It reaches
+[`ByteString.DecodeUtf8`](../../src/Sdk/Gsharp.Runtime.Values/ByteString.gs)
+(`buffer.AsSpan()` and `StringBuilder.Append(char[], ...)`),
+[`TupleTypeSymbol.BuildClrType`](../../src/Core/CodeAnalysis/Symbols/TupleTypeSymbol.gs)
+(`Array.Copy` and `MakeGenericType(Type[])`), and channel receive buffers
+([`ChanBatchTests`](../../test/Runtime.Channels.Tests/ChanBatchTests.gs)).
+[`cs2gs` array translation](../../tools/cs2gs/Cs2Gs.Translator/CSharpToGSharpTranslator.Patterns.gs)
+intentionally emits `[]T{...}` literals and `[n]T` allocations for C# arrays.
+Preserving `[]T` requires a clear zero-filled CLR-array allocation path.
+Keeping `[n]T` inference is the narrower candidate; changing it requires
+rewriting these consumers and cs2gs output, not silently materializing copies.
+Existing `System.GC.AllocateArray[T](n)` is a CLR-array alternative, subject
+to its own ordinary API contract, not newly selected native syntax.
+
+#### Compare the three directions
+
+| Direction | What it genuinely supplies | Remaining cost or blocker |
+| --- | --- | --- |
+| Reference arrays plus explicit CopyNew/CopyInto | Existing ABI, sharing, defaults, generic interop and array APIs. Sections 1-7 supply a bounded Go lowering with real current-language alternatives. | Automatic copies require frontend instrumentation. Nested shapes, generic bodies and location stores remain explicit. Inner arrays remain allocated. This is the compatible baseline, not full Go arrays. |
+| Existing `[N]T` with a real CLR value representation | Ordinary CLR value copies compose through fields, generic code, containers and boxing. Nested fixed-array carriers copy recursively; reference elements retain sharing. | Breaking conversions and reflection; exact cross-assembly identity, zero-length storage and escaping views unresolved. Large values increase copy/stack/ABI costs. This is the preferred research candidate for a general value goal, conditional on the gates below. |
+| Compiler-directed copies while retaining `T[]` | Can preserve physical public signatures and most foreign array API calls. Recursive fresh copies and destination stores can implement a closed translated subset. | Every semantic boundary must cooperate. Foreign `Duplicate<T>(T x) => (x, x)` still duplicates a reference, and foreign code copying a struct with an array field shares that field. Neither a caller copy nor intercepting `List.Add` fixes those internal copies. General support needs specialization, changed storage, cooperative code or rejected boundaries. It is not transparent CLR-wide value semantics. |
+
+The last direction need not change the physical ABI. It **does** change the
+source/metadata contract if G# callers expect value semantics. An attribute
+can tell a cooperating compiler to copy; it cannot make old IL copy.
+Copy-on-write is not an escape: retained writable byrefs, raw arrays and
+foreign mutations can bypass the write barrier.
+
+#### Complete copy and location obligations
+
+The value candidate must cover this matrix before semantic acceptance.
+These are not claims that ordinary shallow `Array.Clone` suffices.
+
+| Boundary | Required value behavior and distinguishing obligation |
+| --- | --- |
+| Declarations, assignment, parameters and returns | A value read creates independent fixed-array contents. A write replaces contents at the destination location. Conservative snapshots precede later mutating calls where the selected evaluation plan requires them; elision needs an ownership/alias proof. |
+| Parallel assignment and swap | Capture required RHS values before stores. `a,b=b,a` must exchange contents while retained `managed(a[0])` and views of `a` keep observing destination `a`. Clone-and-rebind fails W3. |
+| Fields, enclosing structs, tuples and nested arrays | A struct copy must copy its fixed-array fields, recursively through value elements. `[N][M]T` copies both fixed axes. Class, CLR-array, native-slice and managed-handle elements retain their ordinary reference/descriptor semantics. No recursive cloning through class graphs or slices. |
+| Generic functions and containers | An open `T` copy must work without inspecting source spelling. `List[[N]T]` insertion, return and ordinary by-value extraction copy values. Ref-returning access selects a location; a by-value property result is not a writable parent. Test unknown CLR generic bodies and nested instantiations, not just direct `Add` calls. |
+| Native slices and channels | `slice[[N]T]` copies only the outer descriptor. By-value element reads and sends/receives copy inner values; direct nested writes address original storage. Growth, `clear`, batch operations and default element creation must not introduce shared inner fixed arrays or nil elements. CLR value storage can compose naturally; a `T[]` element representation needs cooperating runtime paths. |
+| Boxing and protocols | CLR value boxing/unboxing copies the carrier; reference-backed arrays do not. ADR-0205 already copies actual structs at concrete insertion/recovery and retains protocol entries on transport. A value carrier would compose with that policy; `T[]` would need additional copy evidence, including array fields inside structs. Fixed-array protocol slots remain blocked pending their public/ref contract. No new receiver modes. |
+| Zero, default and nullability | A non-null value `[N]T` has zeroed elements, including collection slots, enclosing defaults and generic `default(T)`; `[0]T` is a valid empty value. Reference elements keep CLR-default nil where applicable. A nullable container needs explicit absence, distinct from a zero value and from nullable elements. Revisit current nil comparison and platform imports through ADR-0186's funnel; no blanket `!!` workaround. |
+| Writable/readonly locations, views and handles | Element reads may copy; nested writes and compound updates select a location exactly once. Readonly access cannot grant writable spans/handles. A view or exact invariant managed handle retains the destination owner/path, not a detached copy. Raw borrows obey existing escape and suspension rules. |
+
+The last row is not solved merely by inline layout. Stack-local inline
+storage can yield a scoped `Span<T>`, not automatically an escaping,
+heap-storable native `slice[T]`. Current native slices own exact `T[]`.
+An explicit `ToArray` can be a copy bridge, never a shared view.
+A new retained view over a promoted cell, class field or carrier-array
+element needs a separate owner/path representation and public contract.
+Promotion must precede every derived alias and survive later whole-value
+stores. It must not turn all ordinary value copies into aliases.
+Existing ADR-0188 handles are invariant in their exact referent type.
+Neither covariance nor a fabricated `ref T[]` over carrier storage is valid.
+
+**Evaluation and faults remain distinct policies.** Native G# parallel
+assignment follows [ADR-0015](0015-multi-target-assignment.md): capture targets,
+evaluate RHS values, then write, each phase left-to-right. A representation
+change must not silently replace that policy with Go's. Go translation uses
+the qualified evaluation plan in section 4: calls, method calls and receives
+have lexical order, but not all bare operand reads do. W24 is a guaranteed
+witness; W25 records one permitted observation, not a universal rule.
+For recursive or overlapping stores, snapshot any source an earlier write
+can affect, including array-valued fields. Select effectful receivers and
+indices once. Test `frames[next()][j] += rhs`, aliasing destinations, a later
+RHS fault, and a later store fault. No blanket prevalidation or transaction
+may erase a permitted earlier Go store. Conversely, existing native G#
+capture-time faults must still prevent its stores. These obligations remain
+unrun for a hypothetical value compiler.
+
+#### CLR representation and public identity gates
+
+G# already synthesizes nominal fixed-buffer backing structs in
+[`DeclarationBinder.Structs`](../../src/Core/CodeAnalysis/Binding/DeclarationBinder.Structs.gs).
+They have a sized sequential layout and a restricted primitive element set.
+They are useful emitter prior art, not arbitrary open-`T`, GC-tracked,
+zero-length value arrays.
+
+.NET inline arrays are stronger prior art. The
+[.NET 10 runtime design](https://github.com/dotnet/runtime/blob/v10.0.0/docs/design/features/InlineArrayAttribute.md)
+supports replicated generic element layout, including GC references, with
+positive length and no explicit layout. Struct/runtime size limits still
+apply. The [C# design](https://github.com/dotnet/csharplang/blob/main/proposals/csharp-12.0/inline-arrays.md)
+distinguishes writable, readonly and temporary access and checks span escape.
+It supplies building blocks, not anonymous arbitrary-length CLR type identity.
+
+Candidate choices need explicit bounds and rejection diagnostics for
+unsupported element types, recursive layout, size overflow and excessive
+value sizes. Length zero needs a distinct empty representation; applying
+`InlineArray(0)` is invalid. Open `T`, nested carriers, GC layout, calling
+conventions and code size need JIT and NativeAOT proofs. A large fixed value
+may be more expensive than a reference plus a bounded copy. No performance
+campaign was run. Default inline-array equality/hash also cannot be assumed
+to supply Go equality; the runtime document requires overrides when used.
+
+Most importantly, independently synthesized carriers are **nominal**.
+Two libraries declaring identical `Shape.Array2<T>` structs do not share a
+CLR type. Their `List` instantiations do not interoperate by shape
+([assembly-qualified types](https://learn.microsoft.com/en-us/dotnet/api/system.type.assemblyqualifiedname?view=net-10.0),
+[generic invariance](https://learn.microsoft.com/en-us/dotnet/standard/generics/covariance-and-contravariance)).
+Deterministic generated names are necessary but insufficient.
+
+No canonical arbitrary-`N` mechanism is selected. A finite SDK-owned carrier
+family proves only supported lengths. A shared compositional generic
+encoding would need to prove canonical shape, layout, nesting and public
+accessibility; a producer-owned shape manifest still needs a rule when two
+independent producers export the same source shape. Explicit conversion
+between nominal carriers cannot preserve invariant generic identity.
+Do not claim structural CLR unification or silently expose different source
+identities for the same `[N]T`.
+
+Before acceptance, specify the canonical carrier owner and signature
+encoding; import/reexport rules; foreign C# construction and element access;
+generic constraints (`Array` versus `struct`); overload identity; reflection;
+helper visibility; versioning; and deterministic implementation/reference
+assembly parity. Length cannot depend on private fields or usable reference
+bodies. A consumer built against `/refout` must select the same type and
+bridges as one built against the implementation. A physical carrier ABI
+would break old public array signatures; a `T[]` lowering might keep those
+signatures but still needs a versioned cooperative semantic contract.
+Neither scheme makes old binary callers value-aware.
+
+#### Bounded runnable evidence, not a compiler prototype
+
+A C#/.NET 10.0.401 probe ran with:
+
+```sh
+dotnet run --project .array-value-evidence/Probe/Probe.csproj --configuration Release
+```
+
+It used two isolated libraries, each declaring the same named
+`[InlineArray(2)] struct Array2<T>` with one `T` field, plus a caller.
+All ten assertions passed: zero default, generic value copy, `List` value
+read, nested value copy, retained `ref`/`Span` through a whole-value swap,
+boxing copy, generic `T[]` sharing, array-field sharing through a generic
+struct copy, distinct cross-assembly carrier types and incompatible lists.
+For the retained-location check, the caller saved `ref a[0]` and a span of
+`a`, swapped `a,b`, then wrote 7 through the ref. `a[0]` and the span read 7;
+`b[0]` retained 1.
+
+These are bounded CLR observations, not G# implementation results.
+The opposite generic outcomes discriminate a real value carrier from an
+unchanged array reference. The two-assembly result demonstrates the identity
+blocker; it does not solve it. The isolated research scaffold is not a
+product dependency or a committed feature. ILVerify, NativeAOT, arbitrary
+lengths, public/ref imports, escaped G# views and value-array protocols were
+not run. Existing W2-W8 and W18-W25 retain their original status.
+
+#### Migration, bootstrap and acceptance
+
+1. **Semantic choice first.** Review this matrix and choose reference arrays,
+   or approve a complete value contract with resolved identity and lifetime
+   gates. A distinct opt-in value type remains an alternative if breaking
+   existing `[N]T` is unacceptable; its syntax is not selected.
+2. **Scoped conversions.** Keep `[]T` as the CLR interop anchor. Specify
+   explicit checked foreign-array import, value-to-array materialization and
+   separately permission/lifetime-checked views. Do not retain false-length
+   casts or identity conversion of invariant foreign lists. Diagnose
+   unsupported boundaries instead of adding implicit copy/view adapters.
+3. **Migration evidence.** Inventory syntax and semantic uses, including
+   embedded tests, public signatures, generic member slots, reflection,
+   defaults, nil checks, retained aliases and cs2gs allocations. A migration
+   analyzer/code fix should distinguish intended sharing from values; it
+   cannot infer that intent from `[N]T` alone. Show diagnostics and before/
+   after text for each conversion class. Do not mass-update expected output
+   without a reviewed semantic witness.
+4. **Release compatibility.** If breaking semantics is chosen, use a
+   deliberately identified breaking release and metadata capability revision.
+   Old binaries retain their old IL and array signatures. Recompiled clients
+   must not silently treat them as value libraries. A temporary legacy mode
+   is justified only with explicit assembly-level identity and a removal
+   policy; per-file modes cannot safely disagree on a public shape.
+   No transitional mode is selected here.
+5. **N-1 bootstrap.** Implement using only features supported by the previous
+   released `Gsharp.NET.Sdk`. Keep repository source on old-compatible forms
+   until the feature is released. Move the pin in a separate PR, rebuild from
+   a clean clone, then adopt new semantics in source/tests/tools. No unreleased
+   pin or source exclusions. The small syntax census is not stage-2 evidence.
+6. **Acceptance and admission are separate.** Semantic acceptance needs
+   resolved public/ref identity, the full copy/store/default/conversion
+   matrix and retained-owner rules. Implementation then needs ADR-0154
+   witnesses, ILVerify, JIT/AOT, deterministic metadata, foreign and
+   cross-assembly tests, formatter/IDE and migration tooling. Go admission
+   additionally needs unchanged-Go differential runs, rejected neighbors,
+   readable output and ADR-0191's four stages. Equality, named Go identity,
+   panic behavior and audio no-inner-array performance remain independent
+   proof obligations. A document merge proves none of them.
+
 ## Consequences
+
+For the explicit-copy baseline (sections 1-7):
 
 Positive:
 
@@ -664,8 +955,10 @@ Negative and limits:
 Neutral:
 
 - No metadata, ABI, runtime library or reference-assembly change.
-- ADR-0191's fixed-array track becomes operation-first. A new value-array type
-  or inline storage stays a possible separate proposal.
+- ADR-0191's fixed-array track keeps explicit operations as the compatible
+  baseline and now evaluates a breaking value-array alternative. Genuine CLR
+  value storage is the conditional research preference for automatic generic
+  copying, not an accepted replacement.
 - No SDK pin moves, and repository source cannot use the operation until a
   release that contains it becomes the pin.
 
@@ -684,9 +977,10 @@ Neutral:
 - **Range or slice copies (`a[..]`, `slice[T].FromArray(a).ToArray()`).**
   These copy but return `[]T` and lose `N` (W23).
 - **A new value-array type (`value [N]T`) or automatic copying of `[N]T`.**
-  Not required for this operation. Automatic copying would break ADR-0190
-  interop and existing source. A distinct type remains a separate future topic
-  if a requirement for uninstrumented copy semantics or storage is approved.
+  Section 8 evaluates these separately from operation spelling. Automatic
+  copying is worth serious consideration, but canonical identity and retained
+  views remain unresolved. A distinct opt-in type could avoid breaking existing
+  fixed arrays, at the cost of another category and its own interop rules.
 - **Intrinsic-first `.copy()` for arrays.** Rejected: it would change the
   meaning of existing calls to extensions named `copy`.
 - **A length-checked copy.** Not proposed. A same-type copy that throws for a
