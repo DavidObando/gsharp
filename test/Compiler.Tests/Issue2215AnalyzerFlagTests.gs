@@ -359,7 +359,9 @@ namespace GscAnalyzerFlagTestGenerators
         let prevEnvironment = Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
         try {
             for useSwitch in[]bool{true, false} {
-                let tempDir = Directory.CreateTempSubdirectory("gsc_sdktools_run_").FullName
+                // Under `tools`, so the cleanup in the finally block removes it.
+                let tempDir = Path.Combine(tools, "run-$useSwitch")
+                Directory.CreateDirectory(tempDir)
                 let sample = Path.Combine(tempDir, "Foo.gs")
                 File.WriteAllText(sample, "package MyLib\n\n@Obsolete\npartial class Foo {\n}\n")
                 let outPath = Path.Combine(tempDir, "MyLib.dll")
