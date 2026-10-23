@@ -68,6 +68,9 @@ nominal target. Overload applicability uses the finite positive conformance
 records, not a guessed runtime shape.
 The insertion closure includes later-bound factory bodies, so declaration/binding
 order does not select an overload; imported calls use the same exact query.
+Trying a rejected overload does not add insertion evidence. Imported parameters
+retain their declared `P` versus `P?` presence requirements. Native compilations
+currently rebind instead of reusing cached global/body state.
 
 Required `P` storage must be initialized. `P?` permits outer absence, not a
 present nullable payload. This core rejects typed-nil insertion, open/generic
@@ -78,6 +81,8 @@ Native-bearing auto-properties (including data-primary properties) and imported
 native constructors/base initializers are not yet admitted; use initialized
 ordinary fields and explicit checked methods. Equality/hash operations on
 aggregates containing native storage are blocked too.
+Nominal interfaces with static native fields remain nominal interfaces; their
+uninitialized fields have the same accessibility/storage checks as initialized fields.
 This includes equality/hash method groups and lifted operators. Safe casts and
 capturing patterns cannot erase native-bearing storage to `object`; ordinary
 noncapturing tests and outer nil checks remain available. Named/anonymous

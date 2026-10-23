@@ -61,7 +61,13 @@ partial class Binder {
         let plan = registry.ProtocolEntries.FirstOrDefault(
             (entry NativeProtocolEntryPlan) -> entry.SourceType == source
         ) ??
-            CreateNativeProtocolEntry(nil, source, protocol, default(TextLocation))
+            Binder($scope, function: nil).CreateNativeProtocolEntry(
+            nil,
+            source,
+            protocol,
+            default(TextLocation),
+            speculative: true
+        )
         return plan != nil && plan.Protocols.Contains(protocol)
     }
 
@@ -230,9 +236,14 @@ partial class Binder {
         syntax SyntaxNode?,
         concrete TypeSymbol,
         required TypeSymbol,
-        location TextLocation
+        location TextLocation,
+        speculative bool = false
     ) NativeProtocolEntryPlan? {
-        let registry = $scope.GetStructuralAdapterRegistry()
+        let registry = if speculative {
+            StructuralAdapterRegistry()
+        } else {
+            $scope.GetStructuralAdapterRegistry()
+        }
         let entry = StructSymbol(
             "<>ProtocolEntry${registry.Counter++}",
             ImmutableArray[FieldSymbol].Empty,

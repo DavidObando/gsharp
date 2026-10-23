@@ -1053,6 +1053,11 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
             }
             for type in interfaces {
                 for field in type.StaticFields {
+                    let location = field.Declaration?.Location ?? type.Declaration.Location
+                    NativeProtocolSafety.ValidateStorageType(field.Type, location, diagnostics)
+                    if NativeProtocolMetadata.IsPublic(type) && field.Accessibility == Accessibility.Public {
+                        NativeProtocolSafety.ValidatePublicContractType(field.Type, location, diagnostics)
+                    }
                     if type.StaticFieldInitializers.TryGetValue(field, out var initializer) {
                         analyzer.CheckScopedStore(initializer)
                         analyzer.VisitExpression(initializer)

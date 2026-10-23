@@ -1757,7 +1757,7 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(ce)
         }
         if classSymbol != nil {
-            if classSymbol.TryLookupFunction(
+            if classSymbol.TryLookupNativeFunction(
                 methodName,
                 ce,
                 arguments,

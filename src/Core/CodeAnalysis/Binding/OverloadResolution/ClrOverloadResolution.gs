@@ -746,7 +746,7 @@ internal shared class ClrOverloadResolution {
         explicitTypeArgumentMismatchCheck((int32, MethodBase) -> bool)? = nil,
         openLiteralArgumentCheck((int32, Type) -> bool)? = nil,
         symbolicArgTypes IReadOnlyList[TypeSymbol]? = nil,
-        symbolicArgumentConversionClassifier((int32, Type) -> ImplicitConversionKind?)? = nil,
+        symbolicArgumentConversionClassifier((int32, Type, ParameterInfo) -> ImplicitConversionKind?)? = nil,
         trailingParameterCountToIgnore((MethodBase) -> int32)? = nil
     ) Result[T] {
         let applicable = List[
@@ -5290,7 +5290,7 @@ internal shared class ClrOverloadResolution {
         explicitTypeArgumentMismatchCheck((int32, MethodBase) -> bool)? = nil,
         openLiteralArgumentCheck((int32, Type) -> bool)? = nil,
         symbolicArgTypes IReadOnlyList[TypeSymbol]? = nil,
-        symbolicArgumentConversionClassifier((int32, Type) -> ImplicitConversionKind?)? = nil,
+        symbolicArgumentConversionClassifier((int32, Type, ParameterInfo) -> ImplicitConversionKind?)? = nil,
         trailingParameterCountToIgnore((MethodBase) -> int32)? = nil
     ) {
         {
@@ -5673,7 +5673,11 @@ internal shared class ClrOverloadResolution {
                     conv == ImplicitConversionKind.Identity &&
                         IsErasedGenericParameterSlot(rawCandidate, paramIndex, explicitTypeArgIsGenuine)
                 ) &&
-                    symbolicArgumentConversionClassifier?(i, paramTypes[i]) is {} symbolicConversion {
+                    symbolicArgumentConversionClassifier?(
+                    i,
+                    paramTypes[i],
+                    parameters[paramIndex]
+                ) is {} symbolicConversion {
                     conv = symbolicConversion
                 }
                 // Issue #3989: the CLR comparison just above ranks the ERASED
@@ -5952,7 +5956,7 @@ internal shared class ClrOverloadResolution {
         deferredInferenceArgs IReadOnlyList[bool]? = nil,
         openLiteralArgumentCheck((int32, Type) -> bool)? = nil,
         symbolicArgTypes IReadOnlyList[TypeSymbol]? = nil,
-        symbolicArgumentConversionClassifier((int32, Type) -> ImplicitConversionKind?)? = nil,
+        symbolicArgumentConversionClassifier((int32, Type, ParameterInfo) -> ImplicitConversionKind?)? = nil,
         trailingParameterCountToIgnore((MethodBase) -> int32)? = nil
     ) {
         var candidate = rawCandidate
@@ -6185,7 +6189,7 @@ internal shared class ClrOverloadResolution {
                 conv == ImplicitConversionKind.Identity &&
                     IsErasedGenericParameterSlot(rawCandidate, slot, explicitTypeArgIsGenuine)
             ) &&
-                symbolicArgumentConversionClassifier?(i, target) is {} symbolicConversion {
+                symbolicArgumentConversionClassifier?(i, target, parameters[slot]) is {} symbolicConversion {
                 conv = symbolicConversion
             }
             // Issue #3989: the same second opinion the normal-form loop takes.

@@ -94,7 +94,7 @@ shared class IncrementalGlobalScopeReuse {
         }
         // Chained (REPL) scopes are not produced by the language server; reuse
         // only the single-link shape the LSP builds.
-        if $scope.Previous != nil {
+        if $scope.Previous != nil || $scope.HasNativeProtocols {
             return false
         }
         let previousText SourceText? = previousTree.Text

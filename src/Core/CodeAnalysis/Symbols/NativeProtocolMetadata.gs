@@ -28,6 +28,7 @@ internal shared class NativeProtocolMetadata {
     internal const Key string = "GSharp.NativeProtocols"
     internal const FeatureKey string = "GSharp.NativeProtocolFeature"
     internal const FeatureName string = "GSharp.NativeProtocols.v1"
+    internal const StorageFeatureName string = "GSharp.NativeStorage.v1"
     internal const Schema string = "6b105e95-6860-496a-9acb-d81bc250a275/1"
 
     private let cache ConditionalWeakTable[Assembly, NativeProtocolAssemblyContract] =
@@ -218,8 +219,21 @@ internal shared class NativeProtocolMetadata {
             (candidate Type) -> ClrTypeUtilities.AreSame(candidate, imported)
         ) ||
             imported.IsInterface &&
-            HasFeatureMarker(imported)
+            HasFeatureMarker(imported) &&
+            !HasStorageMarker(imported)
     }
+
+    private func HasStorageMarker(member MemberInfo) bool -> member.GetCustomAttributesData().Any(
+        (attribute CustomAttributeData) ->
+        IsAttributeType(attribute, typeof(CompilerFeatureRequiredAttribute)) &&
+            attribute
+            .ConstructorArguments
+            .Count == 1 &&
+            attribute
+            .ConstructorArguments[0]
+            .Value is string feature &&
+            feature == StorageFeatureName
+    )
 
     internal func HasFeatureMarker(member MemberInfo) bool -> HasNativeImage(member.Module.Assembly) &&
         member

@@ -296,7 +296,11 @@ open class Compilation {
     prop GlobalScope BoundGlobalScope {
         get {
             if globalScope == nil {
-                let reused = ReusedGlobalScope
+                let reused = if ReusedGlobalScope is {} candidate && !candidate.HasNativeProtocols {
+                    candidate
+                } else {
+                    default(BoundGlobalScope?)
+                }
                 using let measurement = CompilationMeasurements.BeginPhase("declarations", reused == nil)
                 if reused != nil {
                     CompilationMeasurements.Count("declarations.reuses")

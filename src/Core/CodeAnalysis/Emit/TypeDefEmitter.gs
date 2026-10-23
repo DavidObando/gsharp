@@ -903,6 +903,9 @@ internal class TypeDefEmitter {
         this.cache.InterfaceTypeDefs[ifaceSym] = handle
         if ifaceSym.IsProtocol || NativeProtocolSafety.ContainsSavedProtocol(ifaceSym) {
             this.EmitNativeProtocolFeature(handle)
+            if !ifaceSym.IsProtocol {
+                this.EmitNativeProtocolFeature(handle, NativeProtocolMetadata.StorageFeatureName)
+            }
         }
         EmitGenericParamRows(this.emitCtx, handle, ifaceSym.TypeParameters)
         // ADR-0089 / issues #1030/#3519: emit interface static state and const
@@ -929,6 +932,7 @@ internal class TypeDefEmitter {
                     firstInterfaceField = fieldHandle
                 }
                 this.cache.StructFieldDefs[staticField] = fieldHandle
+                this.emitNullableAttributeOnField(fieldHandle, staticField.Type)
                 this.emitUserAttributes(fieldHandle, staticField, AttributeTargetKind.Field)
             }
         }
@@ -1221,6 +1225,9 @@ internal class TypeDefEmitter {
         // mirroring the bodied (EmitFunction) path.
         this.emitUserAttributes(handle, method, AttributeTargetKind.Method)
         this.StampSignature(handle, nullability, returnHandle, method.Type, method, paramHandles)
+        if NativeProtocolSafety.RequiresFeatureMarker(method) {
+            this.EmitNativeProtocolFeature(handle)
+        }
     }
 
     /// Issue #4988: mints a signature's sequence-0 `Param` row when
@@ -2141,13 +2148,13 @@ internal class TypeDefEmitter {
     /// TypeDef as by-ref-like, plus the legacy `Obsolete` attribute that
     /// instructs downstream C# compilers without ref-struct awareness to emit
     /// an error if such a struct is consumed as a normal value type.
-    private func EmitNativeProtocolFeature(typeHandle TypeDefinitionHandle) {
+    private func EmitNativeProtocolFeature(typeHandle EntityHandle, featureName string? = nil) {
         let constructor = typeof(System.Runtime.CompilerServices.CompilerFeatureRequiredAttribute).GetConstructor(
             []Type{typeof(string)}
         )!!
         let blob = BlobBuilder()
         blob.WriteUInt16(0x0001)
-        blob.WriteSerializedString(NativeProtocolMetadata.FeatureName)
+        blob.WriteSerializedString(featureName ?? NativeProtocolMetadata.FeatureName)
         blob.WriteUInt16(0)
         this
             .emitCtx

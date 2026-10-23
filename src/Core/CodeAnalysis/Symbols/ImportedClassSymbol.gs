@@ -297,6 +297,41 @@ class ImportedClassSymbol : Symbol {
                 RefinedArgs ImmutableArray[TypeSymbol],
                 MethodGroupSlots ImmutableArray[bool]
             )
+        )? = nil
+    ) bool -> TryLookupNativeFunction(
+        text,
+        callExpression,
+        arguments,
+        out function,
+        out parameterMapping,
+        out isAmbiguous,
+        out ambiguousMethods,
+        out isExpanded,
+        explicitTypeArgs,
+        typeArgSymbols,
+        projectTypeArgument,
+        argumentNames,
+        refineSymbolicMethodGroupArgs
+    )
+
+    internal func TryLookupNativeFunction(
+        text string,
+        callExpression CallExpressionSyntax,
+        arguments ImmutableArray[BoundExpression],
+        @NotNullWhen(true) out function ImportedFunctionSymbol?,
+        out parameterMapping ImmutableArray[int32],
+        out isAmbiguous bool,
+        out ambiguousMethods ImmutableArray[MethodInfo],
+        out isExpanded bool,
+        explicitTypeArgs[]?Type = nil,
+        typeArgSymbols ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
+        projectTypeArgument((Type) -> Type)? = nil,
+        argumentNames IReadOnlyList[string]? = nil,
+        refineSymbolicMethodGroupArgs(
+            (MethodInfo, bool, ImmutableArray[TypeSymbol]) -> (
+                RefinedArgs ImmutableArray[TypeSymbol],
+                MethodGroupSlots ImmutableArray[bool]
+            )
         )? = nil,
         nativeConversions ConversionClassifier? = nil
     ) bool {

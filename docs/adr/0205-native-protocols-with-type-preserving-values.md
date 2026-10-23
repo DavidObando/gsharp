@@ -44,6 +44,11 @@ Native compilations discover actual insertions across all bodies and rebind
 against their stable finite coverage before committing overload choices,
 including top-level calls. This planning transports facts, not old symbols or
 selected witnesses; an unstable closure diagnoses rather than selecting a guess.
+Rejected overload probes build detached candidate plans, never insertion evidence.
+Native compilations bypass body-only global reuse and bound-body caching until
+replay of synthesized entries and the complete coverage closure is proved.
+Imported applicability reads candidate parameter nullability through the existing
+producer funnel, preserving the distinction between required `P` and optional `P?`.
 
 The selected backend differs from the illustrative sealed-per-protocol carrier
 in section 9: `P` is a feature-marked CLR interface reference to an internal
@@ -82,6 +87,10 @@ object/nominal target, and aggregate equality/hash operations remain blocked.
 Public signature accessibility includes container positions and properties.
 Imported accessors require the same member-level contract as ordinary methods.
 Native-bearing field access requires the owning type's validated storage contract.
+Nominal interface storage owners carry a distinct cooperative storage-identity
+marker, not a protocol declaration. Their static fields preserve nullability and
+are checked for storage legality/public accessibility even without initializers;
+abstract member contracts use the same feature-marker decision as bodied methods.
 Native-bearing imported constructors/base initializers are explicitly unproved
 boundaries. Slot identities use structural type shapes and separate nullability
 flags, rather than a symbolic type's temporary CLR representation.

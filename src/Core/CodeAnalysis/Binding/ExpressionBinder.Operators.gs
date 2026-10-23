@@ -3580,7 +3580,7 @@ internal partial class ExpressionBinder {
             boundArguments IReadOnlyList[BoundExpression]?,
             argumentOffset int32 = 0,
             nativeConversions ConversionClassifier? = nil
-        )((int32, Type) -> ClrOverloadResolution.ImplicitConversionKind?)? {
+        )((int32, Type, ParameterInfo) -> ClrOverloadResolution.ImplicitConversionKind?)? {
             let DeclaresImplicitOperator = func (type TypeSymbol) bool {
                 var type = type
                 while type is NullableTypeSymbol nullable {
@@ -3596,7 +3596,7 @@ internal partial class ExpressionBinder {
             if boundArguments == nil {
                 return nil
             }
-            return (index int32, clrParameterType Type?) -> {
+            return (index int32, clrParameterType Type?, parameter ParameterInfo) -> {
                 let argIndex = index - argumentOffset
                 if argIndex < 0 ||
                     argIndex >= boundArguments.Count ||
@@ -3605,11 +3605,15 @@ internal partial class ExpressionBinder {
                     return nil
                 }
                 let sourceType = boundArguments[argIndex].Type
-                let nativeTarget = TypeSymbol.FromClrTypeWithoutNullability(
+                var nativeTarget = TypeSymbol.FromClrTypeWithoutNullability(
                     clrParameterType,
                     NullabilityFreeReason.IdentityComparison
                 )
                 if NativeProtocolOperations.GetProtocol(nativeTarget) != nil {
+                    nativeTarget = ClrNullability.GetParameterTypeSymbol(parameter)
+                    if parameter.ParameterType.IsArray && !clrParameterType.IsArray {
+                        nativeTarget = GetArraySliceElementType(nativeTarget) ?? nativeTarget
+                    }
                     return if nativeConversions?.ClassifyArgumentConversion(sourceType, nativeTarget)
                         .IsImplicit == true {
                         if sourceType == nativeTarget {

@@ -23,6 +23,35 @@ import Xunit
 /// and serves every other file's bodies from the (cref:BoundBodyCache)
 /// — while remaining bit-for-bit identical to a full rebuild.
 open class IncrementalGlobalScopeReuseTests {
+    @Fact
+    func NativeProtocolBodiesRebuildSynthesisWithSharedBodyCache() {
+        let tree = Parse("Native.gs", `protocol P {}
+struct Value {}
+func Make() P -> Value{}
+`)
+        let scope_ = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree))
+        let cache = BoundBodyCache()
+        Binder.BindProgram(scope_, references: nil, cache)
+        let program = Binder.BindProgram(scope_, references: nil, cache)
+        Assert.Contains(program.Structs, (type StructSymbol) -> type.Name.StartsWith("<>ProtocolEntry"))
+        Assert.DoesNotContain(
+            program.Diagnostics,
+            (diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error
+        )
+    }
+
+    @Fact
+    func NativeProtocolBodyEditsRequireFreshGlobalCoverage() {
+        let original = Parse("Native.gs", `protocol P {}
+struct Reader {}
+struct Other {}
+func Make() P -> Reader{}
+`)
+        let scope_ = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(original))
+        let edited = Parse("Native.gs", original.Text.ToString().Replace("-> Reader{}", "-> Other{}"))
+        Assert.False(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope_, original, edited))
+    }
+
     @Theory
     @InlineData("StringBuilder", "MemoryStream")
     @InlineData("api.StringBuilder", "api.MemoryStream")

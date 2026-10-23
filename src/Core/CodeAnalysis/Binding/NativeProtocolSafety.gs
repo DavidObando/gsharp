@@ -17,6 +17,13 @@ internal shared class NativeProtocolSafety {
     internal func ContainsProtocol(type TypeSymbol) bool ->
     ContainsDependency(type, false, HashSet[TypeSymbol](), HashSet[System.Type]())
 
+    internal func RequiresFeatureMarker(function FunctionSymbol) bool ->
+    ContainsSavedProtocol(function.Type) || function.Parameters.Any(
+        (parameter ParameterSymbol) -> ContainsSavedProtocol(parameter.Type)
+    ) ||
+        function.ReceiverType is {} receiver &&
+        ContainsSavedProtocol(receiver)
+
     private func ContainsDependency(
         type TypeSymbol,
         includeStorage bool,

@@ -14,6 +14,119 @@ import Xunit
 
 class NativeProtocolLanguageTests {
     @Fact
+    func RoundFiveRejectedOverloadProbesDoNotAddInsertionCoverage() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`import System
+protocol Message {}
+protocol Readable { func Read() int32; }
+struct Reader { func Read() int32 -> 17 }
+struct Unreadable {}
+func Touch(value Unreadable) int32 -> 23
+func Touch(value Readable) int32 -> value.Read()
+func Pick(value Readable) int32 -> value.Read()
+func Pick(value Unreadable) int32 -> 99
+func Forward(value Message) int32 -> Pick(value)
+let message Message = Reader{}
+Console.WriteLine(Touch(Unreadable{}))
+Console.WriteLine(Forward(message))
+`, "noncommitting-native-probes", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("23\n17\n", fixture.Run(dll))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RoundFiveImportedOptionalParametersPreservePresence(instance bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "OptionalNative.ref.dll")
+        let methods = `public func Accept(value P?) int32 -> if value == nil { 19 } else { 23 }
+public func Required(value P) int32 -> 7`
+        let implementation = fixture.Compile(`package OptionalNative
+public protocol P {}
+public struct Payload {}
+public func Make() P -> Payload{}
+public class API {
+` + if instance {
+                methods +
+                    "\n}"
+            } else {
+                "shared {\n" +
+                    methods +
+                    "\n} }"
+            }, "OptionalNative", executable: false, "/refout:" + reference)
+        let receiver = if instance {
+            "API()"
+        } else {
+            "API"
+        }
+        for image in[]string{implementation, reference} {
+            let caller = fixture.Compile(`import System
+import OptionalNative
+func Forward(value P?) int32 -> ` + receiver + `.Accept(value)
+var value P? = nil
+Console.WriteLine(Forward(value))
+value = Make()
+Console.WriteLine(Forward(value))
+Console.WriteLine(` + receiver + `.Accept(nil))
+`, "optional-native-caller", executable: true, "/r:" + image)
+            IlVerifier.Verify(caller, []string{implementation})
+            Assert.Equal("19\n23\n19\n", fixture.Run(caller))
+            for argument in[]string{"value", "nil"} {
+                let (code, output) = fixture.TryCompile(
+                    "import OptionalNative\nfunc Bad(value P?) int32 -> " + receiver + ".Required(" + argument + ")",
+                    "required-native-caller",
+                    executable: false,
+                    "/r:" + image
+                )
+                Assert.NotEqual(0, code)
+                Assert.Contains("error GS", output)
+            }
+        }
+    }
+
+    @Theory
+    @InlineData("Hidden?", "accessible")
+    @InlineData("Box[P]?", "delegate/generic")
+    func RoundFiveUninitializedInterfaceFieldsValidateTheirContracts(type string, reason string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`internal protocol Hidden {}
+public protocol P {}
+public class Box[T] { var Value T }
+public interface State { shared { public var Saved ` + type + ` } }
+`, "uninitialized-interface-contract", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains(reason), output)
+    }
+
+    @Fact
+    func RoundFiveNativeStorageMarkersPreserveNominalInterfaceIdentity() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "NominalStorage.ref.dll")
+        let implementation = fixture.Compile(`package NominalStorage
+public protocol P {}
+public interface State { func Read() int32;
+shared { public var Saved P? } }
+public func Use(value State) int32 -> value.Read()
+`, "NominalStorage", executable: false, "/refout:" + reference)
+        for image in[]string{implementation, reference} {
+            let caller = fixture.Compile(`import System
+import NominalStorage
+public class Item : State { public var Number int32 = 31
+public func Read() int32 -> Number }
+func Local(value State) int32 -> value.Read()
+let item = Item()
+Console.WriteLine(Use(item))
+item.Number = 47
+Console.WriteLine(Local(item))
+State.Saved = nil
+`, "nominal-storage-caller", executable: true, "/r:" + image)
+            IlVerifier.Verify(caller, []string{implementation})
+            Assert.Equal("31\n47\n", fixture.Run(caller))
+        }
+    }
+
+    @Fact
     func RoundFourIncidentalUnexportableCapabilitiesDoNotDiscardInternalEntries() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let reference = Path.Combine(fixture.Directory, "InternalCapabilities.ref.dll")

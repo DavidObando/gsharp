@@ -7817,6 +7817,11 @@ partial class Binder {
             dirtyTrees ImmutableHashSet[SyntaxTree]?,
             workBudget CompilationWorkBudget?
         ) BoundProgram {
+            let cache = if globalScope.HasNativeProtocols {
+                default(BoundBodyCache?)
+            } else {
+                cache
+            }
             let parentScope = CreateParentScope(
                 globalScope,
                 references,
