@@ -56,6 +56,7 @@ internal class MetadataTypeSymbol : TypeSymbol {
     private let kinds Lazy[MetadataTypeKinds]
     private let genericParameters Lazy[ImmutableArray[MetadataGenericParameter]]
     private let baseDefinition Lazy[ResolvedTypeReference?]
+    private let baseChain Lazy[MetadataBaseChain]
 
     internal init(module MetadataModule, handle TypeDefinitionHandle) : base(
         module.Reader.GetString(module.Reader.GetTypeDefinition(handle).Name)
@@ -69,6 +70,7 @@ internal class MetadataTypeSymbol : TypeSymbol {
             LazyThreadSafetyMode.ExecutionAndPublication
         )
         baseDefinition = Lazy[ResolvedTypeReference?](ResolveBase, LazyThreadSafetyMode.ExecutionAndPublication)
+        baseChain = Lazy[MetadataBaseChain](WalkBaseChain, LazyThreadSafetyMode.ExecutionAndPublication)
     }
 
     /// Gets the module that defines the type.
@@ -131,26 +133,41 @@ internal class MetadataTypeSymbol : TypeSymbol {
         }
     }
 
-    private func ReachesDelegate() bool {
+    // One walk of the base chain answers two questions, so they cannot disagree about where the chain ends:
+    // does the chain reach a delegate base type, and is every link resolved.
+    private func WalkBaseChain() MetadataBaseChain {
+        var reachesDelegate = false
+        var complete = true
         var current MetadataTypeSymbol? = this
-        for var links = 0; current != nil && links <= MetadataTypeNameReader.MaximumReferenceNesting; links++ {
+        for var links = 0; current != nil; links++ {
             let set = current.Module.Set
+            if links > MetadataTypeNameReader.MaximumReferenceNesting {
+                complete = false
+                break
+            }
             if set.IsWellKnown(current.Module, current.Handle, SpecialType.Delegate) || set.IsWellKnown(
                 current.Module,
                 current.Handle,
                 SpecialType.MulticastDelegate
             ) {
-                return true
+                reachesDelegate = true
             }
             let next = current.BaseDefinition
+            if next != nil && !next.IsResolved {
+                complete = false
+            }
             current = if next == nil || !next.IsResolved {
                 nil
             } else {
                 set.GetTypeSymbol(next)
             }
         }
-        return false
+        return MetadataBaseChain(reachesDelegate, complete)
     }
+
+    /// Gets whether every link of the base chain resolves. A missing link makes the answers that need the chain
+    /// unanswerable by the context (ADR-0209 table 7b, Q4).
+    internal prop IsBaseChainComplete bool -> baseChain.Value.IsComplete
 
     // The one place that decides the kind flags.
     // Only the direct base decides value type, enum and delegate, as the runtime builds them.
@@ -169,7 +186,7 @@ internal class MetadataTypeSymbol : TypeSymbol {
         }
         // A delegate type is System.Delegate, System.MulticastDelegate, or any type whose chain reaches one of them,
         // as ClrTypeUtilities.IsDelegateType answers. A missing link ends the chain.
-        let isDelegate = ReachesDelegate()
+        let isDelegate = baseChain.Value.ReachesDelegate
         return MetadataTypeKinds(
             isInterface,
             (attributes & TypeAttributes.Abstract) != 0,
@@ -182,4 +199,18 @@ internal class MetadataTypeSymbol : TypeSymbol {
 
     /// Reads the answer for a type this module defines. The symbol is a view, so it has no state of its own.
     override prop IsValueType bool -> Kinds.IsValueType
+}
+
+/// The result of walking the base chain of a type definition.
+internal class MetadataBaseChain {
+    internal init(reachesDelegate bool, isComplete bool) {
+        ReachesDelegate = reachesDelegate
+        IsComplete = isComplete
+    }
+
+    /// Gets whether the type or a base is System.Delegate or System.MulticastDelegate.
+    internal prop ReachesDelegate bool
+
+    /// Gets whether every link resolved and the chain ended at a type with no base.
+    internal prop IsComplete bool
 }

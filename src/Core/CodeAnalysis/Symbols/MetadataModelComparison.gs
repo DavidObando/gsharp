@@ -235,7 +235,7 @@ internal shared class MetadataModelComparison {
             kinds.IsSealed,
             symbol.EnclosingType?.FullName ?? ""
         )
-        if symbol.BaseDefinition is {IsResolved: false} {
+        if !symbol.IsBaseChainComplete {
             return own + "|base-missing"
         }
         let baseName = if symbol.BaseDefinition is {} resolvedBase {

@@ -177,6 +177,39 @@ open class Issue5144MetadataTypeSymbolTests {
     }
 
     @Fact
+    func AMissingGrandparent_IsNormalizedLikeAMissingParent() {
+        // Leaf : Middle : Root, with only Root's assembly missing. The context cannot walk the chain.
+        using let lib = CSharpFixture("namespace N5144H { public class Root {} }", assemblyName: "RootH5144")
+        using let middle = CSharpFixture(
+            "namespace N5144H { public class Middle : Root {} }",
+            []MetadataReference{MetadataReference.CreateFromFile(lib.AssemblyPath)},
+            assemblyName: "MiddleH5144"
+        )
+        using let leaf = CSharpFixture(
+            "public class LeafH5144<T> : N5144H.Middle {}",
+            []MetadataReference{
+                MetadataReference.CreateFromFile(lib.AssemblyPath),
+                MetadataReference.CreateFromFile(middle.AssemblyPath)
+            },
+            assemblyName: "LeafH5144"
+        )
+        using let resolver = HandleResolver([]string{middle.AssemblyPath, leaf.AssemblyPath})
+        let set = resolver.ImageSet!!
+        let module = set.FindModule("LeafH5144")!!
+        let symbol = Symbol(module, "LeafH5144`1")
+        Assert.True(symbol.BaseDefinition!!.IsResolved)
+        Assert.False(symbol.IsBaseChainComplete)
+        let described = MetadataModelComparison.DescribeSymbol(symbol)
+        Assert.Contains("T:0:0", described)
+        Assert.EndsWith("|base-missing", described)
+        Assert.Equal(
+            described,
+            MetadataModelComparison.DescribeType(resolver.FindTypeForComparison("LeafH5144", "LeafH5144`1")!!)
+        )
+        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+    }
+
+    @Fact
     func TwoAssembliesWithTheSameBaseName_AreToldApart() {
         using let baseA = CSharpFixture("namespace N5144S { public class Base {} }", assemblyName: "BaseA5144")
         using let baseB = CSharpFixture("namespace N5144S { public class Base {} }", assemblyName: "BaseB5144")
