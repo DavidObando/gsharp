@@ -1,0 +1,122 @@
+namespace ArrayValueResearch
+{
+using System;
+
+// Fixture ABI only. No contiguous-layout or span contract.
+public interface IStorage<T, S> where S : struct, IStorage<T, S>
+{
+    static abstract int Count { get; }
+    static abstract ref T At(ref S value, int index);
+}
+
+public struct Empty<T> : IStorage<T, Empty<T>>
+{
+    public static int Count => 0;
+    public static ref T At(ref Empty<T> value, int index) =>
+        throw new IndexOutOfRangeException();
+}
+
+public struct Leaf<T> : IStorage<T, Leaf<T>>
+{
+    public T Item;
+    public static int Count => 1;
+    public static ref T At(ref Leaf<T> value, int index)
+    {
+        if (index != 0) throw new IndexOutOfRangeException();
+        return ref value.Item;
+    }
+}
+
+public struct Branch<T, L, R> : IStorage<T, Branch<T, L, R>>
+    where L : struct, IStorage<T, L>
+    where R : struct, IStorage<T, R>
+{
+    public L Left;
+    public R Right;
+    public static int Count => checked(L.Count + R.Count);
+    public static ref T At(ref Branch<T, L, R> value, int index)
+    {
+        if ((uint)index >= (uint)Count) throw new IndexOutOfRangeException();
+        if (index < L.Count) return ref L.At(ref value.Left, index);
+        return ref R.At(ref value.Right, index - L.Count);
+    }
+}
+
+public static class Shape
+{
+    // ponytail: bounded tree; a production ABI needs size and tooling policy.
+    public const int MaxLength = 32;
+    public const int MaxArrayDepth = 2;
+
+    public static Type Encode(Type element, int length)
+    {
+        CheckElement(element, 1);
+        return EncodeCore(element, length);
+    }
+
+    private static Type EncodeCore(Type element, int length)
+    {
+        if (length < 0 || length > MaxLength)
+            throw new ArgumentOutOfRangeException(nameof(length));
+        if (length == 0) return typeof(Empty<>).MakeGenericType(element);
+        if (length == 1) return typeof(Leaf<>).MakeGenericType(element);
+        return typeof(Branch<,,>).MakeGenericType(element,
+            EncodeCore(element, length / 2), EncodeCore(element, length - length / 2));
+    }
+
+    public static (Type Element, int Count) Decode(Type carrier) => DecodeCore(carrier, 0);
+
+    private static (Type Element, int Count) DecodeCore(Type carrier, int depth)
+    {
+        ArgumentNullException.ThrowIfNull(carrier);
+        if (depth >= MaxArrayDepth || !carrier.IsGenericType)
+            throw new NotSupportedException("Unknown carrier or excessive array nesting");
+        var definition = carrier.GetGenericTypeDefinition();
+        var args = carrier.GetGenericArguments();
+        if (definition != typeof(Empty<>) && definition != typeof(Leaf<>) &&
+            definition != typeof(Branch<,,>))
+            throw new NotSupportedException("Unknown carrier definition");
+        var element = args[0];
+        CheckElement(element, depth + 1);
+        int count;
+        if (definition == typeof(Empty<>)) count = 0;
+        else if (definition == typeof(Leaf<>)) count = 1;
+        else
+        {
+            // Storage-tree recursion is not another source array dimension.
+            var left = DecodeCore(args[1], depth);
+            var right = DecodeCore(args[2], depth);
+            if (left.Element != element || right.Element != element)
+                throw new ArgumentException("Mixed element tree");
+            count = checked(left.Count + right.Count);
+            if (count < 2 || count > MaxLength ||
+                left.Count != count / 2 || right.Count != count - count / 2)
+                throw new ArgumentException("Noncanonical split");
+        }
+        if (carrier != EncodeCore(element, count))
+            throw new ArgumentException("Noncanonical carrier");
+        return (element, count);
+    }
+
+    private static void CheckElement(Type element, int depth)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        if (element == typeof(int) || element == typeof(string) ||
+            element == typeof(object) || element.IsGenericParameter) return;
+        if (element.IsGenericType)
+        {
+            DecodeCore(element, depth);
+            return;
+        }
+        throw new NotSupportedException("Only int, string, object, open T and nested carriers are supported");
+    }
+
+    public static void Import(Type carrier, Type claimedElement, int claimedCount)
+    {
+        var expected = Encode(claimedElement, claimedCount);
+        var decoded = Decode(carrier);
+        if (carrier != expected || decoded.Element != claimedElement || decoded.Count != claimedCount)
+            throw new ArgumentException("Carrier does not match imported shape");
+    }
+}
+}
