@@ -48,6 +48,7 @@
     <Project Path="src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj" />
     <Project Path="src/Sdk/Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.gsproj" Type="C#" />
     <Project Path="src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj" Type="C#" />
+    <Project Path="src/Sdk/Gsharp.NET.Sdk.Compiler/Gsharp.NET.Sdk.Compiler.gsproj" Type="C#" />
     <Project Path="src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj" Type="C#" />
     <Project Path="src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj" Type="C#" />
     <Project Path="src/Sdk/Gsharp.Templates/Gsharp.Templates.gsproj" Type="C#" />

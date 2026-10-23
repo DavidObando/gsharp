@@ -549,6 +549,39 @@ class ReversionTests(unittest.TestCase):
                 self.assertEqual(b"MZ", archive.read("tools/compiler/gsc.dll"))
 
 
+class RidPackageStampTests(unittest.TestCase):
+    """ADR-0207: the stage-1 SDK and its RID compiler packages carry one private version."""
+
+    def test_bootstrap_feed_input_includes_the_rid_packages_of_its_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bootstrap = nupkg(root / "Gsharp.NET.Sdk.0.5.1-gabc.nupkg", {"x.nuspec": b"<package/>"})
+            nupkg(root / "Gsharp.NET.Sdk.Compiler.linux-x64.0.5.1-gabc.nupkg", {"x.nuspec": b"<package/>"})
+            nupkg(root / "Gsharp.NET.Sdk.Compiler.win-x64.0.5.1-gabc.nupkg", {"x.nuspec": b"<package/>"})
+            nupkg(root / "Gsharp.NET.Sdk.Compiler.osx-x64.9.9.9.nupkg", {"x.nuspec": b"<package/>"})
+            names = [path.name for path in packer.sibling_nupkgs(bootstrap, "0.5.1-gabc")]
+            self.assertEqual(["Gsharp.NET.Sdk.0.5.1-gabc.nupkg",
+                              "Gsharp.NET.Sdk.Compiler.linux-x64.0.5.1-gabc.nupkg",
+                              "Gsharp.NET.Sdk.Compiler.win-x64.0.5.1-gabc.nupkg"], names)
+
+    def test_rid_packages_are_stamped_with_the_sdk_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            pack_out = Path(temp) / "pack-out"
+            out = Path(temp) / "out"
+            out.mkdir()
+            nuspec = "<package><metadata><id>x</id><version>0.5.1-gabc</version></metadata></package>".encode()
+            for rid in ("linux-x64", "win-x64"):
+                nupkg(pack_out / f"Gsharp.NET.Sdk.Compiler.{rid}.0.5.1-gabc.nupkg", {"x.nuspec": nuspec})
+            nupkg(pack_out / "Gsharp.NET.Sdk.Compiler.osx-x64.9.9.9.nupkg", {"x.nuspec": nuspec})
+            stamped = packer.restamp_rid_packages(pack_out, "0.5.1-gabc", "1.0.0-stage1", out)
+            self.assertEqual(["Gsharp.NET.Sdk.Compiler.linux-x64.1.0.0-stage1.nupkg",
+                              "Gsharp.NET.Sdk.Compiler.win-x64.1.0.0-stage1.nupkg"],
+                             [path.name for path in stamped])
+            with zipfile.ZipFile(stamped[0]) as archive:
+                self.assertIn(b"<version>1.0.0-stage1</version>", archive.read("x.nuspec"))
+            self.assertTrue((pack_out / "Gsharp.NET.Sdk.Compiler.osx-x64.9.9.9.nupkg").exists())
+
+
 class VerifyTests(unittest.TestCase):
     def test_a_complete_gsharp_compiled_package_verifies(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

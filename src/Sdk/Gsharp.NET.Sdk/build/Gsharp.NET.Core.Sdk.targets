@@ -46,6 +46,24 @@
     <ProjectCapability Include="SupportsHotReload" />
   </ItemGroup>
 
+  <!-- ADR-0207: select the ReadyToRun compiler from the RID package when it is available. The order is:
+       a value set by the user, the opt-out, an unknown launch host, the file in the RID package under
+       $(NuGetPackageRoot) of this project, and last the IL compiler of the SDK package. Any other case
+       keeps the IL compiler. -->
+  <Target Name="_GsharpSelectCompiler" BeforeTargets="CoreCompile;_GsharpCreateCoreCompileInputsCache">
+    <PropertyGroup>
+      <_GsharpCompilerReason Condition=" '$(GsharpCompilerFullPath)' != '$(_GsharpDefaultCompilerPath)' ">GsharpCompilerFullPath was set by the user</_GsharpCompilerReason>
+      <_GsharpCompilerReason Condition=" '$(_GsharpCompilerReason)' == '' and '$(GsharpUseReadyToRunCompiler)' == 'false' ">GsharpUseReadyToRunCompiler is false</_GsharpCompilerReason>
+      <_GsharpCompilerReason Condition=" '$(_GsharpCompilerReason)' == '' and '$(_GsharpCompilerPackWanted)' != 'true' ">the launch host '$(_GsharpHostRid)' is unknown or has no ReadyToRun package (MSBuildRuntimeType=$(MSBuildRuntimeType), DOTNET_HOST_PATH=$(DOTNET_HOST_PATH))</_GsharpCompilerReason>
+      <_GsharpCompilerCandidate Condition=" '$(_GsharpCompilerReason)' == '' and '$(NuGetPackageRoot)' != '' ">$([MSBuild]::EnsureTrailingSlash('$(NuGetPackageRoot)'))gsharp.net.sdk.compiler.$(_GsharpHostRid)/$(GsharpSdkVersion)/tools/$(GsharpCompilerPackTargetFramework)/$(_GsharpHostRid)/gsc.dll</_GsharpCompilerCandidate>
+      <_GsharpCompilerReason Condition=" '$(_GsharpCompilerReason)' == '' and '$(_GsharpCompilerCandidate)' == '' ">NuGetPackageRoot is not set</_GsharpCompilerReason>
+      <_GsharpCompilerReason Condition=" '$(_GsharpCompilerReason)' == '' and !Exists('$(_GsharpCompilerCandidate)') ">the package file '$(_GsharpCompilerCandidate)' does not exist</_GsharpCompilerReason>
+      <GsharpCompilerFullPath Condition=" '$(_GsharpCompilerReason)' == '' ">$(_GsharpCompilerCandidate)</GsharpCompilerFullPath>
+    </PropertyGroup>
+    <Message Importance="normal" Condition=" '$(_GsharpCompilerReason)' == '' " Text="G# compiler: ReadyToRun $(_GsharpHostRid) from $(GsharpCompilerFullPath)" />
+    <Message Importance="normal" Condition=" '$(_GsharpCompilerReason)' != '' " Text="G# compiler: IL from $(GsharpCompilerFullPath) because $(_GsharpCompilerReason)" />
+  </Target>
+
   <Target Name="_GsharpFilterHotReloadWatchItems"
           Condition=" '$(GsharpEnableHotReload)' == 'true' ">
     <ItemGroup>
@@ -672,6 +690,7 @@
         MaxWorkers="$(GSharpMaxWorkers)"
         WorkerMemoryBudgetMiB="$(GSharpWorkerMemoryBudgetMiB)"
         GsharpCompilerFullPath="$(GsharpCompilerFullPath)"
+        SdkToolsDirectory="$(GsharpSdkToolsDirectory)"
         OutputPath="$(IntermediateOutputPath)"
         OutputName="$(TargetName)"
         TempOutputPath="$(IntermediateOutputPath)"

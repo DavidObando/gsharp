@@ -35,7 +35,8 @@ CONTRACT_INPUTS = {
 }
 HARNESS = {
     "counters": ["build/test-cs2gs-counters.sh", "build/cs2gs-counters.sh"],
-    "stage1": ["build/test-selfhost-pack-stage1.py", "build/selfhost-pack-stage1.py"],
+    "stage1": ["build/test-selfhost-pack-stage1.py", "build/selfhost-pack-stage1.py",
+               "build/test-rid-compiler-packages.py", "build/check-rid-packages.py"],
     "stage2": ["build/test-selfhost-stage2.py", "build/selfhost-stage2.py",
                "build/selfhost_pe.py", "build/verify-stage2-report.py"],
     "concurrency": ["build/verify-concurrency-bench.py", "build/run-concurrency-bench.py",
@@ -49,7 +50,7 @@ HARNESS = {
 BUILD_JOBS = {
     "build", "discover-tests", "tests", "test-partition", "harness", "e2e",
     "ilverify", "release-version-refs", "cs2gs-corpus", "vscode-extension",
-    "vsix", "visual-studio-extension", "desktop-msbuild-sdk-smoke",
+    "vsix", "visual-studio-extension", "desktop-msbuild-sdk-smoke", "r2r-compiler-smoke",
 }
 GO_JOBS = {"go2gs", "go2gs-windows", "go2gs-macos"}
 
@@ -160,7 +161,7 @@ def select(paths, event, projects=None, go_exists=None):
         if areas.intersection({"sdk", "generators"}):
             suites.update(SUITES[key] for key in (
                 "sdk", "compiler", "interpreter", "extensions", "channels", "cs2gs", "generators"))
-            jobs.update({"build", "e2e", "ilverify", "desktop-msbuild-sdk-smoke", "cs2gs-corpus"})
+            jobs.update({"build", "e2e", "ilverify", "desktop-msbuild-sdk-smoke", "r2r-compiler-smoke", "cs2gs-corpus"})
             docs_jobs.update({"build", "visual"})
         if "sdk" in areas:
             # Core and all frontends consume the bundled runtimes.

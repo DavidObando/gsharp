@@ -28,7 +28,7 @@ Checked inputs (fail closed: a missing or empty set is an error, never a pass):
   * a `.dll` path is checked directly;
   * a `.nupkg` is opened and every `tools/task/*.dll` plus every
     `lib|ref/netstandard*/*.dll` and `lib|ref/net4*/*.dll` entry is checked.
-With no inputs every `Gsharp.NET.Sdk.*.nupkg` in out/bin/Release/nupkgs is checked.
+With no inputs every `Gsharp.NET.Sdk.[0-9]*.nupkg` in out/bin/Release/nupkgs is checked.
 
 Surface: `--surface PATH` (a directory of reference assemblies or one `.dll`,
 repeatable). Without it the default is the SDK task's own netstandard2.0 compile
@@ -53,7 +53,7 @@ import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-DEFAULT_GLOB = "out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg"
+DEFAULT_GLOB = "out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg"
 PACKAGE_ENTRY_PATTERNS = (
     "tools/task/*.dll",
     "lib/netstandard*/*.dll",

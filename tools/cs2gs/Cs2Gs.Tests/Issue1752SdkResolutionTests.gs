@@ -94,6 +94,35 @@ open class Issue1752SdkResolutionTests {
         }
     }
 
+    /// ADR-0207: Gsharp.NET.Sdk restores Gsharp.NET.Sdk.Compiler.<rid> of its exact version. Staging the SDK
+    /// package in the local feed stages the RID packages of the same version with it, and no other version.
+    @Fact
+    func EnsureInLocalFeed_StagesTheRidCompilerPackagesOfTheSameVersion() {
+        let repoRoot = CreateTempDir()
+        try {
+            let packages = Path.Combine(repoRoot, "packages")
+            Directory.CreateDirectory(packages)
+            let sdk = Path.Combine(packages, "Gsharp.NET.Sdk.1.2.3.nupkg")
+            File.WriteAllText(sdk, "sdk")
+            File.WriteAllText(Path.Combine(packages, "Gsharp.NET.Sdk.Compiler.linux-x64.1.2.3.nupkg"), "rid")
+            File.WriteAllText(Path.Combine(packages, "Gsharp.NET.Sdk.Compiler.win-x64.9.9.9.nupkg"), "other version")
+            GsharpTestProjectRunner.EnsureInLocalFeed(repoRoot, sdk)
+            let feed = Path.Combine(repoRoot, ".nugs")
+            Assert.True(File.Exists(Path.Combine(feed, "Gsharp.NET.Sdk.1.2.3.nupkg")))
+            Assert.True(File.Exists(Path.Combine(feed, "Gsharp.NET.Sdk.Compiler.linux-x64.1.2.3.nupkg")))
+            Assert.False(File.Exists(Path.Combine(feed, "Gsharp.NET.Sdk.Compiler.win-x64.9.9.9.nupkg")))
+        } finally {
+            Directory.Delete(repoRoot, recursive: true)
+        }
+    }
+
+    /// ADR-0207: a RID compiler package is not an SDK package, so it is never selected as the newest SDK.
+    @Fact
+    func ParseVersion_DoesNotTreatARidCompilerPackageAsTheSdk() {
+        Assert.Null(GsharpTestProjectRunner.ParseVersion("Gsharp.NET.Sdk.Compiler.linux-x64.1.2.3.nupkg"))
+        Assert.Equal("1.2.3", GsharpTestProjectRunner.ParseVersion("Gsharp.NET.Sdk.1.2.3.nupkg"))
+    }
+
     shared {
         private func CreateTempDir() string {
             let dir = Path.Combine(Path.GetTempPath(), "gsharp-1752-" + Guid.NewGuid().ToString("N"))

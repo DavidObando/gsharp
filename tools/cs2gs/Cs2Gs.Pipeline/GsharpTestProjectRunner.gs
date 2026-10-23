@@ -348,6 +348,20 @@ open class GsharpTestProjectRunner {
         internal func EnsureInLocalFeed(repoRoot string?, nupkgPath string) {
             let feed = Path.Combine(repoRoot!!, ".nugs")
             Directory.CreateDirectory(feed)
+            CopyToFeed(feed, nupkgPath)
+            // ADR-0207: Gsharp.NET.Sdk restores Gsharp.NET.Sdk.Compiler.<rid> of its exact version
+            // with PackageDownload. The packages built with the SDK go to the feed with it.
+            let fileName = Path.GetFileName(nupkgPath)
+            let version = ParseVersion(fileName)
+            let directory = Path.GetDirectoryName(Path.GetFullPath(nupkgPath))
+            if version != nil && directory != nil {
+                for sibling in Directory.EnumerateFiles(directory, "Gsharp.NET.Sdk.Compiler.*." + version + ".nupkg") {
+                    CopyToFeed(feed, sibling)
+                }
+            }
+        }
+
+        private func CopyToFeed(feed string, nupkgPath string) {
             let target = Path.Combine(feed, Path.GetFileName(nupkgPath))
             // Bug #1752 (part 1): a rebuilt SDK nupkg with an unchanged version
             // string used to be silently skipped here (`if (!File.Exists(target))`),
@@ -370,7 +384,16 @@ open class GsharpTestProjectRunner {
             ) {
                 return nil
             }
-            return fileName.Substring(packagePrefix.Length, fileName.Length - packagePrefix.Length - ".nupkg".Length)
+            let version = fileName.Substring(
+                packagePrefix.Length,
+                fileName.Length - packagePrefix.Length - ".nupkg".Length
+            )
+            // A version starts with a digit. This keeps `Gsharp.NET.Sdk.Compiler.<rid>.<version>.nupkg`
+            // (ADR-0207) out of the `Gsharp.NET.Sdk` package selection.
+            if version.Length == 0 || !char.IsDigit(version[0]) {
+                return nil
+            }
+            return version
         }
 
         internal func WriteIsolationBoundary(workDir string) {

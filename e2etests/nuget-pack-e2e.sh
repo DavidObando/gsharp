@@ -15,7 +15,7 @@ dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release --nologo -v
 mkdir -p .nugs
 cp out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg .nugs/
 
-SDK_NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg | head -1)
+SDK_NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg | head -1)
 VER="${SDK_NUPKG##*Gsharp.NET.Sdk.}"
 VER="${VER%.nupkg}"
 echo "    SDK version: $VER"
@@ -54,6 +54,8 @@ EOF
 
 mkdir -p "$WORKDIR/MyLib/packages"
 cp "$ROOT/$SDK_NUPKG" "$WORKDIR/MyLib/packages/"
+# ADR-0207: the SDK restores Gsharp.NET.Sdk.Compiler.<rid> of its exact version, so the feed needs them too.
+cp "$ROOT"/out/bin/Release/nupkgs/Gsharp.NET.Sdk.Compiler.*."$VER".nupkg "$WORKDIR/MyLib/packages/"
 
 # Source file: a public class (the cross-language stable surface), and an inline struct.
 # NOTE: Free functions are emitted on a synthesized <Program> type whose name is not

@@ -25,6 +25,9 @@ open class BuildTask : Task, ICancelableTask {
     @Required
     prop GsharpCompilerFullPath string?
 
+    /// Gets or sets the SDK package tools folder, forwarded to gsc as /sdktoolsdir: (ADR-0207).
+    prop SdkToolsDirectory string?
+
     /// Gets or sets the directory where the final assembly is written.
     @Required
     prop OutputPath string?
@@ -299,6 +302,9 @@ open class BuildTask : Task, ICancelableTask {
         for analyzer in this.GsAnalyzers {
             args.Add(QuoteIfNeeded("/gsanalyzer:${analyzer.ItemSpec}"))
         }
+        if !string.IsNullOrEmpty(this.SdkToolsDirectory) {
+            args.Add(QuoteIfNeeded("/sdktoolsdir:${this.SdkToolsDirectory}"))
+        }
         // ADR-0169: lower .editorconfig dotnet_diagnostic.<ID>.severity entries
         // to /gsdiag: switches so severity configuration works without gsc ever
         // parsing editorconfig files. Sorted for a deterministic rsp.
@@ -426,7 +432,7 @@ open class BuildTask : Task, ICancelableTask {
                 )
             }
         }
-        let psi = ProcessStartInfo("dotnet", "\"$gsharpCompilerFullPath\" @\"${this.ResponseFilePath}\""){
+        let psi = ProcessStartInfo(DotnetHost.Path(), "\"$gsharpCompilerFullPath\" @\"${this.ResponseFilePath}\""){
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,

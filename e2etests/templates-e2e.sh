@@ -15,7 +15,7 @@ echo "==> Packing Gsharp.NET.Sdk and Gsharp.Templates"
 dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj   -c Release --nologo -v:q
 dotnet build src/Sdk/Gsharp.Templates/Gsharp.Templates.gsproj -c Release --nologo -v:q
 
-SDK_NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg | head -1)
+SDK_NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg | head -1)
 TPL_NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.Templates.*.nupkg | head -1)
 VER="${SDK_NUPKG##*Gsharp.NET.Sdk.}"
 VER="${VER%.nupkg}"
@@ -41,6 +41,8 @@ cd MyApp
 # (it is a dev-only artifact), so the e2e harness provides one here.
 mkdir -p packages
 cp "$ROOT/$SDK_NUPKG" packages/
+# ADR-0207: the SDK restores Gsharp.NET.Sdk.Compiler.<rid> of its exact version, so the feed needs them too.
+cp "$ROOT"/out/bin/Release/nupkgs/Gsharp.NET.Sdk.Compiler.*."$VER".nupkg packages/
 cat > NuGet.config <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>

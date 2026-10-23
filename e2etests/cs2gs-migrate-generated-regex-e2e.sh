@@ -30,7 +30,7 @@ dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release --nologo -v
 mkdir -p .nugs
 cp out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg .nugs/
 
-NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg | head -1)
+NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg | head -1)
 VER="${NUPKG##*Gsharp.NET.Sdk.}"
 VER="${VER%.nupkg}"
 
