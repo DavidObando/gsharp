@@ -1640,14 +1640,20 @@ class Lowerer : BoundTreeRewriter {
             if !erasedEnumerator.IsValueType ||
                 openEnumerator == nil ||
                 !openEnumerator.IsGenericTypeDefinition ||
-                openEnumerator
-                .GetGenericArguments()
-                .Length != typeArguments.Length ||
                 typeArguments.Length != openDef
                 .GetGenericArguments().Length {
                 return false
             }
-            enumeratorType = ImportedTypeSymbol.GetConstructed(erasedEnumerator, openEnumerator, typeArguments)
+            // Issue #5151: the enumerator is typed over the arguments that the
+            // declared return type of the open `GetEnumerator()` applies to the
+            // nested `Enumerator`, read back through the receiver's own type
+            // arguments. A return type that is not made only of the collection's
+            // type parameters (`View<int>.Enumerator`) keeps the erased route.
+            var enumeratorArguments ImmutableArray[TypeSymbol]
+            if !TryMapEnumeratorArguments(openDef, openEnumerator, typeArguments, out enumeratorArguments) {
+                return false
+            }
+            enumeratorType = ImportedTypeSymbol.GetConstructed(erasedEnumerator, openEnumerator, enumeratorArguments)
             getEnumeratorCall = BoundImportedInstanceCallExpression(
                 nil,
                 collection,
@@ -1655,6 +1661,52 @@ class Lowerer : BoundTreeRewriter {
                 enumeratorType!!,
                 ImmutableArray[BoundExpression].Empty
             )
+            return true
+        }
+
+        /// Issue #5151: maps the type arguments of the nested `Enumerator` that
+        /// the open collection's public parameterless `GetEnumerator()` returns
+        /// back to the receiver's [`typeArguments`](paramref). Every argument of
+        /// the declared return type must be one of the collection's own type
+        /// parameters (`Swap<A, B>` returning `Swap<B, A>.Enumerator` maps to
+        /// the receiver's second then first argument). Returns `false` for any
+        /// other shape, so the caller never types an enumerator it cannot
+        /// prove.
+        private func TryMapEnumeratorArguments(
+            openDef Type,
+            openEnumerator Type,
+            typeArguments ImmutableArray[TypeSymbol],
+            out mapped ImmutableArray[TypeSymbol]
+        ) bool {
+            mapped = ImmutableArray[TypeSymbol].Empty
+            let openGetEnumerator MethodInfo? = openDef.GetMethod(
+                "GetEnumerator",
+                BindingFlags.Instance | BindingFlags.Public,
+                binder: nil,
+                types: Type.EmptyTypes,
+                modifiers: nil
+            )
+            if openGetEnumerator == nil {
+                return false
+            }
+            let returned = openGetEnumerator.ReturnType
+            if !returned.IsGenericType || returned.IsGenericTypeDefinition {
+                return false
+            }
+            if returned.GetGenericTypeDefinition() != openEnumerator {
+                return false
+            }
+            let builder = ImmutableArray.CreateBuilder[TypeSymbol]()
+            for argument in returned.GetGenericArguments() {
+                if !argument.IsGenericParameter ||
+                    argument.DeclaringMethod != nil ||
+                    argument.DeclaringType != openDef ||
+                    argument.GenericParameterPosition >= typeArguments.Length {
+                    return false
+                }
+                builder.Add(typeArguments[argument.GenericParameterPosition])
+            }
+            mapped = builder.ToImmutable()
             return true
         }
 
