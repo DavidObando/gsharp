@@ -309,7 +309,7 @@ internal partial class StatementBinder {
             var toRemove List[AccessPath]? = nil
             for key in frame.Keys {
                 let drop = (statementCollector != nil && MayBeMutatedByUnknownWrite(statementCollector, key)) ||
-                    (dropGlobalRoots && key.Root is GlobalVariableSymbol) ||
+                    (dropGlobalRoots && key.Root is GlobalVariableSymbol && !key.Root.IsReadOnly) ||
                     (
                     if statementCollector != nil {
                         statementCollector.AssignsRoot(key.Root)
@@ -1588,7 +1588,10 @@ internal partial class StatementBinder {
             }
         }
         if collector.MayMutateGlobalRoots {
-            for path in state.Keys.Where((path AccessPath) -> path.Root is GlobalVariableSymbol).ToArray() {
+            for path in state
+                .Keys
+                .Where((path AccessPath) -> path.Root is GlobalVariableSymbol && !path.Root.IsReadOnly)
+                .ToArray() {
                 state.Remove(path)
             }
         }
@@ -1826,6 +1829,7 @@ internal partial class StatementBinder {
 
         func MayMutateGlobalRoot(root VariableSymbol, narrowedType TypeSymbol) bool -> MayMutateGlobalRoots &&
             root is GlobalVariableSymbol &&
+            !root.IsReadOnly &&
             (
             globalMutationProtectedRoots == nil || !globalMutationProtectedRoots!!.Contains(root) ||
                 InvalidatesNarrowing(root, narrowedType)

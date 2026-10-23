@@ -381,6 +381,19 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `, []string{"15"}}
+            yield[]object{"read-only-global-survives-call", `
+import System
+
+func Get() string? { return "abc" }
+let text string? = Get()
+func Poke() { }
+func Run() int32 {
+    if text == nil { return 0 }
+    Poke()
+    return text.Length
+}
+Console.WriteLine(Run())
+`, []string{"3"}}
         }
 
         private func Compile(dir string, source string, outPath string)(Exit int32, Log string) {
