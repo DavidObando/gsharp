@@ -1,14 +1,17 @@
-# ADR-0205: Opt-in type-preserving interface values
+# ADR-0205: Native protocols with type-preserving values
 
 - **Status**: Proposed
 - **Date**: 2026-10-21
-- **Phase**: Design only; no implementation authorization
+- **Revised**: 2026-10-22
+- **Phase**: Design only; no implementation authorization or semantic acceptance
 - **Issue**: [#5097](https://github.com/DavidObando/gsharp/issues/5097)
 - **Related**: [#4333](https://github.com/DavidObando/gsharp/issues/4333),
+  [#5099](https://github.com/DavidObando/gsharp/issues/5099),
   [ADR-0191](0191-go-to-gsharp-migration-tool.md) sections 1.1 and 7,
-  [ADR-0189](0189-capturing-anonymous-objects-and-structural-interface-adaptation.md),
-  [ADR-0188](0188-heap-storable-managed-references.md),
+  [Withdrawn ADR-0206](0206-explicit-snapshot-and-selected-location-receivers.md),
   [ADR-0182](0182-receiver-clause-is-always-extension.md),
+  [ADR-0188](0188-heap-storable-managed-references.md),
+  [ADR-0189](0189-capturing-anonymous-objects-and-structural-interface-adaptation.md),
   [ADR-0186](0186-platform-types-for-oblivious-clr-interop.md),
   [ADR-0193](0193-nullability-queries-are-type-level-and-funnelled.md),
   [ADR-0154](0154-test-oracle-strength.md)
@@ -17,579 +20,589 @@
 
 ### 1. Handwritten programs first
 
-The following pairs describe two independent needs. The left-hand programs use
-existing language constructs. The proposed programs are **hypothetical**, not
-examples that the published compiler accepts. The receiver example has an
-additional design gate, explained below. None of these snippets was compiled
-as evidence for this document.
+A message router needs heterogeneous storage, optional capabilities and concrete
+recovery without carrying each nominal adapter beside its source. Ordinary
+interfaces and `adapt` already provide typed CLR forwarding. They do not preserve
+the source type through tests on the adapter itself.
 
-#### Heterogeneous messages with optional capabilities
-
-A message router needs a common queue, optional audit behavior, and access to
-the original concrete message. Adding an audit view must not replace that
-message's identity with a forwarding object's type.
-
-| Current-language baseline | Proposed contract |
-| --- | --- |
-| Keep the source and an adapter separately. Carry both through every routing layer that needs concrete tests. | Store one opted-in value. Acquire typed capability views without losing the original evidence. |
-| An `Audit` adapter is an ordinary nominal object. Testing that wrapper for the source type does not recover the source. | Capability tests inspect validated evidence, not the adapter's CLR type. |
-
-Current-language sketch, with ordinary nominal interfaces and static adaptation:
+This revision recommends a native `protocol` declaration and target-typed
+conversion. All protocol examples are **hypothetical design sketches**.
+No published compiler supports them, and none was compiled for this document.
+`Print` denotes an application function.
 
 ```gsharp
-interface Audit { func Describe() string; }
-class OrderPlaced(Number int32) {
-    func Describe() string -> "order"
-}
+protocol Message {}
+protocol Auditable { func Describe() string; }
+
+class OrderPlaced(Number int32) {}
 class Heartbeat {}
+
+func (order OrderPlaced) Describe() string -> "order"
 
 let order = OrderPlaced(42)
-let audit = adapt[Audit](order)
-let messages = []object{order, Heartbeat()}
-// Keep order/messages and audit separately if both observations are needed.
-```
-
-Proposed spelling and operations:
-
-```gsharp
-interface value Message {}
-interface value Auditable { func Describe() string; }
-class OrderPlaced(Number int32) {
-    func Describe() string -> "order"
-}
-class Heartbeat {}
-
-let messages = []Message{
-    values.Pack[Message](OrderPlaced(42)),
-    values.Pack[Message](Heartbeat())
-}
-for message in messages {
-    if message is Auditable audit {
-        Print(audit.Describe())
-        if values.TryGet[OrderPlaced](audit, out var order) {
-            Print(order.Number)
-        }
+let message Message = order
+if message is Auditable audit {
+    Print(audit.Describe())
+    if audit is OrderPlaced recovered {
+        Print(recovered.Number)
     }
 }
+let optionalAudit Auditable? = message as Auditable
+let heartbeat Message = Heartbeat()
+// A validated Heartbeat/Auditable mismatch yields false or absent.
 ```
 
-`Print` stands for an application function. `values` denotes the proposed
-compiler-recognized operations, not an existing import. Their qualification
-and packaging need acceptance with the spelling. They expose no wrapper,
-type tag, slot number or universal invocation operation.
+The extension remains an ordinary static extension, not a newly attached
+instance member. A validated typed witness makes it usable for protocol
+conformance. Renaming a category alone cannot provide retroactive conformance.
+Section 4 specifies candidate selection, authority and separate-library limits.
 
-The `Heartbeat` capability test returns false. Recovering `OrderPlaced` through
-`audit` succeeds with the same object reference. Neither operation searches the
-runtime shape. Both types and the queried capability belong to the validated
-finite evidence closure described in section 7.
+Concrete recovery above is an ordinary-compatible, non-null type-pattern
+candidate. It is not an exact-insertion-type assertion or a solution for typed
+nil. Section 6 distinguishes those operations.
 
-#### Value-backed strategies without stored-state mutation
+### 2. Current baseline and why adaptation survives
 
-A pricing simulation wants independent trial calls against a saved strategy.
-Each call may mutate its temporary receiver while reading shared reference
-data. Trial calls must not advance the saved configuration.
+These are existing contracts, not completed protocol implementation evidence:
 
-| Current-language baseline | Proposed family, after the receiver gate |
+| Mechanism | Current contract and protocol boundary |
 | --- | --- |
-| Write a rich object that saves a value and explicitly copies it inside each forwarding method. | Request a snapshot-call slot in an opted-in capability, with ordinary typed calls. |
-| `adapt[Quote](configuration)` instead keeps one mutable struct field. It is not this contract. | Copy the saved struct for each call, not just at insertion. Shared reference-like fields remain shared. |
+| Receiver-clause extensions, ADR-0182 | `func (r R) Foo() T` is static, with a by-value parameter zero. It is not a nominal member and has no new private access. Protocol witness eligibility must not change direct extension calls. |
+| Ordinary struct instance methods | Calls on writable addressable storage may mutate it. Existing readonly defensive-copy rules remain authoritative. |
+| Managed locations, ADR-0188 | A handle selects supported original storage. `*h` is a permission-checked lvalue; `Borrow()` returns exact `ref T` or `ref readonly T`. Whole-value writes require that exact storage type. |
+| Adaptation, ADR-0189 | `adapt[I](x)` creates a fresh nominal CLR implementing wrapper. It saves one mutable struct copy, or retains an object/explicit handle. It rejects unsupported/null sources and exposes the requested nominal contract. |
+| Rich objects, ADR-0189 | Ordinary fields, captures and forwarding bodies can already express independent trials, retained handles and richer member surfaces. |
+| Existing patterns and safe casts | Nominal CLR tests, nullable results, definite-assignment regions and safe-cast target restrictions are current language behavior, not protocol evidence lookup. |
 
-Current-language sketch:
+Inspection anchors include `BindStructuralAdaptation` in
+[Binder](../../src/Core/CodeAnalysis/Binding/Binder.gs),
+[member emission](../../src/Core/CodeAnalysis/Emit/MethodBodyEmitter.MemberAccess.gs),
+[ManagedRef](../../src/Sdk/Gsharp.Runtime.Values/ManagedRef.gs),
+[adaptation language tests](../../test/Compiler.Tests/InterfaceAdaptationLanguageTests.gs)
+and [adaptation review tests](../../test/Compiler.Tests/InterfaceAdaptationReviewTests.gs).
+They exercise current storage/forwarding, not this proposal.
+
+**Keep `adapt` as the working CLR bridge.** Native protocols do not automatically
+implement nominal CLR interfaces. Nor do they inherit the wrapper's observable
+identity, equality, null behavior, properties/events, larger member surface or
+safe foreign export. A protocol-to-CLR replacement requires a separately proved
+interop contract. This is a concrete division of responsibility, not two
+interchangeable capability APIs. Protocols aim at type-preserving native views;
+adaptation supplies exposed nominal implementations today.
+
+Independent Quote trials do not establish a language requirement. A local copy
+inside an ordinary forwarding body already requests a fresh trial. This ADR
+does not add receiver kinds, automatic resets or per-call snapshot construction
+modifiers. ADR-0206 is withdrawn, not a remaining acceptance prerequisite.
+
+## Decision
+
+**Recommend native protocols, statically proved target-typed conversion, and
+paired `is`/`as` views with stable typed witnesses. Copy a concrete struct once
+at conversion; retain a concrete object reference. Preserve ordinary receiver
+semantics. Investigate source-location projections without changing
+`managed[T]`.**
+
+Every recommendation remains Proposed. The confirmed conversion direction does
+not settle representation, ownership of copied protocol values, location-view
+syntax or metadata. The explicit proposed choices and acceptance gates below
+must not be reported as accepted semantics.
+
+### 3. Declaration, conversion and stored mutation
+
+Recommended declaration spelling is `protocol Name { ... }`. Contextual parsing,
+existing identifiers named `protocol` and old grammar compatibility require a
+parser proof. No global keyword reservation is authorized.
+
+`let p MyProtocol = x` is the baseline language spelling when conformance is
+statically proved. It evaluates `x` once and constructs a present protocol value.
+There is no recommended public packing/extraction library or alternate envelope.
+The same proof must govern argument, return and assignment conversion points.
+
+For a **struct**, conversion copies `x` once, shallowly, into persistent saved
+storage. Ordinary instance calls mutate that saved storage across calls, not
+the original `x`. It is neither immutable storage nor a fresh call receiver.
+Class, array, slice and managed-handle fields preserve their ordinary sharing.
+Replacing such a field in the saved struct does not replace the original's
+field; mutating their shared referent can affect both.
+
+Hypothetical protocol trace, assuming a legal ordinary mutating receiver:
 
 ```gsharp
-interface Quote { func Next() int32; }
-struct Configuration {
+protocol NextValue { func Next() int32; }
+struct Counter {
     var Step int32
     func Next() int32 {
         Step += 1
         return Step
     }
 }
-let configuration = Configuration{Step: 10}
-let trial = object : Quote {
-    let Saved = configuration
-    func Next() int32 {
-        var receiver = Saved
-        return receiver.Next()
-    }
-}
-// Repeated trial.Next() calls return 11. Each method creates its own receiver.
+var x = Counter{Step: 10}
+let p NextValue = x
+x.Step = 30
+Print(p.Next()) // 11
+Print(p.Next()) // 12
+Print(x.Step)   // 30
 ```
 
-Proposed **receiver-gated** sketch:
+For a **class**, retain the evaluated object reference. Rebinding `x` does not
+retarget `p`; mutation of that object remains shared. If `a` has state 10,
+`p` is constructed from `a`, and `a` is rebound to another object with state 90,
+`p` still calls the old object. A capability view must not wrap the new object.
+
+An extension witness over a struct instead receives its ordinary by-value
+copy on each call. If its body increments `Step`, two calls from saved state 10
+can return 11 and 11, leaving saved `Step` at 10. That is the existing extension
+contract, not a new protocol receiver policy. An instance witness starting at
+10 returns 11 and 12. Do not normalize one into the other. Readonly instance
+receivers and readonly handles retain their existing permission/copy rules.
+
+Converting an already-erased protocol value is transport or a capability view,
+not a second concrete insertion. Preserve original evidence; do not store a
+protocol box as a new concrete payload or implicitly unwrap an ordinary adapter.
+
+### 4. Retroactive conformance, selection and coherence
+
+The intended source experience includes adding a protocol and ordinary
+extensions for a type owned by another library. A user should then write
+`let p MyProtocol = x` without public wrappers, manual tags or witness tables.
+This resembles Swift's retroactive conformance goal, but does not adopt Swift's
+conformance declarations, global lookup/coherence rules or ABI. In particular,
+ADR-0182 extensions stay static and never enter the receiver's nominal method
+table. Their participation below is new protocol validation only.
+
+Proposed conformance binding rules:
+
+1. A conformance record identifies an exact concrete type `T`, protocol `P`,
+   contract revision and one typed target for each slot. Identity includes
+   assembly, constructed types and nullability, not short names.
+2. At the conformance's defining compilation, first select an exact accessible
+   ordinary instance member using existing applicable member rules. If there
+   is none, consider ordinary receiver-clause extensions visible in that
+   compilation's explicitly imported scope. Use existing extension applicability
+   and overload resolution; initial proof requires exact supported signatures
+   without signature adaptation. An inaccessible instance member grants no
+   private authority; an independently accessible extension can qualify.
+3. Ambiguous applicable candidates are a diagnostic, not import-order priority.
+   Unsupported signatures are not silently skipped to manufacture a negative
+   conformance. The first proof rejects those cases at the boundary.
+4. Record exact target identities, receiver convention and accessibility
+   authority. Runtime dispatch uses those targets. A later import does not
+   re-run extension search or rebind an old conformance.
+5. At a composition boundary require one canonical compatible record per
+   `(T, P)` within that program's validated closure. Two independent libraries
+   choosing different witnesses are a conflict diagnostic, not last-writer
+   wins or whichever view was tested first. Identical re-exported records can
+   be recognized by origin and exact contract identity.
+6. Calls/tests use that record, including its negative decisions. Local
+   conversion sites cannot quietly create incompatible records. The mechanism
+   for declaring/exporting a canonical record and deliberately resolving
+   conflicts remains a source/metadata acceptance gate; no syntax is invented
+   here to conceal that requirement.
+
+A private extension cannot be exported as callable public witness authority.
+A defining library may expose an ordinary legal public forwarder which uses
+its own private implementation; a consumer may bind that public contract.
+Neither a protocol declaration nor possession of a type descriptor grants
+access to another library's private members. Opaque private concrete identities
+may be exported by their owner for existing witnesses without becoming
+consumer-nameable or permitting concrete recovery.
+
+Separate-library example: library A owns `Counter`; library B owns `NextValue`
+and an accessible extension for `Counter`; library C references both. C can
+validate and emit a witness without changing A. If D supplies a conflicting
+`Counter/NextValue` record, composition must diagnose it. Adding D to C cannot
+change an already-bound call in A or B.
+
+This is deliberately more than a spelling change. Declaration authority,
+cross-unit conflict detection and ref-only import parity must be proved before
+claiming usable retroactivity.
+
+### 5. Presence and evidence completeness
+
+`P` denotes a present protocol value. `P?` also permits outer absence (`nil`).
+Use ordinary `if let`, `?.`, `!!` and nullable presence checks. A present value
+may contain an explicitly nullable payload whose current value is nil.
+Outer absence has no payload/evidence; present typed nil has both.
+
+| Input/operation | Proposed boundary |
+| --- | --- |
+| `default(P?)` | Absent. |
+| Uninitialized non-null `P` or `default(P)` | Reject unless valid initialization is proved; no fictitious concrete payload. |
+| Bare `nil` to non-null `P` | Reject: no insertion type evidence. |
+| Typed nullable payload to an empty protocol | Potentially present typed nil; requires explicit presence-preserving conversion and evidence proof. |
+| Nullable class payload to an instance-method protocol | Reject without a separate proved safe entry contract; current non-null value alone cannot erase declared nullability. |
+| Open base/object/interface source with unknown concrete type | Initially reject original-concrete evidence claims; no `GetType()` discovery fallback. |
+| Existing ordinary adapter | At most evidence for that adapter as a CLR object, never automatically its hidden source. |
+
+The nullable-payload conversion in this table remains an admission gate.
+In particular, overload/conversion ranking must distinguish lifting outer
+absence from constructing present typed nil. No ambiguous nullable assignment
+is claimed to work merely because non-null conversion has a recommended spelling.
+Platform `T!` stays distinct from `T?`; use the existing ADR-0193 producer funnel
+and readers, not another nullability computation.
+
+The **bounded first proof** uses finite exact insertion types and finite
+protocols, including positive and negative conformance records. A manifest
+certifies only its declared closure. Missing evidence is **unknown**, not a
+negative answer. Reject the query at compilation/import/link validation if its
+coverage is unknown; invalid runtime contract versions fail the explicit
+boundary before dispatch, not an ordinary false result.
+
+The **long-term source goal** includes protocols authored after a source
+library shipped. A closed old producer manifest cannot promise arbitrary
+future consumer protocols. A consumer can generate supplemental typed evidence
+only for a complete accessible finite set of source types with legal targets,
+then explicitly validate the composed closure and coherence. An old opaque
+erased payload without sufficient descriptors/authority remains blocked.
+Rebuilding/re-exporting an expanded producer closure is one bounded remedy,
+not the desired universal source experience.
+
+The mechanism to compose supplemental evidence across reference assemblies,
+public exports and independently compiled consumers remains an acceptance gate.
+No ambient registry, dynamic shape search, unrestricted reflection or later
+import is allowed to extend an existing conformance silently. Open generic
+insertion and unbounded plugins remain outside the first proof. Generic
+containers do not waive presence, copy, escape or evidence checks.
+
+### 6. Paired capability tests and concrete recovery
+
+Within a validated closure, both forms use the **same stable conformance**:
 
 ```gsharp
-interface value TrialQuote {
-    snapshot func Next() int32;
+if message is Auditable audit {
+    Print(audit.Describe())
 }
-let configuration = Configuration{Step: 10}
-let trial = values.Pack[TrialQuote](configuration)
-Print(trial.Next())  // 11
-Print(trial.Next())  // 11, not 12
+let audit Auditable? = message as Auditable
 ```
 
-`snapshot func` is a **candidate slot modifier for a separate receiver-mode
-ADR**, not syntax selected by this ADR. It describes a call policy on a new
-capability slot, not a change to `Configuration.Next`. The value category has
-an independent use in the message example without this policy. Do not admit
-the strategy sketch by treating a normal method, extension or readonly
-defensive copy as an already available snapshot slot.
-
-#### Intended migrated output, not an executable corpus
-
-After both the category and the necessary receiver modes pass their gates,
-algorithm bodies should look like this:
-
-```gsharp
-func Price(strategy TrialQuote) int32 -> strategy.Next()
-
-func Route(message Message) {
-    if message is Auditable audit {
-        Print(audit.Describe())
-    }
-}
-```
-
-Insertion remains explicit at source conversion points. The translator must
-also prove the Go mapping in section 10. These bodies do not certify Go
-assertions, typed nil, pointer receivers or method values. A frontend operation
-without an admitted mapping remains blocked, even when a native call works.
-
-### 2. What exists today
-
-These observations come from repository source and existing tests, not from
-the intended behavior of this proposal. This is inspection evidence, not a
-new test run:
-
-| Existing mechanism | Inspected evidence and limit |
-| --- | --- |
-| Nominal interface closure | `ExpandStructInterfaceClosures` in [interface verification](../../src/Core/CodeAnalysis/Binding/DeclarationBinder.InterfaceVerification.gs) expands declared interfaces and inherited obligations. It does not install optional structural views on every value. |
-| Static adaptation | `BindStructuralAdaptation` in [Binder](../../src/Core/CodeAnalysis/Binding/Binder.gs) selects a target interface, creates an adapter class and stores a private source field. It rejects nullable, borrowed and unsupported location sources. Reference inputs use `ArgumentNullException.ThrowIfNull` before construction. |
-| Struct mutation | That source field is mutable for value adaptation. [Member access emission](../../src/Core/CodeAnalysis/Emit/MethodBodyEmitter.MemberAccess.gs) has address-based value receiver paths. ADR-0189 requires calls to update the saved field, not a new temporary on every call. |
-| Rich captures and selected locations | `RichMutableCapturesShareOneCellPerDynamicBinding` and `RichCaptureAndPersistentHandleAdaptersVerifyAndExecute` in [language tests](../../test/Compiler.Tests/InterfaceAdaptationLanguageTests.gs) assert shared captures, initializer snapshots and writes through a retained handle. The latter expects two increments to update the original from 20 to 22. |
-| Separate assemblies | `ReferenceAssemblyExposesOnlyTheRequestedInterfaceContract` and `SourceTargetAndCallerMayLiveInThreeIndependentAssemblies` in those tests cover nominal signatures and caller-emitted adaptation. They do not carry original-type evidence through an opt-in category. |
-| Imported contracts | `ImportedAdapterEventsPreserveNestedNullabilityMetadata` and `ImportedGenericNullabilityAndConstraintMetadataRemainExact` in [review tests](../../test/Compiler.Tests/InterfaceAdaptationReviewTests.gs) cover nested nullability and exact generic contracts. These are obligations to preserve, not evidence for new receiver metadata. |
-| Managed locations | [ManagedRef](../../src/Sdk/Gsharp.Runtime.Values/ManagedRef.gs) supplies borrowing and readonly views. Its equality uses location identity. A handle copy does not copy the referent or provide an interface presence discriminator. |
-
-The current-language examples use the interface, class/struct, array literal,
-`adapt`, rich field and method constructs exercised by those mechanisms.
-They are illustrative compositions, not newly banked conformance fixtures.
-
-## Decision
-
-**Recommend an explicit interface-value type category with finite, statically
-validated evidence and ordinary typed capability calls. Preserve evidence
-through views. Use ordinary outer nullability for absence, while retaining
-the insertion payload's exact admitted G# type inside a present value.**
-
-This is one source contract, not three competing public APIs. Hidden storage
-can use library types and synthesized forwarders. It is not a public
-`GoInterface` envelope. All decisions here remain **Proposed**. Merging this
-document or passing CI does not accept its semantics or authorize product work.
-
-### 3. Ownership and recommended spelling
-
-This ADR owns:
-
-1. Opt-in category declarations, insertion, absence, extraction and views.
-2. Preservation of exact admitted G# insertion evidence.
-3. Conservative native equality and explicit foreign boundaries.
-4. Closed-evidence and emitted-contract requirements.
-
-A **separately accepted receiver-mode ADR** must own snapshot-call slots,
-location-receiver slots, nullable-location entry, method-value captures and
-their imported metadata. This document records their required observations;
-it does not approve a receiver syntax or silently add those modes.
-[Proposed ADR-0206](0206-explicit-snapshot-and-selected-location-receivers.md)
-recommends explicit slot policies and separates capture from invocation copies.
-It remains an independent design gate, not acceptance of this category.
-
-The first category implementation may admit class-reference calls through
-ordinary accessible instance methods. It may store/extract structs and handles
-without offering their methods as callable structural slots. Automatic
-struct/handle slot forwarding stays blocked until the receiver ADR selects the
-mode explicitly. There is no fallback to mutable adapter storage.
-
-Recommended declaration spelling is `interface value Name { ... }`.
-`value` is contextual only between `interface` and a following declaration
-identifier. An existing `interface value { ... }`, a method named `value`,
-and escaped identifiers retain their current parsing. A parser proof must
-cover the old grammar before acceptance. No global keyword is reserved.
-
-`values.Pack[V](expression)` is an explicitly recognized, typed insertion
-operation targeting category `V`. The proposed library-qualified operation
-does not reserve `Pack`, `TryGet` or `values` in ordinary user code.
-Recognition requires the compiler-owned symbol identity, not a short-name
-match. A local alias can shorten qualification without granting privileges.
-
-Each category declares ordinary synchronous by-value method signatures.
-Initial slots reuse ADR-0189's exact public instance selection and accessibility
-checks, but not its exposed wrapper semantics. Do not import its larger
-generic/property/event/ref surface by implication. These require separate
-focused proofs before admission to this category.
-
-### 4. Presence, payload and insertion boundaries
-
-`V` is a present value. `V?` is either absent (`nil`) or present. This uses the
-existing source operations for outer nullability: `== nil`, `if let`, `?.` and
-`!!`. A present entry can hold an explicitly nullable payload whose value is
-nil. That entry is not absent.
-
-| Operation | Proposed meaning |
-| --- | --- |
-| `default(V?)` | Absent, no payload and no original-type evidence. |
-| `default(V)` or an uninitialized non-null `V` field | Rejected unless existing definite assignment proves initialization. Do not allocate a fictitious payload. |
-| `values.Pack[V](expression)` | Evaluate once, validate insertion and slots, then create a present entry. A nullable payload's nil is retained. |
-| Assignment/copy of `V` or `V?` | Preserve presence, evidence and semantic payload. Copy a struct payload logically; retain class/handle identity. |
-| Ordinary `T` to `V` assignment | Rejected without explicit insertion. No new ambient structural conversion. |
-| Existing `V` to another view | Preserve the original entry, not a newly inserted adapter or category-typed payload. |
-| Packing an existing category value | Rejected; use view conversion. No nested category payloads in the initial scope. |
-
-An expression containing bare `nil` has insufficient insertion evidence.
-A typed local, such as `let text string? = nil`, supplies `string?` evidence
-for `values.Pack[Message](text)`. A category with no callable slots can hold
-that payload. Nullable class payloads cannot satisfy ordinary instance-call
-slots, even if their current value happens to be non-null. Narrow explicitly
-before insertion to obtain a different, non-null insertion type.
-
-The same rule applies to nullable managed handles. A nil handle can be a
-present payload; it cannot be called through ordinary instance forwarding.
-`T?` inside an entry, outer `V?`, nullable handles, and nullable referents are
-different positions. `T!` remains ADR-0186's unspellable imported platform
-position. Platform input requires an explicit checked/narrowed payload contract
-before insertion; it is not silently canonicalized to `T?`.
-
-All initialization paths must enforce presence, including arrays, generic
-storage and foreign returns. The compiler may reuse ADR-0188's required-value
-analysis, but must prove it applies to this category. Runtime CLR zero storage
-does not become a valid non-null `V`. Foreign invalid storage fails at the
-explicit boundary, rather than creating an apparently present default.
-
-### 5. Original type evidence and capability operations
-
-Original evidence identifies the **admitted concrete insertion type** and its
-nullability/constructed arguments, not a wrapper type or a member-name list.
-For a struct it denotes that exact type. For a class it requires an exact
-concrete type proof; initially a statically sealed class suffices. Insertion
-through `object`, a nominal interface, or an open base class cannot guess the
-original concrete type using `GetType()`. Reject such insertion unless a later
-accepted evidence protocol supplies the missing proof.
-
-An already-created ordinary adapter may be treated only as that ordinary CLR
-object at an explicitly admitted boundary. Its source identity is not
-recoverable evidence. It is never implicitly unwrapped.
-
-Within a validated finite closure:
-
-| Operation | Proposed result |
-| --- | --- |
-| `entry is Capability view` | Test the original evidence against that category's exact validated slots. Bind a present view on success; false on a known mismatch. |
-| `entry as Capability` | A present view on success, otherwise absent. Absence as input remains absent. |
-| `values.TryGet[T](entry, out var payload)` | True only for exact insertion-type evidence `T`; bind the extracted payload with type `T`, including its admitted nullability. Copy struct values; retain class/handle identity. |
-| Failed `TryGet` | False; output is definitely unassigned and cannot be read on the false path. No counterfeit non-null `default(T)`. |
-| Test/extraction on absent `V?` | False; no output binding. Capability conversion preserves absence. |
-| Assert a capability | `(entry as Capability)!!` uses the ordinary checked-presence failure. It is not automatically a Go assertion panic. |
-
-Concrete recovery is explicit `TryGet`, not ordinary CLR `is T` or `as T`.
-Capability patterns apply only when the target is the new category. Ordinary
-type tests on nominal interfaces/objects keep their current meaning. No
-unchecked concrete cast, runtime member-name invocation or implicit
-assignability-based payload extraction is added.
-
-Output definite assignment for `TryGet` is a new, narrowly recognized compiler
-contract. Its true/false branch behavior, nullable outputs and short-circuit
-use require proof before implementation acceptance. If it cannot fit the
-existing flow model, revise the spelling before acceptance, not the semantics.
-
-A failed test means **known not to satisfy**, not **missing evidence**.
-Unknown closure members or unsupported signatures produce a compile-time
-boundary diagnostic. Imported values with unverifiable evidence cannot enter
-native dispatch. A runtime contract/version failure must fail the explicit
-import operation, not return a misleading false capability result.
-
-### 6. Three different copy/receiver decisions
-
-| Event | Contract or gated requirement |
-| --- | --- |
-| Value insertion | Snapshot the struct at that evaluation point. Ordinary shallow value copy preserves sharing of class, slice, array and location fields. Do not capture its source variable as a location. |
-| Reference/handle insertion | Retain the evaluated object reference or selected handle. Reassigning the original variable never retargets the entry. Selecting a handle does not dereference it. |
-| Snapshot-slot call, receiver ADR required | Copy the current selected struct value for **every call**, invoke on the fresh receiver, and discard receiver-local mutation. Shared reference-like field effects remain visible. |
-| Snapshot slot through a location, receiver ADR required | Read/copy the current pointee at invocation, not insertion. Repeated calls observe intervening external writes but cannot mutate the pointee through receiver-local writes. |
-| Location slot, receiver ADR required | Pass the retained selected handle and its permission. Writes affect that location. Do not copy its referent or retarget from the handle variable. |
-
-For a nil selected location, a snapshot/value-method call must fail on the
-attempted read **before entering the body**. A separately declared nullable
-location receiver must instead receive the nil handle and may handle it.
-There is no substitute involving a null CLR instance invocation or an eager
-dereference before a nullable receiver body.
-
-The receiver ADR must specify evaluation and fault timing for direct calls,
-method values, callback conversion and imported slots. A snapshot method value
-must state when it captures the selected source and when it copies a receiver.
-Its callable cannot accidentally share one mutable temporary across invocations.
-If a body retains a location into its copy, that invocation needs independent
-storage with the required lifetime. A location method value retains the chosen
-handle, not the variable holding it. No escaping raw CLR byref is allowed.
-
-Ordinary struct calls continue to mutate addressable storage. CLR boxing,
-nominal interface dispatch, readonly defensive copies and extension selection
-do not change. ADR-0182 receiver-clause functions remain static extensions,
-not nominal method slots. A future explicit snapshot slot can call an ordinary
-struct body on a fresh receiver, but cannot relabel that body's direct or
-nominal calls. Extensions are not automatic structural candidates.
-
-### 7. Finite evidence, generic and cross-unit boundaries
-
-The first admission is closed, not a runtime structural type system.
-It supports finite known concrete insertion types and finite declared
-capabilities. A producer validates the full matrix of its admitted insertion
-types against its declared/referenced capability closure. A negative matrix
-entry is evidence too. Unused combinations need not allocate dispatch objects.
-
-For separate libraries, a shared contract assembly declares the available
-capabilities. The producer exports a versioned closure manifest with its
-public value signatures. A consumer must prove its queried capabilities are
-covered before accepting the value. A consumer-added capability outside that
-manifest is a boundary error, not false. Rebuilding the producer against an
-expanded validated closure is explicit; importing an old binary does not
-silently gain new structural capabilities. This restricts plugin extensibility
-but avoids reflection or universal late dispatch.
-
-Opaque/private concrete types need assembly-qualified opaque identities,
-issued by their defining assembly, with only publicly legal witness slots.
-Consumers need not name private types to call an already exported capability.
-Concrete extraction requires a nameable accessible type and exact evidence.
-The producer never exports private methods as public authority.
-
-Initial admission excludes open type parameters at insertion, generic
-capability declarations/slots, ref-like payloads and unbounded dynamic loading.
-Closed constructed payload types may follow only when identity, substitution,
-nullability and storage proofs cover that particular family. Nongeneric
-helpers may transport a category value without inspecting its payload.
-Generic containers must preserve the category contract; using a container
-does not admit arbitrary generic insertion or waive initialization checks.
-
-An imported CLR type with complete known public shape may receive a local,
-statically generated witness at insertion. Its identity remains the CLR/G#
-type identity selected there, never a guessed Go identity. Unknown versions,
-unrecognized metadata, unknown dynamic classes and runtime-only plugins stay
-attributed boundaries. Native AOT and trimming cannot depend on unrestricted
-reflection to complete a missing witness.
-
-### 8. Native equality, hashing and CLR interop
-
-For the initial category, no intrinsic payload equality or hashing is admitted.
-Only presence comparison against `nil` on `V?` is defined. `==` between entries,
-ordering, implicit map-key comparers and default payload hashing must receive
-diagnostics where the compiler controls the operation. A future explicit
-comparer may use extracted payloads or an application-defined capability.
-Do not silently choose wrapper reference equality, record equality or Go
-comparability. No hash stability or serialization format is promised.
-
-Boxing a category to `object`, converting it to a nominal interface, calling
-inherited `object.Equals/GetHashCode/GetType`, or passing it to an unconstrained
-CLR API must not bypass that restriction. These are explicit export boundaries,
-not ordinary implicit conversions. The proof must cover generic/default
-comparers and arrays as well as direct operators. Merely forbidding `==` is
-insufficient if a generic escape exposes backing-box identity.
-
-G#-to-G# calls through metadata-aware public signatures preserve presence,
-original evidence and selected storage. They are not foreign exports.
-Ordinary CLR code does not receive that guarantee from the erased backing
-signature alone.
-
-**Initial foreign export/import is rejected.** Before admitting it, a separate
-interop contract must decide all of the following together:
-
-- Which nominal interfaces can be exported and which receiver slots they expose.
-- Whether repeated exports create distinct wrappers, and what CLR reflection,
-  reference equality, equality and hash calls observe.
-- How absence differs from a present nullable payload at that boundary.
-- Whether importing an exported wrapper recovers the same semantic entry, and
-  what happens after foreign wrapping, copying or serialization.
-- Which versioned evidence authenticates a recognized round trip; unknown
-  wrappers cannot be unwrapped heuristically.
-
-This does not restrict existing nominal CLR interfaces or `adapt`. They keep
-CLR nullness, equality, boxing, public slot contracts and ordinary BCL use.
-ADR-0189 adapters remain fresh exposed objects, reject null sources and expose
-only their selected interface closure. No conversion cache or transparent
-source-unwrapping rule changes those observations.
-
-### 9. Feasible lowering and costs to prove
-
-A feasible backend uses an internal immutable entry containing original
-evidence, semantic payload storage and a validated slot witness. A view changes
-the statically available slot contract without replacing original evidence.
-Snapshot insertion can use immutable boxed storage; extraction returns a copy.
-Reference payloads retain references. Handles retain their selected locations.
-These are implementation hypotheses, not a universal layout or allocation ABI.
-
-Reuse static member selection and exact contract checking from adaptation.
-Reuse rich-object/capture synthesis for typed forwarders and retained storage.
-Reuse managed-location promotion and permission checks where the receiver ADR
-permits them. These mechanisms do not already implement this category.
-
-Receiver lowering, once accepted, needs a distinct storage/call plan:
-
-1. Evaluate insertion or location selection exactly once at its source point.
-2. Save the original evidence and snapshot/reference/handle choice.
-3. At a call, resolve the typed slot from validated evidence.
-4. Execute its explicit receiver mode. A snapshot slot obtains a fresh value
-   receiver per invocation, including reads through a selected location.
-5. Preserve exception timing, aliasing and escaping receiver storage.
-
-Generate exact typed methods or typed delegates, not an `object[]` dispatch
-ABI, universal `Invoke_I_M` helpers or caller-supplied numeric tags.
-Generated boxes and witnesses are permitted behind the compiler boundary.
-No reflection proxy, global adapter cache or application-maintained tag table
-is intended output.
-
-Evidence identities and witness order must derive from canonical declaration
-identities and exact signatures in deterministic order. Never assign IDs by
-hash-table enumeration, task completion or process-local CLR handles.
-Separate assembly identity/version and signature changes need explicit
-invalidation. No universal tag numbers or binary layout are fixed here.
-
-Both implementation and reference assemblies must carry a versioned contract:
-category identity, original-type descriptor identities, finite capability
-closure including negative knowledge, exact slot signatures/nullability, and
-required receiver/evidence revisions. Include permissions and receiver modes
-when those are accepted. Ref-only consumers must reach the same decisions as
-implementation-assembly consumers. Unknown revisions fail closed.
-Existing CLR nullability attributes remain necessary, but are not sufficient
-to encode these facts. Imported position nullability must use ADR-0193's
-producer funnel and existing readers, not another nullable-signature parser.
-
-Likely costs include per-entry evidence/storage, view checks, typed dispatch,
-code-size growth for witnesses and possible insertion allocation. Views might
-share immutable storage, but no allocation-free view guarantee is made.
-Snapshot copies can be local when non-escaping; escaping receiver locations
-may require a heap cell per invocation. Large structs increase copy bandwidth.
-Reference-like fields can retain large object graphs after shallow snapshots.
-Readonly handles do not imply exclusive ownership or deep immutability.
-
-Before cost claims, measure insertion, repeated calls, view conversion,
-extraction, escaping copies and separate-library calls against handwritten
-same-runtime controls. Include small/large structs, reference fields and JIT/AOT.
-Record allocations, retention, code size and throughput separately. There are
-no invented benchmarks, zero-allocation promises or deadlines in this ADR.
-
-### 10. Go mapping is not the native default
-
-ADR-0191 owns the frontend mapping and family admission. G# original evidence
-is not automatically Go dynamic identity. The frontend must preserve canonical
-defined-type versus alias identity, `T` versus `*T`, exact constructed source
-types, embedding/selection paths and package-qualified private method authority.
-An adapter's `GetType()` or public CLR member list cannot supply these facts.
-
-Go nil interfaces map to absence only under an explicit mapping. Go typed nil
-requires a present entry with validated Go source identity and a nil payload.
-It is not equivalent to G# `T?`, `T!` or an ordinary null CLR instance.
-Nullable pointer-receiver entry requires the separately accepted receiver mode.
-
-Native capability tests do not by themselves implement Go method-set tests,
-comma-ok zero results, single-result panics or ordered type switches. The
-mapper must construct exact target zero results on failed comma-ok assertions;
-native `TryGet` leaves its output unassigned instead. Value assertions copy;
-pointer assertions retain nil/location identity under the mapping.
-
-Go equality requires dynamic source identity and recursive comparability,
-including matching non-comparable values faulting rather than returning false.
-Floating NaN/signed-zero rules, blank fields, equality-consistent hashing,
-panic payload/version and package privacy are separately proved policies.
-The native equality deferral does not admit any Go comparison or map key.
-Where two Go source identities map to the same G# type, an approved mapping
-must preserve that distinction without public application tags, or block them.
-
-The existing schema/profile v1, `migrationReady: false`, M0 Linux-only
-execution/trust boundary and proposed `go2gs.execution-contract` are unchanged.
-ByteString APIs being in-tree does not imply a released/pinned capability or
-admitted text corpus. Interface design proceeds independently of that schedule.
-Value arrays, maps, control effects and concurrency remain separate tracks.
-
-### 11. Independent witnesses and admission gates
-
-The matrix below is an **obligation plan**, not executed probes. Product work
-must add focused tests with independent expected values and ADR-0154 witnesses.
-Use real compiler/driver paths and verify emitted IL where relevant.
-
-| Axis | Positive and negative observations | Discriminating mutant or paired witness |
+| Case | `is Auditable audit` | `as Auditable` |
 | --- | --- | --- |
-| Presence | Absent `Message?`, present non-null payload and present `string?` nil are three different cases. Reject untyped nil insertion and uninitialized `Message`. | Collapse nil payload into absence; assert presence and exact extraction success separately. |
-| Type retention | Recover the same concrete message through two capability views; a different concrete type fails extraction. | Replace original evidence with the current view/wrapper identity. |
-| Views | Known matching slots call exact members; known missing slots test false. Unknown capability closure fails compilation/import, not false. | Drop negative knowledge or accept missing evidence as a mismatch. |
-| Insertion copy | Change the original struct after insertion; extracted saved scalar stays unchanged. Mutate a shared array field; its change remains visible. | Retain the original variable as a location; deep-copy a shared field. |
-| Repeated snapshot calls, receiver gate | Two mutable calls return 11 and 11, not 11 and 12; external shared-field effects remain visible. | Reuse one mutable receiver box across calls; suppress reference-field effects. |
-| Selected location, receiver gate | Rebinding the handle variable does not retarget. External pointee writes affect the next snapshot call; receiver-local writes do not. | Copy at insertion instead of invocation; reread the handle variable on each call. |
-| Nil location, receiver gate | Nullable-location body sees nil and returns its own result. A value-method read of nil fails before the body counter increments. | Eagerly dereference both modes; invoke a null CLR instance instead. |
-| Method values, receiver gate | Repeated captured snapshot calls do not share receiver-local mutation. Two escaping receiver locations remain distinct. | Capture one call temporary at method-value creation or reuse one cell. |
-| Equality/export boundaries | Presence comparison works; entry equality, default generic comparer and implicit CLR export are rejected. Ordinary CLR interface equality still works. | Permit a generic/object escape to backing-box equality or ban ordinary nominal equality. |
-| Separate libraries | Ref-only and implementation imports agree on closed positive/negative witnesses, nullability and original identity. Old/unknown revisions reject. | Omit evidence from the reference assembly; identify unrelated same-name types as equal. |
-| Ordinary behavior | Two ordinary struct/adapter increments persist; exposed `adapt` evaluations stay fresh, null inputs reject, extensions do not satisfy slots. | Route ordinary calls through the snapshot plan or transparently unwrap an adapter. |
-| Go mapping | Independently authored Go/G# oracle pairs distinguish typed nil, source identity, receiver mutation and comparison faults. Unsupported neighboring cases remain blocked. | Merge source identities, treat a non-comparable value as false, or admit a method-set mismatch. |
+| Present, known conformance | True; bind a present view. | Present `Auditable?` result. |
+| Present, known mismatch | False; no success binding. | Absent result. |
+| Outer absence | False; no payload read. | Absent result. |
+| Missing/unknown evidence | Boundary diagnostic, not false. | Same boundary diagnostic, not absence. |
+| Present typed nil | Use its recorded conformance, not outer nullness. Empty/safely proved contracts can match. | Same decision; successful view is present despite nil payload. |
 
-Record the applied mutant diff and artifact movement, then red/green results.
-A diagnostics test must also compile the proposed remedy. Do not use only
-message text, a round trip to itself or an empty quantified assertion.
-Unsupported-case diagnostics need source locations and stable boundary reasons.
+A view preserves the selected payload storage and original evidence, not
+nested adapter identity. Section 7 makes the aliasing choice explicit.
+For source-location projections, section 8 distinguishes selecting the view
+from reading the current referent. A capability test cannot introduce an
+implicit retarget or invent a safe nil instance receiver.
 
-Review handwritten and translated output independently of runtime fidelity.
-Both message and strategy examples must remain readable without generated
-public boxes, tags, dispatch tables, universal helpers or pervasive casts.
-Inspect emitted public/ref signatures as well as pretty source. A clean
-printer cannot hide an unsound boundary, and a correct runtime cannot justify
-unreadable source. The docs-only PR runs no product mutants or new syntax.
+Integrate protocol targets with existing pattern binding and flow regions.
+Success variables obey existing definite assignment, `&&` short-circuiting,
+direct negation false-branch binding and restrictions under `or`/nested `not`.
+Property and list-pattern composition keeps its current evaluation and scope
+rules; a protocol view does not gain undeclared properties or list operations.
+An unsupported composition diagnoses rather than changing the meaning of a
+neighboring nominal pattern. No special out-variable flow model is required.
 
-### 12. Phased rollout, not automatic acceptance
+Existing nominal CLR `is`/`as` on ordinary objects/interfaces stay unchanged.
+For ordinary concrete recovery from a protocol, explore reusing `is T name`
+with ordinary-compatible payload type relations, rather than testing the
+backing object's CLR type. For a non-null class, a compatible base pattern can
+match, just as for an ordinary value. A struct pattern binds a shallow value
+copy of its **current saved state**, not a writable alias. Concrete `as`
+recovery, if admitted, must retain existing target rules: ordinary non-nullable
+value-type targets remain invalid (`GS0270`), not a new extraction loophole.
+Protocol-target `as` is a specifically new fallible view returning `P?`.
 
-1. **Design acceptance:** maintainer accepts or revises this category contract.
-   Green docs CI and a COMMENTED automated review are not semantic acceptance.
-2. **Bounded proofs:** prove presence/flow, closed evidence, exact class views,
-   ref-assembly metadata and nonbreaking parsing. Stop at a failed boundary.
-   Prototype storage privately; do not adopt proposed syntax in repository code.
-3. **Receiver design gate:** a separate Proposed ADR must earn snapshot and
-   nullable-location modes, capture rules, imported contracts and non-Go uses.
-   Category storage/type retention need not wait for that design; affected
-   callable slots and the strategy example must wait.
-4. **Focused implementation after acceptance:** implement only proved surfaces,
-   tooling/diagnostics and discriminating tests. Keep foreign interop and other
-   unsupported neighbors rejected. Do not expand this docs PR into code.
-5. **Release:** publish implemented compiler/runtime contract revisions.
-6. **Separate verified pin movement:** follow the N-1 rule in a new PR with a
-   clean-clone build. In-tree implementation is not permission for source use.
-7. **Capability probes:** bank exact released/pinned revisions, JIT/AOT,
-   separate-library, cost and clean-output evidence. Design obligations are
-   not reported as completed probes.
-8. **Go family admission:** accept a separately verified finite mapping under
-   ADR-0191. Missing receiver, source-identity, equality or boundary proofs
-   continue blocking their operations. No broad application-readiness claim.
+Ordinary type compatibility is **not exact insertion evidence**. A base-class
+match does not certify that the base was the exact insertion type. Exact
+nullable/constructed insertion-type assertions need a distinct justified
+language contract if later required; this ADR selects no extra public API.
+The initial concrete-evidence proof may restrict class insertion to sealed
+concrete types without redefining ordinary base patterns.
+
+An ordinary type pattern does not extract a nil payload as a non-null `T`.
+A present `string?` nil can fail `is string text` while remaining present.
+A failed nullable `as` concrete result cannot distinguish that nil from a
+mismatch or outer absence. **Ergonomic typed-nil concrete recovery is unresolved.**
+Options include a presence-aware pattern extension with a genuinely nullable
+binding, or deferring that recovery family. Neither is ordinary `is` secretly
+binding nil, nor a counterfeit `default(T)` on failure. Until selected and
+proved, keep the operation blocked rather than add an envelope.
+
+### 7. Copying protocol values, views and extraction
+
+The maintainer confirmed one-time shallow concrete conversion and persistent
+stored mutation. That does **not** settle whether copying an already-created
+protocol duplicates its saved struct. This is a separate acceptance decision.
+
+**Coherent proposed baseline: protocol values retain a shared semantic entry.**
+Concrete-to-protocol conversion creates independent saved struct storage once.
+Ordinary copies of that protocol value and successful capability views retain
+the entry, including its mutable saved struct. This is deliberate reference-like
+transport of the protocol entry, not accidental sharing from CLR boxing.
+It does not alias the original concrete variable.
+
+For saved `Step = 10`:
+
+| Operation sequence | Observation under this proposed baseline |
+| --- | --- |
+| Construct `p` from concrete `x`; construct `q` independently from `x` | Two independent saved struct copies. Mutating `p` does not advance `q` or `x`. |
+| Construct `p`; assign `q = p`; call `q.Next()`, then `p.Next()` | 11, 12: protocol assignment retains the same saved entry. |
+| Obtain capability view `v` from `p`; call through either | Both see the same saved state and stable witnesses. |
+| Copy `v` to another view local | Retain the same entry; no second insertion or extra struct copy. |
+| Rebind the protocol variable `p` after saving `v` | `v` retains the old entry; it does not follow the variable `p`. |
+| Extract concrete struct `s` using a successful pattern; mutate `s` | Mutate an independent shallow copy of current saved state. Referenced fields still share normally. |
+| Extract concrete class/managed handle | Retain the object/selected handle with its existing permission and identity. |
+| Pass or return a protocol by value | Same entry-retaining semantics as assignment, including across metadata-aware G# libraries. |
+
+This recommendation is **not confirmed ownership semantics**. An alternative
+is value-like protocol assignment with a logical struct copy, while reference
+payloads retain object references. That alternative must specify whether
+capability views also copy, or use a distinct retaining view category. Copying
+on every view would not preserve selected mutable storage; mixing copy/share
+based only on an invisible compiler box is unacceptable. Another alternative
+is an explicit language copy operation with retaining default transport.
+Acceptance must choose and document one complete model before implementation.
+
+The baseline avoids mixing hidden ownership kinds on assignment: every protocol
+copy retains its entry; only independent concrete insertion/extraction copies
+struct state. Location projections retain their selected storage, not a detached
+entry pretending to be that storage. Internal cell promotion must preserve
+early aliases and lifetime. A projection cannot outlive an owner it fails to
+retain. Raw byrefs cannot escape to implement any of these choices.
+
+No CLR box identity becomes a public protocol equality, hash or `GetType`
+contract. Initial native equality/hash operations other than outer presence
+checks remain rejected, including generic/default comparer or object escapes
+which expose backing storage. Foreign exports are likewise initially rejected.
+Sharing mutation is an explicit semantic observation; `ReferenceEquals` on an
+implementation box is not. No concurrency isolation or deep immutability follows.
+
+### 8. Original-source storage and the managed boundary
+
+The maintainer's candidate **`managed[MyProtocol](x)` means alias the original
+source storage of `x`**. It must not copy `x` into a protocol entry or allocate
+a new protocol-valued slot and claim that slot is the original.
+The spelling is hypothetical, not current syntax or an approved ABI.
+
+There is a real conflict with the existing invariant `managed[T]` contract.
+A `managed[Counter]` can expose `ref Counter`, read/write a whole `Counter`,
+and select fields using Counter's storage layout. A writable
+`managed[NextValue]` would allow storing any `NextValue`. A conforming
+`OtherCounter` cannot be written into a `Counter` slot. Neither covariance,
+a checked box copy nor silently switching to readonly solves that contract.
+
+Distinguish these two objects:
+
+- **Managed location containing a protocol value:** first construct
+  `var p MyProtocol = x`, then use existing `managed(p)` after protocols are
+  supported. Whole writes replace the protocol value in that protocol slot.
+  That slot is not the original `Concrete` slot.
+- **Protocol view of existing concrete storage:** select `x` itself and
+  forward allowed operations against its current contents. It needs a
+  restricted projection contract, not `ref MyProtocol`.
+
+Concrete alternatives for design proof:
+
+| Alternative | Permitted behavior and conflict |
+| --- | --- |
+| Distinct projected-location/protocol-view type with language selection syntax still to choose | Retain owner/path and exact underlying storage type. Allow validated typed calls with original permissions; no `Borrow(): ref P`, raw projected lvalue or arbitrary whole-protocol write. This best preserves the requested aliasing without redefining `managed[T]`. |
+| Candidate spelling constructs that distinct projection type | Possible only with an explicit, non-misleading type/diagnostic story. It must not claim its result is ordinary invariant `managed[P]`. Parser and API consistency remain open. |
+| Exact managed handle plus a separately selected capability projection | Existing handle keeps `Borrow` and whole `Concrete` writes. Projection only forwards proved operations. This adds a selection step, not a public envelope or detached copy. |
+| Readonly projected view | Useful only when explicitly requested. It cannot replace the requested writable source alias or silently admit mutating instance slots through defensive copies. |
+
+Recommended proof target is the distinct restricted projection. Restrictions
+are part of its explicit type contract, not a silent weakening of `managed[T]`.
+Whether optional exact-type replacement can be exposed remains open; it must
+require the original `Concrete`, never an arbitrary conforming protocol.
+
+Required selection/read/fault rules for that proof:
+
+1. Select supported source owner/path once using ADR-0188 checks and location
+   identity. Owner/index evaluation and selection faults occur at selection,
+   not at each protocol call. A copied projection retains that location and
+   permission, without copying the referent.
+2. Replacing a struct in that same source slot changes subsequent calls:
+   select `x` at Step 10, set `x = Counter{Step: 30}`, then a mutating instance
+   call returns 31 and leaves `x.Step` at 31. A detached entry would be wrong.
+3. For a **class-variable slot** projection, rebinding that slot makes a later
+   call observe its current object. This differs from ordinary protocol
+   conversion retaining the old object. Selecting `owner.Field` instead
+   retains the object root/path chosen at selection; rebinding `owner` cannot
+   redirect it. Traversal through references obeys ADR-0188 root selection.
+4. Capability `is`/`as` validates the fixed exact source-slot type/witness,
+   without reading its current payload or selecting another location. Initially
+   reject polymorphic slot types needing unknown dynamic evidence. Capability
+   success does not certify a non-nil current referent.
+5. Proposed direct-call trace: evaluate the projection receiver once; check
+   outer presence, permission and required handle validity; prepare the
+   ordinary typed receiver; evaluate arguments once in ordinary source order;
+   invoke once. For a class slot, read/retain its current object during receiver
+   preparation, before arguments. Argument-side replacement cannot retarget
+   that pending call. For a by-value extension, read/copy the current value
+   there instead. For a struct instance, retain the exact location there and
+   acquire the safe typed borrow only for invocation after argument evaluation.
+   Argument-side replacement of that same struct slot is therefore visible
+   to the instance body. No raw borrow may span an unknown/suspending argument.
+6. A nil required handle faults during receiver preparation, before arguments
+   or body. A valid class slot containing nil can be read successfully; a
+   non-null instance invocation then faults after arguments, before body entry.
+   An exact static extension legitimately accepting that nullable class instead
+   receives nil without an injected instance check. Evidence-only view selection
+   performs none of these reads. Nullable handle, nullable referent and absent
+   protocol remain different positions. These traces are proof targets, not
+   permission to change existing calls if their established timing differs.
+7. Concrete extraction, if admitted, reads at extraction time. A successful
+   struct extraction copies; class extraction retains the current object.
+   Its ordinary non-null pattern may fail for nil without collapsing protocol
+   presence. Exact read/body/argument traces must be specified and tested
+   before admitting this surface; unsupported nil/timing cases stay blocked.
+
+Writable projections may call mutating instance witnesses on original storage
+only with a proven lifetime-safe typed borrow. Readonly projections cannot gain
+writes via a view, witness, inference or import. No borrowed raw byref may cross
+suspension or unknown retaining boundaries. Scoped provenance, receiver-derived
+escaping locations, imported body effects and method-value capture require
+focused proofs. Lack of proof diagnoses; there is no hidden copy fallback.
+
+Projection identity follows the underlying canonical owner/path, but it does
+not grant protocol equality. Any future location-identity observation must
+compare locations, not CLR wrapper references or mutable contents. Metadata must
+record exact underlying type, witness, permission, lifetime/provenance contract,
+selection/read timing and replacement rules. Reference and implementation
+assemblies must agree. Current managed metadata does not already encode this
+new projected view.
+
+### 9. Lowering and separate-assembly proof gates
+
+A possible backend uses typed storage cells and exact typed forwarders.
+The saved struct is mutable. Entry evidence and selected witness bindings can
+be immutable without making the payload immutable. Class payloads retain object
+references; projected views retain original locations. No per-call reset,
+new ordinary receiver kind or invocation-time fresh-storage policy is needed.
+
+Typed forwarding must preserve instance mutation versus extension by-value
+copying. It must also preserve ordinary evaluation, exceptions, readonly rules
+and safe receiver lifetime. Reusing adaptation emission does not prove those
+facts for native evidence/views, projections or escaping receiver locations.
+Reject unsupported member families rather than quietly use another receiver.
+
+Use exact typed methods/delegates, not `object[]`, universal `Invoke` helpers,
+reflection proxies or public type tags. Internal cells, boxes and witness
+records are hypotheses, not an exposed CLR ABI or allocation promise.
+Method values and callbacks need a proof consistent with retained entry or
+selected location and current ordinary capture rules; no fresh-call policy
+is introduced here.
+
+Implementation and reference assemblies need versioned evidence for protocol
+identity, exact insertion identity/nullability, closure coverage including
+negative knowledge, canonical conformance origins/targets, receiver conventions,
+storage transport and permission/lifetime contracts. Exported signatures must
+preserve these facts. Unknown, stale, conflicting or malformed revisions fail
+the boundary; ordinary CLR attributes alone are insufficient.
+
+Generate identities and witness order deterministically from canonical
+declarations/signatures, never hash iteration, task completion or runtime handles.
+Exact generic substitution and nullability imports use existing funnels/readers.
+The first proof may exclude generic protocols/slots, ref-like or borrowed
+payloads, rich property/event/ref signatures and unknown dynamic loading.
+Such exclusions bound proof scope; they do not redefine existing ordinary code.
+
+Costs to measure after acceptance include insertion copies/allocations, retained
+graphs, large structs, shared views, concrete extraction, projected calls and
+separate-library metadata/code size under JIT/AOT. Compare handwritten controls.
+No prototypes, benchmarks, IL checks or product test results are claimed here.
+
+### 10. Go correspondence remains separate
+
+ADR-0191 owns Go family admission. Native protocols do not automatically prove
+Go defined/alias identity, `T` versus `*T`, package-private method authority,
+embedding, typed nil, assertions, equality or method-value capture. Go
+value-receiver copies are a frontend mapping obligation, not the native
+instance-call default. Ordinary by-value extensions are a possible building
+block only where the complete mapping is proved.
+
+Go comma-ok failure must produce its exact target zero; native pattern failure
+does not manufacture an initialized non-null binding. Go pointer identity and
+nil/body fault order require separate correspondence. Go comparability, dynamic
+comparison faults and hashing cannot use internal box identity. Missing mappings
+remain attributed boundaries.
+
+Schema/profile v1, `migrationReady: false`, M0 execution/trust restrictions and
+the proposed execution contract are unchanged. Bytestring APIs in-tree imply
+neither released/pinned features nor Go readiness. Arrays, maps, control effects
+and concurrency remain separate tracks.
+
+### 11. Obligation and observation matrix
+
+This is a **future design/test obligation**, not executed evidence. No new
+syntax tests, product mutants, probes or benchmarks were run for this docs PR.
+After semantic acceptance, behavioral tests need independent oracles and
+ADR-0154 discrimination using real compiler/driver paths.
+
+| Obligation | Expected observation / negative boundary | Error a future witness must distinguish |
+| --- | --- | --- |
+| One-time shallow conversion | After saving Step 10, original becomes 30; saved instance calls return 11, 12 while original stays 30. Shared referenced-field changes remain visible. | Original-storage alias, fresh-call copy or deep clone. |
+| Persistent stored mutation | Repeated instance calls advance the same saved state. Existing readonly rules are not bypassed. | Immutable entry assumption or temporary receiver each call. |
+| Retained class and reassignment | Ordinary conversion retains old object after source rebinding; mutations of that object remain shared. | Following the source variable instead. |
+| Live selected storage/replacement | Project original struct slot at 10, replace with 30, call: 31 in original slot. Class-slot projection follows replacement; selected old object field does not retarget. | Detached box, capture-time payload or expression re-evaluation. |
+| Extension by-value | Same initial scalar gives 11, 11 through mutating by-value extension, versus 11, 12 through instance witness. Reference-field effects persist normally. | Treating an extension as a byref nominal instance member. |
+| Paired capability tests | Match binds/presents; known mismatch returns false/absence for both `is` and `as`. `as` has `P?` result. | Different selection or witness rebinding by operation. |
+| Unknown evidence | Missing closure/unsupported revision rejects at compilation/import, not false or absence. | Treating unrecorded as negative conformance. |
+| Typed nil and absence | Absent has no evidence; present typed nil retains evidence. Non-null concrete pattern does not bind nil. Typed-nil recovery stays gated. | Counterfeit non-null binding or collapsed presence. |
+| Copies/views/evidence | Proposed retaining baseline: `q = p`, then two instance calls across q/p yield 11, 12. Independent concrete insertion and struct extraction copy. Views retain original evidence/storage. | Accidental sharing/detachment, nested adapter or unaccepted value-copy policy. |
+| Invariant writes | Two unrelated conformers cannot be written into a narrower Counter slot through a projection. Ordinary `managed[Counter]` still permits exact Counter replacement. | Writable covariance, `ref P` fabrication or silent readonly fallback. |
+| Permissions/lifetime/fault timing | Selection once; evidence-only view does not read; current nil faults at the required call/read. Readonly/scoped/escaping unsupported paths reject. | Eager test dereference, retarget, permission gain or dangling byref. |
+| Separate-library coherence | A owns source, B protocol/extension, C witness consumer; implementation/ref imports agree. Conflicting D rejects. Later imports cannot rebind old records. | Ambient search, private-authority leak, incomplete manifest or ref metadata loss. |
+| Existing language compatibility | Nominal tests, flow/short-circuit/negation/property/list scopes, safe-cast restrictions, managed writes and fresh nominal adapt behavior remain unchanged. | Protocol special cases escaping into ordinary code. |
+| Equality/export | Presence works; backing-box equality/hash and unproved CLR export reject, including generic escapes. Adapt still provides nominal CLR interop. | Wrapper identity becoming native semantics. |
+
+Acceptance must decide the ownership fork in section 7, canonical witness
+declaration/composition, nullable conversion/recovery, projected-location type
+and full fault traces. Unsupported cases need stable diagnostics/source
+locations and separately validated remedies, not a false success claim.
+Review handwritten and eventual translated output for ordinary calls/tests
+without public wrappers, tags or pervasive casts.
+
+### 12. Delivery and acceptance boundaries
+
+1. Review/revise and explicitly accept a bounded protocol contract. This
+   document remains Proposed; docs CI or COMMENTED review is not acceptance.
+2. Prove parsing, presence/flow, copy/view ownership, exact typed witnesses,
+   coherent separate-library evidence and ref metadata. Investigate projections
+   independently; do not advertise them until permissions/lifetimes are proved.
+3. Only after authorization, implement accepted surfaces with diagnostics,
+   tooling and discriminating tests. Keep unproved neighbors blocked.
+4. Release compiler/runtime contracts. In-tree source alone grants no adoption.
+5. Move the released N-1 pin in a separate verified PR with a clean-clone build
+   and release notes. Do not use new features in repository source beforehand.
+6. Bank exact released/pinned capability, cost and output evidence. Go family
+   admission requires its own verified mapping under ADR-0191.
+
+No compiler/runtime/translator edits, prototypes, pin movement or Go admission
+belong in this revision. Keep #5097 open for design acceptance. After a document
+merge, the conductor may close #5099 with withdrawal evidence; that is not
+acceptance of the former receiver proposal.
 
 ## Consequences
 
-- Handwritten capability-oriented code can retain concrete evidence without
-  carrying the source and each nominal wrapper side by side.
-- Ordinary CLR interfaces, adaptation and source method semantics do not change.
-- Presence is useful independently of optional slots; snapshot dispatch remains
-  a separate explicit choice rather than an inseparable Go mode.
-- Finite manifests restrict unknown future capabilities and plugins. This is a
-  stated admission limit, not a promise of open-world structural dispatch.
-- Compiler recognition is required for presence, flow, views and metadata.
-  A library-only implementation cannot claim these language guarantees.
-- Equality and CLR export stay unavailable until their own contracts are proved.
-- The strategy use case remains an acceptance obligation for receiver design,
-  not evidence that snapshot or nullable-location receivers already exist.
+- Native protocols aim at reusable retroactive capability programming without
+  changing nominal CLR interfaces or ordinary receiver semantics.
+- Conversion copies once; persistent saved mutation and shallow sharing are
+  explicit. Copied protocol ownership remains a separately identified decision.
+- Restricted source-location projections may preserve aliasing, but cannot be
+  invariant writable `managed[P]` over arbitrary concrete storage.
+- Finite first proofs cannot promise arbitrary future protocols. Cross-library
+  evidence composition and coherence are necessary long-term work.
+- Adaptation remains useful and operational at the nominal CLR boundary.
+- Independent trial policy remains ordinary application composition, not a new
+  language receiver mode or mandatory protocol acceptance gate.
 
 ## Alternatives considered
 
 | Candidate | Assessment |
 | --- | --- |
-| Current language/library only | Keep source values plus nominal adapters, use rich objects to request per-call copies, and use managed handles for locations. This is the working baseline, with no new compiler contract. It cannot transparently retain type evidence across erased views or distinguish nullable payload presence without an explicit sum/envelope. Handwritten protocols are possible, but exporting that bookkeeping is not the desired reusable language surface. |
-| **Opt-in interface-value category** | **Recommended.** It gives typed calls, explicit insertion and evidence-preserving views a distinct boundary. It can prohibit ambiguous operations without altering nominal CLR behavior. Cost: new type/flow rules, finite evidence and versioned metadata. |
-| Compiler-recognized library storage plus hidden evidence | Viable as the recommended category's backend. As the public design it still needs all the same call/test/presence/compiler rules; an ordinary library type alone does not supply them. Reject a caller-tag or universal-Invoke API. Do not publish a second competing envelope surface. |
-| Nominal interfaces plus explicit hidden boxes/forwarders | Reuse exact forwarding emission internally where useful. As a complete source model it cannot rely on ordinary CLR tests, nullness, wrapper equality or mutable boxed receivers for the required observations. Adding special extraction, presence, conversion and generic rules recreates a category boundary. Reject wrapper leakage rather than claiming nominal boxing already meets the contract. |
+| Current language only | Working nominal adapters, rich forwarding and exact managed handles cover many APIs. Keep using them where sufficient. They do not transparently preserve concrete evidence across erased capability views. |
+| **Native protocol declarations and conversions** | **Recommended for further design.** Typed witnesses can admit ordinary extensions without changing their meaning. Requires explicit coherence, ownership, presence and metadata proofs. |
+| Compiler-recognized public packing/extraction library | Reject as recommended spelling. It obscures language-level conversion and pattern intent without removing compiler obligations. Internal library storage remains possible. |
+| Hidden nominal boxes as backend | Possible only behind the protocol contract. Ordinary CLR wrapper identity, tests and equality cannot define source evidence/views. |
+| Universal shape registry or public Go envelope | Reject ambient/runtime search, caller tags and universal invocation. They neither establish stable authority nor provide the intended G# source experience. |
 
-No alternative is selected as a universal runtime layout. If proofs show that
-the category cannot enforce its boundaries across public signatures, revise
-or narrow it before acceptance. Do not substitute reflection or weaken unknown
-evidence into a successful or negative runtime type test.
+If representation or cross-unit proofs fail, narrow or revise the proposal.
+Do not assert away unsafe storage, report missing evidence as mismatch or
+reintroduce the withdrawn receiver modes through another construction spelling.
