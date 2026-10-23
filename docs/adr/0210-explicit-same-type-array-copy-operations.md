@@ -936,8 +936,9 @@ No exhaustive nested-size, struct-size, JIT ABI or GC-layout certification follo
 two libraries. Each compiles against the shared contract, without referencing
 the other library. A third compiled client passes the first library's
 `List<C(int,n)>` directly into the second library for every `n` from 0 to 32.
-The consumer checks the length, every element and by-value extraction
-independence. This is typed invariant-generic exchange, not name comparison,
+The consumer validates the imported canonical shape, every element and by-value
+extraction independence. The client also decodes the producer's public open
+generic return shape. This is typed invariant-generic exchange, not name comparison,
 reflection invocation between list types or an element adapter.
 
 The same client also exchanges open-generic, reference-element and nested

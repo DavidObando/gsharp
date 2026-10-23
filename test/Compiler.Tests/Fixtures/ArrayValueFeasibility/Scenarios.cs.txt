@@ -213,6 +213,7 @@ return new List<S> { value }; }");
         else
             text.Append(@"private static int Accept<S>(List<S> values, int n) where S : struct, IStorage<int,S> {
 if (values.Count != 1 || S.Count != n) throw new System.Exception(""exchange count"");
+Shape.Import(typeof(S), typeof(int), n);
 var value = values[0];
 for(int i = 0; i < n; i++) if(S.At(ref value, i) != n * 100 + i)
 throw new System.Exception(""exchange element"");
@@ -243,6 +244,11 @@ Consumer.Ref(ref Producer.Ref(ref p)).Right.Item = 6;
 if (p.Right.Item != 6 || values[0].Right.Item != 0) throw new Exception(""public ref location"");
 var refs = new List<Branch<string,Leaf<string>,Leaf<string>>> { default };
 if (!ReferenceEquals(refs, Consumer.Open(Producer.Open(refs)))) throw new Exception(""reference element identity"");
+var importedOpen = typeof(Producer).GetMethod(""Open"").ReturnType.GetGenericArguments()[0];
+var decodedOpen = Shape.Decode(importedOpen);
+if (!decodedOpen.Element.IsGenericParameter || decodedOpen.Count != 2)
+throw new Exception(""public open shape import"");
+Shape.Import(importedOpen, decodedOpen.Element, 2);
 if (sum != 33) throw new Exception(""finite domain exchange"");
 return ""exchange:33 invariant lists; open/reference/nested/ref signatures; no adapters"";
 }}").ToString();
