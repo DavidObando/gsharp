@@ -169,9 +169,34 @@ if [[ "$EXPECT" == r2r ]]; then
     [[ -d "$WORK/pk2/gsharp.net.sdk.compiler.$RID" && ! -d "$WORK/pk2/gsharp.net.sdk" ]] \
         || { ls "$WORK/pk2"; fail "the RID package must be in the project package root and the SDK in the global root"; }
     LOG4=$(cd "$SPLIT" && dotnet build App.gsproj --no-restore --nologo -v:n 2>&1) || { echo "$LOG4"; fail "split-root build failed"; }
-    echo "$LOG4" | grep -q "G# compiler: ReadyToRun $RID from .*pk2/gsharp.net.sdk.compiler.$RID" || { echo "$LOG4" | grep "G# compiler:" || true; fail "the split-root build did not use the RID package from the project package root"; }
+    # Windows logs paths with backslashes.
+    echo "$LOG4" | tr '\\' '/' | grep -q "G# compiler: ReadyToRun $RID from .*pk2/gsharp.net.sdk.compiler.$RID" || { echo "$LOG4" | grep "G# compiler:" || true; fail "the split-root build did not use the RID package from the project package root"; }
     [[ -f "$SPLIT/bin/Debug/net10.0/Gsharp.Runtime.Channels.dll" ]] || fail "the split-root build did not put the channels runtime in the output"
     cmp -s "$SPLIT/bin/Debug/net10.0/Gsharp.Runtime.Channels.dll" "$PORTABLE" || fail "the split-root runtime differs from the SDK package copy"
 fi
+
+echo "==> Opt-out in the project file: restore must not ask for a RID package"
+# The property is set in the project body, after the SDK props are imported. A feed without the RID
+# packages and an empty package cache must still restore, because no PackageDownload is requested.
+OPT="$WORK/optout"
+write_project_files "$OPT"
+rm -rf "$WORK/feed-no-rid"
+mkdir -p "$WORK/feed-no-rid"
+cp "$PKGS"/Gsharp.NET.Sdk."$VER".nupkg "$WORK/feed-no-rid"/
+sed -i.bak "s#$(native "$FEED")#$(native "$WORK/feed-no-rid")#" "$OPT/nuget.config"
+rm -f "$OPT/nuget.config.bak"
+cat > "$OPT/App.gsproj" <<'EOF'
+<Project Sdk="Gsharp.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <GsharpUseReadyToRunCompiler>false</GsharpUseReadyToRunCompiler>
+  </PropertyGroup>
+</Project>
+EOF
+cp samples/Channels.gs "$OPT/Program.gs"
+LOG5=$(cd "$OPT" && NUGET_PACKAGES="$(native "$WORK/pk3")" dotnet build App.gsproj --nologo -v:n 2>&1) || { echo "$LOG5" | tail -20; fail "the project-file opt-out build failed"; }
+echo "$LOG5" | grep -q "G# compiler: IL from .* because GsharpUseReadyToRunCompiler is false" || fail "the project-file opt-out did not select the IL compiler"
+[[ $(ls "$WORK/pk3" | grep -c '^gsharp\.net\.sdk\.compiler\.' || true) -eq 0 ]] || fail "the project-file opt-out still restored a RID package"
 
 echo "PASS: r2r-compiler-e2e ($RID, $EXPECT)"

@@ -29,8 +29,9 @@
     <GsharpCompilerPackRuntimeIdentifiers>linux-x64;linux-arm64;win-x64;win-arm64;osx-x64;osx-arm64</GsharpCompilerPackRuntimeIdentifiers>
     <GsharpCompilerPackTargetFramework>net10.0</GsharpCompilerPackTargetFramework>
     <!-- The RID of the host process that runs MSBuild, and so starts gsc (DOTNET_HOST_PATH).
-         The exact value must be in the list. The restore and the build use the same rule. -->
-    <_GsharpHostRid>$([System.Runtime.InteropServices.RuntimeInformation]::RuntimeIdentifier)</_GsharpHostRid>
+         The exact value must be in the list. The restore and the build use the same rule.
+         .NET Framework MSBuild (Visual Studio) has no such property, so the lookup runs only on .NET MSBuild. -->
+    <_GsharpHostRid Condition=" '$(MSBuildRuntimeType)' == 'Core' ">$([System.Runtime.InteropServices.RuntimeInformation]::RuntimeIdentifier)</_GsharpHostRid>
     <_GsharpCompilerPackWanted Condition=" '$(GsharpUseReadyToRunCompiler)' != 'false' and '$(GsharpSdkVersion)' != '' and '$(MSBuildRuntimeType)' == 'Core' and '$(DOTNET_HOST_PATH)' != '' and $([System.String]::Copy(';$(GsharpCompilerPackRuntimeIdentifiers);').Contains(';$(_GsharpHostRid);')) ">true</_GsharpCompilerPackWanted>
 
     <!-- ADR-0145 §E/§F: the gsgen source-generator host. In a packed
@@ -108,7 +109,7 @@
                              GsharpCompilerRuntimeIdentifiers="$(GsharpCompilerPackRuntimeIdentifiers)" />
     <PackageDownload Include="Gsharp.NET.Sdk.Compiler.$(_GsharpHostRid)"
                      Version="[$(GsharpSdkVersion)]"
-                     Condition=" '$(_GsharpCompilerPackWanted)' == 'true' " />
+                     Condition=" '$(_GsharpCompilerPackWanted)' == 'true' and '$(GsharpUseReadyToRunCompiler)' != 'false' " />
   </ItemGroup>
 
 </Project>

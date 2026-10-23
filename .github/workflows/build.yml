@@ -1012,6 +1012,9 @@ jobs:
       contents: write
 
     steps:
+      # The feed checks run build/check-rid-packages.py (ADR-0207).
+      - uses: actions/checkout@v5
+
       - name: Download NuGet packages
         uses: actions/download-artifact@v5
         with:

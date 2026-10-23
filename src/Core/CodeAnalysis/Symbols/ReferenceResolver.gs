@@ -1611,7 +1611,9 @@ class ReferenceResolver : IDisposable {
             } catch (IOException) {
                 return false
             } catch (BadImageFormatException) {
-                return false
+                // A file that is not a PE image is not a ReadyToRun image either. The caller
+                // reports it when it loads the file.
+                return true
             }
         }
 

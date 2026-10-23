@@ -355,10 +355,31 @@ def pack(tree: Path, version: str, out: Path, work: Path, config: str) -> Path:
             tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-40:]
             raise SelfHostError(f"{' '.join(command[:2])} failed (exit {result.returncode}); see {log}\n"
                                 + "\n".join(tail))
-    produced = sorted(pack_out.glob(SDK_ID + ".*.nupkg"))
+    # The SDK build also packs Gsharp.NET.Sdk.Compiler.<rid> (ADR-0207). The SDK package name has a
+    # version after the id; a RID package name has "Compiler" there.
+    produced = sorted(pack_out.glob(SDK_ID + ".[0-9]*.nupkg"))
     if len(produced) != 1:
         raise SelfHostError(f"dotnet pack succeeded but produced {len(produced)} {SDK_ID} packages in {pack_out}")
-    return reversion(produced[0], version, out)
+    original = produced[0].name[len(SDK_ID) + 1:-len(".nupkg")]
+    result = reversion(produced[0], version, out)
+    restamp_rid_packages(pack_out, original, version, out)
+    return result
+
+
+def restamp_rid_packages(pack_out: Path, original: str, version: str, out: Path | None = None) -> list[Path]:
+    """Stamps the Gsharp.NET.Sdk.Compiler.<rid> packages with the version of the stamped SDK package.
+
+    Gsharp.NET.Sdk restores them with PackageDownload at its own exact version, so a stage-1 SDK that
+    carries a private version needs RID packages of that version beside it.
+    """
+    prefix = f"{SDK_ID}.Compiler."
+    stamped = []
+    for package in sorted(pack_out.glob(f"{prefix}*.{original}.nupkg")):
+        rid = package.name[len(prefix):-len(f".{original}.nupkg")]
+        target = (out or package.parent) / f"{prefix}{rid}.{version}.nupkg"
+        stamp_package(package, target, version, required=True)
+        stamped.append(target)
+    return stamped
 
 
 def reversion(nupkg: Path, version: str, out: Path | None = None) -> Path:

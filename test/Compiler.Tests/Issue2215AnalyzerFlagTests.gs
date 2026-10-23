@@ -358,7 +358,7 @@ namespace GscAnalyzerFlagTestGenerators
         }
         let prevEnvironment = Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
         try {
-            for useSwitch in []bool{true, false} {
+            for useSwitch in[]bool{true, false} {
                 let tempDir = Directory.CreateTempSubdirectory("gsc_sdktools_run_").FullName
                 let sample = Path.Combine(tempDir, "Foo.gs")
                 File.WriteAllText(sample, "package MyLib\n\n@Obsolete\npartial class Foo {\n}\n")
@@ -455,7 +455,7 @@ namespace GscAnalyzerFlagTestGenerators
 
         /// Runs `gsc` with /analyzer: and the given extra switches, and returns what it wrote to stderr.
         /// The two environment variables are set for the call and restored after it.
-        private func RunAnalyzerAndReadError(extra []string, gsgenTool string?, sdkToolsDir string?) string {
+        private func RunAnalyzerAndReadError(extra[]string, gsgenTool string?, sdkToolsDir string?) string {
             let prevTool = Environment.GetEnvironmentVariable("GSHARP_GSGEN_TOOL")
             let prevDir = Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
             let sample = WriteTempGs("package P\n")
