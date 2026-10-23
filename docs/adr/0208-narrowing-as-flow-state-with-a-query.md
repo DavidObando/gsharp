@@ -1102,8 +1102,8 @@ With the study's profile as the baseline (section 4.7) and #5152 landed:
   `InvalidateNarrowingsForAssignedVariables` 6.6%, alias-set copies 1.1%)
   fall to under 3% of main-thread samples, and the `bodies` phase drops by a
   further 5-10% after #5152's 13%. These are estimates; the implementation
-  PRs report the measured table from `build/compiler-bench.py` (#5163) if it
-  has merged, else `build/selfhost-bench.py`, over the Core, LanguageServer
+  PRs report the measured table from `build/compiler-bench.py` (#5163,
+  merged; `docs/self-host-benchmark.md`), over the Core, LanguageServer
   and hello-world cells, with `GSHARP_MEASURE_PHASES` phases and counters.
 
 ### 18a. Scope: two options for the maintainer
@@ -1649,9 +1649,12 @@ if x is Dog {
   {GSharp.Core,GSharp.Core.Tests,gsc}.rsp`; strip the BOM and redirect
   `/out:`, `/refout:`, `/pdb:` and `/doc:` into a work directory under
   `~/.cache/`; run `dotnet <built>/gsc.dll @<rsp>` from the project
-  directory. `build/compiler-bench.py` (#5163) automates the same with
-  output parity once merged.
-- Code references in this document are to `main` at `51fcab9c9` (#5159).
+  directory. `build/compiler-bench.py` (#5163, merged) automates the same
+  with output parity; its work root defaults to `~/.cache/q9-bench/` and it
+  refuses `/tmp` without `--allow-tmp`.
+- Code references in this document are to `main` at `51fcab9c9` (#5159);
+  the cited files under `src/Core/CodeAnalysis/Binding/` are unchanged at
+  `081a72bd4` (#5178), so the line numbers still hold.
 - Kotlin K2 precedent: the compiler's local-variable assignment analysis
   pre-pass collects, per loop and lambda, the local variables assigned
   inside it; the data-flow analysis then treats those variables as unstable
