@@ -238,6 +238,8 @@ internal partial class StatementBinder {
     /// before control reaches the next iteration.
     /// @param bindIteration Optional binder for a repeated header and
     /// body, so both are rebound after inherited narrowing is invalidated.
+    /// @param iterationRunsUserCode Whether the loop header calls user code
+    /// before every body run, as an enumerator `MoveNext` does (ADR-0208 R11, #5170).
     private func BindLoopBody(
         body StatementSyntax,
         labelName string?,
@@ -246,7 +248,8 @@ internal partial class StatementBinder {
         inheritedNarrowingFrameCount int32 = -1,
         backEdgeTail BoundStatement? = nil,
         backEdgeCondition BoundExpression? = nil,
-        bindIteration(() -> (Body BoundStatement, Tail BoundStatement?, Condition BoundExpression?))? = nil
+        bindIteration(() -> (Body BoundStatement, Tail BoundStatement?, Condition BoundExpression?))? = nil,
+        iterationRunsUserCode bool = false
     ) BoundStatement {
         var inheritedNarrowingFrameCount = inheritedNarrowingFrameCount
         var backEdgeTail = backEdgeTail
@@ -342,6 +345,9 @@ internal partial class StatementBinder {
             backEdgeTail,
             backEdgeCondition
         )
+        if iterationRunsUserCode {
+            mutations.MarkIterationRunsUserCode()
+        }
         let loopEntryExternalCallableAliases = ComputeLoopEntryExternalCallableAliases(
             firstBody,
             backEdgeTail,
