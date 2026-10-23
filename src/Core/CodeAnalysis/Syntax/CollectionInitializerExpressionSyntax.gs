@@ -32,7 +32,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// the just-constructed receiver and lowers each element to an
 /// `Add(...)` call / indexer set on it, mirroring the C# collection-
 /// initializer-in-object-initializer lowering.
-class CollectionInitializerExpressionSyntax : ExpressionSyntax {
+partial class CollectionInitializerExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:CollectionInitializerExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param target The underlying constructor call expression.

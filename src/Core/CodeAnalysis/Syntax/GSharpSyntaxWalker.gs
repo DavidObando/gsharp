@@ -33,8 +33,9 @@ abstract class GSharpSyntaxWalker {
     /// (cref:SyntaxNode.GetChildren) order.
     /// @param node The node whose children to visit.
     protected open func DefaultVisit(node SyntaxNode) {
-        for child in node.GetChildren() {
-            Visit(child)
+        let count = node.ChildCount
+        for var i = 0; i < count; i++ {
+            Visit(node.GetChild(i))
         }
     }
 }

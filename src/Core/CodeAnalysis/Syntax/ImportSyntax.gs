@@ -8,7 +8,7 @@ import System.Collections.Immutable
 import System.Linq
 
 /// Represents an import declaration in the language.
-class ImportSyntax : MemberSyntax {
+partial class ImportSyntax : MemberSyntax {
     /// Initializes a new instance of the (cref:ImportSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param importKeyword The import keyword.

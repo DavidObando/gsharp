@@ -7,7 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// Represents a channel-send statement `ch <- v`
 /// (Phase 5.5 / ADR-0022). The send arrow appears at statement
 /// position after a channel-typed expression.
-class ChannelSendStatementSyntax : StatementSyntax {
+partial class ChannelSendStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:ChannelSendStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param channel The channel expression on the left of the arrow.

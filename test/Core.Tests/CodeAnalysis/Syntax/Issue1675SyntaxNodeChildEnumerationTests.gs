@@ -403,7 +403,7 @@ func F() int32 {
             throw InvalidOperationException("repository root not found from " + AppContext.BaseDirectory)
         }
 
-        private func GetConcreteNodeTypes() List[Type] {
+        internal func GetConcreteNodeTypes() List[Type] {
             return typeof(SyntaxNode)
                 .Assembly
                 .GetTypes()
@@ -412,7 +412,7 @@ func F() int32 {
                 .ToList()
         }
 
-        private func ParseCorpus() sequence[SyntaxTree] {
+        internal func ParseCorpus() sequence[SyntaxTree] {
             for snippet in Snippets {
                 yield SyntaxTree.Parse(snippet)
             }

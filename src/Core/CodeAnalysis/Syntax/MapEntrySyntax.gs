@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a single `key: value` entry inside a map literal
 /// `map[K,V]{ … }` (ADR-0104).
-class MapEntrySyntax : SyntaxNode {
+partial class MapEntrySyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:MapEntrySyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param key The key expression.

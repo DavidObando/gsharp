@@ -9,7 +9,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// transfers control to the NEXT arm's body without evaluating that arm's
 /// pattern or guard. The binder enforces placement (GS0168 family) — the
 /// parser accepts the reserved keyword anywhere a statement can start.
-class FallthroughStatementSyntax : StatementSyntax {
+partial class FallthroughStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:FallthroughStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The `fallthrough` keyword token.

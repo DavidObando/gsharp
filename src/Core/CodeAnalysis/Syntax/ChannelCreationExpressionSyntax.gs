@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// applied to arguments — `chan[T]()` for a rendezvous channel and
 /// `chan[T](n)` for a buffered one — the exact parallel of
 /// `map[K,V]{…}` constructing a dictionary and of `List[int32]()`.
-class ChannelCreationExpressionSyntax : ExpressionSyntax {
+partial class ChannelCreationExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:ChannelCreationExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param typeClause The `chan[T]` type clause.

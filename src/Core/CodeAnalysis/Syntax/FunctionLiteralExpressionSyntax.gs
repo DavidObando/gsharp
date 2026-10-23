@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// (Phase 4.7). Same shape as a function declaration but without a name,
 /// receiver, or modifiers; produces a first-class function value.
 /// Optionally preceded by `async` (Phase 5.1+).
-class FunctionLiteralExpressionSyntax : ExpressionSyntax {
+partial class FunctionLiteralExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:FunctionLiteralExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param funcKeyword The `func` keyword token.

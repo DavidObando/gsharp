@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// bound variable is asynchronously disposed (via
 /// `IAsyncDisposable.DisposeAsync`) when the enclosing scope exits. The
 /// name may be the repeatable discard `_` (ADR-0168).
-class AwaitUsingStatementSyntax : StatementSyntax {
+partial class AwaitUsingStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:AwaitUsingStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param awaitKeyword The `await` keyword.

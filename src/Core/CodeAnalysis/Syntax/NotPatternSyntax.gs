@@ -7,7 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// Represents a negated pattern such as `not > 0`. The `not`
 /// operator is a contextual keyword matched as an identifier in pattern
 /// position and binds more tightly than `and` / `or`.
-class NotPatternSyntax : PatternSyntax {
+partial class NotPatternSyntax : PatternSyntax {
     /// Initializes a new instance of the (cref:NotPatternSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param notKeyword The `not` contextual keyword token.

@@ -14,7 +14,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// `List[T]`) — and is followed by a member access (`.Member`). The
 /// binder resolves it to the closed construction so static-member access binds
 /// against the constructed type.
-class GenericNameExpressionSyntax : ExpressionSyntax {
+partial class GenericNameExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:GenericNameExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param identifier The generic type name.

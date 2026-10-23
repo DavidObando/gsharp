@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a map creation expression `map[K,V]{k1: v1, k2: v2, …}`
 /// (ADR-0104).
-class MapCreationExpressionSyntax : ExpressionSyntax {
+partial class MapCreationExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:MapCreationExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param typeClause The leading `map[K,V]` type clause.

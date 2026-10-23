@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a call expression syntax in the language.
-class CallExpressionSyntax : ExpressionSyntax {
+partial class CallExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:CallExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param identifier The identifier.

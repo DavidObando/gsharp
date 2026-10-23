@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents an assignment expression in the language.
-class AssignmentExpressionSyntax : ExpressionSyntax {
+partial class AssignmentExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:AssignmentExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param identifierToken The identifier of the assignment (left side).

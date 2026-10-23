@@ -10,7 +10,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// inline-declaration payload (`out var name [T]`, `out let name [T]`, or `out _`)
 /// recognised via (cref:DeclarationKeyword) / (cref:DiscardToken); in those forms
 /// (cref:Expression) is `null`.
-class RefArgumentExpressionSyntax : ExpressionSyntax {
+partial class RefArgumentExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:RefArgumentExpressionSyntax) class for the lvalue
     /// form (`ref expr`, `in expr`, `out expr`).
     /// @param syntaxTree The parent syntax tree.

@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// initializer, e.g. the `"a": 1` in
 /// `Dictionary[string, int32]{"a": 1, "b": 2}`. Lowers to an
 /// `Add(key, value)` call on the constructed dictionary.
-class KeyedCollectionElementSyntax : CollectionElementSyntax {
+partial class KeyedCollectionElementSyntax : CollectionElementSyntax {
     /// Initializes a new instance of the (cref:KeyedCollectionElementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param key The key expression.

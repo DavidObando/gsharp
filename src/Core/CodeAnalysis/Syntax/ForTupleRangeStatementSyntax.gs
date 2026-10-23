@@ -9,7 +9,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// identifier to the corresponding element of the current tuple- or
 /// data-struct-typed sequence value, instead of requiring a separate hidden
 /// loop variable plus a `let (a, b) = tmp` deconstruction statement.
-class ForTupleRangeStatementSyntax : StatementSyntax {
+partial class ForTupleRangeStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:ForTupleRangeStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The `for` keyword.

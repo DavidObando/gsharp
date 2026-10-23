@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents one field in a property pattern.
-class PropertyPatternFieldSyntax : SyntaxNode {
+partial class PropertyPatternFieldSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:PropertyPatternFieldSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param identifier The field identifier.

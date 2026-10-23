@@ -8,7 +8,7 @@ import System.Collections.Immutable
 import System.Linq
 
 /// Represents a package declaration in the language.
-class PackageSyntax : MemberSyntax {
+partial class PackageSyntax : MemberSyntax {
     /// Initializes a new instance of the (cref:PackageSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param identifier The package identifier.

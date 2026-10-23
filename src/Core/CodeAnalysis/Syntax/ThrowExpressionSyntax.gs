@@ -9,7 +9,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// the conditional operator, an arrow body, a returned operand, or an
 /// argument. Mirrors C# throw-expressions. The statement form
 /// ((cref:ThrowStatementSyntax)) is unchanged.
-class ThrowExpressionSyntax : ExpressionSyntax {
+partial class ThrowExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:ThrowExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param throwKeyword The `throw` keyword.

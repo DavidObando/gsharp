@@ -7,7 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// Represents a multi-target assignment statement, e.g.
 /// `a, obj.Field, values[i] = b, 1, 2` or
 /// `a, let fresh = Pair()`.
-class MultiAssignmentStatementSyntax : StatementSyntax {
+partial class MultiAssignmentStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:MultiAssignmentStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param targets The comma-separated assignment or fresh-local targets.

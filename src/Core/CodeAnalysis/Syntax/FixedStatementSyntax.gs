@@ -15,7 +15,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// `unsafe { }`). `fixed` is a contextual keyword — the parser only
 /// commits to this form for the exact `fixed IDENT *` shape, so existing
 /// identifiers named `fixed` are unaffected.
-class FixedStatementSyntax : StatementSyntax {
+partial class FixedStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:FixedStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param fixedKeyword The contextual `fixed` keyword token.

@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a parenthesized expression in the language.
-class ParenthesizedExpressionSyntax : ExpressionSyntax {
+partial class ParenthesizedExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:ParenthesizedExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param openParenthesisToken The open parenthesys token.

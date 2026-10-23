@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// `typeof` is recognized as a contextual identifier when followed by
 /// `(` and a type clause. The result is a (cref:System.Type)
 /// obtained from the type's metadata token.
-class TypeOfExpressionSyntax : ExpressionSyntax {
+partial class TypeOfExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:TypeOfExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param typeOfIdentifier The `typeof` identifier token.

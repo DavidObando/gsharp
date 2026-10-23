@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a C-style `for init; cond; post { body }` statement.
 /// All three header parts are optional.
-class ForClauseStatementSyntax : StatementSyntax {
+partial class ForClauseStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:ForClauseStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The `for` keyword.

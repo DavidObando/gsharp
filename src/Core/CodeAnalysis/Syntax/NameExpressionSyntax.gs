@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a name expression in the language.
-open class NameExpressionSyntax : ExpressionSyntax {
+open partial class NameExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:NameExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param identifierToken The identifier.

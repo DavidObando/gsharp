@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a fixed-length list pattern.
-class ListPatternSyntax : PatternSyntax {
+partial class ListPatternSyntax : PatternSyntax {
     /// Initializes a new instance of the (cref:ListPatternSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param openSquareBracketToken The opening bracket token.

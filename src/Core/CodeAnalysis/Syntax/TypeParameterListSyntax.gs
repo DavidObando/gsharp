@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// A `[T any, U any]`-style bracketed list of type parameters attached to a generic
 /// declaration (Phase 4.1 / ADR-0020).
-class TypeParameterListSyntax : SyntaxNode {
+partial class TypeParameterListSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:TypeParameterListSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param openBracketToken The opening `[` token.

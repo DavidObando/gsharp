@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// exclusion follows the classic `System.Threading.Monitor.Enter` /
 /// `try` / `finally` / `Monitor.Exit` pattern C# uses to
 /// lower `lock (expr) { body }`.
-class LockStatementSyntax : StatementSyntax {
+partial class LockStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:LockStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param lockKeyword The `lock` keyword.

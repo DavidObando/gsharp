@@ -9,7 +9,7 @@ import System.Collections.Immutable
 /// Represents a `switch` statement of the form
 /// `switch expr { case A { … } case B { … } default { … } }`.
 /// Cases do not fall through; arms are independent.
-class SwitchStatementSyntax : StatementSyntax {
+partial class SwitchStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:SwitchStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param switchKeyword The `switch` keyword.

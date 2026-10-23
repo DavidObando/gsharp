@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a `finally { … }` clause attached to a
 /// (cref:TryStatementSyntax).
-class FinallyClauseSyntax : SyntaxNode {
+partial class FinallyClauseSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:FinallyClauseSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param finallyKeyword The `finally` keyword.

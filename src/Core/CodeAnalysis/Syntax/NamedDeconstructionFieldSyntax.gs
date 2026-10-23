@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents one `Field = local` binding inside named data-struct deconstruction.
-class NamedDeconstructionFieldSyntax : SyntaxNode {
+partial class NamedDeconstructionFieldSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:NamedDeconstructionFieldSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param fieldIdentifier The field name.

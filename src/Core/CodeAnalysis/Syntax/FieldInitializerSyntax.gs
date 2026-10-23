@@ -9,7 +9,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// ADR-0180: also one ordered element of a (cref:StructLiteralExpressionSyntax)'s
 /// (cref:StructLiteralExpressionSyntax.Elements) list, alongside
 /// (cref:StructLiteralContentElementSyntax).
-class FieldInitializerSyntax : StructLiteralElementSyntax {
+partial class FieldInitializerSyntax : StructLiteralElementSyntax {
     /// Initializes a new instance of the (cref:FieldInitializerSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param fieldIdentifier The field name.

@@ -12,7 +12,7 @@ import GSharp.Core.CodeAnalysis.Text
 /// (cref:DeinitDeclarationSyntax) to a CLR `Finalize` override
 /// whose body is wrapped in `try { … } finally { base.Finalize(); }`.
 /// Only valid inside a `class` body.
-class DeinitDeclarationSyntax : MemberSyntax {
+partial class DeinitDeclarationSyntax : MemberSyntax {
     /// Initializes a new instance of the (cref:DeinitDeclarationSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param deinitKeyword The contextual `deinit` keyword that introduces the destructor.

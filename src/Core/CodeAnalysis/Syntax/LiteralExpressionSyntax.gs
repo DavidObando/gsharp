@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a literal expression in the language.
-class LiteralExpressionSyntax : ExpressionSyntax {
+partial class LiteralExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:LiteralExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param literalToken The literal token.

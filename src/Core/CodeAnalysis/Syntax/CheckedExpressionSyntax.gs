@@ -12,7 +12,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// (cref:System.OverflowException)) instead of truncating;
 /// `unchecked(expr)` restores the (default) truncating behavior. Nesting
 /// is lexical — the innermost `checked`/`unchecked` wins.
-class CheckedExpressionSyntax : ExpressionSyntax {
+partial class CheckedExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:CheckedExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The `checked` or `unchecked` identifier token.

@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// (ADR-0040), or the iteration-terminating `yield break` statement
 /// (issue #3501: C#-aligned early exit from any nesting depth — `break`
 /// keeps its loop binding).
-class YieldStatementSyntax : StatementSyntax {
+partial class YieldStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:YieldStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param yieldKeyword The contextual `yield` keyword token.

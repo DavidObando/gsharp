@@ -7,7 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// Represents a `goto label` statement (issue #1884): an unconditional
 /// jump to a statement elsewhere in the enclosing function marked with
 /// `label:` ((cref:LabeledStatementSyntax)).
-class GotoStatementSyntax : StatementSyntax {
+partial class GotoStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:GotoStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The `goto` keyword.

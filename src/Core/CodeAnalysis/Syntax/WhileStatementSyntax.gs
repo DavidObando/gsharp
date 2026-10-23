@@ -9,7 +9,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// lowers both shapes to the same goto/label sequence. Introducing a dedicated
 /// syntax node (rather than rewriting at parse time) keeps the syntax-tree
 /// pretty-printer faithful to the surface form authors wrote.
-class WhileStatementSyntax : StatementSyntax {
+partial class WhileStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:WhileStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param whileKeyword The `while` keyword.

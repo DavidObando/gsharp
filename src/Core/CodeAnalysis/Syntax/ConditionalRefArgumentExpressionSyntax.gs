@@ -12,7 +12,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// `WhenFalseRefKindModifier`) for parity with the C# spelling
 /// `f(cond ? ref x : ref y)`; when present, they must match the outer
 /// modifier (validated at bind time).
-class ConditionalRefArgumentExpressionSyntax : ExpressionSyntax {
+partial class ConditionalRefArgumentExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:ConditionalRefArgumentExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param condition The condition expression (must be `bool`).

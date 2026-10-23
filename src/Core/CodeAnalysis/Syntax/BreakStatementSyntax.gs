@@ -7,7 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// Represents the break statement syntax in the language. An optional trailing
 /// identifier (on the same source line) names an enclosing labeled loop
 /// (ADR-0070).
-open class BreakStatementSyntax : StatementSyntax {
+open partial class BreakStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:BreakStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The break keyword.

@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents `expr with { Field = value, ... }` data-struct copy sugar.
-class WithExpressionSyntax : ExpressionSyntax {
+partial class WithExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:WithExpressionSyntax) class.
     /// @param receiver The copied expression.
     /// @param withToken The contextual `with` token.

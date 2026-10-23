@@ -10,7 +10,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// `BindDoWhileStatement`). No new (cref:Binding.BoundNodeKind) is
 /// introduced — the lowering produces a (cref:BlockStatementSyntax)-
 /// shaped bound block on the existing label/goto rails.
-class DoWhileStatementSyntax : StatementSyntax {
+partial class DoWhileStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:DoWhileStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param doKeyword The `do` keyword.

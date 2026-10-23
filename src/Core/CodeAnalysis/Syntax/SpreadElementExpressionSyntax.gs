@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents an ellipsis spread inside an array or collection initializer,
 /// e.g. `...items` in `[]int32{ 0, ...items, 9 }`.
-class SpreadElementExpressionSyntax : ExpressionSyntax {
+partial class SpreadElementExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:SpreadElementExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param ellipsisToken The leading `...` token.

@@ -8,7 +8,7 @@ import System.Collections.Immutable
 
 /// Represents an index expression `target[index]` or the
 /// ADR-0073 / issue #710 null-conditional form `target?[index]`.
-class IndexExpressionSyntax : ExpressionSyntax {
+partial class IndexExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:IndexExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param target The expression being indexed.

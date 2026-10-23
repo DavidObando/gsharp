@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a tuple literal expression `(e1, e2, ...)` (Phase 4.5).
-class TupleLiteralExpressionSyntax : ExpressionSyntax {
+partial class TupleLiteralExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:TupleLiteralExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param openParenToken The opening `(`.

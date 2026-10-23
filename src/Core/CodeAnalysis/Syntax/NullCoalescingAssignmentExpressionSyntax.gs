@@ -12,7 +12,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// the expression of an (cref:ExpressionStatementSyntax). The target must be
 /// a nullable lvalue (local, parameter, field, property, or indexer); the
 /// binder reports `GS0298` when the target type is not nullable.
-class NullCoalescingAssignmentExpressionSyntax : ExpressionSyntax {
+partial class NullCoalescingAssignmentExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the
     /// (cref:NullCoalescingAssignmentExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.

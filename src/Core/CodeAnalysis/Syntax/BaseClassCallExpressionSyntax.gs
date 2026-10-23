@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents the canonical non-virtual base-class call `base.Method(args)`.
-class BaseClassCallExpressionSyntax : ExpressionSyntax {
+partial class BaseClassCallExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:BaseClassCallExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param baseKeyword The contextual `base` token.

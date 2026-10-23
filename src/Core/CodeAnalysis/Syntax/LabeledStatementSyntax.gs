@@ -9,7 +9,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// for `break`/`continue` (ADR-0070); a label on any other
 /// statement is a `goto` target (issue #1884). A duplicate label name
 /// within the same enclosing function is reported as GS0470.
-class LabeledStatementSyntax : StatementSyntax {
+partial class LabeledStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:LabeledStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param labelIdentifier The label identifier token.

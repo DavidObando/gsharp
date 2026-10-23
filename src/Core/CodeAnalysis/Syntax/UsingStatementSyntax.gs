@@ -8,7 +8,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// `using var name = expr` declaration whose bound variable is
 /// disposed (via `IDisposable.Dispose`) when the enclosing scope
 /// exits. The name may be the repeatable discard `_` (ADR-0168).
-class UsingStatementSyntax : StatementSyntax {
+partial class UsingStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:UsingStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param usingKeyword The `using` keyword.

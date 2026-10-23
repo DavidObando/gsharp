@@ -15,7 +15,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// functions, imported CLR static/instance methods, imported CLR constructors, imported extension
 /// methods, and inherited CLR instance methods — accept named arguments interchangeably with positional
 /// ones. The binder reorders bound arguments into parameter order before per-position processing.
-class NamedArgumentExpressionSyntax : ExpressionSyntax {
+partial class NamedArgumentExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:NamedArgumentExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param nameToken The argument name.

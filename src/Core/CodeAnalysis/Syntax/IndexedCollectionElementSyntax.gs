@@ -9,7 +9,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// `Dictionary[string, int32]{ ["a"] = 1 }`. Lowers to an indexer set
 /// `self["a"] = 1` (overwrite semantics, matching C#'s indexed
 /// element initializer).
-class IndexedCollectionElementSyntax : CollectionElementSyntax {
+partial class IndexedCollectionElementSyntax : CollectionElementSyntax {
     /// Initializes a new instance of the (cref:IndexedCollectionElementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param openBracketToken The opening `[` token.

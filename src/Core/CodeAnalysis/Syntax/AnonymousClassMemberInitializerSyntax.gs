@@ -12,7 +12,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// <em>optional</em> — when omitted the member's type is inferred from its
 /// initializer expression exactly like an ordinary `let x = expr`
 /// declaration.
-class AnonymousClassMemberInitializerSyntax : SyntaxNode {
+partial class AnonymousClassMemberInitializerSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:AnonymousClassMemberInitializerSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param letOrVarKeyword The `let` or `var` keyword.

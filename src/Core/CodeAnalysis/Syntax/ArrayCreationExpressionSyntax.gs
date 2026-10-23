@@ -14,7 +14,7 @@ import System.Collections.Immutable
 /// initialisers. That form carries its length via (cref:LengthExpression)
 /// instead of the literal (cref:LengthToken), and yields a
 /// zero-initialised slice `[]T` of length `n`.
-class ArrayCreationExpressionSyntax : ExpressionSyntax {
+partial class ArrayCreationExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:ArrayCreationExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param openBracketToken The opening bracket token.

@@ -10,7 +10,7 @@ import System.Collections.Immutable
 /// Represents a `interface Name { ... }` declaration (Phase 3.B.4).
 /// Per ADR-0018, interfaces in Phase 3 carry method signatures only — bodies,
 /// default methods, and static members are diagnosed by the parser.
-class InterfaceDeclarationSyntax : MemberSyntax {
+partial class InterfaceDeclarationSyntax : MemberSyntax {
     // Backing fields for the properties the parser assigns after construction. Their setters
     // invalidate the node's cached span (issue #1675).
     private var baseColonToken SyntaxToken?

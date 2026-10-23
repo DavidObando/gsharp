@@ -11,7 +11,7 @@ import GSharp.Core.CodeAnalysis.Text
 /// the Kotlin-style primary constructor (which only declares same-named fields and
 /// implicitly chains to a parameterless base ctor), an `init` constructor has an
 /// explicit body of statements and may chain to a specific base constructor.
-class ConstructorDeclarationSyntax : MemberSyntax {
+partial class ConstructorDeclarationSyntax : MemberSyntax {
     /// Initializes a new instance of the (cref:ConstructorDeclarationSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param accessibilityModifier The optional accessibility modifier (`public`/`internal`/`private`).

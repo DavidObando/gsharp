@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a parenthesized pattern `( ... )` used to override the
 /// default combinator precedence (`not` > `and` > `or`).
-class ParenthesizedPatternSyntax : PatternSyntax {
+partial class ParenthesizedPatternSyntax : PatternSyntax {
     /// Initializes a new instance of the (cref:ParenthesizedPatternSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param openParenthesisToken The opening parenthesis.

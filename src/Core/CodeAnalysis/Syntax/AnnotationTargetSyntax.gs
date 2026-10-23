@@ -12,7 +12,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 ///
 /// The kind keywords are *contextual* — they are ordinary identifiers
 /// everywhere else in the language; the lexer does not promote them.
-class AnnotationTargetSyntax : SyntaxNode {
+partial class AnnotationTargetSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:AnnotationTargetSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param kindIdentifier The contextual target-kind identifier (e.g. `field`).

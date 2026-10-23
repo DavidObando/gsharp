@@ -9,7 +9,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// from (cref:FieldInitializerSyntax) only in that the property name
 /// must bind to a writable instance property/field of the constructed type
 /// (init-only setters are allowed); the syntactic shape is identical.
-class PropertyInitializerSyntax : SyntaxNode {
+partial class PropertyInitializerSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:PropertyInitializerSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param propertyIdentifier The property name.

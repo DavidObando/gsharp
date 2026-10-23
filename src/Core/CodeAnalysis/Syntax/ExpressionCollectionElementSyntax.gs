@@ -9,7 +9,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// `Add(expr)` call on the constructed collection. When
 /// (cref:Expression) is a (cref:SpreadElementExpressionSyntax),
 /// each source element is added in order.
-class ExpressionCollectionElementSyntax : CollectionElementSyntax {
+partial class ExpressionCollectionElementSyntax : CollectionElementSyntax {
     /// Initializes a new instance of the (cref:ExpressionCollectionElementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param expression The element expression.

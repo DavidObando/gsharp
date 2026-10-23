@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents an expression-level pattern test: `expr is pattern` → `bool`.
 /// Issues #575 and #3351.
-class IsExpressionSyntax : ExpressionSyntax {
+partial class IsExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:IsExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param expression The expression whose runtime type is tested.

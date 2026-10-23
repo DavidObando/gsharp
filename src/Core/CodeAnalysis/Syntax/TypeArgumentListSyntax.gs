@@ -6,7 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 /// A `[T1, T2]`-style bracketed list of type arguments attached to a generic
 /// reference or call site (Phase 4.1 / ADR-0020), e.g. `Map[int, string](xs, f)`.
-class TypeArgumentListSyntax : SyntaxNode {
+partial class TypeArgumentListSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:TypeArgumentListSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param openBracketToken The opening `[` token.

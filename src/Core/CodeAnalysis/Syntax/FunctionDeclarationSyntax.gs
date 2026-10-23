@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a function declaration in the language.
-class FunctionDeclarationSyntax : MemberSyntax {
+partial class FunctionDeclarationSyntax : MemberSyntax {
     // Backing fields for the properties the parser assigns after construction. Their setters
     // invalidate the node's cached span (issue #1675).
     private var semicolonBodyToken SyntaxToken?

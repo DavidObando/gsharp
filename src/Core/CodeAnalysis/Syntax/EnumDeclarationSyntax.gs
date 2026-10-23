@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a `enum Name { ... }` declaration.
-class EnumDeclarationSyntax : MemberSyntax {
+partial class EnumDeclarationSyntax : MemberSyntax {
     // Backing field for the property the parser assigns after construction. Its setter
     // invalidates the node's cached span (issue #1675).
     private var sealedKeyword SyntaxToken?

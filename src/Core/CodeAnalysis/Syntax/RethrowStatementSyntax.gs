@@ -15,7 +15,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// `throw;`: G# statements are not newline-terminated, so a bare
 /// `throw` followed by a statement on the next line would be parsed as
 /// `throw <that expression>`.
-class RethrowStatementSyntax : StatementSyntax {
+partial class RethrowStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:RethrowStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param rethrowKeyword The `rethrow` keyword.

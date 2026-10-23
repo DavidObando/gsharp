@@ -7,7 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// A tuple deconstruction declaration `let (a, b, ...) = expr` or
 /// `var (a, b, ...) = expr`. Each identifier becomes a local bound to the
 /// corresponding tuple element of the right-hand-side initializer.
-class TupleDeconstructionStatementSyntax : StatementSyntax {
+partial class TupleDeconstructionStatementSyntax : StatementSyntax {
     /// Initializes a new instance of the (cref:TupleDeconstructionStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The `let` or `var` keyword.

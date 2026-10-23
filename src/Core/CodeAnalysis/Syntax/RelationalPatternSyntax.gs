@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a relational pattern such as `> 0`.
-class RelationalPatternSyntax : PatternSyntax {
+partial class RelationalPatternSyntax : PatternSyntax {
     /// Initializes a new instance of the (cref:RelationalPatternSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param operatorToken The operator token.

@@ -5,7 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a global statement in the language.
-open class GlobalStatementSyntax : MemberSyntax {
+open partial class GlobalStatementSyntax : MemberSyntax {
     /// Initializes a new instance of the (cref:GlobalStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param statement The statements to include.

@@ -13,7 +13,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// inside `ParseSwitchCase`, `ParseSelectCase`, and
 /// `ParseSwitchExpressionArm` before any expression dispatch, so
 /// this expression node only fires for true value-position uses.
-class DefaultExpressionSyntax : ExpressionSyntax {
+partial class DefaultExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:DefaultExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param defaultKeyword The `default` keyword token.

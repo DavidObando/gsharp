@@ -12,7 +12,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// @remarks This node is produced only by the index-argument parser, so the prefix
 /// `^` one's-complement and infix `^` bitwise-XOR meanings of the hat
 /// token are unchanged everywhere else in the grammar.
-class FromEndIndexExpressionSyntax : ExpressionSyntax {
+partial class FromEndIndexExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:FromEndIndexExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param hatToken The leading `^` marker token.

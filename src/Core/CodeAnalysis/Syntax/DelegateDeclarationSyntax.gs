@@ -14,7 +14,7 @@ import System.Collections.Immutable
 /// emits a real CLR TypeDef deriving from `System.MulticastDelegate`.
 /// The required trailing semicolon terminates the optional return-type
 /// clause, matching extern natives and interface bodiless members.
-class DelegateDeclarationSyntax : MemberSyntax {
+partial class DelegateDeclarationSyntax : MemberSyntax {
     /// Initializes a new instance of the (cref:DelegateDeclarationSyntax) class
     /// for the canonical `delegate Name(params) R;` form (issue #3510).
     /// @param syntaxTree The parent syntax tree.

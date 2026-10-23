@@ -12,7 +12,7 @@ import System.Linq
 /// Represents an interpolated string literal expression (e.g. `"hello $name"`
 /// or `"sum=${a + b}"`). The token's structured fragments are projected
 /// into a mix of literal-text segments and embedded expression segments.
-class InterpolatedStringExpressionSyntax : ExpressionSyntax {
+partial class InterpolatedStringExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:InterpolatedStringExpressionSyntax) class.
     /// @param syntaxTree The owning syntax tree.
     /// @param stringToken The interpolated-string token produced by the lexer.

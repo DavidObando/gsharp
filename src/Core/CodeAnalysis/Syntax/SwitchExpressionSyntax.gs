@@ -8,7 +8,7 @@ import System.Collections.Immutable
 
 /// Represents a `switch` expression of the form
 /// `switch expr { case A -> r1 default -> r2 }`.
-class SwitchExpressionSyntax : ExpressionSyntax {
+partial class SwitchExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:SwitchExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param switchKeyword The `switch` keyword.
