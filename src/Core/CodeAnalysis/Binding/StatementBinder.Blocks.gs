@@ -295,8 +295,10 @@ internal partial class StatementBinder {
         // a later sibling — which is exactly why C# only reports CS0160 for
         // unfiltered predecessors.
         let unfilteredCoverage = List[TypeSymbol]()
+        let enclosingFilters = CollectEnclosingCatchFilters(syntax)
         for catchSyntax in syntax.CatchClauses {
             RestoreExternalCallableAliases(callableExceptionalEntry)
+            InvalidateNarrowingsForEnclosingFilters(enclosingFilters)
             let inheritedReachability = currentStatementListFallsThrough
             currentStatementListFallsThrough = handlersReachable
             // ADR-0177 A: a bare `catch { … }` carries no type clause and means
@@ -366,6 +368,7 @@ internal partial class StatementBinder {
         }
         var finallyBlock BoundStatement? = nil
         if syntax.FinallyClause != nil {
+            InvalidateNarrowingsForEnclosingFilters(enclosingFilters)
             RestoreExternalCallableAliases(callableFinallyEntries)
             finallyEntryExternalCallableAliases[syntax.FinallyClause!!] = callableExits?.ToImmutableArray() ??
                 ImmutableArray[VariableSymbol].Empty
@@ -402,6 +405,61 @@ internal partial class StatementBinder {
             }
         }
         return BoundTryStatement(syntax, tryBlock, catches.ToImmutable(), finallyBlock)
+    }
+
+    /// ADR-0208 R10 (#5168): the `when` filters of every enclosing `try` whose protected
+    /// block contains [`syntax`](paramref). The CLR runs those filters in the first pass,
+    /// before this `try` runs a `finally` block, and a replacement exception can reach a
+    /// handler of this `try` after them.
+    private func CollectEnclosingCatchFilters(syntax TryStatementSyntax) List[ExpressionSyntax] {
+        let filters = List[ExpressionSyntax]()
+        var child SyntaxNode = syntax
+        var parent = syntax.Parent
+        while parent != nil {
+            if parent is TryStatementSyntax outer && object.ReferenceEquals(outer.TryBlock, child) {
+                for clause in outer.CatchClauses {
+                    if clause.Filter != nil {
+                        filters.Add(clause.Filter)
+                    }
+                }
+            }
+            child = parent
+            parent = parent.Parent
+        }
+        return filters
+    }
+
+    /// ADR-0208 R10 (#5168): drops the facts that [`filters`](paramref) may write. The filters
+    /// are not bound yet, so every variable that a filter names counts as written, and a filter
+    /// with a call counts as an unknown call.
+    private func InvalidateNarrowingsForEnclosingFilters(filters List[ExpressionSyntax]) {
+        if filters.Count == 0 {
+            return
+        }
+        EnsureClosureAssignedNames(filters[0])
+        if !HasAnyActiveNarrowings() {
+            return
+        }
+        let names = HashSet[string]()
+        var hasCall = false
+        for filter in filters {
+            CollectAllNames(filter, names)
+            hasCall |= SyntaxMayMutateMemberPaths(filter)
+        }
+        for frame in binderCtx.NarrowedVariables {
+            if frame.Count == 0 {
+                continue
+            }
+            let toRemove = List[AccessPath]()
+            for key in frame.Keys {
+                if names.Contains(key.Root.Name) || (hasCall && MayBeMutatedByUnknownCallable(key)) {
+                    toRemove.Add(key)
+                }
+            }
+            for key in toRemove {
+                frame.Remove(key)
+            }
+        }
     }
 
     private func BindWithinFinallyScope(finallyClause FinallyClauseSyntax?, bind() -> BoundStatement) BoundStatement {

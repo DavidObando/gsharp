@@ -223,6 +223,62 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
+            // An enclosing filter runs in the first pass, before the inner finally.
+            yield[]object{"enclosing-filter-inner-finally", `
+package P
+import System
+
+func Get() string? { return "a" }
+func Clear(ref s string?) bool {
+    s = nil
+    return true
+}
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    try {
+        try {
+            throw Exception("x")
+        } finally {
+            Console.WriteLine(s.Length)
+        }
+    } catch when Clear(ref s) {
+        return 1
+    }
+    return 2
+}
+func Main() { Console.WriteLine(Run()) }
+`}
+            // A replacement exception from a finally reaches an inner catch after the outer filter ran.
+            yield[]object{"enclosing-filter-inner-catch", `
+package P
+import System
+
+func Get() string? { return "a" }
+func Clear(ref s string?) bool {
+    s = nil
+    return true
+}
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    try {
+        try {
+            try {
+                throw FormatException("f")
+            } finally {
+                throw InvalidOperationException("g")
+            }
+        } catch (InvalidOperationException) {
+            return s.Length
+        }
+    } catch (FormatException) when Clear(ref s) {
+        return 0
+    }
+    return 2
+}
+func Main() { Console.WriteLine(Run()) }
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
@@ -296,6 +352,33 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `, []string{"-1"}}
+            // A filter of an enclosing try that names no narrowed variable keeps the narrowing.
+            yield[]object{"enclosing-filter-unrelated", `
+package P
+import System
+
+func Get() string? { return "abc" }
+func Touch(ref t string?) bool {
+    t = nil
+    return true
+}
+func Run() int32 {
+    var s string? = Get()
+    var t string? = Get()
+    if s == nil { return 0 }
+    try {
+        try {
+            throw Exception("x")
+        } finally {
+            Console.WriteLine(s.Length)
+        }
+    } catch when Touch(ref t) {
+        return 1
+    }
+    return 2
+}
+func Main() { Console.WriteLine(Run()) }
+`, []string{"3", "1"}}
         }
 
         private func Compile(dir string, source string, outPath string)(Exit int32, Log string) {
