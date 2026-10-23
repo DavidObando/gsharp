@@ -598,9 +598,11 @@ are replaced by `MissingTypeSymbol` and the reader.
 ### 15. Pre-existing gaps the parity stages must not change silently
 
 These were found by the inventories and are reproduced, not fixed, until the
-compare gate for the affected stage passes; each gets an issue and a corpus
-row that documents today's answer, and a later PR changes the answer with a
-witness.
+compare gate for the affected stage passes; each has or gets an issue and a
+corpus row that documents today's answer, and a later PR changes the answer
+with a witness. Filed with this ADR: #5174 (override slot identity), #5175
+(inference bounds by name), #5176 (unreadable constraints), #5177 (attributes
+never read from imports); each is P2 until a repro confirms it.
 
 - Override slot identity is token identity under MLC (`SameClrMethodSlot`,
   `ExpressionBinder.Access.MemberLookup.gs:5073-5085`); explicit interface
@@ -721,9 +723,10 @@ the decoder, the resolver or the intern table, recorded in the PR).
 | 6 | Remaining binder, lowering and symbol sites; language server; `tools/gsgen`; `Default()` and `WithRuntimeReferences` on images. | Zero disagreements; LanguageServer.Tests and Interpreter.Tests green in `handles`; `handles` becomes the default, `mlc` stays selectable. |
 | 7 | Public API change per section 14; delete the MLC path, the adapter accessors and the 21 `ClearCache` calls from `Dispose`; `CorePublicApiSnapshot` regenerated with allowance entries; release note (breaking change). | Full CI green; `ResourceLeakRegressionTests` green; `lsp-soak` memory flat; `compiler-bench.py` final table against the stage-0 base. |
 
-Issues filed with PR 2: one per section 15 gap, labelled P1 where the answer
-is wrong code or a wrong diagnostic (override identity, raw `IsValueType`,
-inference bound names, skipped constraints), P2 otherwise.
+PR 2 adds a corpus row per section 15 gap and files the issues that section
+15 does not already name; an issue moves to P1 when its corpus row shows wrong
+code or a wrong diagnostic (override identity, raw `IsValueType`, inference
+bound names, skipped constraints).
 
 ### 20. Open questions for the maintainer
 
