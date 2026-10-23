@@ -6,9 +6,10 @@
   decided as recommended on the same day, three of them deferred to
   [#5196](https://github.com/DavidObando/gsharp/issues/5196))
 - **Date**: 2026-10-22 (accepted 2026-10-23)
-- **Amendments**: A1 and A2 of section 19a, proposed after PR 1 of #5130
-  (PR #5212) and awaiting the maintainer's decision; the clarifications of
-  #5207 are folded into the text
+- **Amendments**: A1 (join fallback, #5206) and A2 (property reads, row
+  R14, #5215) of section 19a, found by PR 1 of #5130 (#5212) and accepted by
+  the maintainer on 2026-10-23 (PR #5226); the clarifications of #5207 are
+  folded into the text
 - **Phase**: Compiler architecture (study roadmap item M1b; implementation
   is [#5130](https://github.com/DavidObando/gsharp/issues/5130))
 - **Issue**: [#5129](https://github.com/DavidObando/gsharp/issues/5129)
@@ -292,29 +293,28 @@ among the others, never joined afterwards with an already reduced result. For a
 path present in every incoming state, with incoming types `T1 ... Tn`, the
 join keeps the one `Ti` to which every other `Tj` converts by identity or an
 implicit reference conversion (`Dog` and `Animal` join to `Animal`; `T` and
-`T?` do not join, because `T?` is not a fact). When no such `Ti` exists and
-the path is a plain root whose every incoming type converts, with its
-representation preserved, to the root's declared type with one nullable
-layer removed, the join keeps that declared non-null type (`Dog` and `Cat`
-on `x Animal?` join to `Animal`); otherwise it drops the path.
-*Amendment A1 (proposed, section 19a, #5206):* the fallback drops the
-representation-preserving condition and applies to stable member paths as
-well as plain roots: whenever every incoming state has some fact for the
-path, the join keeps the path's declared type with one nullable layer
-removed. Every fact is a non-null refinement of the storage's declared
-type, and a read of the storage at its declared type needs no cast, so
-this is sound for any mix of incoming facts; it keeps `settings -> T` after
-`if settings is IInit init { ... }` where `IInit` does not convert to `T`,
-which today's compiler keeps and the rule above drops (two sites in the
-pinned Oahu inputs, `SettingsManager.gs:51, 111`). A binary fold
+`T?` do not join, because `T?` is not a fact). When no such `Ti` exists, the
+join keeps the path's declared type with one nullable layer removed: the
+root's declared type for a plain root, the last link's declared type for a
+stable member path. Every fact is a non-null refinement of the storage's
+declared type and a read of the storage at its declared type needs no cast,
+so this holds for any mix of incoming facts (`Dog` and `Cat` on `x Animal?`
+join to `Animal`; `IInit` and `T` on `settings T?` join to `T`, which is
+what `if settings is IInit init { ... }` yields when `T` does not implement
+`IInit`). A path is dropped only when some incoming state has no fact for
+it. This is amendment A1 (section 19a, #5206, accepted 2026-10-23): the
+fallback as first written required every incoming type to convert to the
+declared type with its representation preserved and applied to plain roots
+only, which dropped `settings -> T` at two sites of the pinned Oahu inputs
+(`SettingsManager.gs:51, 111`) that today's compiler keeps. A binary fold
 would lose this: for `x object?` with incoming `Dog`, `Cat` and `Animal`,
 `Join(Dog, Cat)` is `object` and `Join(object, Animal)` is `object`, while
-the n-ary join keeps `Animal` (probe g1). This is exactly the rule the
-`goto` join already uses (ADR-0069 #4989 addendum,
-`FindCommonImplicitSupertype`, `StatementBinder.Narrowing.gs:3860-3885`,
-over all incoming snapshots, including its declared-root fallback), applied
-to every merge; it never computes a least common supertype of unrelated
-types. It keeps an outer
+the n-ary join keeps `Animal` (probe g1). This is the rule the `goto` join
+already uses (ADR-0069 #4989 addendum, `FindCommonImplicitSupertype`,
+`StatementBinder.Narrowing.gs:3860-3885`, over all incoming snapshots),
+with its declared-root fallback widened by A1, applied to every merge; PR 1
+made both call one function, `NarrowingState.JoinTypes`. It never computes
+a least common supertype of unrelated types. It keeps an outer
 non-null proof when an inner branch strengthens it (`if x != nil { if x is
 Dog { } return x.Name }`: `x -> Dog` and `x -> Animal` join to `x ->
 Animal`, probe d5) and when sibling branches refine it differently (probe
@@ -774,7 +774,7 @@ compatibility note. "Probe" refers to section 4.
 | R11 | Any call, written or introduced by lowering, kills a fact on a mutable global: `text = "safe"; Clear(); text.Length` where `Clear` assigns the global (probes d3, d3b); `for item in items { }` over an iterator that assigns it (probe f5) (bug [#5170](https://github.com/DavidObando/gsharp/issues/5170)) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
 | R12 | A write to any member of an alias class kills the facts on the whole class, and so does any member, index or indirect write, because a `ref` local or a by-reference parameter may alias the written element or member: `let ref a C? = x; ...; x = nil; a.Value` (probes d4, d4b); `let ref a C? = xs[0]; ...; xs[0] = nil; a.Value` (probe f2); `Run(ref xs[0], xs)` with `Run(ref a C?, xs []C?)` doing `xs[0] = nil; a.Value` (probe g2) (bug [#5171](https://github.com/DavidObando/gsharp/issues/5171)) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
 | R13 | A suspension point (`await`, `yield`) kills facts on mutable globals and on closure-assigned locals, because the code that runs while the function is suspended may invoke a closure that escaped: iterator with `let clear = func() { s = nil }`, `if s != nil { yield 0; yield s.Length }` (probe g5) | accepted, prints `0` and `1` | GS0158 | less permissive (conservative default; the program is correct) |
-| R14 (proposed, A2) | A read of a property with user code (a non-auto getter) is a `call` in every position, a condition included, and removes every member-bearing path: `if getResultCall.Receiver is not BoundImportedInstanceCallExpression getAwaiterCall { return }` after an earlier proof of a member path (`ExpressionBinder.Access.MemberLookup.gs:3991`, `BaseCallForwarderRewriter.gs:490`) | accepted (today's straight-line kill follows the statement's syntax: calls and member writes only) | GS0158 / GS0159 on the member-path read | less permissive |
+| R14 | A read of a property with user code (a non-auto getter) is a `call` in every position, a condition included, and removes every member-bearing path: `if getResultCall.Receiver is not BoundImportedInstanceCallExpression getAwaiterCall { return }` after an earlier proof of a member path (`ExpressionBinder.Access.MemberLookup.gs:3991`, `BaseCallForwarderRewriter.gs:490`) | accepted (today's straight-line kill follows the statement's syntax: calls and member writes only) | GS0158 / GS0159 on the member-path read | less permissive |
 
 Details per row:
 
@@ -859,7 +859,7 @@ Details per row:
   Core.Tests and gsc have (unknown at the time of writing; the earlier
   experiments did not exercise suspension points). g5 joins the corpus with
   a mutant witness (suspension classified `none`).
-- **R14 (proposed, amendment A2, #5215).** Found by PR 1's comparison
+- **R14 (amendment A2, #5215, accepted 2026-10-23).** Found by PR 1's comparison
   mode: two sites in `src/Core` where a condition reads a non-auto property
   on a path an earlier guard narrowed. Today's straight-line invalidation
   (`SyntaxMayMutateMemberPaths`) kills member paths on calls and member
@@ -872,8 +872,8 @@ Details per row:
   branches (section 9). Impact: Core 2 sites, Core.Tests 0, gsc 0, Oahu 0;
   the two Core sites are restructured (read the property into a `let`
   before the guard) in the pin-move PR, not with `!!` (section 15). The
-  alternatives, and the recommendation, are in section 19a. Tests: the two
-  shapes with a mutant witness (property reads classed `none`).
+  rejected alternatives are in section 19a. Tests: the two shapes with a
+  mutant witness (property reads classed `none`).
 - **Join of strengthened facts (no row).** Probe d5 is accepted today and
   after; the join definition in section 6 keeps the common implied type.
   PR 2 adds d5 as a test with a mutant witness (equality-only join), and g1
@@ -1025,7 +1025,8 @@ each predicted change listed in the PR body; the benchmark table of section
    the new rule, so R1-R6 are expected to appear there), none outside the
    table; the member-selection and cast report for open question 3. Result
    (#5212): output identity met; the disagreement criterion not met, with
-   four sites outside the table that are the amendments of section 19a.
+   four sites outside the table, resolved by amendments A1 and A2 of
+   section 19a.
 2. **Joins from exit states (R1-R6, R9).** `if`, `switch`, blocks, `try`,
    cleanup regions, forward `goto`, labels; the catch-clause entry rule
    (R10); expression-granular state updates; delete `ApplyIfJoinNarrowings`,
@@ -1066,7 +1067,7 @@ each predicted change listed in the PR body; the benchmark table of section
 The pin-move PR after the release that carries PR 2 removes the `!!` that
 `GS0536` newly reports (section 15).
 
-### 19a. Findings of PR 1 and proposed amendments
+### 19a. Findings of PR 1 and the amendments they led to
 
 PR 1 (#5212) ran the comparison mode on Core, Core.Tests, gsc and the 12
 pinned Oahu projects. Counts are first-divergence sites (a fact an earlier
@@ -1085,66 +1086,55 @@ change) and 2 are type-test facts (`ConversionClassifier.gs:5095-5096`,
 `inner` as `BoundLiteralExpression`, whose member `Type` both types have);
 Core.Tests 10 and Oahu 7, all nil-check only; gsc 0. R3 and R6 have no site
 because these inputs have no user `goto`. The four sites outside the table
-are two defects of this document, each with a proposed amendment that the
-maintainer decides; PR 2 does not land before they are decided.
+were two defects of this document. The maintainer decided both amendments
+on 2026-10-23 (PR #5226); for the implementation (#5130, PR 2) A1 is the
+one function `NarrowingState.JoinTypes` and A2 is one predicate of the
+construct table.
 
-**A1 (#5206, P1): the join drops a nullability fact after a type test
-against an unrelated interface.** After `if settings is IInit init { ... }`
-with `settings T?`, the then-state has `settings -> IInit` and the
-else-state `settings -> T`; neither converts to the other, and `IInit` does
-not convert to `T` with its representation preserved, so the section 6 rule
-drops the path and a later read sees `T?` (today's compiler keeps `T`;
-`Oahu.Foundation/Auxiliary/SettingsManager.gs:51, 111`). Options:
-
-1. Extend the declared-root fallback to type-test refinements only: when an
-   incoming type is the target of an `is` test on the path (the declared
-   type converts to it by an explicit reference conversion), count it as
-   convertible. Narrow, but it re-introduces a shape test.
-2. Drop the representation-preserving condition: whenever every incoming
-   state has some fact for the path, the join keeps the path's declared
-   type with one nullable layer removed. Sound because every fact is a
-   non-null refinement of the storage's declared type and reading the
-   storage at its declared type needs no cast; applies to stable member
-   paths as well as plain roots (today's `goto` join returns nothing for
-   member paths, so that part is more permissive).
-3. Record the drop as a row (less permissive; two Oahu sites and any
-   program that tests a nullable local against an interface its type does
-   not implement would get `GS0158`).
-
-Recommendation: option 2, written into section 6 as amendment A1. It is one
-rule for all incoming facts, matches section 15's statement that a
+**A1 (#5206, P1, accepted 2026-10-23): the join keeps the declared non-null
+type whenever every incoming state has a fact.** After `if settings is IInit
+init { ... }` with `settings T?`, the then-state has `settings -> IInit` and
+the else-state `settings -> T`; neither converts to the other, and `IInit`
+does not convert to `T` with its representation preserved, so the fallback
+as first written dropped the path and a later read saw `T?` (today's
+compiler keeps `T`; `Oahu.Foundation/Auxiliary/SettingsManager.gs:51,
+111`). Decision: drop the representation-preserving condition and extend
+the fallback to stable member paths, as section 6 now states. The
+maintainer's reason: do not break Oahu or other consumers. It is one rule
+for all incoming facts, it matches section 15's statement that a
 nullability fact emits no cast, and its only effect on today's results is
-more permissive (the `goto` join's declared-root fallback widens to member
-paths and to non-converting refinements). PR 2 adds the repro of #5206 as a
-corpus row with a mutant witness (the rule as written before A1), and the
-`goto` join tests of `Issue4519` are re-run for the widened fallback.
+more permissive (the `goto` join's fallback widens to member paths and to
+non-converting refinements). PR 2 adds the repro of #5206 as a corpus row
+with a mutant witness (the fallback as first written) and re-runs the
+`goto` join tests of `Issue4519` for the widened fallback. Rejected
+alternatives: counting only type-test refinements as convertible (a shape
+test); recording the drop as a less-permissive row (would reject the two
+Oahu sites and any program that tests a nullable local against an interface
+its type does not implement).
 
-**A2 (#5215, P1): a property read with user code in a condition kills
-member-path facts.** Section 8 classes a non-auto property read as `call`;
-section 9 applies a condition's effects before its branches; together a
-condition that only reads such a property kills every member-path fact.
-Today's straight-line kill follows the statement's syntax (calls and member
-writes), so it keeps the fact; today's loop collector and `finally`
-summaries already kill on the read (`:1751-1753`). Two sites in `src/Core`
-(`ExpressionBinder.Access.MemberLookup.gs:3991`,
-`BaseCallForwarderRewriter.gs:490`), none elsewhere. Options:
-
-1. Keep the kill and record it as row R14 (less permissive): a getter with
-   user code is a call, and ADR-0069 #1180 says an intervening call
-   invalidates member paths. The two Core sites are restructured in the
-   pin-move PR (read the property into a `let` before the guard).
-2. Exempt a read whose path is exactly the path the fact names (the proof's
-   own subject). Narrow, and it is the shape-by-shape pattern this ADR
-   avoids: the getter can still mutate other reachable state.
-3. Class every property read as `none` for member paths, matching today's
-   straight-line rule. Unsound in the same way today is: a getter with user
-   code is a call that can write the member a path names.
-
-Recommendation: option 1, row R14 as written in section 16, marked
-proposed until the maintainer decides. It is the conservative default of
-section 6 applied as stated, removes an inconsistency between today's
-straight-line and loop collectors, and costs two restructurings whose
-`GS0536` hazard section 15 already handles.
+**A2 (#5215, P1, accepted 2026-10-23): a property read with user code is a
+call, in a condition too, and row R14 records it.** Section 8 classes a
+non-auto property read as `call`; section 9 applies a condition's effects
+before its branches; together a condition that only reads such a property
+kills every member-path fact. Today's straight-line kill follows the
+statement's syntax (calls and member writes), so it keeps the fact; today's
+loop collector and `finally` summaries already kill on the read
+(`:1751-1753`). Decision: keep the kill, row R14 as written in section 16.
+It is the conservative default of section 6 applied as stated (ADR-0069
+#1180: an intervening call invalidates member paths), it removes the
+inconsistency between today's straight-line and loop collectors, and it
+costs two restructurings. The pin-move PR restructures these two sites of
+`src/Core` by reading the property into a `let` before the guard, not with
+`!!` (section 15): `src/Core/CodeAnalysis/Binding/ExpressionBinder.Access.
+MemberLookup.gs:3991` (`if getResultCall.Receiver is not
+BoundImportedInstanceCallExpression getAwaiterCall { return }`) and
+`src/Core/CodeAnalysis/Lowering/BaseCallForwarderRewriter.gs:490` (`if
+method.ReceiverType is not StructSymbol declaring { return }`). No site in
+Core.Tests, gsc or the pinned Oahu inputs. Rejected alternatives:
+exempting a read whose path is the fact's own subject (a shape test; the
+getter can still mutate other reachable state); classing every property
+read as `none` for member paths (today's straight-line rule, unsound in the
+same way: a getter with user code can write the member a path names).
 
 **Clarifications from #5207 (not design choices)** are folded into the text
 of this revision: PR 1 keeps the frame list (section 19), `KillRoots` takes
