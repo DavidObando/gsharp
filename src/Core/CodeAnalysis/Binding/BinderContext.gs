@@ -334,6 +334,20 @@ internal class BinderContext {
         get;
     }
 
+    /// Gets the narrowing facts that hold now, as a value (ADR-0208 section 7).
+    /// @remarks PR 1 derives the value from (cref:NarrowedVariables), where the
+    /// innermost frame that holds a path wins. The frame stack stays the
+    /// mechanism until the consuming PR replaces it. The value has no
+    /// external-callable facts, which the statement binder owns.
+    /// Gets or sets the facts that the shadow join proves and that no frame holds
+    /// (ADR-0208 section 19, PR 1). Only the comparison mode reads or writes it.
+    internal var ShadowOverlay NarrowingState = NarrowingState.Empty
+
+    internal prop Narrowing NarrowingState -> NarrowingState.FromFrames(
+        NarrowedVariables,
+        ImmutableArray[VariableSymbol].Empty
+    )
+
     /// Gets the side-table that parks the else-branch narrowing frame of an
     /// `if`-statement keyed by the resulting bound
     /// (cref:BoundIfStatement) node identity. ADR-0069 / issue #700:

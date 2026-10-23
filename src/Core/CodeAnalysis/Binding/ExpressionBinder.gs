@@ -881,12 +881,37 @@ internal partial class ExpressionBinder {
         return BuildNarrowedRead(
             BoundVariableExpression(nil, variable),
             variable.Type,
-            TryGetNarrowedType(variable),
+            TryGetNarrowedType(variable, location),
             makeNarrowedVariable
         )
     }
 
-    private func TryGetNarrowedType(variable VariableSymbol) TypeSymbol? {
+    private func TryGetNarrowedType(variable VariableSymbol, location TextLocation? = nil) TypeSymbol? {
+        let answer = LookUpNarrowedType(variable)
+        if NarrowingComparison.Enabled {
+            ReportShadowRead(AccessPath.ForVariable(variable), answer, variable.Type, location)
+        }
+        return answer
+    }
+
+    // ADR-0208 section 19, comparison mode: reports a read whose type the shadow
+    // flow would narrow and the frames do not.
+    private func ReportShadowRead(
+        path AccessPath,
+        frameAnswer TypeSymbol?,
+        declaredType TypeSymbol,
+        location TextLocation?
+    ) {
+        if frameAnswer != nil {
+            return
+        }
+        let shadowType = binderCtx.ShadowOverlay.NarrowedType(path)
+        if shadowType != nil {
+            NarrowingComparison.ReportRead(location, path, declaredType, shadowType)
+        }
+    }
+
+    private func LookUpNarrowedType(variable VariableSymbol) TypeSymbol? {
         // Phase 3.C.4: smart-cast narrowing map. Walk the active stack from
         // innermost frame outward — the topmost narrowing wins.
         for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {
@@ -902,7 +927,17 @@ internal partial class ExpressionBinder {
     /// the topmost narrowing wins, mirroring the variable overload.
     /// @param path The stable access path to look up.
     /// @returns The narrowed type, or `null` when the path is not narrowed.
-    private func TryGetNarrowedType(path AccessPath) TypeSymbol? {
+    private func TryGetNarrowedType(path AccessPath, declaredType TypeSymbol, location TextLocation?) TypeSymbol? {
+        let answer = LookUpNarrowedType(path)
+        if NarrowingComparison.Enabled {
+            ReportShadowRead(path, answer, declaredType, location)
+        }
+        return answer
+    }
+
+    private func TryGetNarrowedType(path AccessPath) TypeSymbol? -> LookUpNarrowedType(path)
+
+    private func LookUpNarrowedType(path AccessPath) TypeSymbol? {
         for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {
             if binderCtx.NarrowedVariables[i].TryGetValue(path, out var narrowed) {
                 return Invariant.Required(
@@ -938,7 +973,11 @@ internal partial class ExpressionBinder {
                 "a successful stable field-path lookup has a path",
                 expression: "path"
             )
-            let narrowed TypeSymbol? = TryGetNarrowedType(stablePath)
+            let narrowed TypeSymbol? = TryGetNarrowedType(
+                stablePath,
+                fieldAccess.SubstitutedType ?? fieldAccess.Field.Type,
+                fieldAccess.Syntax?.Location
+            )
             if narrowed == nil {
                 return node
             }
@@ -977,7 +1016,11 @@ internal partial class ExpressionBinder {
                 "a successful stable property-path lookup has a path",
                 expression: "path"
             )
-            let narrowed TypeSymbol? = TryGetNarrowedType(stablePath)
+            let narrowed TypeSymbol? = TryGetNarrowedType(
+                stablePath,
+                propertyAccess.SubstitutedType ?? propertyAccess.Property.Type,
+                propertyAccess.Syntax?.Location
+            )
             if narrowed == nil {
                 return node
             }
@@ -1020,7 +1063,7 @@ internal partial class ExpressionBinder {
             "a successful stable CLR member-path lookup has a path",
             expression: "clrPath"
         )
-        let clrNarrowed TypeSymbol? = TryGetNarrowedType(stableClrPath)
+        let clrNarrowed TypeSymbol? = TryGetNarrowedType(stableClrPath, clrAccess.Type, clrAccess.Syntax?.Location)
         if clrNarrowed == nil {
             return node
         }

@@ -3863,31 +3863,10 @@ internal partial class StatementBinder {
             return mayMutateMemberPaths
         }
 
+        // ADR-0208 section 6: the forward-`goto` join and the shadow join share
+        // one rule, which lives on NarrowingState.
         private func FindCommonImplicitSupertype(path AccessPath, sourceTypes IReadOnlyList[TypeSymbol]) TypeSymbol? {
-            if sourceTypes.Count == 0 {
-                return nil
-            }
-            let commonType TypeSymbol? = sourceTypes.FirstOrDefault(
-                (candidate TypeSymbol) -> sourceTypes.All(
-                    (source TypeSymbol) -> IsRepresentationPreservingJoin(source, candidate)
-                )
-            )
-            if commonType != nil {
-                return commonType
-            }
-            if path.HasMembers {
-                return nil
-            }
-            let declaredType = if path.Root.Type is NullableTypeSymbol nullable {
-                nullable.UnderlyingType
-            } else {
-                path.Root.Type
-            }
-            return if sourceTypes.All((source TypeSymbol) -> IsRepresentationPreservingJoin(source, declaredType)) {
-                declaredType
-            } else {
-                default(TypeSymbol?)
-            }
+            return NarrowingState.JoinTypes(path, sourceTypes)
         }
 
         private func IsRepresentationPreservingJoin(source TypeSymbol, target TypeSymbol) bool {

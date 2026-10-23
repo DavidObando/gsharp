@@ -361,6 +361,8 @@ internal partial class StatementBinder {
             continueLabel = firstContinueLabel
             return firstBody
         }
+        // ADR-0208 section 18: counts the loop bodies that this design binds twice.
+        CompilationMeasurements.Count("narrowing.loop-rebinds")
         Diagnostics.TruncateTo(diagnosticCount)
         for var i = 0; i < narrowingSnapshots.Length; i++ {
             let frame = binderCtx.NarrowedVariables[i]

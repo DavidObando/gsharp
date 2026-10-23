@@ -34,6 +34,8 @@ internal partial class StatementBinder {
         let arms = ImmutableArray.CreateBuilder[BoundPatternSwitchArm](syntax.Cases.Length)
         var hasDefault = false
         let callableEntry = CaptureExternalCallableAliases()
+        let shadowFlow = ShadowBegin()
+        var shadowApproximate = false
         var callableExits HashSet[VariableSymbol]? = nil
         var callableFallthrough HashSet[VariableSymbol]? = nil
         // ADR-0069 addendum / issue #712: track each non-exiting arm's
@@ -96,6 +98,8 @@ internal partial class StatementBinder {
                     }
                     hasDefault = true
                     var defaultBody = BindBlockStatement(caseSyntax.Body)
+                    ShadowAddBranch(shadowFlow, nil, defaultBody)
+                    shadowApproximate = shadowApproximate || endsInFallthrough
                     defaultBody = PrependArmEntryLabel(defaultBody, armEntryLabels[caseIndex])
                     arms.Add(BoundPatternSwitchArm(nil, pattern: nil, $guard: nil, defaultBody))
                     let callableDefaultExit = CaptureExternalCallableAliases()
@@ -169,6 +173,8 @@ internal partial class StatementBinder {
                     }
                 )
                 $scope = $scope.Pop()
+                ShadowAddBranch(shadowFlow, frame, body)
+                shadowApproximate = shadowApproximate || endsInFallthrough
                 body = PrependArmEntryLabel(body, armEntryLabels[caseIndex])
                 arms.Add(BoundPatternSwitchArm(nil, pattern, guard_, body))
                 let callableArmExit = CaptureExternalCallableAliases()
@@ -235,6 +241,7 @@ internal partial class StatementBinder {
             Diagnostics
         )
         let result = BoundPatternSwitchStatement(nil, discriminant, boundArms, isExhaustive)
+        let shadowBreaks = binderCtx.UsedBreakLabels.Contains(switchBreakLabel)
         // ADR-0069 addendum / issue #712: park the merged narrowing on the
         // bound switch so the enclosing block walker can lift it. Only do
         // so when at least one arm fell through (otherwise the switch
@@ -254,12 +261,29 @@ internal partial class StatementBinder {
         // there. Switches with no arm-level break keep their bare shape (so
         // exhaustive all-arms-return switches still read as unconditional
         // exits to the all-paths-return check).
-        if binderCtx.UsedBreakLabels.Contains(switchBreakLabel) {
-            return BoundBlockStatement(
+        if shadowBreaks {
+            let wrapped = BoundBlockStatement(
                 syntax,
                 ImmutableArray.Create[BoundStatement](result, BoundLabelStatement(nil, switchBreakLabel))
             )
+            ShadowFinish(
+                shadowFlow,
+                "switch",
+                syntax.SwitchKeyword.Location,
+                []BoundStatement{result, wrapped},
+                !(hasDefault || isExhaustive),
+                true
+            )
+            return wrapped
         }
+        ShadowFinish(
+            shadowFlow,
+            "switch",
+            syntax.SwitchKeyword.Location,
+            []BoundStatement{result},
+            !(hasDefault || isExhaustive),
+            shadowApproximate
+        )
         return result
     }
 
