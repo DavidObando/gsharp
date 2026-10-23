@@ -182,7 +182,7 @@ internal class ReferenceImageSet {
         }
         if resolutionScope.Kind == HandleKind.TypeReference {
             // A nested type: resolve the enclosing type first, then look for the nested name in the same module.
-            if EnclosingChainTooDeep(module.Reader, handle) {
+            if MetadataTypeNameReader.IsEnclosingChainTooDeep(module.Reader, handle) {
                 return ResolvedTypeReference(GetMissing(module.Identity, segment))
             }
             let enclosing = ResolveTypeReference(module, cast[TypeReferenceHandle](resolutionScope))
@@ -201,19 +201,6 @@ internal class ReferenceImageSet {
         }
         // A module reference (multi-module assembly) and a nil scope (exported type) are not importable.
         return ResolvedTypeReference(GetMissing(module.Identity, segment))
-    }
-
-    // Counts the enclosing type references above a row. A chain longer than the limit, or a cycle, is malformed.
-    private func EnclosingChainTooDeep(reader MetadataReader, handle TypeReferenceHandle) bool {
-        var current = handle
-        for var hops = 0; hops <= MetadataTypeNameReader.MaximumReferenceNesting; hops++ {
-            let resolutionScope = reader.GetTypeReference(current).ResolutionScope
-            if resolutionScope.Kind != HandleKind.TypeReference {
-                return false
-            }
-            current = cast[TypeReferenceHandle](resolutionScope)
-        }
-        return true
     }
 
     private func ResolveInAssembly(target AssemblyIdentity, fullName string) ResolvedTypeReference {

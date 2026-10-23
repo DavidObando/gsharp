@@ -111,6 +111,23 @@ internal shared class MetadataTypeNameReader {
     /// The set and the comparison both stop there, so a cyclic scope cannot overflow the stack.
     internal let MaximumReferenceNesting int32 = 64
 
+    /// Tells whether the chain of enclosing type references above a row is malformed.
+    /// A chain with more than (cref:MaximumReferenceNesting) enclosing links, or a cycle, is malformed.
+    /// The set and the comparison both ask this one question, so they cut the chain at the same row.
+    /// @param reader The metadata reader.
+    /// @param handle The type reference row.
+    func IsEnclosingChainTooDeep(reader MetadataReader, handle TypeReferenceHandle) bool {
+        var current = handle
+        for var links = 0; links <= MaximumReferenceNesting; links++ {
+            let enclosing = reader.GetTypeReference(current).ResolutionScope
+            if enclosing.Kind != HandleKind.TypeReference {
+                return false
+            }
+            current = cast[TypeReferenceHandle](enclosing)
+        }
+        return true
+    }
+
     /// Spells one row of the type reference table as reflection spells it.
     /// A top-level reference gives the namespace-qualified full name.
     /// A nested reference (its scope is a type reference) gives the escaped name alone.

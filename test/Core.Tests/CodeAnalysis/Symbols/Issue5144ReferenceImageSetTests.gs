@@ -428,6 +428,26 @@ open class Issue5144ReferenceImageSetTests {
     }
 
     @Fact
+    func NestingLimit_IsOneDecision_ForTheSetAndTheComparison() {
+        // Rows 64, 65 and 66 of a chain have 63, 64 and 65 enclosing links. The limit is 64 links.
+        let referencing = BuildDeepReferencing("Boundary5144", "BoundaryTarget5144", 70)
+        let set = ReferenceImageSet(
+            ImmutableArray.Create(
+                ReferenceImage(BuildDeepTarget("BoundaryTarget5144", 70), nil, true),
+                ReferenceImage(referencing, nil, true)
+            )
+        )
+        let module = set.FindModule("Boundary5144")!!
+        for row in[]int32{64, 65, 66} {
+            let handle = MetadataTokens.TypeReferenceHandle(row)
+            let tooDeep = MetadataTypeNameReader.IsEnclosingChainTooDeep(module.Reader, handle)
+            // The set resolves exactly the rows that the shared predicate accepts, and so does the oracle's spelling.
+            Assert.Equal(row > 65, tooDeep)
+            Assert.Equal(!tooDeep, set.ResolveTypeReference(module, handle).IsResolved)
+        }
+    }
+
+    @Fact
     func Comparison_AsksTheContext_EvenWhenTheSetLacksTheAssembly() {
         using let resolver = HandleResolver([]string{typeof(ReferenceResolver).Assembly.Location})
         let good = resolver.ImageSet!!

@@ -138,7 +138,7 @@ internal shared class MetadataModelComparison {
             for handle in module.Reader.TypeReferences {
                 let actual = set.ResolveTypeReference(module, handle)
                 var assemblyName = ""
-                let fullName = SpellReference(module.Reader, handle, 0, out assemblyName)
+                let fullName = SpellReference(module.Reader, handle, out assemblyName)
                 if fullName == nil {
                     // The context has no name for a reference that a module scope or a nil scope holds.
                     continue
@@ -198,14 +198,10 @@ internal shared class MetadataModelComparison {
     // Spells a type reference as the context sees it: the simple name of the assembly that the outermost
     // scope names, and the full name with `+` between the enclosing types. Returns null for a scope
     // that is not an assembly reference or a type reference, and for a chain deeper than the set resolves.
-    private func SpellReference(
-        reader MetadataReader,
-        handle TypeReferenceHandle,
-        depth int32,
-        out assemblyName string
-    ) string? {
+    private func SpellReference(reader MetadataReader, handle TypeReferenceHandle, out assemblyName string) string? {
         assemblyName = ""
-        if depth >= MetadataTypeNameReader.MaximumReferenceNesting {
+        // The same cut as the set, so the oracle sees every answer that the set gives.
+        if MetadataTypeNameReader.IsEnclosingChainTooDeep(reader, handle) {
             return nil
         }
         let reference = reader.GetTypeReference(handle)
@@ -218,7 +214,7 @@ internal shared class MetadataModelComparison {
             return segment
         }
         if resolutionScope.Kind == HandleKind.TypeReference {
-            let outer = SpellReference(reader, cast[TypeReferenceHandle](resolutionScope), depth + 1, out assemblyName)
+            let outer = SpellReference(reader, cast[TypeReferenceHandle](resolutionScope), out assemblyName)
             return if outer == nil {
                 nil
             } else {
