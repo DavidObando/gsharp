@@ -10,7 +10,9 @@ import System.Collections.Immutable
 import System.Diagnostics.CodeAnalysis
 import System.Linq
 import System.Reflection
+import GSharp.Core.CodeAnalysis.Compilation
 import System.Runtime.CompilerServices
+import System.Threading
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Documentation
 import GSharp.Core.CodeAnalysis.Emit
@@ -220,7 +222,39 @@ class ImportedTypeSymbol : TypeSymbol {
         internal var Accesses int32
     }
 
+    /// One level of the construction table (issue #5158). Child tables are created
+    /// on demand; the symbol is held weakly and set under the lock of the node. A strong
+    /// reference would let a long-lived argument (a primitive) keep the erased type, and
+    /// with it the reference context, alive through the ephemeron value.
+    private class ConstructionNode {
+        private var children ConditionalWeakTable[object, ConstructionNode]?
+        internal var Symbol WeakReference[ImportedTypeSymbol]?
+
+        internal func GetChild(key object) ConstructionNode {
+            var table = Volatile.Read(&children)
+            if table == nil {
+                Interlocked.CompareExchange[ConditionalWeakTable[object, ConstructionNode]?](
+                    &children,
+                    ConditionalWeakTable[object, ConstructionNode](),
+                    nil
+                )
+                table = Volatile.Read(&children)
+            }
+            return table!!.GetValue(key, ImportedTypeSymbol.CreateConstructionNode)
+        }
+    }
+
     shared {
+        private let ConstructionRoots ConditionalWeakTable[object, ConstructionNode] = ConditionalWeakTable[
+            object,
+            ConstructionNode
+        ]()
+        private let CreateConstructionNode ConditionalWeakTable[object, ConstructionNode].CreateValueCallback =
+        (_ object) -> ConstructionNode()
+
+        /// Key part for a construction without an open definition.
+        private let NoOpenDefinition object = SystemObject()
+
         private let Cache ConditionalWeakTable[Assembly, CacheBucket] = ConditionalWeakTable[Assembly, CacheBucket]()
 
         /// Gets or creates the imported type symbol for the given CLR type.
@@ -280,14 +314,29 @@ class ImportedTypeSymbol : TypeSymbol {
             }
         }
 
-        /// #313: creates a generic type constructed over one or more in-scope type
-        /// parameters (e.g. `List[T]`). The instance is intentionally not
-        /// cached because each construction carries distinct symbolic type
-        /// arguments while sharing the same type-erased closed CLR shape.
+        /// #313: gets the generic type constructed over one or more in-scope type
+        /// parameters (e.g. `List[T]`). Issue #5158: equal constructions share one
+        /// instance. Two calls are equal when they pass the same erased closed type
+        /// object, the same open definition object and the same argument symbol
+        /// objects in the same order.
         /// @param erasedClosedType The type-erased closed CLR type (type parameters projected onto `object`).
         /// @param openDefinition The open generic CLR definition (e.g. `List<>`).
         /// @param typeArguments The symbolic type arguments, possibly containing (cref:TypeParameterSymbol).
-        /// @returns A fresh constructed (cref:ImportedTypeSymbol).
+        /// @returns The constructed (cref:ImportedTypeSymbol).
+        /// @remarks The table is a chain of weak tables, one level per key part. The
+        /// symbol at the end of the chain is held through a (cref:WeakReference), not
+        /// directly: the symbol refers to every key above it, so a strong value under a
+        /// long-lived last key (a primitive argument) would keep the erased type, and
+        /// with it the whole reference context, alive. While any caller holds the
+        /// symbol, equal calls get the same instance; once all callers drop it, a later
+        /// call builds a new one, which nobody can tell apart. Keys use reference
+        /// identity, so a symbol from another reference set, another nullability mode
+        /// (a nullable or platform-type annotation is a different argument object) or
+        /// another argument identity never answers for this one. A missing deduplication
+        /// is harmless; an alias would not be. Each symbol is built once under the lock
+        /// of its entry and published after it is fully built, and an exception while
+        /// building publishes nothing. No collection is iterated, so the table does not
+        /// affect ordering or output.
         func GetConstructed(
             erasedClosedType Type?,
             openDefinition Type?,
@@ -296,6 +345,46 @@ class ImportedTypeSymbol : TypeSymbol {
             if erasedClosedType == nil {
                 throw ArgumentNullException("erasedClosedType")
             }
+            if !CanIntern(typeArguments) {
+                return CreateConstructed(erasedClosedType, openDefinition, typeArguments)
+            }
+            var node = ConstructionRoots.GetValue(erasedClosedType, CreateConstructionNode)
+            node = node.GetChild(openDefinition ?? NoOpenDefinition)
+            for argument in typeArguments {
+                node = node.GetChild(argument)
+            }
+            lock node {
+                let previous = node.Symbol
+                if previous != nil && previous.TryGetTarget(out var existing) {
+                    CompilationMeasurements.Count("metadata.construction-hits")
+                    return existing
+                }
+                let created = CreateConstructed(erasedClosedType, openDefinition, typeArguments)
+                node.Symbol = WeakReference[ImportedTypeSymbol](created)
+                CompilationMeasurements.Count("metadata.constructions")
+                return created
+            }
+        }
+
+        /// An array with an unset or null element cannot key the table; the old
+        /// behaviour (a fresh symbol or the same exception) applies to it.
+        private func CanIntern(typeArguments ImmutableArray[TypeSymbol]) bool {
+            if typeArguments.IsDefault {
+                return false
+            }
+            for argument in typeArguments {
+                if argument == nil {
+                    return false
+                }
+            }
+            return true
+        }
+
+        private func CreateConstructed(
+            erasedClosedType Type,
+            openDefinition Type?,
+            typeArguments ImmutableArray[TypeSymbol]
+        ) ImportedTypeSymbol {
             let argNames = string.Join(", ", typeArguments.Select((a TypeSymbol) -> a?.Name ?? "?"))
             let baseName = openDefinition?.FullName ??
                 openDefinition?.Name ??
