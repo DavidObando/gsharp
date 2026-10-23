@@ -87,6 +87,13 @@ from .NET SDK 10.0.400). Scripts and packages are in `~/.cache/r2r5155/exp`.
    succeeded. So the opt-out must be set for restore and for build. A failed
    acquisition is fatal, not a fallback.
 
+7. **The SDK and the RID package can be in different package roots.** The SDK
+   package was resolved into the global cache (`NUGET_PACKAGES`). Then
+   `dotnet restore --packages <dir>` put the `PackageDownload` package in
+   `<dir>`. `toy.sdk` was in the first root, `toy.sdk.tools.linux-x64` in the
+   second, and `$(NuGetPackageRoot)` in the build named the second. So no
+   consumer may derive the location of one package from the other.
+
 Package sizes (zipped, from the linux-x64 probe): `gsc` and its closure is
 8.2 MB, `gsfmt` 8.2 MB and `gsgen` 23.2 MB. For `gsc` only, six RIDs add about
 49 MB to the registry. A host that downloads one RID adds about 8 MB.
@@ -120,13 +127,14 @@ Package sizes (zipped, from the linux-x64 probe): `gsc` and its closure is
    2. `GsharpUseReadyToRunCompiler=false` selects the IL path.
    3. If the launch host is unknown or its RID is not the RID of the package
       (see "Launch host"), select the IL path.
-   4. The file `tools/<tfm>/<rid>/gsc.dll` inside the RID package in the NuGet
-      packages folder, if the file exists.
+   4. The file `tools/<tfm>/<rid>/gsc.dll` inside the RID package, under
+      `$(NuGetPackageRoot)` of the project, if the file exists. Result 7 shows
+      that this root can differ from the root of the SDK package.
    5. The IL path `$(MSBuildThisFileDirectory)../tools/compiler/gsc.dll`.
    Other consumers (`Program.gs` driver probe, the selfhost scripts, the
    language server and the extensions) call one shared function with the same
-   order. Outside MSBuild, they find the packages folder of the SDK package and
-   use the id and version rule in "Naming and layout".
+   order. Outside MSBuild, they do not guess the packages folder. They use the
+   explicit mechanisms in "Companion tools and shared assets".
 5. **Fallback is silent and always correct at build time.** If the RID is not
    supported, the opt-out is set, or the file is missing from the package
    directory, the IL path is used. The build logs one low-importance message
@@ -197,7 +205,7 @@ looks for the files it needs. These are the lookups today:
   `GsgenToolFullPath` (`Gsharp.NET.Sdk.props:22`, `GsgenTask.gs:159`).
 - **Bundled runtime assemblies** (`Gsharp.Runtime.Channels.dll`,
   `Gsharp.Runtime.Values.dll`, `Gsharp.Extensions.dll`):
-  `FindBundledRuntimePath` (`src/Core/CodeAnalysis/Symbols/ReferenceResolver.gs:1561-1573`)
+  `FindBundledRuntimePath` (`src/Core/CodeAnalysis/Symbols/ReferenceResolver.gs:1558-1570`)
   checks `<baseDirectory>/<file>` first, then `../<project folder>/` and
   `../<sdk folder>/`. `Program.gs:604-621` uses it to copy the runtime beside a
   direct `/out:` output. These files are in the portable runtime set (see below).
@@ -215,22 +223,32 @@ The rules:
    `System.IO.Hashing`, `System.Reflection.MetadataLoadContext`), all beside
    `gsc.dll`. These are the only assemblies that are R2R-compiled. The portable
    runtime set (see below) is not R2R-compiled.
-2. **The SDK passes explicit paths.** When it starts `gsc` with `/analyzer:`, the
-   SDK also passes `/gsgentool:$(GsgenToolFullPath)`. The result does not depend
-   on where `gsc.dll` is.
-3. **A direct invocation resolves `gsgen` in this order:** `/gsgentool:`; the
-   environment variable `GSHARP_GSGEN_TOOL`; the IL sibling rule
-   `<gsc dir>/../gsgen/gsgen.dll`; the SDK package rule. The SDK package rule
-   applies when `gsc.dll` is in
-   `<packages>/gsharp.net.sdk.compiler.<rid>/<version>/tools/<tfm>/<rid>/`. Then
-   `gsgen` is at `<packages>/gsharp.net.sdk/<version>/tools/gsgen/gsgen.dll`
-   (the package folder names are the lowercase ids and the version is the same).
-   This is a fixed relative-location contract between the two packages. It is
-   the only reason the two package layouts are a promise (see the compatibility
-   section).
-4. **A direct invocation outside any package layout** (for example a copied
-   `gsc.dll`) keeps today's behavior. If no rule finds `gsgen`, `gsc` reports
-   the existing error, which names `/gsgentool:`.
+2. **Locations come from explicit inputs, never from one package to the other.**
+   Result 7 shows that the SDK package and the RID package can be in different
+   package roots. So no code may compute the path of one package from the path
+   of the other. The SDK knows the real SDK directory
+   (`$(MSBuildThisFileDirectory)..`) and the real RID package directory
+   (`$(NuGetPackageRoot)` of the project). When it starts `gsc`, it passes:
+   - `/gsgentool:$(GsgenToolFullPath)` when `/analyzer:` is present;
+   - `/sdktoolsdir:<SDK package>/tools/` (new switch), the folder that holds the
+     portable files `gsgen/`, `channels/`, `values/`, `extensions/` and
+     `hotreload/`.
+3. **A direct invocation resolves the companions in this order.** The supported
+   mechanisms are explicit: the command-line switches and these environment
+   variables.
+   - `gsgen`: `/gsgentool:`; `GSHARP_GSGEN_TOOL`; `<sdk tools dir>/gsgen/gsgen.dll`
+     (from `/sdktoolsdir:` or `GSHARP_SDK_TOOLS_DIR`); then the IL sibling rule
+     `<gsc dir>/../gsgen/gsgen.dll`, which works only for `gsc.dll` in the SDK
+     package.
+   - Portable runtime assemblies: `<sdk tools dir>/<sdk folder>/<file>`; then the
+     existing lookup beside `gsc.dll` and in `../` folders.
+   The RID package does not look for the SDK package. A guess such as
+   `<packages>/gsharp.net.sdk/<version>/` is not made, because a wrong guess
+   finds a different SDK version or none. The IL `gsc` in the SDK package is the
+   payload for hand-run direct calls, and it needs none of these mechanisms.
+4. **A direct invocation of an R2R `gsc` without these inputs** finds no `gsgen`
+   and reports the existing error, which names `/gsgentool:`. It copies no
+   runtime assembly. This is the existing best-effort behavior of the copy.
 5. **`gsgen` and `gsfmt` stay in the SDK package.** The RID package does not
    duplicate them (about 23 MB zipped for `gsgen`).
 
@@ -267,8 +285,8 @@ The rules:
    byte-identical to the SDK ones, and the implementation PR records the reason.
 3. **Lookup order.** `FindBundledRuntimePath` checks, in this order: beside
    `gsc.dll` (the IL layout), the existing `../<project folder>/` and
-   `../<sdk folder>/` folders, and the SDK package rule from the companion
-   tools section (`<packages>/gsharp.net.sdk/<version>/tools/<sdk folder>/`).
+   `../<sdk folder>/` folders. The SDK tools directory from `/sdktoolsdir:` or
+   `GSHARP_SDK_TOOLS_DIR` is checked first (`<sdk tools dir>/<sdk folder>/`).
    A copy beside an R2R `gsc.dll` is used only if rule 2 allows it and its
    `Machine` is `0x14C`. If the candidate has another `Machine` value, the
    lookup skips it.
@@ -285,8 +303,15 @@ The implementation PR must add these tests:
 - A direct `dotnet <rid package dir>/gsc.dll /analyzer:... /out:...` call
   without `/gsgentool:`, in a copy of the two-package layout. It must find
   `gsgen` by rule 3 and produce the same output bytes as the IL payload.
-- The same direct call with only the RID package present. It must fail with the
-  existing diagnostic that names `/gsgentool:`.
+- The same direct call with only the RID package present and no explicit input.
+  It must fail with the existing diagnostic that names `/gsgentool:`.
+- A split-root test. The SDK package is in one package root, and the RID package
+  is in another (`dotnet restore --packages <dir>`). It builds a project with a
+  source generator and a channel program through the SDK, and it makes a direct
+  call with `GSHARP_SDK_TOOLS_DIR`. Generator discovery must find `gsgen`, and the
+  copied runtime assemblies must be the portable files from the real SDK
+  directory. A mutant that computes the SDK directory from the RID package path
+  (`../../../gsharp.net.sdk/...`) must make this test fail.
 - A direct call that compiles a program with a channel, from the RID package
   layout. It must copy `Gsharp.Runtime.Channels.dll` beside the output. The
   copy must be byte-identical to the SDK package copy, and its PE `Machine` must
@@ -385,6 +410,42 @@ larger runners. Hosted runners can have a long queue time. A smoke job that
 cannot get a runner must not block the release, so the release notes name the
 unverified RID (see the compatibility section).
 
+## Measurement plan
+
+The implementation PR measures with `build/compiler-bench.py` (issue #5127,
+PR #5163). The script runs a baseline compiler and a candidate compiler
+interleaved on the same response files. It reports medians and ranges for wall
+time, CPU time and peak memory, and it checks that the outputs are byte-identical.
+The baseline is the IL `gsc` of the SDK package. The candidate is the R2R `gsc`
+of the RID package. The cells are the Core compile and a hello-world compile, each
+with default tiered PGO settings and with the shipped `TieredPGO=false`. The PR
+records the arrays and the parity result for each RID that has a runner.
+
+## Interaction with other ADRs
+
+- [ADR-0209](https://github.com/DavidObando/gsharp/pull/5173) (Proposed, handle-backed
+  imported symbols) reads the metadata of reference images into one image set,
+  and it reads host assemblies of `Default()` and `WithRuntimeReferences` from
+  `Assembly.Location`. This ADR does not conflict with it:
+  - An R2R image keeps the full IL and metadata tables, so a metadata reader
+    works on it. No rule in ADR-0209 needs an IL-only image.
+  - The portable runtime set stays portable IL. The reference sets that
+    ADR-0209 builds from the SDK payload (`tools/channels`, `tools/values`,
+    `tools/extensions`) read the same bytes as today.
+  - The R2R files are the compiler's private dependencies. `Default()` reads
+    framework assemblies from the shared framework, which are R2R already.
+  - The text "what `gsc` itself loads" lists the files that the .NET host loads
+    through `gsc.deps.json`. ADR-0209 changes how `gsc` reads reference images,
+    not which files the host loads.
+  If ADR-0209 later reads the compiler's own R2R `GSharp.Core.dll` as a
+  reference image, it works, and a stored image costs more memory (the R2R file
+  is about 2.6 times larger). The implementation PR of ADR-0209 should measure
+  that case.
+- PR #5166 (type-name index from metadata names) changed
+  `ReferenceResolver.gs`. The line numbers in this ADR follow the file at
+  `c3cce6b81`. The rules here use `FindBundledRuntimePath` and
+  `ResolveGsgenToolPath`, which that PR did not change.
+
 ## Compatibility promise
 
 The maintainer expects the six RIDs to stay for five to ten years. This section
@@ -400,7 +461,7 @@ lists what becomes a promise if this ADR is accepted.
 | Launch host | `gsc` starts with `$(DOTNET_HOST_PATH)`. An R2R image is used only when the host RID equals the package RID. A mismatch uses IL. |
 | Same layout | A RID package has the same file names under `tools/<tfm>/<rid>/` as the IL layout under `tools/compiler/`. |
 | Portable runtime set | The four assemblies in the table are portable IL in every package, and the files that `gsc` copies into user output are byte-identical to the SDK package copies. |
-| Companion location | From `tools/<tfm>/<rid>/` in a RID package, `gsgen` is found at the SDK package rule in "Companion tools and shared assets" and with `/gsgentool:` and `GSHARP_GSGEN_TOOL`. |
+| Companion location | `/gsgentool:`, `/sdktoolsdir:`, `GSHARP_GSGEN_TOOL` and `GSHARP_SDK_TOOLS_DIR` are the supported ways to give `gsc` the location of `gsgen` and of the portable runtime files. The relative position of the SDK package and the RID package is not a promise. |
 | Version lock | A RID package has the exact version of its SDK. |
 | Supported set | The six RIDs are listed in the documentation for as long as they are published. |
 
