@@ -393,7 +393,9 @@ children contain no call).
 **Join.** A join is an operation over the whole set of incoming states of a
 merge point, never a fold of binary joins: `Join(S1, ..., Sn)` is computed
 once from all `n` predecessors (in source order, for determinism), and
-`JoinJumps` hands the join every recorded state of a label at once. For a
+`JoinJumps` hands the join the fall-through state and every recorded state
+of a label in that one operation; the fall-through state is one predecessor
+among the others, never joined afterwards with an already reduced result. For a
 path present in every incoming state, with incoming types `T1 ... Tn`, the
 join keeps the one `Ti` to which every other `Tj` converts by identity or an
 implicit reference conversion (`Dog` and `Animal` join to `Animal`; `T` and
@@ -451,9 +453,16 @@ internal sealed class NarrowingState {
     func Kill(effects StatementEffects) NarrowingState
     func KillRoots(roots LoopKillSet) NarrowingState
 
-    /// Merge (section 6): a path survives with the incoming type the other
-    /// converts to, or is dropped; aliases intersect. Unreachable is the
-    /// identity.
+    /// Merge (section 6), over ALL predecessors of a merge point at once: a
+    /// path survives with the incoming type every other converts to, else
+    /// with the declared non-null type of a plain root when every incoming
+    /// type preserves representation into it, else is dropped; aliases
+    /// intersect. Unreachable predecessors are skipped (identity). Callers
+    /// never fold this pairwise: Join([Dog, Cat, Animal]) on `x object?` is
+    /// Animal, while Join(Join(Dog, Cat), Animal) would be object.
+    static func Join(predecessors IReadOnlyList[NarrowingState]) NarrowingState
+    /// The genuine two-way case (an `if` without jumps into its join, `?:`,
+    /// `??`): Join([this, other]).
     func Join(other NarrowingState) NarrowingState
 
     /// The state a closure body starts from (ADR-0069 #2442 rule).
@@ -478,7 +487,12 @@ internal sealed class NarrowingFlow {
     /// labels, loop exits. A jump through cleanup regions is recorded with
     /// the regions still to run (section 9).
     func RecordJump(target BoundLabel, state NarrowingState, pendingCleanup ImmutableArray[GotoCleanupRegion])
-    func JoinJumps(target BoundLabel) NarrowingState
+    /// The entry state of a label: ONE n-ary Join over the fall-through
+    /// state (Unreachable when the label is not reached by fall-through)
+    /// and every state recorded for the target, in source order, after the
+    /// pending cleanup transfers have been applied to each recorded state.
+    /// The recorded states are never pre-reduced among themselves.
+    func JoinJumps(target BoundLabel, fallThrough NarrowingState) NarrowingState
     /// The roots the `when` filters of this function may write (section 9),
     /// computed once per function from syntax. The follow-up ADR of
     /// section 10 would generalise this to loop and backward-goto regions.
@@ -551,9 +565,10 @@ expressions, 16 patterns, arms, clauses and attributes):
 | `root-write` | `BoundAssignmentExpression`, `BoundVariableDeclaration` with an initializer, deconstruction targets, `out`/`ref` arguments, `++`/`--` on a name | removes every path on the root; if the root is in the alias class, every fact on the class; applies P2 afterwards |
 | `member-write` | `BoundFieldAssignmentExpression`, `BoundPropertyAssignmentExpression`, `BoundIndexAssignmentExpression`, `BoundClrIndexAssignmentExpression`, `BoundClrPropertyAssignmentExpression`, `BoundIndirectAssignmentExpression` through an address-of operand | removes every member-bearing path and every fact on the alias class (a `ref` local or a by-reference parameter may alias the written element or member: probes f2, g2); a property setter with user code is also `call` |
 | `pointer-write` | `BoundIndirectAssignmentExpression` through anything else, `BoundDereferenceExpression` as a target | removes every mutable root (`MayMutateAnyRootViaPointer`) |
-| `alias` | `BoundAddressOfExpression`, `BoundConditionalAddressExpression`, `BoundManagedReferenceExpression`, `BoundFixedStatement`, `BoundStackAllocExpression`, a `ref` local declaration | puts the operand's root in the alias class; the write rules above then apply to the class |
+| `alias` | `BoundAddressOfExpression`, `BoundConditionalAddressExpression` (both operands, whichever the condition selects; its condition and operands flow like `?:`), `BoundManagedReferenceExpression`, `BoundFixedStatement`, `BoundStackAllocExpression`, a `ref` local declaration | puts the operand's root (every operand's root, for a conditional address) in the alias class; the write rules above then apply to the class |
 | `call` | `BoundCallOperationExpression`, `BoundIndirectCallExpression`, `BoundFunctionPointerInvocationExpression`, `BoundConstructorCallExpression`, `BoundClrConstructorCallExpression`, `BoundTypeParameterConstructionExpression`, `BoundStructLiteralExpression` (field initializers), `BoundBaseClassCallExpression`, `BoundConstructorChainingExpression`, `BoundClrConversionCallExpression`, `BoundConversionExpression` with a user-defined conversion, `BoundBinaryOperationExpression`/`BoundUnaryExpression`/`BoundClrUnaryOperatorExpression` on user-defined operators, `BoundEventSubscriptionExpression`, `BoundClrEventSubscriptionExpression`, `BoundInterpolatedStringExpression` (`ToString`), `BoundAwaitExpression` (awaiter calls), `BoundForRangeStatement`/`BoundAwaitForRangeStatement` (`GetEnumerator`, `MoveNext`, `Current`, disposal; probe f5), `using`/`await using`/`lock`/`defer` cleanup regions (disposal, `Monitor`), `BoundGoStatement`, `BoundYieldStatement` (the consumer runs arbitrary code before resumption), property reads and `BoundPropertyPattern`/`BoundListPattern`/`BoundSlicePattern`/`BoundConstantPattern`/`BoundRelationalPattern` that invoke user code, `BoundMethodReferenceOperationExpression`/`BoundPropertyReferenceOperationExpression` when invoked, **and every kind not in the table** | removes every member-bearing path and every fact on the indirect-write class (mutable globals, closure-assigned locals, the alias class); in straight-line code with a bound callee, today's finer classification may keep closure-assigned locals when the callee has no captures, is not indirect through an unknown target and receives no unknown callable argument (`AnalyzeCallableArguments`, `:1930-1949`), and may keep mutable globals only when the callee is a declared function proven not to assign them, which this ADR does not define, so globals are always removed |
-| `jump` | `BoundReturnStatement`, `BoundThrowStatement`, `BoundRethrowStatement`, `BoundThrowExpression`, `BoundGotoStatement`, `BoundConditionalGotoStatement`, `break`/`continue` | records the state on the target (through pending cleanup) and yields `Unreachable` |
+| `jump` | `BoundReturnStatement`, `BoundThrowStatement`, `BoundRethrowStatement`, `BoundThrowExpression`, `BoundGotoStatement`, `break`/`continue` | one successor: records the state on the target (through pending cleanup) and yields `Unreachable` |
+| `conditional-jump` | `BoundConditionalGotoStatement` (the binder emits it before the then-body of a multi-clause `if let`, `StatementBinder.Conditionals.gs:299-305`, and the CFG connects both successors, `ControlFlowGraph.gs:298-314`) | two successors: binds the condition and applies its effects (P1 classification plus the condition's own writes and calls); records `Assume(condition, JumpIfTrue)` on the target through pending cleanup; continues with `Assume(condition, !JumpIfTrue)` as the fall-through state. It never yields `Unreachable` by itself. The rule this row fixes: no kind with a live fall-through successor may use the `jump` class, whose transfer ends the current path. A kind that selects between two operands or branches gets its control flow from the join rules (P1 on the condition, each operand under its derived state, P5 on their exits), whatever effect class names its other effect: statement-level branching is `join` or `region`, and an expression such as `BoundConditionalAddressExpression` keeps its `alias` class for the operands it may select while its two operands are joined like those of `?:` |
 | `join` | `BoundIfStatement`, `BoundConditionalExpression`, `BoundSwitchExpression`, `BoundPatternSwitchStatement`, `BoundNullConditionalAccessExpression`, `&&`/`||`/`??`, `BoundTryStatement` exits, labels | P1 on the condition, children under the derived states, P5 on the exits |
 | `region` | loops (`BoundLoopStatement` subtypes), the backward-jump region, `BoundTryStatement` handlers and `finally` | P6; the region's own effects are the union of its children's effects plus the `call` effect when the table says the construct introduces calls |
 | `closure` | `BoundFunctionLiteralExpression` | P8 for the body; the literal's own creation has no effect; the body's assignments are in the closure-assigned set |
@@ -638,17 +653,29 @@ globals.
     `T` and of the catch bodies; `Unreachable` when `F` cannot complete.
   - `defer` and `using` cleanup regions are the same shape with an empty
     handler list.
-- A jump (`break`, `continue`, `return`, `throw`, `goto`) records its state
-  on the target and yields `Unreachable`. A jump that leaves cleanup regions
+- An unconditional jump (`break`, `continue`, `return`, `throw`, `goto`)
+  records its state on the target and yields `Unreachable`. A conditional
+  jump (`BoundConditionalGotoStatement`, which the `if let` lowering emits
+  before its then-body) has two live successors: after the condition's own
+  effects, the taken state (`Assume(condition, JumpIfTrue)`) is recorded on
+  the target and the not-taken state (`Assume(condition, !JumpIfTrue)`)
+  flows on to the next statement; it never yields `Unreachable` by itself,
+  and its not-taken writes and exit state take part in later joins like
+  any other statement's. A jump that leaves cleanup regions
   is recorded with the regions still to run; when a region's cleanup has
   been bound (under the lower bound above, which is at most the state of any
   such jump), its exit transfer is applied to each pending state before the
   target joins it. This keeps the `GotoLeavingTry_*` and `*Finally*` results
   of `Issue4519GotoAssignmentNarrowingTests`.
-- A user label is a join of the fall-through state and every recorded
-  forward jump. Forward `goto` keeps its join rule, including the
-  one-incoming-type-converts-to-the-others rule of the #4989 addendum
-  (`FindCommonImplicitSupertype`); the predecessor list is in source order.
+- A user label (and every synthesized label: `break`/`continue` targets,
+  loop exits, the `if let` else and end labels) is one n-ary join over the
+  fall-through state and every recorded jump state, computed by
+  `JoinJumps(target, fallThrough)` in one operation; the recorded states
+  are not reduced among themselves first, and the fall-through state is not
+  joined afterwards with a reduced result (section 6). Forward `goto` keeps
+  its join rule, including the one-incoming-type-converts-to-the-others
+  rule of the #4989 addendum (`FindCommonImplicitSupertype`); the
+  predecessor list is in source order.
 
 ### 10. Loops and backward jumps: unchanged mechanism, deferred redesign
 
