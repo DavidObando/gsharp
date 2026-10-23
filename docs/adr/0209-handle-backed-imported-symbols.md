@@ -69,54 +69,46 @@ Types declared in the compilation being built have no `System.Type`: their
 `ClrType` is `nil` and the emitter encodes them symbolically. Where an imported
 generic is closed over such a type, binding erases the argument to
 `System.Object` and carries the real symbols beside the erased CLR shape
-(`ImportedTypeSymbol.TypeArguments`, `HasSubstitutableTypeArgument`,
-`ReifyClosedClrType`, `Symbols/ImportedTypeSymbol.gs:61-205`). No
-`TypeBuilder` is created for a user type. The `TypeBuilderInstantiation`
-guards (54 mentions) exist because the runtime manufactures that object
-whenever a host `RuntimeType` definition is closed over a non-runtime argument:
-`typeof(Func<,>)` closed over a context type in `FunctionTypeSymbol.gs:579-600`,
-`typeof(ValueTuple<,>)` in `TupleTypeSymbol.gs:229-239`, `typeof(Dictionary<,>)`
-in `MapTypeSymbol.gs` (#4023), and about 300 `typeof(` sites in `Emit/` that
-rely on `MapClrTypeToReferences` (`ReferenceResolver.gs:673-766`) or
-`TryProjectOntoReferences` (`ImportedMemberRefFactory.gs:2061-2090`) to project
-a host type onto the reference set by name.
+(`Symbols/ImportedTypeSymbol.gs:61-205`). No `TypeBuilder` is created for a
+user type; the `TypeBuilderInstantiation` guards (54 mentions) exist because
+the runtime manufactures that object whenever a host `RuntimeType` definition
+is closed over a non-runtime argument (`typeof(Func<,>)` in
+`FunctionTypeSymbol.gs:579-600`, `typeof(ValueTuple<,>)` in
+`TupleTypeSymbol.gs:229-239`, `typeof(Dictionary<,>)` in `MapTypeSymbol.gs`),
+and about 300 `typeof(` sites in `Emit/` rely on `MapClrTypeToReferences`
+(`ReferenceResolver.gs:673-766`) or `TryProjectOntoReferences`
+(`ImportedMemberRefFactory.gs:2061-2090`) to project a host type onto the
+reference set by name.
 
 ### 2. The measured problem
 
 From the study (section 4.6, 4.7) and the first-layer PRs:
 
 - `System.Reflection.*` frames are on the stack in 16.8% of main-thread
-  samples of a Core compile (about 4.4 s of 26.3 s). `Monitor.Enter` under
-  `ImportedTypeSymbol.Get` (`lock bucket.Gate`, `ImportedTypeSymbol.gs:252`) is
-  1.9% on its own.
+  samples of a Core compile (about 4.4 s of 26.3 s); `Monitor.Enter` under
+  `ImportedTypeSymbol.Get` (`ImportedTypeSymbol.gs:252`) is 1.9% on its own.
 - 4,791 first-chance exceptions per Core compile were reflection probes that
-  used a throw as the answer; #5156 cut them to 84 by testing
-  `IsTypeBuilderInstantiation` and `IsMetadataLoadContextMember` first
-  (`Symbols/ClrTypeUtilities.gs:296-306`). #5157 lists the remainder:
-  `IsAssignableFrom` on a `TypeBuilderInstantiation`, `GetBaseDefinition` (which
-  `MetadataLoadContext` never answers), `FileNotFoundException` from the one-hop
-  transitive probe, `ReflectionTypeLoadException` from the name index.
-- Identity is a string. `TypeIdentityComparer` keys the emitter's `TypeRefs`
+  used a throw as the answer; #5156 cut them to 84 with pre-checks
+  (`Symbols/ClrTypeUtilities.gs:296-306`); #5157 lists the rest
+  (`IsAssignableFrom` on a `TypeBuilderInstantiation`, `GetBaseDefinition`,
+  which `MetadataLoadContext` never answers, the transitive probe, the name
+  index).
+- Identity is a string: `TypeIdentityComparer` keys the emitter's `TypeRefs`
   and `TypeSpecs` by `AssemblyQualifiedName` (`Emit/TypeIdentityComparer.gs:72-83`,
-  `Emit/MetadataTokenCache.gs:54-55`); `LoadContextSensitiveTypeComparer` adds a
-  walk that requires the same `Assembly` instance at every position (#3826,
-  `Symbols/LoadContextSensitiveTypeComparer.gs:74-102`). Primitives are matched
-  by `FullName` switch in `TypeSymbol.FromClrType` (`TypeSymbol.gs:220-276`),
-  `SignatureEncoder.EncodeClrType` (`Emit/SignatureEncoder.gs:624-683`),
-  `CustomAttributeEncoder` and `ConversionEmitter`; about 187 further sites
-  compare `FullName` strings.
-- Member enumeration is eager. `MetadataLoadContext` builds a `RoMethod` and
-  resolves its signature for every member the first time `GetMethods` is
-  called, and `ClrTypeUtilities.SafeEnumerate` then touches every signature
-  type again to filter unloadable members (`ClrTypeUtilities.gs:384-415,
-  1231-1257`).
-- The decoded-signature cache (#5162) cut `metadata.contract-requests` from
-  101,595 to 29,461 and raw decodes to 6,640 on Core, and allocation by 0.4%.
-  Wall time did not change within noise. The metadata-name index (#5166) cut
-  `references.type-name-index` from 135 ms to 17 ms on hello world and from
-  189 ms to 12.5 ms on Core; Core wall time did not change measurably, and
-  hello world's `declarations` phase is 195 ms, of which about 170 ms is now
-  first-use cost outside any named phase (#5167).
+  `Emit/MetadataTokenCache.gs:54-55`); `LoadContextSensitiveTypeComparer` adds
+  an `Assembly`-instance walk (#3826); primitives are matched by `FullName`
+  switch in five places (`TypeSymbol.gs:220-276`, `Emit/SignatureEncoder.gs:624-683`,
+  ...), and about 187 further sites compare `FullName` strings.
+- Member enumeration is eager: `MetadataLoadContext` builds a `RoMethod` and
+  resolves its signature for every member on the first `GetMethods`, and
+  `ClrTypeUtilities.SafeEnumerate` touches every signature type again to
+  filter unloadable members (`ClrTypeUtilities.gs:384-415, 1231-1257`).
+- The first layer moved counters, not wall time: #5162 cut
+  `metadata.contract-requests` from 101,595 to 29,461 and allocation by 0.4%;
+  #5166 cut `references.type-name-index` from 135 ms to 17 ms on hello world
+  and from 189 ms to 12.5 ms on Core; Core wall time did not change measurably
+  in either, and hello world's `declarations` phase is 195 ms, mostly first-use
+  cost outside any named phase (#5167).
 
 A probe over the 171 reference assemblies of `Gsharp.Extensions.rsp` (the
 `net10.0` reference pack plus repository references; the hello-world closure
@@ -133,30 +125,27 @@ References; medians of three runs):
 
 The closure also holds 6,539 `TypeRef`, 7,978 `MemberRef`, 1,366 `TypeSpec`,
 7,032 `ExportedType` and 585 `AssemblyRef` rows. The handle-side heap figures
-are a floor for the API shape: the probe's provider returns an `int` per
-node and allocates no symbol, so a decoder that builds `TypeSymbol`s pays for
-the symbols it creates. The time comparison stands. The finding is that the cost
-is the API shape, not the library: `MetadataLoadContext` is itself a reader
-over `System.Reflection.Metadata`, but `System.Type`'s member API forces eager
-member and signature construction, answers "not applicable" with an exception,
-and offers only strings as identity. Decoding every signature in the closure
-through handles costs less than the name index did before #5166.
+are a floor: the probe's provider returns an `int` per node, so a decoder that
+builds `TypeSymbol`s pays for the symbols it creates; the time comparison
+stands. The finding is that the cost is the API shape, not the library:
+`MetadataLoadContext` is itself a reader over `System.Reflection.Metadata`,
+but `System.Type`'s member API forces eager member and signature construction,
+answers "not applicable" with an exception, and offers only strings as
+identity.
 
 ### 3. What the first layer already delivered, and what it cannot
 
 #5156 (probe guards), #5162 (signature cache keyed by the reflected member,
-one decode per member and nullability mode, failed reads never cached) and
-#5166 (`MetadataTypeNameReader`, the first handle-level reader in Core,
-`Symbols/MetadataTypeNameReader.gs`) are the building blocks the study called
-the first layer. #5158 prototyped interning of `ImportedTypeSymbol.GetConstructed`
-and found it changes the emitted PE (138 fewer `MemberRef` rows, 154 fewer
-`TypeSpec` rows on Core); the maintainer accepted the deduplicated output as
-the new baseline. What the first layer cannot do while the model is
-`System.Type`: give reference identity to definitions and constructions, stop
-eager member construction, remove the string identity and the host-`typeof`
-projection, remove the exception-as-answer probes that have no pre-check, or
-let a reference set survive a compiler-worker request without carrying a
-`MetadataLoadContext` whose `Type` objects every symbol points at.
+failed reads never cached) and #5166 (`MetadataTypeNameReader`, the first
+handle-level reader in Core) are the study's first layer. #5158 prototyped
+interning of `ImportedTypeSymbol.GetConstructed`, found it changes the emitted
+PE (138 fewer `MemberRef` and 154 fewer `TypeSpec` rows on Core), and the
+maintainer accepted the deduplicated output as the baseline. What the first
+layer cannot do while the model is `System.Type`: reference identity for
+definitions and constructions, lazy member construction, no string identity
+or host-`typeof` projection, no exception-as-answer probe without a
+pre-check, and a reference set that survives a compiler-worker request without
+a `MetadataLoadContext` that every symbol points at.
 
 ### 4. Constraints
 
@@ -182,12 +171,11 @@ let a reference set survive a compiler-worker request without carrying a
   (`test/Core.Tests/PublicApi/CorePublicApiAllowance.gs:14-18`); a removal is
   a snapshot change, not an allowance entry.
 - **Concurrency.** One resolver serves parallel body binding
-  (`Binding/Binder.gs:8704`, `CompilationWorkBudget.gs:99`) and parallel emit
-  (`Emit/FunctionEmitter.gs:119`); the language server hands one resolver to
-  concurrent requests and never disposes it (`src/LanguageServer/ProjectState.gs:118-131,
-  440-472`); `ReferenceResolver.Dispose` clears 21 process-wide caches
-  (`ReferenceResolver.gs:233-285`), which is unsafe when another compilation
-  in the process is live.
+  (`Binding/Binder.gs:8704`) and parallel emit (`Emit/FunctionEmitter.gs:119`);
+  the language server shares one resolver across requests and never disposes
+  it (`src/LanguageServer/ProjectState.gs:118-131, 440-472`);
+  `ReferenceResolver.Dispose` clears 21 process-wide caches
+  (`ReferenceResolver.gs:233-285`), unsafe while another compilation is live.
 - **Hosts without an image.** `ReferenceResolver.Default()` and
   `WithRuntimeReferences` bind against host `RuntimeType` objects (REPL first
   cell, `gsc` without `/out`, language-server fallbacks, most tests). The
@@ -236,7 +224,9 @@ CompilationImportContext          per compilation: consumer assembly name, Inter
   `TypeArgsKey` holds its arguments strongly (`Symbols/TypeArgsKey.gs:19-25`),
   so a set-wide table would otherwise keep every compilation's
   `List[MySourceType]` alive for as long as the set is cached (#5145's
-  retained-memory goal). Arguments may be imported types, source types, type
+  retained-memory goal). The same ownership rule applies to every intern and
+  cache table of this ADR (section 7c): a key that reaches a compilation-owned
+  symbol is owned by the compilation. Arguments may be imported types, source types, type
   parameters or composites; the erased `List<object>` CLR shape and
   `ReifyClosedClrType` disappear, because the symbolic arguments are the only
   representation. A member signature of a construction is computed from the
@@ -332,7 +322,7 @@ CompilationImportContext          per compilation: consumer assembly name, Inter
 | Unresolvable `TypeRef` | `MissingTypeSymbol(assembly identity, full name)`, interned; equal to itself, to nothing else | `TypeReference` whose scope is not in the set or whose name is absent |
 | `Nullable<V>` | `NullableTypeSymbol.Get(V)`, never a construction over the `Nullable`1` definition (today `FromClrType` does this first, `TypeSymbol.gs:198-199`) | `GENERICINST` over the `System.Nullable`1` well-known type |
 | By-ref, pointer, pinned | `ByRefTypeSymbol`, `PointerTypeSymbol`, `PinnedTypeSymbol` (locals only) | `ELEMENT_TYPE_BYREF`, `PTR`, `PINNED` |
-| Array | `MetadataArrayTypeSymbol(element)` for a single-dimensional array: length-free, interned per set by element, the handle twin of today's `ImportedTypeSymbol` over `T[]` that `ContainsMetadataRecoveredArray` detects (`TypeSymbol.gs:730-760`); never `ArrayTypeSymbol`, which is the fixed-length `[N]T` (`ArrayTypeSymbol.gs:10-21`), and never `SliceTypeSymbol`, so the metadata-recovered leniency in `ConversionClassifier.gs:1578-1586` and the source-array distinction in `TypeSymbol.gs:682-741` keep their inputs. `RectangularArrayTypeSymbol` (rank, bounds) for `ARRAY` | `SZARRAY`, `ARRAY` |
+| Array | `MetadataArrayTypeSymbol(element)` for a single-dimensional array: length-free, interned by element under the ownership rule of section 7c (a `MetadataArrayTypeSymbol(MySourceType)` produced by substituting `T[]` belongs to the compilation), the handle twin of today's `ImportedTypeSymbol` over `T[]` that `ContainsMetadataRecoveredArray` detects (`TypeSymbol.gs:730-760`); never `ArrayTypeSymbol`, which is the fixed-length `[N]T` (`ArrayTypeSymbol.gs:10-21`), and never `SliceTypeSymbol`, so the metadata-recovered leniency in `ConversionClassifier.gs:1578-1586` and the source-array distinction in `TypeSymbol.gs:682-741` keep their inputs. `RectangularArrayTypeSymbol` (rank, bounds) for `ARRAY` | `SZARRAY`, `ARRAY` |
 | Function pointer | `FunctionPointerTypeSymbol` with calling convention and `CallConv*` modifiers | `FNPTR` |
 | Custom modifiers | `ImmutableArray[CustomModifier(type, isRequired)]` on the position (parameter, return, field, local), in blob order; `modreq(InAttribute)` and `modreq(IsExternalInit)` are read from it | `CMOD_REQD`, `CMOD_OPT` |
 | Method | `MetadataMethodSymbol`: attributes, impl attributes, signature header (calling convention, instance, generic arity, vararg), parameters with names and flags from `Param` rows, return type, default values from `Constant`, `MethodImpl` rows for explicit overrides | `MethodDefinition`, `Parameter`, `Constant`, `MethodImpl` |
@@ -375,7 +365,7 @@ diagnostic at the use site; **M** `MissingTypeSymbol`; **E** GS9998.
 | Q10 | Method flags: static, virtual, abstract, final, newslot, special name, has body | `MethodAttributes`, `MethodImplAttributes`, RVA | none | `IsOverrideFromMetadataAttributes` `:949-956` |
 | Q11 | Override slot identity (which base method does this override; explicit interface implementations) | **Parity stages (PRs 3 to 7):** the legacy answer, so the compare gate can be zero: two methods are the same slot when they are the same method definition (same module and handle; the token-and-module identity `SameClrMethodSlot` falls back to today), and an explicit implementation is detected by the same name-suffix rule. **After stage 7** (maintainer decision Q4, issue #5174): `MethodImpl` rows, then the C# rule: walk the base chain for a `Virtual` method with the same name and substituted signature until `NewSlot`. Both answers exist behind one switch from PR 3; the #5174 PR flips it with a witness. | none; an unresolvable base is M and the walk stops | `SameClrMethodSlot` degrades to token identity because `GetBaseDefinition` throws under MLC (`:5073-5085`; wrong for overrides); explicit implementations detected by a name-suffix heuristic (`:5340-5384`) |
 | Q12 | Accessibility; `InternalsVisibleTo` grant to the consumer | `MethodAttributes`/`FieldAttributes`/`TypeAttributes` visibility; `InternalsVisibleTo` rows of the module against the `CompilationImportContext` | none | `ClrMemberVisibility.gs:37-171`; `GrantsInternalAccessTo` `ImportedAssemblySemantics.gs:241-268` (blanket catch denies) |
-| Q13 | Generic type parameters: position, owner, constraints, variance, special constraints | `GenericParam`, `GenericParamConstraint`, `GenericParameterAttributes` | M per constraint type; the constraint is then unsatisfiable, not satisfied | `ClrOverloadResolution.gs:7393-7705`; a failed read `continue`s, which treats the constraint as satisfied (`:4141, 7509, 7760`) |
+| Q13 | Generic type parameters: position, owner, constraints, variance, special constraints | `GenericParam`, `GenericParamConstraint`, `GenericParameterAttributes` | **Parity stages:** the legacy fallback. When a parameter's constraint list cannot be read, that parameter's whole type-bound constraint list is skipped and the candidate stays viable; the special constraints (`struct`, `class`, `new()`) checked before the read stay checked (`ClrOverloadResolution.gs:4136-4146, 7505-7511, 7754-7764`). In the handle model "cannot be read" is "a constraint type is M", so the same skip applies to that parameter. **After stage 7 (#5176):** M per constraint type makes the constraint unsatisfiable, not satisfied. | `ClrOverloadResolution.gs:7393-7705`; a failed read `continue`s (`:4141, 7509, 7760`) |
 | Q14 | Construct a type or method over arguments; substitute a signature | `Construct(args)`, `TypeMap` | none; constraint checks are the binder's (`SatisfiesDeclaredConstraints`) and never a thrown `ArgumentException` | `MakeGenericType`/`MakeGenericMethod` with 35 `catch (ArgumentException)` sites used as the constraint oracle (`ClrOverloadResolution.gs:5555-5575`) |
 | Q15 | Assignability, identity and variance conversions between imported types | structural rules over Q4, Q5, Q13 on symbols; reference identity for definitions and interned constructions | none | `IsAssignableFrom` with `catch (InvalidOperationException)` then a by-name walk (`ClrTypeUtilities.gs:171-231`, `ClrOverloadResolution.gs:8954-9050`) |
 | Q16 | Attributes by well-known name, with constructor and named arguments | `CustomAttribute` rows, `DecodeValue` through the decoder | a malformed blob is E; an attribute whose type is M is ignored and counted | `SafeGetCustomAttributesData` `ClrNullability.gs:1367`; 16 attribute kinds are never read from imports today (section 15) |
@@ -391,14 +381,89 @@ diagnostic at the use site; **M** `MissingTypeSymbol`; **E** GS9998.
 | Q26 | Whole-assembly scans: extension holders, placeholder types for inference | `TypeDefinition` rows in table order; attributes by Q16 | none | `BuildImportedExtensionHolderIndex` `MemberLookup.gs:396-423`; `GetTypes().OrderBy(FullName)` `ClrOverloadResolution.gs:2488` |
 | Q27 | Documentation comment for a member | documentation id built from the symbol | none | `AssemblyDocumentationProvider.Resolve(OpenDefinition ?? Type)` |
 | Q28 | Display name | symbol printer | none | `RenderClrType` `TypeSymbol.gs:102` |
+| Q29 | Does a source member implement or override an imported interface or virtual member (name, substituted signature, default-method presence, covariant return) | Q6 and Q7 on the imported side; `MethodImpl` and `MethodImplAttributes` | **Parity stages:** today's signature match. **After stage 7 (#5174):** `MethodImpl`-aware. | `DeclarationBinder.InterfaceVerification.gs` (23 `ClrType` reads); `ExternalClrOverrideResolver.GetEffectiveAbstractSlots` `:285-326` |
+| Q30 | Storage size and field offsets of a struct whose fields are built-in, enum or imported value types | **Parity stages:** the `LayoutHostTypes` bridge of section 8. **PR 6:** symbolic layout from `SpecialType` sizes, enum underlying type, `ClassLayout`, `FieldLayout` and the target pointer size | `false` (no size) where today's oracle answers `false` | `StructLayoutBinder.gs:170-229`; `StructValue.gs:258-343` |
 
 Questions that have no row and are not ported: `MetadataToken`+`Module` as
 identity (Q11 replaces it), `AssemblyQualifiedName` keys (reference identity
 replaces them), host `typeof(...)` projection (the `WellKnownTypes` table
 replaces it), `IsAssignableFrom`, `GetBaseDefinition`, `GetInterfaceMap`,
-`MakeGenericType` as a constraint oracle, and the fail-open probes
+`MakeGenericType` as a constraint oracle. The fail-open probes
 `ClrTypeMayHaveMember`, `ImportedExtensionMayApply` and
-`HasExplicitClrInterfaceImplementation` (an exception never means "yes").
+`HasExplicitClrInterfaceImplementation` keep their answer during the parity
+stages (table 7b) and go with #5183.
+
+### 7a. Completeness audit
+
+A mechanical audit at `2e9fd1a1d` of every way the compiler reaches the
+reflection model, so that a consumer outside the table is found by grep, not
+by review. Counts are grep hits over `src/Core/CodeAnalysis` unless stated.
+**Conservative default: a site that this audit does not map to a row keeps
+its legacy behaviour during the parity stages**, and PR 2's generated per-site
+list (the audit re-run as a test input) is where a new site must be mapped
+before it is migrated.
+
+| Family (grep) | Sites | Rows | Disposition |
+| --- | ---: | --- | --- |
+| `TypeSymbol` base members that read `ClrType` (`ConstructedTypeArguments`, `ConstructedFrom`, `IsValueType`, `BaseType`, `ToDisplayString`, `TypeSymbol.gs:37-106`) | 12 | Q2 to Q4, Q28 | become handle members |
+| Conversions and classification (`Conversion.gs` 130, `ConversionClassifier.gs` 38, `StructuralProjectionPlan.gs` 9, `ExpressionBinder.NativeSlices.gs` 9) | 186 | Q3, Q13, Q15 | structural rules on symbols |
+| Member access, calls, overloads (`ExpressionBinder.Access.*` 68, `ExpressionBinder.Calls*` 63, `MemberLookup.gs` 47, `ClrOverloadResolution.gs` 20, `OverloadResolver.Candidates.gs` 9, `ImportedClassSymbol.gs` 9) | 216 | Q6 to Q11, Q14, Q22 | |
+| Operators, loops, literals, assignments, blocks, `Binder.gs` | 135 | Q3, Q19, Q22, Q23 | enumerator, awaitable and handler shapes |
+| Source attributes whose attribute type is imported (`KnownAttributes.gs` 19, `DeclarationBinder.Attributes.gs` 17) | 36 | Q16 | `AttributeUsage` walk, constructor selection |
+| Interface and override verification of source members (`DeclarationBinder.InterfaceVerification.gs` 23, `ExternalClrOverrideResolver.gs`) | 30 | **Q29** (new) | |
+| Emit (`MethodBodyEmitter.*` 131, `ImportedMemberRefFactory.gs` 21, `UserTokenResolver.gs` 20, `CustomAttributeEncoder.gs` 15, `NullableFlagsBuilder.gs` 13, `ReflectionMetadataEmitter.gs` 12, `SignatureEncoder.gs` 9, `TypeDefEmitter.gs` 8, others) | 294 | Q2, Q3, Q7, Q8, Q19, Q24, Q25 | IL choice by kind flags; tokens |
+| Lowering (`Lowerer.gs` 9, async and handler shapes) | 36 | Q23 | |
+| Layout oracle (`StructValue.gs` 8, `StructLayoutBinder.gs` 4) | 12 | **Q30** (new) | section 8 bridge, then symbolic |
+| Documentation ids (`SymbolDocumentationIdProvider.gs:313-318`) | 2 | Q27 | |
+| `GetEffectiveClrType` (closes `Nullable<>` over a `ClrType`; 20 files) | 54 | section 5 canonical form | `NullableTypeSymbol.Get` over symbols |
+| Producer doors `FromClrType` 26, `FromClrTypeWithoutNullability` 265, `MapOpenClrTypeToSymbolic` 64 | 355 | Q7, Q8, Q14 | become the decoder's outputs; a door fed a host `typeof` becomes a `WellKnownTypes` lookup |
+| Host `typeof(` (Binding 478, Emit 443, Lowering 357, Symbols 181, other 8) | 1,467 | section 5 `WellKnownTypes` | PR 1 generates the per-site list; a `typeof` used as a metadata identity becomes a table lookup, one used as a runtime value (attribute instance, pattern test, host helper) is not import and is untouched |
+| Guarded reflection calls: `catch` 434 in the four layers (`IsMetadataLoadFailure` 79, `NotSupportedException` 36, `ArgumentException` 42, blanket 65) | 434 | table 7b | each guard's legacy answer is a 7b row or "no import" |
+| Language server (`BoundSemantics.gs`, `ImportedClrMemberResolver.gs`, `SemanticLookup.gs`) | 25 | Q6, Q15 | stage 6 |
+| `tools/gsgen` type speller | 11 | Q28 | stage 6 |
+
+Total `.ClrType` reads: 1,242 in 138 files of `src/Core`; every family above
+is either a row or a named disposition. No read was found outside these
+families.
+
+**7b. Legacy fallback kept during the parity stages, and the fail-closed
+answer it becomes.** Each row is a corpus entry in PR 2 that records today's
+answer; the follow-up issue flips it after stage 7.
+
+| Row | Legacy fallback on a read failure (kept, PRs 2 to 7) | Fail-closed answer (after stage 7) | Issue |
+| --- | --- | --- | --- |
+| Q4, Q5 | base chain or interface list stops at the failing link (`nil`, partial) | `MissingTypeSymbol` link; GS9106 if the use needs it | #5183 |
+| Q6 | member dropped when any signature type fails to load; `ClrTypeMayHaveMember`, `ImportedExtensionMayApply` answer `true` on an exception | member kept with M positions; GS9106 when selected; probes fail closed | #5183 |
+| Q7, Q8 | member dropped (as Q6) | as Q6 | #5183 |
+| Q9 | "no default value", "not `params`" on a failed read | GS9998 for a malformed constant; attribute absent otherwise | #5183 |
+| Q11 | same method definition handle; name-suffix rule | `MethodImpl` and base-chain walk | #5174 |
+| Q12 | internal access denied on a failed `InternalsVisibleTo` read | unchanged (deny) | none |
+| Q13 | the parameter's type-bound constraint list skipped, candidate viable | constraint unsatisfiable | #5176 |
+| Q16 | attribute treated as absent on a failed read; 12 attribute kinds never read | read; malformed blob GS9998 | #5177 |
+| Q20, Q30 | no size (`false`) | symbolic layout | Q30 (PR 6) |
+| Q21 | semantics denied on a failed read | unchanged (deny) | none |
+| Q22 | `TryGetDelegateSignature` blanket catch: no signature | diagnostic at use | #5183 |
+| Q25, emit | `Object()`, `STRING`, `int32`, host `typeof` written | diagnostics; GS0546 | #5183 |
+| Q29 | signature match without `MethodImpl` | `MethodImpl`-aware | #5174 |
+
+**7c. Cache and intern tables.** Owner is the set when a key can never reach
+a compilation-owned symbol, otherwise the compilation; the test is the one
+rule of section 5.
+
+| Table | Key | Owner | Consumer-independence test |
+| --- | --- | --- | --- |
+| Definition slots | (module, row) | set | always independent |
+| `MissingTypeSymbol` | (assembly identity, full name) | set | always |
+| `WellKnownTypes` | `SpecialType` or name | set | always |
+| Name index (#5166) | name to module index | set | always |
+| Per-definition member-by-name map, interface closure, base chain | definition | set | a definition reaches only definitions and its own type parameters |
+| Decoded member signature (structure plus declaration states) | member definition | set | as above |
+| Constructions | (definition, `TypeArgsKey`) | set or compilation | every argument consumer-independent, recursively |
+| Substituted member signature | (construction, member) | the construction's owner | inherits |
+| `MetadataArrayTypeSymbol`, `PointerTypeSymbol`, `ByRefTypeSymbol`, `PinnedTypeSymbol`, `FunctionPointerTypeSymbol`, `TupleTypeSymbol`, `NullableTypeSymbol`, `PlatformTypeSymbol`, `NullabilityAnnotatedTypeSymbol` | element or parts | the parts' owner | every part consumer-independent; these are process-wide today and `Dispose` clears them, M5 moves them |
+| Extension holder index (#5108, names and holder definitions) | set | set | the consumer's visibility filter is applied by the compilation, not stored |
+| Semantic aggregates, `InternalsVisibleTo` grants | (type, consumer) | compilation | consumer-dependent by definition |
+| Comparison answers (`compare` mode) | (question, symbol) | one run | not a cache |
 
 ### 8. What stays on runtime reflection, and why
 
@@ -411,11 +476,27 @@ replaces it), `IsAssignableFrom`, `GetBaseDefinition`, `GetInterfaceMap`,
   diffs images with `PEReader` and applies them with `MetadataUpdater` in the
   running process (`src/Sdk/Gsharp.HotReload.Runtime`). None of these imports
   symbols; none changes.
-- **`StructValue.TryGetStorageSize`** defines a runtime type with
-  `AssemblyBuilder.DefineDynamicAssembly` to measure a layout at host bitness
-  (`StructValue.gs:258-325`). It is a layout oracle over host types, not an
-  import; it stays, and a follow-up may compute sizes from `ClassLayout` and
-  the target's pointer size instead.
+- **The layout oracle** (`StructValue.TryGetStorageSize`, `StructValue.gs:258-343`;
+  consumer `StructLayoutBinder.TryGetStorageSize`, `StructLayoutBinder.gs:170-229`,
+  which feeds overlap validation) defines a runtime type with
+  `AssemblyBuilder.DefineDynamicAssembly` and reads its inputs through
+  `ClrType`: `ResolveRuntimeType` takes an enum's `ClrType` or its underlying
+  type's, and every other field type through `GetEffectiveClrType`, which falls
+  back to `typeSymbol.ClrType` (`:328-343`). With section 5's `nil` backing an
+  `int32` field would become `typeof(object)` storage, so this consumer
+  migrates **before** any built-in loses its `ClrType` (row Q30): PR 2 gives
+  the oracle a private `LayoutHostTypes` bridge (a built-in's `SpecialType` to
+  the host primitive, an enum to its underlying primitive's host type, an
+  imported value type to the host type of the same assembly-qualified name
+  when the host runtime has it, otherwise `typeof(object)` exactly as today),
+  which reproduces today's answers during the parity stages and is checked by
+  the `StructLayoutBinder` tests and a corpus row per `StructLayout` fixture.
+  PR 6 replaces the oracle with a symbolic layout calculation (primitive sizes
+  by `SpecialType`, enum underlying type, nested source struct layouts, imported
+  value types from `ClassLayout` and `FieldLayout`, pointer size from the
+  target); the bridge and the dynamic assembly go with it. `Marshal.SizeOf` on
+  an imported type fails today (`StructLayoutBinder.gs:224`) and keeps that
+  answer through stage 7 (section 15).
 - **The `MetadataLoadContext` oracle** stays in the tree until the comparison
   gate of the last stage passes, then is deleted (section 11).
 
@@ -438,19 +519,16 @@ replaces it), `IsAssignableFrom`, `GetBaseDefinition`, `GetInterfaceMap`,
   type through different facades are one object. Today's emitted `TypeRef`
   scope is already the implementation assembly (`ImportedMemberRefFactory.gs:548-565`),
   so rows do not move.
-- Two reference assemblies with the same simple name in one set: today the
-  name index is first-writer-wins and `MetadataLoadContext` binds an
-  `AssemblyRef` by simple name. The set keeps that rule (bind by simple name
-  to the first module with that name, in reference order) and records a
-  diagnostic when a second module with the same simple name is loaded, so the
-  behaviour is stated rather than accidental. Roslyn's version unification is
-  not adopted (open question 3).
+- Two reference assemblies with the same simple name in one set: the set keeps
+  today's rule (the name index and `AssemblyRef` binding are first-writer-wins
+  by simple name, in reference order) and records a diagnostic when a second
+  module with that simple name is loaded (decision Q3; Roslyn's version
+  unification is not adopted).
 - Same-compilation types as arguments of imported constructions need no
-  erasure: `ConstructedTypeSymbol` holds the symbol. The emitter already
-  encodes a symbolic parent (`TryNormalizeToSymbolicContainer`,
-  `ImportedMemberRefFactory.gs:2339-2426`) and this becomes the only path.
-- `TypeSymbol.ClrType` is `nil` for every handle-backed symbol. The public
-  API consequences are in section 14.
+  erasure: `ConstructedTypeSymbol` holds the symbol, and the emitter's
+  symbolic parent (`TryNormalizeToSymbolicContainer`,
+  `ImportedMemberRefFactory.gs:2339-2426`) becomes the only path.
+- `TypeSymbol.ClrType` is `nil` for every handle-backed symbol (section 14).
 
 ### 10. The adapter and the comparison mode
 
@@ -542,27 +620,24 @@ both. No other statement in this ADR moves that point.
   compilation over the same set see different aggregates by construction.
   **Retention test (PR 2, and #5145's worker test):** compile a program twice
   in one process over one cached set, hold a `WeakReference` to a
-  `List[MySourceType]` construction and to a source `StructSymbol` from the
-  first compile, drop the compilation, collect, and assert both are dead
-  while the set and its `List<int>` construction stay alive.
+  `List[MySourceType]` construction, to the `MetadataArrayTypeSymbol(MySourceType)`
+  that substituting an imported `T[]` member produced, to a
+  `NullableTypeSymbol` over a source struct and to a source `StructSymbol`
+  from the first compile, drop the compilation, collect, and assert all are
+  dead while the set and its `List<int>` construction stay alive.
 - `ReferenceResolver.Dispose` stops clearing the 21 process-wide caches. The
-  interning tables that made that necessary (`NullableTypeSymbol`,
-  `StructSymbol` constructions, `FunctionTypeSymbol`, ...) are keyed by
-  symbols that belong to one set; they move onto the set or the compilation
-  (study item M5, #5145 item 1) so nothing process-wide pins a set. Until
-  they move, a set that is referenced from a process-wide cache stays alive
-  with it, exactly as the `MetadataLoadContext` does today; this is a memory
-  cost, not an identity defect.
-- Host TPA images: today `SharedHostAssemblyBytes` keeps them process-wide
-  and never evicts (`ReferenceResolver.gs:1133-1136`). The set keeps the same
-  policy for the framework images (one copy per process, shared by every set
-  that references the same file by path, size, mtime and fingerprint).
+  wrapper tables that made that necessary move to the owner table 7c names
+  (study item M5, #5145 item 1); until they move, a set referenced from a
+  process-wide cache stays alive with it, as the `MetadataLoadContext` does
+  today, a memory cost and not an identity defect.
+- Host TPA images: `SharedHostAssemblyBytes` keeps them process-wide today
+  (`ReferenceResolver.gs:1133-1136`); the set keeps that policy for framework
+  images (one copy per process per path, size, mtime and fingerprint).
 - Thread safety: slot publication by `Interlocked.CompareExchange`; interning
-  through `ConcurrentDictionary.GetOrAdd` with a reference-equal struct key;
-  per-member decode under a per-entry lock, as #5162 does, so concurrent
-  first callers decode once; a decode that observed a `MissingTypeSymbol` or
-  a blob error is stored (the answer is stable for the set), unlike today's
-  retryable reflection failures, which the handle model does not have.
+  through `ConcurrentDictionary.GetOrAdd` with a reference-equal key; one
+  decode per member under a per-entry lock, as #5162 does; a decode that saw a
+  `MissingTypeSymbol` or a blob error is stored, because the answer is stable
+  for the set (the handle model has no retryable read).
 - Images stay `byte[]` (#853). Memory-mapping remains rejected (#5167). A
   `PEReader` over an `ImmutableArray[uint8]` view of the array is zero-copy
   (`MetadataTypeNameReader.gs:48`).
@@ -588,15 +663,22 @@ attribute parameter type, `CustomAttributeEncoder.gs:899-902`; `STRING` for an
 unknown field type, `:2292-2295`; `int32` for an unknown enum underlying type,
 `:2175-2188`; a host `typeof` when `TryResolveType` fails, `WellKnownReferences.gs:315-328`).
 
+The answers below are the end state. **During the parity stages (PRs 2 to 7)
+the handle model reproduces the legacy fallback of each row of table 7b
+behind the same legacy-answers switch as Q11**, so the compare gate stays at
+zero; the follow-up PRs of #5183 (member skips, fail-open probes, silent
+emitter encodings), #5176 (constraints) and #5174 (slot identity) flip the
+switch after stage 7 with a witness each (maintainer decision Q4).
+
 In the new model:
 
-- An image that is not a PE file or has no metadata is a diagnostic at
+- An image that is not a PE file or has no metadata is GS9105 at
   reference-set construction naming the path (today `MetadataLoadContext`
   throws `BadImageFormatException` at load).
 - A `TypeRef` that resolves nowhere is a `MissingTypeSymbol`. It flows through
   signatures, so a member list is complete and overload resolution sees every
   candidate. A candidate whose selected signature position is missing reports
-  a diagnostic at the use site that names the type and the assembly (the #340
+  GS9106 at the use site, naming the type and the assembly (the #340
   "under-referenced" condition the resolver already computes as
   `MissingTransitiveReferences`, `ReferenceResolver.gs:290-299`), and the
   compile fails instead of emitting a reference to a type the runtime cannot
@@ -615,44 +697,35 @@ are replaced by `MissingTypeSymbol` and the reader.
 
 ### 14. Compatibility and observable changes
 
-- **Diagnostics.** Text of existing diagnostics is unchanged. New reports:
-  the reference-set construction diagnostic, the missing-type diagnostic at a
-  selected candidate, GS0546 where the emitter fell back to a host type, and
-  GS9998 for malformed blobs and unlisted questions. The fail-open probes of
-  section 7 become fail-closed, so a member that reflection could not load but
-  the binder treated as "may exist" now resolves or reports.
+- **Diagnostics.** Text of existing diagnostics is unchanged during the
+  parity stages (table 7b keeps every legacy answer). The follow-ups after
+  stage 7 add GS9105, GS9106, GS0546 where the emitter fell back to a host
+  type, and GS9998 for malformed blobs and unlisted questions, and turn the
+  fail-open probes fail-closed.
 - **Overload resolution.** Candidate order and ties are unchanged for
-  `WithReferences` compiles (table order both before and after). `Default()`
-  compiles gain a stable order. The silent wrong answers listed in section 15
-  are pre-existing and are not corrected inside a parity stage (open question 4).
+  `WithReferences` compiles (table order before and after); `Default()`
+  compiles gain a stable order. Section 15's silent wrong answers are not
+  corrected inside a parity stage (decision Q4).
 - **Emitted metadata.** Within a stage the output is identical to the `mlc`
-  mode except for the deduplication #5158 accepted: `TypeRef` and `TypeSpec`
-  rows are keyed by symbol identity (today AQN, equivalent), `MemberRef` rows
-  by member symbol (today by `MethodInfo` object, which misses on equal
-  constructions), `AssemblyRef` rows by identity (today by `Assembly` object,
-  one row per object). Each stage's PR shows the per-table row-count change on
-  Core and Core.Tests and that every removed row was a duplicate, and adds the
-  release-notes bullet the #5158 decision requires. The `System.Runtime`
-  `AssemblyRef` version is read from the reference set, not from the host
-  (`ImportedMemberRefFactory.gs:477-523` reads `Assembly.Load("System.Runtime")`
-  of the host today); this changes one row's version field on a build whose
-  host runtime is newer than its target and is listed as an intentional
-  change (open question 5).
-- **Public API (ADR-0199).** Stage 7 removes `TypeSymbol.ClrType`,
-  `TypeSymbol.FromClrType`, `ImportedTypeSymbol.Type`/`OpenDefinition`,
-  `ImportedFunctionSymbol.Method`, the `MethodInfo`/`PropertyInfo`/`FieldInfo`/
-  `EventInfo`/`ConstructorInfo`/`Type` members of the `Bound*Clr*` nodes,
+  mode except for the deduplication #5158 accepted: `TypeRef`, `TypeSpec` and
+  `MemberRef` rows keyed by symbol identity, `AssemblyRef` rows by identity
+  (today one row per `Assembly` object). Each stage's PR shows the per-table
+  row-count change on Core and Core.Tests and that every removed row was a
+  duplicate. The `System.Runtime` `AssemblyRef` version is read from the
+  reference set, not from the host (`ImportedMemberRefFactory.gs:477-523`
+  today); this changes one row's version field on a build whose host runtime
+  is newer than its target (decision Q5).
+- **Public API.** Stage 7 removes `TypeSymbol.ClrType`, `TypeSymbol.FromClrType`,
+  `ImportedTypeSymbol.Type`/`OpenDefinition`, `ImportedFunctionSymbol.Method`,
+  the reflection-typed members of the `Bound*Clr*` nodes,
   `FunctionSymbol.ExternalOverriddenMethod`/`ExplicitInterfaceSlot` and their
   property and event twins, `BaseConstructorInitializer.ClrConstructor`, and
-  the `Assembly`-typed and `Type`-typed members of `ReferenceResolver`
-  (`Assemblies`, `TryResolveType(out Type)`, `MapClrTypeToReferences`,
-  `GetCoreType`), replacing each with the symbol it wraps. The in-repository
-  consumers (`tools/gsgen` 22 sites, the language server 38 sites, tests 251
-  sites in 106 files) move in stage 6. This is a breaking change for external
-  analyzers, recorded by the regenerated snapshot and the release notes, and the
-  reason stage 7 is its own PR (open question 1). An analyzer that needs the
-  CLR type can still load the reference itself; the compiler no longer hands
-  one out.
+  the `Assembly`- and `Type`-typed members of `ReferenceResolver`, replacing
+  each with the symbol it wraps. In-repository consumers (`tools/gsgen` 22
+  sites, the language server 38, tests 251 in 106 files) move in stage 6. This
+  is a breaking change for external analyzers, recorded by the regenerated
+  snapshot and the release notes (decision Q1); an analyzer that needs the CLR
+  type loads the reference itself.
 - **Language server.** Hover, completion and definition read the same
   symbols; the three `ClrType`-based helpers move to symbol queries. The
   persisted index of ADR-0107 is unchanged: `ReferenceMetadataIndex` holds
@@ -701,49 +774,40 @@ never read from imports); each is P2 until a repro confirms it.
 
 ### 16. Bootstrap and N-1
 
-The change is ordinary library code under the pin: generic BCL interface
+The change is ordinary library code under the pin (generic BCL interface
 implementations, `ImmutableArray`, `ConcurrentDictionary`,
-`ConditionalWeakTable`, `Interlocked.CompareExchange`, struct-like key classes,
-`BlobReader`. No new language feature is used or needed. The compiler compiles
-itself, so `src/Core`'s own 176-reference closure is the first consumer of
-every stage, and the pinned compiler is the one that compiles the new model;
-a defect in the new model shows as a wrong compile of a consumer, caught by
-the compare gate and by Core.Tests under the stage-1 compiler. Stage-2
-certification (ADR-0198) compares `GSharp.Core.dll` and `gsc.dll` built by the
-pinned compiler and by the stage-1 compiler; because the model is
-deterministic by construction (section 12) and changes emitted rows only
-through the documented deduplication, the stage-2 comparison stays
-byte-identical once both compilers carry the same stage. Across a pin move the
-output differs only by the deduplication, which the pin-move PR's release note
+`ConditionalWeakTable`, `Interlocked.CompareExchange`, key classes,
+`BlobReader`); no new language feature is used. The pinned compiler compiles
+the new model and `src/Core`'s own 176-reference closure is the first consumer
+of every stage, so a defect shows as a wrong compile of a consumer, caught by
+the compare gate and Core.Tests under the stage-1 compiler. Stage-2
+certification (ADR-0198) stays byte-identical once both compilers carry the
+same stage, because the model is deterministic (section 12) and changes rows
+only through the documented deduplication; across a pin move the output
+differs only by that deduplication, which the pin-move PR's release note
 records.
 
 ### 17. Performance expectations
 
 Stated against the study's numbers and what the first layer measured:
 
-- Hello world (`declarations` 195 ms after #5166, of which `type-name-index`
-  17 ms and `namespace-index` 23 ms): the `MetadataLoadContext` load (20 ms in
-  the probe), the host-`typeof` projections and the first `GetMethods` on the
-  types a one-line program touches go away. The rest of the 195 ms is JIT and
-  binder first-use (#5167), which this ADR does not touch. Expected:
-  `declarations` under 150 ms (the #5124 criterion #5166 did not reach), total
-  hello world under 330 ms from 375 ms.
-- Core (18.3 s on the study host, bodies 57%): the achievable gain is a part
-  of the 16.8% of samples with a reflection frame, minus what #5162 and #5166
-  already removed without moving wall time. The eager member construction and
-  signature resolution (417 ms and 144 MiB for the whole closure in the probe;
-  Core touches a fraction of it many times), the `lock` in
-  `ImportedTypeSymbol.Get` (1.9%), AQN key construction, `GetWrappedTypes`
-  walks on erased shapes (9.8% of allocation in the 0.5.199 profile) and the
-  interning of constructions (48,272 of 53,017 constructions removed in the
-  #5158 prototype) are the measurable items. Expected: 5 to 10% of Core wall
-  time and a larger share of allocation; the study's 10 to 20% is the upper
-  end and is not promised.
-- Compiler worker (#5145): a warm request reuses the `ReferenceImageSet`, so
-  the per-request cost falls to the compilation-owned state. This is the
-  gain the model is for; it is measured by #5145, not here.
-- Memory: no `RoType` graph; one array of slots per module; constructions
-  interned once.
+- Hello world (`declarations` 195 ms after #5166): the `MetadataLoadContext`
+  load (20 ms in the probe), the host-`typeof` projections and the first
+  `GetMethods` on the types a one-line program touches go away; the rest is
+  JIT and binder first-use (#5167), untouched here. Expected: `declarations`
+  under 150 ms (the #5124 criterion #5166 did not reach), total under 330 ms
+  from 375 ms.
+- Core (18.3 s on the study host): the achievable gain is a part of the 16.8%
+  reflection share, minus what #5162 and #5166 already removed without moving
+  wall time. Measurable items: eager member construction and signature
+  resolution (417 ms and 144 MiB for the whole closure in the probe), the
+  `lock` in `ImportedTypeSymbol.Get` (1.9%), AQN key construction,
+  `GetWrappedTypes` walks on erased shapes (9.8% of allocation in the 0.5.199
+  profile), interned constructions (48,272 of 53,017 removed in the #5158
+  prototype). Expected: 5 to 10% of Core wall time and a larger share of
+  allocation; the study's 10 to 20% is the upper end and is not promised.
+- Compiler worker (#5145): a warm request reuses the `ReferenceImageSet`; this
+  is the gain the model is for, measured by #5145.
 
 Every stage reports `build/compiler-bench.py` on Core, LanguageServer and
 hello world against its base, with the reflection share from a sample profile.
@@ -754,24 +818,23 @@ proceed for the worker-reuse and correctness benefits alone.
 
 ### 18. Risks
 
-- **A question the inventory missed.** Mitigation: the conservative default
-  (section 7) turns it into a GS9998 with the site, and the compare gate over
-  Core, Core.Tests and Oahu finds it before the oracle is removed.
-- **The compare gate passes but a reference set outside the three corpora
-  differs.** Mitigation: the `mlc` mode stays selectable until stage 7; the
-  nightly apps run (`cs2gs-apps-nightly`) and the conformance suites run in
-  `handles` mode from stage 5.
-- **Public API break.** Mitigation: its own PR, regenerated snapshot, release note,
-  and the in-repository consumers moved first; open question 1.
+- **A consumer or question the audit missed.** The conservative defaults
+  (section 7: unlisted question is GS9998 with the site; section 7a: unmapped
+  site keeps legacy behaviour) and the compare gate over Core, Core.Tests and
+  Oahu find it before the oracle is removed; `mlc` stays selectable until
+  stage 7 and the nightly apps run in `handles` from stage 5.
+- **Public API break.** Its own PR, regenerated snapshot, release note, and
+  the in-repository consumers moved first (decision Q1).
 - **Memory growth** from sets pinned by process-wide caches until M5 moves
-  them. Mitigation: `build/lsp-soak.py` and the worker's retained-memory
-  retirement rule stay in force; #5145 measures 50 requests.
-- **Behaviour change hidden in a parity stage** (section 15). Mitigation: a
+  them, or from a table that violates the ownership rule of 7c: the retention
+  test of section 11, `build/lsp-soak.py` and the worker's retained-memory
+  retirement rule; #5145 measures 50 requests.
+- **Behaviour change hidden in a parity stage** (section 15, table 7b): a
   corpus row per gap pins today's answer; a change is a separate PR with a
   witness.
 - **Decoder divergence from `MetadataLoadContext`'s reading of nullable
-  bytes.** Mitigation: ADR-0193 §4's reader-agreement test is extended to the
-  handle reader; the funnel members are shared, only the byte source changes.
+  bytes.** ADR-0193 §4's reader-agreement test is extended to the handle
+  reader; the funnel members are shared, only the byte source changes.
 
 ### 19. Implementation plan (#5144)
 
@@ -790,10 +853,8 @@ the decoder, the resolver or the intern table, recorded in the PR).
 | 6 | Remaining binder, lowering and symbol sites; language server; `tools/gsgen`; `Default()` and `WithRuntimeReferences` on images. | Zero disagreements; LanguageServer.Tests and Interpreter.Tests green in `handles`; `handles` becomes the default, `mlc` and `compare` stay selectable. This is the PR whose output every user gets, so it carries the #5158 release-notes bullet (fewer duplicate rows; the `System.Runtime` version row) and the note that the next pin move is the first whose pinned compiler emits the deduplicated rows for the repository's own build (section 16). |
 | 7 | Public API change per section 14; delete the MLC path, the adapter accessors and the 21 `ClearCache` calls from `Dispose`; `gsharp-core-public-api.txt` regenerated (the ADR-0199 allowance test stays green: nothing is added); release note (breaking change). | Full CI green; `ResourceLeakRegressionTests` green; `lsp-soak` memory flat; `compiler-bench.py` final table against the stage-0 base. |
 
-PR 2 adds a corpus row per section 15 gap and files the issues that section
-15 does not already name; an issue moves to P1 when its corpus row shows wrong
-code or a wrong diagnostic (override identity, raw `IsValueType`, inference
-bound names, skipped constraints).
+PR 2 adds a corpus row per row of table 7b and per section 15 gap; an issue
+moves to P1 when its corpus row shows wrong code or a wrong diagnostic.
 
 ### 20. Open questions and the maintainer's decisions
 
@@ -850,36 +911,29 @@ whole.
 
 ### Positive
 
-- Imported identity is the object. The AQN comparer, the load-context
-  comparer, the `TypeArgsKey` work-arounds for erased shapes and the
-  `TypeBuilderInstantiation` probes go away; equal constructions are one
-  symbol and the emitter's caches hit (the #5158 gain lands as a side effect).
-- Import cost is proportional to what the compile touches: a type that is
-  never named is a row that is never read; a member that is never selected is
-  never decoded.
-- No exception is an answer. The 84 remaining first-chance exceptions of
-  #5157 that come from import are gone, and every failure is a diagnostic
-  that names the type and the assembly.
-- The reference set is reusable across compilations in one process, which is
-  what #5145 needs to turn shared compilation on by default, and the language
-  server's long-lived resolver stops depending on a `Dispose` that is unsafe
-  to call.
-- One decoder behind the ADR-0193 funnel; the nullability producers are
-  fewer, not more.
-- The compiler's own build (176 references) is the first beneficiary once
-  the pin moves to a release carrying the model.
+- Imported identity is the object: the AQN and load-context comparers, the
+  erased-shape work-arounds and the `TypeBuilderInstantiation` probes go away;
+  equal constructions are one symbol and the emitter's caches hit (#5158).
+- Import cost is proportional to what the compile touches; no exception is an
+  answer, and after the follow-ups every failure is a diagnostic that names
+  the type and the assembly.
+- The reference set is reusable across compilations in one process (#5145),
+  and the language server stops depending on a `Dispose` that is unsafe to
+  call.
+- One decoder behind the ADR-0193 funnel; the compiler's own build is the
+  first beneficiary once the pin moves to a release carrying the model.
 
 ### Negative
 
 - A release or more of staged work across the two largest files in the
-  compiler (`ClrOverloadResolution.gs`, `MemberLookup.gs`) and the emitter's
-  reference factory, with two models in the tree until stage 7.
+  compiler and the emitter's reference factory, with two models in the tree
+  until stage 7, and legacy answers kept behind a switch until the follow-ups.
 - A public API break for analyzers and tools that read `ClrType` or
   `MethodInfo`.
 - The deduplicated output changes PE bytes against the pinned compiler
-  (accepted in #5158) and the `System.Runtime` version row (open question 5).
-- `StructValue`'s layout oracle keeps a Reflection.Emit dependency until a
-  follow-up computes layouts from metadata.
+  (accepted in #5158) and the `System.Runtime` version row (decision Q5).
+- The layout oracle needs a host-type bridge through the parity stages before
+  PR 6 replaces it with a symbolic calculation.
 
 ### Neutral
 
@@ -907,31 +961,24 @@ whole.
   `MetadataLoadContext`, the emitter and #5166 use), with its own type model
   to adapt to `TypeSymbol`; ADR-0027's reason for a Roslyn-free compiler
   (owning the model) applies.
-- **Roslyn's PE symbol model, as comparison.** Roslyn's `PEAssemblySymbol`
-  and `PEModuleSymbol` (`src/Compilers/CSharp/Portable/Symbols/Metadata/PE/`)
-  wrap a `PEModule` over a `MetadataReader`; `PENamedTypeSymbol` is created
-  per `TypeDefinitionHandle` and cached in `PEModuleSymbol.TypeHandleToTypeMap`
-  (a `ConcurrentDictionary`); members are loaded on first `GetMembers()`
-  (`EnsureAllMembersAreLoaded`, a by-name dictionary built from table order);
-  `PEMethodSymbol` decodes its signature lazily (`LoadSignature`) through
-  `MetadataDecoder`, which implements the signature provider; attributes are
-  decoded on demand by name (`PEModule.HasAttribute`, `FindTargetAttribute`);
-  an unresolvable `TypeRef` is a `MissingMetadataTypeSymbol` and a malformed
-  one an `UnsupportedMetadataTypeSymbol`, each reported at use; publication
-  uses `Interlocked.CompareExchange`. What transfers: the per-handle cache,
-  lazy members and signatures, the single decoder, decoding attributes by
-  name, the missing and unsupported symbols, interlocked publication, and
-  identity by object. What does not: Roslyn compares types structurally
-  (`TypeSymbol.Equals(TypeCompareKind)`) and does not intern constructions,
-  because its emitter deduplicates rows itself; G#'s emitter caches are
-  identity-keyed, so this ADR interns. Roslyn's `ReferenceManager` unifies
-  assembly versions and reports `CS1701`/`CS1702`; this ADR keeps the
-  first-writer rule (open question 3). Roslyn memory-maps images
-  (`ModuleMetadata.CreateFromFile`); #853 forbids it here.
+- **Roslyn's PE symbol model, as comparison.** `PEModuleSymbol`
+  (`src/Compilers/CSharp/Portable/Symbols/Metadata/PE/`) wraps a `PEModule`
+  over a `MetadataReader`; `PENamedTypeSymbol` is cached per
+  `TypeDefinitionHandle` (`TypeHandleToTypeMap`); members load on first
+  `GetMembers()` into a by-name dictionary in table order; `PEMethodSymbol`
+  decodes its signature lazily through `MetadataDecoder`; attributes are
+  decoded by name on demand; an unresolvable `TypeRef` is a
+  `MissingMetadataTypeSymbol`, a malformed one an `UnsupportedMetadataTypeSymbol`,
+  each reported at use; publication uses `Interlocked.CompareExchange`. All of
+  that transfers. What does not: Roslyn compares types structurally and does
+  not intern constructions (its emitter deduplicates rows itself; G#'s caches
+  are identity-keyed, so this ADR interns); its `ReferenceManager` unifies
+  assembly versions (`CS1701`/`CS1702`) where this ADR keeps first-writer
+  (decision Q3); it memory-maps images, which #853 forbids here.
 - **Memory-map images instead of copying.** Rejected in #5167: a mapped file
   holds a handle and blocks `CopyRefAssembly` (#853).
 - **Keep `Type` on the public surface through a permanent shim.** Rejected
-  as the default (open question 1): it keeps `MetadataLoadContext` alive for
+  as the default (decision Q1): it keeps `MetadataLoadContext` alive for
   every compilation to serve a few analyzer call sites.
 
 ## References and reproducibility
