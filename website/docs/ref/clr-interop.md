@@ -133,6 +133,9 @@ use as a general foreign API.
 Calls carrying native arguments or returns require a nongeneric, feature-marked
 method and validated assembly evidence. An assembly marker alone is not an
 admitted method contract.
+Imported conversion, unary and binary operators use this same member-level
+admission check, including lifted operators. Native-bearing exception transport
+is not admitted through either throw form.
 The same admission check applies to imported property/indexer accessors.
 Native-bearing field reads/writes also require a marked owning type and validated
 assembly evidence; ordinary CLR fields cannot become an unmarked native export.
@@ -147,7 +150,10 @@ arrays; reference imports do not rely on their source-time CLR placeholders.
 Fixed-length array slot positions are not admitted: the current CLR vector
 signature does not carry their length. Public conformance also requires an
 effectively public selected witness owner; internal-only conformance can use an
-internal owner. Annotated imported array elements retain native dependencies,
+internal owner. When an unrelated public capability cannot export that internal
+witness, that incidental capability remains unknown, not negative evidence.
+Nominal interfaces with native-bearing static fields carry a storage marker too.
+Annotated imported array elements retain native dependencies,
 and named/anonymous delegate and generic-container checks include saved native
 state rather than only direct protocol positions.
 Native-bearing method-group/function captures are gated too: an ordinary

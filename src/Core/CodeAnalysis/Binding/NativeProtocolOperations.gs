@@ -95,10 +95,42 @@ internal class NativeProtocolOperations {
             .Add(NativeProtocolQuery(source, target, positive, location))
 
         internal func HasPositiveCoverage($scope BoundScope, source TypeSymbol, target TypeSymbol) bool {
-            if source == target {
+            if NativeProtocolMetadata.Identity(source, "<current>") == NativeProtocolMetadata.Identity(
+                target,
+                "<current>"
+            ) {
                 return true
             }
             let registry = $scope.GetStructuralAdapterRegistry()
+            if registry.ProtocolCoverage is {} coverage {
+                return coverage.TryGetValue(CoverageKey(source, target), out var positive) && positive
+            }
+            return HasPositiveCoverage(registry, source, target)
+        }
+
+        private func CoverageKey(source TypeSymbol, target TypeSymbol) string ->
+        NativeProtocolMetadata.Identity(source, "<current>") + "=>" + NativeProtocolMetadata.Identity(
+            target,
+            "<current>"
+        )
+
+        internal func CaptureCoverage(registry StructuralAdapterRegistry) ImmutableDictionary[string, bool] {
+            let result = ImmutableDictionary.CreateBuilder[string, bool](StringComparer.Ordinal)
+            let protocols = registry.ProtocolOperations.Keys.ToImmutableArray()
+            for source in protocols {
+                for target in protocols {
+                    result[CoverageKey(source, target)] = source == target ||
+                        HasPositiveCoverage(registry, source, target)
+                }
+            }
+            return result.ToImmutable()
+        }
+
+        private func HasPositiveCoverage(
+            registry StructuralAdapterRegistry,
+            source TypeSymbol,
+            target TypeSymbol
+        ) bool {
             var known = false
             for entry in registry.ProtocolEntries.Where(
                 (item NativeProtocolEntryPlan) -> item.Protocols.Contains(source)

@@ -1312,7 +1312,10 @@ internal partial class ExpressionBinder {
             recoverTypeArgSymbols: recoverInheritedTypeArgs,
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
-            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
+            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(
+                arguments,
+                nativeConversions: conversions
+            ),
             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
@@ -1322,7 +1325,10 @@ internal partial class ExpressionBinder {
             explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
             openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments),
             symbolicArgTypes: inheritedSymbolicArgs,
-            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments)
+            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
+                arguments,
+                nativeConversions: conversions
+            )
         )
         switch resolution.Outcome {
             case ClrOverloadResolution.ResolutionOutcome.Resolved {
@@ -1788,7 +1794,11 @@ internal partial class ExpressionBinder {
         if hasUserClassArg {
             supplementaryInterfaceCheck = CheckUserClassInterface
         }
-        let argumentStructuralProjectionCheck = MakeStructuralProjectionArgumentCheck(arguments, argumentOffset: 1)
+        let argumentStructuralProjectionCheck = MakeStructuralProjectionArgumentCheck(
+            arguments,
+            argumentOffset: 1,
+            nativeConversions: conversions
+        )
         let ExtensionStructuralProjectionCheck = func (index int32, target Type) bool {
             return if index == 0 {
                 ClrTypeUtilities.IsAssignableByName(target, argTypes[0]) || Conversion.ClassifyNonStructural(
@@ -1885,7 +1895,8 @@ internal partial class ExpressionBinder {
                 symbolicArgTypes: extensionSymbolicArgs,
                 symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
                     arguments,
-                    argumentOffset: 1
+                    argumentOffset: 1,
+                    nativeConversions: conversions
                 )
             )
         }
@@ -3616,13 +3627,19 @@ internal partial class ExpressionBinder {
             },
             recoverTypeArgSymbols: recoverTypeArgSymbols,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
-            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
+            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(
+                arguments,
+                nativeConversions: conversions
+            ),
             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
             symbolicArgTypes: symbolicArgTypes,
-            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments)
+            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
+                arguments,
+                nativeConversions: conversions
+            )
         )
         if resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous {
             Diagnostics.ReportAmbiguousOverload(

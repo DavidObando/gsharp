@@ -79,6 +79,11 @@ internal shared class NativeProtocolSafety {
                     NativeProtocolMetadata.HasFeatureMarker(importedAggregate)
             )
         }
+        if type is InterfaceSymbol contract && includeStorage && contract.StaticFields.Any(
+            (field FieldSymbol) -> ContainsDependency(field.Type, true, seen, importedDelegates)
+        ) {
+            return true
+        }
         if type is DelegateTypeSymbol named {
             if !seen.Add(named.Definition ?? named) {
                 return false
@@ -278,7 +283,7 @@ internal shared class NativeProtocolSafety {
     }
 
     internal func ValidateProtocolSlotType(type TypeSymbol, location TextLocation, diagnostics DiagnosticBag) {
-        if type is ArrayTypeSymbol {
+        if StorageShape(type) is ArrayTypeSymbol {
             diagnostics.ReportNativeProtocol(
                 location,
                 "fixed-array native protocol slots require a separately admitted reference contract"
@@ -289,10 +294,38 @@ internal shared class NativeProtocolSafety {
         }
     }
 
+    internal func ValidateThrow(value BoundExpression, location TextLocation, diagnostics DiagnosticBag) {
+        if ContainsSavedProtocol(value.Type) {
+            diagnostics.ReportNativeProtocol(
+                location,
+                "native-bearing throw transport requires a separately admitted exception contract"
+            )
+        }
+    }
+
     internal func ValidateExpression(node BoundExpression, diagnostics DiagnosticBag, anchor SyntaxNode?) {
         let location = (anchor ?? node.Syntax)?.Location ?? default(TextLocation)
         ValidateStorageType(node.Type, location, diagnostics)
         switch node {
+            case throwing is BoundThrowExpression {
+                ValidateThrow(throwing.Expression, location, diagnostics)
+            }
+            case conversion is BoundClrConversionCallExpression when conversion.Method is {} method {
+                ValidateForeignCall(
+                    method,
+                    ContainsSavedProtocol(conversion.Source.Type) || ContainsSavedProtocol(conversion.Type),
+                    location,
+                    diagnostics
+                )
+            }
+            case unary is BoundClrUnaryOperatorExpression {
+                ValidateForeignCall(
+                    unary.Method,
+                    ContainsSavedProtocol(unary.Operand.Type) || ContainsSavedProtocol(unary.Type),
+                    location,
+                    diagnostics
+                )
+            }
             case literal is BoundFunctionLiteralExpression when literal.CapturedVariables.Any(
                 (variable VariableSymbol) -> ContainsSavedProtocol(variable.Type)
             ) {
@@ -319,15 +352,22 @@ internal shared class NativeProtocolSafety {
                     "native protocol equality/hash is not admitted; only outer presence checks are supported"
                 )
             }
-            case binary is BoundClrBinaryOperatorExpression when
-            (binary.OperatorKind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken) &&
-                (ContainsSavedProtocol(binary.Left.Type) || ContainsSavedProtocol(binary.Right.Type)) &&
-                !IsNil(binary.Left) &&
-                !IsNil(binary.Right) {
-                diagnostics.ReportNativeProtocol(
-                    location,
-                    "native protocol equality/hash is not admitted; only outer presence checks are supported"
-                )
+            case binary is BoundClrBinaryOperatorExpression {
+                let hasNative = ContainsSavedProtocol(binary.Left.Type) ||
+                    ContainsSavedProtocol(binary.Right.Type) ||
+                    ContainsSavedProtocol(binary.Type)
+                if (binary.OperatorKind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken) &&
+                    hasNative &&
+                    !IsNil(binary.Left) &&
+                    !IsNil(binary.Right) {
+                    diagnostics.ReportNativeProtocol(
+                        location,
+                        "native protocol equality/hash is not admitted; only outer presence checks are supported"
+                    )
+                }
+                if binary.Method is {} method {
+                    ValidateForeignCall(method, hasNative, location, diagnostics)
+                }
             }
             case conversion is BoundConversionExpression {
                 ValidateStorageErasure(conversion.Expression.Type, conversion.Type, location, diagnostics)

@@ -39,6 +39,11 @@ rather than testing a carrier or treating unknown coverage as mismatch.
 Native inputs nested inside ordinary property/list patterns also require an
 intermediate protocol view. Applicability uses finite positive coverage;
 conformance is not a blanket nominal relation for overload target ranking.
+Source and imported overloads share the scope-aware exact conformance query.
+Native compilations discover actual insertions across all bodies and rebind
+against their stable finite coverage before committing overload choices,
+including top-level calls. This planning transports facts, not old symbols or
+selected witnesses; an unstable closure diagnoses rather than selecting a guess.
 
 The selected backend differs from the illustrative sealed-per-protocol carrier
 in section 9: `P` is a feature-marked CLR interface reference to an internal
@@ -84,6 +89,8 @@ Fixed-array slot positions (including nested positions) diagnose until their
 length has an admitted implementation/reference contract; vector slots remain
 supported. Public witness targets require effectively accessible owners;
 internal-only conformance can retain an internal owner.
+An unexportable incidental capability is omitted as unknown evidence without
+discarding a valid internal entry; requesting that capability still diagnoses.
 One dependency traversal handles annotated/platform array positions, named and
 anonymous delegate signatures, and saved state. Native-bearing delegates and
 generic containers remain gated transitively. Storage-erasing safe casts and
@@ -91,6 +98,10 @@ binding patterns, equality/hash method groups and lifted/imported equality are
 checked too. Method-group/function captures carrying native state remain gated:
 their ordinary delegate `Target` would otherwise erase that state. Nonbinding
 tests, outer nil checks and ordinary checked method calls retain their behavior.
+Native-bearing exception transport remains gated, for both throw forms.
+Imported conversion/unary/binary operator calls require the same marked member
+contract as other foreign calls, including lifted forms. Nominal interface
+static native storage carries the same owning-type contract as class storage.
 
 `NativeProtocolLanguageTests` exercises real emitted execution, IL verification,
 contract/producer/consumer implementation/ref imports, hostile boundaries,

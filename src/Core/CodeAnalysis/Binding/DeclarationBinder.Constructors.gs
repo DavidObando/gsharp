@@ -291,7 +291,8 @@ internal partial class DeclarationBinder {
                 interpolatedStringArgs: interpolatedStringArgs,
                 constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(boundArguments),
                 structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(
-                    boundArguments
+                    boundArguments,
+                    nativeConversions: conversions
                 ),
                 erasedArgumentMismatchCheck: ExpressionBinder.MakeErasedArgumentMismatchCheck(boundArguments),
                 delegateRefKindArgumentCheck: ExpressionBinder.MakeDelegateRefKindArgumentCheck(boundArguments)
@@ -681,7 +682,8 @@ internal partial class DeclarationBinder {
                 applicabilityArgumentTypes,
                 constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(boundArguments),
                 structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(
-                    boundArguments
+                    boundArguments,
+                    nativeConversions: conversions
                 ),
                 erasedArgumentMismatchCheck: ExpressionBinder.MakeErasedArgumentMismatchCheck(boundArguments),
                 delegateRefKindArgumentCheck: refKindCheck

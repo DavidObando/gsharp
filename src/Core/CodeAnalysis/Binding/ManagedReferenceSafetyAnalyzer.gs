@@ -251,6 +251,17 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         base.VisitYieldStatement(node)
     }
 
+    protected override func VisitThrowStatement(node BoundThrowStatement) {
+        if !this.analyzingNativeSupport {
+            NativeProtocolSafety.ValidateThrow(
+                node.Expression,
+                (this.initializerAnchor ?? node.Syntax)?.Location ?? default(TextLocation),
+                this.diagnostics
+            )
+        }
+        base.VisitThrowStatement(node)
+    }
+
     private func AnalyzeFunction(function FunctionSymbol, body BoundBlockStatement) {
         if !this.analyzedFunctions.Add((function, this.initializerOwner, this.initializerAnchor)) {
             return

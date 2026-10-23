@@ -13,6 +13,229 @@ import System.Text.Json
 import Xunit
 
 class NativeProtocolLanguageTests {
+    @Fact
+    func RoundFourIncidentalUnexportableCapabilitiesDoNotDiscardInternalEntries() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "InternalCapabilities.ref.dll")
+        let implementation = fixture.Compile(`package InternalCapabilities
+internal protocol P { func Read() int32; }
+public protocol Unused { func Read() int32; }
+public struct Value : P {}
+internal shared class HiddenWitnesses {}
+@ExtensionOwner(typeof(HiddenWitnesses))
+public func (value Value) Read() int32 -> 17
+public func ReadHidden() int32 {
+let value P = Value{}
+return value.Read()
+}
+`, "InternalCapabilities", executable: false, "/refout:" + reference)
+        for image in[]string{implementation, reference} {
+            let caller = fixture.Compile(`import System
+import InternalCapabilities
+Console.WriteLine(ReadHidden())
+`, "incidental-hidden-witness", executable: true, "/r:" + image)
+            IlVerifier.Verify(caller, []string{implementation})
+            Assert.Equal("17\n", fixture.Run(caller))
+        }
+    }
+
+    @Theory
+    @InlineData("internal func Probe(value P) bool -> value is Unused")
+    @InlineData("internal func Probe() bool -> Value{} is Unused")
+    func RoundFourUnexportableIncidentalCapabilitiesRemainUnknown(probe string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`internal protocol P { func Read() int32; }
+public protocol Unused { func Read() int32; }
+public struct Value : P {}
+internal shared class HiddenWitnesses {}
+@ExtensionOwner(typeof(HiddenWitnesses))
+public func (value Value) Read() int32 -> 17
+internal func Make() P -> Value{}
+` + probe, "unknown-incidental-capability", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629"), output)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RoundFourImportedOverloadsUseExactNativeConformance(instance bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "NativeOverloads.ref.dll")
+        let methods = `public func Pick(value Readable) int32 -> value.Read()
+public func Pick(value Writable) int32 -> value.Write()`
+        let source = `package NativeOverloads
+public protocol Readable { func Read() int32; }
+public protocol Writable { func Write() int32; }
+public struct Reader { public func Read() int32 -> 17 }
+public func Make() Readable -> Reader{}
+` + if instance {
+            "public class API {\n" + methods + "\n}"
+        } else {
+            "public class API { shared {\n" + methods + "\n} }"
+        }
+        let implementation = fixture.Compile(source, "NativeOverloads", executable: false, "/refout:" + reference)
+        for image in[]string{implementation, reference} {
+            let caller = fixture.Compile(`import System
+import NativeOverloads
+` + if instance {
+                    "Console.WriteLine(API().Pick(Reader{}))"
+                } else {
+                    "Console.WriteLine(API.Pick(Reader{}))"
+                }, "native-overload-caller", executable: true, "/r:" + image)
+            IlVerifier.Verify(caller, []string{implementation})
+            Assert.Equal("17\n", fixture.Run(caller))
+        }
+    }
+
+    @Theory
+    @InlineData("throw value")
+    @InlineData("let result = if true { throw value } else { 1 }")
+    func RoundFourNativeStorageCannotEscapeThroughExceptionTransport(statement string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`import System
+protocol P {}
+class NativeError : Exception { private var Saved P? }
+func Escape(value NativeError) object? {
+try {
+` + statement + `
+} catch (error Exception) { return error }
+return nil
+}`, "native-throw-boundary", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("throw"), output)
+    }
+
+    @Fact
+    func RoundFourProtocolOverloadsUseInsertionsFromLaterBoundFactories() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`import System
+protocol Message {}
+protocol Readable { func Read() int32; }
+protocol Writable { func Write() int32; }
+struct Reader { func Read() int32 -> 17 }
+func Pick(value Readable) int32 -> value.Read()
+func Pick(value Writable) int32 -> value.Write()
+func Forward(value Message) int32 -> Pick(value)
+class Factory { shared { func Make() Message -> Reader{} } }
+Console.WriteLine(Forward(Factory.Make()))
+Console.WriteLine(Pick(Factory.Make()))
+`, "later-native-insertion", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("17\n17\n", fixture.Run(dll))
+    }
+
+    @Fact
+    func RoundFourImportedProtocolOverloadsUseLaterLocalInsertions() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "LateContracts.ref.dll")
+        let implementation = fixture.Compile(`package LateContracts
+public protocol Message {}
+public protocol Readable { func Read() int32; }
+public protocol Writable { func Write() int32; }
+`, "LateContracts", executable: false, "/refout:" + reference)
+        for image in[]string{implementation, reference} {
+            let caller = fixture.Compile(`import System
+import LateContracts
+public struct Reader { public func Read() int32 -> 17 }
+func Pick(value Readable) int32 -> value.Read()
+func Pick(value Writable) int32 -> value.Write()
+func Forward(value Message) int32 -> Pick(value)
+class Factory { shared { func Make() Message -> Reader{} } }
+Console.WriteLine(Forward(Factory.Make()))
+Console.WriteLine(Pick(Factory.Make()))
+`, "late-imported-caller", executable: true, "/r:" + image)
+            IlVerifier.Verify(caller, []string{implementation})
+            Assert.Equal("17\n17\n", fixture.Run(caller))
+        }
+    }
+
+    @Theory
+    @InlineData("func Check(value [2]?int32) bool;")
+    @InlineData("func Check() [2]?int32;")
+    func RoundFourNullableFixedArraySlotsRequireAdmission(slot string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(
+            "public protocol P { " + slot + " }",
+            "nullable-fixed-native",
+            executable: false
+        )
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("fixed-array"), output)
+    }
+
+    @Theory
+    @InlineData("func Bad(value Holder) int32 -> value")
+    @InlineData("func Bad(value Holder?) int32? -> value")
+    @InlineData("func Bad(value Holder) int32 -> -value")
+    @InlineData("func Bad(left Holder?, right Holder?) int32? -> left + right")
+    func RoundFourUnmarkedForeignOperatorsRequireNativeAdmission(declaration string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "NativeOperators.ref.dll")
+        let implementation = fixture.CompileCSharpWithReference(`using System;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+[assembly: AssemblyMetadata("GSharp.NativeProtocolFeature", "6b105e95-6860-496a-9acb-d81bc250a275/1")]
+[assembly: AssemblyMetadata("GSharp.NativeProtocols", """{"schema":"6b105e95-6860-496a-9acb-d81bc250a275/1","declarations":[{"type":"NativeOperators.P","slots":[]}],"entries":[]}""")]
+namespace NativeOperators {
+[Obsolete("GSharp.NativeProtocols.v1")] public interface P {}
+[Obsolete("GSharp.NativeProtocols.v1")] public struct Holder {
+private P? saved;
+public static implicit operator int(Holder value) => 17;
+public static int operator -(Holder value) => 17;
+public static int operator +(Holder left, Holder right) => 17;
+}
+public static class Marker { public static CompilerFeatureRequiredAttribute Type => null!; }
+}`, "NativeOperators", reference)
+        for image in[]string{implementation, reference} {
+            PromoteFixtureProtocolMarker(image)
+            let (code, output) = fixture.TryCompile(
+                "import NativeOperators\n" + declaration,
+                "native-operator-caller",
+                executable: false,
+                "/r:" + image
+            )
+            Assert.NotEqual(0, code)
+            Assert.True(output.Contains("GS0629") && output.Contains("foreign export"), output)
+        }
+    }
+
+    @Fact
+    func RoundFourNominalInterfaceStaticNativeStorageHasAnImportedContract() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "InterfaceStorage.ref.dll")
+        let implementation = fixture.Compile(`package InterfaceStorage
+public protocol P { func Read() int32; }
+public struct Payload { public func Read() int32 -> 17 }
+public struct Other { public func Read() int32 -> 23 }
+public interface State { shared { public var Saved P = Payload{} } }
+`, "InterfaceStorage", executable: false, "/refout:" + reference)
+        for image in[]string{implementation, reference} {
+            let caller = fixture.Compile(`import System
+import InterfaceStorage
+Console.WriteLine(State.Saved.Read())
+State.Saved = Other{}
+Console.WriteLine(State.Saved.Read())
+`, "interface-storage-caller", executable: true, "/r:" + image)
+            IlVerifier.Verify(caller, []string{implementation})
+            Assert.Equal("17\n23\n", fixture.Run(caller))
+        }
+    }
+
+    @Theory
+    @InlineData("wrapped is Holder { Saved: Counter captured }")
+    @InlineData("wrapped is Holder { Saved: Counter }")
+    func RoundFourSameProtocolNestedMemberInputsRequireIntermediateViews(pattern string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`protocol P {}
+struct Counter {}
+class Holder { public var Saved P
+init(value P) { Saved = value } }
+func Bad(wrapped P) bool -> ` + pattern, "same-native-nested-pattern", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("GS0629") && output.Contains("nested native pattern"), output)
+    }
+
     @Theory
     @InlineData("let read () -> int32 = value.Read")
     @InlineData("let read = func () int32 { return value.Read() }")

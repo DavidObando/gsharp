@@ -720,7 +720,8 @@ internal partial class ExpressionBinder {
                 argumentNames: deferredArgumentNames,
                 symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
                     boundArgs,
-                    argumentOffset: offset
+                    argumentOffset: offset,
+                    nativeConversions: conversions
                 )
             )
             if resolution.Outcome != ClrOverloadResolution
@@ -1807,7 +1808,8 @@ internal partial class ExpressionBinder {
                         groupSlots
                     )
                     return (refinedArgs, groupSlots)
-                }
+                },
+                nativeConversions: conversions
             ) {
                 // Issue #1538: now that the imported static overload is chosen,
                 // re-bind any inline `out var`/`out let`/`out _` placeholders
@@ -2830,7 +2832,10 @@ internal partial class ExpressionBinder {
                     recoverTypeArgSymbols: recoverTypeArgSymbols,
                     supplementaryInterfaceCheck: supplementaryInterfaceCheck,
                     constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
-                    structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
+                    structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(
+                        arguments,
+                        nativeConversions: conversions
+                    ),
                     erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
                     delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
                     methodGroupInference: MakeMethodGroupInference(
@@ -2841,7 +2846,10 @@ internal partial class ExpressionBinder {
                     explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
                     explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
                     symbolicArgTypes: preResolutionSymbolicArgs,
-                    symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments)
+                    symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
+                        arguments,
+                        nativeConversions: conversions
+                    )
                 )
                 // Issue #3745: a user-declared class argument erases to
                 // `System.Object`, which gives an imported generic method no
@@ -2872,7 +2880,10 @@ internal partial class ExpressionBinder {
                             recoverTypeArgSymbols: recoverTypeArgSymbols,
                             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
                             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
-                            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
+                            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(
+                                arguments,
+                                nativeConversions: conversions
+                            ),
                             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
                             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
                             methodGroupInference: MakeMethodGroupInference(
@@ -2888,7 +2899,10 @@ internal partial class ExpressionBinder {
                                 typeArgSymbols
                             ),
                             symbolicArgTypes: preResolutionSymbolicArgs,
-                            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments)
+                            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
+                                arguments,
+                                nativeConversions: conversions
+                            )
                         )
                         if projectedResolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved {
                             resolution = projectedResolution

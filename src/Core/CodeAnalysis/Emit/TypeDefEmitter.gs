@@ -901,7 +901,7 @@ internal class TypeDefEmitter {
             methodList: MetadataTokens.MethodDefinitionHandle(firstMethodRow)
         )
         this.cache.InterfaceTypeDefs[ifaceSym] = handle
-        if ifaceSym.IsProtocol {
+        if ifaceSym.IsProtocol || NativeProtocolSafety.ContainsSavedProtocol(ifaceSym) {
             this.EmitNativeProtocolFeature(handle)
         }
         EmitGenericParamRows(this.emitCtx, handle, ifaceSym.TypeParameters)

@@ -66,6 +66,8 @@ Native inputs nested in property/list patterns likewise need an intermediate
 view. Recovery cannot hide native-bearing saved state behind an `object` or
 nominal target. Overload applicability uses the finite positive conformance
 records, not a guessed runtime shape.
+The insertion closure includes later-bound factory bodies, so declaration/binding
+order does not select an overload; imported calls use the same exact query.
 
 Required `P` storage must be initialized. `P?` permits outer absence, not a
 present nullable payload. This core rejects typed-nil insertion, open/generic
@@ -83,6 +85,9 @@ delegates and generic containers are checked transitively. Fixed-array slot
 positions diagnose until their reference contract preserves the length.
 Method-group and function-literal captures of native-bearing values also require
 a separately admitted delegate contract; ordinary checked calls remain available.
+Throwing a native-bearing exception also requires a separately admitted
+transport contract. A nested property/list native input needs an intermediate
+view even when its protocol is the same as the outer input's protocol.
 Existing nominal `interface`, `adapt`, concrete `as` restrictions and ordinary
 pattern/flow rules are unchanged.
 

@@ -37,6 +37,7 @@ partial class Binder {
                         NullabilityFreeReason.ResolvedTypeName
                     )
                     ValidateNativeProtocolSlots(declaration.GetProperty("slots"), protocol, assembly.FullName!!)
+                    registry.HasNativeProtocolDeclarations = true
                 }
                 for record in manifest.GetProperty("entries").EnumerateArray() {
                     NativeProtocolMetadata.RequireFields(record, "source", "origin", "storage", "coverage")

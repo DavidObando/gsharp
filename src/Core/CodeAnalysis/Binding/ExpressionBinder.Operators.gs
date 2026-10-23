@@ -3578,7 +3578,8 @@ internal partial class ExpressionBinder {
         // gains no applicability.
         internal func MakeSymbolicArgumentConversionClassifier(
             boundArguments IReadOnlyList[BoundExpression]?,
-            argumentOffset int32 = 0
+            argumentOffset int32 = 0,
+            nativeConversions ConversionClassifier? = nil
         )((int32, Type) -> ClrOverloadResolution.ImplicitConversionKind?)? {
             let DeclaresImplicitOperator = func (type TypeSymbol) bool {
                 var type = type
@@ -3603,10 +3604,24 @@ internal partial class ExpressionBinder {
                     clrParameterType.IsByRef {
                     return nil
                 }
-                let sourceType TypeSymbol? = boundArguments[argIndex].Type
-                if sourceType == nil || sourceType.ClrType != nil || !TypeSymbol.ContainsSameCompilationUserType(
-                    sourceType
-                ) ||
+                let sourceType = boundArguments[argIndex].Type
+                let nativeTarget = TypeSymbol.FromClrTypeWithoutNullability(
+                    clrParameterType,
+                    NullabilityFreeReason.IdentityComparison
+                )
+                if NativeProtocolOperations.GetProtocol(nativeTarget) != nil {
+                    return if nativeConversions?.ClassifyArgumentConversion(sourceType, nativeTarget)
+                        .IsImplicit == true {
+                        if sourceType == nativeTarget {
+                            ClrOverloadResolution.ImplicitConversionKind.Identity
+                        } else {
+                            ClrOverloadResolution.ImplicitConversionKind.Reference
+                        }
+                    } else {
+                        ClrOverloadResolution.ImplicitConversionKind.None
+                    }
+                }
+                if sourceType.ClrType != nil || !TypeSymbol.ContainsSameCompilationUserType(sourceType) ||
                     !DeclaresImplicitOperator(sourceType) {
                     return nil
                 }
@@ -3658,7 +3673,8 @@ internal partial class ExpressionBinder {
         // a call-local applicability callback; by-ref parameters remain excluded.
         internal func MakeStructuralProjectionArgumentCheck(
             boundArguments IReadOnlyList[BoundExpression]?,
-            argumentOffset int32 = 0
+            argumentOffset int32 = 0,
+            nativeConversions ConversionClassifier? = nil
         )((int32, Type) -> bool)? {
             if boundArguments == nil {
                 return nil
@@ -3676,6 +3692,9 @@ internal partial class ExpressionBinder {
                     clrParameterType,
                     NullabilityFreeReason.IdentityComparison
                 )
+                if NativeProtocolOperations.GetProtocol(targetType) != nil {
+                    return nativeConversions?.ClassifyArgumentConversion(sourceType, targetType).IsImplicit == true
+                }
                 return Conversion.ClassifyNonStructural(sourceType, targetType)
                     .IsImplicit ||
                     StructuralProjectionPlanner.CanProject(sourceType, targetType) ||

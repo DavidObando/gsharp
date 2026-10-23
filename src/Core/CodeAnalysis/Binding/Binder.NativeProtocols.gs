@@ -50,10 +50,13 @@ partial class Binder {
         }
         let registry = $scope.GetStructuralAdapterRegistry()
         let imported = registry.ImportedProtocolEntries.FirstOrDefault(
-            (entry ImportedNativeProtocolEntry) -> entry.SourceType == source
+            (entry ImportedNativeProtocolEntry) -> NativeProtocolMetadata.TypesMatch(entry.SourceType, source)
         )
         if imported != nil {
-            return imported.Decisions.TryGetValue(protocol, out var decision) && decision.Positive
+            return imported.Decisions.Any(
+                (decision KeyValuePair[TypeSymbol, ImportedNativeProtocolDecision]) ->
+                NativeProtocolMetadata.TypesMatch(decision.Key, protocol) && decision.Value.Positive
+            )
         }
         let plan = registry.ProtocolEntries.FirstOrDefault(
             (entry NativeProtocolEntryPlan) -> entry.SourceType == source
@@ -196,7 +199,9 @@ partial class Binder {
             plan = CreateNativeProtocolEntry(source.Syntax, concrete, protocol, location)
         }
         if plan == nil || !plan.Protocols.Contains(protocol) {
-            if plan != nil && testOnly {
+            if plan != nil && testOnly && plan.Decisions.Any(
+                (decision NativeProtocolDecision) -> decision.Protocol == protocol && !decision.Positive
+            ) {
                 return NativeProtocolOperations.NegativeProbe($scope, source, protocol)
             }
             Diagnostics.ReportNativeProtocol(
@@ -514,6 +519,10 @@ partial class Binder {
                     .DeclaringType
                     ?.IsVisible != true
             ) {
+                if protocol != required {
+                    // Omitted authority is unknown evidence, never a negative conformance record.
+                    continue
+                }
                 Diagnostics.ReportNativeProtocol(
                     location,
                     "public native conformance requires an accessible exact witness owner"

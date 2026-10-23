@@ -297,7 +297,8 @@ class ImportedClassSymbol : Symbol {
                 RefinedArgs ImmutableArray[TypeSymbol],
                 MethodGroupSlots ImmutableArray[bool]
             )
-        )? = nil
+        )? = nil,
+        nativeConversions ConversionClassifier? = nil
     ) bool {
         function = nil
         parameterMapping = default(ImmutableArray[int32])
@@ -507,7 +508,10 @@ class ImportedClassSymbol : Symbol {
             },
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(arguments),
-            structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(arguments),
+            structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(
+                arguments,
+                nativeConversions: nativeConversions
+            ),
             erasedArgumentMismatchCheck: ExpressionBinder.MakeErasedArgumentMismatchCheck(arguments),
             explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
             explicitTypeArgumentMismatchCheck: ExpressionBinder.MakeExplicitTypeArgumentMismatchCheck(
@@ -529,7 +533,10 @@ class ImportedClassSymbol : Symbol {
             deferredInferenceArgs: deferredInferenceArgs,
             openLiteralArgumentCheck: ExpressionBinder.MakeOpenLiteralArgumentCheck(arguments),
             symbolicArgTypes: symbolicArgVector,
-            symbolicArgumentConversionClassifier: ExpressionBinder.MakeSymbolicArgumentConversionClassifier(arguments)
+            symbolicArgumentConversionClassifier: ExpressionBinder.MakeSymbolicArgumentConversionClassifier(
+                arguments,
+                nativeConversions: nativeConversions
+            )
         )
         switch result.Outcome {
             case ClrOverloadResolution.ResolutionOutcome.Resolved {

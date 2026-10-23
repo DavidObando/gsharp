@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis.Symbols
 import System.Collections.Generic
+import System.Collections.Immutable
 
 internal class StructuralAdapterRegistry {
     init() {
@@ -18,6 +19,10 @@ internal class StructuralAdapterRegistry {
     }
 
     internal prop Counter int32
+    internal prop ProtocolCoverage ImmutableDictionary[string, bool]?
+    internal prop CollectedProtocolCoverage ImmutableDictionary[string, bool]?
+    internal prop ProtocolCoverageFailed bool
+    internal prop HasNativeProtocolDeclarations bool
 
     internal prop Types List[StructSymbol] {
         get;

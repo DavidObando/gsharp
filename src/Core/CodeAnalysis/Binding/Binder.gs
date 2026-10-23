@@ -6619,6 +6619,80 @@ partial class Binder {
             isLibrary bool,
             submission SubmissionBindingOptions?
         ) BoundGlobalScope {
+            var result = BindGlobalScopeCore(
+                previous,
+                syntaxTrees,
+                references,
+                implicitSystemImport,
+                preprocessorSymbols,
+                isLibrary,
+                submission,
+                nativeCoverage: nil
+            )
+            if !result.Interfaces.Any((item InterfaceSymbol) -> item.IsProtocol) &&
+                !result
+                .StructuralAdapters
+                .HasNativeProtocolDeclarations &&
+                result
+                .StructuralAdapters
+                .ImportedProtocolEntries
+                .Count == 0 &&
+                result
+                .StructuralAdapters
+                .ProtocolOperations
+                .Count == 0 {
+                return result
+            }
+            // Discover actual insertions across all bodies before committing overload choices,
+            // including choices in TLS. Rebinding uses facts only, never old symbols or witnesses.
+            let seen = HashSet[string](StringComparer.Ordinal)
+            while true {
+                BindProgram(result, references)
+                let coverage = result.StructuralAdapters.CollectedProtocolCoverage!!
+                let fingerprint = string.Join(
+                    "\n",
+                    coverage.OrderBy((item KeyValuePair[string, bool]) -> item.Key, StringComparer.Ordinal).Select(
+                        (item KeyValuePair[string, bool]) -> item.Key + ":" + item.Value.ToString()
+                    )
+                )
+                if result
+                    .StructuralAdapters
+                    .ProtocolCoverage is {} previousCoverage &&
+                    previousCoverage.Count == coverage.Count &&
+                    coverage
+                    .All(
+                    (item KeyValuePair[string, bool]) -> previousCoverage.TryGetValue(item.Key, out var value) &&
+                        value == item.Value
+                ) {
+                    return result
+                }
+                if !seen.Add(fingerprint) {
+                    result.StructuralAdapters.ProtocolCoverageFailed = true
+                    return result
+                }
+                result = BindGlobalScopeCore(
+                    previous,
+                    syntaxTrees,
+                    references,
+                    implicitSystemImport,
+                    preprocessorSymbols,
+                    isLibrary,
+                    submission,
+                    coverage
+                )
+            }
+        }
+
+        private func BindGlobalScopeCore(
+            previous BoundGlobalScope?,
+            syntaxTrees ImmutableArray[SyntaxTree],
+            references ReferenceResolver?,
+            implicitSystemImport bool,
+            preprocessorSymbols ImmutableHashSet[string]?,
+            isLibrary bool,
+            submission SubmissionBindingOptions?,
+            nativeCoverage ImmutableDictionary[string, bool]?
+        ) BoundGlobalScope {
             let parentScope = CreateParentScope(
                 previous,
                 references,
@@ -6627,6 +6701,7 @@ partial class Binder {
                 submissionImports: submission?.Imports
             )
             let binder = Binder(parentScope, function: nil)
+            binder.$scope.GetStructuralAdapterRegistry().ProtocolCoverage = nativeCoverage
             binder.ImportNativeProtocols(syntaxTrees.FirstOrDefault()?.Root.Location ?? default(TextLocation))
             // Issues #4089/#4090: the declaration phase binds type clauses before
             // every same-compilation declaration's type-parameter constraints are
@@ -7783,6 +7858,8 @@ partial class Binder {
             }
             if globalScope?.StructuralAdapters != nil {
                 let adapters = parentScope.GetStructuralAdapterRegistry()
+                adapters.ProtocolCoverage = globalScope.StructuralAdapters.ProtocolCoverage
+                adapters.ProtocolCoverageFailed = globalScope.StructuralAdapters.ProtocolCoverageFailed
                 adapters.Counter = Math.Max(adapters.Counter, globalScope.StructuralAdapters.Counter)
                 adapters.Types.AddRange(globalScope.StructuralAdapters.Types)
                 adapters.ProtocolEntries.AddRange(globalScope.StructuralAdapters.ProtocolEntries)
@@ -8332,6 +8409,15 @@ partial class Binder {
                 .Where((g GlobalVariableSymbol) -> !g.Name.StartsWith("<>"))
                 .ToImmutableArray()
             NativeProtocolOperations.Complete(parentScope, nativeBinder.Diagnostics)
+            globalScope.StructuralAdapters.CollectedProtocolCoverage = NativeProtocolOperations.CaptureCoverage(
+                parentScope.GetStructuralAdapterRegistry()
+            )
+            if parentScope.GetStructuralAdapterRegistry().ProtocolCoverageFailed {
+                nativeBinder.Diagnostics.ReportNativeProtocol(
+                    globalScope.Interfaces.FirstOrDefault()?.Declaration.Location ?? default(TextLocation),
+                    "native insertion coverage did not reach a stable finite closure"
+                )
+            }
             diagnostics.AddRange(nativeBinder.Diagnostics)
             for pair in parentScope.GetStructuralAdapterRegistry().MethodBodies {
                 functionBodies[pair.Key] = pair.Value

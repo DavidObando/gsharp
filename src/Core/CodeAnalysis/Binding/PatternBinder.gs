@@ -653,7 +653,12 @@ internal class PatternBinder {
                         BoundPropertyPatternField(
                             syntax,
                             FieldSymbol(tupleFieldSyntax.Identifier.ValueText, TypeSymbol.Error, Accessibility.Public),
-                            BindPattern(tupleFieldSyntax.Pattern, TypeSymbol.Error, bindingContext, preferTypeNames)
+                            BindMemberPattern(
+                                tupleFieldSyntax.Pattern,
+                                TypeSymbol.Error,
+                                bindingContext,
+                                preferTypeNames
+                            )
                         )
                     )
                     continue
@@ -662,7 +667,7 @@ internal class PatternBinder {
                     BoundPropertyPatternField(
                         syntax,
                         tupleField,
-                        BindPattern(tupleFieldSyntax.Pattern, tupleField.Type, bindingContext, preferTypeNames)
+                        BindMemberPattern(tupleFieldSyntax.Pattern, tupleField.Type, bindingContext, preferTypeNames)
                     )
                 )
             }
@@ -687,7 +692,7 @@ internal class PatternBinder {
                     BoundPropertyPatternField(
                         syntax,
                         FieldSymbol(fieldSyntax.Identifier.ValueText, TypeSymbol.Error, Accessibility.Public),
-                        BindPattern(fieldSyntax.Pattern, TypeSymbol.Error, bindingContext, preferTypeNames)
+                        BindMemberPattern(fieldSyntax.Pattern, TypeSymbol.Error, bindingContext, preferTypeNames)
                     )
                 )
                 continue
@@ -695,6 +700,22 @@ internal class PatternBinder {
             fields.Add(field)
         }
         return BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable())
+    }
+
+    private func BindMemberPattern(
+        syntax PatternSyntax,
+        input TypeSymbol,
+        bindingContext PatternBindingContext,
+        preferTypeNames bool
+    ) BoundPattern {
+        if NativeProtocolOperations.GetProtocol(input) != nil {
+            Diagnostics.ReportNativeProtocol(
+                syntax.Location,
+                "nested native pattern inputs require an explicit intermediate protocol view"
+            )
+            return BoundDiscardPattern(syntax, input)
+        }
+        return BindPattern(syntax, input, bindingContext, preferTypeNames)
     }
 
     private func TryBindPropertyPatternMember(
@@ -714,7 +735,7 @@ internal class PatternBinder {
                             syntax,
                             field,
                             current,
-                            BindPattern(syntax.Pattern, field.Type, bindingContext, preferTypeNames)
+                            BindMemberPattern(syntax.Pattern, field.Type, bindingContext, preferTypeNames)
                         )
                         return true
                     }
@@ -730,7 +751,7 @@ internal class PatternBinder {
                         syntax,
                         property,
                         current,
-                        BindPattern(syntax.Pattern, property.Type, bindingContext, preferTypeNames)
+                        BindMemberPattern(syntax.Pattern, property.Type, bindingContext, preferTypeNames)
                     )
                     return true
                 }
@@ -762,7 +783,7 @@ internal class PatternBinder {
                         syntax,
                         property,
                         current,
-                        BindPattern(syntax.Pattern, property.Type, bindingContext, preferTypeNames)
+                        BindMemberPattern(syntax.Pattern, property.Type, bindingContext, preferTypeNames)
                     )
                     return true
                 }
@@ -834,7 +855,7 @@ internal class PatternBinder {
                 syntax,
                 property,
                 propertyType,
-                BindPattern(syntax.Pattern, propertyType, bindingContext, preferTypeNames)
+                BindMemberPattern(syntax.Pattern, propertyType, bindingContext, preferTypeNames)
             )
             return true
         }
@@ -849,7 +870,7 @@ internal class PatternBinder {
                 syntax,
                 field,
                 fieldType,
-                BindPattern(syntax.Pattern, fieldType, bindingContext, preferTypeNames)
+                BindMemberPattern(syntax.Pattern, fieldType, bindingContext, preferTypeNames)
             )
             return true
         }
@@ -962,7 +983,7 @@ internal class PatternBinder {
                 }
                 elements.Add(BindSlicePattern(slice, discriminantType, elementType, bindingContext, preferTypeNames))
             } else {
-                elements.Add(BindPattern(elementSyntax, elementType, bindingContext, preferTypeNames))
+                elements.Add(BindMemberPattern(elementSyntax, elementType, bindingContext, preferTypeNames))
             }
         }
         return BoundListPattern(
