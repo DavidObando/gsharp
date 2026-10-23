@@ -268,7 +268,7 @@ internal partial class StatementBinder {
         let reachabilityGeneration = internalReachabilityGeneration
         let tryBlock = BindWithinFinallyScope(syntax.FinallyClause, () -> BindBlockStatement(syntax.TryBlock))
         let callableTryExit = CaptureExternalCallableAliases()
-        let tryMutations = AssignedRootsCollector(nil, callableEntry)
+        let tryMutations = NewCollector(nil, callableEntry)
         tryMutations.Visit(tryBlock)
         let callableExceptionalEntry = HashSet[VariableSymbol](callableEntry)
         callableExceptionalEntry.ExceptWith(tryMutations.Roots)

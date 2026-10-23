@@ -314,6 +314,93 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
+            yield[]object{"guard-let-assignment-in-initializer", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Keep(c C?) C? { return C{} }
+func Run() int32 {
+    var x C? = C{}
+    let ref a C? = x
+    if a == nil { return 0 }
+    guard let y = Keep((x = nil)) else { return 0 }
+    Console.WriteLine(y == nil)
+    return a.Value
+}
+func Main() { Console.WriteLine(Run()) }
+`}
+            yield[]object{"ref-return-provenance", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Forward(ref value C?) ref C? { return ref value }
+func Run() int32 {
+    var x C? = C{}
+    let ref a C? = Forward(ref x)
+    if a == nil { return 0 }
+    x = nil
+    return a.Value
+}
+func Main() { Console.WriteLine(Run()) }
+`}
+            yield[]object{"loop-root-and-alias-write", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Run() int32 {
+    var x C? = C{}
+    var total int32 = 0
+    let ref a C? = x
+    if x == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        total = total + x.Value
+        x = C{}
+        a = nil
+    }
+    return total
+}
+func Main() { Console.WriteLine(Run()) }
+`}
+            yield[]object{"whole-struct-assignment", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+struct S {
+    var Field C?
+}
+func Run() int32 {
+    var s = S{Field: C{}}
+    let empty = S{}
+    let ref a C? = s.Field
+    if a == nil { return 0 }
+    s = empty
+    return a.Value
+}
+func Main() { Console.WriteLine(Run()) }
+`}
+            yield[]object{"global-aliased-by-ref-parameter", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var g C? = C{}
+func Run(ref a C?) int32 {
+    let ref b C? = g
+    if b == nil { return 0 }
+    a = nil
+    return b.Value
+}
+Console.WriteLine(Run(ref g))
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).

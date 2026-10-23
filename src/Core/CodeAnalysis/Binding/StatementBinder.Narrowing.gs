@@ -47,6 +47,42 @@ internal partial class StatementBinder {
         externalCallableAliases
     )
 
+    /// ADR-0208 R12 (#5171): creates an effect collector that decides storage sharing through
+    /// (cref:MayShareStorage).
+    private func NewCollector(
+        assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?,
+        externalFunctionValues IEnumerable[VariableSymbol]? = nil,
+        trackSourceCallGlobalMutations bool = false
+    ) AssignedRootsCollector -> AssignedRootsCollector(
+        assignmentPreservesNarrowing,
+        externalFunctionValues,
+        trackSourceCallGlobalMutations,
+        (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second)
+    )
+
+    /// ADR-0208 R12 (#5171): whether [`first`](paramref) and [`second`](paramref) may name one
+    /// storage: the same variable, an overlapping `ref` alias chain, two external-storage aliases, or
+    /// an external-storage alias and a root whose address the function takes or a closure assigns.
+    private func MayShareStorage(first VariableSymbol, second VariableSymbol) bool {
+        if SharesStorage(first, second) {
+            return true
+        }
+        let firstChain = AliasChain(first)
+        let secondChain = AliasChain(second)
+        return (
+            IsExternalStorageAlias(first) && binderCtx.MayBeAssignedByClosure(secondChain[secondChain.Count - 1])
+        ) ||
+            (IsExternalStorageAlias(second) && binderCtx.MayBeAssignedByClosure(firstChain[firstChain.Count - 1]))
+    }
+
+    /// ADR-0208 R12 (#5171): removes every narrowing whose root may share storage with
+    /// [`root`](paramref).
+    private func RemoveSharingStorage(state Dictionary[AccessPath, TypeSymbol], root VariableSymbol) {
+        for key in state.Keys.Where((key AccessPath) -> MayShareStorage(key.Root, root)).ToArray() {
+            state.Remove(key)
+        }
+    }
+
     private func RestoreJoinedExternalCallableAliases(
         left HashSet[VariableSymbol],
         right IReadOnlyCollection[VariableSymbol]
@@ -79,7 +115,7 @@ internal partial class StatementBinder {
             breakLabel,
             continueLabel
         )
-        let collector = AssignedRootsCollector(nil, entryAliases)
+        let collector = NewCollector(nil, entryAliases)
         collector.Visit(loop)
         return collector.DefinitelyExternalFunctionValues.ToHashSet()
     }
@@ -184,7 +220,7 @@ internal partial class StatementBinder {
         if statement is not BoundIfStatement ifStatement {
             return
         }
-        let condition = AssignedRootsCollector(nil, externalCallableAliases)
+        let condition = NewCollector(nil, externalCallableAliases)
         condition.VisitExpression(ifStatement.Condition)
         if condition
             .WritableReferenceRoots
@@ -193,7 +229,7 @@ internal partial class StatementBinder {
             condition.MayMutateWritableReferenceRoots {
             return
         }
-        let branches = AssignedRootsCollector(nil, externalCallableAliases)
+        let branches = NewCollector(nil, externalCallableAliases)
         branches.VisitStatement(ifStatement.ThenStatement)
         if ifStatement.ElseStatement != nil {
             branches.VisitStatement(ifStatement.ElseStatement)
@@ -314,7 +350,10 @@ internal partial class StatementBinder {
                     if statementCollector != nil {
                         statementCollector.AssignsRoot(key.Root)
                     } else {
-                        assignedRoots!!.Contains(key.Root)
+                        assignedRoots!!.Any(
+                            (assigned VariableSymbol) -> object.ReferenceEquals(assigned, key.Root) ||
+                                MayShareStorage(assigned, key.Root)
+                        )
                     }
                 ) ||
                     (DropsOnMemberMutation(key) && dropAllMemberPaths)
@@ -368,7 +407,7 @@ internal partial class StatementBinder {
             CompilationMeasurements.Count("narrowing.effect-reuses")
             return effects!!
         }
-        let collector = AssignedRootsCollector(nil, aliases)
+        let collector = NewCollector(nil, aliases)
         collector.Visit(statement)
         CompilationMeasurements.Count("narrowing.effect-walks")
         effectsNode = statement
@@ -581,7 +620,10 @@ internal partial class StatementBinder {
                 (statement BoundStatement) -> object.ReferenceEquals(statement, marker)
             )
         )
-        let collector = LoopBackEdgeMutationCollector(AssignmentPreservesNarrowing)
+        let collector = LoopBackEdgeMutationCollector(
+            AssignmentPreservesNarrowing,
+            (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second)
+        )
         if markerBlock == nil {
             return collector
         }
@@ -936,7 +978,7 @@ internal partial class StatementBinder {
                 if activeCleanupSet.Contains(cleanup) {
                     continue
                 }
-                let mutations = AssignedRootsCollector(
+                let mutations = NewCollector(
                     AssignmentPreservesNarrowing,
                     snapshot.ExternalCallableAliases,
                     trackSourceCallGlobalMutations: true
@@ -978,7 +1020,7 @@ internal partial class StatementBinder {
         finallyBlock BoundStatement,
         callableAliases IReadOnlyCollection[VariableSymbol]
     ) FinallyFlowSummary {
-        let mutations = AssignedRootsCollector(
+        let mutations = NewCollector(
             AssignmentPreservesNarrowing,
             callableAliases,
             trackSourceCallGlobalMutations: true
@@ -1039,7 +1081,7 @@ internal partial class StatementBinder {
                 return nil
             }
             let aliasesAtEntry = aliases.ToArray()
-            let mutations = AssignedRootsCollector(
+            let mutations = NewCollector(
                 AssignmentPreservesNarrowing,
                 aliasesAtEntry,
                 trackSourceCallGlobalMutations: true
@@ -1573,7 +1615,7 @@ internal partial class StatementBinder {
             return nil
         }
         let before = HashSet[VariableSymbol](externalCallableAliases)
-        let collector = AssignedRootsCollector(nil, externalCallableAliases)
+        let collector = NewCollector(nil, externalCallableAliases)
         collector.VisitExpression(header)
         if collector.MayMutateAnyRootViaPointer {
             externalCallableAliases.Clear()
@@ -1600,7 +1642,7 @@ internal partial class StatementBinder {
         if state.Count == 0 {
             return
         }
-        let collector = AssignedRootsCollector(nil, callableAliases ?? externalCallableAliases)
+        let collector = NewCollector(nil, callableAliases ?? externalCallableAliases)
         collector.Visit(node)
         if collector.MayMutateAnyRoot {
             for path in state.Keys.Where((path AccessPath) -> MayBeMutatedByUnknownWrite(collector, path)).ToArray() {
@@ -1655,15 +1697,15 @@ internal partial class StatementBinder {
         private let enclosingGlobalAssignments Stack[VariableSymbol] = Stack[VariableSymbol]()
         private var globalMutationProtectedRoots HashSet[VariableSymbol]?
         private var tryAssignedVariables HashSet[VariableSymbol]?
-        private var aliasExpandedRoots HashSet[VariableSymbol]?
-        private var aliasExpandedCount int32 = -1
-        private var aliasAssignedExternal bool
+        private let mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?
 
         init(
             assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?,
             externalFunctionValues IEnumerable[VariableSymbol]? = nil,
-            trackSourceCallGlobalMutations bool = false
+            trackSourceCallGlobalMutations bool = false,
+            mayShareStorage((VariableSymbol, VariableSymbol) -> bool)? = nil
         ) {
+            this.mayShareStorage = mayShareStorage
             Roots = HashSet[VariableSymbol]()
             WritableReferenceRoots = HashSet[VariableSymbol]()
             this.assignmentPreservesNarrowing = assignmentPreservesNarrowing
@@ -1799,32 +1841,18 @@ internal partial class StatementBinder {
             base.VisitExpression(node)
         }
 
-        // ADR-0208 R12 (#5171): whether [`root`](paramref) names the storage of an assigned
-        // root. A `ref` local and the plain variable it aliases are one storage.
+        // ADR-0208 R12 (#5171): whether [`root`](paramref) may name the storage of another
+        // assigned root: one decision for every invalidation site (StatementBinder.MayShareStorage).
         func SharesStorageWithAssignedRoot(root VariableSymbol) bool {
-            if Roots.Count == 0 {
-                return false
-            }
-            if aliasExpandedRoots == nil || aliasExpandedCount != Roots.Count {
-                let expanded = HashSet[VariableSymbol]()
-                aliasAssignedExternal = false
-                for assigned in Roots {
-                    for member in StatementBinder.AliasChain(assigned) {
-                        expanded.Add(member)
-                    }
-                    if StatementBinder.IsExternalStorageAlias(assigned) {
-                        aliasAssignedExternal = true
-                    }
+            for assigned in Roots {
+                if object.ReferenceEquals(assigned, root) {
+                    continue
                 }
-                aliasExpandedRoots = expanded
-                aliasExpandedCount = Roots.Count
-            }
-            // Two external-storage aliases may name the same storage (`Run(ref x, ref x)`).
-            if aliasAssignedExternal && StatementBinder.IsExternalStorageAlias(root) {
-                return true
-            }
-            for member in StatementBinder.AliasChain(root) {
-                if aliasExpandedRoots!!.Contains(member) {
+                if mayShareStorage != nil {
+                    if mayShareStorage!!(assigned, root) {
+                        return true
+                    }
+                } else if StatementBinder.SharesStorage(assigned, root) {
                     return true
                 }
             }
@@ -1864,6 +1892,11 @@ internal partial class StatementBinder {
             }
             if !Roots.Contains(root) {
                 return AssignsRoot(root)
+            }
+            // Another assigned root may name the same storage, so the preserving proof of this
+            // root alone is not enough.
+            if SharesStorageWithAssignedRoot(root) {
+                return true
             }
             return !SmartCastStability.IsAssignmentNarrowingRoot(root) ||
                 assignmentPreservesNarrowing == nil ||
@@ -2610,11 +2643,10 @@ internal partial class StatementBinder {
     ) : IEquatable[FinallyFlowSummary] { }
 
     private class LoopBackEdgeMutationCollector : AssignedRootsCollector {
-        init(assignmentPreservesNarrowing(BoundAssignmentExpression, TypeSymbol) -> bool) : base(
-            assignmentPreservesNarrowing,
-            nil,
-            false
-        ) { }
+        init(
+            assignmentPreservesNarrowing(BoundAssignmentExpression, TypeSymbol) -> bool,
+            mayShareStorage(VariableSymbol, VariableSymbol) -> bool
+        ) : base(assignmentPreservesNarrowing, nil, false, mayShareStorage) { }
     }
 
     private func HasInternallyReachableFallthrough(statement BoundStatement) bool {
@@ -4019,14 +4051,6 @@ internal partial class StatementBinder {
                 }
             }
             return result
-        }
-
-        /// ADR-0208 R12 (#5171): removes every narrowing whose root may share storage with
-        /// [`root`](paramref).
-        private func RemoveSharingStorage(state Dictionary[AccessPath, TypeSymbol], root VariableSymbol) {
-            for key in state.Keys.Where((key AccessPath) -> SharesStorage(key.Root, root)).ToArray() {
-                state.Remove(key)
-            }
         }
 
         /// Issue #2159: removes every narrowing whose access path is rooted at
