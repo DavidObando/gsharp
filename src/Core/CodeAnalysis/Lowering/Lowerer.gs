@@ -1605,6 +1605,46 @@ class Lowerer : BoundTreeRewriter {
                 fullName == "System.Collections.Immutable.ImmutableArray`1"
         }
 
+        /// Issue #5193: reads the enumerator type that the OPEN collection's
+        /// public `GetEnumerator()` returns, and maps its type arguments onto the
+        /// receiver's own arguments. Each argument of the open return type must
+        /// be a type parameter of the collection itself. A closed argument, or
+        /// a parameter of another owner, gives no mapping, so the caller keeps
+        /// the closed route. This covers an enumerator that permutes the
+        /// arguments, such as `Swap<A, B>` returning `Swap<B, A>.Enumerator`.
+        /// @param openDef The open generic collection definition.
+        /// @param typeArguments The receiver's symbolic type arguments.
+        /// @param enumeratorArguments The symbolic arguments of the enumerator type.
+        /// @returns The open generic enumerator definition, or `null` when the shape does not match.
+        private func MapOpenEnumeratorArguments(
+            openDef Type,
+            typeArguments ImmutableArray[TypeSymbol],
+            out enumeratorArguments ImmutableArray[TypeSymbol]
+        ) Type? {
+            enumeratorArguments = default(ImmutableArray[TypeSymbol])
+            let openGetEnumerator MethodInfo? = MemberLookup.ResolveGetEnumerator(openDef, out _)
+            if openGetEnumerator == nil {
+                return nil
+            }
+            let openReturn = openGetEnumerator.ReturnType
+            if !openReturn.IsValueType || !openReturn.IsGenericType || openReturn.IsGenericTypeDefinition {
+                return nil
+            }
+            let openReturnArguments = openReturn.GetGenericArguments()
+            let mapped = ImmutableArray.CreateBuilder[TypeSymbol](openReturnArguments.Length)
+            for argument in openReturnArguments {
+                if !argument.IsGenericParameter ||
+                    argument.DeclaringMethod != nil ||
+                    argument.DeclaringType != openDef ||
+                    argument.GenericParameterPosition >= typeArguments.Length {
+                    return nil
+                }
+                mapped.Add(typeArguments[argument.GenericParameterPosition])
+            }
+            enumeratorArguments = mapped.MoveToImmutable()
+            return openReturn.GetGenericTypeDefinition()
+        }
+
         /// Issue #4907: builds a `GetEnumerator()` call that returns the nested
         /// struct enumerator of [`receiver`](paramref), typed as the symbolic
         /// `Enumerator` over the receiver's own type arguments so the loop
@@ -1621,7 +1661,8 @@ class Lowerer : BoundTreeRewriter {
             getEnumeratorCall = nil
             enumeratorType = nil
             let erasedCollection Type? = receiver.ClrType
-            if erasedCollection == nil || !IsStructEnumeratorCollection(openDef) {
+            if erasedCollection == nil ||
+                !(IsStructEnumeratorCollection(openDef) || ClrTypeUtilities.IsByRefLike(openDef)) {
                 return false
             }
             let getEnumerator MethodInfo? = MemberLookup.ResolveGetEnumerator(erasedCollection, out _)
@@ -1629,18 +1670,14 @@ class Lowerer : BoundTreeRewriter {
                 return false
             }
             let erasedEnumerator = getEnumerator.ReturnType
-            let openEnumerator Type? = openDef.GetNestedType("Enumerator", BindingFlags.Public)
-            if !erasedEnumerator.IsValueType ||
-                openEnumerator == nil ||
-                !openEnumerator.IsGenericTypeDefinition ||
-                openEnumerator
-                .GetGenericArguments()
-                .Length != typeArguments.Length ||
-                typeArguments.Length != openDef
-                .GetGenericArguments().Length {
+            if !erasedEnumerator.IsValueType || typeArguments.Length != openDef.GetGenericArguments().Length {
                 return false
             }
-            enumeratorType = ImportedTypeSymbol.GetConstructed(erasedEnumerator, openEnumerator, typeArguments)
+            let openEnumerator Type? = MapOpenEnumeratorArguments(openDef, typeArguments, out var enumeratorArguments)
+            if openEnumerator == nil {
+                return false
+            }
+            enumeratorType = ImportedTypeSymbol.GetConstructed(erasedEnumerator, openEnumerator, enumeratorArguments)
             getEnumeratorCall = BoundImportedInstanceCallExpression(
                 nil,
                 collection,
@@ -1699,12 +1736,23 @@ class Lowerer : BoundTreeRewriter {
                     if enumeratorType is ImportedTypeSymbol structEnum &&
                         structEnum
                         .OpenDefinition
-                        ?.DeclaringType != nil &&
+                        ?.IsValueType == true &&
                         !structEnum
                         .TypeArguments
                         .IsDefaultOrEmpty &&
                         currentMember is PropertyInfo currentProperty {
                         currentType = MemberLookup.GetClrPropertyTypeSymbol(enumeratorType, currentProperty)
+                    } else if enumeratorType is ImportedTypeSymbol fieldEnum &&
+                        fieldEnum
+                        .OpenDefinition
+                        ?.IsValueType == true &&
+                        !fieldEnum
+                        .TypeArguments
+                        .IsDefaultOrEmpty &&
+                        currentMember is FieldInfo currentField {
+                        // Issue #5193: a by-ref-like enumerator may expose
+                        // `Current` as a public field.
+                        currentType = MemberLookup.GetClrFieldTypeSymbol(enumeratorType, currentField)
                     }
                     if currentType == nil &&
                         enumeratorType is ImportedTypeSymbol enumImp &&
