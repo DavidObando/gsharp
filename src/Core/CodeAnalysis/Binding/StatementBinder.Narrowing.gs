@@ -936,11 +936,7 @@ internal partial class StatementBinder {
                 if activeCleanupSet.Contains(cleanup) {
                     continue
                 }
-                let mutations = AssignedRootsCollector(
-                    AssignmentPreservesNarrowing,
-                    snapshot.ExternalCallableAliases,
-                    trackSourceCallGlobalMutations: true
-                )
+                let mutations = AssignedRootsCollector(AssignmentPreservesNarrowing, snapshot.ExternalCallableAliases)
                 mutations.Visit(cleanup)
                 summary = FinallyFlowSummary(
                     mutations,
@@ -978,11 +974,7 @@ internal partial class StatementBinder {
         finallyBlock BoundStatement,
         callableAliases IReadOnlyCollection[VariableSymbol]
     ) FinallyFlowSummary {
-        let mutations = AssignedRootsCollector(
-            AssignmentPreservesNarrowing,
-            callableAliases,
-            trackSourceCallGlobalMutations: true
-        )
+        let mutations = AssignedRootsCollector(AssignmentPreservesNarrowing, callableAliases)
         mutations.Visit(finallyBlock)
         let nonNullOnNormalExit = if !CanCompleteNormally(finallyBlock) {
             default(Dictionary[AccessPath, TypeSymbol]?)
@@ -1039,11 +1031,7 @@ internal partial class StatementBinder {
                 return nil
             }
             let aliasesAtEntry = aliases.ToArray()
-            let mutations = AssignedRootsCollector(
-                AssignmentPreservesNarrowing,
-                aliasesAtEntry,
-                trackSourceCallGlobalMutations: true
-            )
+            let mutations = AssignedRootsCollector(AssignmentPreservesNarrowing, aliasesAtEntry)
             mutations.Visit(statement)
             ApplyMutationsToState(state, mutations)
             ApplyCallableAliasExitState(aliases, statement, aliasesAtEntry, mutations)
@@ -1614,7 +1602,6 @@ internal partial class StatementBinder {
     /// join narrowings across constructs the flow analysis does not model.
     private open class AssignedRootsCollector : BoundTreeWalker {
         private let assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?
-        private let trackSourceCallGlobalMutations bool
         private let assignedFields HashSet[AssignedField] = HashSet[AssignedField]()
         private let assignedProperties HashSet[AssignedProperty] = HashSet[AssignedProperty]()
         private let assignments Dictionary[VariableSymbol, List[BoundAssignmentExpression]] = Dictionary[
@@ -1644,13 +1631,11 @@ internal partial class StatementBinder {
 
         init(
             assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?,
-            externalFunctionValues IEnumerable[VariableSymbol]? = nil,
-            trackSourceCallGlobalMutations bool = false
+            externalFunctionValues IEnumerable[VariableSymbol]? = nil
         ) {
             Roots = HashSet[VariableSymbol]()
             WritableReferenceRoots = HashSet[VariableSymbol]()
             this.assignmentPreservesNarrowing = assignmentPreservesNarrowing
-            this.trackSourceCallGlobalMutations = trackSourceCallGlobalMutations
             if externalFunctionValues != nil {
                 this.externalFunctionValues.UnionWith(externalFunctionValues)
             }
@@ -1751,21 +1736,30 @@ internal partial class StatementBinder {
             if node is BoundPropertyAccessExpression && node.Property.IsAutoProperty == false {
                 MayMutateMemberPaths = true
             }
-            let sourceConstructionRunsUserCode = node is BoundConstructorCallExpression construction &&
-                (construction.SelectedConstructor != nil || !construction.StructType.InstanceFieldInitializers.IsEmpty)
+            let sourceConstructionRunsUserCode = (
+                node is BoundConstructorCallExpression construction &&
+                    (
+                    construction.SelectedConstructor != nil ||
+                        !construction
+                        .StructType
+                        .InstanceFieldInitializers
+                        .IsEmpty
+                )
+            ) ||
+                (node is BoundStructLiteralExpression literal && !literal.StructType.InstanceFieldInitializers.IsEmpty)
             let sourcePropertyRunsUserCode = (
                 node is BoundPropertyAccessExpression and
                     {Property: {IsAutoProperty: false}} or
                     BoundPropertyAssignmentExpression and
                     {Property: {IsAutoProperty: false}}
             )
-            if trackSourceCallGlobalMutations && (sourcePropertyRunsUserCode || sourceConstructionRunsUserCode) {
+            // ADR-0208 R11 (#5170): any call, property getter or constructor
+            // with user code may assign a mutable global.
+            if sourcePropertyRunsUserCode || sourceConstructionRunsUserCode {
                 MarkMayMutateGlobalRoots()
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function, Arguments: var arguments} {
-                if trackSourceCallGlobalMutations {
-                    MarkMayMutateGlobalRoots()
-                }
+                MarkMayMutateGlobalRoots()
                 if function.HasCaptures {
                     MayMutateAnyRoot = true
                 }
@@ -2562,8 +2556,7 @@ internal partial class StatementBinder {
     private class LoopBackEdgeMutationCollector : AssignedRootsCollector {
         init(assignmentPreservesNarrowing(BoundAssignmentExpression, TypeSymbol) -> bool) : base(
             assignmentPreservesNarrowing,
-            nil,
-            false
+            nil
         ) { }
     }
 
