@@ -123,7 +123,8 @@
       <_GsharpRidPackItem Include="$(_GsharpRidStageDir)**\*" Exclude="$(_GsharpRidStageDir)**\*.pdb;$(_GsharpRidStageDir)**\*.xml;@(GsharpPortableRuntimeSetName->'$(_GsharpRidStageDir)%(Identity)')" />
     </ItemGroup>
     <ItemGroup>
-      <_GsharpPortableCopy Include="$(MSBuildThisFileDirectory)../../../out/bin/$(Configuration)/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.dll;$(MSBuildThisFileDirectory)../../../out/bin/$(Configuration)/Gsharp.Runtime.Values/Gsharp.Runtime.Values.dll;$(MSBuildThisFileDirectory)../../../out/bin/$(Configuration)/Gsharp.Extensions/Gsharp.Extensions.dll;$(MSBuildThisFileDirectory)../../../out/bin/$(Configuration)/Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.dll" />
+      <!-- The outputs of the runtime projects are under $(BaseOutputPath), which follows OutRoot. -->
+      <_GsharpPortableCopy Include="$(BaseOutputPath)/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.dll;$(BaseOutputPath)/Gsharp.Runtime.Values/Gsharp.Runtime.Values.dll;$(BaseOutputPath)/Gsharp.Extensions/Gsharp.Extensions.dll;$(BaseOutputPath)/Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.dll" />
       <_GsharpRidReadyToRun Include="$(_GsharpRidStageDir)gsc.dll;$(_GsharpRidStageDir)GSharp.Core.dll" />
     </ItemGroup>
     <GsharpAssertImages Portable="@(_GsharpPortableCopy)"
