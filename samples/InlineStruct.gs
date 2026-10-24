@@ -6,6 +6,7 @@ package GSharp.Example.InlineStruct
 import System
 
 inline struct UserId(value string)
+
 inline struct OrderId(value string)
 
 func printUser(id UserId) {
