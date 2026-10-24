@@ -125,10 +125,11 @@ shared class BoundSemantics {
             return (model, token)
         }
         let mapped = SemanticLookup.FindTokenAt(tree, token.Span.Start)
-        if mapped == nil ||
-            mapped.Kind != token.Kind ||
-            mapped.Span.Length != token.Span.Length ||
-            !string.Equals(mapped.Text, token.Text, StringComparison.Ordinal) {
+        if mapped == nil || mapped.Kind != token.Kind || mapped.Span.Length != token.Span.Length || !string.Equals(
+            mapped.Text,
+            token.Text,
+            StringComparison.Ordinal
+        ) {
             return nil
         }
         return (model, mapped)
@@ -165,7 +166,11 @@ shared class BoundSemantics {
         if !string.IsNullOrEmpty(fileName) {
             for candidate in compilation.SyntaxTrees {
                 if string.Equals(candidate.Text?.FileName, fileName, StringComparison.Ordinal) &&
-                    candidate.Text.Length == tree.Text.Length &&
+                    candidate
+                    .Text
+                    .Length == tree
+                    .Text
+                    .Length &&
                     string.Equals(candidate.Text.ToString(), tree.Text.ToString(), StringComparison.Ordinal) {
                     found = candidate
                     break

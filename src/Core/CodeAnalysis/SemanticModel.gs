@@ -441,7 +441,11 @@ partial class SemanticModel {
                         if part.Identifier is {} partIdentifier && !partIdentifier.IsMissing {
                             for location in partLocations {
                                 if string.Equals(location.FileName, tree.Text?.FileName, StringComparison.Ordinal) &&
-                                    location.Span.Start == partIdentifier.Span.Start {
+                                    location
+                                    .Span
+                                    .Start == partIdentifier
+                                    .Span
+                                    .Start {
                                     structsByIdentifier.TryAdd(partIdentifier, declaredStruct)
                                 }
                             }

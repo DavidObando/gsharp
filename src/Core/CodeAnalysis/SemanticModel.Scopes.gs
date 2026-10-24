@@ -195,7 +195,9 @@ partial class SemanticModel {
             result.Add(thisParameter)
         }
         for parameter in function.Parameters {
-            if parameter.DeclaringSyntaxNodes.IsDefaultOrEmpty &&
+            if parameter
+                .DeclaringSyntaxNodes
+                .IsDefaultOrEmpty &&
                 IsListable(parameter.Name) &&
                 (name == nil || string.Equals(parameter.Name, name, StringComparison.Ordinal)) &&
                 seen.Add(parameter.Name) {
@@ -569,8 +571,11 @@ partial class SemanticModel {
             globalName string,
             symbol Symbol
         ) {
-            if IsListable(globalName) && byName.TryAdd(globalName, symbol) &&
-                string.Equals(globalName, symbol.Name, StringComparison.Ordinal) {
+            if IsListable(globalName) && byName.TryAdd(globalName, symbol) && string.Equals(
+                globalName,
+                symbol.Name,
+                StringComparison.Ordinal
+            ) {
                 // An alias has no symbol of its own, so only its name finds it: listing the aliased
                 // type under the alias would give two symbols one name.
                 ordered.Add((globalName, symbol))
