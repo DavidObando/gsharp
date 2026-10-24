@@ -2,10 +2,11 @@
 
 - **Status**: Proposed
 - **Date**: 2026-10-23
-- **Phase**: Design only. No compiler, runtime, translator or SDK-pin change
-  is part of this record.
+- **Phase**: Proposed design with a bounded, fixture-only feasibility prototype.
+  No shipped compiler, runtime, translator or SDK-pin change.
 - **Issue**: [#5208](https://github.com/DavidObando/gsharp/issues/5208),
   evaluation follow-up [#5221](https://github.com/DavidObando/gsharp/issues/5221),
+  executable feasibility [#5224](https://github.com/DavidObando/gsharp/issues/5224),
   part of [#4333](https://github.com/DavidObando/gsharp/issues/4333)
 - **Related**: [ADR-0191](0191-go-to-gsharp-migration-tool.md) sections 1.1,
   6.1, 7 and 12,
@@ -59,7 +60,7 @@ example needs one operation over the existing type, and no new type is
 necessary for that operation. The maintainer subsequently authorized a serious
 evaluation of making existing `[N]T` assignments and swaps Go-like values.
 Section 8 evaluates that breaking alternative without treating the earlier
-ranking as settled. It does not authorize implementation or semantic acceptance.
+ranking as settled. It does not authorize a shipped feature or semantic acceptance.
 Audio layout remains a separate workload gate.
 
 ### Why fixed arrays, not all buffer types?
@@ -841,7 +842,7 @@ CLR type. Their `List` instantiations do not interoperate by shape
 [generic invariance](https://learn.microsoft.com/en-us/dotnet/standard/generics/covariance-and-contravariance)).
 Deterministic generated names are necessary but insufficient.
 
-No canonical arbitrary-`N` mechanism is selected. A finite SDK-owned carrier
+No production canonical arbitrary-`N` mechanism is selected. A finite SDK-owned carrier
 family proves only supported lengths. A shared compositional generic
 encoding would need to prove canonical shape, layout, nesting and public
 accessibility; a producer-owned shape manifest still needs a rule when two
@@ -886,6 +887,148 @@ blocker; it does not solve it. The isolated research scaffold is not a
 product dependency or a committed feature. ILVerify, NativeAOT, arbitrary
 lengths, public/ref imports, escaped G# views and value-array protocols were
 not run. Existing W2-W8 and W18-W25 retain their original status.
+
+#### Committed bounded feasibility prototype (#5224)
+
+[`ArrayValueFeasibilityTests`](../../test/Compiler.Tests/ArrayValueFeasibilityTests.gs)
+runs the committed
+[`Storage`](../../test/Compiler.Tests/Fixtures/ArrayValueFeasibility/Storage.cs.txt),
+[`Locations`](../../test/Compiler.Tests/Fixtures/ArrayValueFeasibility/Locations.cs.txt)
+and
+[`Scenarios`](../../test/Compiler.Tests/Fixtures/ArrayValueFeasibility/Scenarios.cs.txt)
+C# research inputs. The G# driver uses the existing Roslyn compilation and
+collectible assembly-loading helpers. Every run deletes its fixture directory.
+These definitions belong only to emitted test assemblies, not the G# SDK.
+This is not the `.copy()` feature or source `[N]T` lowering.
+
+**Canonical mechanism.** One shared fixture assembly owns three public generic
+value definitions. For element `T`, the encoding is:
+
+```text
+C(T, 0) = Empty<T>
+C(T, 1) = Leaf<T>                         // one T field
+C(T, n) = Branch<T, C(T, floor(n/2)), C(T, n-floor(n/2))>
+```
+
+`Branch` contains its two child values, not a backing `T[]`. Three definitions
+cover every supported length; there is no separately declared length carrier.
+Static interface dispatch selects a child recursively and returns a field ref.
+No pointer arithmetic, unsafe code, contiguous-layout assumption or fabricated
+span is involved. Empty values have zero elements, not a zero-byte CLR layout
+promise. Public generic arguments carry the shape in reference assemblies.
+
+`Shape.Encode`, `Decode` and `Import` implement the rule and validate claims.
+Import compares actual definition identity, recursive element identity, the
+canonical split and the claimed count. The decoder rejects foreign definitions,
+CLR arrays, empty-child noncanonical trees and false element/count claims.
+Negative lengths and lengths above 32 fail explicitly.
+
+The fixture caps each length at 32 and array nesting at two dimensions.
+It admits `int`, `string`, `object`, an open generic parameter and nested
+canonical carriers. Other concrete elements, pointers, byrefs, byref-like
+values and deeper arrays are unsupported. Open `T` does not promise that all
+closed substitutions pass import. The check must run again for a closed shape.
+The executed layout domain is narrower than the admitted type domain:
+all integer lengths 0-32, reference-element cases, and nested 2-by-2 values.
+No exhaustive nested-size, struct-size, JIT ABI or GC-layout certification follows.
+
+**Real independent exchange.** The encoder generates public C# signatures for
+two libraries. Each compiles against the shared contract, without referencing
+the other library. A third compiled client passes the first library's
+`List<C(int,n)>` directly into the second library for every `n` from 0 to 32.
+The consumer validates the imported canonical shape, every element and by-value
+extraction independence. The client also decodes the producer's public open
+generic return shape. This is typed invariant-generic exchange, not name comparison,
+reflection invocation between list types or an element adapter.
+
+The same client also exchanges open-generic, reference-element and nested
+public signatures, preserves the list object, and writes through a public
+carrier ref-return chain. Both runs pass: compilation against implementation
+assemblies, and compilation against actual Roslyn-emitted reference assemblies
+for the runtime and both libraries. Both execute with implementation assemblies.
+The generator is prototype lowering, not a G# metadata importer.
+All participants deliberately use the same shared assembly identity.
+Version skew, duplicate owners, type forwarding and reexport policy remain open.
+
+The copy scenario separately exercises uninformed generic duplication, `List`
+extraction, nested values, boxing and reference-containing elements. Reference
+objects remain shared while reference slots copy. A `T[]` control still shares.
+Independent expected shapes for lengths 0, 1, 2 and 10 constrain the encoder;
+the test does not rely only on encoder/decoder round trips.
+
+**Retained locations.** `Place<T>` supports an explicitly promoted `Cell<T>`
+or an exact CLR `T[]` element. Root creation captures the owner and index once.
+Each access resolves an owner path afresh. Trusted pure ref-field projections
+extend that path; they do not save a struct snapshot. The implementation stores
+ordinary object/delegate references, never a heap field containing a stack ref.
+It does not validate arbitrary user-supplied projection delegates.
+The caller must capture effectful selections before constructing a pure path.
+
+Writable views and exact element handles survive their creating method and
+forced collections. Existing readonly views and handles see subsequent writes.
+Whole-parent replacement and swap update the original destination seen through
+earlier derived paths. Ordinary copied parents stay independent.
+Tests also replace a carrier-array element, then write through a retained nested
+element path without changing the neighbor or a by-value extraction.
+An effectful owner selection and handle index each run once.
+
+Readonly views and handles expose value reads, not ref returns, setters or a
+writable upgrade. Reference-element readonly access remains shallow.
+Writable handles are invariant in their referent type.
+Invalid ranges, indices, noncanonical view storage, covariant array roots and
+boxed value roots fail explicitly. A separate lexical `ref` test covers raw
+borrows. There is no automatic local promotion, stack escape, async borrow,
+native-slice integration, arbitrary class-field root or concurrency guarantee.
+In particular, current `slice[T]` still requires exact `T[]` owners.
+
+**Measured validation.** On .NET SDK 10.0.401 with the unchanged released
+G# SDK pin 0.5.212:
+
+```sh
+dotnet build test/Compiler.Tests/Compiler.Tests.gsproj --configuration Release -graph
+dotnet test test/Compiler.Tests/Compiler.Tests.gsproj --configuration Release --no-build --no-restore --filter 'FullyQualifiedName~ArrayValueFeasibilityTests' --logger 'console;verbosity=detailed'
+```
+
+The build passed with zero warnings/errors; all four theory cases passed.
+The detailed output records SHA-256 hashes of emitted runtime, public/ref
+libraries, clients and scenario assemblies before cleanup.
+This is JIT evidence for the research implementation.
+
+ILVerify 10.0.8 runs on the actual runtime, libraries and clients.
+The client verifies without suppressions. Runtime and library verification is
+**partial**: selected methods suppress `CallAbstract`/`Constrained` for static
+interface calls and `ReturnPtrToStack` for Roslyn-emitted generic-struct ref
+returns. The driver names the limited scopes. Scenario IL is not verified:
+an unfiltered attempt reported readonly-address `StackUnexpected` in `Encoding`
+and struct-field ref-return errors in generated projections. Those observations
+are not a clean ILVerify result or a compiler defect attributed to gsc.
+NativeAOT, other architectures and full strict verification remain gates.
+
+ADR-0154 witnesses used temporary mutations of the prototype, not assertions
+or nonexistent G# lowering. Each mutant compiled, executed and failed its
+intended runtime observation using the same targeted test command above:
+
+| Prototype mutation | Runtime observation that failed |
+| --- | --- |
+| In `EncodeCore`, insert `if (length == 10) return EncodeCore(element, 11);` before the zero case | `distinct canonical length 10`; both implementation/ref clients fail `exchange count` |
+| Replace the cell-root return with `var snapshot = new Cell<T> { Value = cell.Value }; return new Place<T>(() => ref snapshot.Value);` | `escaped owner retained after GC` |
+| Replace `ref array[index]` with `ref array[0]` in the array-root resolver | `array element and recursive path re-resolve` |
+
+Source hashes changed for each mutant. The detailed test output also records
+different emitted-runtime hashes. Every source was restored byte-for-byte.
+The restored command passed all four cases. Compile errors and the initial
+unfiltered verifier failures were not counted as mutation witnesses.
+
+**Conclusion and remaining gates.** Shared compositional CLR definitions solve
+the nominal identity problem for this finite domain. Explicit owner paths solve
+the exercised escaping-location problem without turning ordinary copies into
+aliases. Neither result selects a production ABI or accepts breaking semantics.
+The full copy/store/default/nullability/conversion matrix, broad element and
+size policy, public/ref import and tooling, deterministic production emission,
+strict verification, AOT, promotion/permission rules, migration and versioning
+still require implementation evidence and approval.
+Existing `[5]T` and `[5]T{}` inference remains `[]T`.
+ADR-0210 stays Proposed; #5208 and ADR-0191 admission gates remain open.
 
 #### Migration, bootstrap and acceptance
 
