@@ -120,8 +120,9 @@ partial class SemanticModel {
             ) {
                 builder.Add(method)
             }
-            // A private interface helper is visible inside the interface.
-            if typedOwner is InterfaceSymbol contract {
+            // A private interface helper is visible only to a query inside the
+            // interface, as in the binder's lookup.
+            if typedOwner is InterfaceSymbol contract && QueryIsInside(node, contract) {
                 let helpers = if isStatic {
                     contract.StaticPrivateMethods
                 } else {
@@ -131,6 +132,13 @@ partial class SemanticModel {
                     if helper.Name == function.Name {
                         builder.Add(helper)
                     }
+                }
+                // Public and private overloads share one declaration order.
+                if builder.Count > 1 && builder.All((s Symbol) -> cast[FunctionSymbol](s).Declaration != nil) {
+                    let ordered = builder.OrderBy((s Symbol) -> cast[FunctionSymbol](s).Declaration!!.Span.Start)
+                        .ToArray()
+                    builder.Clear()
+                    builder.AddRange(ordered)
                 }
             }
         } else {
@@ -160,6 +168,26 @@ partial class SemanticModel {
         } else {
             default(TypeSymbol?)
         }
+    }
+
+    /// Tells whether [`node`](paramref) lies inside a declaration of [`contract`](paramref).
+    private func QueryIsInside(node SyntaxNode, contract InterfaceSymbol) bool {
+        for declaration in(contract.Definition ?? contract).DeclaringSyntaxNodes {
+            if object.ReferenceEquals(declaration.SyntaxTree, node.SyntaxTree) &&
+                declaration
+                .Span
+                .Start <= node
+                .Span
+                .Start &&
+                node
+                .Span
+                .End <= declaration
+                .Span
+                .End {
+                return true
+            }
+        }
+        return false
     }
 
     private func StripWrappers(type TypeSymbol?) TypeSymbol? {

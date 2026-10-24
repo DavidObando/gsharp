@@ -98,6 +98,35 @@ open class Adr0212SymbolInfoTests {
     }
 
     @Fact
+    func MemberGroup_PrivateInterfaceHelpers_AreVisibleOnlyInsideAndKeepDeclarationOrder() {
+        let (model, tree) = CreateModel(Source)
+        let inside = tree
+            .Root
+            .DescendantNodes()
+            .OfType[CallExpressionSyntax]()
+            .Single((c CallExpressionSyntax) -> c.Identifier.Text == "Help" && c.Parent is not AccessorExpressionSyntax)
+        let outside = tree
+            .Root
+            .DescendantNodes()
+            .OfType[CallExpressionSyntax]()
+            .Single((c CallExpressionSyntax) -> c.Identifier.Text == "Help" && c.Parent is AccessorExpressionSyntax)
+        Assert.Equal(
+            "string,int32",
+            string.Join(
+                ",",
+                model.GetMemberGroup(inside).Select((s Symbol) -> cast[FunctionSymbol](s).Parameters[0].Type.Name)
+            )
+        )
+        Assert.Equal(
+            "int32",
+            string.Join(
+                ",",
+                model.GetMemberGroup(outside).Select((s Symbol) -> cast[FunctionSymbol](s).Parameters[0].Type.Name)
+            )
+        )
+    }
+
+    @Fact
     func Queries_HonourACancelledToken() {
         let (model, tree) = CreateModel(Source)
         let token = NameToken(tree, "Value", "Fold", 0)
@@ -149,6 +178,14 @@ interface Shape[T] {
     func Area(a T) int32
     func Area(a T, b T) int32
 }
+interface Calc {
+    shared {
+        private func Help(a string) int32 { return 1 }
+        func Help(a int32) int32 { return 2 }
+        func Inside() int32 { return Help(3) }
+    }
+}
+func Outside() int32 -> Calc.Help(4)
 func UseShape(shape Shape[string]) int32 -> shape.Area("a")
 func Pick(a int32) string -> "i"
 func Pick(a string) string -> "s"
