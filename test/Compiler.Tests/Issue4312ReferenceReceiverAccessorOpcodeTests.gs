@@ -105,7 +105,10 @@ open class Issue4312ReferenceReceiverAccessorOpcodeTests {
                     if !isCall && !isCallvirt {
                         continue
                     }
-                    let target = DescribeTarget(reader, MetadataTokens.EntityHandle(instruction.MetadataToken.GetValueOrDefault()))
+                    let target = DescribeTarget(
+                        reader,
+                        MetadataTokens.EntityHandle(instruction.MetadataToken.GetValueOrDefault())
+                    )
                     if !target.IsInstance || !target.IsReference || target.Name == ".ctor" {
                         continue
                     }
@@ -113,11 +116,11 @@ open class Issue4312ReferenceReceiverAccessorOpcodeTests {
                         virtualCalls++
                         continue
                     }
-                    if enclosingIsInstance && !target.Owner.IsNil && IsSameOrAncestor(
-                        reader,
-                        target.Owner,
-                        enclosingType
-                    ) {
+                    if enclosingIsInstance &&
+                        !target
+                        .Owner
+                        .IsNil &&
+                        IsSameOrAncestor(reader, target.Owner, enclosingType) {
                         baseCalls++
                         continue
                     }
@@ -240,30 +243,38 @@ func probe(name string, f func()) {
         private const FullSource string = Declarations + NullBody + LiveBody + "nullMain()\nliveMain()\n"
 
         func Cases() sequence[[]object] {
-            yield[]object{"a-null-receiver-fails-at-the-accessor-call", NullSource, []string{
-                "null-event: NRE",
-                "null-event-generic: NRE",
-                "null-virt-event: NRE",
-                "null-prop-get: NRE",
-                "null-prop-set: NRE",
-                "null-generic-prop-set: NRE",
-                "null-interface-prop-get: NRE"
-            }}
-            yield[]object{"a-live-receiver-keeps-its-dispatch-and-its-base-calls", LiveSource, []string{
-                "plain add ran",
-                "derived virt add",
-                "gen add ran",
-                "derived:base",
-                "derived set x",
-                "gen set",
-                "z",
-                "derived set tp",
-                "derived:base",
-                "5",
-                "7",
-                "derived:base",
-                "derived set narrowed"
-            }}
+            yield[]object{
+                "a-null-receiver-fails-at-the-accessor-call",
+                NullSource,
+                []string{
+                    "null-event: NRE",
+                    "null-event-generic: NRE",
+                    "null-virt-event: NRE",
+                    "null-prop-get: NRE",
+                    "null-prop-set: NRE",
+                    "null-generic-prop-set: NRE",
+                    "null-interface-prop-get: NRE"
+                }
+            }
+            yield[]object{
+                "a-live-receiver-keeps-its-dispatch-and-its-base-calls",
+                LiveSource,
+                []string{
+                    "plain add ran",
+                    "derived virt add",
+                    "gen add ran",
+                    "derived:base",
+                    "derived set x",
+                    "gen set",
+                    "z",
+                    "derived set tp",
+                    "derived:base",
+                    "5",
+                    "7",
+                    "derived:base",
+                    "derived set narrowed"
+                }
+            }
         }
 
         /// Describes a call target.
