@@ -295,7 +295,16 @@ internal partial class StatementBinder {
             }
             anyRootAssigned = assignedRoots.Count > 0
         }
-        if !anyRootAssigned && !dropAllMemberPaths && !dropAllRoots && !dropGlobalRoots {
+        // ADR-0208 R10 (#5168): a statement that runs user code or catches a replacement exception can
+        // run after a filter of an enclosing try, so the filter writes join the statement effects.
+        var filterNames HashSet[string]? = nil
+        if statementCollector != nil && (statementCollector.MayMutateMemberPaths || statementCollector.ContainsTry) {
+            let filters = CollectCatchFiltersAbove(statementSyntax)
+            if filters.Count > 0 {
+                filterNames = CollectEnclosingFilterNames(filters)
+            }
+        }
+        if !anyRootAssigned && !dropAllMemberPaths && !dropAllRoots && !dropGlobalRoots && filterNames == nil {
             return
         }
         // Issue #208: iterate ALL frames (not just the top) because the
@@ -308,7 +317,10 @@ internal partial class StatementBinder {
             }
             var toRemove List[AccessPath]? = nil
             for key in frame.Keys {
-                let drop = (statementCollector != nil && MayBeMutatedByUnknownWrite(statementCollector, key)) ||
+                let drop = (
+                    filterNames != nil && (filterNames.Contains(key.Root.Name) || MayBeMutatedByUnknownCallable(key))
+                ) ||
+                    (statementCollector != nil && MayBeMutatedByUnknownWrite(statementCollector, key)) ||
                     (dropGlobalRoots && key.Root is GlobalVariableSymbol && !key.Root.IsReadOnly) ||
                     (
                     if statementCollector != nil {
@@ -358,11 +370,8 @@ internal partial class StatementBinder {
         // A filter of an enclosing try can run between any two statements of its protected block,
         // when a nested handler catches a replacement exception.
         if externalCallableAliases.Count > 0 && statement.Syntax is {} syntax {
-            let filters = if syntax is TryStatementSyntax tryStatement {
-                CollectEnclosingCatchFilters(tryStatement)
-            } else {
-                CollectCatchFiltersAbove(syntax)
-            }
+            let filters = CollectCatchFiltersAbove(syntax)
+            filters.AddRange(CollectCatchFiltersWithin(syntax))
             if filters.Count > 0 {
                 RemoveFilterAffectedAliases(externalCallableAliases, filters)
             }
@@ -1594,6 +1603,18 @@ internal partial class StatementBinder {
         }
         let collector = AssignedRootsCollector(nil, callableAliases ?? externalCallableAliases)
         collector.Visit(node)
+        if node.Syntax is {} syntax && (collector.MayMutateMemberPaths || collector.ContainsTry) {
+            let filters = CollectCatchFiltersAbove(syntax)
+            if filters.Count > 0 {
+                let names = CollectEnclosingFilterNames(filters)
+                for path in state
+                    .Keys
+                    .Where((path AccessPath) -> names.Contains(path.Root.Name) || MayBeMutatedByUnknownCallable(path))
+                    .ToArray() {
+                    state.Remove(path)
+                }
+            }
+        }
         if collector.MayMutateAnyRoot {
             for path in state.Keys.Where((path AccessPath) -> MayBeMutatedByUnknownWrite(collector, path)).ToArray() {
                 state.Remove(path)

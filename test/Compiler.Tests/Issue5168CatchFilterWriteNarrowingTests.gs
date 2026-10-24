@@ -510,6 +510,35 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
+            // The summary of a compound statement keeps the alias that the filter of a try inside it replaced.
+            yield[]object{"own-filter-alias-in-if", `
+package P
+import System
+
+func Run(callback () -> void, flag bool) int32 {
+    var s string? = "abc"
+    let clear = func() { s = nil }
+    var action = callback
+    let flip = func() bool {
+        action = clear
+        return false
+    }
+    if flag {
+        try {
+            throw Exception("x")
+        } catch when flip() {
+            return 1
+        } catch {
+        }
+    }
+    if s != nil {
+        action()
+        return s.Length
+    }
+    return 0
+}
+func Main() { Console.WriteLine(Run(() -> { }, true)) }
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
@@ -691,6 +720,49 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `, []string{"3"}}
+            // An index input of a ?? = target is only read.
+            yield[]object{"filter-coalescing-index-read", `
+package P
+import System
+
+func Get() string? { return "abc" }
+func Run() int32 {
+    let s string? = Get()
+    if s == nil { return 0 }
+    var items = []string?{"a", "b", "c", "d"}
+    try {
+        throw Exception("x")
+    } catch when (items[s.Length] ??= "filled") == "filled" {
+        return 1
+    } catch {
+        return s.Length
+    }
+}
+func Main() { Console.WriteLine(Run()) }
+`, []string{"3"}}
+            // A store in a finally block establishes a fresh fact under a filter.
+            yield[]object{"finally-store-under-filter", `
+package P
+import System
+
+func Clear(ref s string?) bool {
+    s = nil
+    return false
+}
+func Run() int32 {
+    var s string? = nil
+    try {
+        try {
+        } finally {
+            s = "safe"
+        }
+        return s.Length
+    } catch (FormatException) when Clear(ref s) {
+        return 0
+    }
+}
+func Main() { Console.WriteLine(Run()) }
+`, []string{"4"}}
         }
 
         private func Compile(dir string, source string, outPath string)(Exit int32, Log string) {

@@ -491,32 +491,39 @@ internal partial class StatementBinder {
         let names = HashSet[string]()
         for filter in filters {
             CollectAssignedNamesAndMemberMutation(filter, names)
-            CollectNullCoalescingTargetNames(filter, names)
             CollectWritableRefArgumentNames(filter, names)
-            CollectAddressOfNames(filter, names)
+            CollectFilterWriteTargets(filter, names)
         }
         return names
     }
 
-    /// ADR-0208 R10 (#5168): after a statement that can run user code or catch a replacement
-    /// exception, a filter of an enclosing try may have run. Runs after the joins of the statement,
-    /// which would otherwise restore the facts that the filter writes.
-    private func ApplyEnclosingFilterEffects(
-        syntax SyntaxNode,
-        statement BoundStatement,
-        persistentFrame Dictionary[AccessPath, TypeSymbol]
-    ) {
-        let filters = CollectCatchFiltersAbove(syntax)
-        if filters.Count == 0 || !HasAnyActiveNarrowings() {
-            return
+    /// ADR-0208 R10 (#5168): collects the targets of `??=` and `&` in a filter. An index input of the
+    /// target is only read; nested writes stay found by the traversal.
+    private func CollectFilterWriteTargets(node SyntaxNode, names HashSet[string]) {
+        if node is NullCoalescingAssignmentExpressionSyntax coalescing {
+            CollectWriteTargetNames(coalescing.Target, names)
+        } else if node is UnaryExpressionSyntax unary && unary.OperatorToken.Kind == SyntaxKind.AmpersandToken {
+            CollectWriteTargetNames(unary.Operand, names)
         }
-        let effects = GetStatementEffects(statement, externalCallableAliases)
-        if effects.MayMutateMemberPaths || effects.ContainsTry {
-            InvalidateNarrowingsForEnclosingFilters(filters)
-            // A filter that ran while the statement evaluated its right side ran before the store, so
-            // the store establishes a fresh fact.
-            ApplyAssignmentNarrowing(statement, persistentFrame)
+        for child in node.GetChildren() {
+            CollectFilterWriteTargets(child, names)
         }
+    }
+
+    /// ADR-0208 R10 (#5168): the `when` filters of every `try` at or below [`node`](paramref).
+    private func CollectCatchFiltersWithin(node SyntaxNode) List[ExpressionSyntax] {
+        let filters = List[ExpressionSyntax]()
+        if node is TryStatementSyntax tryStatement {
+            for clause in tryStatement.CatchClauses {
+                if clause.Filter != nil {
+                    filters.Add(clause.Filter)
+                }
+            }
+        }
+        for child in node.GetChildren() {
+            filters.AddRange(CollectCatchFiltersWithin(child))
+        }
+        return filters
     }
 
     /// ADR-0208 R10 (#5168): adds the storage that the `ref` or `out` operand [`operand`](paramref)
