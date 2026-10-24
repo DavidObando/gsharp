@@ -4743,7 +4743,7 @@ internal shared class ClrOverloadResolution {
         if !hasVariantSlot {
             return false
         }
-        for candidate in EnumerateSelfAndInterfaces(source) {
+        for candidate in ClrTypeUtilities.EnumerateSelfAndInterfaces(source, false) {
             var candidateDefinition Type
             var candidateArguments[]Type
             try {
@@ -4764,15 +4764,6 @@ internal shared class ClrOverloadResolution {
             }
         }
         return false
-    }
-
-    private func EnumerateSelfAndInterfaces(source Type) sequence[Type] {
-        if source.IsInterface {
-            yield source
-        }
-        for implemented in ClrTypeUtilities.SafeGetInterfaces(source) {
-            yield implemented
-        }
     }
 
     private func AreVarianceCompatibleArguments(parameters[]Type, sourceArguments[]Type, targetArguments[]Type) bool {
