@@ -88,7 +88,7 @@ internal partial class StatementBinder {
     /// called function carries `[MemberNotNull("_f", …)]`, narrows each
     /// named field (via its (cref:ImplicitFieldVariableSymbol)) to its
     /// underlying non-nullable type in [`frame`](paramref).
-    private func ApplyMemberNotNullNarrowings(statement BoundStatement?, frame Dictionary[AccessPath, TypeSymbol]) {
+    private func ApplyMemberNotNullNarrowings(statement BoundStatement?, frame NarrowingFrame) {
         var statement = statement
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
@@ -147,12 +147,28 @@ internal partial class StatementBinder {
         }
     }
 
+    private func NarrowFieldIfNullable(fieldName string, frame NarrowingFrame) {
+        if $scope.TryLookupSymbol(fieldName) is ImplicitFieldVariableSymbol fieldVar &&
+            fieldVar.Type is NullableTypeSymbol nullable {
+            SetPersistentNarrowing(frame, fieldVar, nullable.UnderlyingType)
+        }
+    }
+
+    private func SetPersistentNarrowing(frame NarrowingFrame, path AccessPath, narrowedType TypeSymbol) {
+        frame[path] = narrowedType
+        NoteAssignmentNarrowing(path)
+    }
+
     private func SetPersistentNarrowing(
         frame Dictionary[AccessPath, TypeSymbol],
         path AccessPath,
         narrowedType TypeSymbol
     ) {
         frame[path] = narrowedType
+        NoteAssignmentNarrowing(path)
+    }
+
+    private func NoteAssignmentNarrowing(path AccessPath) {
         if !path.HasMembers {
             binderCtx.AssignmentNarrowingGeneration++
             binderCtx.AssignmentNarrowingGenerations[path.Root] = binderCtx.AssignmentNarrowingGeneration
@@ -167,7 +183,7 @@ internal partial class StatementBinder {
     // writable reference and that no branch or plain assignment touches.
     private func RestoreEarlyExitLiftsWrittenOnlyByCondition(
         statement BoundStatement?,
-        persistentFrame Dictionary[AccessPath, TypeSymbol]
+        persistentFrame NarrowingFrame
     ) {
         var statement = statement
         if lastEarlyExitLifts.Count == 0 {
@@ -611,10 +627,7 @@ internal partial class StatementBinder {
     /// (cref:BindIfStatement)) is non-empty, merge that frame into
     /// [`persistentFrame`](paramref) so subsequent statements in the
     /// enclosing block see the narrowing.
-    private func ApplyEarlyExitNarrowings(
-        statement BoundStatement?,
-        persistentFrame Dictionary[AccessPath, TypeSymbol]
-    ) {
+    private func ApplyEarlyExitNarrowings(statement BoundStatement?, persistentFrame NarrowingFrame) {
         var statement = statement
         lastEarlyExitLifts.Clear()
         var isLabeledStatement = false
@@ -681,10 +694,7 @@ internal partial class StatementBinder {
     /// (cref:InvalidateNarrowingsForAssignedVariables) clears it on a
     /// subsequent mutation. Called after invalidation so the fresh narrowing
     /// supersedes the clearing pass for this same statement.
-    private func ApplyAssignmentNarrowing(
-        statement BoundStatement?,
-        persistentFrame Dictionary[AccessPath, TypeSymbol]
-    ) {
+    private func ApplyAssignmentNarrowing(statement BoundStatement?, persistentFrame NarrowingFrame) {
         var statement = statement
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
@@ -780,7 +790,7 @@ internal partial class StatementBinder {
                     .Count {
                     binderCtx.NarrowedVariables[frameIndex]
                 } else {
-                    binderCtx.NarrowedVariables[^1]
+                    binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1]
                 }
                 targetFrame.Add(entry.Key, entry.Value)
                 if !entry.Key.HasMembers && incomingSnapshots[0].AssignmentGenerations.TryGetValue(
@@ -1052,10 +1062,7 @@ internal partial class StatementBinder {
         }
     }
 
-    private func ApplyTryFinallyFallthroughNarrowings(
-        statement BoundStatement,
-        persistentFrame Dictionary[AccessPath, TypeSymbol]
-    ) {
+    private func ApplyTryFinallyFallthroughNarrowings(statement BoundStatement, persistentFrame NarrowingFrame) {
         var statement = statement
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
@@ -1296,7 +1303,7 @@ internal partial class StatementBinder {
     /// fresh join narrowing supersedes the clearing pass; a later statement that
     /// reassigns the local to a nullable value re-nullable-izes it through its
     /// own invalidation pass.
-    private func ApplyIfJoinNarrowings(statement BoundStatement?, persistentFrame Dictionary[AccessPath, TypeSymbol]) {
+    private func ApplyIfJoinNarrowings(statement BoundStatement?, persistentFrame NarrowingFrame) {
         // Issues #4285 and #4290: arbitrary user jumps invalidate the
         // dominance assumptions behind branch-exit narrowing.
         if binderCtx.FunctionContainsUserGotoOrLabel {

@@ -80,12 +80,10 @@ internal class BinderContext {
     /// Instance access is unavailable until the selected constructor has run.
     var ConstructorInitializerDepth int32
 
-    private let narrowingProofGenerations Dictionary[
-        IReadOnlyDictionary[AccessPath, TypeSymbol],
+    private let narrowingProofGenerations Dictionary[NarrowingFrame, (Generation int32, Depth int32)] = Dictionary[
+        NarrowingFrame,
         (Generation int32, Depth int32)
-    ] = Dictionary[IReadOnlyDictionary[AccessPath, TypeSymbol], (Generation int32, Depth int32)](
-        ReferenceEqualityComparer.Instance
-    )
+    ](ReferenceEqualityComparer.Instance)
     private var narrowingProofGeneration int32
 
     /// Issue #1201: cached set of user-defined types brought into unqualified
@@ -122,7 +120,7 @@ internal class BinderContext {
         BackwardGotoNarrowingStates = Dictionary[string, BackwardGotoNarrowingState]()
         ReachableUserLabels = HashSet[string](StringComparer.Ordinal)
         DeferredUnreachableGotoEdges = List[(SourceLabel string?, TargetLabel string, Snapshot GotoNarrowingSnapshot)]()
-        NarrowedVariables = List[Dictionary[AccessPath, TypeSymbol]]()
+        NarrowedVariables = NarrowingFrameStack()
         PendingEarlyExitFrames = Dictionary[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]]()
         PendingSwitchExitFrames = Dictionary[BoundPatternSwitchStatement, Dictionary[AccessPath, TypeSymbol]]()
         PendingPatternVariableLeaks = Dictionary[BoundIfStatement, ImmutableArray[LocalVariableSymbol]]()
@@ -330,15 +328,25 @@ internal class BinderContext {
     /// Gets the stack of per-scope variable-narrowing tables used by pattern
     /// matching and flow analysis. Each entry maps a variable to its narrowed
     /// type within the corresponding scope.
-    prop NarrowedVariables List[Dictionary[AccessPath, TypeSymbol]] {
+    prop NarrowedVariables NarrowingFrameStack {
         get;
     }
 
+    /// Wraps [`frame`](paramref) in a narrowing frame, starts its proof and pushes
+    /// it. Pop it with (cref:EndNarrowingProof). Use the returned frame for later writes:
+    /// a write to the dictionary itself is not seen by the stack.
+    func PushNarrowingFrame(frame Dictionary[AccessPath, TypeSymbol]) NarrowingFrame {
+        let pushed = NarrowingFrame(frame)
+        BeginNarrowingProof(pushed)
+        NarrowedVariables.Add(pushed)
+        return pushed
+    }
+
     /// Gets the narrowing facts that hold now, as a value (ADR-0208 section 7).
-    /// @remarks PR 1 derives the value from (cref:NarrowedVariables), where the
-    /// innermost frame that holds a path wins. The frame stack stays the
-    /// mechanism until the consuming PR replaces it. The value has no
-    /// external-callable facts, which the statement binder owns.
+    /// @remarks The stack threads the value beside the frames: the innermost
+    /// frame that holds a path wins. The frame stack stays the mechanism until the
+    /// consuming PR replaces it. The value has no external-callable facts, which
+    /// the statement binder owns.
     /// Gets or sets the facts that the shadow join proves and that no frame holds
     /// (ADR-0208 section 19, PR 1). Only the comparison mode reads or writes it.
     internal var ShadowOverlay NarrowingState = NarrowingState.Empty
@@ -390,10 +398,7 @@ internal class BinderContext {
         }
     }
 
-    internal prop Narrowing NarrowingState -> NarrowingState.FromFrames(
-        NarrowedVariables,
-        ImmutableArray[VariableSymbol].Empty
-    )
+    internal prop Narrowing NarrowingState -> NarrowedVariables.State
 
     /// Gets the side-table that parks the else-branch narrowing frame of an
     /// `if`-statement keyed by the resulting bound
@@ -753,7 +758,7 @@ internal class BinderContext {
         return UnsafeContextScope(this, active)
     }
 
-    func BeginNarrowingProof(frame IReadOnlyDictionary[AccessPath, TypeSymbol]) {
+    func BeginNarrowingProof(frame NarrowingFrame) {
         if narrowingProofGenerations.TryGetValue(frame, out var state) {
             narrowingProofGenerations[frame] = ((narrowingProofGeneration += 1), state.Depth + 1)
             return
@@ -773,9 +778,10 @@ internal class BinderContext {
         }
     }
 
-    func GetNarrowingProofGeneration(
-        frame IReadOnlyDictionary[AccessPath, TypeSymbol]
-    ) int32 -> if narrowingProofGenerations.TryGetValue(frame, out var state) {
+    func GetNarrowingProofGeneration(frame NarrowingFrame) int32 -> if narrowingProofGenerations.TryGetValue(
+        frame,
+        out var state
+    ) {
         state.Generation
     } else {
         0
@@ -887,12 +893,7 @@ internal class BinderContext {
     }
 
     func TrackBackwardGotoNarrowingRead(variable VariableSymbol, location TextLocation) {
-        var narrowedType TypeSymbol? = nil
-        for var i = NarrowedVariables.Count - 1; i >= 0; i-- {
-            if NarrowedVariables[i].TryGetValue(variable, out narrowedType) {
-                break
-            }
-        }
+        let narrowedType = NarrowedVariables.Query(AccessPath.ForVariable(variable))
         if narrowedType == nil || !NarrowedReadChangesRuntimeType(variable.Type, narrowedType) {
             return
         }
@@ -978,13 +979,8 @@ internal class BinderContext {
             narrowedType = nil
             return false
         }
-        for var i = NarrowedVariables.Count - 1; i >= 0; i-- {
-            if NarrowedVariables[i].TryGetValue(path, out narrowedType) {
-                return true
-            }
-        }
-        narrowedType = nil
-        return false
+        narrowedType = NarrowedVariables.Query(path)
+        return narrowedType != nil
     }
 
     /// Records a narrowed variable consumed at a non-null boundary, then
