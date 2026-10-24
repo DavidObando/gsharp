@@ -386,8 +386,10 @@ internal shared class NativeProtocolSafety {
         if visited == nil && !ContainsSavedProtocol(type) {
             return
         }
+        // A fresh set always accepts the first type, and the query above already
+        // answered for it; only a caller-supplied set needs the second query.
         let seen = visited ?? HashSet[TypeSymbol]()
-        if !seen.Add(type) || !ContainsSavedProtocol(type) {
+        if !seen.Add(type) || visited != nil && !ContainsSavedProtocol(type) {
             return
         }
         if type is PlatformTypeSymbol && NativeProtocolOperations.GetProtocol(type) != nil {
