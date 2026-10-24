@@ -33,7 +33,9 @@
   [#5237](https://github.com/DavidObando/gsharp/issues/5237),
   [#5238](https://github.com/DavidObando/gsharp/issues/5238),
   [#5239](https://github.com/DavidObando/gsharp/issues/5239),
-  [#5249](https://github.com/DavidObando/gsharp/issues/5249); PRs
+  [#5249](https://github.com/DavidObando/gsharp/issues/5249),
+  [#5301](https://github.com/DavidObando/gsharp/issues/5301) (filed by this
+  ADR: two hazards for the #5130 slice that lands R6); PRs
   [#5164](https://github.com/DavidObando/gsharp/pull/5164) (ADR-0208, whose
   commit 001ee4ff5 holds the draft this ADR starts from),
   [#5212](https://github.com/DavidObando/gsharp/pull/5212) (PR 1),
@@ -222,7 +224,9 @@ without it, and the second evaluation of the header dereferences nil. The
 loop's entry state must join that jump (section 6, J6 in section 10); the
 R6 slice needs the same rule for the loop mechanism it keeps, or the
 suppression kept for loops that contain a label targeted from outside.
-Filed as an issue against #5130 when this ADR is opened; q6 is its row.
+Both shapes are filed as
+[#5301](https://github.com/DavidObando/gsharp/issues/5301) against #5130;
+q2 and q6 are its rows.
 
 **3e. Loops, `finally` and `catch`.** `continue`, `break` and `goto` out of
 a `try` inside a loop run the `finally` first; a `catch` inside a loop
@@ -1070,9 +1074,9 @@ reverted; the slice's PR body lists the mutant and the rows it turned red:
   and the non-empty-entry guard; the benchmark gates each slice; the
   counters show node visits against node counts.
 - **A forward jump into a loop body** (q6) has no test today and is masked
-  by #4285. Mitigation: q6 joins the corpus in L1 with the M16 mutant; the
-  issue filed against #5130 (section 3d) asks the R6 slice to join the
-  jump into the loop's entry state under the mechanism it keeps.
+  by #4285. Mitigation: q6 joins the corpus in L1 with the M16 mutant;
+  #5301 (section 3d) asks the R6 slice to join the jump into the loop's
+  entry state under the mechanism it keeps.
 
 ### 23. Open questions for the maintainer, each with a recommendation
 
