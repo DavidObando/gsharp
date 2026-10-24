@@ -6,6 +6,47 @@ import Xunit
 
 class NativeSpanLanguageTests {
     @Theory
+    @InlineData("span[T]")
+    @InlineData("readonly span[T]")
+    func ParameterlessGenericAliasesPreserveElementTypes(typeName string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package SpanGenericDefault
+import System
+enum Code { A = 1 }
+func Check[T]() {
+    let empty = TARGET()
+    let values []T = empty.ToArray()
+    Console.WriteLine(values.Length)
+}
+func Main() {
+    Check[byte]()
+    Check[Code]()
+}`.Replace("TARGET", typeName)
+        let assembly = fixture.Compile(source, "span-generic-default", true)
+        IlVerifier.Verify(assembly)
+        Assert.Equal("0\n0\n", fixture.Run(assembly))
+    }
+
+    @Theory
+    @InlineData("span[Code]")
+    @InlineData("readonly span[Code]")
+    func ParameterlessEnumAliasesPreserveOverloadSelection(typeName string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package SpanEnumDefault
+import System
+enum Code { A = 1 }
+func Kind(value TARGET) string -> "Code"
+func Kind(value OTHER) string -> "Object"
+func Main() {
+    let empty = TARGET()
+    Console.WriteLine(Kind(empty))
+}`.Replace("TARGET", typeName).Replace("OTHER", typeName.Replace("Code", "object"))
+        let assembly = fixture.Compile(source, "span-enum-default", true)
+        IlVerifier.Verify(assembly)
+        Assert.Equal("Code\n", fixture.Run(assembly))
+    }
+
+    @Theory
     @InlineData("span[byte](data)")
     @InlineData("Registry.span[byte](data)")
     func EnclosingAndQualifiedSpanMethodsKeepTheirSideEffects(call string) {
@@ -115,6 +156,8 @@ func Main() {
     @InlineData("let value span[void]", "ordinary heap-storable element type")
     @InlineData("let value span[Span[byte]]", "ordinary heap-storable element type")
     @InlineData("let value = readonly span[byte]{1, 2}", "no collection-literal allocation")
+    @InlineData("let value = span[byte]{}", "no collection-literal allocation")
+    @InlineData("let value = span[byte]{Value: 1}", "no collection-literal allocation")
     func InvalidAliasesReportLocatedDiagnostics(statement string, reason string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let (code, output) = fixture.TryCompile(

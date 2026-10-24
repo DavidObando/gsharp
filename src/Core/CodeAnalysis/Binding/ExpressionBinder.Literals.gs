@@ -1602,11 +1602,18 @@ internal partial class ExpressionBinder {
         resolvedDefinition StructSymbol?,
         enclosingTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
     ) BoundExpression {
-        if resolvedDefinition == nil &&
-            syntax.TypeArgumentList is {} nativeTypeArguments &&
-            binderCtx
-            .CanUseNativeBufferAlias($scope, syntax.TypeIdentifier, getCurrentFunction(), expression: true) {
-            return BindEmptyNativeBufferLiteral(syntax, nativeTypeArguments)
+        if resolvedDefinition == nil && syntax.TypeArgumentList is {} nativeTypeArguments {
+            if binderCtx.CanUseSpanAlias($scope, syntax.TypeIdentifier, getCurrentFunction(), expression: true) {
+                return RejectNativeSpanAllocation(syntax)
+            }
+            if binderCtx.CanUseNativeBufferAlias(
+                $scope,
+                syntax.TypeIdentifier,
+                getCurrentFunction(),
+                expression: true
+            ) {
+                return BindEmptyNativeBufferLiteral(syntax, nativeTypeArguments)
+            }
         }
         if syntax.SpreadExpression != nil {
             return BindStructuralSpreadLiteral(syntax, resolvedDefinition, enclosingTypeArguments)
