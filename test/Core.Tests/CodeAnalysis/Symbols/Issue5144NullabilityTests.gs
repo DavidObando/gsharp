@@ -6,6 +6,7 @@ package GSharp.Core.Tests.CodeAnalysis.Symbols
 
 import GSharp.Core.CodeAnalysis.Symbols
 import System
+import System.Collections.Immutable
 import System.Linq
 import System.Reflection
 import System.Reflection.Metadata
@@ -307,6 +308,23 @@ open class Issue5144NullabilityTests {
         let attribute = reader.GetCustomAttribute(reader.GetCustomAttributes(Handle.AssemblyDefinition).First())
         Assert.True(MetadataNullability.IsAttribute(reader, attribute, "NullableContextAttribute"))
         Assert.False(MetadataNullability.IsAttribute(reader, attribute, "NullableAttribute"))
+    }
+
+    @Fact
+    func ACustomModifierBeneathANullable_AddsNoPosition() {
+        using let fixture = CSharpFixture("namespace N5144M { public class C { } }", assemblyName: "Nullable5144M")
+        using let resolver = HandleResolver([]string{fixture.AssemblyPath})
+        let set = resolver.ImageSet!!
+        let modifiedInt = set.GetModified(
+            TypeSymbol.Int32,
+            ImmutableArray.Create(MetadataCustomModifier(TypeSymbol.String, true))
+        )
+        let nullable = NullableTypeSymbol.Get(modifiedInt)
+        Assert.True(MetadataNullability.IsSinglePosition(nullable))
+        Assert.True(MetadataNullability.IsSinglePosition(modifiedInt))
+        let position = MetadataNullability.ApplyPosition(set, nullable, ImmutableArray[uint8].Empty)
+        Assert.False(position.IsDeferred)
+        Assert.Equal("?", MetadataNullability.Mark(position.Type, position.IsDeferred))
     }
 
     @Fact
