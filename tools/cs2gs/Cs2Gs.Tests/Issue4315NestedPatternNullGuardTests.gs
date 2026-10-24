@@ -171,6 +171,40 @@ public static class C
         Assert.Equal("True,1,True,1,True,False,True", Normalize(CompileAndRun(printed, "C.Run()")))
     }
 
+    /// Round 2 of the Copilot review: the guard's two receiver questions (is it a
+    /// bare slice that needs no guard, is it safe to read twice) are decided from
+    /// the receiver's TYPE and its whole emitted chain, so list elements,
+    /// materialized slices and extended-path leaves behave like plain members. The
+    /// `null!` array is the boundary: promoted to `T?`, it keeps its guard and
+    /// yields false, not a NullReferenceException.
+    @Fact
+    func NestedMember_ReceiverClassificationFollowsTypeAndChain() {
+        let printed = Translate(`#nullable enable
+using System;
+namespace Sample;
+public class Child { public int X; }
+public class Holder { public Child Child = new Child(); }
+public class Outer { public int Reads; public Holder P { get { Reads++; return new Holder { Child = new Child { X = Reads } }; } } }
+public class H { public int[][] Items = new[] { new[] { 1 } }; public int[] Flat = new[] { 1, 2 }; public int[] Arr = null!; }
+public static class C
+{
+    public static void Run()
+    {
+        var o = new Outer();
+        Console.WriteLine((o is { P.Child: { X: 1 } }) + "," + o.Reads);
+        var o3 = new Outer();
+        Console.WriteLine((o3 is { P: { Child: { X: 1 } } }) + "," + o3.Reads);
+        var h = new H();
+        Console.WriteLine(h is { Items: [{ Length: > 0 }] });
+        Console.WriteLine(h is { Flat: [.. { Length: > 0 }] });
+        Console.WriteLine(h is { Flat: { Length: 2 } });
+        Console.WriteLine(h is { Arr: { Length: 2 } });
+        Console.WriteLine(h is { Arr: { } });
+    }
+}`)
+        Assert.Equal("True,1,True,1,True,True,True,False,False", Normalize(CompileAndRun(printed, "C.Run()")))
+    }
+
     private func Expected() string {
         return "False,False,True,True,True,other,True,True,lima,False,False,False,False,False,True,True,False,False,False,True"
     }

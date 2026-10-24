@@ -63,7 +63,7 @@ internal class DocumentTranslationState {
         DeconstructionTempNamesByBody = Dictionary[SyntaxNode, HashSet[string]]()
         SynthesizedLocalOccupiedNamesByBody = Dictionary[SyntaxNode, HashSet[string]]()
         GSharpNullablePatternReceivers = HashSet[GExpression](ReferenceEqualityComparer.Instance)
-        BareCollectionPatternReceivers = HashSet[GExpression](ReferenceEqualityComparer.Instance)
+        PromotedNullablePatternMembers = HashSet[GExpression](ReferenceEqualityComparer.Instance)
         StablePatternMemberReads = HashSet[GExpression](ReferenceEqualityComparer.Instance)
         CollectionElementSlots = Dictionary[SyntaxNode, ITypeSymbol]()
         StoredPatternCaptures = HashSet[GExpression](ReferenceEqualityComparer.Instance)
@@ -364,12 +364,12 @@ internal class DocumentTranslationState {
         get;
     }
 
-    // Issue #4315: pattern-lowering member reads whose EMITTED G# type is a bare
-    // (non-`?`) array/slice. gsc's sound empty-instance zero value makes such a
-    // slot never nil, so a `!= nil` guard on it is the dead check GS0523 warns
-    // about; every other reference member keeps its guard. Keyed by node identity
-    // like GSharpNullablePatternReceivers.
-    prop BareCollectionPatternReceivers HashSet[GExpression] {
+    // Issue #4315: pattern-lowering member reads (and the locals they are bound
+    // to) that the nullability funnel renders `T?` although Roslyn types them
+    // non-null (ShouldPromoteToNullableReference). Together with the receiver's
+    // type this decides whether a recursive pattern's `!= nil` guard would be a
+    // dead check on a bare slice (GS0523). Keyed by node identity.
+    prop PromotedNullablePatternMembers HashSet[GExpression] {
         get;
     }
 
