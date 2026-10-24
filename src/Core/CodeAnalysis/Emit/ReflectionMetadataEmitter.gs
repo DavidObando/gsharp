@@ -45,6 +45,7 @@ internal class ReflectionMetadataEmitter {
     // via constructor injection.
     // PR-E-11: widened to internal so the promoted MethodBodyEmitter can read it.
     internal let emitCtx EmitContext
+    internal let utf8Data Utf8LiteralData
     private var workBudget CompilationWorkBudget = CompilationWorkBudget()
 
     // PR-E-2: every key→handle dictionary (assemblyRefs, typeRefs, typeSpecs,
@@ -741,6 +742,7 @@ internal class ReflectionMetadataEmitter {
         embeddedResources IReadOnlyList[(Name string, Data[]uint8, IsPublic bool)]?
     ) {
         this.emitCtx = EmitContext(program!!, references, assemblyName, metadataOnly)
+        this.utf8Data = Utf8LiteralData(program!!, metadataOnly)
         this.embeddedResources = embeddedResources
         this.moduleInitializers = if program == nil {
             ImmutableArray[FunctionSymbol].Empty
@@ -870,6 +872,18 @@ internal class ReflectionMetadataEmitter {
         )
         this.EmitRemainingMethodDefinitions(generatedTypes, aggregateTypes, methodRows, packageMethods)
         this.EmitNestedTypeRows(aggregateTypes, packageMethods, programTypeDefinitions)
+        if this.utf8Data.HasData {
+            this.utf8Data.Emit(
+                this.emitCtx.Metadata,
+                this.memberRefs.GetElementTypeToken(TypeSymbol.Object),
+                this.memberRefs.GetElementTypeToken(
+                    TypeSymbol.FromClrTypeWithoutNullability(
+                        this.emitCtx.CoreValueType,
+                        NullabilityFreeReason.ResolvedTypeName
+                    )
+                )
+            )
+        }
         let mvidFixup = this.EmitModuleAndAssemblyRows()
         let debugArtifacts = this.BuildPortablePdbAndDebugDirectory(packageMethods.EntryPointHandle)
         this.SerializePeAndWriteOutputs(peStream, packageMethods.EntryPointHandle, mvidFixup, debugArtifacts)
@@ -1698,6 +1712,7 @@ internal class ReflectionMetadataEmitter {
             nextFieldRow += s.Fields.Length
         }
         let moduleFirstFieldRow = 1
+        this.utf8Data.PlanFields(nextFieldRow)
         return FieldRowPlan(
             interfaceFirstFieldRow,
             structFirstFieldRow,
@@ -4141,6 +4156,7 @@ internal class ReflectionMetadataEmitter {
                 metadataRootBuilder: MetadataRootBuilder(this.emitCtx.Metadata),
                 ilStream: this.emitCtx.IlStream,
                 managedResources: managedResources,
+                mappedFieldData: this.utf8Data.Data,
                 entryPoint: entryHandle,
                 debugDirectoryBuilder: debugDirectory,
                 deterministicIdProvider: ComputeDeterministicContentId

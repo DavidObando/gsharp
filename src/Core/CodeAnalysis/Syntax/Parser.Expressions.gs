@@ -571,7 +571,7 @@ open partial class Parser {
             case SyntaxKind.StringToken {
                 return ParsePostfixChain(ParseStringLiteral())
             }
-            case SyntaxKind.ByteStringToken {
+            case SyntaxKind.ByteStringToken, SyntaxKind.Utf8StringToken {
                 return ParsePostfixChain(LiteralExpressionSyntax(syntaxTree, NextToken()))
             }
             case SyntaxKind.InterpolatedStringToken {
@@ -728,6 +728,25 @@ open partial class Parser {
 
     private func ParsePostfixChainCore(current ExpressionSyntax, stopBeforeIndirectInvocation bool) ExpressionSyntax {
         var current = current
+        if Current.Kind is SyntaxKind.Utf8StringToken or
+            SyntaxKind.StringToken or
+            SyntaxKind.ByteStringToken or
+            SyntaxKind
+            .InterpolatedStringToken {
+            let utf8Representation = SyntaxFacts.IsUtf8LiteralRepresentation(current)
+            if (utf8Representation || Current.Kind == SyntaxKind.Utf8StringToken) &&
+                (utf8Representation || current is LiteralExpressionSyntax) &&
+                current
+                .Location
+                .EndLine == Current
+                .Location
+                .StartLine {
+                Diagnostics.ReportInvalidUtf8StringLiteral(
+                    Current.Location,
+                    "Adjacent literals are not concatenated; use + between UTF-8 literal representations."
+                )
+            }
+        }
         while true {
             if IsTupleElementSelectorToken(Current, includesDot: true) {
                 // Issue #2924: the lexer keeps `.5` as a leading-dot float

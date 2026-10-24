@@ -1464,6 +1464,26 @@ internal partial class ExpressionBinder {
         } else {
             boundRight = BindExpression(syntax.Right)
         }
+        if syntax
+            .OperatorToken
+            .Kind == SyntaxKind.PlusToken &&
+            boundLeft is BoundUtf8StringExpression leftUtf8 &&
+            boundRight is BoundUtf8StringExpression rightUtf8 &&
+            SyntaxFacts.IsUtf8LiteralRepresentation(syntax.Left) && SyntaxFacts.IsUtf8LiteralRepresentation(
+            syntax.Right
+        ) {
+            if leftUtf8.Bytes.Length > int32.MaxValue - 1 - rightUtf8.Bytes.Length {
+                Diagnostics.ReportInvalidUtf8StringLiteral(syntax.Location, "The combined backing data is too large.")
+                return BoundErrorExpression(syntax)
+            }
+            return BoundUtf8StringExpression(
+                syntax,
+                leftUtf8.Bytes.AddRange(rightUtf8.Bytes),
+                leftUtf8.Type,
+                leftUtf8.CreateSpan,
+                leftUtf8.Slice
+            )
+        }
         if boundLeft.Type == TypeSymbol.Error || boundRight.Type == TypeSymbol.Error {
             if TryBindDelegateCombinationOperator(
                 syntax.OperatorToken.Kind,

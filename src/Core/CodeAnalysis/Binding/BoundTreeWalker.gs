@@ -115,6 +115,7 @@ abstract class BoundTreeWalker {
         }
         switch node.Kind {
             case BoundNodeKind.ErrorExpression,
+            BoundNodeKind.Utf8StringExpression,
             BoundNodeKind.LiteralExpression,
             BoundNodeKind.VariableExpression,
             BoundNodeKind.DefaultExpression,

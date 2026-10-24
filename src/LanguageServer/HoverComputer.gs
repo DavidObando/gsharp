@@ -275,6 +275,7 @@ async sequence[T]
             case SyntaxKind.NumberToken: GetNumericTypeName(token.Value)
             case SyntaxKind.StringToken: "string"
             case SyntaxKind.ByteStringToken: "bytestring"
+            case SyntaxKind.Utf8StringToken: "readonly span[byte]"
             case SyntaxKind.InterpolatedStringToken: "string"
             case SyntaxKind.TrueKeyword: "bool"
             case SyntaxKind.FalseKeyword: "bool"

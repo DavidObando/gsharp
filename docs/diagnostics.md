@@ -16,6 +16,7 @@ value lowering of ordinary source `[N]T`.
 | Code | Severity | Meaning | Remedy |
 | --- | --- | --- | --- |
 | GS0631 | Error | Invalid native CLR span alias: wrong arity or element type, a shadowed readonly form, unavailable core-library span types, a nullable constructor target, or an unsupported allocation literal. | Use one heap-storable element type and a target core library providing CLR spans. If `span` is shadowed, use `System.ReadOnlySpan[T]` explicitly. Construct a non-nullable CLR span; use existing CLR span constructors, not native collection allocation syntax. |
+| GS0632 | Error | Invalid UTF-8 span literal, unsupported literal form, invalid decoded Unicode scalar, lossy source decoding, unavailable target span helpers, or a constant initializer. | Use adjacent lowercase `u8"..."`, valid text escapes, and a target core library with `RuntimeHelpers.CreateSpan` and readonly span slicing. Use literal-only `+` explicitly; the span value is not a metadata constant. |
 
 ## Native protocols (ADR-0205)
 

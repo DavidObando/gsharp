@@ -349,7 +349,7 @@ default: 0
     }
 
     shared {
-        private func RunDriver(directory string, driver string, arguments[]string)(int32, string, string) {
+        internal func RunDriver(directory string, driver string, arguments[]string)(int32, string, string) {
             let start = ProcessStartInfo("dotnet"){
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -366,7 +366,7 @@ default: 0
             if !exited {
                 process.Kill(entireProcessTree: true)
             }
-            Assert.True(exited, "byte-string driver timed out")
+            Assert.True(exited, "literal driver timed out")
             return (
                 process.ExitCode,
                 stdout.GetAwaiter().GetResult().ReplaceLineEndings("\n"),
