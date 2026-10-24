@@ -158,7 +158,9 @@ partial class PropertyDeclarationSyntax : SyntaxNode {
     }
 
     /// Gets the `this` contextual keyword token when this declaration is an
-    /// indexer member (ADR-0118), or `null` for an ordinary property.
+    /// indexer member (ADR-0118), or `null` for an ordinary property. For an indexer this is the same
+    /// token as (cref:Identifier), which already lists it as a child.
+    @SyntaxChildIgnore
     prop ThisKeyword SyntaxToken? {
         get;
         private set;

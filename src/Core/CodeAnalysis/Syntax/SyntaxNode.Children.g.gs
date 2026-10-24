@@ -4423,9 +4423,6 @@ partial class ImportSyntax {
         if IsPresent(EqualsToken) {
             builder.Add(EqualsToken!!)
         }
-        for itemIdentifiers in Identifiers {
-            builder.Add(itemIdentifiers)
-        }
         for itemIdentifiersWithDots in IdentifiersWithDots {
             builder.Add(itemIdentifiersWithDots)
         }
@@ -6094,9 +6091,6 @@ partial class PackageSyntax {
         if IsPresent(PackageKeyword) {
             builder.Add(PackageKeyword)
         }
-        for itemIdentifiers in Identifiers {
-            builder.Add(itemIdentifiers)
-        }
         for itemIdentifiersWithDots in IdentifiersWithDots {
             builder.Add(itemIdentifiersWithDots)
         }
@@ -6375,9 +6369,6 @@ partial class PropertyDeclarationSyntax {
         }
         if IsPresent(Identifier) {
             builder.Add(Identifier)
-        }
-        if IsPresent(ThisKeyword) {
-            builder.Add(ThisKeyword!!)
         }
         if IsPresent(OpenBracketToken) {
             builder.Add(OpenBracketToken!!)
