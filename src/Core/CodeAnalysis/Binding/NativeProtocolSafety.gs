@@ -25,7 +25,30 @@ internal shared class NativeProtocolSafety {
     private var memoAny Dictionary[TypeSymbol, bool]?
 
     @ThreadStatic
+    private var memoProtocol Dictionary[TypeSymbol, bool]?
+
+    // Every entry of one top-level walk (a type may appear more than once), so a
+    // walk that finds nothing can record each of them as protocol-free (issue #5201).
+    @ThreadStatic
+    private var walkVisited List[TypeSymbol]?
+
+    @ThreadStatic
     private var memoDepth int32
+
+    // Hits are tallied in plain thread-static fields and published once when the
+    // outermost pass ends: a named counter costs a dictionary update, which is
+    // too much for a path that runs once per bound expression.
+    @ThreadStatic
+    private var memoHits int64
+
+    @ThreadStatic
+    private var memoWalks int64
+
+    @ThreadStatic
+    private var memoPruned int64
+
+    @ThreadStatic
+    private var memoEntered int64
 
     // Re-entrant: only the outermost Begin installs the memo and only the
     // matching outermost End drops it, so a nested pass cannot clear the outer
@@ -34,6 +57,11 @@ internal shared class NativeProtocolSafety {
         if memoDepth == 0 {
             memoSaved = Dictionary[TypeSymbol, bool]()
             memoAny = Dictionary[TypeSymbol, bool]()
+            memoProtocol = Dictionary[TypeSymbol, bool]()
+            memoHits = 0
+            memoWalks = 0
+            memoPruned = 0
+            memoEntered = 0
         }
         memoDepth++
     }
@@ -44,8 +72,34 @@ internal shared class NativeProtocolSafety {
             if memoDepth == 0 {
                 memoSaved = nil
                 memoAny = nil
+                memoProtocol = nil
+                walkVisited = nil
+                CompilationMeasurements.Count("nativeprotocol.memo-hits", memoHits)
+                CompilationMeasurements.Count("nativeprotocol.memo-walks", memoWalks)
+                CompilationMeasurements.Count("nativeprotocol.memo-pruned", memoPruned)
+                CompilationMeasurements.Count("nativeprotocol.walk-entered", memoEntered)
+                memoHits = 0
+                memoWalks = 0
+                memoPruned = 0
+                memoEntered = 0
             }
         }
+    }
+
+    // NativeProtocolMetadata.IsProtocol reads custom-attribute data for an imported
+    // interface on every call. It depends only on the type, so the run keeps the
+    // answer (issue #5201). Absent a run it simply asks.
+    internal func IsProtocol(type TypeSymbol) bool {
+        let memo = memoProtocol
+        if memo == nil {
+            return NativeProtocolMetadata.IsProtocol(type)
+        }
+        if memo.TryGetValue(type, out var known) {
+            return known
+        }
+        let found = NativeProtocolMetadata.IsProtocol(type)
+        memo[type] = found
+        return found
     }
 
     internal func ContainsSavedProtocol(type TypeSymbol) bool {
@@ -53,14 +107,7 @@ internal shared class NativeProtocolSafety {
         if memo == nil {
             return ContainsDependency(type, true, HashSet[TypeSymbol](), HashSet[System.Type]())
         }
-        if memo.TryGetValue(type, out var known) {
-            CompilationMeasurements.Count("nativeprotocol.memo-hits")
-            return known
-        }
-        CompilationMeasurements.Count("nativeprotocol.memo-walks")
-        let found = ContainsDependency(type, true, HashSet[TypeSymbol](), HashSet[System.Type]())
-        memo[type] = found
-        return found
+        return QueryMemoized(type, true, memo)
     }
 
     internal func ContainsProtocol(type TypeSymbol) bool {
@@ -68,12 +115,44 @@ internal shared class NativeProtocolSafety {
         if memo == nil {
             return ContainsDependency(type, false, HashSet[TypeSymbol](), HashSet[System.Type]())
         }
+        return QueryMemoized(type, false, memo)
+    }
+
+    private func QueryMemoized(type TypeSymbol, includeStorage bool, memo Dictionary[TypeSymbol, bool]) bool {
         if memo.TryGetValue(type, out var known) {
-            CompilationMeasurements.Count("nativeprotocol.memo-hits")
+            memoHits++
             return known
         }
-        CompilationMeasurements.Count("nativeprotocol.memo-walks")
-        let found = ContainsDependency(type, false, HashSet[TypeSymbol](), HashSet[System.Type]())
+        memoWalks++
+        let outer = walkVisited
+        let visited = List[TypeSymbol]()
+        walkVisited = visited
+        var found = false
+        try {
+            found = ContainsDependency(type, includeStorage, HashSet[TypeSymbol](), HashSet[System.Type]())
+        } finally {
+            walkVisited = outer
+        }
+        memoEntered += visited.Count
+        // Only a negative top-level answer is recorded for the types the walk
+        // entered. A walk that finds nothing has entered every type reachable
+        // from its root (a cutoff only skips a type that is already entered),
+        // so each entered type's own reachable set lies inside a protocol-free
+        // set and is protocol-free alone. A later walk can then stop at it
+        // instead of re-walking its whole graph (a class's fields reach most of
+        // the compiler's types). Stopping early cannot change an answer: if
+        // Box[A] is recorded, Box's definition is protocol-free, so a later walk
+        // of Box[B] can only find a protocol through B, which the
+        // type-argument check examines before the definition cutoff anyway. A
+        // positive walk records only its root: its inner results were reached
+        // under seen/importedDelegates cutoffs and prove nothing about the types
+        // entered on the way. The memo is keyed per includeStorage, as the
+        // walk's edges differ between the two queries.
+        if !found {
+            for entered in visited {
+                memo[entered] = false
+            }
+        }
         memo[type] = found
         return found
     }
@@ -98,6 +177,19 @@ internal shared class NativeProtocolSafety {
         seen HashSet[TypeSymbol],
         importedDelegates HashSet[System.Type]
     ) bool {
+        let entered = walkVisited
+        if entered != nil {
+            let memo = if includeStorage {
+                memoSaved
+            } else {
+                memoAny
+            }
+            if memo != nil && memo.TryGetValue(type, out var settled) {
+                memoPruned++
+                return settled
+            }
+            entered.Add(type)
+        }
         if NativeProtocolOperations.GetProtocol(type) != nil {
             return true
         }
@@ -288,8 +380,16 @@ internal shared class NativeProtocolSafety {
         diagnostics DiagnosticBag,
         visited HashSet[TypeSymbol]? = nil
     ) {
+        // The overwhelmingly common answer is "no protocol anywhere in this type";
+        // settle it before allocating the visited set (issue #5201). Either test
+        // failing returns, so the order does not change the result.
+        if visited == nil && !ContainsSavedProtocol(type) {
+            return
+        }
+        // A fresh set always accepts the first type, and the query above already
+        // answered for it; only a caller-supplied set needs the second query.
         let seen = visited ?? HashSet[TypeSymbol]()
-        if !seen.Add(type) || !ContainsSavedProtocol(type) {
+        if !seen.Add(type) || visited != nil && !ContainsSavedProtocol(type) {
             return
         }
         if type is PlatformTypeSymbol && NativeProtocolOperations.GetProtocol(type) != nil {

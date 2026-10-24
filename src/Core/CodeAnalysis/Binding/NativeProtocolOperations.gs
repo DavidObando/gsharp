@@ -50,7 +50,7 @@ internal class NativeProtocolOperations {
                     type
                 }
             )
-            return if NativeProtocolMetadata.IsProtocol(underlying) {
+            return if NativeProtocolSafety.IsProtocol(underlying) {
                 underlying
             } else {
                 nil
