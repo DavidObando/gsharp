@@ -128,12 +128,14 @@ partial class SemanticModel {
     /// literal, the property behind an auto-property backing-field read (at the
     /// constructed receiver's signature), and the type behind a static
     /// qualifier whose read the binder folded. An identifier token answers the
-    /// symbol it declares or names; a name that differs from the token text, and
+    /// symbol the binder recorded for it (a local, a parameter, a pattern
+    /// variable) or the symbol it names; a name that differs from the token text, and
     /// a field-like event's backing field, answer nothing.
     /// @param node The syntax node to resolve.
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The resolution result; (cref:SymbolInfo.Symbol) is null when nothing is referenced.
     func GetSymbolInfo(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) SymbolInfo {
+        cancellationToken.ThrowIfCancellationRequested()
         if node is SyntaxToken{Kind: SyntaxKind.IdentifierToken} token {
             return SymbolInfo(GetTokenSymbol(token))
         }

@@ -82,8 +82,9 @@ partial class SemanticModel {
 
     /// Returns the candidates that the call or member name at [`node`](paramref)
     /// resolved among, in declaration order: the overloads of the resolved
-    /// function in its declaring type (without inherited members) or, for a
-    /// free function, in the global scope. An imported function answers itself.
+    /// function in its declaring type (without inherited members, with the
+    /// private helpers of an interface) or, for a free function, in its package.
+    /// An imported or local function answers itself.
     /// @param node A call, a name or a member access.
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The candidates; empty when the node does not resolve to a function.
@@ -91,39 +92,87 @@ partial class SemanticModel {
         node SyntaxNode,
         cancellationToken CancellationToken = default(CancellationToken)
     ) ImmutableArray[Symbol] {
+        cancellationToken.ThrowIfCancellationRequested()
         if GetSymbolInfo(node, cancellationToken).Symbol is not FunctionSymbol function {
             return ImmutableArray[Symbol].Empty
         }
         let builder = ImmutableArray.CreateBuilder[Symbol]()
-        if function is ImportedFunctionSymbol {
+        if function is ImportedFunctionSymbol || function.IsLocalFunction || function.LocalDeclaration != nil {
+            // An imported function has no source overload set here, and a local
+            // function is reached by its lexical name.
             builder.Add(function)
-        } else if function.StaticOwnerType is {} staticOwner &&
-            (staticOwner is StructSymbol || staticOwner is InterfaceSymbol) {
+            return builder.ToImmutable()
+        }
+        let isStatic = function.StaticOwnerType != nil
+        let owner = StripWrappers(function.StaticOwnerType ?? function.ReceiverType ?? CallReceiverType(node))
+        if owner is {} typedOwner && (typedOwner is StructSymbol || typedOwner is InterfaceSymbol) {
             // ADR-0112: the canonical layer, non-inherited, matching the
             // historic single-declaring-type count.
             for method in TypeMemberModel.GetMethods(
-                staticOwner,
+                typedOwner,
                 function.Name,
-                MemberQuery(includeInstance: false, includeStatic: true, includeInherited: false, MemberKinds.Method)
+                MemberQuery(
+                    includeInstance: !isStatic,
+                    includeStatic: isStatic,
+                    includeInherited: false,
+                    MemberKinds.Method
+                )
             ) {
                 builder.Add(method)
             }
-        } else if function.ReceiverType is {} owner && (owner is StructSymbol || owner is InterfaceSymbol) {
-            for method in TypeMemberModel.GetMethods(
-                owner,
-                function.Name,
-                MemberQuery(includeInstance: true, includeStatic: false, includeInherited: false, MemberKinds.Method)
-            ) {
-                builder.Add(method)
+            // A private interface helper is visible inside the interface.
+            if typedOwner is InterfaceSymbol contract {
+                let helpers = if isStatic {
+                    contract.StaticPrivateMethods
+                } else {
+                    contract.PrivateMethods
+                }
+                for helper in helpers {
+                    if helper.Name == function.Name {
+                        builder.Add(helper)
+                    }
+                }
             }
         } else {
+            // Binding picks a free function among the functions of one package.
             for candidate in compilation.GlobalScope.Functions {
-                if candidate.Name == function.Name {
+                if candidate.Name == function.Name && object.ReferenceEquals(candidate.Package, function.Package) {
                     builder.Add(candidate)
                 }
             }
         }
+        if builder.Count == 0 {
+            builder.Add(function)
+        }
         return builder.ToImmutable()
+    }
+
+    /// Gets the type of the receiver of the user instance call that [`node`](paramref)
+    /// names. A constructed generic interface's methods do not record their receiver.
+    private func CallReceiverType(node SyntaxNode) TypeSymbol? {
+        let bound BoundExpression? = if node is SyntaxToken{Kind: SyntaxKind.IdentifierToken} token {
+            Unwrap(FindReferencedNode(token))
+        } else {
+            Unwrap(GetBoundNode(node) as BoundExpression)
+        }
+        return if bound is BoundUserInstanceCallExpression call {
+            call.Receiver.Type
+        } else {
+            default(TypeSymbol?)
+        }
+    }
+
+    private func StripWrappers(type TypeSymbol?) TypeSymbol? {
+        var current = type
+        while true {
+            if current is NullableTypeSymbol nullable {
+                current = nullable.UnderlyingType
+            } else if current is PlatformTypeSymbol platform {
+                current = platform.UnderlyingType
+            } else {
+                return current
+            }
+        }
     }
 
     shared {

@@ -11,6 +11,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Linq
+import System.Threading
 import Xunit
 
 /// ADR-0212 slice S2: (cref:SemanticModel.GetSymbolInfo) answers what a bound node means,
@@ -84,6 +85,28 @@ open class Adr0212SymbolInfoTests {
     }
 
     @Fact
+    func MemberGroup_OnAConstructedGenericInterface_ListsItsOverloads() {
+        let (model, tree) = CreateModel(Source)
+        let call = tree
+            .Root
+            .DescendantNodes()
+            .OfType[CallExpressionSyntax]()
+            .First((c CallExpressionSyntax) -> c.Identifier.Text == "Area")
+        let group = model.GetMemberGroup(call)
+        Assert.Equal(2, group.Length)
+        Assert.All(group, (s Symbol) -> Assert.Equal("Area", s.Name))
+    }
+
+    @Fact
+    func Queries_HonourACancelledToken() {
+        let (model, tree) = CreateModel(Source)
+        let token = NameToken(tree, "Value", "Fold", 0)
+        let cancelled = CancellationToken(true)
+        Assert.Throws[OperationCanceledException](() -> model.GetSymbolInfo(token, cancelled))
+        Assert.Throws[OperationCanceledException](() -> model.GetMemberGroup(token, cancelled))
+    }
+
+    @Fact
     func MemberGroup_OfANonFunction_IsEmpty() {
         let (model, tree) = CreateModel(Source)
         let token = NameToken(tree, "Value", "Fold", 0)
@@ -122,6 +145,11 @@ enum Color { Red, Green }
 interface Box[T] {
     prop Value T { get; }
 }
+interface Shape[T] {
+    func Area(a T) int32
+    func Area(a T, b T) int32
+}
+func UseShape(shape Shape[string]) int32 -> shape.Area("a")
 func Pick(a int32) string -> "i"
 func Pick(a string) string -> "s"
 class Constants {
