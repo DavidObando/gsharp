@@ -1152,8 +1152,24 @@ explicit capability revision, not edits to `V1` or automatic element adapters.
 Do not publish another owner assembly or move definitions by type forwarding
 in v1. Keep old definitions available when introducing a new ABI.
 
+F1 (#5236) freezes the measured owner as
+`Gsharp.Runtime.Values, Version=0.5.0.0, Culture=neutral, PublicKeyToken=null`,
+with default sequential packing and no explicit layout size. The runtime
+advertises `AssemblyMetadata("GSharp.FixedArrayAbi", "1")`; a producer
+explicitly claiming fixed shapes advertises
+`AssemblyMetadata("GSharp.FixedArrays", "1")`. Duplicate or unsupported
+markers diagnose. The owner's public definitions must originate in that
+assembly, not forwarded replacements. The required `struct` constraints are
+the CLR value-type/default-constructor flags; a redundant `System.ValueType`
+constraint row does not change their meaning.
+An extra `unmanaged` constraint is not equivalent and must be rejected.
+
 The SDK supplies one canonical reference/runtime pair. Producers reference
-that owner instead of embedding its definitions. Reexports preserve the
+that owner instead of embedding its definitions. Tool payloads can contain
+physical copies, but every packaged copy must match the SDK-owned runtime.
+`build/check-fixed-array-owner.py` checks actual package bytes against that
+runtime before the SDK end-to-end test changes its sample pin.
+Reexports preserve the
 originating owner and closed generic arguments. A resolver must unify
 compatible references to that actual owner; unresolved or conflicting owners
 diagnose. A lookalike namespace, assembly name or manifest claim is insufficient.
@@ -1187,6 +1203,37 @@ CLR types; they cannot convert to `[N]T`. A producer claiming that such a type
 is a fixed array must diagnose on import. Actual reference assemblies must
 contain every needed public definition, signature, helper and annotation.
 Import cannot depend on private fields or reference method bodies.
+
+F1 validates these explicit claims without replacing ordinary source
+`ArrayTypeSymbol` or granting semantic authority to raw imported CLR carriers.
+Automatic capability emission for newly lowered native `[N]T` signatures
+belongs to F2; a handwritten F1 marker is emitted unchanged through both
+implementation and reference outputs. The F1 decoder/signature visitor uses
+a depth budget of 256, diagnosing exhaustion instead of changing storage.
+This is a metadata resource ceiling, not certification of all CLR layouts
+below it or a supported-length increase beyond 32.
+F1 reads `InterfaceImpl` and type/method `GenericParamConstraint` annotations
+from their metadata rows, through the ADR-0186/0193 declaration readers and
+receiver-aware projection. It validates public declared members, including
+constructors and inherited static members, at each projected hierarchy node.
+Independent implementation/reference witnesses cover marked closed receivers
+over unmarked generic bases, transitive interface/base relationships and
+framework-forwarded interface identities, including nested types forwarded
+through their declaring type. Constructed declaring contexts must match the
+selected closed CLR identity, not just its generic definition. Projection
+memoizes unsuccessful annotation-aware receiver states within each search;
+shared diamonds must not cause exponential metadata work.
+Unsubstituted CLR declarations keep
+their declared annotations; substituted slots use the canonical open-slot rule.
+Unreadable, ambiguous or contradictory marked relationships diagnose GS0630.
+Fixed-bearing unmanaged pointer/function-pointer signatures also fail closed;
+the ordinary element-position query does not admit those unsafe boundaries.
+Fixed-bearing detection includes projected public members and constraints,
+not only the interface's type arguments.
+Different nullability paths to one fixed-bearing CLR interface are ambiguous;
+the importer must not choose a path by traversal order. Unmarked ordinary CLR
+contracts keep their existing treatment. These readers do not grant raw
+carriers source-level fixed-array authority or complete the remaining F1 gates.
 
 Distinct lengths and invariant generic instantiations remain distinct.
 Aliases of the same source shape share `C(T,N)`; this does not merge distinct
@@ -1376,7 +1423,7 @@ If a verifier, runtime or pinned-compiler limitation blocks a slice, keep
 that slice unshipped and report it. Do not add a source exclusion, change
 the SDK pin or use an unreleased compiler to bypass it.
 
-Current evidence is **only** section 8/#5225: 33 integer lengths, selected
+At design approval, the evidence was **only** section 8/#5225: 33 integer lengths, selected
 reference/open/nested shapes, implementation/ref exchange, explicit retained
 owners and three discriminating prototype mutants. The prototype's verifier
 exclusions and unverified scenario IL remain exclusions. Automatic promotion,
@@ -1386,6 +1433,24 @@ No new executable investigation is needed to choose this proposal; those
 are implementation acceptance tests, not facts a design edit can establish.
 Go-family admission and audio workload acceptance remain ADR-0191 gates;
 M0 still reports `migrationReady: false`.
+
+F1 implementation and evidence are tracked separately in #5236. The
+interface/constraint readers have discriminating product-driver witnesses.
+The pinned 0.5.212 compiler also publishes and runs the production carriers
+under actual macOS arm64 NativeAOT: all 33 lengths, independent invariant
+exchange and selected generic/nested/reference/nullable/CLR-array copies.
+A buildable generic-value-loss mutant fails that native witness. This is
+host-specific evidence, not certification of every release-supported target.
+Reproduce with `python3 e2etests/fixed-array-abi-aot.py --rid osx-arm64`;
+supply installed native linker dependency paths when the host requires them.
+
+These witnesses do not close the full-runtime strict gate: ILVerify 10.0.8
+reports the same two `ReturnPtrToStack` diagnostics in existing native-slice
+`AsSpan` methods in both the changed SDK runtime and published 0.5.212 runtime.
+The separate P2 blocker is [#5244](https://github.com/DavidObando/gsharp/issues/5244),
+with an exact published-binary reproduction and upstream provenance.
+No suppression or gate waiver is authorized. F1 stays unshipped while this
+gate and any applicable release-target evidence remain open.
 
 #### Recorded maintainer decisions
 

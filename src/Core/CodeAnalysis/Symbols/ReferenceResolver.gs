@@ -1340,6 +1340,26 @@ class ReferenceResolver : IDisposable {
             return nil
         }
 
+        internal func OpenReferencedAssemblyImage(origin Assembly, simpleName string) Stream? {
+            if AssemblyImageLookups.TryGetValue(origin, out var imageOf) {
+                let image = imageOf(simpleName)
+                return if image != nil {
+                    MemoryStream(image, writable: false)
+                } else {
+                    nil
+                }
+            }
+            let assembly = AssemblyLoadContext
+                .GetLoadContext(origin)
+                ?.Assemblies
+                .FirstOrDefault((candidate Assembly) -> candidate.GetName().Name == simpleName)
+            return if assembly != nil {
+                OpenAssemblyImage(assembly)
+            } else {
+                nil
+            }
+        }
+
         /// Gets a resolver that searches the runtime's currently loaded
         /// assemblies plus the well-known BCL assemblies.
         /// @returns A default resolver.
@@ -1708,6 +1728,11 @@ class ReferenceResolver : IDisposable {
             }
             for path in paths {
                 if string.Equals(Path.GetFullPath(path), bundledPath, StringComparison.OrdinalIgnoreCase) {
+                    return
+                }
+                if Path.GetFileName(bundledPath) == "Gsharp.Runtime.Values.dll" && File.Exists(path) &&
+                    AssemblyName
+                    .GetAssemblyName(path).Name == NativeSliceTypes.AssemblyName {
                     return
                 }
             }
