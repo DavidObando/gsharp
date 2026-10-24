@@ -5,6 +5,7 @@
 package GSharp.Compiler.Tests
 
 import GSharp.Compiler
+import Gsharp.Values
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
@@ -24,6 +25,347 @@ import Xunit.Sdk
 /// gate: if these break, every Compile…+Verify call elsewhere in this assembly
 /// is producing meaningless results.
 open class IlVerifierTests {
+    @Fact
+    func LiteralRefLikeReturn_AdmitsOnlyFrozenIndependentlyWitnessedImage() {
+        let directory = Directory.CreateTempSubdirectory("ilverify-literal-proof-").FullName
+        try {
+            let dll = WriteLiteralProof(directory, byRef: false)
+            let report = StaticInterfaceReport(dll)
+            Assert.Contains("1 Error(s) Verifying " + dll, report, StringComparison.Ordinal)
+            Assert.Contains("Utf8Proof.Utf8Candidate::Get()][offset 0x00000014]", report, StringComparison.Ordinal)
+            Assert.True(IlVerifyFalsePositives.OnlyKnown(dll, report), report)
+            Assert.Equal(0, RunStandaloneAdapter(dll, report, expectApprovedReturn: true, expectedAccepted: 1))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData(int32(0))
+    @InlineData(int32(1))
+    @InlineData(int32(2))
+    @InlineData(int32(3))
+    func LiteralRefLikeReturn_RejectsActualByRefAndSameDiagnosticStorageMutants(mutant int32) {
+        let directory = Directory.CreateTempSubdirectory("ilverify-literal-negative-").FullName
+        try {
+            let dll = WriteLiteralProof(directory, byRef: mutant == 0)
+            let bytes = File.ReadAllBytes(dll)
+            using let pe = PEReader(MemoryStream(bytes, writable: false))
+            let md = pe.GetMetadataReader()
+            let method = md.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(1))
+            if mutant == 0 {
+                Assert.Equal(uint8(0x10), md.GetBlobBytes(method.Signature)[2])
+            } else if mutant == 1 {
+                let field = md.GetFieldDefinition(MetadataTokens.FieldDefinitionHandle(1))
+                let rva = field.GetRelativeVirtualAddress()
+                let section = pe
+                    .PEHeaders
+                    .SectionHeaders
+                    .Single((s SectionHeader) -> rva >= s.VirtualAddress && rva < s.VirtualAddress + s.SizeOfRawData)
+                bytes[rva - section.VirtualAddress + section.PointerToRawData + 4] = uint8(0x7F)
+            } else if mutant == 2 {
+                let section = pe
+                    .PEHeaders
+                    .SectionHeaders
+                    .Single(
+                    (s SectionHeader) -> method.RelativeVirtualAddress >= s.VirtualAddress &&
+                        method.RelativeVirtualAddress < s.VirtualAddress +
+                        s.SizeOfRawData
+                )
+                let header = method.RelativeVirtualAddress - section.VirtualAddress + section.PointerToRawData
+                let code = header + int32(bytes[header + 1] >> 4) * 4
+                Assert.Equal(uint8(0x1A), bytes[code + 14])
+                bytes[code + 14] = uint8(0x1B)
+            } else {
+                let name = pe.PEHeaders.MetadataStartOffset + md.GetHeapMetadataOffset(HeapIndex.String) +
+                    MetadataTokens.GetHeapOffset(method.Name)
+                bytes[name + 1] = uint8('u')
+            }
+            File.WriteAllBytes(dll, bytes)
+            let report = StaticInterfaceReport(dll)
+            Assert.Contains("[ReturnPtrToStack]", report, StringComparison.Ordinal)
+            Assert.Contains("1 Error(s) Verifying " + dll, report, StringComparison.Ordinal)
+            if mutant == 0 {
+                // A forged permitted offset must not turn the actual byref signature into a safe by-value image.
+                Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report.Replace("0x00000017", "0x00000014")))
+            }
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report), report)
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    private func WriteLiteralProof(directory string, byRef bool) string {
+        let name = if byRef {
+            "TrueByRefNegative"
+        } else {
+            "Utf8Candidate"
+        }
+        let source = Path.Combine(
+            IlVerifier.FindRepoRoot(),
+            "test",
+            "Compiler.Tests",
+            "TestData",
+            "IlVerify",
+            name + ".base64.txt"
+        )
+        let dll = Path.Combine(directory, name + ".dll")
+        File.WriteAllBytes(dll, Convert.FromBase64String(File.ReadAllText(source)))
+        return dll
+    }
+
+    @Fact
+    func RuntimeRefLikeReturns_RequireApprovedExactProductionProof() {
+        let dll = typeof(Slice[_]).Assembly.Location
+        let report = StaticInterfaceReport(dll)
+        Assert.Contains("2 Error(s) Verifying " + dll, report, StringComparison.Ordinal)
+        Assert.Contains("Slice`1::AsSpan()][offset 0x00000017]", report, StringComparison.Ordinal)
+        Assert.Contains("ReadOnlySlice`1::AsSpan()][offset 0x00000010]", report, StringComparison.Ordinal)
+        Assert.True(
+            IlVerifyFalsePositives.OnlyKnown(dll, report),
+            report + "\nAudited runtime proof: " + IlVerifyFalsePositives.RuntimeReturnProof(dll)
+        )
+        let accepted = IlVerifyFalsePositives.Analyze(dll, report)
+        Assert.True(accepted.Complete)
+        Assert.Equal(2, accepted.Accepted.Length)
+        Assert.Empty(accepted.Unexpected)
+        Assert.All(
+            accepted.Accepted,
+            (line string) -> Assert.Contains("[approved #5244; dotnet/runtime#129030]", line, StringComparison.Ordinal)
+        )
+        Assert.Equal(0, RunStandaloneAdapter(dll, report, expectApprovedReturn: true))
+    }
+
+    @Theory
+    @InlineData(int32(0))
+    @InlineData(int32(1))
+    @InlineData(int32(2))
+    @InlineData(int32(3))
+    @InlineData(int32(4))
+    @InlineData(int32(5))
+    @InlineData(int32(6))
+    @InlineData(int32(7))
+    @InlineData(int32(8))
+    @InlineData(int32(9))
+    @InlineData(int32(10))
+    @InlineData(int32(11))
+    @InlineData(int32(12))
+    @InlineData(int32(13))
+    func RuntimeRefLikeReturns_RejectMalformedAndNearMissReports(mutant int32) {
+        let dll = typeof(Slice[_]).Assembly.Location
+        let report = StaticInterfaceReport(dll)
+        let lines = report.Replace("\r\n", "\n").Split('\n').Where((line string) -> line.Length != 0).ToArray()
+        let bad = if mutant == 0 {
+            report.Replace("0x00000017", "0x00000018")
+        } else if mutant == 1 {
+            report.Replace("[ReturnPtrToStack]", "[StackUnderflow]")
+        } else if mutant == 2 {
+            report.Replace("::AsSpan()", "::Other()")
+        } else if mutant == 3 {
+            report.Replace("2 Error(s)", "3 Error(s)")
+        } else if mutant == 4 {
+            report.Replace("Verifying " + dll, "Verifying " + dll + ".other")
+        } else if mutant == 5 {
+            lines[0] + "\n" + lines[0] + "\n" + lines[2]
+        } else if mutant == 6 {
+            report + "\nUnhandled tool failure"
+        } else if mutant == 7 {
+            lines[0] + "\n" + lines[1]
+        } else if mutant == 8 {
+            lines[0] + "\n" + lines[1] + "\n" + lines[2] + "\n" + lines[2]
+        } else if mutant == 9 {
+            lines[0] + "\n" + lines[2] + "\n" + lines[1]
+        } else if mutant == 10 {
+            report.Replace("2 Error(s)", "999999999999999999999999999999 Error(s)")
+        } else if mutant == 11 {
+            report.Replace("ArgIterator.", "ArgIterator")
+        } else if mutant == 12 {
+            report.Replace(dll + " : ", dll + ".other : ")
+        } else {
+            report.Replace("Gsharp.Values.Slice`1::", "Gsharp.Values.Slice`2::")
+        }
+        Assert.NotEqual(report, bad)
+        Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, bad), bad)
+    }
+
+    @Theory
+    @InlineData(int32(0))
+    @InlineData(int32(1))
+    @InlineData(int32(2))
+    @InlineData(int32(3))
+    @InlineData(int32(4))
+    @InlineData(int32(5))
+    @InlineData(int32(6))
+    @InlineData(int32(7))
+    func RuntimeRefLikeReturns_RejectChangedSignatureClosureAndProvenance(mutant int32) {
+        let original = typeof(Slice[_]).Assembly.Location
+        let report = StaticInterfaceReport(original)
+        let directory = Directory.CreateTempSubdirectory("ilverify-runtime-proof-").FullName
+        try {
+            let dll = Path.Combine(directory, Path.GetFileName(original))
+            let bytes = File.ReadAllBytes(original)
+            using let pe = PEReader(MemoryStream(bytes, writable: false))
+            let md = pe.GetMetadataReader()
+            let expectedType = if mutant == 1 {
+                "Gsharp.Values.ReadOnlySlice`1"
+            } else {
+                "Gsharp.Values.Slice`1"
+            }
+            let expectedName = if mutant == 2 {
+                "get_Owner"
+            } else {
+                "AsSpan"
+            }
+            let target = md.MethodDefinitions.Single(
+                (handle MethodDefinitionHandle) -> {
+                    let method = md.GetMethodDefinition(handle)
+                    return IlVerifyFilterInFinallyRule.GetTypeName(md, method.GetDeclaringType()) == expectedType &&
+                        md.GetString(method.Name) == expectedName
+                }
+            )
+            let method = md.GetMethodDefinition(target)
+            if mutant <= 2 || mutant == 7 {
+                let section = pe
+                    .PEHeaders
+                    .SectionHeaders
+                    .Single(
+                    (s SectionHeader) -> method.RelativeVirtualAddress >= s.VirtualAddress &&
+                        method.RelativeVirtualAddress < s.VirtualAddress +
+                        s.SizeOfRawData
+                )
+                let header = method.RelativeVirtualAddress - section.VirtualAddress + section.PointerToRawData
+                let code = header + if (bytes[header] & uint8(3)) == uint8(2) {
+                    1
+                } else {
+                    int32(bytes[header + 1] >> 4) * 4
+                }
+                if mutant == 7 {
+                    Assert.Equal(uint8(0x28), bytes[code + 18])
+                    Array.Copy(BitConverter.GetBytes(MetadataTokens.GetToken(target)), 0, bytes, code + 19, 4)
+                } else {
+                    Assert.Equal(uint8(2), bytes[code])
+                    bytes[code] = uint8(0x14)
+                }
+            } else if mutant == 3 {
+                let byRef = md
+                    .MethodDefinitions
+                    .Select(md.GetMethodDefinition)
+                    .First(
+                    (candidate MethodDefinition) -> {
+                        let signature = md.GetBlobBytes(candidate.Signature)
+                        return signature.Length >= 3 &&
+                            signature[0] == uint8(0x20) &&
+                            signature[1] == uint8(0) &&
+                            signature[2] == uint8(0x10)
+                    }
+                )
+                let row = pe.PEHeaders.MetadataStartOffset + md.GetTableMetadataOffset(TableIndex.MethodDef) +
+                    (MetadataTokens.GetRowNumber(target) - 1) * md.GetTableRowSize(TableIndex.MethodDef)
+                Assert.Equal(
+                    2,
+                    if md.GetHeapSize(HeapIndex.String) > 65535 {
+                        4
+                    } else {
+                        2
+                    }
+                )
+                let signatureColumn = row + 8 + 2
+                let width = if md.GetHeapSize(HeapIndex.Blob) > 65535 {
+                    4
+                } else {
+                    2
+                }
+                Array.Copy(
+                    BitConverter.GetBytes(MetadataTokens.GetHeapOffset(byRef.Signature)),
+                    0,
+                    bytes,
+                    signatureColumn,
+                    width
+                )
+            } else if mutant == 4 {
+                let owner = md.GetTypeDefinition(method.GetDeclaringType()).GetFields().First()
+                let row = pe.PEHeaders.MetadataStartOffset + md.GetTableMetadataOffset(TableIndex.Field) +
+                    (MetadataTokens.GetRowNumber(owner) - 1) * md.GetTableRowSize(TableIndex.Field)
+                let flags = BitConverter.ToUInt16(bytes, row) | uint16(FieldAttributes.Static)
+                Array.Copy(BitConverter.GetBytes(flags), 0, bytes, row, 2)
+            } else {
+                let name = if mutant == 5 {
+                    md.GetAssemblyDefinition().Name
+                } else {
+                    md.GetAssemblyReference(md.AssemblyReferences.First()).Name
+                }
+                let offset = pe.PEHeaders.MetadataStartOffset + md.GetHeapMetadataOffset(HeapIndex.String) +
+                    MetadataTokens.GetHeapOffset(name)
+                bytes[offset] = uint8('X')
+            }
+            File.WriteAllBytes(dll, bytes)
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report.Replace(original, dll)))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData(int32(0), false)
+    @InlineData(int32(1), false)
+    @InlineData(int32(3), false)
+    @InlineData(int32(2), true)
+    func RuntimeRefLikeReturns_RejectWrongProcessOutcome(exitCode int32, stderr bool) {
+        let dll = typeof(Slice[_]).Assembly.Location
+        let report = StaticInterfaceReport(dll)
+        let escaped = report.Replace("'", "'\\''")
+        let child = CreateChildProcess(
+            "[Console]::Out.Write('${report.Replace("'", "''")}'); " +
+                (
+                if stderr {
+                    "[Console]::Error.Write('failure'); exit $exitCode"
+                } else {
+                    "exit $exitCode"
+                }
+            ),
+            "printf '%s' '$escaped'; " +
+                (
+                if stderr {
+                    "printf failure >&2; exit $exitCode"
+                } else {
+                    "exit $exitCode"
+                }
+            )
+        )
+        Assert.Throws[XunitException](
+            () -> IlVerifier.VerifyCore(
+                child.FileName,
+                child.ArgumentList.ToArray(),
+                dll,
+                Array.Empty[string](),
+                ignoredErrorCodes: nil,
+                includedScope: nil,
+                excludedScope: nil
+            )
+        )
+    }
+
+    @Fact
+    func VerifyCore_RejectsStderrEvenWithCompleteSuccessMarker() {
+        let dll = typeof(Slice[_]).Assembly.Location
+        let marker = "All Classes and Methods in $dll Verified."
+        let child = CreateChildProcess(
+            "[Console]::Out.Write('${marker.Replace("'", "''")}'); [Console]::Error.Write('failure')",
+            "printf '%s' '${marker.Replace("'", "'\\''")}'; printf failure >&2"
+        )
+        Assert.Throws[XunitException](
+            () -> IlVerifier.VerifyCore(
+                child.FileName,
+                child.ArgumentList.ToArray(),
+                dll,
+                Array.Empty[string](),
+                ignoredErrorCodes: nil,
+                includedScope: nil,
+                excludedScope: nil
+            )
+        )
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)
@@ -334,10 +676,13 @@ open class IlVerifierTests {
     @InlineData(int32(0), "")
     @InlineData(int32(0), "All Classes and Methods Verified.")
     @InlineData(int32(0), "All Classes and Methods in other.dll Verified.")
+    @InlineData(int32(0), "matching-with-extra-output")
     @InlineData(int32(1), "matching")
     func VerifyCore_RejectsMissingOrWrongMarkerAndNonzeroExit(exitCode int32, output string) {
         let assemblyPath = typeof(IlVerifierTests).Assembly.Location
-        let marker = if output == "matching" {
+        let marker = if output == "matching-with-extra-output" {
+            "unexpected tool output\nAll Classes and Methods in $assemblyPath Verified."
+        } else if output == "matching" {
             "All Classes and Methods in $assemblyPath Verified."
         } else {
             output
@@ -692,7 +1037,12 @@ public static int Run() {
             return dll
         }
 
-        private func RunStandaloneAdapter(dll string, report string) int32 {
+        private func RunStandaloneAdapter(
+            dll string,
+            report string,
+            expectApprovedReturn bool = false,
+            expectedAccepted int32 = 2
+        ) int32 {
             let adapter = Path.GetFullPath(
                 Path.Combine(AppContext.BaseDirectory, "..", "IlVerifyDiagnostics", "IlVerifyDiagnostics.dll")
             )
@@ -705,6 +1055,9 @@ public static int Run() {
             }
             startInfo.ArgumentList.Add(adapter)
             startInfo.ArgumentList.Add(dll)
+            if expectApprovedReturn {
+                startInfo.ArgumentList.Add("--report")
+            }
             using let process = Process.Start(startInfo) ?? throw XunitException("Standalone adapter did not start")
             let stdout = process.StandardOutput.ReadToEndAsync()
             let stderr = process.StandardError.ReadToEndAsync()
@@ -714,7 +1067,14 @@ public static int Run() {
                 process.Kill(entireProcessTree: true)
                 throw XunitException("Standalone adapter timed out")
             }
-            Assert.Equal(string.Empty, stdout.GetAwaiter().GetResult())
+            let output = stdout.GetAwaiter().GetResult()
+            if expectApprovedReturn {
+                Assert.Contains("raw verifier stdout:", output, StringComparison.Ordinal)
+                Assert.Contains("accepted=$expectedAccepted; unexpected=0", output, StringComparison.Ordinal)
+                Assert.Contains("dotnet/runtime#129030", output, StringComparison.Ordinal)
+            } else {
+                Assert.Equal(string.Empty, output)
+            }
             Assert.Equal(string.Empty, stderr.GetAwaiter().GetResult())
             return process.ExitCode
         }

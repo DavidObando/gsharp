@@ -1,0 +1,64 @@
+{
+  "approval": {
+    "date": "2026-10-24",
+    "repository_issue": 5244,
+    "upstream_issue": "dotnet/runtime#129030",
+    "policy": "Finite independently witnessed exceptions, not an all-ref-like or diagnostic-category waiver."
+  },
+  "runtime": {
+    "owner": "Gsharp.Runtime.Values, Version=0.5.0.0, Culture=neutral, PublicKeyToken=null",
+    "compiler": "published Gsharp.NET.Sdk 0.5.212",
+    "certificate_sha256": "556C811C449A4F74904C377F2B318C228DD91636A89D88554AC82DD485BD60E9",
+    "serialization": "IlVerifyFalsePositives.RuntimeReturnProof",
+    "closure": [
+      "Gsharp.Values.Slice`1::get_Owner(): T[] = owner ?? Array.Empty<T>()",
+      "Gsharp.Values.Slice`1::AsSpan(): Span<T> = MemoryExtensions.AsSpan<T>(Owner, offset, Length)",
+      "Gsharp.Values.ReadOnlySlice`1::AsSpan(): ReadOnlySpan<T> = Span<T>.op_Implicit(slice.AsSpan())"
+    ],
+    "reported_returns": [
+      { "method": "Gsharp.Values.Slice`1::AsSpan()", "offset": "0x00000017" },
+      { "method": "Gsharp.Values.ReadOnlySlice`1::AsSpan()", "offset": "0x00000010" }
+    ],
+    "limits": "The signature/reference metadata and entire closure must remain identical. Other runtime methods remain fully checked."
+  },
+  "literal_research_fixture": {
+    "scope": "One original #5242 MetadataBuilder image; not generated product literals.",
+    "compiler": "Original G# generator built with published Gsharp.NET.Sdk 0.5.212.",
+    "file": "Utf8Candidate.base64.txt",
+    "image_sha256": "38b57be6d6b8abd3be70316b48c3abb6371bccaf28e6fa6ee6188b005f557bbe",
+    "owner": "Utf8Candidate, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null",
+    "method": "Utf8Proof.Utf8Candidate::Get()",
+    "return_type": "System.ReadOnlySpan<System.Byte>, by value",
+    "signature": "000015110D0105",
+    "il": "D001000004280100002B0A1200161A280200000A2A",
+    "locals": "070115110D0105",
+    "init_locals": true,
+    "max_stack": 3,
+    "exception_regions": 0,
+    "return_offset": "0x00000014",
+    "storage": {
+      "field": "private static initonly RVA Utf8Proof.Utf8Candidate.Data",
+      "layout": "Bytes5 explicit layout, size 5, packing 1",
+      "contiguous_bytes": "41C3A90000",
+      "logical_length": 4,
+      "hidden_terminator_offset": 4
+    },
+    "targets": [
+      "RuntimeHelpers.CreateSpan<byte>(RuntimeFieldHandle)",
+      "ReadOnlySpan<byte>.Slice(int,int)"
+    ],
+    "reference": "System.Runtime, Version=10.0.0.0, PublicKeyToken=b03f5f7f11d50a3a",
+    "resolved_target_owner": "System.Private.CoreLib, Version=10.0.0.0, PublicKeyToken=7cec85d7bea7798e",
+    "independent_witnesses": [
+      "JIT and real osx-arm64 NativeAOT: logical bytes/length, adjacent hidden zero, original/derived views after forced GC",
+      "100000 warmed calls: zero allocated bytes; real array control: 3200000 bytes",
+      "Independent consumer and terminator helper: complete raw verifier success"
+    ],
+    "negative_fixture": {
+      "file": "TrueByRefNegative.base64.txt",
+      "shape": "Actual byref-to-local span descriptor, ReturnPtrToStack at 0x17.",
+      "execution": "Never execute the invalid negative image."
+    }
+  },
+  "retirement": "After a separately approved corrected released verifier is pinned, rerun the complete unsuppressed gate and all positive/negative witnesses. Remove the admissions once unnecessary. Keep both tracking issues open."
+}

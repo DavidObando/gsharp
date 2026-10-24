@@ -91,7 +91,20 @@ class FixedArrayAbiTests {
     }
 
     @Fact
-    func CompleteSdkRuntimePassesStrictIlVerification() -> IlVerifier.Verify(typeof(Slice[_]).Assembly.Location)
+    func CompleteSdkRuntimeRunsFullIlVerificationWithApprovedUpstreamException() {
+        var report = string.Empty
+        IlVerifier.Verify(
+            typeof(Slice[_]).Assembly.Location,
+            report: (text string) -> {
+                report = text
+                this.output.WriteLine(text)
+            }
+        )
+        Assert.Contains("ilverify invocation:", report, StringComparison.Ordinal)
+        Assert.Contains("raw exit: 2", report, StringComparison.Ordinal)
+        Assert.Contains("accepted=2; unexpected=0", report, StringComparison.Ordinal)
+        Assert.Equal(2, report.Split("[approved #5244; dotnet/runtime#129030]").Length - 1)
+    }
 
     @Fact
     func UnsupportedImportedCapabilityReportsSourceDiagnostic() {

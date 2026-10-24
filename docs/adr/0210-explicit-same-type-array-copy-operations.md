@@ -1413,9 +1413,11 @@ bounded PR slices and closure gates:
 | F4: tooling and breaking rollout | Complete structural equality, import/IDE/formatter/debugger displays, migration diagnostics/fixes and reference/spec examples. Close all F1-F3 gates before enabling the new default. The maintainer chooses the breaking release; publish, pin in a separate clean-build PR, then adopt in repository source. |
 
 Every behavioral test needs ADR-0154 RED/GREEN evidence through the actual
-product path, not just Roslyn fixtures. Require unfiltered strict ILVerify
-for all emitted runtime, producer, consumer and scenario assemblies, with
-no new scopes suppressing errors. Run JIT and NativeAOT on the release's
+product path, not just Roslyn fixtures. Run unfiltered ILVerify
+for all emitted runtime, producer, consumer and scenario assemblies.
+The only new approved F1 exception is the finite runtime certificate below;
+it does not suppress a diagnostic category or skip verification.
+Run JIT and NativeAOT on the release's
 supported architectures, deterministic repeated builds and public/ref
 round trips. Measure large/open/nested value costs and GC-containing layouts;
 do not infer allocation or latency from inline fields.
@@ -1444,13 +1446,61 @@ host-specific evidence, not certification of every release-supported target.
 Reproduce with `python3 e2etests/fixed-array-abi-aot.py --rid osx-arm64`;
 supply installed native linker dependency paths when the host requires them.
 
-These witnesses do not close the full-runtime strict gate: ILVerify 10.0.8
+Before the exception approval below, these witnesses did not close the full-runtime gate: ILVerify 10.0.8
 reports the same two `ReturnPtrToStack` diagnostics in existing native-slice
 `AsSpan` methods in both the changed SDK runtime and published 0.5.212 runtime.
-The separate P2 blocker is [#5244](https://github.com/DavidObando/gsharp/issues/5244),
+The separate P2 tracking issue is [#5244](https://github.com/DavidObando/gsharp/issues/5244),
 with an exact published-binary reproduction and upstream provenance.
-No suppression or gate waiver is authorized. F1 stays unshipped while this
-gate and any applicable release-target evidence remain open.
+The [permanent upstream reproducer](https://github.com/dotnet/runtime/issues/129030#issuecomment-6389023342)
+also contrasts safe CLR span/ref-struct identity returns with an ordinary struct control.
+
+On October 24, 2026, the maintainer explicitly approved a narrow
+verification/certification exception for
+[dotnet/runtime#129030](https://github.com/dotnet/runtime/issues/129030):
+“We know this is a limitation of ilverify, please make an exception for the
+validation/certification based on the upstream tracking issue.”
+This approval is not a compiler, ref-safety or language-semantics waiver.
+
+The test helper and standalone gate use one shared, fail-closed policy.
+Its runtime certificate admits only the exact `ReturnPtrToStack` diagnostics
+at `Slice<T>.AsSpan`'s `ret` at `0x17` and
+`ReadOnlySlice<T>.AsSpan`'s `ret` at `0x10`.
+The certificate freezes the unsigned `Gsharp.Runtime.Values, Version=0.5.0.0`
+owner, full declaration/reference signatures and complete array-owner
+method closure emitted by the pinned released compiler.
+That closure consists of `Slice<T>.get_Owner`, `Slice<T>.AsSpan` and
+`ReadOnlySlice<T>.AsSpan`: a managed array range, followed only by the
+trusted CLR writable-to-readonly span conversion.
+The shared implementation records its SHA-256 certificate and serialization.
+Even unrelated metadata drift invalidates this finite certificate;
+never refresh its digest without renewed inspection and safety evidence.
+The same policy separately admits one immutable #5242 research image:
+`Utf8Proof.Utf8Candidate.Get`, by value, at `0x14`, bound to full-image
+SHA-256 `38b57be6d6b8abd3be70316b48c3abb6371bccaf28e6fa6ee6188b005f557bbe`.
+That image contains exactly `41C3A900` plus its contiguous hidden zero.
+Its independent JIT/NativeAOT, GC, terminator and allocation witnesses do not
+admit other generated literal images or certify the UTF-8 feature.
+The human-readable finite records and immutable positive/true-byref-negative
+images are under `test/Compiler.Tests/TestData/IlVerify`.
+
+The verifier must run over the entire runtime without ignore or scope flags.
+Report its exact invocation, raw exit/stdout/stderr, accepted diagnostics,
+upstream issue and remaining errors.
+The pinned tool currently exits 2 with exactly two admitted diagnostics.
+Call this **verified with the approved upstream exception**, never
+**strict unsuppressed ILVerify success**.
+By-reference returns, other methods/owners/signatures, changed closure bodies,
+wrong offsets, other diagnostics, incomplete/malformed output, stderr and
+tool/reference/process failures remain failures.
+JIT, alias/default/range/readonly/escaped-GC and applicable NativeAOT
+witnesses remain required independently.
+
+Keep #5244 and upstream tracking open.
+When a corrected released verifier is separately approved and pinned,
+rerun the full unsuppressed runtime and the positive/negative witnesses.
+Remove this certificate when those methods verify without it.
+This exception does not certify unmeasured release targets, enable ordinary
+fixed-value lowering, choose a release or authorize publication.
 
 #### Recorded maintainer decisions
 
