@@ -51,17 +51,20 @@ result = int32(rows.Length) * 1000 + int32(rows[1].A) * 100 + int32(items[0].A) 
     }
 
     @Fact
-    func NamedTupleSliceArrowBody_ElementTypeMismatch_ReportsBindingDiagnosticAtTheLiteral() {
+    func NamedTupleSliceArrowBody_ElementTypeMismatch_ReportsGS0155AtTheLiteral() {
         const source = "package P\n" +
             "func M1() [](A int64, B string) -> [](A int64, B string){(A: 1, B: \"q\"), (A: \"bad\", B: \"x\")}\n"
         let tree = SyntaxTree.Parse(SourceText.From(source, "issue5191.gs"))
+        Assert.Empty(tree.Diagnostics)
         let compilation = Compilation(ReferenceResolver.Default(), tree){IsLibrary = true}
         using let peStream = MemoryStream()
         let result = compilation.Emit(peStream, refStream: nil)
-        let diagnostics = result.Diagnostics.ToArray()
-        Assert.NotEmpty(diagnostics)
-        Assert.All(diagnostics, (d Diagnostic) -> Assert.NotEqual("GS0005", d.Id))
-        Assert.All(diagnostics, (d Diagnostic) -> Assert.Equal(2, d.Location.StartLine + 1))
+        Assert.False(result.Success)
+        let diagnostic = Assert.Single(result.Diagnostics.ToArray())
+        Assert.Equal("GS0155", diagnostic.Id)
+        const badLiteral = "(A: \"bad\", B: \"x\")"
+        Assert.Equal(source.IndexOf(badLiteral, StringComparison.Ordinal), diagnostic.Location.Span.Start)
+        Assert.Equal(badLiteral.Length, diagnostic.Location.Span.Length)
     }
 
     shared {
