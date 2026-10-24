@@ -7,7 +7,6 @@ import System.Security.Cryptography
 import System.Text.Json
 
 public data class FileEntry(Path string, Bytes int64, Sha256 string?, Error string?)
-
 public data class Inventory(Files[]FileEntry, TotalBytes int64, Failed int32)
 
 func inspect(path string, root string) FileEntry {
