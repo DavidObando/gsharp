@@ -66,7 +66,7 @@ import System
 /// from (cref:BoundGlobalScope.Statements) rather than from a
 /// member-declaration node, so it is not member-addressable for re-pointing.
 /// Such a file falls back to a full rebuild.
-shared class IncrementalGlobalScopeReuse {
+internal shared class IncrementalGlobalScopeReuse {
     private enum EventAccessorKind {
         Add,
         Remove,

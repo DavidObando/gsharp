@@ -24,6 +24,7 @@ import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Analyzers
 import GSharp.Core.CodeAnalysis.Lowering
 import GSharp.Core.CodeAnalysis.Lowering.Async
+import System.Globalization
 import System.Runtime.CompilerServices
 
 /// Chained compilation facilities.
@@ -38,6 +39,15 @@ open class Compilation {
     private var preprocessorSymbols ImmutableHashSet[string] = ImmutableHashSet[string].Empty
     private var assemblyName string?
     private var debugInformation DebugInformationOptions = DebugInformationOptions()
+    // ADR-0212 §8: one gate serialises the lazy builds (single flight) and the repoint that
+    // ReplaceSyntaxTree performs on this compilation's symbols. Waiters take it with their
+    // request token; the build itself runs under WorkBudget.CancellationToken only.
+    private let buildGate SemaphoreSlim = SemaphoreSlim(1, 1)
+    private var bodyCache BoundBodyCache?
+    private var incrementalBodyReuse bool
+    // Set when ReplaceSyntaxTree re-points this compilation's symbols at a successor's tree.
+    // A second re-point would map the wrong declarations, so a retired compilation never reuses.
+    private var retired bool
 
     /// Initializes a new instance of the (cref:Compilation) class.
     /// @param syntaxTrees The syntax trees.
@@ -204,17 +214,26 @@ open class Compilation {
         }
     }
 
-    /// Gets or sets the optional per-project bound-body cache (ADR-0105
-    /// Phase 1). When set, (cref:BoundProgram) threads it through
-    /// (cref:Binder.BindProgram(BoundGlobalScope, ReferenceResolver, BoundBodyCache))
-    /// so unchanged member bodies can be reused across compilations <em>when
-    /// reuse is provably sound</em> (see (cref:BoundBodyCache)). The
-    /// cache is owned externally (by the language server's per-project
-    /// `ProjectState`) and lives across the immutable, per-edit
-    /// (cref:Compilation) instances; it never changes emitted IL or
-    /// diagnostics relative to the full-rebuild path. Defaults to
-    /// `null`, which is exactly the historical behavior.
-    prop BodyCache BoundBodyCache?
+    /// Gets or sets a value indicating whether this compilation chain keeps a body cache so that
+    /// successors built by (cref:ReplaceSyntaxTree) reuse unchanged member bodies (ADR-0105,
+    /// ADR-0212). Defaults to `false`, which is the batch path: no cache, no reuse. Set it before
+    /// the first query, like every other option. A successor copies the flag and shares the cache of
+    /// its predecessor; (cref:WithReplacedSyntaxTree) never does.
+    prop IncrementalBodyReuse bool {
+        get -> incrementalBodyReuse
+        set {
+            incrementalBodyReuse = value
+            bodyCache = if value {
+                bodyCache ?? BoundBodyCache()
+            } else {
+                default(BoundBodyCache?)
+            }
+        }
+    }
+
+    /// Gets the body cache of this compilation chain, or `null` when (cref:IncrementalBodyReuse) is off.
+    /// Internal for tests (ADR-0212 §9).
+    internal prop BodyCache BoundBodyCache? -> bodyCache
 
     /// Gets or sets the shared budget for independent parse, binding, and emit work. Defaults to sequential execution.
     private var workBudget CompilationWorkBudget = CompilationWorkBudget()
@@ -224,27 +243,19 @@ open class Compilation {
         set -> workBudget = value
     }
 
-    /// Gets or sets a pre-bound (cref:BoundGlobalScope) to reuse instead
-    /// of re-binding from the syntax trees (ADR-0105 Phase 2). The language
-    /// server sets this when a single-file, body-only edit lets the previous
-    /// compilation's global scope (and therefore every symbol instance) be
-    /// reused — the prerequisite for the (cref:BoundBodyCache)'s
-    /// symbol-identity soundness gate to hit and for the emitter, which keys
-    /// members by reference, to remain correct. When set, (cref:GlobalScope)
-    /// returns it verbatim instead of re-binding from the syntax trees.
-    /// The edited file's symbols are expected to have been re-pointed at the new
-    /// syntax via (cref:IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit)
-    /// before this is set. Defaults to `null` (full rebuild).
-    prop ReusedGlobalScope BoundGlobalScope?
+    /// Gets or sets a pre-bound (cref:BoundGlobalScope) to reuse instead of re-binding from the
+    /// syntax trees (ADR-0105 Phase 2). Only (cref:ReplaceSyntaxTree) sets it, after it has
+    /// re-pointed the edited file's symbols at the new syntax. Internal for tests (ADR-0212 §9).
+    internal prop ReusedGlobalScope BoundGlobalScope?
 
-    /// Gets or sets the set of syntax trees whose member bodies must be re-bound
-    /// from source rather than served from the (cref:BoundBodyCache)
-    /// (ADR-0105 Phase 2). For a body-only edit this is the single re-parsed
-    /// file: its unchanged-but-shifted members would otherwise cache-hit and
-    /// return bodies bound at stale spans, so they are forced to rebind (which
-    /// then refreshes their cached entry). Unchanged files are absent and hit
-    /// the cache. Defaults to `null` (no forced re-bind).
-    prop DirtyBodyTrees ImmutableHashSet[SyntaxTree]?
+    /// Gets or sets the set of syntax trees whose member bodies must be re-bound from source rather
+    /// than served from the body cache (ADR-0105 Phase 2). For a body-only edit this is the single
+    /// re-parsed file: its unchanged-but-shifted members would otherwise cache-hit and return bodies
+    /// bound at stale spans. Defaults to `null` (no forced re-bind). Internal for tests (ADR-0212 §9).
+    internal prop DirtyBodyTrees ImmutableHashSet[SyntaxTree]?
+
+    /// Runs inside the body bind while the build gate is held. Tests use it to hold a build open.
+    internal prop BodyBindProbe Action?
 
     /// Gets or sets the assembly-identity override (e.g. from MSBuild's
     /// `AssemblyName` or the SDK). Setting this immediately pushes the
@@ -293,42 +304,9 @@ open class Compilation {
     }
 
     /// Gets the global scope.
-    prop GlobalScope BoundGlobalScope {
-        get {
-            if globalScope == nil {
-                let reused = if ReusedGlobalScope is {} candidate && !candidate.HasNativeProtocols {
-                    candidate
-                } else {
-                    default(BoundGlobalScope?)
-                }
-                using let measurement = CompilationMeasurements.BeginPhase("declarations", reused == nil)
-                if reused != nil {
-                    CompilationMeasurements.Count("declarations.reuses")
-                }
-                // Belt-and-braces: make sure References sees the current
-                // assembly name before the (possibly cached, see
-                // ImportedTypeSymbol.AggregateCache) binding pass runs, even
-                // if the caller only ever set AssemblyName and never called
-                // Emit.
-                PrepareReferencesForBinding(assemblyName)
-                // ADR-0186: metadata import happens under this bind, and the
-                // reader that decides what an oblivious byte means is a static
-                // leaf with no Compilation in reach.
-                using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
-                let globalScope = reused ?? Binder.BindGlobalScope(
-                    previous: nil,
-                    EmbeddedAttributeSource.AddEmbeddedAttributes(SyntaxTrees, References),
-                    References,
-                    ImplicitSystemImport,
-                    PreprocessorSymbols,
-                    IsLibrary,
-                    Submission
-                )
-                Interlocked.CompareExchange[BoundGlobalScope?](&this.globalScope, globalScope, nil)
-            }
-            return globalScope!!
-        }
-    }
+    /// @remarks The first read binds the declarations; concurrent first readers wait for that one
+    /// bind instead of binding again (ADR-0212 §8).
+    prop GlobalScope BoundGlobalScope -> GetGlobalScope(default(CancellationToken))
 
     /// Gets the fully-bound program — all function/method bodies and top-level
     /// statements, plus any diagnostics surfaced during binding.
@@ -343,20 +321,246 @@ open class Compilation {
     /// requests should reuse this cached instance rather than re-invoking
     /// (cref:Binder.BindProgram(BoundGlobalScope, Symbols.ReferenceResolver)), which can take hundreds of
     /// milliseconds on projects with large reference graphs.
-    prop BoundProgram BoundProgram {
-        get {
-            if boundProgram == nil {
-                let declarations = GlobalScope
-                using let measurement = CompilationMeasurements.BeginPhase("bodies")
-                // ADR-0186: body binding reads imported member signatures too.
-                using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
-                WorkBudget.CancellationToken.ThrowIfCancellationRequested()
-                let bp = Binder.BindProgram(declarations, References, BodyCache, DirtyBodyTrees, WorkBudget)
-                CompilationMeasurements.Count("input.methods", bp.Functions.Count)
-                Interlocked.CompareExchange[BoundProgram?](&this.boundProgram, bp, nil)
-            }
-            return boundProgram!!
+    prop BoundProgram BoundProgram -> GetBoundProgram(default(CancellationToken))
+
+    /// Returns the global scope, binding it first when no caller has.
+    /// @param cancellationToken Cancels this caller's wait for a build in flight. It never cancels the build,
+    /// which runs under (cref:WorkBudget)'s token (ADR-0212 §8).
+    internal func GetGlobalScope(cancellationToken CancellationToken) BoundGlobalScope {
+        let published = Volatile.Read[BoundGlobalScope?](&this.globalScope)
+        if published != nil {
+            return published
         }
+        buildGate.Wait(cancellationToken)
+        try {
+            return BuildGlobalScope_Locked()
+        } finally {
+            buildGate.Release()
+        }
+    }
+
+    /// Returns the bound program, binding it first when no caller has.
+    /// @param cancellationToken Cancels this caller's wait for a build in flight, never the build itself.
+    internal func GetBoundProgram(cancellationToken CancellationToken) BoundProgram {
+        let published = Volatile.Read[BoundProgram?](&this.boundProgram)
+        if published != nil {
+            return published
+        }
+        // The declaration bind takes the gate itself, so it must finish before this thread holds it.
+        let declarations = GetGlobalScope(cancellationToken)
+        buildGate.Wait(cancellationToken)
+        try {
+            if boundProgram != nil {
+                return boundProgram!!
+            }
+            using let measurement = CompilationMeasurements.BeginPhase("bodies")
+            // ADR-0186: body binding reads imported member signatures too.
+            using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
+            WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+            BodyBindProbe?.Invoke()
+            let bp = Binder.BindProgram(declarations, References, BodyCache, DirtyBodyTrees, WorkBudget)
+            CompilationMeasurements.Count("input.methods", bp.Functions.Count)
+            // A cancelled build publishes nothing: the compilation is dead (ADR-0212 §8).
+            WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+            Volatile.Write[BoundProgram?](&this.boundProgram, bp)
+            return bp
+        } finally {
+            buildGate.Release()
+        }
+    }
+
+    // Must run while the build gate is held.
+    private func BuildGlobalScope_Locked() BoundGlobalScope {
+        if globalScope != nil {
+            return globalScope!!
+        }
+        WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+        let reused = if ReusedGlobalScope is {} candidate && !candidate.HasNativeProtocols {
+            candidate
+        } else {
+            default(BoundGlobalScope?)
+        }
+        using let measurement = CompilationMeasurements.BeginPhase("declarations", reused == nil)
+        if reused != nil {
+            CompilationMeasurements.Count("declarations.reuses")
+        }
+        // Belt-and-braces: make sure References sees the current
+        // assembly name before the (possibly cached, see
+        // ImportedTypeSymbol.AggregateCache) binding pass runs, even
+        // if the caller only ever set AssemblyName and never called
+        // Emit.
+        PrepareReferencesForBinding(assemblyName)
+        // ADR-0186: metadata import happens under this bind, and the
+        // reader that decides what an oblivious byte means is a static
+        // leaf with no Compilation in reach.
+        using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
+        let bound = reused ?? Binder.BindGlobalScope(
+            previous: nil,
+            EmbeddedAttributeSource.AddEmbeddedAttributes(SyntaxTrees, References),
+            References,
+            ImplicitSystemImport,
+            PreprocessorSymbols,
+            IsLibrary,
+            Submission
+        )
+        WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+        Volatile.Write[BoundGlobalScope?](&this.globalScope, bound)
+        return bound
+    }
+
+    /// Returns a successor compilation in which [`newTree`](paramref) replaces [`oldTree`](paramref)
+    /// (ADR-0212 §7a). The successor copies every option of this compilation except
+    /// (cref:WorkBudget), which the host sets before the first query because it owns the token.
+    /// @remarks When the edit changes only member bodies of one file, the successor reuses this
+    /// compilation's global scope and binds only the edited file's bodies. This **retires** the
+    /// predecessor: its symbols are re-pointed at [`newTree`](paramref) in place. The factory takes
+    /// the build gate first, so the re-point never overlaps a build of this compilation. When
+    /// (cref:IncrementalBodyReuse) is set the successor shares this compilation's body cache.
+    /// Any other edit binds from scratch.
+    /// @param oldTree A tree of this compilation.
+    /// @param newTree The tree that replaces it.
+    /// @returns The successor compilation.
+    func ReplaceSyntaxTree(oldTree SyntaxTree, newTree SyntaxTree) Compilation {
+        ArgumentNullException.ThrowIfNull(oldTree, paramName: "oldTree")
+        ArgumentNullException.ThrowIfNull(newTree, paramName: "newTree")
+        let index = SyntaxTrees.IndexOf(oldTree)
+        if index < 0 {
+            throw ArgumentException("The syntax tree is not part of this compilation.", "oldTree")
+        }
+        let successor = CreateSuccessor(SyntaxTrees.SetItem(index, newTree), shareBodyCache: true)
+        // The re-point mutates this compilation's symbols, so no build may be running (ADR-0212 §8).
+        // The host cancels the token of a compilation it retires; a dead compilation cannot bind, so
+        // the successor then binds from scratch.
+        buildGate.Wait()
+        try {
+            if Submission == nil && !retired {
+                var declarations BoundGlobalScope? = globalScope
+                if declarations == nil && !WorkBudget.CancellationToken.IsCancellationRequested {
+                    declarations = BuildGlobalScope_Locked()
+                }
+                if IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(declarations, oldTree, newTree) {
+                    successor.ReusedGlobalScope = declarations
+                    successor.DirtyBodyTrees = ImmutableHashSet.Create(newTree)
+                    retired = true
+                }
+            }
+        } finally {
+            buildGate.Release()
+        }
+        return successor
+    }
+
+    /// Returns a successor compilation with [`trees`](paramref) added. It binds from scratch and
+    /// shares this compilation's body cache when (cref:IncrementalBodyReuse) is set. This compilation
+    /// is not changed.
+    /// @param trees The trees to add. None may already be part of this compilation.
+    /// @returns The successor compilation.
+    func AddSyntaxTrees(trees ...SyntaxTree) Compilation {
+        ArgumentNullException.ThrowIfNull(trees, paramName: "trees")
+        var next = SyntaxTrees
+        for tree in trees {
+            ArgumentNullException.ThrowIfNull(tree, paramName: "trees")
+            if next.Contains(tree) {
+                throw ArgumentException("The syntax tree is already part of this compilation.", "trees")
+            }
+            next = next.Add(tree)
+        }
+        return CreateSuccessor(next, shareBodyCache: true)
+    }
+
+    /// Returns a successor compilation with [`trees`](paramref) removed. It binds from scratch and
+    /// shares this compilation's body cache when (cref:IncrementalBodyReuse) is set. This compilation
+    /// is not changed.
+    /// @param trees The trees to remove. All must be part of this compilation.
+    /// @returns The successor compilation.
+    func RemoveSyntaxTrees(trees ...SyntaxTree) Compilation {
+        ArgumentNullException.ThrowIfNull(trees, paramName: "trees")
+        var next = SyntaxTrees
+        for tree in trees {
+            ArgumentNullException.ThrowIfNull(tree, paramName: "trees")
+            let index = next.IndexOf(tree)
+            if index < 0 {
+                throw ArgumentException("The syntax tree is not part of this compilation.", "trees")
+            }
+            next = next.RemoveAt(index)
+        }
+        return CreateSuccessor(next, shareBodyCache: true)
+    }
+
+    /// Returns a one-shot compilation in which [`newTree`](paramref) replaces [`oldTree`](paramref),
+    /// for a buffer that is not saved (ADR-0212 §7a). It binds from scratch, never re-points this
+    /// compilation's symbols, and has no body cache, so it cannot evict this chain's cache entries.
+    /// @param oldTree A tree of this compilation.
+    /// @param newTree The tree that replaces it.
+    /// @returns The snapshot compilation.
+    func WithReplacedSyntaxTree(oldTree SyntaxTree, newTree SyntaxTree) Compilation {
+        ArgumentNullException.ThrowIfNull(oldTree, paramName: "oldTree")
+        ArgumentNullException.ThrowIfNull(newTree, paramName: "newTree")
+        let index = SyntaxTrees.IndexOf(oldTree)
+        if index < 0 {
+            throw ArgumentException("The syntax tree is not part of this compilation.", "oldTree")
+        }
+        return CreateSuccessor(SyntaxTrees.SetItem(index, newTree), shareBodyCache: false)
+    }
+
+    /// Returns the declared type whose metadata name is [`fullyQualifiedMetadataName`](paramref), or
+    /// `null` (ADR-0212 §7a). The name is the one the emitter writes: the package, a dot, then the
+    /// type name with its own generic arity (`Box`1`); a nested type follows its enclosing type after
+    /// `+`. A type without a package has no prefix.
+    /// @param fullyQualifiedMetadataName The metadata name, for example `Shapes.Outer+Inner`.
+    /// @param cancellationToken Cancels this caller's wait for the declaration bind, never the bind.
+    /// @returns The type symbol, or `null` when this compilation declares no such type.
+    func GetTypeByMetadataName(
+        fullyQualifiedMetadataName string,
+        cancellationToken CancellationToken = default(CancellationToken)
+    ) TypeSymbol? {
+        ArgumentNullException.ThrowIfNull(fullyQualifiedMetadataName, paramName: "fullyQualifiedMetadataName")
+        let declarations = GetGlobalScope(cancellationToken)
+        for candidate in declarations.Structs {
+            if MetadataNameMatches(candidate, fullyQualifiedMetadataName) {
+                return candidate
+            }
+        }
+        for candidate in declarations.Enums {
+            if MetadataNameMatches(candidate, fullyQualifiedMetadataName) {
+                return candidate
+            }
+        }
+        for candidate in declarations.Interfaces {
+            if MetadataNameMatches(candidate, fullyQualifiedMetadataName) {
+                return candidate
+            }
+        }
+        for candidate in declarations.Delegates {
+            if MetadataNameMatches(candidate, fullyQualifiedMetadataName) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    // Builds a compilation over [`trees`](paramref) with this compilation's options (ADR-0212 §8).
+    private func CreateSuccessor(trees ImmutableArray[SyntaxTree], shareBodyCache bool) Compilation {
+        let successor = Compilation(References, trees.ToArray())
+        successor.ImplicitSystemImport = ImplicitSystemImport
+        successor.Nullability = Nullability
+        successor.PlatformNilChecks = PlatformNilChecks
+        successor.IsLibrary = IsLibrary
+        successor.Optimize = Optimize
+        successor.PreprocessorSymbols = PreprocessorSymbols
+        successor.DebugInformation = CloneDebugInformation(DebugInformation)
+        successor.WarnOnMissingDocumentation = WarnOnMissingDocumentation
+        successor.Logger = Logger
+        successor.Submission = Submission
+        successor.EmbeddedResources = EmbeddedResources
+        if assemblyName != nil {
+            successor.AssemblyName = assemblyName
+        }
+        if shareBodyCache && incrementalBodyReuse {
+            successor.incrementalBodyReuse = true
+            successor.bodyCache = bodyCache
+        }
+        return successor
     }
 
     /// ADR-0175 amendment (issue #4422): removes the compiler warnings that a
@@ -880,6 +1084,57 @@ open class Compilation {
                 .ToImmutableArray()
             let lowered = LoweredProgram(asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult)
             return (lowered, program, diagnostics)
+        }
+
+        // The metadata name the emitter gives a declared type (TypeDefEmitter): package and dot, or the
+        // enclosing type's name and `+`, then the name with the arity the type declares itself.
+        private func MetadataNameMatches(symbol TypeSymbol, name string) bool -> string.Equals(
+            GetMetadataName(symbol),
+            name,
+            StringComparison.Ordinal
+        )
+
+        private func GetMetadataName(symbol TypeSymbol) string? {
+            var packageName string? = nil
+            var simpleName string? = nil
+            if symbol is StructSymbol declaredStruct {
+                packageName = declaredStruct.PackageName
+                let ownArity = if declaredStruct.Declaration == nil {
+                    declaredStruct.TypeParameters.Length
+                } else {
+                    declaredStruct.Declaration!!.TypeParameterList?.Parameters.Count ?? 0
+                }
+                simpleName = if ownArity == 0 {
+                    declaredStruct.Name
+                } else {
+                    declaredStruct.Name + "`" + ownArity.ToString(CultureInfo.InvariantCulture)
+                }
+            } else if symbol is EnumSymbol declaredEnum {
+                packageName = declaredEnum.PackageName
+                simpleName = TypeDefEmitter.MangleGenericName(declaredEnum.Name, declaredEnum.TypeParameters)
+            } else if symbol is InterfaceSymbol declaredInterface {
+                packageName = declaredInterface.PackageName
+                simpleName = TypeDefEmitter.MangleGenericName(declaredInterface.Name, declaredInterface.TypeParameters)
+            } else if symbol is DelegateTypeSymbol declaredDelegate {
+                packageName = declaredDelegate.PackageName
+                simpleName = TypeDefEmitter.MangleGenericName(declaredDelegate.Name, declaredDelegate.TypeParameters)
+            }
+            if simpleName == nil {
+                return nil
+            }
+            if symbol.ContainingType is {} enclosing {
+                let enclosingName = GetMetadataName(enclosing)
+                return if enclosingName == nil {
+                    default(string?)
+                } else {
+                    enclosingName + "+" + simpleName
+                }
+            }
+            return if string.IsNullOrEmpty(packageName) {
+                simpleName
+            } else {
+                packageName + "." + simpleName
+            }
         }
 
         private func CloneDebugInformation(source DebugInformationOptions?) DebugInformationOptions {
