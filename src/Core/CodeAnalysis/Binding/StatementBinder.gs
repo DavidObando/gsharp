@@ -592,7 +592,7 @@ internal partial class StatementBinder {
                                 expression: "usingLowering.ErrorStatement"
                             )
                         )
-                        InvalidateNarrowingsForAssignedVariables(statementSyntax)
+                        InvalidateNarrowingsForAssignedVariables(statementSyntax, usingLowering.Declaration)
                         continue
                     }
                     statements.Add(
@@ -604,7 +604,7 @@ internal partial class StatementBinder {
                             )
                         )
                     )
-                    InvalidateNarrowingsForAssignedVariables(statementSyntax)
+                    InvalidateNarrowingsForAssignedVariables(statementSyntax, usingLowering.Declaration)
                     let innerStatements = ImmutableArray.CreateBuilder[BoundStatement]()
                     let cleanupEffect = BoundExpressionStatement(nil, usingLowering.Cleanup!!)
                     let fallsThrough = BindWithinSynthesizedCleanup(
@@ -649,7 +649,7 @@ internal partial class StatementBinder {
                                 expression: "awaitUsingLowering.ErrorStatement"
                             )
                         )
-                        InvalidateNarrowingsForAssignedVariables(statementSyntax)
+                        InvalidateNarrowingsForAssignedVariables(statementSyntax, awaitUsingLowering.Declaration)
                         continue
                     }
                     statements.Add(
@@ -661,7 +661,7 @@ internal partial class StatementBinder {
                             )
                         )
                     )
-                    InvalidateNarrowingsForAssignedVariables(statementSyntax)
+                    InvalidateNarrowingsForAssignedVariables(statementSyntax, awaitUsingLowering.Declaration)
                     let innerStatements = ImmutableArray.CreateBuilder[BoundStatement]()
                     let cleanupEffect = BoundExpressionStatement(nil, awaitUsingLowering.Cleanup!!)
                     let fallsThrough = BindWithinSynthesizedCleanup(
