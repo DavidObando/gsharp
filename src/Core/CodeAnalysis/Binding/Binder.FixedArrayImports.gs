@@ -48,9 +48,13 @@ partial class Binder {
 
     shared {
         private func ValidateFixedArraySignatures(assembly Assembly, abi FixedArrayAbi) {
+            let mark = ClrNullability.MarkMetadataReadFailures()
             for type in assembly.GetExportedTypes().OrderBy((item Type) -> item.FullName, StringComparer.Ordinal) {
                 let receiver = TypeSymbol.FromClrTypeWithoutNullability(type, NullabilityFreeReason.ResolvedTypeName)
                 ValidateFixedArrayRelationships(receiver, abi)
+            }
+            if ClrNullability.MetadataReadFailedSince(mark) {
+                throw InvalidDataException("fixed-array annotations could not be read")
             }
         }
 
