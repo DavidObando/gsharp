@@ -164,6 +164,7 @@ open class Adr0208NarrowingCorpusTests {
                 "g4_overload_ambiguity_after_join",
                 "g5_yield_after_guard",
                 "h10_tuple_by_ref_parameter_overlaps_element",
+                "h11_enclosing_type_argument_by_ref_parameters_overlap",
                 "h1_by_ref_param_survives_calls",
                 "h2_limitation_call_with_container_operand",
                 "h3_limitation_call_writes_global",
@@ -1077,6 +1078,20 @@ func Main() {
     var t (C?, int32) = (C{}, 1)
     Console.WriteLine(Run(ref element, ref t))
 }`, "GS0158@7:14", "reject", "", ""}
+            yield[]object{"h11_enclosing_type_argument_by_ref_parameters_overlap", `class Outer[T] {
+    class Inner {
+        var Item int32 = 1
+    }
+}
+func Run(ref a Outer[string].Inner?, ref b Outer[string?].Inner?) int32 {
+    if a == nil { return 0 }
+    b = nil
+    return a.Item
+}
+func Main() {
+    var x Outer[string].Inner? = Outer[string].Inner()
+    Console.WriteLine(Run(ref x, ref x))
+}`, "GS0158@9:14 GS0612@13:34", "reject", "", ""}
             yield[]object{"out-alias_out_ref_alias", `class C { func M() { } }
 func Run(out c C?, ref alias C?) {
     c = C()

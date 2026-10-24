@@ -302,11 +302,13 @@ equal types, any generic instantiation (annotations nested in a construction
 are not told apart: `Box[C]?` and `Box[C?]?`), tuples, structs and other
 value aggregates (they embed the other as a member), arrays, source
 interfaces, type parameters (also nested in tuples, maps, function types or
-enclosing-type arguments, as `TypeSymbol.ContainsTypeParameter` decides) and
-any type that cannot be classified. The occurrences of a
+enclosing-type arguments, as `TypeSymbol.ContainsTypeParameter` decides), a nested type of a generic outer type (`Outer[string].Inner` and
+`Outer[string?].Inner`) and any type that cannot be classified. The occurrences of a
 variable among the receiver and the arguments of a call are collected
 through conversions, null assertions, address-of operands and each branch of
-a conditional (`Clear(ref b, b!!)`, `Clear2(ref flag ? b : b, ref b)`).
+a conditional (`Clear(ref b, b!!)`, `Clear2(ref flag ? b : b, ref b)`); an
+operand counts a variable once, because the branches of one conditional are
+mutually exclusive (`Touch(ref flag ? b : b)` is one reference).
 
 **Known limitations of the call rule.** Because a plain call does not kill
 the fact, the rule does not cover a callee that writes the storage by a path

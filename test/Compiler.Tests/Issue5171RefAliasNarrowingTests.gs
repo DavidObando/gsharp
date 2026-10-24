@@ -674,6 +674,41 @@ Console.WriteLine(Run(ref box.Field, box))
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
         /// @returns The case data.
         func AcceptedCases() sequence[[]object] {
+            yield[]object{"conditional-address-argument-counts-the-variable-once", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Touch(ref target C?) { }
+func Run(ref a C?, ref b C?, flag bool) int32 {
+    if a == nil { return 0 }
+    Touch(ref flag ? b : b)
+    return a.Value
+}
+func Main() {
+    var x C? = C{}
+    var y C? = C{}
+    Console.WriteLine(Run(ref x, ref y, true))
+}
+`, []string{"1"}}
+            yield[]object{"object-and-class-by-reference-parameters-do-not-overlap", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(ref a C?, ref other object?) int32 {
+    if a == nil { return 0 }
+    other = nil
+    return a.Value
+}
+func Main() {
+    var x C? = C{}
+    var y object? = "text"
+    Console.WriteLine(Run(ref x, ref y))
+}
+`, []string{"1"}}
             yield[]object{"out-parameters-of-interface-and-string-types-do-not-overlap", `
 import System
 

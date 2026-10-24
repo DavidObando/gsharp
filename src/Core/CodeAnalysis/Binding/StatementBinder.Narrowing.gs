@@ -1968,28 +1968,40 @@ internal partial class StatementBinder {
             let byValue = Dictionary[VariableSymbol, int32]()
             for child in call.ChildNodes {
                 if child is BoundExpression operand {
-                    CollectOccurrences(operand, false, byReference, byValue)
+                    // The branches of one conditional are mutually exclusive: an operand counts a variable once.
+                    let referenceUses = HashSet[VariableSymbol]()
+                    let valueUses = HashSet[VariableSymbol]()
+                    CollectOccurrences(operand, false, referenceUses, valueUses)
+                    for variable in referenceUses {
+                        byReference[variable] = CountOf(byReference, variable) + 1
+                    }
+                    for variable in valueUses {
+                        byValue[variable] = CountOf(byValue, variable) + 1
+                    }
                 }
             }
             for entry in byReference {
-                let valueUses = if byValue.TryGetValue(entry.Key, out var uses) {
-                    uses
-                } else {
-                    0
-                }
-                if entry.Value + valueUses >= 2 {
+                if entry.Value + CountOf(byValue, entry.Key) >= 2 {
                     callAliasedRoots.Add(entry.Key)
                 }
             }
         }
 
-        // Every occurrence of a variable among the receiver and the arguments counts: through conversions,
-        // null assertions, address-of operands and each branch of a conditional.
+        private func CountOf(counts Dictionary[VariableSymbol, int32], variable VariableSymbol) int32 {
+            return if counts.TryGetValue(variable, out var seen) {
+                seen
+            } else {
+                0
+            }
+        }
+
+        // Every occurrence of a variable in one operand of the call (the receiver or an argument) is collected
+        // through conversions, null assertions, address-of operands and each branch of a conditional.
         private func CollectOccurrences(
             expression BoundExpression,
             isReference bool,
-            byReference Dictionary[VariableSymbol, int32],
-            byValue Dictionary[VariableSymbol, int32]
+            byReference HashSet[VariableSymbol],
+            byValue HashSet[VariableSymbol]
         ) {
             switch expression {
                 case address is BoundAddressOfExpression {
@@ -2010,19 +2022,11 @@ internal partial class StatementBinder {
                     CollectOccurrences(conditional.WhenFalse, isReference, byReference, byValue)
                 }
                 case variable is BoundVariableExpression {
-                    let counts = if isReference {
-                        byReference
+                    if isReference {
+                        byReference.Add(variable.Variable)
                     } else {
-                        byValue
+                        byValue.Add(variable.Variable)
                     }
-                    counts[variable.Variable] = (
-                        if counts.TryGetValue(variable.Variable, out var seen) {
-                            seen
-                        } else {
-                            0
-                        }
-                    ) +
-                        1
                 }
             }
         }
@@ -4525,13 +4529,18 @@ internal partial class StatementBinder {
                     .IsDefaultOrEmpty &&
                     structure
                     .TypeArguments
-                    .IsDefaultOrEmpty
+                    .IsDefaultOrEmpty &&
+                    !structure.IsConstructedNestedType &&
+                    !TypeSymbol.IsUnboundGenericDefinition(structure)
             }
             let clr = type.ClrType
             if clr == nil || type is TypeParameterSymbol or InterfaceSymbol {
                 return false
             }
-            if clr.IsPrimitive || ClrTypeInspector.IsSameAs(clr, typeof(string)) {
+            if clr.IsPrimitive || ClrTypeInspector.IsSameAs(clr, typeof(string)) || ClrTypeInspector.IsSameAs(
+                clr,
+                typeof(object)
+            ) {
                 return true
             }
             // An imported non-generic class, interface or `object`: a by-reference argument has the exact type of
