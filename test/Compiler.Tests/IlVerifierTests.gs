@@ -25,6 +25,54 @@ import Xunit.Sdk
 /// gate: if these break, every Compile…+Verify call elsewhere in this assembly
 /// is producing meaningless results.
 open class IlVerifierTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func CertifiedReturns_RejectSelfConsistentPartialDiagnosticSets(product bool) {
+        let directory = Directory.CreateTempSubdirectory("ilverify-partial-certificate-").FullName
+        try {
+            let dll = if product {
+                WriteLiteralProof(directory, byRef: false, product: true)
+            } else {
+                typeof(Slice[_]).Assembly.Location
+            }
+            let report = StaticInterfaceReport(dll)
+            let errors = report
+                .Replace("\r\n", "\n")
+                .Split('\n')
+                .Where((line string) -> line.StartsWith("[IL]: Error", StringComparison.Ordinal))
+                .ToArray()
+            Assert.Equal(
+                if product {
+                    3
+                } else {
+                    2
+                },
+                errors.Length
+            )
+            for var mask = 1; mask < (1 << errors.Length) - 1; mask++ {
+                let partial = System.Text.StringBuilder()
+                var count = 0
+                for var index = 0; index < errors.Length; index++ {
+                    if (mask & (1 << index)) != 0 {
+                        partial.AppendLine(errors[index])
+                        count++
+                    }
+                }
+                partial.Append(count).Append(" Error(s) Verifying ").AppendLine(dll)
+                let text = partial.ToString()
+                Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, text), text)
+                let analysis = IlVerifyFalsePositives.Analyze(dll, text)
+                Assert.False(analysis.Complete)
+                Assert.Empty(analysis.Accepted)
+                Assert.Equal(count, analysis.Unexpected.Length)
+                Assert.Equal(1, RunStandaloneAdapter(dll, text, expectedUnexpected: count))
+            }
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     @Fact
     func ProductLiteralRefLikeReturns_RequireFrozenCompilerImageAndExactDiagnostics() {
         let directory = Directory.CreateTempSubdirectory("ilverify-product-literal-proof-").FullName

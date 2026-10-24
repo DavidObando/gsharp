@@ -3,7 +3,7 @@
     "date": "2026-10-24",
     "repository_issue": 5244,
     "upstream_issue": "dotnet/runtime#129030",
-    "policy": "Finite independently witnessed exceptions, not an all-ref-like or diagnostic-category waiver."
+    "policy": "Finite independently witnessed exceptions, not an all-ref-like or diagnostic-category waiver. Each matched certificate requires its complete unique diagnostic set, even when a truncated report has an internally consistent summary."
   },
   "runtime": {
     "owner": "Gsharp.Runtime.Values, Version=0.5.0.0, Culture=neutral, PublicKeyToken=null",
