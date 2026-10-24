@@ -72,7 +72,7 @@ internal class MetadataSignatureDecoder : ISignatureTypeProvider[TypeSymbol, Met
         modifier TypeSymbol,
         unmodifiedType TypeSymbol,
         isRequired bool
-    ) TypeSymbol -> MetadataModifiers.Add(modifier, isRequired, unmodifiedType)
+    ) TypeSymbol -> MetadataModifiers.Add(module.Set, modifier, isRequired, unmodifiedType)
 
     func GetPinnedType(elementType TypeSymbol) TypeSymbol -> elementType
 

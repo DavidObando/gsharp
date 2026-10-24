@@ -120,6 +120,67 @@ open class Issue5144ModifierTests {
         Assert.False(MetadataModifiers.IsCallingConvention(TypeSymbol.Int32))
     }
 
+    @Fact
+    func TwoDecodesOfOneModifiedSignature_ShareTheirSymbols() {
+        let path = WriteImage(BuildModifierImage())
+        using let resolver = HandleResolver([]string{path})
+        let module = resolver.ImageSet!!.FindModule("Mods5144B")!!
+        module.TryGetDefinition("N5144B.S", out var handle)
+        let shapes = module.GetTypeSymbol(handle)
+        for name in[]string{"Ordered", "Callback"} {
+            let field = shapes.Fields.First((f MetadataFieldSymbol) -> f.Name == name)
+            let context = MetadataGenericContext.Empty
+            let first = module
+                .Reader
+                .GetFieldDefinition(field.Handle)
+                .DecodeSignature[TypeSymbol, MetadataGenericContext](module.Decoder, context)
+            let second = module
+                .Reader
+                .GetFieldDefinition(field.Handle)
+                .DecodeSignature[TypeSymbol, MetadataGenericContext](module.Decoder, context)
+            Assert.Same(first, second)
+        }
+        // The function pointer of the second field is shared because its modified return type is.
+        let callback = shapes.Fields.First((f MetadataFieldSymbol) -> f.Name == "Callback")
+        Assert.Same(
+            (cast[MetadataFunctionPointerTypeSymbol](callback.FieldType)).ReturnType,
+            (
+                cast[MetadataFunctionPointerTypeSymbol](
+                    module
+                        .Reader
+                        .GetFieldDefinition(callback.Handle)
+                        .DecodeSignature[TypeSymbol, MetadataGenericContext](
+                        module.Decoder,
+                        MetadataGenericContext.Empty
+                    )
+                )
+            ).ReturnType
+        )
+    }
+
+    @Fact
+    func ModifiersOfNestedTypes_AreKept_AndSpelledByTheDeepFormat() {
+        let path = WriteImage(BuildNestedImage())
+        using let resolver = HandleResolver([]string{path})
+        let module = resolver.ImageSet!!.FindModule("Nested5144C")!!
+        module.TryGetDefinition("N5144C.S", out var handle)
+        let shapes = module.GetTypeSymbol(handle)
+        let pointer = shapes.Fields.First((f MetadataFieldSymbol) -> f.Name == "Pointer")
+        let plain = shapes.Fields.First((f MetadataFieldSymbol) -> f.Name == "PlainPointer")
+        // The identity key is the same; the nested modifier is data on the pointee.
+        Assert.Equal(MetadataTypeKeys.Of(plain.FieldType), MetadataTypeKeys.Of(pointer.FieldType))
+        Assert.Equal("", MetadataModifiers.FormatDeep(plain.FieldType))
+        Assert.Equal(
+            "{req:;opt:System.Private.CoreLib!System.Runtime.CompilerServices.IsConst}",
+            MetadataModifiers.FormatDeep(pointer.FieldType)
+        )
+        // A constructor's return modifier is kept on the symbol; reflection cannot show it.
+        let ctor = shapes.Methods.First((m MetadataMethodSymbol) -> m.Name == ".ctor")
+        Assert.Equal(1, MetadataModifiers.Of(ctor.Signature.ReturnType).Length)
+        Assert.DoesNotContain("{req", MetadataMemberComparison.DescribeMethod(ctor))
+        Assert.Empty(MetadataModelComparison.Compare(resolver, resolver.ImageSet!!))
+    }
+
     shared {
         private func HandleResolver(paths[]string) ReferenceResolver {
             using let override_ = MetadataModel.Override(MetadataModelMode.Handles)
@@ -233,6 +294,97 @@ open class Issue5144ModifierTests {
                 FieldAttributes.Public,
                 metadata.GetOrAddString("Callback"),
                 metadata.GetOrAddBlob(CallbackField(cdecl))
+            )
+            let image = BlobBuilder()
+            ManagedPEBuilder(
+                PEHeaderBuilder.CreateLibraryHeader(),
+                MetadataRootBuilder(metadata),
+                BlobBuilder()
+            ).Serialize(image)
+            return image.ToArray()
+        }
+
+        // Writes an assembly with S: a pointer field whose pointee has modopt(IsConst), the same pointer without it,
+        // and a constructor whose void return has modopt(IsConst).
+        private func BuildNestedImage()[]uint8 {
+            let metadata = MetadataBuilder()
+            metadata.AddModule(
+                0,
+                metadata.GetOrAddString("Nested5144C.dll"),
+                metadata.GetOrAddGuid(Guid.NewGuid()),
+                GuidHandle(),
+                GuidHandle()
+            )
+            metadata.AddAssembly(
+                metadata.GetOrAddString("Nested5144C"),
+                Version(1, 0, 0, 0),
+                StringHandle(),
+                BlobHandle(),
+                cast[AssemblyFlags](0),
+                AssemblyHashAlgorithm.None
+            )
+            let runtime = metadata.AddAssemblyReference(
+                metadata.GetOrAddString("System.Runtime"),
+                Version(10, 0, 0, 0),
+                StringHandle(),
+                BlobHandle(),
+                cast[AssemblyFlags](0),
+                BlobHandle()
+            )
+            let isConst = metadata.AddTypeReference(
+                runtime,
+                metadata.GetOrAddString("System.Runtime.CompilerServices"),
+                metadata.GetOrAddString("IsConst")
+            )
+            metadata.AddTypeDefinition(
+                cast[TypeAttributes](0),
+                StringHandle(),
+                metadata.GetOrAddString("<Module>"),
+                EntityHandle(),
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(1)
+            )
+            metadata.AddTypeDefinition(
+                TypeAttributes.Public,
+                metadata.GetOrAddString("N5144C"),
+                metadata.GetOrAddString("S"),
+                EntityHandle(),
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(1)
+            )
+            let pointerBlob = BlobBuilder()
+            let pointee = BlobEncoder(pointerBlob).FieldSignature().Pointer()
+            pointee.CustomModifiers().AddModifier(isConst, true)
+            pointee.Int32()
+            let plainBlob = BlobBuilder()
+            BlobEncoder(plainBlob).FieldSignature().Pointer().Int32()
+            metadata.AddFieldDefinition(
+                FieldAttributes.Public,
+                metadata.GetOrAddString("Pointer"),
+                metadata.GetOrAddBlob(pointerBlob)
+            )
+            metadata.AddFieldDefinition(
+                FieldAttributes.Public,
+                metadata.GetOrAddString("PlainPointer"),
+                metadata.GetOrAddBlob(plainBlob)
+            )
+            let ctorBlob = BlobBuilder()
+            var ctorReturn ReturnTypeEncoder = default(ReturnTypeEncoder)
+            var ctorParameters ParametersEncoder = default(ParametersEncoder)
+            BlobEncoder(ctorBlob).MethodSignature(SignatureCallingConvention.Default, 0, true).Parameters(
+                0,
+                out ctorReturn,
+                out ctorParameters
+            )
+            ctorReturn.CustomModifiers().AddModifier(isConst, true)
+            ctorReturn.Void()
+            metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
+                cast[MethodImplAttributes](0),
+                metadata.GetOrAddString(".ctor"),
+                metadata.GetOrAddBlob(ctorBlob),
+                -1,
+                MetadataTokens.ParameterHandle(1)
             )
             let image = BlobBuilder()
             ManagedPEBuilder(

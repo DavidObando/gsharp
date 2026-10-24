@@ -43,13 +43,14 @@ internal shared class MetadataModifiers {
     private let CallConvPrefix string = "System.Runtime.CompilerServices.CallConv"
 
     /// Adds one modifier in front of a type. The decoder applies the modifiers of a position from the last to the first,
-    /// so adding in front gives blob order.
-    internal func Add(modifier TypeSymbol, isRequired bool, type TypeSymbol) TypeSymbol {
+    /// so adding in front gives blob order. The set interns the result, so two decodes of one signature share their
+    /// symbols and anything keyed by those symbols (a function pointer) shares too.
+    internal func Add(set ReferenceImageSet, modifier TypeSymbol, isRequired bool, type TypeSymbol) TypeSymbol {
         let entry = MetadataCustomModifier(modifier, isRequired)
         if type is MetadataModifiedTypeSymbol modified {
-            return MetadataModifiedTypeSymbol(modified.Unmodified, modified.Modifiers.Insert(0, entry))
+            return set.GetModified(modified.Unmodified, modified.Modifiers.Insert(0, entry))
         }
-        return MetadataModifiedTypeSymbol(type, ImmutableArray.Create(entry))
+        return set.GetModified(type, ImmutableArray.Create(entry))
     }
 
     /// Gets the type without its modifiers.
@@ -118,6 +119,35 @@ internal shared class MetadataModifiers {
             (m MetadataCustomModifier) -> MetadataTypeKeys.Of(m.Type)
         )
     )
+
+    /// Spells the modifiers of a symbol position and of every type nested in it: element types, pointees, type arguments
+    /// and function pointer parts. Reflection exposes only the modifiers of the outer position, so the comparison uses
+    /// (cref:Format(TypeSymbol)); this function is for the structural tests of the nested ones.
+    internal func FormatDeep(type TypeSymbol) string {
+        let own = Format(type)
+        let inner = Strip(type)
+        if inner is MetadataArrayTypeSymbol array {
+            return FormatDeep(array.ElementType) + own
+        }
+        if inner is PointerTypeSymbol pointer {
+            return FormatDeep(pointer.PointeeType) + own
+        }
+        if inner is ByRefTypeSymbol byRef {
+            return FormatDeep(byRef.PointeeType) + own
+        }
+        if inner is ConstructedMetadataTypeSymbol constructed {
+            return "<" + string.Join(",", constructed.TypeArguments.Select((a TypeSymbol) -> FormatDeep(a))) + ">" + own
+        }
+        if inner is MetadataFunctionPointerTypeSymbol functionPointer {
+            return "fnptr(" + FormatDeep(functionPointer.ReturnType) + ";" + string.Join(
+                ";",
+                functionPointer.ParameterTypes.Select((a TypeSymbol) -> FormatDeep(a))
+            ) +
+                ")" +
+                own
+        }
+        return own
+    }
 
     /// Spells the modifiers of a reflection position by the shared format.
     /// Reflection lists the modifiers of each kind in reverse blob order (observed with `MetadataLoadContext` on a

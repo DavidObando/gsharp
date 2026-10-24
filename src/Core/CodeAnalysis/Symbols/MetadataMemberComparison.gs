@@ -186,7 +186,7 @@ internal shared class MetadataMemberComparison {
             "signature-missing"
         } else {
             MethodSignature(
-                MetadataTypeKeys.Of(signature.ReturnType) + MetadataModifiers.Format(signature.ReturnType),
+                MetadataTypeKeys.Of(signature.ReturnType) + ReturnModifiers(method),
                 signature.Parameters.Select(
                     (p MetadataParameter) -> Parameter(
                         p.Name,
@@ -372,6 +372,16 @@ internal shared class MetadataMemberComparison {
         .GetIndexParameters()
         .Take(declaredParameterCount)
         .ToArray()
+
+    // Reflection has no return parameter for a constructor (ConstructorInfo), so the return modifiers of a `.ctor` or
+    // `.cctor` cannot be compared. Both sides leave them out of the line; the symbol keeps them and a structural test
+    // covers them.
+    private func ReturnModifiers(method MetadataMethodSymbol) string -> if method.Name == ".ctor" ||
+        method.Name == ".cctor" {
+        ""
+    } else {
+        MetadataModifiers.Format(method.Signature.ReturnType)
+    }
 
     // The modifiers of a parameter position, by the shared format.
     private func Modifiers(parameter ParameterInfo) string -> MetadataModifiers.Format(
