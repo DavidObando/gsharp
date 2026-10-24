@@ -4,6 +4,7 @@
 
 package GSharp.Core.Tests.CodeAnalysis.Compilation
 
+import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Emit
@@ -72,6 +73,24 @@ open class CompilationSuccessorTests {
         Assert.Same(scope_, first.GlobalScope)
         let second = previous.ReplaceSyntaxTree(a, Parse("A.gs", AText.Replace("return 1", "return 3")))
         Assert.NotSame(scope_, second.GlobalScope)
+    }
+
+    @Fact
+    func ReplaceSyntaxTree_OnAnUnnamedTreeWithADeclarationDiagnostic_BindsFromScratch() {
+        let source = "package P\nfunc A() int32 {\n    return 1\n}\nfunc B() Undefined {\n    return nil\n}\n"
+        let tree = SyntaxTree.Parse(source)
+        Assert.True(string.IsNullOrEmpty(tree.Text.FileName))
+        let previous = Compilation(tree)
+        Assert.NotEmpty(previous.GlobalScope.Diagnostics)
+        let edited = SyntaxTree.Parse(source.Replace("return 1", "let x int32 = 1\n    return x"))
+        let successor = previous.ReplaceSyntaxTree(tree, edited)
+        // The diagnostic's span moved with the edit, so the old scope cannot be kept.
+        Assert.NotSame(previous.GlobalScope, successor.GlobalScope)
+        let fresh = Compilation(edited).GlobalScope.Diagnostics
+        Assert.Equal(
+            fresh.Select((d Diagnostic) -> (d.Id, d.Location.Span.Start)).ToArray(),
+            successor.GlobalScope.Diagnostics.Select((d Diagnostic) -> (d.Id, d.Location.Span.Start)).ToArray()
+        )
     }
 
     @Fact
