@@ -101,6 +101,85 @@ open class Issue5171RefAliasNarrowingTests {
         /// Gets the rejected programs: each is (name, source).
         /// @returns The case data.
         func RejectedCases() sequence[[]object] {
+            yield[]object{"ref-parameter-base-interface-call", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+interface IClear {
+    func Reset() { }
+    func Clear() { Reset() }
+}
+class Holder : IClear {
+    var Field C? = C{}
+    func Reset() { Field = nil }
+    func Run(ref a C?) int32 {
+        if a == nil { return 0 }
+        base[IClear].Clear()
+        return a.Value
+    }
+}
+func Main() {
+    let h = Holder{}
+    Console.WriteLine(h.Run(ref h.Field))
+}
+`}
+            yield[]object{"ref-parameter-cyclic-object-argument", `
+import System
+
+class Node {
+    var Value int32 = 1
+    var Link Node? = nil
+}
+func Clear(n Node) { n.Link = nil }
+func Run(ref a Node?) int32 {
+    if a == nil { return 0 }
+    Clear(a)
+    return a.Value
+}
+func Main() {
+    let c = Node{}
+    c.Link = c
+    Console.WriteLine(Run(ref c.Link))
+}
+`}
+            yield[]object{"ref-parameter-cyclic-object-receiver", `
+import System
+
+class Node {
+    var Value int32 = 1
+    var Link Node? = nil
+    func Detach() { Link = nil }
+}
+func Run(ref a Node?) int32 {
+    if a == nil { return 0 }
+    a.Detach()
+    return a.Value
+}
+func Main() {
+    let c = Node{}
+    c.Link = c
+    Console.WriteLine(Run(ref c.Link))
+}
+`}
+            yield[]object{"ref-parameter-call-with-same-typed-ref-argument", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Clear(ref b C?) { b = nil }
+func Run(ref a C?, ref b C?) int32 {
+    if a == nil { return 0 }
+    Clear(ref b)
+    return a.Value
+}
+func Main() {
+    var x C? = C{}
+    Console.WriteLine(Run(ref x, ref x))
+}
+`}
             yield[]object{"ref-local-root-write", `
 import System
 
@@ -691,6 +770,76 @@ Console.WriteLine(Run(ref box.Field, box))
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
         /// @returns The case data.
         func AcceptedCases() sequence[[]object] {
+            yield[]object{"ref-parameter-survives-read-only-calls", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Touch(c C) int32 { return c.Value }
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    let first = Touch(a)
+    let second = Touch(a)
+    return a.Value + first + second
+}
+func Main() {
+    var x C? = C{}
+    Console.WriteLine(Run(ref x))
+}
+`, []string{"3"}}
+            yield[]object{"out-parameter-survives-calls-in-a-loop", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Touch(c C) int32 { return c.Value }
+func Run(out a C?) int32 {
+    a = C{}
+    if a == nil { return 0 }
+    var total int32 = 0
+    for var i = 0; i < 3; i++ {
+        total += Touch(a) + a.Value
+    }
+    return total
+}
+func Main() {
+    var x C? = nil
+    Console.WriteLine(Run(out x))
+}
+`, []string{"6"}}
+            yield[]object{"out-parameters-of-different-types-do-not-overlap", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+func Lookup(d Dictionary[C, string], key C, out found string?) bool -> d.TryGetValue(key, out found)
+func Find(d Dictionary[C, string], c C?, out path C?, out text string?) bool {
+    path = c
+    if path == nil {
+        text = nil
+        return false
+    }
+    for var i = 0; i < 2; i++ {
+        if Lookup(d, path, out text) {
+            return path.Value > 0
+        }
+    }
+    text = nil
+    return false
+}
+func Main() {
+    let c = C{}
+    let d = Dictionary[C, string]()
+    d[c] = "x"
+    var p C? = nil
+    var t string? = nil
+    Console.WriteLine(Find(d, c, out p, out t))
+}
+`, []string{"True"}}
             yield[]object{"ref-local-unrelated-write", `
 import System
 

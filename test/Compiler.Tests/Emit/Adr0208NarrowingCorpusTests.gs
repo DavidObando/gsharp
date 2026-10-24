@@ -163,6 +163,10 @@ open class Adr0208NarrowingCorpusTests {
                 "g3_switch_failed_guard",
                 "g4_overload_ambiguity_after_join",
                 "g5_yield_after_guard",
+                "h1_by_ref_param_survives_calls",
+                "h2_by_ref_param_call_with_container",
+                "h3_by_ref_param_call_with_imported_holder",
+                "h4_by_ref_param_call_with_array_segment",
                 "out-alias_out_ref_alias"
             },
             names
@@ -924,6 +928,71 @@ func Main() {
         Console.WriteLine(item)
     }
 }`, "", "run", "0|1", "R13 (GS0158 after)"}
+            yield[]object{"h1_by_ref_param_survives_calls", `import System.Collections.Generic
+class P { var Value int32 = 1 }
+func Touch(p P) int32 { return p.Value }
+func Find(frames List[Dictionary[P, string]], c P?, out path P?, out found string?) bool {
+    path = c
+    if path == nil {
+        found = nil
+        return false
+    }
+    for var i = 0; i < frames.Count; i++ {
+        if frames[i].TryGetValue(path, out found) {
+            return Touch(path) + path.Value == 2
+        }
+    }
+    found = nil
+    return false
+}
+func Main() {
+    let c = P{}
+    let frames = List[Dictionary[P, string]]()
+    frames.Add(Dictionary[P, string]{[c] = "x"})
+    var p P? = nil
+    var t string? = nil
+    Console.WriteLine(Find(frames, c, out p, out t))
+}`, "", "run", "True", "R12 amendment A3 (#5292)"}
+            yield[]object{"h2_by_ref_param_call_with_container", `class C {
+    var Value int32 = 1
+}
+func Clear(xs []C?) { xs[0] = nil }
+func Run(ref a C?, xs []C?) int32 {
+    if a == nil { return 0 }
+    Clear(xs)
+    return a.Value
+}
+func Main() {
+    var xs = []C?{C{}}
+    Console.WriteLine(Run(ref xs[0], xs))
+}`, "GS0158@8:14", "reject", "", ""}
+            yield[]object{"h3_by_ref_param_call_with_imported_holder", `import System.Runtime.CompilerServices
+class C {
+    var Value int32 = 1
+}
+func Clear(box StrongBox[C?]) { box.Value = nil }
+func Run(ref a C?, box StrongBox[C?]) int32 {
+    if a == nil { return 0 }
+    Clear(box)
+    return a.Value
+}
+func Main() {
+    let box = StrongBox[C?](C{})
+    Console.WriteLine(Run(ref box.Value, box))
+}`, "GS0158@9:14", "reject", "", ""}
+            yield[]object{"h4_by_ref_param_call_with_array_segment", `class C {
+    var Value int32 = 1
+}
+func Clear(segment ArraySegment[C?]) { segment.Array!![0] = nil }
+func Run(ref a C?, segment ArraySegment[C?]) int32 {
+    if a == nil { return 0 }
+    Clear(segment)
+    return a.Value
+}
+func Main() {
+    var items = []C?{C{}}
+    Console.WriteLine(Run(ref items[0], ArraySegment[C?](items)))
+}`, "GS0158@8:14", "reject", "", ""}
             yield[]object{"out-alias_out_ref_alias", `class C { func M() { } }
 func Run(out c C?, ref alias C?) {
     c = C()

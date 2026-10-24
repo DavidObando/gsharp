@@ -396,7 +396,14 @@ internal partial class StatementBinder {
                         )
                     }
                 ) ||
-                    (DropsOnMemberMutation(key) && dropAllMemberPaths)
+                    (
+                    if statementCollector != nil {
+                        DropsOnMemberMutation(key, dropAllMemberPaths, statementCollector.MayMutateReferenceStorage) ||
+                            (IsExternalStorageAlias(key.Root) && statementCollector.CallMayReachStorageOf(key.Root))
+                    } else {
+                        DropsOnMemberMutation(key, dropAllMemberPaths, dropAllMemberPaths)
+                    }
+                )
                 if drop {
                     (
                         (
@@ -627,7 +634,7 @@ internal partial class StatementBinder {
                     frames[i][path]
                 ) ||
                     mutations.InvalidatesNarrowing(path.Root, frames[i][path]) ||
-                    (DropsOnMemberMutation(path) && mayMutateMemberPaths) {
+                    DropsOnMemberMutation(path, mutations) {
                     invalidations.Add((i, path))
                 }
             }
@@ -1130,7 +1137,7 @@ internal partial class StatementBinder {
                 entry.Key.Root,
                 entry.Value
             ) ||
-                (DropsOnMemberMutation(entry.Key) && mutations.MayMutateMemberPaths) ||
+                DropsOnMemberMutation(entry.Key, mutations) ||
                 mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value) {
                 state.Remove(entry.Key)
             }
@@ -1161,7 +1168,7 @@ internal partial class StatementBinder {
                     entry.Key.Root,
                     entry.Value
                 ) ||
-                    (DropsOnMemberMutation(entry.Key) && summary.Mutations.MayMutateMemberPaths) ||
+                    DropsOnMemberMutation(entry.Key, summary.Mutations) ||
                     summary
                     .Mutations
                     .InvalidatesNarrowing(entry.Key.Root, entry.Value) {
@@ -1182,7 +1189,7 @@ internal partial class StatementBinder {
                 entry.Key.Root,
                 entry.Value
             ) ||
-                (DropsOnMemberMutation(entry.Key) && summary.Mutations.MayMutateMemberPaths) ||
+                DropsOnMemberMutation(entry.Key, summary.Mutations) ||
                 summary
                 .Mutations
                 .InvalidatesNarrowing(entry.Key.Root, entry.Value) {
@@ -1771,6 +1778,41 @@ internal partial class StatementBinder {
             private set;
         }
 
+        // ADR-0208 R12 (#5292): the types of the operands (the receiver, implicit or written, and every
+        // argument) of the calls whose callee is known.
+        private let callOperandTypes List[TypeSymbol?] = List[TypeSymbol?]()
+
+        private func RecordCallOperands(call BoundExpression) {
+            for child in call.ChildNodes {
+                if child is BoundExpression operand {
+                    // A `ref`/`out` argument passes the storage; the callee reaches what its value reaches.
+                    var value = operand
+                    while value is BoundAddressOfExpression address {
+                        value = address.Operand
+                    }
+                    callOperandTypes.Add(value.Type)
+                }
+            }
+        }
+
+        // ADR-0208 R12 (#5292): whether a call of this node may reach the storage that [`root`](paramref) names:
+        // through an operand whose type graph holds the container of a storage of the type of the root.
+        func CallMayReachStorageOf(root VariableSymbol) bool {
+            for type in callOperandTypes {
+                if StatementBinder.TypeGraphMayHoldStorageOf(type, root.Type) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        // ADR-0208 R12 (#5292): a member, index or indirect write, or user code that may run one
+        // (a lambda, a loop header); unlike MayMutateMemberPaths, a plain call does not set it.
+        prop MayMutateReferenceStorage bool {
+            get;
+            private set;
+        }
+
         // A nested try can catch a replacement exception, after the filters of an enclosing try ran.
         prop ContainsTry bool {
             get;
@@ -1854,6 +1896,13 @@ internal partial class StatementBinder {
             if StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) {
                 MayMutateMemberPaths = true
             }
+            if StatementBinder.IsMemberStorageWriteExpression(node.Kind) ||
+                (
+                StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) &&
+                    node is not BoundCallOperationExpression
+            ) {
+                MayMutateReferenceStorage = true
+            }
             if node is BoundPropertyAccessExpression && node.Property.IsAutoProperty == false {
                 MayMutateMemberPaths = true
             }
@@ -1888,7 +1937,9 @@ internal partial class StatementBinder {
                 MarkMayMutateGlobalRoots()
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function, Arguments: var arguments} {
-                MarkMayMutateGlobalRoots()
+                // ADR-0208 R12 (#5292): a call reaches by-reference storage only through its operands.
+                MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                RecordCallOperands(node)
                 if function.HasCaptures {
                     MayMutateAnyRoot = true
                 }
@@ -1900,6 +1951,9 @@ internal partial class StatementBinder {
                 }
             }
             if node is BoundCallOperationExpression call {
+                if call.CalledFunction is not FunctionSymbol {
+                    RecordCallOperands(node)
+                }
                 AnalyzeCallableArguments(call.Arguments)
             }
             base.VisitExpression(node)
@@ -2418,6 +2472,7 @@ internal partial class StatementBinder {
             if variable is ParameterSymbol && variable.IsReadOnly == true || externalFunctionValues.Contains(variable) {
                 MarkMayMutateGlobalRoots()
                 MayMutateWritableReferenceRoots = true
+                MayMutateReferenceStorage = true
             }
         }
 
@@ -2426,9 +2481,12 @@ internal partial class StatementBinder {
             MarkMayMutateGlobalRoots()
         }
 
-        private func MarkMayMutateGlobalRoots() {
+        private func MarkMayMutateGlobalRoots(writesReferenceStorage bool = true) {
             // User code can also write members and the storage behind by-reference aliases.
             MayMutateMemberPaths = true
+            if writesReferenceStorage {
+                MayMutateReferenceStorage = true
+            }
             MayMutateGlobalRoots = true
             let protectedRoots = enclosingGlobalAssignments.ToHashSet()
             if globalMutationProtectedRoots == nil {
@@ -2581,6 +2639,7 @@ internal partial class StatementBinder {
             if !SmartCastStability.TryGetStableMemberPath(expression, out var path, out _) {
                 if expression is BoundIndexExpression || expression is BoundClrIndexExpression {
                     MayMutateMemberPaths = true
+                    MayMutateReferenceStorage = true
                 } else {
                     MayMutateAnyRoot = true
                     MayMutateAnyRootViaPointer = true
@@ -2589,6 +2648,7 @@ internal partial class StatementBinder {
             }
             if path.HasMembers {
                 MayMutateMemberPaths = true
+                MayMutateReferenceStorage = true
             } else {
                 Roots.Add(path.Root)
             }
@@ -4365,13 +4425,47 @@ internal partial class StatementBinder {
             return !last.IsReadOnly
         }
 
+        private func StripNullability(type TypeSymbol?) TypeSymbol? {
+            var current = type
+            while current is NullableTypeSymbol or PlatformTypeSymbol {
+                current = if current is NullableTypeSymbol nullable {
+                    nullable.UnderlyingType
+                } else {
+                    (current as PlatformTypeSymbol)!!.UnderlyingType
+                }
+            }
+            return current
+        }
+
+        /// ADR-0208 R12 (#5292): whether two by-reference storages of these types can be one storage. A
+        /// by-reference argument has the exact type of its parameter, so two different reference-like or
+        /// primitive types cannot share a storage; a value-type aggregate (it may hold the other as a field),
+        /// `object`, an interface or a type parameter can.
+        internal func ByReferenceTypesMayOverlap(first TypeSymbol?, second TypeSymbol?) bool {
+            let left = StripNullability(first)
+            let right = StripNullability(second)
+            if left == nil || right == nil || object.Equals(left, right) {
+                return true
+            }
+            return MayHoldOtherStorage(left) || MayHoldOtherStorage(right)
+        }
+
+        private func MayHoldOtherStorage(type TypeSymbol) bool -> type is TypeParameterSymbol or
+            InterfaceSymbol ||
+            type is StructSymbol{IsClass: false} ||
+            object.ReferenceEquals(type.ClrType, typeof(object)) ||
+            (type.ClrType != nil && type.ClrType.IsValueType && !type.ClrType.IsPrimitive && !type.ClrType.IsEnum)
+
         /// ADR-0208 R12 (#5171): whether [`first`](paramref) and [`second`](paramref) may name one
-        /// storage: the same variable, an overlapping alias chain, or two external-storage aliases.
+        /// storage: the same variable, an overlapping alias chain, or two external-storage aliases of types
+        /// that can overlap.
         internal func SharesStorage(first VariableSymbol, second VariableSymbol) bool {
             if object.ReferenceEquals(first, second) {
                 return true
             }
-            if IsExternalStorageAlias(first) && IsExternalStorageAlias(second) {
+            if IsExternalStorageAlias(first) &&
+                IsExternalStorageAlias(second) &&
+                ByReferenceTypesMayOverlap(first.Type, second.Type) {
                 return true
             }
             let secondChain = AliasChain(second)
@@ -4403,10 +4497,155 @@ internal partial class StatementBinder {
             return false
         }
 
-        /// ADR-0208 R12 (#5171): whether a member, index or indirect write, or a
-        /// call, invalidates the narrowing of [`path`](paramref).
-        internal func DropsOnMemberMutation(path AccessPath) bool -> path.HasMembers ||
-            IsExternalStorageAlias(path.Root)
+        /// ADR-0208 R12 (#5171, #5292): whether the effects of a node invalidate the narrowing of
+        /// [`path`](paramref). A member-bearing path drops when the node may run user code or write a member
+        /// (`mayMutateMemberPaths`). A root that may name storage no other root names drops when the node
+        /// writes through a member, index or indirect target (`mayMutateReferenceStorage`), and also on any
+        /// call when the callee can reach that storage (a `ref` local that does not alias a by-reference
+        /// parameter; see (cref:CallsMayWriteAliasedStorage)). A call alone does not drop the narrowing of a
+        /// by-reference parameter: the callee has no name for the caller's storage.
+        internal func DropsOnMemberMutation(
+            path AccessPath,
+            mayMutateMemberPaths bool,
+            mayMutateReferenceStorage bool
+        ) bool -> (path.HasMembers && mayMutateMemberPaths) ||
+            (
+            IsExternalStorageAlias(path.Root) &&
+                (mayMutateReferenceStorage || (mayMutateMemberPaths && CallsMayWriteAliasedStorage(path.Root)))
+        )
+
+        internal func DropsOnMemberMutation(
+            path AccessPath,
+            mutations AssignedRootsCollector
+        ) bool -> DropsOnMemberMutation(path, mutations.MayMutateMemberPaths, mutations.MayMutateReferenceStorage) ||
+            (IsExternalStorageAlias(path.Root) && mutations.CallMayReachStorageOf(path.Root))
+
+        /// ADR-0208 R12 (#5292): whether a callee that receives a value of [`operand`](paramref) can reach
+        /// a container of a storage of type [`stored`](paramref): the type graph of the operand, followed
+        /// through the instance fields and properties of user types, the public instance fields of imported
+        /// types and the elements of arrays and slices, has an array of the stored type or a type with a field
+        /// of the stored type. An interface, `object`, a type parameter, a function or a delegate can hold any
+        /// type, so they reach. Primitives, strings and enums reach nothing.
+        internal func TypeGraphMayHoldStorageOf(operand TypeSymbol?, stored TypeSymbol?) bool {
+            let target = StripNullability(stored)
+            if operand == nil || target == nil {
+                return true
+            }
+            return GraphReaches(StripNullability(operand), target, HashSet[TypeSymbol](), 0)
+        }
+
+        private func SameStoredType(candidate TypeSymbol?, target TypeSymbol) bool {
+            let stripped = StripNullability(candidate)
+            return stripped != nil &&
+                (
+                object.Equals(stripped, target) ||
+                    (
+                    stripped.ClrType != nil && target.ClrType != nil && ClrTypeInspector.IsSameAs(
+                        stripped.ClrType,
+                        target.ClrType
+                    )
+                )
+            )
+        }
+
+        private func GraphReaches(type TypeSymbol?, target TypeSymbol, visited HashSet[TypeSymbol], depth int32) bool {
+            if type == nil || depth > 24 {
+                return true
+            }
+            if !visited.Add(type) {
+                return false
+            }
+            if type is TypeParameterSymbol or
+                InterfaceSymbol or
+                DelegateTypeSymbol or
+                FunctionTypeSymbol ||
+                object.ReferenceEquals(type.ClrType, typeof(object)) {
+                return true
+            }
+            if type is ArrayTypeSymbol array {
+                return SameStoredType(array.ElementType, target) ||
+                    GraphReaches(StripNullability(array.ElementType), target, visited, depth + 1)
+            }
+            if type is SliceTypeSymbol slice {
+                return SameStoredType(slice.ElementType, target) ||
+                    GraphReaches(StripNullability(slice.ElementType), target, visited, depth + 1)
+            }
+            if type is StructSymbol structure {
+                var current StructSymbol? = structure
+                for var hops = 0; current != nil && hops < 64; hops++ {
+                    let definition = current.Definition ?? current
+                    for field in definition.Fields {
+                        if !field.IsStatic &&
+                            (
+                            SameStoredType(field.Type, target) ||
+                                GraphReaches(StripNullability(field.Type), target, visited, depth + 1)
+                        ) {
+                            return true
+                        }
+                    }
+                    for property in definition.Properties {
+                        if !property.IsStatic &&
+                            property.IsAutoProperty &&
+                            (
+                            SameStoredType(property.Type, target) ||
+                                GraphReaches(StripNullability(property.Type), target, visited, depth + 1)
+                        ) {
+                            return true
+                        }
+                    }
+                    current = definition.BaseClass
+                }
+                return false
+            }
+            let clr = type.ClrType
+            if clr == nil {
+                // Tuples, channels, maps and other structural types: any element can be the container.
+                return !(type is EnumSymbol)
+            }
+            if clr.IsArray {
+                let element = clr.GetElementType()
+                return element == nil ||
+                    (target.ClrType != nil && ClrTypeInspector.IsSameAs(element, target.ClrType)) ||
+                    !(element.IsPrimitive || element == typeof(string))
+            }
+            if clr.IsPrimitive || clr.IsEnum || object.ReferenceEquals(clr, typeof(string)) {
+                return false
+            }
+            if clr.IsByRef || clr.IsPointer || clr.IsByRefLike {
+                return true
+            }
+            // A public property that exposes an array (`ArraySegment<T>.Array`) or a reference exposes storage too.
+            for property in clr.GetProperties(BindingFlags.Instance | BindingFlags.Public) {
+                let propertyType = property.PropertyType
+                if propertyType.IsArray || propertyType.IsByRef {
+                    let element = propertyType.GetElementType()
+                    if element == nil || target.ClrType == nil || ClrTypeInspector.IsSameAs(element, target.ClrType) ||
+                        !(element.IsPrimitive || object.ReferenceEquals(element, typeof(string))) {
+                        return true
+                    }
+                }
+            }
+            for field in clr.GetFields(BindingFlags.Instance | BindingFlags.Public) {
+                let fieldType = field.FieldType
+                if target.ClrType != nil && ClrTypeInspector.IsSameAs(fieldType, target.ClrType) {
+                    return true
+                }
+                if !(fieldType.IsPrimitive || fieldType.IsEnum || object.ReferenceEquals(fieldType, typeof(string))) &&
+                    GraphReaches(ClrNullability.GetFieldTypeSymbol(field), target, visited, depth + 1) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        /// ADR-0208 R12 (#5292): whether a call can write the storage that the external-storage alias
+        /// [`root`](paramref) names. A by-reference parameter (or a `ref` local that aliases one) names
+        /// storage that the caller owns and the callee cannot name; any other alias (a `ref` local of an
+        /// element or member, or of a mutable global) can be reached through the shared heap or global.
+        internal func CallsMayWriteAliasedStorage(root VariableSymbol) bool {
+            let chain = AliasChain(root)
+            return !(chain[chain.Count - 1] is ParameterSymbol)
+        }
 
         /// Returns whether an expression kind can invoke user code or assign
         /// through a member-bearing path.
@@ -4427,7 +4666,13 @@ internal partial class StatementBinder {
             kind == BoundNodeKind.ClrConstructorCallExpression ||
             kind == BoundNodeKind.ClrStaticCallExpression ||
             kind == BoundNodeKind.ClrConversionCallExpression ||
-            kind == BoundNodeKind.FieldAssignmentExpression ||
+            IsMemberStorageWriteExpression(kind)
+
+        /// ADR-0208 R12 (#5292): whether an expression kind writes through a member, index or indirect
+        /// target, which can change the storage that a by-reference parameter names.
+        internal func IsMemberStorageWriteExpression(
+            kind BoundNodeKind
+        ) bool -> kind == BoundNodeKind.FieldAssignmentExpression ||
             kind == BoundNodeKind.PropertyAssignmentExpression ||
             kind == BoundNodeKind.IndexAssignmentExpression ||
             kind == BoundNodeKind.ClrPropertyAssignmentExpression ||
