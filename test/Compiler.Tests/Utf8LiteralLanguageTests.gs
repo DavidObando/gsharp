@@ -18,26 +18,30 @@ class Utf8LiteralLanguageTests {
         let assembly = fixture.Compile(`package Utf8Spill
 import System
 import System.Threading.Tasks
-async func Choose(value bool) Task[bool] {
-    await Task.Yield()
-    return value
-}
-async func Extra() Task[int32] {
-    await Task.Yield()
-    return 1
-}
 func Consume(value readonly span[byte], extra int32) int32 -> int32(value[0]) + extra
-async func Read(flag bool) Task[string] {
-    let value = (await Choose(flag)) ? u8"Aé" : u8"B\0"
+async func Read(pending Task[bool]) Task[string] {
+    let value = (await pending) ? u8"Aé" : u8"B\0"
     return Convert.ToHexString(value)
 }
-async func Argument() Task[int32] -> Consume(u8"A", await Extra())
-async func Receiver() Task[int32] -> int32(u8"AB".Slice(await Extra(), 1)[0])
+async func Argument(pending Task[int32]) Task[int32] -> Consume(u8"A", await pending)
+async func Receiver(pending Task[int32]) Task[int32] -> int32(u8"AB".Slice(await pending, 1)[0])
 func Main() {
-    Console.WriteLine(Read(true).Result)
-    Console.WriteLine(Read(false).Result)
-    Console.WriteLine(Argument().Result)
-    Console.WriteLine(Receiver().Result)
+    let trueGate = TaskCompletionSource[bool]()
+    let whenTrue = Read(trueGate.Task)
+    trueGate.SetResult(true)
+    Console.WriteLine(whenTrue.Result)
+    let falseGate = TaskCompletionSource[bool]()
+    let whenFalse = Read(falseGate.Task)
+    falseGate.SetResult(false)
+    Console.WriteLine(whenFalse.Result)
+    let argumentGate = TaskCompletionSource[int32]()
+    let argument = Argument(argumentGate.Task)
+    argumentGate.SetResult(1)
+    Console.WriteLine(argument.Result)
+    let receiverGate = TaskCompletionSource[int32]()
+    let receiver = Receiver(receiverGate.Task)
+    receiverGate.SetResult(1)
+    Console.WriteLine(receiver.Result)
 }`, "Utf8Spill", true)
         IlVerifier.Verify(assembly)
         Assert.Equal("41C3A9\n4200\n66\n66\n", fixture.Run(assembly))

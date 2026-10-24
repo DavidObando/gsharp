@@ -1,5 +1,5 @@
 {
-  "status": "Independent finite-policy validation; dependency PR #5331 remains draft and unmerged.",
+  "status": "Initial independent matrix incomplete: subsequently reproduced self-consistent certificate-subset acceptance. Owner correction required; dependency PR #5331 remains draft and unmerged.",
   "historical_producer_record": {
     "file": "certification-record.json",
     "sha256": "3f771dae1755225ae3fd2fa2225933a6e937f7e16da65fd933dd931177721add",
@@ -38,6 +38,18 @@
       "Additional unrecognized output",
       "Complete product-shaped diagnostics and path forged for the genuine byref PE"
     ]
+  },
+  "subsequently_reproduced_blocker": {
+    "review_thread": "PRRT_kwDOCzQNb86v8a_5",
+    "scope": "The same shared certificate-completeness decision also affects the runtime pair.",
+    "expected_policy_exit": 1,
+    "actual_policy_exit": 0,
+    "cases": [
+      "Only product Get diagnostic with summary reduced from three errors to one",
+      "Only product Get and Empty diagnostics with summary reduced from three errors to two"
+    ],
+    "meaning": "The seven earlier controls did not test self-consistent proper subsets. Their passing results do not establish complete finite-certificate validation.",
+    "ownership": "Shared policy owner fixes the authoritative decision separately; no feature-local matcher or frozen F1/F2 head edit."
   },
   "review_correction": {
     "source_commit": "6ea70eb9d67bc333edd4fe282cdb55fa937f85da",
