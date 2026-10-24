@@ -71,16 +71,12 @@ internal sealed class NarrowingFrameStack : IReadOnlyList[NarrowingFrame] {
     }
 
     func Clear() {
-        let removed = frames.ToArray()
-        frames.Clear()
-        for frame in removed {
+        for frame in frames {
             frame.Owner = nil
         }
-        for frame in removed {
-            for entry in frame {
-                Recompute(entry.Key)
-            }
-        }
+        frames.Clear()
+        // No frame is left, so no fact is: reset the state in one step.
+        threaded = NarrowingState.Empty
     }
 
     /// Called by a frame that this stack holds after a write to [`path`](paramref).
