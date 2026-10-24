@@ -113,6 +113,10 @@ internal class MetadataTypeSymbol : TypeSymbol {
     /// A nested type in a generic type repeats the parameters of the enclosing type first, as the table holds them.
     internal prop GenericParameters ImmutableArray[MetadataGenericParameter] -> genericParameters.Value
 
+    /// Gets whether the row is an interface. This reads the row only, so a type parameter constraint can ask it while
+    /// the kind flags of the same type are still being computed.
+    internal prop IsInterface bool -> (Attributes & TypeAttributes.ClassSemanticsMask) == TypeAttributes.Interface
+
     /// Gets the kind flags.
     internal prop Kinds MetadataTypeKinds -> kinds.Value
 
@@ -225,6 +229,10 @@ internal class MetadataTypeSymbol : TypeSymbol {
             if next != nil && !next.IsResolved {
                 complete = false
             }
+            // A base such as Base<Gone> resolves, but the context cannot build it when an argument is missing.
+            if MetadataTypeKeys.ContainsMissing(current.BaseType) {
+                complete = false
+            }
             current = if next == nil || !next.IsResolved {
                 nil
             } else {
@@ -242,7 +250,7 @@ internal class MetadataTypeSymbol : TypeSymbol {
     // Only the direct base decides value type, enum and delegate, as the runtime builds them.
     private func ComputeKinds() MetadataTypeKinds {
         let attributes = Attributes
-        let isInterface = (attributes & TypeAttributes.ClassSemanticsMask) == TypeAttributes.Interface
+        let isInterface = IsInterface
         var isValueType = false
         var isEnum = false
         if baseDefinition.Value is {} resolvedBase && resolvedBase.IsResolved {

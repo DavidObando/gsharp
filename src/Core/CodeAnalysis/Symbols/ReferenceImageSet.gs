@@ -48,6 +48,10 @@ internal class ReferenceImageSet {
         TypeSymbol,
         MetadataArrayTypeSymbol
     ]()
+    private let nonVectorArrays ConcurrentDictionary[TypeSymbol, MetadataArrayTypeSymbol] = ConcurrentDictionary[
+        TypeSymbol,
+        MetadataArrayTypeSymbol
+    ]()
     private let missingTypes ConcurrentDictionary[MissingTypeKey, MissingTypeSymbol] = ConcurrentDictionary[
         MissingTypeKey,
         MissingTypeSymbol
@@ -238,7 +242,13 @@ internal class ReferenceImageSet {
     /// Gets the interned single-dimensional array of an element type.
     internal func GetArray(elementType TypeSymbol) MetadataArrayTypeSymbol -> arrays.GetOrAdd(
         elementType,
-        (key TypeSymbol) -> MetadataArrayTypeSymbol(key)
+        (key TypeSymbol) -> MetadataArrayTypeSymbol(key, true)
+    )
+
+    /// Gets the interned rank-one non-vector array of an element type (`ARRAY` with rank 1).
+    internal func GetNonVectorArray(elementType TypeSymbol) MetadataArrayTypeSymbol -> nonVectorArrays.GetOrAdd(
+        elementType,
+        (key TypeSymbol) -> MetadataArrayTypeSymbol(key, false)
     )
 
     /// Gets the interned missing type for a pair of assembly identity and full name.

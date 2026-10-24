@@ -4,12 +4,22 @@
 
 package GSharp.Core.CodeAnalysis.Symbols
 
-/// A single-dimensional array of an imported signature, length-free (ADR-0209 section 6, row "Array").
+/// A rank-one array of an imported signature, length-free (ADR-0209 section 6, row "Array").
 /// @remarks It is not (cref:ArrayTypeSymbol), the fixed-length source array, and not (cref:SliceTypeSymbol).
 internal class MetadataArrayTypeSymbol : TypeSymbol {
-    internal init(elementType TypeSymbol) : base(elementType.Name + "[]") {
+    internal init(elementType TypeSymbol, isVector bool) : base(
+        elementType.Name + if isVector {
+            "[]"
+        } else {
+            "[*]"
+        }
+    ) {
         ElementType = elementType
+        IsVector = isVector
     }
+
+    /// Gets whether this is a vector (`SZARRAY`). A rank-one `ARRAY` is not: it keeps its bounds and is a distinct type.
+    internal prop IsVector bool
 
     /// Gets the element type.
     internal prop ElementType TypeSymbol

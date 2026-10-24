@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Symbols
 import System
 import System.Collections.Generic
 import System.Linq
+import System.Reflection
 import System.Text
 
 /// The identity text of a type, spelled for a symbol and for a reflection type by one set of rules.
@@ -54,7 +55,7 @@ internal shared class MetadataTypeKeys {
             return Generic(NullableName, nullableArguments)
         }
         if type is MetadataTypeSymbol definition {
-            return Definition(definition.Module.Identity.Name, definition.FullName)
+            return Definition(definition.Module.Identity.Name, definition.FullName, definition.Module.IsCoreLibrary)
         }
         if type is ConstructedMetadataTypeSymbol constructed {
             return Generic(
@@ -63,10 +64,10 @@ internal shared class MetadataTypeKeys {
             )
         }
         if type is MetadataArrayTypeSymbol array {
-            return Of(array.ElementType) + "[]"
+            return Of(array.ElementType) + ArraySuffix(array.IsVector, 1)
         }
         if type is RectangularArrayTypeSymbol rectangular {
-            return Of(rectangular.ElementType) + "[" + string.Concat(Enumerable.Repeat(",", rectangular.Rank - 1)) + "]"
+            return Of(rectangular.ElementType) + ArraySuffix(false, rectangular.Rank)
         }
         if type is PointerTypeSymbol pointer {
             return Of(pointer.PointeeType) + "*"
@@ -98,38 +99,78 @@ internal shared class MetadataTypeKeys {
             return Of(type.GetElementType()) + "*"
         }
         if type.IsArray {
-            return Of(type.GetElementType()) + if type.IsSZArray {
-                "[]"
-            } else {
-                "[" + string.Concat(Enumerable.Repeat(",", type.GetArrayRank() - 1)) + "]"
-            }
+            return Of(type.GetElementType()) + ArraySuffix(type.IsSZArray, type.GetArrayRank())
         }
         if type.IsGenericType && !type.IsGenericTypeDefinition {
             let definition = type.GetGenericTypeDefinition()
             let arguments = type.GetGenericArguments().Select((a Type) -> Of(a)).ToList()
-            return if definition.FullName == NullableName {
+            return if definition.FullName == NullableName && IsCoreLibrary(definition.Assembly) {
                 Generic(NullableName, arguments)
             } else {
                 Generic(Of(definition), arguments)
             }
         }
-        let fullName = type.FullName ?? ""
-        for builtIn in BuiltIns {
-            if builtIn.Value == fullName {
-                return fullName
-            }
-        }
-        return Definition(type.Assembly.GetName().Name ?? "", fullName)
+        return Definition(type.Assembly.GetName().Name ?? "", type.FullName ?? "", IsCoreLibrary(type.Assembly))
     }
 
-    private func Definition(assemblyName string, fullName string) string {
-        // A core library's own copy of a built-in type is that built-in type.
-        for builtIn in BuiltIns {
-            if builtIn.Value == fullName {
-                return fullName
+    /// Tells whether a type, or a part of it, is a missing type. The test is structural: no text is searched.
+    internal func ContainsMissing(type TypeSymbol?) bool {
+        if type == nil {
+            return false
+        }
+        if type is MissingTypeSymbol {
+            return true
+        }
+        if type is NullableTypeSymbol nullable {
+            return ContainsMissing(nullable.UnderlyingType)
+        }
+        if type is ConstructedMetadataTypeSymbol constructed {
+            return constructed.TypeArguments.Any((a TypeSymbol) -> ContainsMissing(a))
+        }
+        if type is MetadataArrayTypeSymbol array {
+            return ContainsMissing(array.ElementType)
+        }
+        if type is RectangularArrayTypeSymbol rectangular {
+            return ContainsMissing(rectangular.ElementType)
+        }
+        if type is PointerTypeSymbol pointer {
+            return ContainsMissing(pointer.PointeeType)
+        }
+        if type is ByRefTypeSymbol byRef {
+            return ContainsMissing(byRef.PointeeType)
+        }
+        return false
+    }
+
+    // A built-in name denotes the built-in type only in a core library (a module that defines a base-less System.Object).
+    // A namesake in any other assembly is a definition of its own. Symbols and reflection types use this one rule.
+    private func Definition(assemblyName string, fullName string, inCoreLibrary bool) string {
+        if inCoreLibrary {
+            for builtIn in BuiltIns {
+                if builtIn.Value == fullName {
+                    return fullName
+                }
             }
         }
         return assemblyName + "!" + fullName
+    }
+
+    // The reflection side of MetadataModule.IsCoreLibrary.
+    private func IsCoreLibrary(assembly Assembly) bool {
+        let objectType = assembly.GetType("System.Object", false)
+        return objectType != nil && objectType.Assembly == assembly && objectType.BaseType == nil
+    }
+
+    // The one spelling of an array shape. A vector is `[]`, a rank-one non-vector array is `[*]`, higher ranks use commas.
+    private func ArraySuffix(isVector bool, rank int32) string {
+        if isVector {
+            return "[]"
+        }
+        return if rank == 1 {
+            "[*]"
+        } else {
+            "[" + string.Concat(Enumerable.Repeat(",", rank - 1)) + "]"
+        }
     }
 
     private func Generic(definition string, arguments List[string]) string -> definition + "<" + string.Join(

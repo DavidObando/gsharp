@@ -51,8 +51,8 @@ internal shared class MetadataTypeParameters {
     // The one rule that tells an interface constraint from a base class constraint.
     private func IsInterfaceType(type TypeSymbol) bool {
         if type is MetadataTypeSymbol definition {
-            return definition.Kinds.IsInterface
+            return definition.IsInterface
         }
-        return type is ConstructedMetadataTypeSymbol constructed && constructed.Definition.Kinds.IsInterface
+        return type is ConstructedMetadataTypeSymbol constructed && constructed.Definition.IsInterface
     }
 }

@@ -118,6 +118,101 @@ open class Issue5144SignatureDecoderTests {
     }
 
     @Fact
+    func AMissingTypeArgumentInTheBase_NormalizesTheBaseDependentPart() {
+        using let baseLib = CSharpFixture("namespace N5144M { public class Base<T> {} }", assemblyName: "BaseLib5144M")
+        using let goneLib = CSharpFixture("namespace N5144M { public class Gone {} }", assemblyName: "GoneLib5144M")
+        using let derived = CSharpFixture(
+            "public class Derived5144M : N5144M.Base<N5144M.Gone> {}",
+            []Microsoft
+                .CodeAnalysis
+                .MetadataReference{
+                Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(baseLib.AssemblyPath),
+                Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(goneLib.AssemblyPath)
+            },
+            assemblyName: "Derived5144M"
+        )
+        // GoneLib5144M is not in the set; BaseLib5144M is.
+        using let resolver = HandleResolver([]string{baseLib.AssemblyPath, derived.AssemblyPath})
+        let set = resolver.ImageSet!!
+        let module = set.FindModule("Derived5144M")!!
+        module.TryGetDefinition("Derived5144M", out var handle)
+        let symbol = module.GetTypeSymbol(handle)
+        Assert.True(symbol.BaseDefinition!!.IsResolved)
+        Assert.True(MetadataTypeKeys.ContainsMissing(symbol.BaseType))
+        Assert.False(symbol.IsBaseChainComplete)
+        Assert.EndsWith("|base-missing", MetadataModelComparison.DescribeSymbol(symbol))
+        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+    }
+
+    @Fact
+    func AMissingConstraint_NormalizesOnlyItsOwnParameter() {
+        using let lib = CSharpFixture("namespace N5144P { public class Gone {} }", assemblyName: "GoneP5144")
+        using let user = CSharpFixture(
+            "using System; public class Pair5144P<A, B> where A : N5144P.Gone where B : IDisposable {}",
+            []Microsoft
+                .CodeAnalysis
+                .MetadataReference{Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(lib.AssemblyPath)},
+            assemblyName: "Pair5144P"
+        )
+        using let resolver = HandleResolver([]string{user.AssemblyPath})
+        let set = resolver.ImageSet!!
+        let module = set.FindModule("Pair5144P")!!
+        module.TryGetDefinition("Pair5144P`2", out var handle)
+        let symbol = module.GetTypeSymbol(handle)
+        let described = MetadataModelComparison.DescribeSymbol(symbol)
+        Assert.EndsWith("constraints-missing,System.Private.CoreLib!System.IDisposable", described)
+        Assert.Equal(
+            described,
+            MetadataModelComparison.DescribeType(resolver.FindTypeForComparison("Pair5144P", "Pair5144P`2")!!)
+        )
+        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+    }
+
+    @Fact
+    func ARankOneNonVectorArray_IsItsOwnSymbolAndKey() {
+        using let fixture = CSharpFixture("public class Any5144R {}", assemblyName: "Rank5144R")
+        using let resolver = HandleResolver([]string{fixture.AssemblyPath})
+        let module = resolver.ImageSet!!.FindModule("Rank5144R")!!
+        let shape = ArrayShape(1, ImmutableArray[int32].Empty, ImmutableArray[int32].Empty)
+        let nonVector = module.Decoder.GetArrayType(TypeSymbol.Int32, shape)
+        let vector = module.Decoder.GetSZArrayType(TypeSymbol.Int32)
+        Assert.NotSame(vector, nonVector)
+        Assert.Same(nonVector, module.Decoder.GetArrayType(TypeSymbol.Int32, shape))
+        Assert.Equal("System.Int32[*]", MetadataTypeKeys.Of(nonVector))
+        Assert.Equal("System.Int32[]", MetadataTypeKeys.Of(vector))
+        // Reflection spells the same two shapes the same two ways.
+        Assert.Equal("System.Int32[*]", MetadataTypeKeys.Of(typeof(int32).MakeArrayType(1)))
+        Assert.Equal("System.Int32[]", MetadataTypeKeys.Of(typeof(int32).MakeArrayType()))
+        Assert.Equal("System.Int32[,]", MetadataTypeKeys.Of(typeof(int32).MakeArrayType(2)))
+    }
+
+    @Fact
+    func ANamesakeOfABuiltIn_IsNotTheBuiltIn() {
+        // An assembly that is not a core library defines System.Nullable`1 itself. The name alone does not make it the
+        // framework type, in the decoder and in the key.
+        using let namesake = CSharpFixture(
+            "namespace System { public class Nullable<T> where T : struct {} public struct Decimal {} } public class Holder5144N : System.Nullable<int> {}",
+            assemblyName: "Namesake5144N"
+        )
+        let coreLibPath = typeof(object).Assembly.Location
+        let set = ReferenceImageSet(
+            ImmutableArray.Create(
+                ReferenceImage(System.IO.File.ReadAllBytes(coreLibPath), coreLibPath, true),
+                ReferenceImage(System.IO.File.ReadAllBytes(namesake.AssemblyPath), namesake.AssemblyPath, true)
+            )
+        )
+        let module = set.FindModule("Namesake5144N")!!
+        module.TryGetDefinition("Holder5144N", out var handle)
+        let holder = module.GetTypeSymbol(handle)
+        Assert.IsType[ConstructedMetadataTypeSymbol](holder.BaseType)
+        Assert.Equal("Namesake5144N!System.Nullable`1<System.Int32>", MetadataTypeKeys.Of(holder.BaseType))
+        // The namesake definition of a built-in name keeps its assembly in the key.
+        module.TryGetDefinition("System.Decimal", out var decimalHandle)
+        Assert.Equal("Namesake5144N!System.Decimal", MetadataTypeKeys.Of(module.GetTypeSymbol(decimalHandle)))
+        Assert.Equal("System.Nullable`1<System.Int32>", MetadataTypeKeys.Of(typeof(Nullable[int32])))
+    }
+
+    @Fact
     func TheKeyRules_SpellSymbolsAndReflectionTypesTheSameWay() {
         Assert.Equal("System.Int32[]", MetadataTypeKeys.Of(typeof([]int32)))
         Assert.Equal("System.Int32[,]", MetadataTypeKeys.Of(typeof([,]int32)))

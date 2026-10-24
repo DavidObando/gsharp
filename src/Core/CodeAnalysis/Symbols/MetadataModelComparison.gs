@@ -248,39 +248,41 @@ internal shared class MetadataModelComparison {
         )
     }
 
-    // Q13: the constraint rows of every generic parameter. Both sides write "constraints-missing" when a constraint
-    // names a type that the context cannot load (table 7b).
+    // Q13: the constraint rows of each generic parameter. A parameter whose constraint names a type that the context
+    // cannot load is written "constraints-missing" on both sides; the other parameters still compare (table 7b).
     private func ConstraintsOf(symbol MetadataTypeSymbol) string {
         let parts = List[string]()
         for var i = 0; i < symbol.TypeParameters.Length; i++ {
-            parts.Add(string.Join("+", symbol.GetConstraintTypes(i).Select((c TypeSymbol) -> MetadataTypeKeys.Of(c))))
+            let constraints = symbol.GetConstraintTypes(i)
+            parts.Add(
+                if constraints.Any((c TypeSymbol) -> MetadataTypeKeys.ContainsMissing(c)) {
+                    "constraints-missing"
+                } else {
+                    string.Join("+", constraints.Select((c TypeSymbol) -> MetadataTypeKeys.Of(c)))
+                }
+            )
         }
-        let text = string.Join(",", parts)
-        return if text.Contains("missing:") {
-            "constraints-missing"
-        } else {
-            text
-        }
+        return string.Join(",", parts)
     }
 
     private func ConstraintsOf(type Type) string {
-        try {
-            let parts = List[string]()
-            for argument in type.GetGenericArguments() {
+        let parts = List[string]()
+        for argument in type.GetGenericArguments() {
+            try {
                 parts.Add(
                     string.Join(
                         "+",
                         argument.GetGenericParameterConstraints().Select((c Type) -> MetadataTypeKeys.Of(c))
                     )
                 )
+            } catch (ex Exception) when ex is FileNotFoundException ||
+                ex is FileLoadException ||
+                ex is BadImageFormatException ||
+                ex is TypeLoadException {
+                parts.Add("constraints-missing")
             }
-            return string.Join(",", parts)
-        } catch (ex Exception) when ex is FileNotFoundException ||
-            ex is FileLoadException ||
-            ex is BadImageFormatException ||
-            ex is TypeLoadException {
-            return "constraints-missing"
         }
+        return string.Join(",", parts)
     }
 
     internal func DescribeType(type Type) string {

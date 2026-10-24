@@ -21,10 +21,13 @@ internal class MetadataSignatureDecoder : ISignatureTypeProvider[TypeSymbol, Met
         this.module = module
     }
 
-    func GetArrayType(elementType TypeSymbol, shape ArrayShape) TypeSymbol -> RectangularArrayTypeSymbol.Get(
-        elementType,
-        shape.Rank
-    )
+    func GetArrayType(elementType TypeSymbol, shape ArrayShape) TypeSymbol {
+        // RectangularArrayTypeSymbol starts at rank 2. A rank-one ARRAY is its own symbol, apart from the vector.
+        if shape.Rank == 1 {
+            return module.Set.GetNonVectorArray(elementType)
+        }
+        return RectangularArrayTypeSymbol.Get(elementType, shape.Rank)
+    }
 
     func GetByReferenceType(elementType TypeSymbol) TypeSymbol -> ByRefTypeSymbol.Get(elementType)
 
