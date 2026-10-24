@@ -1859,7 +1859,14 @@ internal partial class ExpressionBinder {
                 .ContainsGenericParameters {
                 result = BoundDefaultExpression(
                     syntax,
-                    TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
+                    resultTypeOverride ??
+                        (
+                        if openGenericDefinition != nil && !symbolicTypeArgs.IsDefaultOrEmpty {
+                            ImportedTypeSymbol.GetConstructed(clrType, openGenericDefinition, symbolicTypeArgs)
+                        } else {
+                            TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
+                        }
+                    )
                 )
                 return true
             }

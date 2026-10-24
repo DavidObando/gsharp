@@ -39,12 +39,76 @@ internal partial class ExpressionBinder {
             IsArray: false,
             HasQualifier: false,
             HasTypeArguments: true,
+            Identifier: {} spanIdentifier
+        } spanType &&
+            spanIdentifier.Text == "span" {
+            let ordinary = CallExpressionSyntax(
+                syntax.SyntaxTree,
+                spanIdentifier,
+                spanType.QuestionToken,
+                BufferTypeArguments(spanType),
+                syntax.OpenParenthesisToken,
+                syntax.Arguments,
+                syntax.CloseParenthesisToken
+            )
+            let useAlias = binderCtx.CanUseSpanAlias($scope, spanIdentifier, getCurrentFunction(), expression: true) &&
+                !overloads.HasNonConstructorCallableCandidate(ordinary)
+            if !useAlias && spanType.ReadOnlySpanModifier == nil {
+                return overloads.BindCallExpression(ordinary)
+            }
+            if !useAlias {
+                Diagnostics.ReportNativeSpanType(
+                    spanType.Location,
+                    "readonly span requires the native alias, not an ordinary same-named callable or type"
+                )
+                return BoundErrorExpression(syntax)
+            }
+            let boundTarget = bindTypeClause(spanType)
+            if boundTarget == nil || boundTarget == TypeSymbol.Error {
+                return BoundErrorExpression(syntax)
+            }
+            if boundTarget is not ImportedTypeSymbol target || target.ClrType is not{} clrType {
+                Diagnostics.ReportNativeSpanType(
+                    spanType.Location,
+                    "span constructor heads require a non-nullable CLR span type"
+                )
+                return BoundErrorExpression(syntax)
+            }
+            if TryBindClrConstructorFromType(
+                clrType,
+                ordinary,
+                out var result,
+                out var noApplicableOverload,
+                out var arguments,
+                clrType.GetGenericTypeDefinition(),
+                target.ConstructedTypeArguments,
+                resultTypeOverride: target
+            ) {
+                return Invariant.Required(
+                    result,
+                    "a successful native span constructor binding produces a result",
+                    expression: "result"
+                )
+            }
+            FinishClrConstructorBindingFailure(ordinary, target.Name, noApplicableOverload, arguments, &result, target)
+            return result ?? BoundErrorExpression(syntax)
+        }
+        if syntax.ConversionTypeClause is {
+            IsArray: false,
+            HasQualifier: false,
+            HasTypeArguments: true,
             ReadOnlySliceModifier: nil,
+            ReadOnlySpanModifier: nil,
             Identifier: {} identifier
         } type &&
-            (identifier.Text is "slice" or "array") &&
-            !binderCtx
-            .CanUseNativeBufferAlias($scope, identifier, getCurrentFunction(), expression: true) {
+            (
+            (identifier.Text is "slice" or "array") && !binderCtx.CanUseNativeBufferAlias(
+                $scope,
+                identifier,
+                getCurrentFunction(),
+                expression: true
+            )
+        ) {
             let ordinary = CallExpressionSyntax(
                 syntax.SyntaxTree,
                 identifier,
@@ -329,7 +393,27 @@ internal partial class ExpressionBinder {
         return FinishPostfixCompoundAssignment(indexSyntax, statements, previousDeclaration, previousValue, assignment)
     }
 
+    private func RejectNativeSpanAllocation(syntax ExpressionSyntax) BoundExpression {
+        Diagnostics.ReportNativeSpanType(
+            syntax.Location,
+            "span aliases add no collection-literal allocation; use an existing CLR span constructor explicitly"
+        )
+        return BoundErrorExpression(syntax)
+    }
+
     private func BindNativeBufferLiteral(syntax CollectionInitializerExpressionSyntax) BoundExpression {
+        if syntax.BufferType is {Identifier: {} spanName} spanType &&
+            (
+            spanType.ReadOnlySpanModifier != nil || binderCtx.CanUseSpanAlias(
+                $scope,
+                spanName,
+                getCurrentFunction(),
+                expression: true
+            )
+        ) {
+            return RejectNativeSpanAllocation(syntax)
+        }
+
         if syntax.BufferType is {ReadOnlySliceModifier: nil, Identifier: {} name} ordinaryType &&
             !binderCtx
             .CanUseNativeBufferAlias($scope, name, getCurrentFunction(), expression: true) {

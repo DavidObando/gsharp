@@ -4483,6 +4483,9 @@ partial class GenericNameExpressionSyntax {
             if IsPresent(ReadOnlySliceModifier) {
                 count++
             }
+            if IsPresent(ReadOnlySpanModifier) {
+                count++
+            }
             if IsPresent(ReadOnlyManagedModifier) {
                 count++
             }
@@ -4509,24 +4512,31 @@ partial class GenericNameExpressionSyntax {
                 }
                 remaining--
             }
-            let child1 = ReadOnlyManagedModifier
+            let child1 = ReadOnlySpanModifier
             if IsPresent(child1) {
                 if remaining == 0 {
                     return child1!!
                 }
                 remaining--
             }
-            let child2 = Identifier
+            let child2 = ReadOnlyManagedModifier
             if IsPresent(child2) {
                 if remaining == 0 {
-                    return child2
+                    return child2!!
                 }
                 remaining--
             }
-            let child3 = TypeArgumentList
+            let child3 = Identifier
             if IsPresent(child3) {
                 if remaining == 0 {
                     return child3
+                }
+                remaining--
+            }
+            let child4 = TypeArgumentList
+            if IsPresent(child4) {
+                if remaining == 0 {
+                    return child4
                 }
                 remaining--
             }
@@ -9575,6 +9585,9 @@ partial class TypeClauseSyntax {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(ReadOnlySliceModifier) {
             builder.Add(ReadOnlySliceModifier!!)
+        }
+        if IsPresent(ReadOnlySpanModifier) {
+            builder.Add(ReadOnlySpanModifier!!)
         }
         if IsPresent(ReadOnlyManagedModifier) {
             builder.Add(ReadOnlyManagedModifier!!)

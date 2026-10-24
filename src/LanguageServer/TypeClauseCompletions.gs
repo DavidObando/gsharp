@@ -91,6 +91,15 @@ internal shared class TypeClauseCompletions {
             "03"
         )
         AddSnippet(items, seen, "managed[T]", "managed[$${1:T}]", "Writable heap-storable managed location.", "03")
+        AddSnippet(items, seen, "span[T]", "span[$${1:T}]", "CLR System.Span<T>; stack-only writable view.", "03")
+        AddSnippet(
+            items,
+            seen,
+            "readonly span[T]",
+            "readonly span[$${1:T}]",
+            "CLR System.ReadOnlySpan<T>; stack-only readonly view.",
+            "04"
+        )
         AddSnippet(
             items,
             seen,
