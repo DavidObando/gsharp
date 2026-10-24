@@ -178,10 +178,23 @@ abstract class SyntaxNode {
         }
     }
 
-    /// Enumerates the children by reflection over the public properties. This is the order and the
-    /// content that the generated (cref:GetChild) must reproduce, so tests use it as the oracle.
+    /// Enumerates the children by reflection over the public properties. A class marked with
+    /// `@SyntaxChildSourceOrder` gets its children sorted by source position. This is the order
+    /// and the content that the generated (cref:GetChild) must reproduce, so tests use it as the oracle.
     /// @returns The children of this syntax node.
     internal func GetChildrenByReflection() sequence[SyntaxNode] {
+        if IsSourceOrdered(GetType()) {
+            for child in SortBySourcePosition(EnumerateChildrenByProperty().ToImmutableArray()) {
+                yield child
+            }
+        } else {
+            for child in EnumerateChildrenByProperty() {
+                yield child
+            }
+        }
+    }
+
+    private func EnumerateChildrenByProperty() sequence[SyntaxNode] {
         let accessors = ChildAccessorsByType.GetOrAdd(GetType(), (type Type) -> BuildChildAccessors(type))
         for accessor in accessors {
             // Kind comes from the property's static type, so a failed `as`
@@ -265,10 +278,9 @@ abstract class SyntaxNode {
     }
 
     private func ComputeSpan() TextSpan {
-        // Take the minimum start and the maximum end over all children. The children are not in
-        // source order for every node: a postfix `x!!` lists its operator before its operand, a
-        // struct keeps fields and methods in separate lists, and the parser sets some properties
-        // (for example StructDeclarationSyntax.SharedBlock) after construction. The first and last
+        // Take the minimum start and the maximum end over all children. Children can overlap
+        // even in source order: an interpolated string token contains its holes, and the parser
+        // synthesizes tokens at the position of a real one (issue #5185). The first and last
         // child would give a truncated span and break position-based walks such as the language
         // server's interpolated-string hole detection (issue #5136).
         var hasChild = false
@@ -328,6 +340,26 @@ abstract class SyntaxNode {
     }
 
     shared {
+        /// Sorts children by the start of their span. The sort is stable, so children with the
+        /// same start (for example a missing token) keep their property order. Issue #5185.
+        /// @param items The children in property order.
+        /// @returns The children in source order.
+        internal func SortBySourcePosition(items ImmutableArray[SyntaxNode]) ImmutableArray[SyntaxNode] {
+            return items.OrderBy((item SyntaxNode) -> item.Span.Start).ToImmutableArray()
+        }
+
+        /// Returns whether a node class, or one of its base classes, has `@SyntaxChildSourceOrder`.
+        /// @param nodeType The runtime type of a node.
+        /// @returns `true` when the children of the class are sorted by source position.
+        internal func IsSourceOrdered(nodeType Type) bool {
+            return SourceOrderedByType.GetOrAdd(
+                nodeType,
+                (type Type) -> Attribute.IsDefined(type, typeof(SyntaxChildSourceOrderAttribute), true)
+            )
+        }
+
+        private let SourceOrderedByType ConcurrentDictionary[Type, bool] = ConcurrentDictionary[Type, bool]()
+
         /// Returns one element of a children array, with the argument check of the generated accessors.
         /// @param items The children.
         /// @param index The index.

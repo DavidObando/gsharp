@@ -7,10 +7,8 @@ package GSharp.Core.Tests.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
-import GSharp.Tests
 import System
 import System.Collections.Generic
-import System.IO
 import System.Linq
 import System.Reflection
 import Xunit
@@ -18,8 +16,8 @@ import Xunit
 /// Issue #5136 (M7): every concrete syntax node class has generated `ChildCount` and
 /// `GetChild(index)` members (`SyntaxNode.Children.g.gs`, written by
 /// `build/generate-syntax-children.py`). `GetChildren` reads them. The reflection path stays as the
-/// oracle. These tests compare the two on every node of the corpus, pin the span the node computes
-/// from its children, and record where the child order is not the source order.
+/// oracle. These tests compare the two on every node of the corpus and pin the span the node
+/// computes from its children. Issue5185ChildSourceOrderTests checks the order of the children.
 open class Issue5136GeneratedChildrenTests {
     /// A concrete node class without generated members would fall back to reflection and allocate.
     /// The fallback is only for a class that the generator did not see.
@@ -112,45 +110,6 @@ open class Issue5136GeneratedChildrenTests {
             }
         }
         Assert.True(nodes > 10_000, "corpus unexpectedly small: $nodes nodes")
-    }
-
-    /// The children are not always in source order, and a fixed property order cannot make them
-    /// so. A unary expression lists its operator first, but a postfix `!!` follows its operand. A
-    /// type clause lists the same properties for `string?`, `[]T` and `(a) -> b`. A struct keeps
-    /// fields, methods and nested types in separate lists. Because of this, a node takes its span
-    /// from the minimum start and the maximum end of its children, not from the first and last
-    /// child. This test lists every (node class, previous child kind, next child kind) whose start
-    /// goes backward in the corpus. A new entry means a class has a new out-of-order shape: review
-    /// it, then regenerate with GSHARP_UPDATE_GOLDENS=1.
-    @Fact
-    func ChildrenOutOfSourceOrder_MatchTheRecordedInversions() {
-        let found = SortedSet[string](StringComparer.Ordinal)
-        for tree in Issue1675SyntaxNodeChildEnumerationTests.ParseCorpus() {
-            for node in Descendants(tree.Root) {
-                var previous SyntaxNode? = nil
-                let count = node.ChildCount
-                for var i = 0; i < count; i++ {
-                    let child = node.GetChild(i)
-                    if previous != nil && child.Span.Start < previous.Span.Start {
-                        found.Add("${node.GetType().Name}: ${previous.Kind} -> ${child.Kind}")
-                    }
-                    previous = child
-                }
-            }
-        }
-        Assert.True(found.Count > 0, "the corpus no longer has any out-of-order child")
-        GoldenFile.AssertMatches(
-            Path.Combine(
-                LocateRepoRoot(),
-                "test",
-                "Core.Tests",
-                "Baselines",
-                "syntax-child-source-order-inversions.txt"
-            ),
-            string.Join("\n", found) + "\n",
-            "A syntax node has children that are not in source order in a new shape. If the new shape is " +
-                "expected, regenerate with GSHARP_UPDATE_GOLDENS=1."
-        )
     }
 
     /// A subclass of a public open node class can add a child property. The generated accessors of
@@ -273,15 +232,6 @@ open class Issue5136GeneratedChildrenTests {
                     stack.Push(node.GetChild(i))
                 }
             }
-        }
-
-        private func LocateRepoRoot() string {
-            for var dir DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory); dir != nil; dir = dir!!.Parent {
-                if Directory.Exists(Path.Combine(dir.FullName, "test", "Core.Tests", "Baselines")) {
-                    return dir.FullName
-                }
-            }
-            throw InvalidOperationException("repository root not found from " + AppContext.BaseDirectory)
         }
     }
 }

@@ -441,7 +441,12 @@ func F() int32 {
         }
 
         private func AssertChildrenMatchLegacy(node SyntaxNode) int32 {
-            let expected = LegacyGetChildren(node).ToList()
+            // A class marked @SyntaxChildSourceOrder lists the same children by source position
+            // (issue #5185). OrderBy is stable.
+            var expected = LegacyGetChildren(node).ToList()
+            if Attribute.IsDefined(node.GetType(), typeof(SyntaxChildSourceOrderAttribute), true) {
+                expected = expected.OrderBy((c SyntaxNode) -> c.Span.Start).ToList()
+            }
             let actual = node.GetChildren().ToList()
             Assert.True(
                 expected.Count == actual.Count,

@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 import System.Collections.Immutable
 
 /// Represents an abstract member in the language.
+@SyntaxChildSourceOrder
 abstract class MemberSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:MemberSyntax) class.
     /// @param syntaxTree The parent syntax tree.

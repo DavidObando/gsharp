@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 /// Represents a unary expression in the language.
+@SyntaxChildSourceOrder
 open partial class UnaryExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:UnaryExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.
