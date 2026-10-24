@@ -10,6 +10,7 @@ import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Reflection
 import System.Reflection.Emit
 import System.Reflection.Metadata
 import System.Reflection.Metadata.Ecma335
@@ -69,19 +70,94 @@ open class Issue4312ReferenceReceiverAccessorOpcodeTests {
 
     /// The emitter invariant the issue asks for: no `call` opcode targets an
     /// instance method of a reference type unless it is a constructor or a
-    /// `this`-rooted base call inside the type's own hierarchy.
+    /// `this`-rooted base call (`ldarg.0` immediately before the call) inside the
+    /// type's own hierarchy.
     /// @remarks The scan decodes opcode by opcode through `IlInstructionReader`.
     /// It must also have SEEN reference-receiver `callvirt` calls and at least one
     /// legitimate non-virtual base call, so an invariant that matched nothing could
     /// not pass.
     @Fact
-    func NoCallOpcodeTargetsAnInstanceMethodOfAReferenceTypeFromOutsideItsHierarchy() {
+    func NoCallOpcodeTargetsAnInstanceMethodOfAReferenceTypeUnlessItIsAThisRootedBaseCall() {
         let tempDir = Directory.CreateTempSubdirectory("gs_4312_inv_").FullName
         try {
             let appPath = Path.Combine(tempDir, "Invariant.dll")
             let appLog = Compile(tempDir, "App.gs", FullSource, appPath, "/target:exe")
             Assert.True(File.Exists(appPath), (`the invariant program must compile. Log:
 ` + "$appLog"))
+            let scan = ScanReferenceCalls(appPath)
+            Assert.Empty(scan.Violations)
+            Assert.True(
+                scan.VirtualCalls > 10,
+                "the scan saw only ${scan.VirtualCalls} reference-receiver callvirt calls"
+            )
+            Assert.True(scan.BaseCalls > 0, "the scan saw no this-rooted base call, so the exemption is untested")
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
+    /// The scan itself rejects a non-`this` receiver in the same hierarchy.
+    /// @remarks A hand-built assembly has `Base.Probe(other)` emit
+    /// `ldarg.1; call Base::get_Name` (a same-type receiver that is NOT `this`, the
+    /// shape that loses the null check and virtual dispatch) next to
+    /// `Base.Self()`, which emits `ldarg.0; call Base::get_Name` and is legitimate.
+    /// Raised in review of PR #5250.
+    @Fact
+    func TheScanRejectsANonThisReceiverInTheSameHierarchy() {
+        let tempDir = Directory.CreateTempSubdirectory("gs_4312_neg_").FullName
+        try {
+            let path = Path.Combine(tempDir, "Neg.dll")
+            let assembly = PersistedAssemblyBuilder(AssemblyName("Neg"), typeof(object).Assembly)
+            let module = assembly.DefineDynamicModule("Neg")
+            let type = module.DefineType("Base", TypeAttributes.Public | TypeAttributes.Class)
+            type.DefineDefaultConstructor(MethodAttributes.Public)
+            let getter = type.DefineMethod(
+                "get_Name",
+                MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig,
+                typeof(string),
+                Type.EmptyTypes
+            )
+            let getterIl = getter.GetILGenerator()
+            getterIl.Emit(OpCodes.Ldstr, "x")
+            getterIl.Emit(OpCodes.Ret)
+            let probe = type.DefineMethod(
+                "Probe",
+                MethodAttributes.Public | MethodAttributes.HideBySig,
+                typeof(string),
+                []Type{type}
+            )
+            let probeIl = probe.GetILGenerator()
+            probeIl.Emit(OpCodes.Ldarg_1)
+            probeIl.Emit(OpCodes.Call, getter)
+            probeIl.Emit(OpCodes.Ret)
+            let selfCall = type.DefineMethod(
+                "Self",
+                MethodAttributes.Public | MethodAttributes.HideBySig,
+                typeof(string),
+                Type.EmptyTypes
+            )
+            let selfIl = selfCall.GetILGenerator()
+            selfIl.Emit(OpCodes.Ldarg_0)
+            selfIl.Emit(OpCodes.Call, getter)
+            selfIl.Emit(OpCodes.Ret)
+            type.CreateType()
+            assembly.Save(path)
+            let scan = ScanReferenceCalls(path)
+            Assert.Equal([]string{"Probe calls get_Name"}, scan.Violations.ToArray())
+            Assert.Equal(1, scan.BaseCalls)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
+    shared {
+        /// Scans every method body of an assembly for `call` opcodes that target an
+        /// instance method of a reference type.
+        /// @param appPath The assembly path.
+        /// @returns The offending `Method calls target` strings, the number of
+        /// reference-receiver `callvirt` calls seen, and the number of exempt
+        /// this-rooted base calls seen.
+        private func ScanReferenceCalls(appPath string)(Violations List[string], VirtualCalls int32, BaseCalls int32) {
             let violations = List[string]()
             var virtualCalls = 0
             var baseCalls = 0
@@ -95,8 +171,10 @@ open class Issue4312ReferenceReceiverAccessorOpcodeTests {
                 }
                 let il = pe.GetMethodBody(method.RelativeVirtualAddress).GetILBytes()
                 let enclosingType = method.GetDeclaringType()
-                let enclosingIsInstance = (method.Attributes & System.Reflection.MethodAttributes.Static) == 0
-                for instruction in IlInstructionReader.Read(il) {
+                let enclosingIsInstance = (method.Attributes & MethodAttributes.Static) == 0
+                let instructions = IlInstructionReader.Read(il)
+                for var index = 0; index < instructions.Length; index++ {
+                    let instruction = instructions[index]
                     if instruction.MetadataToken == nil {
                         continue
                     }
@@ -117,6 +195,8 @@ open class Issue4312ReferenceReceiverAccessorOpcodeTests {
                         continue
                     }
                     if enclosingIsInstance &&
+                        index > 0 &&
+                        instructions[index - 1].OpCode == OpCodes.Ldarg_0 &&
                         !target
                         .Owner
                         .IsNil &&
@@ -127,15 +207,8 @@ open class Issue4312ReferenceReceiverAccessorOpcodeTests {
                     violations.Add(reader.GetString(method.Name) + " calls " + target.Name)
                 }
             }
-            Assert.Empty(violations)
-            Assert.True(virtualCalls > 10, "the scan saw only $virtualCalls reference-receiver callvirt calls")
-            Assert.True(baseCalls > 0, "the scan saw no this-rooted base call, so the exemption is untested")
-        } finally {
-            Directory.Delete(tempDir, recursive: true)
+            return (violations, virtualCalls, baseCalls)
         }
-    }
-
-    shared {
         private const RunTimeout int32 = 60_000
 
         private const Declarations string = `package Demo
