@@ -1408,7 +1408,7 @@ bounded PR slices and closure gates:
 | Slice | Scope and required evidence |
 | --- | --- |
 | F1: canonical ABI/import | Add the three runtime definitions and capability/import model, without changing ordinary `[N]T` lowering. Use pinned released G# only. Independent gsc/C# producers and consumers must exchange invariant generic shapes through real implementation/ref contracts. Test malformed trees, lookalikes, missing capabilities, reexports, duplicate owners, compatible version skew and load contexts. Freeze exact ABI metadata and deterministic bytes. |
-| F2: value lowering, explicit bridges and defaults | Implement the complete value/store matrix in an unreleased, explicitly gated compiler profile. No source adoption or public default switch. Cover every length 0-32, boundary failures, numeric/reference/nullable/enum/struct/open-generic elements, nested carriers, containing aggregates, collections, boxing and checked CLR copies. Reject larger lengths and invalid layouts. Include required-handle/default/nullability cases. |
+| F2: value lowering, explicit bridges and defaults | Complete the value/store matrix before rollout. Independently usable runtime/emitter foundations may land without changing source defaults; do not add an unused feature profile or legacy mode. No source adoption or public default switch. Cover every length 0-32, boundary failures, numeric/reference/nullable/enum/struct/open-generic elements, nested carriers, containing aggregates, collections, boxing and checked CLR copies. Reject larger lengths and invalid layouts. Include required-handle/default/nullability cases. |
 | F3: retained locations and slice composition | Add view operations/types using existing promotion/location machinery. Cover early borrows/captures, escape/GC, parent replacement/swap, nested fields/arrays/slices, pure paths, permissions, owner rebinding/growth, overlap, effectful indexing and suspension rejection. Unknown origins stay rejected. |
 | F4: tooling and breaking rollout | Complete structural equality, import/IDE/formatter/debugger displays, migration diagnostics/fixes and reference/spec examples. Close all F1-F3 gates before enabling the new default. The maintainer chooses the breaking release; publish, pin in a separate clean-build PR, then adopt in repository source. |
 
@@ -1446,6 +1446,31 @@ host-specific evidence, not certification of every release-supported target.
 Reproduce with `python3 e2etests/fixed-array-abi-aot.py --rid osx-arm64`;
 supply installed native linker dependency paths when the host requires them.
 
+F2a [#5323](https://github.com/DavidObando/gsharp/issues/5323) is the
+separately scoped typed CLR-copy foundation.
+`Gsharp.Values.FixedArrays.V1.ClrArrayCopies` supplies ordinary public
+`FromArrayN<T>(T[]) -> C(T,N)` and `ToArrayN<T>(C(T,N)) -> T[]`
+methods for each constant `N` from 0 through 32.
+Copy-in checks null, then exact physical length, before producing a value.
+Copy-out allocates fresh exact storage, including length zero.
+Typed fields copy values without element constructors, reflection or boxing;
+references and descriptors inside elements retain their established sharing.
+These are compiler-service CLR APIs, not source `cast[[N]T]` or
+`.ToArray()` recognition, automatic native-signature capability emission,
+or a second fixed-array category.
+They do not alter the frozen carriers, source defaults, required-handle
+checks, numeric empty-allocation inference or `migrationReady: false`.
+Actual implementation/ref witnesses independently inspect field order and
+construct canonical inputs; a round trip alone is not a copy oracle.
+
+The broader native-slice nested-field write gate remains blocked by
+[#5325](https://github.com/DavidObando/gsharp/issues/5325).
+Released 0.5.212 silently drops an imported nested value-field store through
+a slice element; the corresponding same-file case reports GS9998.
+F2a tests whole-carrier stores and existing retained roots.
+It neither works around this compiler defect nor claims that full F2,
+fixed views/promotion, equality/protocol admission or breaking rollout is ready.
+
 Before the exception approval below, these witnesses did not close the full-runtime gate: ILVerify 10.0.8
 reports the same two `ReturnPtrToStack` diagnostics in existing native-slice
 `AsSpan` methods in both the changed SDK runtime and published 0.5.212 runtime.
@@ -1474,6 +1499,10 @@ trusted CLR writable-to-readonly span conversion.
 The shared implementation records its SHA-256 certificate and serialization.
 Even unrelated metadata drift invalidates this finite certificate;
 never refresh its digest without renewed inspection and safety evidence.
+F2a renews that digest after adding the copy-helper declarations.
+Independent old/new audits resolve the same complete three-method closure,
+including locals, exception regions, offsets and signed CLR targets.
+No additional return, method or diagnostic is admitted.
 The same policy separately admits one immutable #5242 research image:
 `Utf8Proof.Utf8Candidate.Get`, by value, at `0x14`, bound to full-image
 SHA-256 `38b57be6d6b8abd3be70316b48c3abb6371bccaf28e6fa6ee6188b005f557bbe`.
