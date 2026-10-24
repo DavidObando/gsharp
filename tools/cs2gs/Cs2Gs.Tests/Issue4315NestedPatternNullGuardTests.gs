@@ -141,6 +141,36 @@ public static class C
         Assert.Contains("p.Address != nil", printed, StringComparison.Ordinal)
     }
 
+    /// Copilot finding on 9611e4f: a non-nullable getter is now read by the
+    /// null guard and by each member test, so it must be bound once, as C#
+    /// reads it once. Also a bare array member must not take the dead
+    /// `!= nil` guard (GS0523, an error under warnings-as-errors).
+    @Fact
+    func NestedMember_NonNullableGetterIsReadOnce_AndBareArrayTakesNoDeadGuard() {
+        let printed = Translate(`#nullable enable
+using System;
+namespace Sample;
+public class Inner { public int X; }
+public class Outer { public int Reads; public Inner P { get { Reads++; return new Inner { X = Reads }; } } }
+public class H { public int[] Items = new[] { 1 }; public int[] Empty = new int[0]; }
+public static class C
+{
+    public static void Run()
+    {
+        var o = new Outer();
+        bool a = o is { P: { X: 1 } };
+        Console.WriteLine(a + "," + o.Reads);
+        var o2 = new Outer();
+        bool b = o2 is { P: { X: 1 } or { X: 2 } };
+        Console.WriteLine(b + "," + o2.Reads);
+        var h = new H();
+        Console.WriteLine((h is { Items: { Length: > 0 } }) + "," + (h is { Empty: { Length: > 0 } }) + "," + (h is { Items: { } }));
+    }
+}`)
+        Assert.DoesNotContain("h.Items != nil", printed, StringComparison.Ordinal)
+        Assert.Equal("True,1,True,1,True,False,True", Normalize(CompileAndRun(printed, "C.Run()")))
+    }
+
     private func Expected() string {
         return "False,False,True,True,True,other,True,True,lima,False,False,False,False,False,True,True,False,False,False,True"
     }
@@ -178,6 +208,8 @@ public static class C
 Translated G#:
 ` + printed
                 )
+                // GS0523 is the dead-nil-check warning a guard on a bare slice raises.
+                Assert.DoesNotContain("GS0523", compileOut, StringComparison.Ordinal)
                 let (runExit, stdout) = RunDotnet("\"$dllPath\"")
                 Assert.True(runExit == 0, "Translated snippet must run. Output:\n" + stdout + `
 

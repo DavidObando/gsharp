@@ -1075,11 +1075,14 @@ partial class CSharpToGSharpTranslator {
         /// through. A single subpattern over a member that needs no guard reads
         /// it once and needs no local.
         ///
-        /// A NON-nullable member re-read (`expr.Kind == A || expr.Kind == B`
-        /// for `{ Kind: A or B }`) is left as it was: it cannot fail a nil
-        /// test it never had, the self-migration inventory keeps the synthesized
-        /// temporaries it would add retired (Issue3347RemainingSpillInventoryTests),
-        /// and it is a pre-existing readability tradeoff outside #4356.
+        /// A NON-nullable member re-read by member tests alone (`expr.Kind == A ||
+        /// expr.Kind == B` for `{ Kind: A or B }`) is left as it was: it cannot fail
+        /// a nil test it never had, the self-migration inventory keeps the
+        /// synthesized temporaries it would add retired
+        /// (Issue3347RemainingSpillInventoryTests), and it is a pre-existing
+        /// readability tradeoff outside #4356. Issue #4315: a non-nullable
+        /// member that now also takes the `!= nil` guard IS read more than once,
+        /// like a nullable one, and is bound once.
         /// @param pattern The nested pattern.
         /// @param receiverType The receiver's declared C# type, if known.
         /// @param receiver The translated receiver (for the analyzer-mode registry).
@@ -1090,23 +1093,24 @@ partial class CSharpToGSharpTranslator {
             receiver GExpression?
         ) bool {
             let gsharpNullable = this.IsGSharpNullablePatternReceiver(receiver)
+            let bareCollection = this.IsBareCollectionPatternReceiver(receiver)
+            let stableMember = receiver != nil && this.state.StablePatternMemberReads.Contains(receiver)
             let CountReads = func (current PatternSyntax?) int32 {
                 switch current {
                     case recursive is RecursivePatternSyntax {
                         if recursive.Designation is SingleVariableDesignationSyntax {
                             return 2
                         }
+                        // Issue #4315: the guard is emitted for EVERY non-value
+                        // receiver, not only an annotated one (a declared-non-null
+                        // getter is read by the guard and again by each member
+                        // test), except a bare G# slice (GS0523).
                         let guarded = recursive.Type == nil &&
+                            !bareCollection &&
                             (gsharpNullable || receiverType != nil) &&
                             (
                             gsharpNullable ||
-                                (
-                                receiverType!!.IsReferenceType &&
-                                    receiverType!!.NullableAnnotation == Microsoft
-                                    .CodeAnalysis
-                                    .NullableAnnotation
-                                    .Annotated
-                            ) ||
+                                !receiverType!!.IsValueType ||
                                 receiverType!!
                                 .OriginalDefinition
                                 ?.SpecialType == SpecialType.System_Nullable_T
@@ -1162,7 +1166,31 @@ partial class CSharpToGSharpTranslator {
                         ?.SpecialType == SpecialType.System_Nullable_T
                 )
             )
-            return nullableMember && CountReads(pattern) > 1
+            // Issue #4315: a declared-non-null reference member that a bare
+            // recursive pattern now also guards is read by the guard and again by
+            // its member tests, exactly like a nullable one. Only that shape
+            // widens the gate: a non-recursive pattern over such a member
+            // (`{ Name: "a" or "b" }`) keeps its pre-#4315 repeated reads.
+            let guardedNonNullMember = !nullableMember &&
+                !bareCollection &&
+                !stableMember &&
+                receiverType != nil &&
+                !receiverType.IsValueType &&
+                this.ContainsBareRecursivePattern(pattern)
+            return (nullableMember || guardedNonNullMember) && CountReads(pattern) > 1
+        }
+
+        private func ContainsBareRecursivePattern(pattern PatternSyntax?) bool {
+            return switch pattern {
+                case recursive is RecursivePatternSyntax: recursive.Type == nil
+                case unary is UnaryPatternSyntax: this.ContainsBareRecursivePattern(unary.Pattern)
+                case parenthesized is ParenthesizedPatternSyntax: this.ContainsBareRecursivePattern(
+                    parenthesized.Pattern
+                )
+                case binary is BinaryPatternSyntax: this.ContainsBareRecursivePattern(binary.Left) ||
+                    this.ContainsBareRecursivePattern(binary.Right)
+                default: false
+            }
         }
 
         /// Issue #4356: THE test for whether an extended-property-path link is
@@ -1199,12 +1227,80 @@ partial class CSharpToGSharpTranslator {
             if this.IsGSharpNullableAnalyzerApiMember(member) {
                 this.state.GSharpNullablePatternReceivers.Add(memberAccess)
             }
+            this.RegisterBareCollectionPatternMember(member, memberAccess)
+            this.RegisterStablePatternMember(member, memberAccess)
             return switch member {
                 case property is IPropertySymbol: property.Type
                 case field is IFieldSymbol: field.Type
                 default: default(ITypeSymbol?)
             }
         }
+
+        /// Issue #4315: records [`memberAccess`](paramref) as a bare G# slice when
+        /// the member is a C# array whose emitted type is not `T?` (neither
+        /// annotated nor promoted by the same nullability funnel that renders its
+        /// declaration), so the recursive-pattern null guard skips it (GS0523).
+        /// @param member The slot's member symbol, if bound.
+        /// @param memberAccess The translated member read.
+        private func RegisterBareCollectionPatternMember(member ISymbol?, memberAccess GExpression) {
+            let declared ITypeSymbol? = switch member {
+                case property is IPropertySymbol: property.Type
+                case field is IFieldSymbol: field.Type
+                default: default(ITypeSymbol?)
+            }
+            if declared is IArrayTypeSymbol &&
+                declared.NullableAnnotation != Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated &&
+                !this.ShouldPromoteToNullableReference(member) {
+                this.state.BareCollectionPatternReceivers.Add(memberAccess)
+            }
+        }
+
+        /// Issue #4315: records [`memberAccess`](paramref) when reading it twice is
+        /// unobservable: a field, or a non-virtual auto-property declared in this
+        /// compilation (no accessor body). Anything else (a getter body, a virtual
+        /// or imported property) may run user code, so it is bound once.
+        private func RegisterStablePatternMember(member ISymbol?, memberAccess GExpression) {
+            let stable = switch member {
+                case field is IFieldSymbol: true
+                case property is IPropertySymbol: !property.IsVirtual &&
+                    !property.IsOverride &&
+                    !property.IsAbstract &&
+                    property
+                    .DeclaringSyntaxReferences
+                    .Length > 0 &&
+                    property
+                    .DeclaringSyntaxReferences
+                    .All((reference SyntaxReference) -> IsAutoPropertySyntax(reference.GetSyntax()))
+                default: false
+            }
+            if stable {
+                this.state.StablePatternMemberReads.Add(memberAccess)
+            }
+        }
+
+        private func IsAutoPropertySyntax(syntax SyntaxNode) bool {
+            if syntax is not PropertyDeclarationSyntax declaration {
+                return false
+            }
+            if declaration.ExpressionBody != nil || declaration.AccessorList == nil {
+                return false
+            }
+            for accessor in declaration.AccessorList!!.Accessors {
+                if accessor.Body != nil || accessor.ExpressionBody != nil {
+                    return false
+                }
+            }
+            return true
+        }
+
+        private func IsBareCollectionPatternReceiver(receiver GExpression?) bool -> receiver != nil &&
+            this
+            .state
+            .BareCollectionPatternReceivers
+            .Contains(receiver)
 
         /// Issue #4356: whether a pattern-lowering receiver's EMITTED G# type is a
         /// nullable reference although its Roslyn type is not (an ADR-0169
@@ -1976,7 +2072,7 @@ partial class CSharpToGSharpTranslator {
             // dropping the guard threw a NullReferenceException (or matched
             // `{ }`) where C# yields false. The only reference receiver still
             // exempt is a `params` array below (GS0523).
-            var receiverIsNonNullableReference = false
+            var receiverIsNonNullableReference = this.IsBareCollectionPatternReceiver(receiver)
             // ADR-0159 / issue #3501: a C# `params` array subject
             // (`args is { Length: > 0 }`) can be null in C# but a G# variadic
             // always materializes an array — gsc rejects the defensive
@@ -2080,9 +2176,7 @@ partial class CSharpToGSharpTranslator {
                             memberReceiver,
                             this.EmittedName(subpatternMember, memberName)
                         )
-                        if this.IsGSharpNullableAnalyzerApiMember(subpatternMember) {
-                            this.state.GSharpNullablePatternReceivers.Add(memberAccess)
-                        }
+                        this.RegisterPatternMemberSlot(subpatternMember, memberAccess)
                         let memberType ITypeSymbol? = this.TryGetSubpatternMemberType(sub)
                         memberTest = this.TranslatePatternTest(
                             memberAccess,
@@ -2366,6 +2460,11 @@ partial class CSharpToGSharpTranslator {
                 if this.IsGSharpNullableAnalyzerApiMember(this.context.GetSymbolInfo(memberPath).Symbol) {
                     this.state.GSharpNullablePatternReceivers.Add(finalMemberAccess)
                 }
+                this.RegisterBareCollectionPatternMember(
+                    this.context.GetSymbolInfo(memberPath).Symbol,
+                    finalMemberAccess
+                )
+                this.RegisterStablePatternMember(this.context.GetSymbolInfo(memberPath).Symbol, finalMemberAccess)
                 let leafType ITypeSymbol? = this.context.GetTypeInfo(memberPath).Type
                 return this.TranslatePatternTest(finalMemberAccess, leafPattern, leafType, isNestedPatternMember: true)
             }

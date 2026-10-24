@@ -63,6 +63,8 @@ internal class DocumentTranslationState {
         DeconstructionTempNamesByBody = Dictionary[SyntaxNode, HashSet[string]]()
         SynthesizedLocalOccupiedNamesByBody = Dictionary[SyntaxNode, HashSet[string]]()
         GSharpNullablePatternReceivers = HashSet[GExpression](ReferenceEqualityComparer.Instance)
+        BareCollectionPatternReceivers = HashSet[GExpression](ReferenceEqualityComparer.Instance)
+        StablePatternMemberReads = HashSet[GExpression](ReferenceEqualityComparer.Instance)
         CollectionElementSlots = Dictionary[SyntaxNode, ITypeSymbol]()
         StoredPatternCaptures = HashSet[GExpression](ReferenceEqualityComparer.Instance)
         EmittedLocalGSharpNullability = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
@@ -359,6 +361,23 @@ internal class DocumentTranslationState {
     // `SyntaxToken?` in G#). Keyed by node identity: the lowering passes the
     // same GExpression instance down to the nested test it builds.
     prop GSharpNullablePatternReceivers HashSet[GExpression] {
+        get;
+    }
+
+    // Issue #4315: pattern-lowering member reads whose EMITTED G# type is a bare
+    // (non-`?`) array/slice. gsc's sound empty-instance zero value makes such a
+    // slot never nil, so a `!= nil` guard on it is the dead check GS0523 warns
+    // about; every other reference member keeps its guard. Keyed by node identity
+    // like GSharpNullablePatternReceivers.
+    prop BareCollectionPatternReceivers HashSet[GExpression] {
+        get;
+    }
+
+    // Issue #4315: pattern-lowering member reads that cannot run user code or
+    // change between reads (a field, or an auto-property that is not virtual), so
+    // a non-null member of this kind may be read by both the null guard and the
+    // member tests without being bound to a local first.
+    prop StablePatternMemberReads HashSet[GExpression] {
         get;
     }
 
