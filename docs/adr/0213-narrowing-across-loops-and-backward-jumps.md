@@ -83,7 +83,10 @@ reviewer can check it when the in-flight work lands:
   the straight-line rule kills for an effect, the region rule kills for the
   same effect found in the region.
 - **A3 (the R12 amendment).** A P0 correction to ADR-0208 row R12 is in
-  flight: a call must not drop a `ref`/`out` parameter's narrowing unless
+  flight as PR [#5298](https://github.com/DavidObando/gsharp/pull/5298)
+  (open at the time of writing) for issue
+  [#5292](https://github.com/DavidObando/gsharp/issues/5292): a call does
+  not drop a by-reference parameter's narrowing unless
   the parameter's storage is **alias-reachable** (the function has taken
   another alias of it, or the storage may be an element or member that
   code the call runs can reach through another path). This ADR does not
@@ -260,7 +263,7 @@ the current reachability rule (ADR-0208 section 6; probe d6 depends on it).
 | Core, Core.Tests, gsc | same, keeping today's bound non-null proof | 0 errors | same |
 | Core, Core.Tests, gsc | every call also kills closure-assigned and by-reference roots (draft rules 4 and 5, unamended) | 22 errors in three Core functions (`BinderContext.gs:906-923`, `MemberLookup.gs:1108-1120`, `:3100-3172`); 0 elsewhere | same; superseded by A3, re-measured in L0 |
 | Core / Core.Tests / gsc / Oahu | `narrowing.loop-rebinds` | 62 / 0 / 0 / 7 | PR 1 (#5212) |
-| 0.5.212 | probes q1 to q12 (section 24) | q3 compiles and throws; q1, q5a, q5b, q6, q7, q8, q9, q10, q11, q12 rejected; q2 accepted, prints `5`; q4 accepted, prints `3`; q5c accepted, prints `2` | this ADR |
+| 0.5.212 | probes q1 to q13 (section 24) | q3 compiles and throws; q1, q5a, q5b, q6, q7, q8, q9, q10, q11, q12 rejected; q2 accepted, prints `5`; q4 accepted, prints `3`; q5c and q13 accepted, print `2` | this ADR |
 
 Not measured yet, and therefore an output of slice L0 rather than an input
 to this ADR: the comparison of the syntactic kill set of section 7 against
@@ -445,14 +448,22 @@ The rules, each an instance of the construct table and of the lower bound:
   scope (the receiver root resolves to a variable, the variable's type is
   known, the member is looked up by name on that type) and reports a
   field, an array element, or an auto property that **cannot dispatch to
-  user code** (not `open`, not `override`, not an interface member, not on
-  a type parameter: an `open` auto property can be overridden by a getter
-  with a body, `Issue4312ReferenceReceiverAccessorOpcodeTests.gs:218-226`)
-  as `none`, anything else as an unknown getter. L0 reports both counts so
-  the maintainer sees what the resolution buys (section 23, question 7),
-  and the resolved-W5 corpus rows include the `open` auto property shape
-  with the mutant "any auto property is `none`". Until L0's numbers are
-  in, the rule is the strict one.
+  user code and cannot be re-selected by a narrowing inside the region**
+  as `none`, anything else as an unknown getter. "Cannot dispatch" is: not
+  `open`, not `override`, not an interface member, not on a type parameter
+  (an `open` auto property can be overridden by a getter with a body,
+  `Issue4312ReferenceReceiverAccessorOpcodeTests.gs:218-226`). "Cannot be
+  re-selected" is: the receiver's declared type is a sealed class or a
+  struct, because the lookup happens at the region's entry scope on the
+  declared type while a type-test fact proven inside the region (`if b is
+  Derived { let n = b.Count }`) binds the same read on the narrowed type,
+  where a hiding `Derived.Count` with a getter body runs user code. A
+  field needs no such condition: a hiding field runs no code. L0 reports
+  both counts so the maintainer sees what the resolution buys (section 23,
+  question 7), and the resolved-W5 corpus rows include the `open` auto
+  property shape (mutant "any auto property is `none`") and the hidden
+  getter shape (mutant "resolve on the declared type without the sealed
+  condition"). Until L0's numbers are in, the rule is the strict one.
 - **W6 Closed kind list.** A syntax kind the walker does not list sets
   `ContainsUnknownKind`, and a region with that flag is bound from
   `NarrowingState.Empty`: every fact is removed. This is stronger than the
@@ -481,9 +492,11 @@ record reports to `r`'s fact, exactly as the straight-line pass applies it
 to a statement with those effects: `ContainsCall`, `ContainsMemberWrite`
 (R12: a member, index or indirect write kills the alias class, `MayShareStorage`),
 `ContainsPointerWrite`, `ContainsRefOrOutArgument` on `r` or on a member of
-its alias class, `ContainsAliasTake` on `r`, and every root `w` in
+its alias class, `ContainsAliasTake` on `r`, and every root `w` **other than `r`** in
 `AssignedNames` with `MayShareStorage(w, r)` (a write to `x` kills the facts
-of a `ref` local `a` that aliases `x`: probe d4); any of these that the
+of a `ref` local `a` that aliases `x`: probe d4; `MayShareStorage(r, r)` is
+true by `SharesStorage`, so the identical root is excluded here and its
+direct writes are decided by (v) and (vi)); any of these that the
 predicate says kills, drops; (v) if `r` is in `AssignedNames` and some
 write to `r` is not in `NonNullAssignments`, drop; (vi) if `r` is in
 `AssignedNames` and every write to `r` is in `NonNullAssignments`, keep
@@ -810,7 +823,7 @@ direction. "Probe" refers to the ADR-0208 corpus and to section 24.
 | R7 (c) | A loop that contains a call reads an inherited fact on a root in the indirect-write class: q3 (an escaped closure the callee invokes; `main` compiles it and it throws) and whatever the shared predicate (A2, A3) kills for a call; the alias-class part follows the amended R12 | q3 accepted, throws; others per `main` | `GS0158` | less permissive (soundness for q3; conservative default for the rest; question 3) |
 | R7 (d) | Output change in accepted programs: `x = Dog{}` keeps a type-test fact like `x = Dog()` (c8 prints `dog`, as c8b does; closes #5169); a reassignment from a variable or a call drops a type-test fact that the bound proof kept, so a hidden-member read in the loop binds on the declared type | c8 prints `animal`; the reassignment shape selects the narrowed type's member | c8 prints `dog`; the declared type's member | output change, no diagnostic (question 2) |
 | R7 (e) | A loop that reads a member the walker cannot resolve to a field, a non-dispatching auto property or an array element takes the shared predicate's classification of an unknown getter (`call` under ADR-0208 R14 as read today). For inherited member-bearing paths this is today's loop result (q5a, a source getter, and q5b, an imported getter, both reject `b.Pet.Name` today). The change is on plain roots in the indirect-write class: `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { let len = sb.Length; total = total + x.Value + len }` (q5c; no call in the loop other than the getter) | q5c accepted, prints `2` | `GS0158` on `x.Value` under today's R14 reading; whatever #5231 decides for imported getters, the day it decides it | less permissive (W5 and A2; question 7; count from L0) |
-| R7 (f) | The loop's exit state joins the header's false state, so a fact the condition proves on exit survives: `while s == nil { s = "ok" }; s.Length` (q12) | `GS0158` | accepted, prints `2` | more permissive (T1 exit; I6) |
+| R7 (f) | The loop's exit state joins the header's false state, so a fact the condition proves on exit survives: `while s == nil { s = "ok" }; s.Length` (q12). The same fact makes a `!!` after the loop redundant: `while s == nil { s = "ok" }; s!!.Length` (q13) | q12 `GS0158`; q13 accepted, prints `2` | q12 accepted, prints `2`; q13 `GS0536` (a warning; an error where warnings are errors) | more permissive for q12; a new `GS0536` for q13 (T1 exit; I6; section 18) |
 | R8 (a) | A backward-jump span reassigns the root from a variable or a call, which the deferred proof accepted | accepted | `GS0158` / `GS0159` at the read | less permissive (P7) |
 | R8 (a') | The span assigns nil inside a `try` whose `finally` restores a non-null value before the jump (probe cC) | accepted, prints `4` | `GS0158` | less permissive (section 12; question 5) |
 | R8 (b) | A type-test fact killed at the label makes a read bind at the declared type: `TypeTestNarrowingThroughUpcast_ReportsConversion` and `*ThroughNullableUpcast*` (valid programs) are accepted; q1 (`x.Name` where `Animal` declares `Name`) is accepted and prints `animal,animal,`; `*AtForSource*` moves from `GS0155` to `GS0116` at `x`; `*ThroughNullSafeCall*` moves from `GS0155` to `GS0159` at the same read | `GS0155`; q1 `GS0158` | accepted, or the declared type's own diagnostic | more permissive, or a changed id at the same read |
@@ -863,8 +876,12 @@ Details per row:
   the condition's false state; the T1 exit rule is `JoinJumps` over the
   header's false state and the `break` states, which is where the gain
   comes from. The same join makes `while s == nil && Try(out s) { }`
-  shapes work as users expect. Compatibility: more permissive, no
-  diagnostic change for programs that compile today.
+  shapes work as users expect. Compatibility: a `!!` on the root after
+  such a loop becomes redundant and reports `GS0536` (q13, accepted today),
+  which is an error under this repository's warning policy; this is the
+  ADR-0208 section 15 hazard for more permissive rows, and section 18
+  says how the bootstrap handles it. Users outside the repository see a
+  warning and delete the `!!`.
 - **R8.** `Issue4519GotoAssignmentNarrowingTests` has 102 `BackwardGoto_*`
   tests; the family-by-family inventory of the ADR-0208 draft (commit
   001ee4ff5, section 16, "R8") is the re-expectation list and L2 copies it
@@ -916,9 +933,14 @@ are errors):
 - R7 (e): count from L0.
 - R8: none (`src/Core` has no user `goto`).
 
-More permissive rows (R8 (b), (b')) make no `!!` in repository source
-redundant that the join slices do not already report, because `src/Core`
-has no `goto`. Every slice compiles Core, Core.Tests and gsc with the built
+More permissive rows make some `!!` in repository source redundant
+(`GS0536`, ADR-0208 section 15): R8 (b) and (b') touch none, because
+`src/Core` has no `goto`, but R7 (f) can touch any `!!` on a root after a
+loop whose condition proves it (q13). Nothing can be removed before the
+pin move, because the pinned compiler still needs them. L0's `.loops`
+report lists every read after a loop exit whose new fact makes a `!!`
+redundant on Core, Core.Tests, gsc and Oahu; L1's PR body carries that
+list for the pin-move PR, which removes them. Every slice compiles Core, Core.Tests and gsc with the built
 compiler (the response-file procedure of ADR-0208's References section)
 and lists the diagnostics outside its rows; a diagnostic outside the rows
 blocks the slice.
@@ -1018,7 +1040,9 @@ User-visible changes: new rejects e2b (`s.Length; if c { s = nil; break
 closure the callee invokes; a crash today), q5c (a member read as a call
 for an indirect-write root), and the Core `access = inner` site; new
 accepts: q12 (`while s == nil { s = "ok" }; s.Length`, R7 (f)); output
-change: c8 prints `dog` (as c8b); no diagnostic id changes. Does not: touch spans or the backward-`goto` checker (the loop snapshot's
+change: c8 prints `dog` (as c8b); new `GS0536` on a `!!` that the loop
+exit's new fact makes redundant (q13; the repository sites go to the
+pin-move PR, section 18); no diagnostic id changes at a rejected read. Does not: touch spans or the backward-`goto` checker (the loop snapshot's
 clone of `BackwardGotoNarrowingStates` goes with the snapshot; the checker
 still reads the live structure). Prerequisite: L0's report; #5130's slice
 that deletes the frame stack is recommended first so L1 does not have to
@@ -1094,6 +1118,8 @@ reverted; the slice's PR body lists the mutant and the rows it turned red:
 | M22 span bound from `L` at its labels only, not at its first statement | section 11 span entry | q11 (the header read is accepted under the mutant and dereferences nil) |
 | M23 shared predicate consulted after P7 (steps (ii) to (iv) after (vi)) | section 7 consumer rule | d4 loop form, f2 loop form, a `b = Box{}` row after a guard on `b.Pet` |
 | M24 `open` auto property resolved as `none` | W5 resolved | the resolved-W5 `open` auto property row |
+| M25 auto property resolved on the declared type without the sealed-receiver condition | W5 resolved | the resolved-W5 hidden getter row (`if b is Derived { let n = b.Count }` inside the loop, where `Derived.Count` has a getter body that clears a guarded root) |
+| M26 `MayShareStorage(r, r)` applied to the identical root in step (iv) | section 7 consumer rule | e15, c8 (`dog`), the `constructor` rows of `NonNullAssignmentAfterUse_PreservesInheritedNarrowing` (all rejected under the mutant) |
 | M13 `do` body bound under `S` | T6 | q8 |
 | M14 span shrunk to label-through-own-`goto` | section 11 | c3b |
 | M15 non-target labels excluded from participation | section 11 | c3a |
@@ -1233,6 +1259,7 @@ measured for this ADR; the sources are in the References section.
 | q10 | guard; `try { Again: i = i + s.Length; s = nil; if i < n { goto Again } } finally { return i }` | `GS0158` (#4285) | `GS0158` (section 11, participants: the `goto` does not leave the `try`, so it is a live back edge; M21) |
 | q11 | guard; `while count < 3 && s.Length < 9 { Inside: count++; i++ }; s = nil; if i < n { goto Inside }` | `GS0158` on the header read (#4285) | `GS0158` on the header read (section 11, span entry: the span starts at the `while` statement and is bound from `L`; M22) |
 | q12 | `var s string? = Get(c); while s == nil { s = "ok" }; return s.Length` | `GS0158` | accepted, prints `2` (R7 (f); M12) |
+| q13 | as q12 with `return s!!.Length` | accepted, prints `2` | `GS0536` on `s!!` (R7 (f) compatibility; the `!!` is redundant after the loop) |
 
 ## Consequences
 
