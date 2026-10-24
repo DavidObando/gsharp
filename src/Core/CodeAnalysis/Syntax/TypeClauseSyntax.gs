@@ -645,6 +645,12 @@ partial class TypeClauseSyntax : SyntaxNode {
         internal set;
     }
 
+    /// Gets the contextual readonly modifier of a CLR span alias.
+    prop ReadOnlySpanModifier SyntaxToken? {
+        get;
+        internal set;
+    }
+
     /// Gets the contextual readonly modifier of a managed-reference type.
     prop ReadOnlyManagedModifier SyntaxToken? {
         get;

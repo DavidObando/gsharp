@@ -40,11 +40,19 @@ internal partial class ExpressionBinder {
             HasQualifier: false,
             HasTypeArguments: true,
             ReadOnlySliceModifier: nil,
+            ReadOnlySpanModifier: nil,
             Identifier: {} identifier
         } type &&
-            (identifier.Text is "slice" or "array") &&
-            !binderCtx
-            .CanUseNativeBufferAlias($scope, identifier, getCurrentFunction(), expression: true) {
+            (
+            (identifier.Text is "slice" or "array") && !binderCtx.CanUseNativeBufferAlias(
+                $scope,
+                identifier,
+                getCurrentFunction(),
+                expression: true
+            ) ||
+                identifier.Text == "span" &&
+                !binderCtx.CanUseSpanAlias($scope, identifier, getCurrentFunction(), expression: true)
+        ) {
             let ordinary = CallExpressionSyntax(
                 syntax.SyntaxTree,
                 identifier,
@@ -330,6 +338,21 @@ internal partial class ExpressionBinder {
     }
 
     private func BindNativeBufferLiteral(syntax CollectionInitializerExpressionSyntax) BoundExpression {
+        if syntax.BufferType is {Identifier: {} spanName} spanType &&
+            (
+            spanType.ReadOnlySpanModifier != nil || binderCtx.CanUseSpanAlias(
+                $scope,
+                spanName,
+                getCurrentFunction(),
+                expression: true
+            )
+        ) {
+            Diagnostics.ReportNativeSpanType(
+                syntax.Location,
+                "span aliases add no collection-literal allocation; use an existing CLR span constructor explicitly"
+            )
+            return BoundErrorExpression(syntax)
+        }
         if syntax.BufferType is {ReadOnlySliceModifier: nil, Identifier: {} name} ordinaryType &&
             !binderCtx
             .CanUseNativeBufferAlias($scope, name, getCurrentFunction(), expression: true) {

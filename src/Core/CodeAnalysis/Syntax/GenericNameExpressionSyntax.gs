@@ -35,6 +35,12 @@ partial class GenericNameExpressionSyntax : ExpressionSyntax {
         internal set;
     }
 
+    /// Gets the contextual readonly modifier of a CLR span alias receiver.
+    prop ReadOnlySpanModifier SyntaxToken? {
+        get;
+        internal set;
+    }
+
     /// Gets the contextual readonly modifier of a managed-reference type receiver.
     prop ReadOnlyManagedModifier SyntaxToken? {
         get;

@@ -590,8 +590,9 @@ open partial class Parser {
         if IsReadOnlyManagedHead() || IsReadOnlyManagedHead(address: true) {
             current = ParseReadOnlyManagedExpression()
         } else if IsReadOnlySliceHead() ||
+            IsReadOnlySpanHead() ||
             (
-            Current.Kind == SyntaxKind.IdentifierToken && (Current.Text is "slice" or "array") && Peek(
+            Current.Kind == SyntaxKind.IdentifierToken && (Current.Text is "slice" or "array" or "span") && Peek(
                 1
             ).Kind == SyntaxKind.OpenSquareBracketToken &&
                 LooksLikeGenericCallSite(1)
@@ -689,7 +690,8 @@ open partial class Parser {
     }
 
     private func ParseNativeBufferExpression() ExpressionSyntax {
-        let modifier SyntaxToken? = if IsReadOnlySliceHead() {
+        let readOnlySpan = IsReadOnlySpanHead()
+        let modifier SyntaxToken? = if IsReadOnlySliceHead() || readOnlySpan {
             NextToken()
         } else {
             default(SyntaxToken?)
@@ -697,7 +699,18 @@ open partial class Parser {
         let identifier = MatchToken(SyntaxKind.IdentifierToken)
         let arguments = ParseTypeArgumentList()
         if Current.Kind == SyntaxKind.DotToken {
-            return GenericNameExpressionSyntax(syntaxTree, identifier, arguments){ReadOnlySliceModifier = modifier}
+            return GenericNameExpressionSyntax(syntaxTree, identifier, arguments){
+                ReadOnlySliceModifier = if readOnlySpan {
+                    nil
+                } else {
+                    modifier
+                },
+                ReadOnlySpanModifier = if readOnlySpan {
+                    modifier
+                } else {
+                    nil
+                }
+            }
         }
         let question = if Current.Kind == SyntaxKind.QuestionToken {
             NextToken()
@@ -714,7 +727,18 @@ open partial class Parser {
             arguments.Arguments,
             arguments.CloseBracketToken,
             question
-        ){ReadOnlySliceModifier = modifier}
+        ){
+            ReadOnlySliceModifier = if readOnlySpan {
+                nil
+            } else {
+                modifier
+            },
+            ReadOnlySpanModifier = if readOnlySpan {
+                modifier
+            } else {
+                nil
+            }
+        }
         if Current.Kind == SyntaxKind.OpenBraceToken {
             if modifier == nil && !BraceLooksLikeGenericCollectionInitializer() {
                 let openBrace = MatchToken(SyntaxKind.OpenBraceToken)
@@ -981,7 +1005,7 @@ open partial class Parser {
                 pos++
             }
         }
-        if IsReadOnlySliceHead(pos) || IsReadOnlyManagedHead(pos) {
+        if IsReadOnlySliceHead(pos) || IsReadOnlySpanHead(pos) || IsReadOnlyManagedHead(pos) {
             pos++
             isComplex = true
         }

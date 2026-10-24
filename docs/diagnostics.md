@@ -2,6 +2,12 @@
 
 Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severity level, a human-readable message, and a source location (file, line, column). This document enumerates all identifiers so that project files can suppress or promote them using standard MSBuild properties.
 
+## Native CLR span aliases (ADR-0211)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0631 | Error | Invalid native CLR span alias: wrong arity or element type, a shadowed readonly form, unavailable core-library span types, or an unsupported allocation literal. | Use one heap-storable element type and a target core library providing CLR spans. If `span` is shadowed, use `System.ReadOnlySpan[T]` explicitly. Use existing CLR span constructors, not native collection allocation syntax. |
+
 ## Native protocols (ADR-0205)
 
 | Code | Severity | Meaning | Remedy |

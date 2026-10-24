@@ -28,6 +28,12 @@ Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severi
 | --- | --- | --- | --- |
 | GS0629 | Error | Unsupported native protocol declaration, payload/signature/escape, absent required initialization, or unknown/invalid/incompatible canonical evidence. | Use the admitted nongeneric synchronous by-value core and exact accessible witnesses; initialize required storage, reference the canonical origin/contracts and matching implementation/ref metadata. Unknown evidence is not negative conformance. |
 
+## Native CLR span aliases (Next, ADR-0211)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0631 | Error | Invalid native CLR span alias: wrong arity or element type, a shadowed readonly form, unavailable core-library span types, or an unsupported allocation literal. | Use one heap-storable element type and a target core library providing CLR spans. If `span` is shadowed, use `System.ReadOnlySpan[T]` explicitly. Use existing CLR span constructors, not native collection allocation syntax. |
+
 ## Severity levels
 
 | Level | Meaning |

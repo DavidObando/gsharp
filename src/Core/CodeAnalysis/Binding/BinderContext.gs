@@ -480,6 +480,14 @@ internal class BinderContext {
     prop CachedImportedExtensionImports ImmutableArray[ImportSymbol]
     prop CachedImportedExtensionMethods Dictionary[string, ImmutableArray[MethodInfo]]?
 
+    func CanUseSpanAlias(
+        $scope BoundScope,
+        identifier SyntaxToken,
+        currentFunction FunctionSymbol?,
+        expression bool = false
+    ) bool ->
+    identifier.Text == "span" && CanUseIntrinsicAlias($scope, identifier, currentFunction, expression)
+
     func CanUseNativeBufferAlias(
         $scope BoundScope,
         identifier SyntaxToken,
