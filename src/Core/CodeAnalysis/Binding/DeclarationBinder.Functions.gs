@@ -112,7 +112,7 @@ internal partial class DeclarationBinder {
             !owner.IsGenericDefinition ||
             owner
             .TypeParameters
-            .Length != syntax.TypeArguments!!.Count ||
+            .Length != typeArguments.Count ||
             !string.Equals(owner.PackageName, $package.Name, StringComparison.Ordinal) {
             return ImmutableArray[TypeParameterSymbol].Empty
         }

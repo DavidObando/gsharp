@@ -91,14 +91,10 @@ internal partial class MethodBodyEmitter {
     }
 
     private func TryLoadFromEnclosingClosure(variable VariableSymbol) bool {
-        if this.enclosingClosure == nil ||
-            !this
-            .enclosingClosure
-            .CaptureFields
-            .TryGetValue(variable, out var capField) {
+        let enclosingClosure = this.enclosingClosure
+        if enclosingClosure == nil || !enclosingClosure.CaptureFields.TryGetValue(variable, out var capField) {
             return false
         }
-        let enclosingClosure = this.enclosingClosure!!
         this.il.OpCode(ILOpCode.Ldarg_0)
         // In MoveNext, arg0 is the state machine. Follow its hoisted `this`
         // field to the closure before loading the captured value.
