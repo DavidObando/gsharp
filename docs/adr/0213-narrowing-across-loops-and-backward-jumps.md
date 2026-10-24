@@ -437,39 +437,41 @@ The rules, each an instance of the construct table and of the lower bound:
   answer (A2, A3): member-bearing paths, mutable globals, closure-assigned
   locals, and the alias-class facts the amended R12 names.
 - **W5 Member reads.** A member access or index read is reported as
-  `ContainsMemberRead` with what the walker could resolve about it. The
-  kill it causes is the shared predicate's classification of that read
-  (A2; ADR-0208 row R14: a getter with user code is a call; the open
-  decision of [#5231](https://github.com/DavidObando/gsharp/issues/5231)
-  on imported getters applies here the day it is made). Two variants of
-  what the walker resolves: the *strict* walker resolves nothing, so every
-  member read is an unknown getter and takes the `call` classification;
-  the *resolved* walker resolves the receiver chain at the region's entry
-  scope (the receiver root resolves to a variable, the variable's type is
-  known, the member is looked up by name on that type) and reports an
-  array element, or a field or auto property that **cannot dispatch to
-  user code and cannot be re-selected by a narrowing inside the region**,
-  as `none`, anything else as an unknown getter. "Cannot dispatch" is: not
-  `open`, not `override`, not an interface member, not on a type parameter
-  (an `open` auto property can be overridden by a getter with a body,
-  `Issue4312ReferenceReceiverAccessorOpcodeTests.gs:218-226`). "Cannot be
-  re-selected" is: the receiver's declared type is a sealed class or a
-  struct, because the lookup happens at the region's entry scope on the
-  declared type while a type-test fact proven inside the region (`if b is
-  Derived { let n = b.Count }`) binds the same read on the narrowed type,
-  where a hiding `Derived.Count` with a getter body runs user code. The
-  condition applies to fields as well as to auto properties: a derived
-  computed property can hide a base field
-  (`ExpressionBinder.Access.MemberLookup.gs:810-887`), so a field found at
-  the entry scope is no proof that the read inside the region runs no
-  code. Only an array element has no hiding member. L0 reports both counts
-  so the maintainer sees what the resolution buys (section 23, question
-  7), and the resolved-W5 corpus rows include the `open` auto property
-  shape (mutant "any auto property is `none`") and the hidden getter shape
-  in both variants, a base auto property and a base field hidden by a
-  computed `Derived.Count` (mutant "resolve on the declared type without
-  the sealed condition"). Until L0's numbers are in, the rule is the
-  strict one.
+  `ContainsMemberRead`; **every member or index read in a region is an
+  unknown getter**, and the kill it causes is the shared predicate's
+  classification of an unknown getter (A2; ADR-0208 row R14: a getter with
+  user code is a call; the open decision of
+  [#5231](https://github.com/DavidObando/gsharp/issues/5231) on imported
+  getters applies here the day it is made). The walker resolves nothing
+  about the member. This ADR defines **no exemption**, and the reason is a
+  derivation, not a measurement: an exemption would need the walker to
+  prove, before the region is bound, that the read binds to a member that
+  runs no code, and the binder makes that selection only after the
+  narrowing facts proven inside the region are known. The rows below are
+  the cases such a proof would have to cover; the right column is what
+  defeats a lookup on the receiver's declared type at the region's entry
+  scope:
+
+  | Read as resolved at the entry scope | Why the read inside the region may run code |
+  | --- | --- |
+  | field on a class or struct | a type-test fact inside the region (`if b is Derived { b.Count }`) selects a hiding computed `Derived.Count` (`ExpressionBinder.Access.MemberLookup.gs:810-887`) |
+  | auto property, not `open` | the same hiding; and a later edit can make it `open` or give it a body without touching the region |
+  | `open` or `override` auto property | a derived getter with a body (`Issue4312ReferenceReceiverAccessorOpcodeTests.gs:218-226`) |
+  | member on a `sealed` class | G# `sealed` permits subclasses in the declaring assembly (ADR-0078 section 4); only CLR non-inheritability (`!IsOpen && !IsSealedHierarchy`, `TypeDefEmitter.gs:518-519`) rules a derived getter out, and the walker would have to prove it per receiver |
+  | member on a struct | no hiding, but a struct member can be a computed property or an interface implementation the region reaches through a boxing narrowing |
+  | interface member | always dispatches |
+  | extension member | an instance member on the narrowed type shadows it, or the reverse |
+  | member on a type parameter | dispatches through the constraint |
+  | array element on a receiver whose declared type is an array | no code; but a receiver whose declared type is not an array (`object?` narrowed to `[]int32` inside the region) is not found as an array at the entry scope, and an indexer on any other receiver is a getter |
+  | imported member of any kind | #5231: the classification of imported getters is the shared predicate's open decision |
+
+  The one row that is `none` under every column (an element of a
+  receiver declared as an array) is not worth a second rule. If slice L0
+  finds that the strict rule rejects repository or Oahu sites, an exemption
+  is proposed as a construct-table change under ADR-0208 section 8, with
+  the rows above as its proof obligations and its own corpus rows and
+  mutants, and it applies to the straight-line read of the same member
+  too, because the kill is the shared predicate's.
 - **W6 Closed kind list.** A syntax kind the walker does not list sets
   `ContainsUnknownKind`, and a region with that flag is bound from
   `NarrowingState.Empty`: every fact is removed. This is stronger than the
@@ -810,7 +812,9 @@ benchmark table (ADR-0203, `GSHARP_MEASURE_PHASES`): `narrowing.region-walks`
 (regions whose kill set was computed), `narrowing.region-nodes` (syntax
 nodes visited by the walker, which must be at most the node count of the
 walked regions), `narrowing.region-facts-killed`,
-`narrowing.region-member-reads-strict` and `-resolved` (W5),
+`narrowing.region-member-reads` and `narrowing.region-member-reads-with-live-facts`
+(W5: member reads in regions, and those in regions entered with a live
+fact on an indirect-write root),
 `narrowing.spans`; `narrowing.loop-rebinds` reports 0 in L1 and is removed
 in L3. Acceptance per slice is in section 20: `build/compiler-bench.py`
 output parity and a `bodies` phase not worse than the baseline's range on
@@ -828,7 +832,7 @@ direction. "Probe" refers to the ADR-0208 corpus and to section 24.
 | R7 (b) | A loop reassigns the root from a variable or a call, which the bound proof accepted: `node.Value; node = Make()` with `Make() Node` (e3); the `local` (`c = fresh`) and `function` (`c = Mk(33)`) rows of `NonNullAssignmentAfterUse_PreservesInheritedNarrowing`; `access = inner` in `ExpressionBinder.Assignments.gs:5435-5494` | accepted | `GS0158` / `GS0159` | less permissive (P7; question 1 and 4) |
 | R7 (c) | A loop that contains a call reads an inherited fact on a root in the indirect-write class: q3 (an escaped closure the callee invokes; `main` compiles it and it throws) and whatever the shared predicate (A2, A3) kills for a call; the alias-class part follows the amended R12 | q3 accepted, throws; others per `main` | `GS0158` | less permissive (soundness for q3; conservative default for the rest; question 3) |
 | R7 (d) | Output change in accepted programs: `x = Dog{}` keeps a type-test fact like `x = Dog()` (c8 prints `dog`, as c8b does; closes #5169); a reassignment from a variable or a call drops a type-test fact that the bound proof kept, so a hidden-member read in the loop binds on the declared type | c8 prints `animal`; the reassignment shape selects the narrowed type's member | c8 prints `dog`; the declared type's member | output change, no diagnostic (question 2) |
-| R7 (e) | A loop that reads a member the walker cannot resolve to an array element, or to a field or non-dispatching auto property on a sealed receiver type, takes the shared predicate's classification of an unknown getter (`call` under ADR-0208 R14 as read today). For inherited member-bearing paths this is today's loop result (q5a, a source getter, and q5b, an imported getter, both reject `b.Pet.Name` today). The change is on plain roots in the indirect-write class: `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { let len = sb.Length; total = total + x.Value + len }` (q5c; no call in the loop other than the getter) | q5c accepted, prints `2` | `GS0158` on `x.Value` under today's R14 reading; whatever #5231 decides for imported getters, the day it decides it | less permissive (W5 and A2; question 7; count from L0) |
+| R7 (e) | Every member or index read in a loop is an unknown getter (W5, no exemption) and takes the shared predicate's classification of one (`call` under ADR-0208 R14 as read today). For inherited member-bearing paths this is today's loop result (q5a, a source getter, and q5b, an imported getter, both reject `b.Pet.Name` today). The change is on plain roots in the indirect-write class: `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { let len = sb.Length; total = total + x.Value + len }` (q5c; no call in the loop other than the getter) | q5c accepted, prints `2` | `GS0158` on `x.Value` under today's R14 reading; whatever #5231 decides for imported getters, the day it decides it | less permissive (W5 and A2; question 7; count from L0) |
 | R7 (f) | The loop's exit state joins the header's false state, so a fact the condition proves on exit survives: `while s == nil { s = "ok" }; s.Length` (q12). The same fact makes a `!!` after the loop redundant: `while s == nil { s = "ok" }; s!!.Length` (q13) | q12 `GS0158`; q13 accepted, prints `2` | q12 accepted, prints `2`; q13 `GS0536` (a warning; an error where warnings are errors) | more permissive for q12; a new `GS0536` for q13 (T1 exit; I6; section 18) |
 | R8 (a) | A backward-jump span reassigns the root from a variable or a call, which the deferred proof accepted | accepted | `GS0158` / `GS0159` at the read | less permissive (P7) |
 | R8 (a') | The span assigns nil inside a `try` whose `finally` restores a non-null value before the jump (probe cC) | accepted, prints `4` | `GS0158` | less permissive (section 12; question 5) |
@@ -866,16 +870,16 @@ Details per row:
   loop whose selection changes on Core, Core.Tests and Oahu; ADR-0208's PR
   1 found two type-test reads in all of Core, neither in a loop, so the
   expected count is zero.
-- **R7 (e).** q5a, q5b and q5c join the corpus; q5c carries the mutant
-  "member reads are `none`" and q5a/q5b pin today's result. The row is the
+- **R7 (e).** q5a, q5b, q5c and q5d join the corpus; q5c carries the mutant
+  "member reads are `none`" (M10), q5d the mutant "a read resolved at the
+  entry scope as a field is `none`" (M24), and q5a/q5b pin today's result. The row is the
   loop face of ADR-0208 R14 and of #5231: whatever the shared predicate
   decides an unresolved getter kills in straight-line code, the loop kills
-  at entry. L0 reports the strict and resolved counts (W5) on Core,
-  Core.Tests, gsc and Oahu; L1 ships the resolved rule if the strict rule
-  rejects any site there, otherwise the strict rule (question 7). The
-  resolved rule does not help q5c (an imported getter is never a field),
-  only reads of array elements and of fields and non-dispatching auto
-  properties on sealed receiver types.
+  at entry. L0 counts the member reads in regions entered with a live
+  fact on an indirect-write root, and the repository and Oahu sites the
+  rule rejects (question 7); an exemption, if those numbers call for one,
+  is a construct-table change with the proof obligations of W5's table,
+  not a rule of this ADR.
   q5c has no call other than the getter, so the mutant "member reads are
   `none`" accepts it while the rule rejects it.
 - **R7 (f).** q12 joins the corpus with the M12 mutant. Today's loop exit
@@ -1009,8 +1013,9 @@ removes after the first bind; write every disagreement as `file:line,
 path, kept-by-old/killed-by-new or the reverse, rule (W1..W7, P7), row
 (R7 a-e)`; and at every span, the kill set and the labels. Counters of
 section 15. Deliverables in the PR body: the disagreement table for Core,
-Core.Tests, gsc and the 12 Oahu projects by row; the strict and resolved
-W5 counts; the re-measurement of R7 (c) under A3; the number of spans in
+Core.Tests, gsc and the 12 Oahu projects by row; the W5 counts (member
+reads in regions entered with a live fact on an indirect-write root, and
+the sites R7 (e) rejects); the re-measurement of R7 (c) under A3; the number of spans in
 Oahu; the list of repository sites each of R7 (a), (b), (c), (e) would
 reject. Acceptance: byte-identical output; every disagreement falls under a
 row of section 16 (a disagreement outside the table is a defect of this
@@ -1124,8 +1129,7 @@ reverted; the slice's PR body lists the mutant and the rows it turned red:
 | M21 `goto` inside a `try` excluded because the `finally` ends in `return` | section 11 participants | q10 |
 | M22 span bound from `L` at its labels only, not at its first statement | section 11 span entry | q11 (the header read is accepted under the mutant and dereferences nil) |
 | M23 shared predicate consulted after P7 (steps (ii) to (iv) after (vi)) | section 7 consumer rule | d4 loop form, f2 loop form, a `b = Box{}` row after a guard on `b.Pet` |
-| M24 `open` auto property resolved as `none` | W5 resolved | the resolved-W5 `open` auto property row |
-| M25 field or auto property resolved on the declared type without the sealed-receiver condition | W5 resolved | the resolved-W5 hidden getter rows (`if b is Derived { let n = b.Count }` inside the loop, where `Derived.Count` has a getter body that clears a guarded root; one row with `Base.Count` an auto property, one with it a field) |
+| M24 a member read resolved at the entry scope as a field or auto property classed `none` | W5 | q5d (`if b is Derived { let n = b.Count }` inside the loop, where `Base.Count` is a field and `Derived.Count` a getter with a body that clears a guarded root; accepted under the mutant and dereferences nil) |
 | M26 `MayShareStorage(r, r)` applied to the identical root in step (iv) | section 7 consumer rule | e15, c8 (`dog`), the `constructor` rows of `NonNullAssignmentAfterUse_PreservesInheritedNarrowing` (all rejected under the mutant) |
 | M13 `do` body bound under `S` | T6 | q8 |
 | M14 span shrunk to label-through-own-`goto` | section 11 | c3b |
@@ -1148,9 +1152,9 @@ reverted; the slice's PR body lists the mutant and the rows it turned red:
   exit is a `JoinJumps`, and section 19 pins each with a mutant. A review
   that finds a rule not derivable from the invariant blocks the slice.
 - **Cost of the conservative default on real code** (R7 (c), (e)).
-  Mitigation: L0 measures on Core, Core.Tests, gsc and Oahu before L1;
-  question 7's resolved W5 rule is ready if the strict rule costs sites;
-  the maintainer sees the numbers before deciding questions 3, 4 and 7.
+  Mitigation: L0 measures on Core, Core.Tests, gsc and Oahu before L1; if
+  R7 (e) costs sites, W5's table lists what a construct-table exemption
+  would have to prove; the maintainer sees the numbers before L1 lands.
 - **Ordering with #5130.** Section 3d. Mitigation: the ordering statement in
   L2 and row q2.
 - **Walker cost in bodies with many loops.** Mitigation: per-node caching
@@ -1164,10 +1168,12 @@ reverted; the slice's PR body lists the mutant and the rows it turned red:
 ### 23. Decided questions
 
 The maintainer accepted this ADR on 2026-10-24 and decided each question
-below as recommended, so every recommendation is a decision. The two
-marked *provisional* are decided as recommended too: their default stands
-unless slice L0's numbers meet the stated condition, in which case the
-stated alternative applies without a further decision. Questions 1 to 3
+below as recommended, so every recommendation is a decision. The one
+marked *provisional* (question 4) is decided as recommended too: its
+default stands unless slice L0's numbers meet the stated condition, in
+which case the stated alternative applies without a further decision.
+Question 7's recommendation was narrowed by review round 4 of PR #5302
+(no exemption at all in this ADR); its text says so. Questions 1 to 3
 are ADR-0208's deferred questions 4, 7 and 6. The slice named with each
 question is the one that first depends on it.
 
@@ -1221,18 +1227,21 @@ question is the one that first depends on it.
    place where a `throw` caught inside the loop, a `defer`, or a label
    between the write and the exit reintroduces the back edge; the user's
    fix is a re-test after the loop. L1.
-7. **W5: strict (every member read in a region is `call`) or resolved
-   (receiver chain resolved at the entry scope; an array element, or a
-   field or auto property that cannot dispatch to user code and sits on a
-   sealed receiver type, is `none`)?**
-   Recommendation: **strict in L0's report,
-   decided by L0's numbers**, *provisional*: ship the resolved rule in L1
-   only if the strict rule rejects a site in Core, Core.Tests, gsc or
-   Oahu, because the resolution is the one piece of the walker that
-   performs lookups and it should earn its cost. Either way the
-   straight-line rule for the same read (ADR-0208 R14, #5231) is the shared
-   predicate's, and the walker only decides whether it can tell a field
-   from a getter before binding. L1.
+7. **W5: should the walker exempt any member read from the unknown-getter
+   classification (a field, an auto property, an array element resolved at
+   the region's entry scope)?** Recommendation: **no exemption in this
+   ADR**; every member read in a region is an unknown getter and takes the
+   shared predicate's classification. Three review rounds on an exemption
+   each found a case where the member selected inside the region (after a
+   type-test fact) is not the member found at the entry scope (hiding by a
+   computed property, `open` auto properties, G# `sealed` admitting
+   same-assembly subclasses); W5's table records them as the proof
+   obligations any future exemption carries. L0 counts what the strict
+   rule costs; if it rejects repository or Oahu sites, an exemption is a
+   construct-table change under ADR-0208 section 8 with its own corpus
+   rows, applied to the straight-line read too, and approved on its own.
+   Decided: as recommended (the earlier recommendation, a resolved variant
+   gated on L0's numbers, is withdrawn by review round 4). L1.
 8. **Ordering with #5130's R6 slice** (section 3d): land L2 first, or have
    that slice keep the #4285 suppression inside backward-jump spans until
    L2? Recommendation: **land L2 before the R6 slice** if L0 and L2 fit the
@@ -1260,6 +1269,7 @@ measured for this ADR; the sources are in the References section.
 | q5a | `if b.Pet == nil { return }`; loop body `Consume(x.Count); b.Pet.Name.Length` where `Count` is a source getter with a body | `GS0158` on `b.Pet.Name` | `GS0158` (R7 (e), no change) |
 | q5b | as q5a with `sb.Length` on a `StringBuilder` (an imported getter) | `GS0158` on `b.Pet.Name` | `GS0158` (R7 (e), no change) |
 | q5c | `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { let len = sb.Length; total = total + x.Value + len }; clear()` (no call in the loop) | accepted, prints `2` | `GS0158` on `x.Value` (R7 (e), under today's R14 reading of an imported getter; follows #5231) |
+| q5d | `open class Base { var Count int32 }`, `class Derived : Base { prop Count int32 { get { clear(); return 0 } } }` (hiding a field with a getter that clears a guarded closure-assigned root); guard; loop body `if b is Derived { let n = b.Count }; total += x.Value` | to measure in L0 (expected accepted and throws on today's compiler if the straight-line getter rule does not see the hidden getter) | `GS0158` on `x.Value` (R7 (e); M24) |
 | q6 | `if skip { goto Inside }; if s == nil { return 0 }; while count < 3 && s.Length < 9 { Inside: count++ }` | `GS0158` on the header read (#4285) | `GS0158` on the header read (I2, J6); under the R6 slice without J6: accepted and the header dereferences nil |
 | q7 | `while s != nil { if c { break }; s = Next(s) }; s.Length` | `GS0158` | `GS0158` (T1 exit) |
 | q8 | guard; `do { n = n + s.Length; s = Next(s) } while n < 10` | `GS0158`, `GS0154` | `GS0158`, `GS0154` (T6; `Next(s)` still receives a `string?`) |
