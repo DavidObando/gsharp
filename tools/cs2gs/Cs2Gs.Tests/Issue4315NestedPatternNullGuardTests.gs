@@ -273,6 +273,53 @@ public static class C
         Assert.Equal(BoundaryExpected(), Normalize(CompileAndRun(printed, "C.Run()")))
     }
 
+    /// Round 4 of the Copilot review: only a built-in array/string slice is provably
+    /// non-nil. A custom `Slice(int, int)` can return null, so the slice pattern
+    /// keeps its slicing expression and null guard instead of folding to `true`.
+    /// G# cannot range-slice a custom type yet, so gsc reports an explicit error
+    /// ("cannot be sliced") for the guarded form, which is recorded on #4315;
+    /// the old silent `true` is what must not come back.
+    @Fact
+    func NullGuardRule_CustomSliceResultKeepsGuard_NullableEnabled() {
+        let printed = TranslateUnchecked(`#nullable enable
+using System;
+namespace Sample;
+public class V { public int Length => 2; public int this[int i] => i; public V? Slice(int start, int length) => null; }
+public static class C
+{
+    public static bool A(V v) => v is [.. { }];
+    public static bool B(V v) => v is [.. { Length: > 0 }];
+}`)
+        Assert.Contains("v[..] != nil", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("return true", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func NullGuardRule_CustomSliceResultKeepsGuard_NullableDisabled() {
+        let printed = TranslateUnchecked(`#nullable disable
+using System;
+namespace Sample;
+public class V { public int Length => 2; public int this[int i] => i; public V Slice(int start, int length) => null; }
+public static class C
+{
+    public static bool A(V v) => v is [.. { }];
+    public static bool B(V v) => v is [.. { Length: > 0 }];
+}`)
+        Assert.Contains("v[..] != nil", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("return true", printed, StringComparison.Ordinal)
+    }
+
+    private func TranslateUnchecked(source string) string {
+        let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Probe.cs", source)})
+        Assert.True(
+            project.BoundWithoutErrors,
+            "Snippet should bind: " + string.Join(Environment.NewLine, project.ErrorDiagnostics)
+        )
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        return GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+    }
+
     private func BoundaryExpected() string {
         return "False,False,False,False,True,True,True,True,True,False"
     }

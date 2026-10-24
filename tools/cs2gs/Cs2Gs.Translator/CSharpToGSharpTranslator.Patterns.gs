@@ -1300,7 +1300,8 @@ partial class CSharpToGSharpTranslator {
         ///   1. a non-nullable value type (never null; `Nullable<T>` is not one);
         ///   2. a `params` array subject (a G# variadic always materializes an
         ///      array; the guard is GS0523);
-        ///   3. a materialized range slice (`xs[1..^1]`), which slicing never makes nil;
+        ///   3. a range slice of a built-in array or string (`xs[1..^1]`), which slicing never
+        ///      makes nil (a custom `Slice` method can return null, so it keeps the guard);
         ///   4. a declared bare-slice slot, i.e. a field/property read registered
         ///      by RegisterPatternMemberShape (G# zero value is an empty slice, so the
         ///      guard is dead; GS0523).
@@ -1328,7 +1329,10 @@ partial class CSharpToGSharpTranslator {
             if receiverSyntax != nil && this.IsParamsArrayOperand(receiverSyntax) {
                 return true
             }
-            if receiver is IndexExpression index && index.Index is RangeIndexExpression {
+            if receiver is IndexExpression index &&
+                index.Index is RangeIndexExpression &&
+                receiverType != nil &&
+                (receiverType is IArrayTypeSymbol || receiverType.SpecialType == SpecialType.System_String) {
                 return true
             }
             return receiverType is IArrayTypeSymbol &&
