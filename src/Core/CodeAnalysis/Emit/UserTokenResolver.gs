@@ -498,7 +498,9 @@ internal class UserTokenResolver {
         for arg in typeArgs {
             this.signatures.EncodeTypeSymbol(gi.AddArgument(), arg)
         }
-        let spec = EntityHandle(this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob)))
+        let spec = EntityHandle(
+            this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        )
         this.userStructTypeSpecCache[cacheKey] = spec
         return spec
     }
@@ -623,7 +625,9 @@ internal class UserTokenResolver {
         for arg in typeArgs {
             this.signatures.EncodeTypeSymbol(gi.AddArgument(), arg)
         }
-        let spec = EntityHandle(this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob)))
+        let spec = EntityHandle(
+            this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        )
         this.userEnumTypeSpecCache[cacheKey] = spec
         return spec
     }
@@ -663,7 +667,9 @@ internal class UserTokenResolver {
         for arg in typeArgs {
             this.signatures.EncodeTypeSymbol(gi.AddArgument(), arg)
         }
-        let spec = EntityHandle(this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob)))
+        let spec = EntityHandle(
+            this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        )
         this.userDelegateTypeSpecCache[cacheKey] = spec
         return spec
     }
@@ -1524,7 +1530,9 @@ internal class UserTokenResolver {
         for arg in typeArgs {
             this.signatures.EncodeTypeSymbol(gi.AddArgument(), arg)
         }
-        let spec = EntityHandle(this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob)))
+        let spec = EntityHandle(
+            this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        )
         this.userInterfaceTypeSpecCache[cacheKey] = spec
         return spec
     }

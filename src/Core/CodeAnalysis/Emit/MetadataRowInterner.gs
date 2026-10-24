@@ -26,20 +26,30 @@ import System.Reflection.Metadata.Ecma335
 /// so no output order depends on hash iteration order.
 internal class MetadataRowInterner {
     private let builder MetadataBuilder
-    private let memberRefs Dictionary[(Parent EntityHandle, Name StringHandle, Signature BlobHandle), MemberReferenceHandle]
+    private let memberRefs Dictionary[
+        (Parent EntityHandle, Name StringHandle, Signature BlobHandle),
+        MemberReferenceHandle
+    ]
     private let typeSpecs Dictionary[BlobHandle, TypeSpecificationHandle]
     private let methodSpecs Dictionary[(Method EntityHandle, Instantiation BlobHandle), MethodSpecificationHandle]
 
     init(builder MetadataBuilder) {
         this.builder = builder
-        this.memberRefs = Dictionary[(Parent EntityHandle, Name StringHandle, Signature BlobHandle), MemberReferenceHandle]()
+        this.memberRefs = Dictionary[
+            (Parent EntityHandle, Name StringHandle, Signature BlobHandle),
+            MemberReferenceHandle
+        ]()
         this.typeSpecs = Dictionary[BlobHandle, TypeSpecificationHandle]()
         this.methodSpecs = Dictionary[(Method EntityHandle, Instantiation BlobHandle), MethodSpecificationHandle]()
     }
 
     /// Returns the `MemberRef` row for (parent, name, signature), adding it on
     /// first use.
-    internal func AddMemberReference(parent EntityHandle, name StringHandle, signature BlobHandle) MemberReferenceHandle {
+    internal func AddMemberReference(
+        parent EntityHandle,
+        name StringHandle,
+        signature BlobHandle
+    ) MemberReferenceHandle {
         let key = (parent, name, signature)
         if this.memberRefs.TryGetValue(key, out var existing) {
             CompilationMeasurements.Count("emit.memberref.reused")

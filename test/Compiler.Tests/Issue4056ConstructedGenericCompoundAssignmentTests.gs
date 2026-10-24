@@ -141,10 +141,7 @@ Console.WriteLine(Handler[MyOptions].Field)`
             // on a partial repair (repairing the write alone once left the read
             // half on `Handler<object>` and ILVerify stayed red).
             let specs = DescribeConstructedGenerics(appPath, "Handler")
-            Assert.Equal(
-                []string{"HelperLib4056.Handler`1<P.MyOptions>"},
-                specs
-            )
+            Assert.Equal([]string{"HelperLib4056.Handler`1<P.MyOptions>"}, specs)
         } finally {
             Directory.Delete(tempDir, recursive: true)
         }

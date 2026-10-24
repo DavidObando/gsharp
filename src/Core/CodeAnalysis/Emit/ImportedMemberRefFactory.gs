@@ -749,7 +749,10 @@ internal class ImportedMemberRefFactory {
                 this.signatures.EncodeClrType(argsEncoder.AddArgument(), closedArgs[i])
             }
         }
-        let spec = this.emitCtx.MetadataRows.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        let spec = this
+            .emitCtx
+            .MetadataRows
+            .AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
         if !hasSymbolArgs {
             this.cache.MethodSpecs[method] = spec
         } else {
@@ -1795,7 +1798,9 @@ internal class ImportedMemberRefFactory {
         }
         let sigBlob = BlobBuilder()
         this.signatures.EncodeFunctionTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), fnType)
-        let spec = EntityHandle(this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob)))
+        let spec = EntityHandle(
+            this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        )
         this.functionDelegateTypeSpecCache[cacheKey] = spec
         return spec
     }

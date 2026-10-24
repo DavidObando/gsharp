@@ -4,6 +4,12 @@
 
 package GSharp.Core.Tests.CodeAnalysis.Emit
 
+import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Emit
+import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
+import GSharp.Tests
 import System
 import System.Collections.Generic
 import System.IO
@@ -12,12 +18,6 @@ import System.Reflection
 import System.Reflection.Metadata
 import System.Reflection.Metadata.Ecma335
 import System.Reflection.PortableExecutable
-import GSharp.Core.CodeAnalysis
-import GSharp.Core.CodeAnalysis.Compilation
-import GSharp.Core.CodeAnalysis.Emit
-import GSharp.Core.CodeAnalysis.Syntax
-import GSharp.Core.CodeAnalysis.Text
-import GSharp.Tests
 import Xunit
 
 /// Issue #5172: the emitter wrote the same `MemberRef`, `TypeSpec` and
@@ -46,7 +46,11 @@ open class Issue5172MetadataRowDeduplicationTests {
         let first = rows.AddMemberReference(parent, name, builder.GetOrAddBlob([]uint8{0, 0, 1}))
         let again = rows.AddMemberReference(parent, name, builder.GetOrAddBlob([]uint8{0, 0, 1}))
         let otherSignature = rows.AddMemberReference(parent, name, builder.GetOrAddBlob([]uint8{0, 1, 1, 8}))
-        let otherName = rows.AddMemberReference(parent, builder.GetOrAddString("N2"), builder.GetOrAddBlob([]uint8{0, 0, 1}))
+        let otherName = rows.AddMemberReference(
+            parent,
+            builder.GetOrAddString("N2"),
+            builder.GetOrAddBlob([]uint8{0, 0, 1})
+        )
         Assert.Equal(first, again)
         Assert.NotEqual(first, otherSignature)
         Assert.NotEqual(first, otherName)
@@ -170,7 +174,7 @@ Console.WriteLine(a.Length + b.Count)`
     }
 
     shared {
-        private func Compile(source string, fileName string = "test.gs") []uint8 {
+        private func Compile(source string, fileName string = "test.gs")[]uint8 {
             let tree = SyntaxTree.Parse(SourceText.From(source, fileName))
             using let references = SampleReferences.CreateResolver()
             let compilation = Compilation(references, tree){
@@ -184,10 +188,7 @@ Console.WriteLine(a.Length + b.Count)`
                 assemblyName: "GSharp.Issue5172",
                 assemblyVersion: "1.0.0.0"
             )
-            Assert.True(
-                result.Success,
-                string.Join("; ", result.Diagnostics.Select((d Diagnostic) -> d.Message))
-            )
+            Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select((d Diagnostic) -> d.Message)))
             return peStream.ToArray()
         }
 
@@ -213,8 +214,9 @@ Console.WriteLine(a.Length + b.Count)`
             }
             for var rid = 1; rid <= reader.GetTableRowCount(TableIndex.MethodSpec); rid++ {
                 let row = reader.GetMethodSpecification(MetadataTokens.MethodSpecificationHandle(rid))
-                let key = "S|${row.Method.Kind}:${MetadataTokens.GetRowNumber(row.Method)}:" +
-                    Convert.ToHexString(reader.GetBlobBytes(row.Signature))
+                let key = "S|${row.Method.Kind}:${MetadataTokens.GetRowNumber(row.Method)}:" + Convert.ToHexString(
+                    reader.GetBlobBytes(row.Signature)
+                )
                 if !seen.Add(key) {
                     repeats.Add("MethodSpec row $rid")
                 }
