@@ -208,6 +208,45 @@ open class Issue5144NullabilityTests {
         )
     }
 
+    @Fact
+    func ThePayloadOfANullableBlob_IsDecodedByTheConstructorShape_NotByItsLength() {
+        // (byte) followed by one named argument (count 1, an 0x54 Boolean property): the first byte is the flag.
+        let scalarWithNamed = []uint8{2, 1, 0, 0x54, 4, 0x45, 0x78, 0x74, 0x72, 1}
+        Assert.Equal([]uint8{2}, MetadataNullability.DecodePayload(scalarWithNamed, false).ToArray())
+        // (byte[]) with a named argument after the array.
+        let arrayWithNamed = []uint8{3, 0, 0, 0, 1, 2, 2, 1, 0, 0x54, 1}
+        Assert.Equal([]uint8{1, 2, 2}, MetadataNullability.DecodePayload(arrayWithNamed, true).ToArray())
+        // A scalar blob read as an array would ask for 1,409,286,402 bytes; the length must fit the payload.
+        Assert.True(MetadataNullability.DecodePayload([]uint8{2, 1, 0, 0x54, 1}, true).IsDefault)
+        Assert.True(MetadataNullability.DecodePayload([]uint8{255, 255, 255, 255}, true).IsDefault)
+        Assert.True(MetadataNullability.DecodePayload([]uint8{5, 0, 0, 0, 1}, true).IsDefault)
+        Assert.True(MetadataNullability.DecodePayload([]uint8{}, false).IsDefault)
+        Assert.Equal(0, MetadataNullability.DecodePayload([]uint8{0, 0, 0, 0}, true).Length)
+    }
+
+    @Fact
+    func OnlyTheCoreLibrarysNullable_IsAStatedNullablePosition() {
+        Assert.True(MetadataNullability.IsSinglePosition(typeof(int?)))
+        Assert.False(MetadataNullability.IsSinglePosition(typeof(System.Collections.Generic.List[int])))
+        let assembly = System
+            .Reflection
+            .Emit
+            .AssemblyBuilder
+            .DefineDynamicAssembly(
+            System.Reflection.AssemblyName("Namesake5144"),
+            System.Reflection.Emit.AssemblyBuilderAccess.Run
+        )
+        let builder = assembly.DefineDynamicModule("Namesake5144").DefineType(
+            "System.Nullable`1",
+            System.Reflection.TypeAttributes.Public | System.Reflection.TypeAttributes.Sealed,
+            typeof(ValueType)
+        )
+        builder.DefineGenericParameters([]string{"T"})
+        let namesake = builder.CreateType().MakeGenericType(typeof(int))
+        Assert.Equal("System.Nullable`1", namesake.GetGenericTypeDefinition().FullName)
+        Assert.False(MetadataNullability.IsSinglePosition(namesake))
+    }
+
     shared {
         private func HandleResolver(paths[]string) ReferenceResolver {
             using let override_ = MetadataModel.Override(MetadataModelMode.Handles)

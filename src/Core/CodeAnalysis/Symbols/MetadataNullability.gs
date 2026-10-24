@@ -147,8 +147,11 @@ internal shared class MetadataNullability {
         if type.IsGenericParameter {
             return true
         }
+        // Only the core library's `Nullable<T>` is a stated nullable; a namesake is an ordinary generic type.
         if type.IsGenericType && !type.IsGenericTypeDefinition && type.GetGenericTypeDefinition()
-            .FullName == "System.Nullable`1" {
+            .FullName == "System.Nullable`1" &&
+            MetadataTypeKeys
+            .IsCoreLibrary(type.GetGenericTypeDefinition().Assembly) {
             return IsSinglePosition(type.GetGenericArguments()[0])
         }
         return !type.IsGenericType && !type.IsArray && !type.IsPointer && !type.IsByRef && !type.IsFunctionPointer
@@ -203,22 +206,56 @@ internal shared class MetadataNullability {
             if blob.ReadUInt16() != 1 {
                 continue
             }
-            if context {
-                return ImmutableArray.Create(blob.ReadByte())
+            let payload = blob.ReadBytes(blob.RemainingBytes)
+            // NullableAttribute has two constructors: (byte) and (byte[]). The constructor's own signature says which
+            // one the blob was written for; the blob's length does not (named arguments can follow either).
+            let decoded = DecodePayload(payload, !context && TakesByteArray(reader, attribute.Constructor))
+            if !decoded.IsDefault {
+                return decoded
             }
-            // NullableAttribute has two constructors: (byte) and (byte[]). After the prolog, the first leaves one byte
-            // and the count of named arguments (three bytes); the second has a four-byte length first.
-            if blob.RemainingBytes == 3 {
-                return ImmutableArray.Create(blob.ReadByte())
-            }
-            let count = blob.ReadInt32()
-            let builder = ImmutableArray.CreateBuilder[uint8](Math.Max(count, 0))
-            for var i = 0; i < count; i++ {
-                builder.Add(blob.ReadByte())
-            }
-            return builder.MoveToImmutable()
         }
         return default(ImmutableArray[uint8])
+    }
+
+    /// Decodes the fixed arguments that follow the prolog of a `[Nullable]` or `[NullableContext]` blob: one byte, or a
+    /// length-prefixed byte array. Bytes after the fixed arguments (named arguments) are ignored. A payload that is too
+    /// short, or a null or oversized array, is not a declaration and gives the default array.
+    internal func DecodePayload(payload[]uint8, isArray bool) ImmutableArray[uint8] {
+        if !isArray {
+            return if payload.Length >= 1 {
+                ImmutableArray.Create(payload[0])
+            } else {
+                default(ImmutableArray[uint8])
+            }
+        }
+        if payload.Length < 4 {
+            return default(ImmutableArray[uint8])
+        }
+        let count = BitConverter.ToInt32(payload, 0)
+        if count < 0 || count > payload.Length - 4 {
+            return default(ImmutableArray[uint8])
+        }
+        return ImmutableArray.Create(payload, 4, count)
+    }
+
+    // Tells whether an attribute constructor's first parameter is an array: the signature is the calling convention
+    // byte, the parameter count, the return type (void), then the first parameter's element type.
+    internal func TakesByteArray(reader MetadataReader, constructor EntityHandle) bool {
+        var signature BlobHandle = default(BlobHandle)
+        if constructor.Kind == HandleKind.MemberReference {
+            signature = reader.GetMemberReference(cast[MemberReferenceHandle](constructor)).Signature
+        } else if constructor.Kind == HandleKind.MethodDefinition {
+            signature = reader.GetMethodDefinition(cast[MethodDefinitionHandle](constructor)).Signature
+        } else {
+            return false
+        }
+        var blob = reader.GetBlobReader(signature)
+        blob.ReadByte()
+        if blob.ReadCompressedInteger() < 1 {
+            return false
+        }
+        blob.ReadByte()
+        return blob.ReadByte() == 0x1D
     }
 
     // The attribute type is matched by namespace and name, as ADR-0209 section 6 says: the type is never constructed.
