@@ -82,7 +82,19 @@ internal shared class IlVerifyFalsePositives {
             "Return type is ByRef, TypedReference, ArgHandle, or ArgIterator."
         let prefix = "[IL]: Error [ReturnPtrToStack]: [" + Path.GetFullPath(assemblyPath) + " : Gsharp.Values."
         let suffix = "] Return type is ByRef, TypedReference, ArgHandle, or ArgIterator."
+        let productPrefix = "[IL]: Error [ReturnPtrToStack]: [" + Path.GetFullPath(assemblyPath) +
+            " : Utf8LiteralProof.Literals::"
+        let product = line == productPrefix +
+            "Get()][offset 0x00000014" +
+            suffix ||
+            line == productPrefix +
+            "Empty()][offset 0x00000014" +
+            suffix ||
+            line == productPrefix +
+            "Derived()][offset 0x0000000F" +
+            suffix
         if !literal &&
+            !product &&
             line != prefix +
             "Slice`1::AsSpan()][offset 0x00000017" +
             suffix &&
@@ -92,11 +104,15 @@ internal shared class IlVerifyFalsePositives {
             return false
         }
         try {
-            if literal {
-                // #5242: this exact witnessed image includes the contiguous payload and hidden zero.
-                // Generated product literals are not admitted by this finite research certificate.
-                return Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(assemblyPath))) ==
-                "38B57BE6D6B8ABD3BE70316B48C3ABB6371BCCAF28E6FA6EE6188B005F557BBE"
+            if literal || product {
+                // #5242: whole-image hashes freeze RVA bytes, bounded slices and every signed target.
+                // Future compiler images require separate review; ref-like signatures do not grant admission.
+                let hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(assemblyPath)))
+                return if literal {
+                    hash == "38B57BE6D6B8ABD3BE70316B48C3ABB6371BCCAF28E6FA6EE6188B005F557BBE"
+                } else {
+                    hash == "D8093A176AC3BBEBC3022ADABD7F7BA4FA9AB02436142386B5DE26981A1AB3CC"
+                }
             }
             return RuntimeReturnProof(
                 assemblyPath

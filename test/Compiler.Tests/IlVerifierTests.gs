@@ -26,6 +26,33 @@ import Xunit.Sdk
 /// is producing meaningless results.
 open class IlVerifierTests {
     @Fact
+    func ProductLiteralRefLikeReturns_RequireFrozenCompilerImageAndExactDiagnostics() {
+        let directory = Directory.CreateTempSubdirectory("ilverify-product-literal-proof-").FullName
+        try {
+            let dll = WriteLiteralProof(directory, byRef: false, product: true)
+            let report = StaticInterfaceReport(dll)
+            Assert.Contains("3 Error(s) Verifying " + dll, report, StringComparison.Ordinal)
+            Assert.Contains("Utf8LiteralProof.Literals::Get()][offset 0x00000014]", report, StringComparison.Ordinal)
+            Assert.Contains("Utf8LiteralProof.Literals::Empty()][offset 0x00000014]", report, StringComparison.Ordinal)
+            Assert.Contains(
+                "Utf8LiteralProof.Literals::Derived()][offset 0x0000000F]",
+                report,
+                StringComparison.Ordinal
+            )
+            Assert.True(IlVerifyFalsePositives.OnlyKnown(dll, report), report)
+            Assert.Equal(0, RunStandaloneAdapter(dll, report, expectApprovedReturn: true, expectedAccepted: 3))
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report.Replace("0x00000014", "0x00000015")))
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report.Replace("3 Error(s)", "2 Error(s)")))
+            Assert.False(
+                IlVerifyFalsePositives.OnlyKnown(dll, report.Replace("[ReturnPtrToStack]", "[StackUnderflow]"))
+            )
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report.Replace(dll, dll + ".different")))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
     func LiteralRefLikeReturn_AdmitsOnlyFrozenIndependentlyWitnessedImage() {
         let directory = Directory.CreateTempSubdirectory("ilverify-literal-proof-").FullName
         try {
@@ -41,22 +68,43 @@ open class IlVerifierTests {
     }
 
     @Theory
-    @InlineData(int32(0))
-    @InlineData(int32(1))
-    @InlineData(int32(2))
-    @InlineData(int32(3))
-    func LiteralRefLikeReturn_RejectsActualByRefAndSameDiagnosticStorageMutants(mutant int32) {
+    @InlineData(false, int32(0))
+    @InlineData(false, int32(1))
+    @InlineData(false, int32(2))
+    @InlineData(false, int32(3))
+    @InlineData(true, int32(0))
+    @InlineData(true, int32(1))
+    @InlineData(true, int32(2))
+    @InlineData(true, int32(3))
+    func LiteralRefLikeReturn_RejectsActualByRefAndSameDiagnosticStorageMutants(product bool, mutant int32) {
         let directory = Directory.CreateTempSubdirectory("ilverify-literal-negative-").FullName
         try {
-            let dll = WriteLiteralProof(directory, byRef: mutant == 0)
+            let productImage = product && mutant != 0
+            let dll = WriteLiteralProof(directory, byRef: mutant == 0, product: productImage)
             let bytes = File.ReadAllBytes(dll)
             using let pe = PEReader(MemoryStream(bytes, writable: false))
             let md = pe.GetMetadataReader()
-            let method = md.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(1))
+            let method = md.GetMethodDefinition(
+                MetadataTokens.MethodDefinitionHandle(
+                    if productImage {
+                        2
+                    } else {
+                        1
+                    }
+                )
+            )
             if mutant == 0 {
                 Assert.Equal(uint8(0x10), md.GetBlobBytes(method.Signature)[2])
             } else if mutant == 1 {
-                let field = md.GetFieldDefinition(MetadataTokens.FieldDefinitionHandle(1))
+                let field = md.GetFieldDefinition(
+                    MetadataTokens.FieldDefinitionHandle(
+                        if productImage {
+                            2
+                        } else {
+                            1
+                        }
+                    )
+                )
                 let rva = field.GetRelativeVirtualAddress()
                 let section = pe
                     .PEHeaders
@@ -84,19 +132,35 @@ open class IlVerifierTests {
             File.WriteAllBytes(dll, bytes)
             let report = StaticInterfaceReport(dll)
             Assert.Contains("[ReturnPtrToStack]", report, StringComparison.Ordinal)
-            Assert.Contains("1 Error(s) Verifying " + dll, report, StringComparison.Ordinal)
+            let errors = if productImage {
+                3
+            } else {
+                1
+            }
+            Assert.Contains(errors.ToString() + " Error(s) Verifying " + dll, report, StringComparison.Ordinal)
             if mutant == 0 {
                 // A forged permitted offset must not turn the actual byref signature into a safe by-value image.
-                Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report.Replace("0x00000017", "0x00000014")))
+                var forged = report.Replace("0x00000017", "0x00000014")
+                if product {
+                    forged = forged.Replace("Utf8Proof.Utf8Candidate::Get()", "Utf8LiteralProof.Literals::Get()")
+                }
+                Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, forged))
             }
             Assert.False(IlVerifyFalsePositives.OnlyKnown(dll, report), report)
+            let analysis = IlVerifyFalsePositives.Analyze(dll, report)
+            Assert.True(analysis.Complete)
+            Assert.Empty(analysis.Accepted)
+            Assert.Equal(errors, analysis.Unexpected.Length)
+            Assert.Equal(1, RunStandaloneAdapter(dll, report, expectedUnexpected: errors))
         } finally {
             Directory.Delete(directory, recursive: true)
         }
     }
 
-    private func WriteLiteralProof(directory string, byRef bool) string {
-        let name = if byRef {
+    private func WriteLiteralProof(directory string, byRef bool, product bool = false) string {
+        let name = if product {
+            "Utf8LiteralProduct"
+        } else if byRef {
             "TrueByRefNegative"
         } else {
             "Utf8Candidate"
@@ -1041,7 +1105,8 @@ public static int Run() {
             dll string,
             report string,
             expectApprovedReturn bool = false,
-            expectedAccepted int32 = 2
+            expectedAccepted int32 = 2,
+            expectedUnexpected int32 = 0
         ) int32 {
             let adapter = Path.GetFullPath(
                 Path.Combine(AppContext.BaseDirectory, "..", "IlVerifyDiagnostics", "IlVerifyDiagnostics.dll")
@@ -1072,6 +1137,10 @@ public static int Run() {
                 Assert.Contains("raw verifier stdout:", output, StringComparison.Ordinal)
                 Assert.Contains("accepted=$expectedAccepted; unexpected=0", output, StringComparison.Ordinal)
                 Assert.Contains("dotnet/runtime#129030", output, StringComparison.Ordinal)
+            } else if expectedUnexpected != 0 {
+                Assert.Contains("raw verifier stdout:", output, StringComparison.Ordinal)
+                Assert.Contains("accepted=0; unexpected=$expectedUnexpected", output, StringComparison.Ordinal)
+                Assert.DoesNotContain("[approved", output, StringComparison.Ordinal)
             } else {
                 Assert.Equal(string.Empty, output)
             }
