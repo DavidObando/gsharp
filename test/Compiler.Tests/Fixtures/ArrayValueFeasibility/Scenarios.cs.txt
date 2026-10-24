@@ -1,0 +1,256 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Text;
+using ArrayValueResearch;
+using Pair = ArrayValueResearch.Branch<int, ArrayValueResearch.Leaf<int>, ArrayValueResearch.Leaf<int>>;
+using Nested = ArrayValueResearch.Branch<
+    ArrayValueResearch.Branch<int, ArrayValueResearch.Leaf<int>, ArrayValueResearch.Leaf<int>>,
+    ArrayValueResearch.Leaf<ArrayValueResearch.Branch<int, ArrayValueResearch.Leaf<int>, ArrayValueResearch.Leaf<int>>>,
+    ArrayValueResearch.Leaf<ArrayValueResearch.Branch<int, ArrayValueResearch.Leaf<int>, ArrayValueResearch.Leaf<int>>>>;
+
+public static class Scenarios
+{
+    private static void Check(bool condition, string name)
+    {
+        if (!condition) throw new Exception("observation: " + name);
+    }
+    private static void Reject<E>(Action action, string name) where E : Exception
+    {
+        try { action(); }
+        catch (E) { return; }
+        throw new Exception("accepted: " + name);
+    }
+    private static (T, T) Duplicate<T>(T value) => (value, value);
+    private static Pair PairOf(int a, int b)
+    {
+        Pair result = default;
+        Pair.At(ref result, 0) = a; Pair.At(ref result, 1) = b;
+        return result;
+    }
+    public static string Encoding()
+    {
+        // Exhaust the finite length domain, not just aliases for two sizes.
+        var types = new HashSet<Type>();
+        for (int n = 0; n <= 32; n++)
+        {
+            var carrier = Shape.Encode(typeof(int), n);
+            var decoded = Shape.Decode(carrier);
+            Check(types.Add(carrier) && decoded.Element == typeof(int) && decoded.Count == n,
+                "distinct canonical length " + n);
+            Shape.Import(carrier, typeof(int), n);
+        }
+        Check(Shape.Encode(typeof(int), 0) == typeof(Empty<int>) &&
+              Shape.Encode(typeof(int), 1) == typeof(Leaf<int>) &&
+              Shape.Encode(typeof(int), 2) == typeof(Pair), "independent small-shape oracle");
+        var ten = typeof(Branch<int,
+            Branch<int, Pair, Branch<int, Leaf<int>, Pair>>,
+            Branch<int, Pair, Branch<int, Leaf<int>, Pair>>>);
+        Check(Shape.Encode(typeof(int), 10) == ten, "independent length ten oracle");
+        var parameter = typeof(Open<>).GetGenericArguments()[0];
+        var open = Shape.Encode(parameter, 10);
+        Check(Shape.Decode(open).Element == parameter && open.ContainsGenericParameters, "open T import");
+        Shape.Import(typeof(Nested), typeof(Pair), 2);
+        Check(Shape.Encode(typeof(string), 2) != typeof(Pair), "element identity");
+
+        Reject<ArgumentOutOfRangeException>(() => Shape.Encode(typeof(int), -1), "negative");
+        Reject<ArgumentOutOfRangeException>(() => Shape.Encode(typeof(int), 33), "length ceiling");
+        Reject<NotSupportedException>(() => Shape.Encode(typeof(long), 2), "unsupported element");
+        Reject<NotSupportedException>(() => Shape.Encode(typeof(int).MakePointerType(), 2), "pointer");
+        Reject<NotSupportedException>(() => Shape.Encode(typeof(int).MakeByRefType(), 2), "byref element");
+        Reject<NotSupportedException>(() => Shape.Encode(typeof(Span<int>), 2), "byref-like element");
+        Reject<NotSupportedException>(() => Shape.Encode(typeof(Nested), 1), "third array dimension");
+        Reject<NotSupportedException>(() => Shape.Decode(typeof(Foreign<int>)), "unknown definition");
+        Reject<NotSupportedException>(() => Shape.Decode(typeof(int[])), "CLR array is not carrier");
+        Reject<ArgumentNullException>(() => Shape.Decode(null), "null carrier");
+        Reject<ArgumentException>(() => Shape.Decode(typeof(Branch<int, Empty<int>, Pair>)), "unbalanced split");
+        Reject<ArgumentException>(() => Shape.Decode(typeof(Branch<int, Leaf<int>, Empty<int>>)), "noncanonical one");
+        Reject<ArgumentException>(() => Shape.Import(typeof(Pair), typeof(string), 2), "false element");
+        Reject<ArgumentException>(() => Shape.Import(typeof(Pair), typeof(int), 1), "false count");
+        Reject<ArgumentOutOfRangeException>(() => Shape.Import(typeof(Pair), typeof(int), -1), "negative import");
+
+        Pair original = PairOf(1, 2);
+        var copies = Duplicate(original);
+        Pair.At(ref copies.Item1, 0) = 9;
+        Check(Pair.At(ref copies.Item2, 0) == 1 && Pair.At(ref original, 0) == 1, "generic copies");
+        var list = new List<Pair> { original };
+        var extracted = list[0]; Pair.At(ref extracted, 0) = 8;
+        Check(list[0].Left.Item == 1, "by-value extraction");
+        Nested nested = default; Nested.At(ref nested, 0) = original;
+        var nestedCopy = nested;
+        Pair.At(ref Nested.At(ref nestedCopy, 0), 1) = 7;
+        Check(nested.Left.Item.Right.Item == 2, "recursive value copy");
+        object boxed = original;
+        var unboxed = (Pair)boxed; unboxed.Left.Item = 8;
+        Check(((Pair)boxed).Left.Item == 1, "boxing copy");
+        var payload = new Payload { Number = 4 };
+        Leaf<object> refs = new() { Item = payload };
+        var refCopies = Duplicate(refs);
+        ((Payload)refCopies.Item1.Item).Number = 5;
+        refCopies.Item1.Item = new Payload();
+        Check(((Payload)refCopies.Item2.Item).Number == 5 && ReferenceEquals(refs.Item, payload),
+            "reference elements share objects, not slots");
+        var foreign = Duplicate(new[] { 1, 2 });
+        foreign.Item1[0] = 9;
+        Check(foreign.Item2[0] == 9, "CLR-array control");
+        return "encoding:33 lengths; open/reference/nested copies; invalid imports rejected";
+    }
+
+    public struct Open<T> { public T Value; }
+    public struct Foreign<T> { public T Value; }
+    public sealed class Payload { public int Number; }
+    public struct Inner { public Pair Value; }
+    public struct Parent { public Inner Inner; public int Other; }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (WriteView<int, Pair>, ReadView<int, Pair>, WriteHandle<int>, WeakReference) Escape()
+    {
+        var owner = new Cell<Parent>();
+        owner.Value.Inner.Value = PairOf(3, 4);
+        var field = Place<Parent>.From(owner)
+            .Select((ref Parent p) => ref p.Inner)
+            .Select((ref Inner p) => ref p.Value);
+        var view = new WriteView<int, Pair>(field, 0, 2);
+        return (view, view.AsReadOnly(), view.Handle(1), new WeakReference(owner));
+    }
+
+    public static string Locations()
+    {
+        var (escaped, readEscaped, handleEscaped, weak) = Escape();
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+        handleEscaped.Value = 12;
+        Check(weak.IsAlive && escaped[1] == 12 && readEscaped[1] == 12, "escaped owner retained after GC");
+
+        var owner = new Cell<Parent>();
+        owner.Value.Inner.Value = PairOf(1, 2);
+        int selections = 0, indices = 0;
+        Cell<Parent> SelectOwner() { selections++; return owner; }
+        int SelectIndex() { indices++; return 1; }
+        var root = Place<Parent>.From(SelectOwner());
+        var path = root.Select((ref Parent p) => ref p.Inner).Select((ref Inner p) => ref p.Value);
+        var view = new WriteView<int, Pair>(path, 0, 2);
+        var read = view.AsReadOnly();
+        var handle = view.Handle(SelectIndex());
+        var readonlyHandle = handle.AsReadOnly();
+        var unrelated = root.Value;
+        unrelated.Inner.Value = PairOf(90, 91);
+        var replacement = new Parent { Inner = new Inner { Value = PairOf(7, 8) }, Other = 45 };
+        root.Value = replacement;
+        Check(view[0] == 7 && read[1] == 8 && readonlyHandle.Value == 8 &&
+              owner.Value.Inner.Value.Left.Item == 7, "live parent replacement");
+        var other = new Cell<Parent> { Value = new Parent { Inner = new Inner { Value = PairOf(10, 11) } } };
+        (owner.Value, other.Value) = (other.Value, owner.Value);
+        handle.Value += 5;
+        Check(view[0] == 10 && read[1] == 16 && owner.Value.Inner.Value.Right.Item == 16 &&
+              other.Value.Inner.Value.Right.Item == 8 && unrelated.Inner.Value.Right.Item == 91,
+            "swap preserves destination and copy independence");
+        Check(selections == 1 && indices == 1 && owner.Value.Other == 0, "selection once; correct field");
+
+        var array = new Nested[2];
+        array[0].Left.Item = PairOf(20, 21); array[1].Right.Item = PairOf(30, 31);
+        var element = Place<Nested>.From(array, 1).Select((ref Nested n) => ref Nested.At(ref n, 1));
+        var elementView = new WriteView<int, Pair>(element, 1, 1);
+        var exact = elementView.Handle(0);
+        var copy = array[1];
+        array[1] = default;
+        exact.Value = 42;
+        Check(array[1].Right.Item.Right.Item == 42 && elementView.AsReadOnly()[0] == 42 &&
+              array[0].Left.Item.Right.Item == 21 && copy.Right.Item.Right.Item == 31,
+            "array element and recursive path re-resolve");
+        Pair raw = PairOf(5, 6);
+        ref int borrow = ref Pair.At(ref raw, 0);
+        raw = PairOf(8, 9); borrow++;
+        Check(raw.Left.Item == 9, "raw scoped borrow stays separate");
+        var empty = new WriteView<int, Empty<int>>(Place<Empty<int>>.From(new Cell<Empty<int>>()), 0, 0);
+        Check(empty.Count == 0, "empty retained view");
+        Reject<ArgumentOutOfRangeException>(() => empty.Handle(0), "empty index");
+        Reject<ArgumentOutOfRangeException>(() => new WriteView<int, Pair>(path, -1, 1), "negative start");
+        Reject<ArgumentOutOfRangeException>(() => new WriteView<int, Pair>(path, 1, 2), "range overrun");
+        Reject<ArgumentOutOfRangeException>(() => new WriteView<int, Pair>(path, int.MaxValue, 1), "range overflow");
+        Reject<ArgumentOutOfRangeException>(() => view.Handle(-1), "negative index");
+        Reject<ArgumentOutOfRangeException>(() => read.Handle(2), "readonly index");
+        Reject<ArgumentOutOfRangeException>(() => Place<Nested>.From(array, 2), "array root bound");
+        Reject<NotSupportedException>(() => Place<Pair>.From(PairOf(1, 2)), "boxed snapshot root");
+        Reject<NotSupportedException>(() => Place<object>.From(new string[1]), "covariant root");
+        Reject<ArgumentException>(() => new WriteView<int, Branch<int, Empty<int>, Pair>>(
+            Place<Branch<int, Empty<int>, Pair>>.From(new Cell<Branch<int, Empty<int>, Pair>>()), 0, 2),
+            "noncanonical view");
+        Check(!typeof(ReadHandle<int>).GetProperty("Value").CanWrite &&
+              typeof(ReadView<int, Pair>).GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .All(m => !m.ReturnType.IsByRef && !m.ReturnType.Name.StartsWith("Write") &&
+                          !m.ReturnType.Name.StartsWith("Place")),
+            "readonly surface has no writable upgrade");
+        Check(!typeof(WriteHandle<object>).IsAssignableFrom(typeof(WriteHandle<string>)),
+            "exact handles invariant");
+        return "locations:escaped GC; live field/swap/recursive array paths; permissions and bounds";
+    }
+
+    private static string Name(Type type)
+    {
+        if (type == typeof(int)) return "int";
+        var name = type.GetGenericTypeDefinition().FullName.Split('`')[0];
+        return "global::" + name + "<" + string.Join(",", type.GetGenericArguments().Select(Name)) + ">";
+    }
+
+    // Both libraries invoke the same canonical rule, without referencing each other.
+    public static string Library(string kind)
+    {
+        var text = new StringBuilder("using System.Collections.Generic; using ArrayValueResearch; public static class " + kind + " {");
+        for (int n = 0; n <= 32; n++)
+        {
+            var type = Name(Shape.Encode(typeof(int), n));
+            if (kind == "Producer")
+                text.Append($"public static List<{type}> Make{n}() => Build<{type}>({n});");
+            else
+                text.Append($"public static int Take{n}(List<{type}> x) => Accept(x, {n});");
+        }
+        if (kind == "Producer")
+            text.Append(@"private static List<S> Build<S>(int n) where S : struct, IStorage<int,S> {
+S value = default; for(int i = 0; i < n; i++) S.At(ref value, i) = n * 100 + i;
+return new List<S> { value }; }");
+        else
+            text.Append(@"private static int Accept<S>(List<S> values, int n) where S : struct, IStorage<int,S> {
+if (values.Count != 1 || S.Count != n) throw new System.Exception(""exchange count"");
+Shape.Import(typeof(S), typeof(int), n);
+var value = values[0];
+for(int i = 0; i < n; i++) if(S.At(ref value, i) != n * 100 + i)
+throw new System.Exception(""exchange element"");
+if(n > 0) { S.At(ref value, 0) = -1; var stored = values[0]; if(S.At(ref stored, 0) != n * 100)
+throw new System.Exception(""exchange copy""); }
+return 1; }");
+        text.Append("public static List<Branch<T,Leaf<T>,Leaf<T>>> Open<T>(List<Branch<T,Leaf<T>,Leaf<T>>> x) => x;");
+        text.Append("public static List<Leaf<Branch<int,Leaf<int>,Leaf<int>>>> Nested(List<Leaf<Branch<int,Leaf<int>,Leaf<int>>>> x) => x;");
+        text.Append("public static ref Branch<int,Leaf<int>,Leaf<int>> Ref(ref Branch<int,Leaf<int>,Leaf<int>> x) => ref x;");
+        return text.Append("}").ToString();
+    }
+
+    public static string Client()
+    {
+        var text = new StringBuilder(@"using System; using System.Collections.Generic; using ArrayValueResearch;
+using Pair = ArrayValueResearch.Branch<int,ArrayValueResearch.Leaf<int>,ArrayValueResearch.Leaf<int>>;
+public static class Client {
+public static string Run() { int sum = 0;");
+        for (int n = 0; n <= 32; n++) text.Append($"sum += Consumer.Take{n}(Producer.Make{n}());");
+        return text.Append(@"
+var values = new List<Pair> { new Pair { Left = new Leaf<int> { Item = 3 } } };
+var exchanged = Consumer.Open(Producer.Open(values));
+if (!ReferenceEquals(values, exchanged)) throw new Exception(""invariant list adapted"");
+var nested = new List<Leaf<Pair>> { new Leaf<Pair> { Item = values[0] } };
+if (!ReferenceEquals(nested, Consumer.Nested(Producer.Nested(nested)))) throw new Exception(""nested list adapted"");
+var p = values[0];
+Consumer.Ref(ref Producer.Ref(ref p)).Right.Item = 6;
+if (p.Right.Item != 6 || values[0].Right.Item != 0) throw new Exception(""public ref location"");
+var refs = new List<Branch<string,Leaf<string>,Leaf<string>>> { default };
+if (!ReferenceEquals(refs, Consumer.Open(Producer.Open(refs)))) throw new Exception(""reference element identity"");
+var importedOpen = typeof(Producer).GetMethod(""Open"").ReturnType.GetGenericArguments()[0];
+var decodedOpen = Shape.Decode(importedOpen);
+if (!decodedOpen.Element.IsGenericParameter || decodedOpen.Count != 2)
+throw new Exception(""public open shape import"");
+Shape.Import(importedOpen, decodedOpen.Element, 2);
+if (sum != 33) throw new Exception(""finite domain exchange"");
+return ""exchange:33 invariant lists; open/reference/nested/ref signatures; no adapters"";
+}}").ToString();
+    }
+}
