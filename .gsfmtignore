@@ -1,3 +1,7 @@
 # Visual Studio item/project templates contain $placeholder$ tokens that are
 # substituted before the result becomes valid G# source.
 /src/vs-gsharp/templates/
+
+# samples/Trail/Program.gs is byte-frozen: website/static/img/trail-editor.json records the SHA-256 of
+# the source shown in the historical editor capture (website/tests/content.test.mjs).
+/samples/Trail/Program.gs
