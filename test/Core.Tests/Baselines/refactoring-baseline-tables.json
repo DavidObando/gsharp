@@ -23,6 +23,32 @@
       "rows=10 sha256=C57688EAFC8A357C"
     ]
   },
+  "samples/AllowsRefStruct.gs": {
+    "AssemblyRef": [
+      "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
+      "System.Memory, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
+      "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "FieldDef": [
+      "rows=14 sha256=90CC9C87404133CE"
+    ],
+    "MemberRef": [
+      "rows=58 sha256=E2F9015631C5E5D1"
+    ],
+    "MethodBodies": [
+      "rows=29 sha256=11F1A0162A0D0AAE"
+    ],
+    "MethodDef": [
+      "rows=29 sha256=BCF0E9B0495C7EC8"
+    ],
+    "TypeDef": [
+      "rows=8 sha256=D6DE57618F17C46C"
+    ],
+    "TypeRef": [
+      "rows=37 sha256=AD02CA2CFD38DFC5"
+    ]
+  },
   "samples/AnonymousVariadicFunctionType.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",

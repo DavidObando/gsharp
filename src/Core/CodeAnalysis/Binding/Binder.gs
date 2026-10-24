@@ -4456,7 +4456,7 @@ partial class Binder {
                 // Issue #367: a by-ref-like (`ref struct`) type cannot be used as
                 // a generic type argument (e.g. `List[Span[int32]]`); the CLR
                 // forbids constructing a generic type over a by-ref-like type.
-                if TypeSymbol.IsByRefLike(ta) {
+                if TypeSymbol.IsByRefLike(ta) && !ClrTypeUtilities.GenericParameterAllowsByRefLike(clrOpenType, i) {
                     let taLocation = topLevelTypeArguments[i].Identifier?.Location ?? identifierToken.Location
                     Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
                     return nil
@@ -5438,7 +5438,7 @@ partial class Binder {
             }
             symbolicArgs.Add(ta)
             // Issue #367: by-ref-like types cannot serve as generic arguments.
-            if TypeSymbol.IsByRefLike(ta) {
+            if TypeSymbol.IsByRefLike(ta) && !ClrTypeUtilities.GenericParameterAllowsByRefLike(clrType, i) {
                 let taLocation = typeArguments[i].Identifier?.Location ?? identifierToken.Location
                 Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
                 return nil
@@ -5678,7 +5678,7 @@ partial class Binder {
                 return nil
             }
             symbolicArgs.Add(ta)
-            if TypeSymbol.IsByRefLike(ta) {
+            if TypeSymbol.IsByRefLike(ta) && !ClrTypeUtilities.GenericParameterAllowsByRefLike(nestedDef, i) {
                 let taLocation = argSyntaxes[i].Identifier?.Location ?? identifierToken.Location
                 Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
                 return nil
