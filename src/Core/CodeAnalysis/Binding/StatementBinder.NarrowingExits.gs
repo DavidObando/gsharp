@@ -96,6 +96,7 @@ internal partial class StatementBinder {
             return
         }
         var effects AssignedRootsCollector? = nil
+        var filterNames HashSet[string]? = nil
         var branchesMutateMembers = false
         for path in exit.Paths {
             let joined = exit.NarrowedType(path)
@@ -104,11 +105,19 @@ internal partial class StatementBinder {
             }
             if effects == nil {
                 effects = GetStatementEffects(statement, externalCallableAliases)
+                let syntax = statement.Syntax
+                filterNames = if syntax == nil {
+                    default(HashSet[string]?)
+                } else {
+                    EnclosingFilterNames(syntax, effects)
+                }
                 branchesMutateMembers = BranchesMayMutateMemberPaths(statement)
             }
             // The legacy passes own every kill that a write causes (row R2, a later PR).
             // A call in the condition runs before the condition proves its facts (row R5).
-            if !StatementKillsPath(effects, path, branchesMutateMembers) {
+            let killedByFilter = filterNames != nil &&
+                (filterNames.Contains(path.Root.Name) || MayBeMutatedByUnknownCallable(path))
+            if !killedByFilter && !StatementKillsPath(effects, path, branchesMutateMembers) {
                 SetPersistentNarrowing(persistentFrame, path, joined)
             }
         }

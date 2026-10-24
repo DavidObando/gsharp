@@ -311,7 +311,14 @@ internal partial class StatementBinder {
             }
             anyRootAssigned = assignedRoots.Count > 0
         }
-        if !anyRootAssigned && !dropAllMemberPaths && !dropAllRoots && !dropGlobalRoots {
+        // ADR-0208 R10 (#5168): a statement that runs user code or catches a replacement exception can
+        // run after a filter of an enclosing try, so the filter writes join the statement effects.
+        let filterNames = if statementCollector != nil {
+            EnclosingFilterNames(statementSyntax, statementCollector)
+        } else {
+            default(HashSet[string]?)
+        }
+        if !anyRootAssigned && !dropAllMemberPaths && !dropAllRoots && !dropGlobalRoots && filterNames == nil {
             return
         }
         // Issue #208: iterate ALL frames (not just the top) because the
@@ -324,11 +331,16 @@ internal partial class StatementBinder {
             }
             var toRemove List[AccessPath]? = nil
             for key in frame.Keys {
-                let drop = if statementCollector != nil {
-                    StatementKillsPath(statementCollector, key, dropAllMemberPaths)
-                } else {
-                    assignedRoots!!.Contains(key.Root) || (key.HasMembers && dropAllMemberPaths)
-                }
+                let drop = (
+                    filterNames != nil && (filterNames.Contains(key.Root.Name) || MayBeMutatedByUnknownCallable(key))
+                ) ||
+                    (
+                    if statementCollector != nil {
+                        StatementKillsPath(statementCollector, key, dropAllMemberPaths)
+                    } else {
+                        assignedRoots!!.Contains(key.Root) || (key.HasMembers && dropAllMemberPaths)
+                    }
+                )
                 if drop {
                     (
                         (
@@ -346,6 +358,20 @@ internal partial class StatementBinder {
                     frame.Remove(key)
                 }
             }
+        }
+    }
+
+    // The names that the filters of enclosing `try` statements write, when the statement
+    // can run after one of them; otherwise `nil`.
+    private func EnclosingFilterNames(statementSyntax SyntaxNode, effects AssignedRootsCollector) HashSet[string]? {
+        if !effects.MayMutateMemberPaths && !effects.ContainsTry {
+            return nil
+        }
+        let filters = CollectCatchFiltersAbove(statementSyntax)
+        return if filters.Count > 0 {
+            CollectEnclosingFilterNames(filters)
+        } else {
+            default(HashSet[string]?)
         }
     }
 
@@ -378,6 +404,15 @@ internal partial class StatementBinder {
         // The summary serves one statement; later statements recompute it.
         ClearStatementEffects()
         ApplyCallableAliasExitState(externalCallableAliases, statement, aliasesAtEntry, collector)
+        // A filter of an enclosing try can run between any two statements of its protected block,
+        // when a nested handler catches a replacement exception.
+        if externalCallableAliases.Count > 0 && statement.Syntax is {} syntax {
+            let filters = CollectCatchFiltersAbove(syntax)
+            filters.AddRange(CollectCatchFiltersWithin(syntax))
+            if filters.Count > 0 {
+                RemoveFilterAffectedAliases(externalCallableAliases, filters)
+            }
+        }
     }
 
     // Returns the effect summary of [`statement`](paramref) for the entry alias
@@ -1596,6 +1631,18 @@ internal partial class StatementBinder {
         }
         let collector = AssignedRootsCollector(nil, callableAliases ?? externalCallableAliases)
         collector.Visit(node)
+        if node.Syntax is {} syntax && (collector.MayMutateMemberPaths || collector.ContainsTry) {
+            let filters = CollectCatchFiltersAbove(syntax)
+            if filters.Count > 0 {
+                let names = CollectEnclosingFilterNames(filters)
+                for path in state
+                    .Keys
+                    .Where((path AccessPath) -> names.Contains(path.Root.Name) || MayBeMutatedByUnknownCallable(path))
+                    .ToArray() {
+                    state.Remove(path)
+                }
+            }
+        }
         if collector.MayMutateAnyRoot {
             for path in state.Keys.Where((path AccessPath) -> MayBeMutatedByUnknownWrite(collector, path)).ToArray() {
                 state.Remove(path)
@@ -1669,6 +1716,12 @@ internal partial class StatementBinder {
         }
 
         prop MayMutateMemberPaths bool {
+            get;
+            private set;
+        }
+
+        // A nested try can catch a replacement exception, after the filters of an enclosing try ran.
+        prop ContainsTry bool {
             get;
             private set;
         }
@@ -2114,6 +2167,7 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitTryStatement(node BoundTryStatement) {
+            ContainsTry = true
             let branchStart = CaptureCallableState()
             let outerTryAssignments = tryAssignedVariables
             let assignedInTry = HashSet[VariableSymbol]()
@@ -2122,11 +2176,20 @@ internal partial class StatementBinder {
             tryAssignedVariables = outerTryAssignments
             outerTryAssignments?.UnionWith(assignedInTry)
             let tryState = CaptureCallableState()
-            let exceptionalState = CloneCallableState(branchStart)
+            var exceptionalState = CloneCallableState(branchStart)
             for variable in assignedInTry {
                 exceptionalState.Literals.Remove(variable)
                 exceptionalState.External.Remove(variable)
                 exceptionalState.Unknown.Add(variable)
+            }
+            // ADR-0208 R10 (#5168): a replacement exception reaches a clause after the filters of
+            // all clauses ran, so every handler starts from the state with their effects.
+            for clause in node.CatchClauses {
+                if clause.Filter != nil {
+                    RestoreCallableState(exceptionalState)
+                    VisitExpression(clause.Filter)
+                    exceptionalState = JoinCallableStates(exceptionalState, CaptureCallableState())
+                }
             }
             var finallyEntries = JoinCallableStates(CloneCallableState(tryState), exceptionalState)
             var joined(

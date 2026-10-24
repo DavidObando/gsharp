@@ -20,11 +20,11 @@ import Xunit
 /// @remarks A row records the exact diagnostics (id, line and column, the
 /// shared GS9100 note excluded). A program that compiles is verified with
 /// ILVerify and run. Its output, or its `NullReferenceException`, is the
-/// result. The soundness rows (cA, d1, d1b, d4, f2, f3, g2) compile today
-/// and dereference nil at run time (bugs #5168 and #5171). They pin that
-/// defect so that the PR that closes it flips them in the same change. The
-/// rows d3, d3b and f5 (bug #5170, R11) were flipped by that fix and now
-/// record its GS0158.
+/// result. The soundness rows (d4, d4b, f2, g2) compile today and dereference
+/// nil at run time (bug #5171). They pin that defect so that the PR that closes
+/// it flips them in the same change. The rows cA, d1, d1b and f3 (bug #5168,
+/// R10) and d3, d3b and f5 (bug #5170, R11) were flipped by their fixes and now
+/// record GS0158.
 /// Each row names the row of ADR-0208 section 16 that changes it, if any.
 /// PR 2, slice 2a flipped e7 (Run2), e8, e10, e21, f1, f6 and g4 (rows R1, R3,
 /// R5) and added h1 to h5, i1, i2 and j1 (issue #5206, amendment A1). They now
@@ -325,7 +325,7 @@ func Run() int32 {
         return s.Length
     }
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0612@11:24", "nre", "", "R10 (GS0158 after)"}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@14:18", "reject", "", ""}
             yield[]object{"cB_local_function_captures", `func Get() string? { return "a" }
 func Run(n int32) int32 {
     var s string? = Get()
@@ -382,7 +382,7 @@ func Run() int32 {
     }
     return 2
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0612@17:24", "run", "filter|finally: nil|filter|1", "R10 (GS0158 after)"}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@15:33", "reject", "", ""}
             yield[]object{"d1_enclosing_filter_before_finally", `func Get() string? { return "a" }
 func Consume(n int32) { Console.WriteLine(n) }
 func Clear(ref s string?) bool {
@@ -403,7 +403,7 @@ func Run() int32 {
     }
     return 2
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0612@16:24", "run", "1", "R10 (GS0158 after)"}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@14:23", "reject", "", ""}
             yield[]object{"d2_shadowed_type_name", `import System.Text
 func Get() StringBuilder? { return StringBuilder() }
 func Run(n int32) int32 {
@@ -827,7 +827,7 @@ func Run() int32 {
     }
     return 2
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0612@19:42", "nre", "", "R10 (GS0158 after)"}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@17:22", "reject", "", ""}
             yield[]object{"f4_nullable_construction_boxes_nil", `func Get() object? { return "a" }
 func Run(n int32) int32 {
     var x object? = Get()
