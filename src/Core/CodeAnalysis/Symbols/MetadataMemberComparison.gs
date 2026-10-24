@@ -186,9 +186,13 @@ internal shared class MetadataMemberComparison {
             "signature-missing"
         } else {
             MethodSignature(
-                MetadataTypeKeys.Of(signature.ReturnType),
+                MetadataTypeKeys.Of(signature.ReturnType) + ReturnModifiers(method),
                 signature.Parameters.Select(
-                    (p MetadataParameter) -> Parameter(p.Name, cast[int32](p.Attributes), MetadataTypeKeys.Of(p.Type))
+                    (p MetadataParameter) -> Parameter(
+                        p.Name,
+                        cast[int32](p.Attributes),
+                        MetadataTypeKeys.Of(p.Type) + MetadataModifiers.Format(p.Type)
+                    )
                 )
             )
         }
@@ -199,7 +203,7 @@ internal shared class MetadataMemberComparison {
         let text = if MetadataTypeKeys.ContainsMissing(field.FieldType) {
             "signature-missing"
         } else {
-            MetadataTypeKeys.Of(field.FieldType)
+            MetadataTypeKeys.Of(field.FieldType) + MetadataModifiers.Format(field.FieldType)
         }
         return Line("field", Row(field.Handle), field.Name, cast[int32](field.Flags), "", text)
     }
@@ -210,8 +214,10 @@ internal shared class MetadataMemberComparison {
             "signature-missing"
         } else {
             MethodSignature(
-                MetadataTypeKeys.Of(signature.ReturnType),
-                signature.Parameters.Select((p MetadataParameter) -> MetadataTypeKeys.Of(p.Type))
+                MetadataTypeKeys.Of(signature.ReturnType) + MetadataModifiers.Format(signature.ReturnType),
+                signature.Parameters.Select(
+                    (p MetadataParameter) -> MetadataTypeKeys.Of(p.Type) + MetadataModifiers.Format(p.Type)
+                )
             )
         }
         let accessors = Row(property.Getter).ToString() + "/" + Row(property.Setter).ToString()
@@ -278,7 +284,7 @@ internal shared class MetadataMemberComparison {
         var text = ""
         try {
             let returnType = if method is MethodInfo info {
-                MetadataTypeKeys.Of(info.ReturnType)
+                MetadataTypeKeys.Of(info.ReturnType) + Modifiers(info.ReturnParameter)
             } else {
                 "System.Void"
             }
@@ -290,7 +296,7 @@ internal shared class MetadataMemberComparison {
                     (p ParameterInfo) -> Parameter(
                         p.Name ?? "",
                         cast[int32](p.Attributes),
-                        MetadataTypeKeys.Of(p.ParameterType)
+                        MetadataTypeKeys.Of(p.ParameterType) + Modifiers(p)
                     )
                 )
                     .ToList()
@@ -304,7 +310,10 @@ internal shared class MetadataMemberComparison {
     internal func DescribeField(field FieldInfo) string {
         var text = ""
         try {
-            text = MetadataTypeKeys.Of(field.FieldType)
+            text = MetadataTypeKeys.Of(field.FieldType) + MetadataModifiers.Format(
+                field.GetRequiredCustomModifiers(),
+                field.GetOptionalCustomModifiers()
+            )
         } catch (ex Exception) when IsLoadFailure(ex) {
             text = "signature-missing"
         }
@@ -315,9 +324,12 @@ internal shared class MetadataMemberComparison {
         var text = ""
         try {
             text = MethodSignature(
-                MetadataTypeKeys.Of(property.PropertyType),
+                MetadataTypeKeys.Of(property.PropertyType) + MetadataModifiers.Format(
+                    property.GetRequiredCustomModifiers(),
+                    property.GetOptionalCustomModifiers()
+                ),
                 IndexParameters(property, declaredParameterCount).Select(
-                    (p ParameterInfo) -> MetadataTypeKeys.Of(p.ParameterType)
+                    (p ParameterInfo) -> MetadataTypeKeys.Of(p.ParameterType) + Modifiers(p)
                 )
                     .ToList()
             )
@@ -360,6 +372,22 @@ internal shared class MetadataMemberComparison {
         .GetIndexParameters()
         .Take(declaredParameterCount)
         .ToArray()
+
+    // Reflection has no return parameter for a constructor (ConstructorInfo), so the return modifiers of a `.ctor` or
+    // `.cctor` cannot be compared. Both sides leave them out of the line; the symbol keeps them and a structural test
+    // covers them.
+    private func ReturnModifiers(method MetadataMethodSymbol) string -> if method.Name == ".ctor" ||
+        method.Name == ".cctor" {
+        ""
+    } else {
+        MetadataModifiers.Format(method.Signature.ReturnType)
+    }
+
+    // The modifiers of a parameter position, by the shared format.
+    private func Modifiers(parameter ParameterInfo) string -> MetadataModifiers.Format(
+        parameter.GetRequiredCustomModifiers(),
+        parameter.GetOptionalCustomModifiers()
+    )
 
     private func AccessorRow(method MethodInfo?) string -> if method == nil {
         "0"
