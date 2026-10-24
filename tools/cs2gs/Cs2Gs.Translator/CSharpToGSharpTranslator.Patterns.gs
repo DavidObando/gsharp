@@ -1962,47 +1962,21 @@ partial class CSharpToGSharpTranslator {
                 .InputType
                 ?.OriginalDefinition
                 .SpecialType == SpecialType.System_Nullable_T
-            // Issue #1923: a NESTED bare recursive pattern (`{ Address: { City:
-            // "Lima" } }`) recurses into this method with `receiver` bound to the
-            // member access (`person.Address`) and its declared/flow type passed
-            // through as `receiverType`. Unlike C#, where every reference type is
-            // nullable at runtime and a defensive `!= null` is always legal, G#'s
-            // null model treats a non-nullable reference type as truly non-null —
-            // `!= nil` against one is rejected (GS0129). Skip the null check when
-            // the member's G# type is a non-nullable reference; the member-access
-            // sub-tests below are then the whole test, matching the value-type
-            // treatment above.
-            //
-            // `receiverType` (when it comes from `TranslateIsPattern`'s
-            // `GetTypeInfo(...).Type`) is Roslyn's FLOW type, which reports
-            // `NullableAnnotation.None` — not `Annotated` — for a `T?` local once
-            // the corpus's nullable annotations context is disabled (the common
-            // case here, see `IsNullableInitializer`). That would make a truly
-            // nullable top-level receiver like `person` look non-nullable and
-            // wrongly drop its guard. `ResolveDeclaredReceiverType` prefers the
-            // bound symbol's own DECLARED type (`ILocalSymbol.Type`, etc.), which
-            // reliably preserves the syntactic `?` regardless of context state;
-            // it falls back to `receiverType` itself only when no symbol binds
-            // (e.g. the constructed `person.Address` member access from the
-            // property-pattern loop below, whose `receiverType` already comes
-            // from a declared property/field symbol via
-            // <see cref="TryGetSubpatternMemberType"/>).
-            // The non-nullable-reference skip below applies ONLY to a NESTED
-            // subpattern member (`isNestedPatternMember`), never to the
-            // OUTER/top-level subject of the whole `is`/pattern expression
-            // (e.g. `person` in `person is { ... }`). C# always defensively
-            // null-checks the top-level subject regardless of its declared
-            // nullability, and that guard pre-dates issue #1923 (issue
-            // #1888), so it must stay unconditional there.
-            let declaredReceiverType ITypeSymbol? = this.ResolveDeclaredReceiverType(receiverType, receiverSyntax)
-            var receiverIsNonNullableReference = isNestedPatternMember &&
-                recursive.Type == nil &&
-                declaredReceiverType != nil &&
-                declaredReceiverType.IsReferenceType == true &&
-                declaredReceiverType.NullableAnnotation != Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated
+            // Issue #4315: a bare recursive pattern ALWAYS tests its subject for
+            // null, nested or not (`{ Address: { } }` is false when `Address` is
+            // null). Issue #1923 once skipped the guard for a nested member whose
+            // declared type is a non-nullable reference, on the premise that gsc
+            // rejects `!= nil` against one (GS0129). That premise is stale:
+            // `== nil` / `!= nil` is legal on every reference-shaped operand
+            // (BoundBinaryOperator.IsNullCompare); GS0129 is reserved for an
+            // imported METHOD-call result with explicit non-null metadata, which a
+            // pattern member access never is. The skip was also unsound: a
+            // declared-non-null member is null at run time whenever it was never
+            // assigned, came from oblivious code or was `null!`-initialized, so
+            // dropping the guard threw a NullReferenceException (or matched
+            // `{ }`) where C# yields false. The only reference receiver still
+            // exempt is a `params` array below (GS0523).
+            var receiverIsNonNullableReference = false
             // ADR-0159 / issue #3501: a C# `params` array subject
             // (`args is { Length: > 0 }`) can be null in C# but a G# variadic
             // always materializes an array — gsc rejects the defensive

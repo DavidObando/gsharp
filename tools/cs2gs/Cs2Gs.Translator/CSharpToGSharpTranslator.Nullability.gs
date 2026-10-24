@@ -44,8 +44,10 @@ partial class CSharpToGSharpTranslator {
         // symbol DECLARED non-nullable (`T`) but defensively compared against
         // `null`, coalesced in local storage, or assigned `null` / `null!` is, in
         // truth, nullable: faithfully it must render `T?` so the `== nil`/`!= nil`
-        // guard type-checks (gsc only permits `== nil` on a nullable operand,
-        // otherwise GS0129). Returns true when <paramref name="symbol"/> is used
+        // guard type-checks and reads honestly (gsc accepts `== nil` on any
+        // reference type, BoundBinaryOperator.IsNullCompare, but a non-null
+        // declaration would misstate the value; GS0129 survives only for value
+        // types and explicitly non-null imported call results). Returns true when <paramref name="symbol"/> is used
         // that way anywhere in <paramref name="scope"/>.
         private func IsUsedAsNullable(symbol ISymbol?, $scope SyntaxNode?) bool {
             if symbol == nil || $scope == nil {
