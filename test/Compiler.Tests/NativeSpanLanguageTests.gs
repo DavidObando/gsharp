@@ -5,6 +5,49 @@ import System
 import Xunit
 
 class NativeSpanLanguageTests {
+    @Theory
+    @InlineData("span[byte](data)")
+    @InlineData("Registry.span[byte](data)")
+    func EnclosingAndQualifiedSpanMethodsKeepTheirSideEffects(call string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package SpanCallable
+import System
+class Registry {
+    shared {
+        func span[T](value []T) []T {
+            Console.WriteLine("called")
+            return value
+        }
+        func Run() {
+            let data = []byte{65, 66}
+            Console.WriteLine(CALL.Length)
+        }
+    }
+}
+func Main() { Registry.Run() }`.Replace("CALL", call)
+        let assembly = fixture.Compile(source, "span-callable", true)
+        IlVerifier.Verify(assembly)
+        Assert.Equal("called\n2\n", fixture.Run(assembly))
+    }
+
+    @Theory
+    @InlineData("span[byte]")
+    @InlineData("readonly span[byte]")
+    func AliasesUseExistingClrRangeConstructors(typeName string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package SpanConstructor
+import System
+func Main() {
+    let data = []byte{99, 65, 0, 195, 169, 99}
+    let view = TARGET(data, 1, 4)
+    Console.WriteLine(view.Length)
+    Console.WriteLine(Convert.ToHexString(view.ToArray()))
+}`.Replace("TARGET", typeName)
+        let assembly = fixture.Compile(source, "span-constructor", true)
+        IlVerifier.Verify(assembly)
+        Assert.Equal("4\n4100C3A9\n", fixture.Run(assembly))
+    }
+
     @Fact
     func AliasesDoNotBindAUserDefinedSystemSpanLookalike() {
         using let fixture = NativeSliceLanguageTests.Fixture()

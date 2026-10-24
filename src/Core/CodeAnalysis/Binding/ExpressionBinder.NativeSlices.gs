@@ -39,6 +39,56 @@ internal partial class ExpressionBinder {
             IsArray: false,
             HasQualifier: false,
             HasTypeArguments: true,
+            Identifier: {} spanIdentifier
+        } spanType &&
+            spanIdentifier.Text == "span" {
+            let ordinary = CallExpressionSyntax(
+                syntax.SyntaxTree,
+                spanIdentifier,
+                spanType.QuestionToken,
+                BufferTypeArguments(spanType),
+                syntax.OpenParenthesisToken,
+                syntax.Arguments,
+                syntax.CloseParenthesisToken
+            )
+            let useAlias = binderCtx.CanUseSpanAlias($scope, spanIdentifier, getCurrentFunction(), expression: true) &&
+                !overloads.HasNonConstructorCallableCandidate(ordinary)
+            if !useAlias && spanType.ReadOnlySpanModifier == nil {
+                return overloads.BindCallExpression(ordinary)
+            }
+            if !useAlias {
+                Diagnostics.ReportNativeSpanType(
+                    spanType.Location,
+                    "readonly span requires the native alias, not an ordinary same-named callable or type"
+                )
+                return BoundErrorExpression(syntax)
+            }
+            if bindTypeClause(spanType) is not ImportedTypeSymbol target || target.ClrType is not{} clrType {
+                return BoundErrorExpression(syntax)
+            }
+            if TryBindClrConstructorFromType(
+                clrType,
+                ordinary,
+                out var result,
+                out var noApplicableOverload,
+                out var arguments,
+                clrType.GetGenericTypeDefinition(),
+                target.ConstructedTypeArguments,
+                resultTypeOverride: target
+            ) {
+                return Invariant.Required(
+                    result,
+                    "a successful native span constructor binding produces a result",
+                    expression: "result"
+                )
+            }
+            FinishClrConstructorBindingFailure(ordinary, target.Name, noApplicableOverload, arguments, &result, target)
+            return result ?? BoundErrorExpression(syntax)
+        }
+        if syntax.ConversionTypeClause is {
+            IsArray: false,
+            HasQualifier: false,
+            HasTypeArguments: true,
             ReadOnlySliceModifier: nil,
             ReadOnlySpanModifier: nil,
             Identifier: {} identifier
@@ -49,9 +99,7 @@ internal partial class ExpressionBinder {
                 identifier,
                 getCurrentFunction(),
                 expression: true
-            ) ||
-                identifier.Text == "span" &&
-                !binderCtx.CanUseSpanAlias($scope, identifier, getCurrentFunction(), expression: true)
+            )
         ) {
             let ordinary = CallExpressionSyntax(
                 syntax.SyntaxTree,
