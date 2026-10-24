@@ -75,6 +75,12 @@ internal shared class MetadataTypeKeys {
         if type is ByRefTypeSymbol byRef {
             return Of(byRef.PointeeType) + "&"
         }
+        if type is MetadataFunctionPointerTypeSymbol pointer {
+            return FunctionPointer(
+                Of(pointer.ReturnType),
+                pointer.ParameterTypes.Select((t TypeSymbol) -> Of(t)).ToList()
+            )
+        }
         if type is TypeParameterSymbol parameter {
             return Parameter(parameter.IsMethodTypeParameter, parameter.Ordinal)
         }
@@ -88,6 +94,12 @@ internal shared class MetadataTypeKeys {
     internal func Of(type Type?) string {
         if type == nil {
             return ""
+        }
+        if type.IsFunctionPointer {
+            return FunctionPointer(
+                Of(type.GetFunctionPointerReturnType()),
+                type.GetFunctionPointerParameterTypes().Select((t Type) -> Of(t)).ToList()
+            )
         }
         if type.IsGenericParameter {
             return Parameter(type.DeclaringMethod != nil, type.GenericParameterPosition)
@@ -139,6 +151,11 @@ internal shared class MetadataTypeKeys {
         if type is ByRefTypeSymbol byRef {
             return ContainsMissing(byRef.PointeeType)
         }
+        if type is MetadataFunctionPointerTypeSymbol functionPointer {
+            return ContainsMissing(functionPointer.ReturnType) || functionPointer.ParameterTypes.Any(
+                (t TypeSymbol) -> ContainsMissing(t)
+            )
+        }
         return false
     }
 
@@ -156,7 +173,7 @@ internal shared class MetadataTypeKeys {
     }
 
     // The reflection side of MetadataModule.IsCoreLibrary.
-    private func IsCoreLibrary(assembly Assembly) bool {
+    internal func IsCoreLibrary(assembly Assembly) bool {
         let objectType = assembly.GetType("System.Object", false)
         return objectType != nil && objectType.Assembly == assembly && objectType.BaseType == nil
     }
@@ -172,6 +189,13 @@ internal shared class MetadataTypeKeys {
             "[" + string.Concat(Enumerable.Repeat(",", rank - 1)) + "]"
         }
     }
+
+    // The one spelling of a function pointer: the return type, then the parameters. The calling convention modifiers
+    // arrive with the custom modifiers.
+    private func FunctionPointer(returnType string, parameters List[string]) string -> "fnptr(" +
+        returnType +
+        ";" +
+        string.Join(";", parameters) + ")"
 
     private func Generic(definition string, arguments List[string]) string -> definition + "<" + string.Join(
         ",",

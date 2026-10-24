@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Compilation
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.IO
 import System.Linq
 import System.Reflection.Metadata
@@ -59,6 +60,7 @@ internal shared class MetadataModelComparison {
         CompareTypeReferences(resolver, set, result)
         CompareWellKnownTypes(resolver, set, result)
         CompareTypeDefinitions(resolver, set, result)
+        MetadataMemberComparison.Compare(resolver, set, result)
         return result
     }
 
@@ -166,17 +168,43 @@ internal shared class MetadataModelComparison {
     ) {
         for fullName in set.WellKnown.FullNames {
             let actual = set.WellKnown.TryGet(fullName)!!
-            var found Type? = nil
-            let expected = if resolver.TryResolveType(fullName, false, out found) {
-                Identify(found!!)
-            } else {
+            let found = ExpectedWellKnown(resolver, fullName)
+            let expected = if found == nil {
                 "missing"
+            } else {
+                Identify(found)
             }
             let actualText = Describe(actual)
             if !string.Equals(expected, actualText, StringComparison.OrdinalIgnoreCase) {
                 result.Add(ModelDisagreement("Q1.well-known", fullName, expected, actualText))
             }
         }
+    }
+
+    // The context's answer for a well-known name. A name that the runtime binds specially needs a core library, the same
+    // rule as the table: the first public core library definition, else the first one. Another name is the resolver's own
+    // answer, the first writer with the accessible copy preferred.
+    private func ExpectedWellKnown(resolver ReferenceResolver, fullName string) Type? {
+        if !WellKnownTypes.RequiresCoreLibrary(fullName) {
+            var found Type? = nil
+            return if resolver.TryResolveType(fullName, false, out found) {
+                found
+            } else {
+                nil
+            }
+        }
+        var firstCoreLibrary Type? = nil
+        for assembly in resolver.Assemblies {
+            let candidate = resolver.FindTypeForComparison(assembly.GetName().Name ?? "", fullName)
+            if candidate == nil || !MetadataTypeKeys.IsCoreLibrary(candidate.Assembly) {
+                continue
+            }
+            if candidate.IsVisible {
+                return candidate
+            }
+            firstCoreLibrary ??= candidate
+        }
+        return firstCoreLibrary
     }
 
     private func Identify(type Type) string -> (type.Assembly.GetName().Name ?? string.Empty) +
@@ -251,24 +279,30 @@ internal shared class MetadataModelComparison {
 
     // Q13: the constraint rows of each generic parameter. A parameter whose constraint names a type that the context
     // cannot load is written "constraints-missing" on both sides; the other parameters still compare (table 7b).
-    private func ConstraintsOf(symbol MetadataTypeSymbol) string {
+    // Types and methods share these two functions.
+    private func ConstraintsOf(symbol MetadataTypeSymbol) string -> ConstraintsOf(
+        symbol.TypeParameters.Select((p TypeParameterSymbol) -> symbol.GetConstraintTypes(p.Ordinal)).ToImmutableArray()
+    )
+
+    internal func ConstraintsOf(constraints ImmutableArray[ImmutableArray[TypeSymbol]]) string {
         let parts = List[string]()
-        for var i = 0; i < symbol.TypeParameters.Length; i++ {
-            let constraints = symbol.GetConstraintTypes(i)
+        for parameter in constraints {
             parts.Add(
-                if constraints.Any((c TypeSymbol) -> MetadataTypeKeys.ContainsMissing(c)) {
+                if parameter.Any((c TypeSymbol) -> MetadataTypeKeys.ContainsMissing(c)) {
                     "constraints-missing"
                 } else {
-                    string.Join("+", constraints.Select((c TypeSymbol) -> MetadataTypeKeys.Of(c)))
+                    string.Join("+", parameter.Select((c TypeSymbol) -> MetadataTypeKeys.Of(c)))
                 }
             )
         }
         return string.Join(",", parts)
     }
 
-    private func ConstraintsOf(type Type) string {
+    private func ConstraintsOf(type Type) string -> ConstraintsOf(type.GetGenericArguments())
+
+    internal func ConstraintsOf(arguments[]Type) string {
         let parts = List[string]()
-        for argument in type.GetGenericArguments() {
+        for argument in arguments {
             try {
                 parts.Add(
                     string.Join(

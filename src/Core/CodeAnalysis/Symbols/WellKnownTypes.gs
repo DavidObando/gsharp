@@ -49,7 +49,7 @@ internal class WellKnownTypes {
         if existing != nil {
             return existing
         }
-        let created = set.TryResolveVisibleName(Names[index]) ??
+        let created = set.TryResolveVisibleName(Names[index], RequiresCoreLibrary(index)) ??
             ResolvedTypeReference(set.GetMissing(nil, Names[index]))
         return Interlocked.CompareExchange(&resolved[index], created, nil) ?? created
     }
@@ -115,6 +115,7 @@ internal class WellKnownTypes {
         private let OtherTypes[]string = []string{
             "System.Attribute",
             "System.Type",
+            "System.TypedReference",
             "System.Exception",
             "System.NullReferenceException",
             "System.IDisposable",
@@ -163,6 +164,24 @@ internal class WellKnownTypes {
         private let Names ImmutableArray[string] = BuildNames()
         private let SpecialIndex Dictionary[SpecialType, int32] = BuildSpecialIndex()
         private let NameIndex Dictionary[string, int32] = BuildNameIndex()
+
+        /// Tells whether the entry at an index is bound specially by the runtime: the tagged types before the
+        /// tuple family, and System.TypedReference. A definition of such a name in a library that is not a core library
+        /// is a namesake. This is the only place that decides it; the table, `IsWellKnown` and the comparison all ask.
+        /// The tuple family is not one of them: `System.ValueTuple` may live in a separate assembly.
+        internal func RequiresCoreLibrary(index int32) bool -> index < TaggedTypes.Length ||
+            Names[index] == "System.TypedReference"
+
+        /// Tells whether a tag is bound specially by the runtime (see `RequiresCoreLibrary(int32)`).
+        internal func RequiresCoreLibrary(special SpecialType) bool -> SpecialIndex.TryGetValue(
+            special,
+            out var index
+        ) &&
+            RequiresCoreLibrary(index)
+
+        /// Tells whether a full name is bound specially by the runtime (see `RequiresCoreLibrary(int32)`).
+        internal func RequiresCoreLibrary(fullName string) bool -> NameIndex.TryGetValue(fullName, out var index) &&
+            RequiresCoreLibrary(index)
 
         private func BuildSpecialIndex() Dictionary[SpecialType, int32] {
             let index = Dictionary[SpecialType, int32]()
