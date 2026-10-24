@@ -1,8 +1,9 @@
 # ADR-0211: UTF-8 literals over static readonly byte spans
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-10-23
-- **Phase**: Contract review; no product implementation
+- **Phase**: Design approved; implementation and certification pending
+- **Approval**: The maintainer stated “ADR 0211 is approved” on 2026-10-23.
 - **Issue**: [#5218](https://github.com/DavidObando/gsharp/issues/5218)
 - **Related**: [ADR-0204](0204-immutable-bytestring-values.md),
   [ADR-0056](0056-span-consumption-v1.md),
@@ -57,10 +58,20 @@ The lexical specification and executable compiler diagnostics take precedence.
 
 ## Decision
 
-**Recommend a native `u8"..."` expression of CLR type
+**Provide a native `u8"..."` expression of CLR type
 `System.ReadOnlySpan[uint8]`, backed directly by static module bytes.**
-Keep this proposal unaccepted until the maintainer approves the choices below.
+The maintainer approved this design, not an implemented or certified capability.
 No SDK, runtime, compiler, translator, or test behavior changes in this ADR.
+Implementation, release, SDK-pin adoption, and merge require their own authorization.
+
+Two release-scope alternatives remain explicit decisions:
+
+- Include the recommended native aliases in section 2, or initially use CLR spelling.
+- Include native literal-only `+` in section 7, or initially fold only in cs2gs.
+
+Acceptance does not select between those alternatives.
+The managed-helper emission in section 5 remains a candidate subject to its proof gates.
+Approval is not evidence that G# emission, strict ILVerify, NativeAOT, or translation works.
 
 ### 1. Three distinct contracts
 
@@ -117,7 +128,8 @@ let utf8span ReadOnlySpan[byte] = u8"Hello, World!"
 
 This alternative has identical literal semantics.
 It can omit the alias slice of implementation if the maintainer prefers.
-Approval must explicitly select whether the native aliases belong in this release.
+The initial release must explicitly select whether to include the native aliases.
+That release-scope choice remains open after design approval.
 
 ### 3. Lexical forms and exact encoding
 
@@ -296,6 +308,7 @@ This choice preserves C# literal addition directly.
 Alternatively, the maintainer can defer native addition and require cs2gs to
 collapse only Roslyn-validated UTF-8 literal-addition trees into one target literal.
 Do not emit ordinary span addition in that alternative.
+That initial-release choice remains open after design approval.
 
 ### 8. Explicit conversion and ownership boundaries
 
@@ -396,8 +409,9 @@ Do not call a printer substring assertion an allocation or semantic witness.
 
 ### 11. Bounded implementation sequence
 
-1. Obtain exact semantic approval for prefix, aliases, escape rules, raw deferral,
-   termination, literal addition, and the static-storage cost contract.
+1. Design approval is recorded above.
+   Settle the two release-scope alternatives and obtain implementation authorization.
+   Preserve the approved encoding, raw deferral, termination, and static-storage contracts.
 2. Implement compiler token/binding and minimal static-data emission in G#.
    Reuse existing BCL symbols, escape analysis, metadata, and slot planning.
    Cover diagnostics, exact bytes, type, lifetime, allocation, and strict IL.
@@ -440,8 +454,9 @@ Paths below identify the inspected components, not files changed by this study.
 
 ## Study evidence and limitations
 
-On 2026-10-23, the remote `main` SHA remained `04069285a4eb967b59182343944ccd20cec61712`.
-The latest issue comment was the maintainer's prefix suggestion,
+During the original study on 2026-10-23, the remote `main` SHA remained
+`04069285a4eb967b59182343944ccd20cec61712`.
+The latest issue comment at that time was the maintainer's prefix suggestion,
 created at `2026-10-23T23:58:43Z`.
 Remote ADR enumeration ended at 0210.
 The concurrent fixed-array study confirmed that it needs no new ADR number.
@@ -493,7 +508,7 @@ No G# product code or behavioral tests changed.
 No G# solution build, cs2gs driver run, strict ILVerify, NativeAOT execution,
 or proposed managed-helper emission was certified by this study.
 The measured Roslyn implementation uses the pointer-constructor path.
-It does not establish acceptance of the proposed G# emission.
+It does not certify the candidate G# emission.
 Those missing proofs are explicit implementation gates.
 
 ## Consequences
