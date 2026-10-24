@@ -72,6 +72,62 @@ func Main() { Registry.Run() }`.Replace("CALL", call)
     }
 
     @Theory
+    @InlineData("shared {", "}", "Registry.Run()")
+    @InlineData("", "", "Registry().Run()")
+    func InheritedSpanMethodsKeepTheirSideEffects(openShared string, closeShared string, invoke string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package InheritedSpanCallable
+import System
+open class Parent {
+    shared {
+        public func span[T](value []T) []T {
+            Console.WriteLine("called")
+            return value
+        }
+    }
+}
+class Registry : Parent {
+    OPEN
+    public func Run() {
+        let data = []byte{65, 66}
+        Console.WriteLine(span[byte](data).Length)
+    }
+    CLOSE
+}
+func Main() { INVOKE }`.Replace("OPEN", openShared).Replace("CLOSE", closeShared).Replace("INVOKE", invoke)
+        let assembly = fixture.Compile(source, "inherited-span-callable", true)
+        IlVerifier.Verify(assembly)
+        Assert.Equal("called\n2\n", fixture.Run(assembly))
+    }
+
+    @Fact
+    func ImportedInheritedSpanMethodsKeepTheirSideEffects() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`using System;
+namespace InheritedSpanContract;
+public class Parent {
+    public static T[] span<T>(T[] value) {
+        Console.WriteLine("called");
+        return value;
+    }
+}`, "InheritedSpanContract")
+        let assembly = fixture.Compile(`package ImportedInheritedSpanCallable
+import System
+import InheritedSpanContract
+class Registry : Parent {
+    shared {
+        public func Run() {
+            let data = []byte{65, 66}
+            Console.WriteLine(span[byte](data).Length)
+        }
+    }
+}
+func Main() { Registry.Run() }`, "imported-inherited-span-callable", true, "/reference:" + contract)
+        IlVerifier.Verify(assembly, []string{contract})
+        Assert.Equal("called\n2\n", fixture.Run(assembly))
+    }
+
+    @Theory
     @InlineData("span[byte]")
     @InlineData("readonly span[byte]")
     func AliasesUseExistingClrRangeConstructors(typeName string) {
