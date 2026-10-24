@@ -1999,32 +1999,8 @@ shared class SemanticLookup {
         type TypeSymbol?,
         declarations Dictionary[SyntaxToken, Symbol]
     ) {
-        if typeClause == nil || type == nil {
-            return
-        }
-        let wrappedTypes = if type is ImportedTypeSymbol {
-            Array.Empty[TypeSymbol]()
-        } else {
-            TypeSymbol.GetWrappedTypes(type).ToArray()
-        }
-        if wrappedTypes.Length > 0 {
-            let wrappedClauses = typeClause.GetChildren().OfType[TypeClauseSyntax]().ToArray()
-            if typeClause.Identifier != nil || (wrappedTypes.Length == 1 && wrappedClauses.Length != 1) {
-                MapTypeClauseReference(typeClause, wrappedTypes[0], declarations)
-                return
-            }
-            for var i = 0; i < Math.Min(wrappedTypes.Length, wrappedClauses.Length); i++ {
-                MapTypeClauseReference(wrappedClauses[i], wrappedTypes[i], declarations)
-            }
-            return
-        }
-        let identifier SyntaxToken? = if !typeClause.QualifierIdentifierTokens.IsDefaultOrEmpty {
-            typeClause.QualifierIdentifierTokens[^1]
-        } else {
-            typeClause.Identifier
-        }
-        if identifier != nil {
-            declarations[identifier] = type
+        for (identifier, named) in GSharp.Core.CodeAnalysis.SemanticModel.GetTypeClauseSymbols(typeClause, type) {
+            declarations[identifier] = named
         }
     }
 
