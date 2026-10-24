@@ -589,13 +589,16 @@ open partial class Parser {
         let isCastIntrinsic = !isMemberName && IsCastIntrinsicHead()
         if IsReadOnlyManagedHead() || IsReadOnlyManagedHead(address: true) {
             current = ParseReadOnlyManagedExpression()
-        } else if IsReadOnlySliceHead() ||
-            IsReadOnlySpanHead() ||
+        } else if !isMemberName &&
             (
-            Current.Kind == SyntaxKind.IdentifierToken && (Current.Text is "slice" or "array" or "span") && Peek(
-                1
-            ).Kind == SyntaxKind.OpenSquareBracketToken &&
-                LooksLikeGenericCallSite(1)
+            IsReadOnlySliceHead() ||
+                IsReadOnlySpanHead() ||
+                (
+                Current.Kind == SyntaxKind.IdentifierToken && (Current.Text is "slice" or "array" or "span") && Peek(
+                    1
+                ).Kind == SyntaxKind.OpenSquareBracketToken &&
+                    LooksLikeGenericCallSite(1)
+            )
         ) {
             current = ParseNativeBufferExpression()
         } else if allowContextualOperators &&

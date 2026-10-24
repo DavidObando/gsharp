@@ -502,7 +502,7 @@ internal partial class OverloadResolver {
     /// When no such candidate exists, this returns `false` and
     /// the CLR paths run exactly as before, so genuine constructor/conversion
     /// calls (e.g. `StringBuilder(16)`) are unaffected.
-    private func HasNonConstructorCallableCandidate(syntax CallExpressionSyntax) bool {
+    internal func HasNonConstructorCallableCandidate(syntax CallExpressionSyntax) bool {
         let name = syntax.Identifier.ValueText
         // A same-compilation free function or extension function (extension
         // functions are flattened into the global function table — issue
