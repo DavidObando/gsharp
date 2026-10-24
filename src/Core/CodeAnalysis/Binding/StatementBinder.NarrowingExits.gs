@@ -65,7 +65,10 @@ internal partial class StatementBinder {
     }
 
     /// The state of the path that skips an `if` with no `else`.
-    private func SkippedBranchExit(entry NarrowingState, elseNarrow Dictionary[AccessPath, TypeSymbol]?) NarrowingState {
+    private func SkippedBranchExit(
+        entry NarrowingState,
+        elseNarrow Dictionary[AccessPath, TypeSymbol]?
+    ) NarrowingState {
         if elseNarrow == nil {
             return entry
         }
@@ -85,7 +88,11 @@ internal partial class StatementBinder {
     /// Lifts the facts that the exit state of [`statement`](paramref) proves into
     /// [`persistentFrame`](paramref). Every lift goes through
     /// (cref:SetPersistentNarrowing), like the other lifts.
-    private func ApplyJoinExitNarrowings(statement BoundStatement?, persistentFrame NarrowingFrame) {
+    private func ApplyJoinExitNarrowings(
+        statement BoundStatement?,
+        persistentFrame NarrowingFrame,
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol]
+    ) {
         if statement == nil || !JoinExitsEnabled() || !object.ReferenceEquals(exitOwner, statement) {
             return
         }
@@ -104,7 +111,7 @@ internal partial class StatementBinder {
                 continue
             }
             if effects == nil {
-                effects = GetStatementEffects(statement, externalCallableAliases)
+                effects = GetStatementEffects(statement, aliasesAtEntry)
                 let syntax = statement.Syntax
                 filterNames = if syntax == nil {
                     default(HashSet[string]?)
@@ -132,7 +139,9 @@ internal partial class StatementBinder {
                     (ifStatement.ElseStatement != nil && MayMutateMemberPaths(ifStatement.ElseStatement))
             }
             case initialized is BoundBlockStatement when initialized.Syntax is IfStatementSyntax &&
-                initialized.Statements.Length == 2 &&
+                initialized
+                .Statements
+                .Length == 2 &&
                 initialized.Statements[1] is BoundIfStatement {
                 return BranchesMayMutateMemberPaths(initialized.Statements[1])
             }
@@ -160,7 +169,6 @@ internal partial class StatementBinder {
         if currentType == nil {
             return true
         }
-        return !object.Equals(currentType, joined) &&
-            Conversion.IsRepresentationPreservingImplicit(joined, currentType)
+        return !object.Equals(currentType, joined) && Conversion.IsRepresentationPreservingImplicit(joined, currentType)
     }
 }

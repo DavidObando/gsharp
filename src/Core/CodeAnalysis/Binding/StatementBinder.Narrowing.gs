@@ -384,8 +384,7 @@ internal partial class StatementBinder {
         dropAllMemberPaths bool
     ) bool -> MayBeMutatedByUnknownWrite(effects, path) ||
         (effects.MayMutateGlobalRoots && path.Root is GlobalVariableSymbol && !path.Root.IsReadOnly) ||
-        effects.AssignsRoot(path.Root) ||
-        (path.HasMembers && dropAllMemberPaths)
+        effects.AssignsRoot(path.Root) || (path.HasMembers && dropAllMemberPaths)
 
     private func UpdateExternalCallableAliases(
         statement BoundStatement,

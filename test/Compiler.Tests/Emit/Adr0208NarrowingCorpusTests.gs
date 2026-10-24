@@ -27,7 +27,7 @@ import Xunit
 /// record GS0158.
 /// Each row names the row of ADR-0208 section 16 that changes it, if any.
 /// PR 2, slice 2a flipped e7 (Run2), e8, e10, e21, f1, f6 and g4 (rows R1, R3,
-/// R5) and added h1 to h6, i1, i2 and j1 (issue #5206, amendment A1). They now
+/// R5) and added h1 to h6, i1, i2, j1, k1 and k2 (issue #5206, amendment A1). They now
 /// record the new result. The rows h1 and h2 stay rejected until slice 2b (R2).
 open class Adr0208NarrowingCorpusTests {
     /// Compiles one probe, checks its diagnostics, and for a program that
@@ -177,6 +177,8 @@ open class Adr0208NarrowingCorpusTests {
                 "i1_5206_type_test_against_unrelated_interface",
                 "i2_5206_goto_join_keeps_declared_type",
                 "j1_else_if_chain_nary_join",
+                "k1_legacy_lift_keeps_the_stronger_join",
+                "k2_header_write_before_branch_read",
                 "out-alias_out_ref_alias"
             },
             names
@@ -1050,6 +1052,32 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 func Main() { Console.WriteLine(Run(Box(Animal()))) }`, "GS0158@13:18", "reject", "", "R14 (the condition call kills; stays rejected)"}
+            yield[]object{"k1_legacy_lift_keeps_the_stronger_join", `open class Animal { var Name string = "a" }
+class Dog : Animal { func Bark() string { return "woof" } }
+func Run(a Animal, c bool) string {
+    var x Animal? = a
+    if c {
+        if x !is Dog { return "" }
+    } else {
+        if x !is Dog { return "" }
+    }
+    return x.Bark()
+}
+func Main() { Console.WriteLine(Run(Dog(), true)) }`, "", "run", "woof", ""}
+            yield[]object{"k2_header_write_before_branch_read", `func Get() string? { return "a" }
+func Clear(ref s string?) bool {
+    s = nil
+    return true
+}
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    if Clear(ref s) {
+        return s.Length
+    }
+    return 0
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0612@9:14", "nre", "", "#5249, header effects before the branches (slice 4): GS0158 after"}
             yield[]object{"i1_5206_type_test_against_unrelated_interface", `interface IInit {
     func Init();
 }

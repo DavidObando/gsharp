@@ -722,10 +722,6 @@ internal partial class StatementBinder {
                 // block see the variable at its declared (nullable) type again.
                 InvalidateNarrowingsForAssignedVariables(statementSyntax, statement)
                 RestoreEarlyExitLiftsWrittenOnlyByCondition(statement, memberNotNullFrame)
-                // ADR-0208: lift what the join of the branch exits proves, for an
-                // `if` and for a bare block. It runs after the invalidation above,
-                // which owns every kill that a write causes.
-                ApplyJoinExitNarrowings(statement, memberNotNullFrame)
                 // Issue #1123: assignment-based smart cast. After invalidation
                 // (which clears any stale narrowing on the assigned variable),
                 // re-narrow a nullable `var` local that was just assigned a
@@ -742,6 +738,11 @@ internal partial class StatementBinder {
                 // type. Runs after invalidation for the same reason as the
                 // assignment narrowing above.
                 ApplyIfJoinNarrowings(statement, memberNotNullFrame)
+                // ADR-0208: lift what the join of the branch exits proves, for an
+                // `if` and for a bare block. It runs after the invalidation, which
+                // owns every kill that a write causes, and after the legacy lifts,
+                // so it can strengthen a fact they lifted but never weakens one.
+                ApplyJoinExitNarrowings(statement, memberNotNullFrame, externalCallableAliasesAtEntry)
                 ApplyTryFinallyFallthroughNarrowings(statement, memberNotNullFrame)
                 ShadowAfterStatement(statement)
                 let hasInternallyReachableFallthrough = HasInternallyReachableFallthrough(statement)
