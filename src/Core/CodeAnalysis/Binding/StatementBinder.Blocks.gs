@@ -294,10 +294,10 @@ internal partial class StatementBinder {
         let reachabilityGeneration = internalReachabilityGeneration
         let tryBlock = BindWithinFinallyScope(syntax.FinallyClause, () -> BindBlockStatement(syntax.TryBlock))
         let callableTryExit = CaptureExternalCallableAliases()
-        let tryMutations = AssignedRootsCollector(nil, callableEntry)
+        let tryMutations = NewCollector(nil, callableEntry)
         tryMutations.Visit(tryBlock)
         let callableExceptionalEntry = HashSet[VariableSymbol](callableEntry)
-        callableExceptionalEntry.ExceptWith(tryMutations.Roots)
+        RemoveAssignedAliases(callableExceptionalEntry, tryMutations)
         // ADR-0208 R10 (#5168): an enclosing filter can run user code that assigns a callable alias.
         let enclosingFilters = CollectEnclosingCatchFilters(syntax)
         if enclosingFilters.Count > 0 {

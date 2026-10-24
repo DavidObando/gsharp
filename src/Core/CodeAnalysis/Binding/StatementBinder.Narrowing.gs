@@ -47,6 +47,52 @@ internal partial class StatementBinder {
         externalCallableAliases
     )
 
+    /// ADR-0208 R12 (#5171): creates an effect collector that decides storage sharing through
+    /// (cref:MayShareStorage).
+    private func NewCollector(
+        assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?,
+        externalFunctionValues IEnumerable[VariableSymbol]? = nil
+    ) AssignedRootsCollector -> AssignedRootsCollector(
+        assignmentPreservesNarrowing,
+        externalFunctionValues,
+        (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second)
+    )
+
+    /// ADR-0208 R12 (#5171): removes the callable aliases that [`collector`](paramref) assigns, and
+    /// those that share storage with an assigned variable.
+    private func RemoveAssignedAliases(aliases HashSet[VariableSymbol], collector AssignedRootsCollector) {
+        aliases.ExceptWith(collector.Roots)
+        aliases.RemoveWhere((alias VariableSymbol) -> collector.SharesStorageWithAssignedRoot(alias))
+    }
+
+    /// ADR-0208 R12 (#5171): whether [`first`](paramref) and [`second`](paramref) may name one
+    /// storage: the same variable, an overlapping `ref` alias chain, two external-storage aliases, or
+    /// an external-storage alias and a root whose address the function takes or a closure assigns.
+    private func MayShareStorage(first VariableSymbol, second VariableSymbol) bool {
+        if SharesStorage(first, second) {
+            return true
+        }
+        let firstEnd = AliasChain(first).Last()
+        let secondEnd = AliasChain(second).Last()
+        return (IsExternalStorageAlias(first) && MayBeReachedByAlias(secondEnd)) ||
+            (IsExternalStorageAlias(second) && MayBeReachedByAlias(firstEnd))
+    }
+
+    // A caller can pass any mutable global by reference; an address-taken or closure-assigned root can be
+    // reached through an alias as well.
+    private func MayBeReachedByAlias(root VariableSymbol) bool -> (
+        !(root is LocalVariableSymbol) && !(root is ParameterSymbol) && !root.IsReadOnly
+    ) ||
+        binderCtx.MayBeAssignedByClosure(root)
+
+    /// ADR-0208 R12 (#5171): removes every narrowing whose root may share storage with
+    /// [`root`](paramref).
+    private func RemoveSharingStorage(state Dictionary[AccessPath, TypeSymbol], root VariableSymbol) {
+        for key in state.Keys.Where((key AccessPath) -> MayShareStorage(key.Root, root)).ToArray() {
+            state.Remove(key)
+        }
+    }
+
     private func RestoreJoinedExternalCallableAliases(
         left HashSet[VariableSymbol],
         right IReadOnlyCollection[VariableSymbol]
@@ -79,7 +125,7 @@ internal partial class StatementBinder {
             breakLabel,
             continueLabel
         )
-        let collector = AssignedRootsCollector(nil, entryAliases)
+        let collector = NewCollector(nil, entryAliases)
         collector.Visit(loop)
         return collector.DefinitelyExternalFunctionValues.ToHashSet()
     }
@@ -200,7 +246,7 @@ internal partial class StatementBinder {
         if statement is not BoundIfStatement ifStatement {
             return
         }
-        let condition = AssignedRootsCollector(nil, externalCallableAliases)
+        let condition = NewCollector(nil, externalCallableAliases)
         condition.VisitExpression(ifStatement.Condition)
         if condition
             .WritableReferenceRoots
@@ -209,7 +255,7 @@ internal partial class StatementBinder {
             condition.MayMutateWritableReferenceRoots {
             return
         }
-        let branches = AssignedRootsCollector(nil, externalCallableAliases)
+        let branches = NewCollector(nil, externalCallableAliases)
         branches.VisitStatement(ifStatement.ThenStatement)
         if ifStatement.ElseStatement != nil {
             branches.VisitStatement(ifStatement.ElseStatement)
@@ -220,7 +266,7 @@ internal partial class StatementBinder {
             if !path.HasMembers && condition.WritableReferenceRoots.Contains(path.Root) &&
                 !plainTargets
                 .Targets
-                .Contains(path.Root) && !branches.Roots.Contains(path.Root) {
+                .Contains(path.Root) && !branches.AssignsRoot(path.Root) {
                 SetPersistentNarrowing(persistentFrame, path, narrowedType)
             }
         }
@@ -273,7 +319,7 @@ internal partial class StatementBinder {
         // statement effect summary, so the syntax walk only answers the
         // member-mutation question and caches that answer per statement.
         let assignedNames = HashSet[string]()
-        let dropAllMemberPaths = if boundStatement != nil {
+        var dropAllMemberPaths = if boundStatement != nil {
             SyntaxMayMutateMemberPaths(statementSyntax)
         } else {
             CollectAssignedNamesAndMemberMutation(statementSyntax, assignedNames)
@@ -291,6 +337,8 @@ internal partial class StatementBinder {
         if boundStatement != nil {
             let collector = GetStatementEffects(boundStatement, externalCallableAliases)
             statementCollector = collector
+            // A property getter with user code is no call expression in the syntax.
+            dropAllMemberPaths = dropAllMemberPaths || collector.MayMutateMemberPaths
             dropAllRoots = collector.MayMutateAnyRoot
             dropGlobalRoots = collector.MayMutateGlobalRoots
             // The summary is shared, so read it without adding roots to it.
@@ -342,10 +390,13 @@ internal partial class StatementBinder {
                     if statementCollector != nil {
                         statementCollector.AssignsRoot(key.Root)
                     } else {
-                        assignedRoots!!.Contains(key.Root)
+                        assignedRoots!!.Any(
+                            (assigned VariableSymbol) -> object.ReferenceEquals(assigned, key.Root) ||
+                                MayShareStorage(assigned, key.Root)
+                        )
                     }
                 ) ||
-                    (key.HasMembers && dropAllMemberPaths)
+                    (DropsOnMemberMutation(key) && dropAllMemberPaths)
                 if drop {
                     (
                         (
@@ -405,7 +456,7 @@ internal partial class StatementBinder {
             CompilationMeasurements.Count("narrowing.effect-reuses")
             return effects!!
         }
-        let collector = AssignedRootsCollector(nil, aliases)
+        let collector = NewCollector(nil, aliases)
         collector.Visit(statement)
         CompilationMeasurements.Count("narrowing.effect-walks")
         effectsNode = statement
@@ -510,7 +561,7 @@ internal partial class StatementBinder {
             aliases.Clear()
             aliases.UnionWith(collector.DefinitelyExternalFunctionValues)
         } else {
-            aliases.ExceptWith(collector.Roots)
+            RemoveAssignedAliases(aliases, collector)
         }
         if assignsExternalCallable {
             aliases.Add(
@@ -576,7 +627,7 @@ internal partial class StatementBinder {
                     frames[i][path]
                 ) ||
                     mutations.InvalidatesNarrowing(path.Root, frames[i][path]) ||
-                    (path.HasMembers && mayMutateMemberPaths) {
+                    (DropsOnMemberMutation(path) && mayMutateMemberPaths) {
                     invalidations.Add((i, path))
                 }
             }
@@ -618,7 +669,10 @@ internal partial class StatementBinder {
                 (statement BoundStatement) -> object.ReferenceEquals(statement, marker)
             )
         )
-        let collector = LoopBackEdgeMutationCollector(AssignmentPreservesNarrowing)
+        let collector = LoopBackEdgeMutationCollector(
+            AssignmentPreservesNarrowing,
+            (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second)
+        )
         if markerBlock == nil {
             return collector
         }
@@ -967,7 +1021,7 @@ internal partial class StatementBinder {
                 if activeCleanupSet.Contains(cleanup) {
                     continue
                 }
-                let mutations = AssignedRootsCollector(AssignmentPreservesNarrowing, snapshot.ExternalCallableAliases)
+                let mutations = NewCollector(AssignmentPreservesNarrowing, snapshot.ExternalCallableAliases)
                 mutations.Visit(cleanup)
                 summary = FinallyFlowSummary(
                     mutations,
@@ -1005,7 +1059,7 @@ internal partial class StatementBinder {
         finallyBlock BoundStatement,
         callableAliases IReadOnlyCollection[VariableSymbol]
     ) FinallyFlowSummary {
-        let mutations = AssignedRootsCollector(AssignmentPreservesNarrowing, callableAliases)
+        let mutations = NewCollector(AssignmentPreservesNarrowing, callableAliases)
         mutations.Visit(finallyBlock)
         let nonNullOnNormalExit = if !CanCompleteNormally(finallyBlock) {
             default(Dictionary[AccessPath, TypeSymbol]?)
@@ -1062,7 +1116,7 @@ internal partial class StatementBinder {
                 return nil
             }
             let aliasesAtEntry = aliases.ToArray()
-            let mutations = AssignedRootsCollector(AssignmentPreservesNarrowing, aliasesAtEntry)
+            let mutations = NewCollector(AssignmentPreservesNarrowing, aliasesAtEntry)
             mutations.Visit(statement)
             ApplyMutationsToState(state, mutations)
             ApplyCallableAliasExitState(aliases, statement, aliasesAtEntry, mutations)
@@ -1076,7 +1130,7 @@ internal partial class StatementBinder {
                 entry.Key.Root,
                 entry.Value
             ) ||
-                (entry.Key.HasMembers && mutations.MayMutateMemberPaths) ||
+                (DropsOnMemberMutation(entry.Key) && mutations.MayMutateMemberPaths) ||
                 mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value) {
                 state.Remove(entry.Key)
             }
@@ -1107,7 +1161,7 @@ internal partial class StatementBinder {
                     entry.Key.Root,
                     entry.Value
                 ) ||
-                    (entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths) ||
+                    (DropsOnMemberMutation(entry.Key) && summary.Mutations.MayMutateMemberPaths) ||
                     summary
                     .Mutations
                     .InvalidatesNarrowing(entry.Key.Root, entry.Value) {
@@ -1128,7 +1182,7 @@ internal partial class StatementBinder {
                 entry.Key.Root,
                 entry.Value
             ) ||
-                (entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths) ||
+                (DropsOnMemberMutation(entry.Key) && summary.Mutations.MayMutateMemberPaths) ||
                 summary
                 .Mutations
                 .InvalidatesNarrowing(entry.Key.Root, entry.Value) {
@@ -1433,7 +1487,17 @@ internal partial class StatementBinder {
                 return false
             }
             case BoundExpressionStatement{Expression: BoundAssignmentExpression assign} {
+                // The right-hand side can write other roots, aliases included.
+                ClearAssignedRoots(assign, state, callableAliases)
                 if TryClassifyNonNullAssignment(assign, out var local, out var underlying) {
+                    RemoveSharingStorage(
+                        state,
+                        Invariant.Required(
+                            local,
+                            "a successful assignment narrowing has a variable",
+                            expression: "local"
+                        )
+                    )
                     state[
                         AccessPath.ForVariable(
                             Invariant.Required(
@@ -1450,7 +1514,7 @@ internal partial class StatementBinder {
                 } else if assign.Variable != nil {
                     // Any other assignment to a tracked local (nullable value,
                     // value type, …) drops its narrowing.
-                    RemoveByRoot(state, assign.Variable)
+                    RemoveSharingStorage(state, assign.Variable)
                 }
                 return true
             }
@@ -1555,9 +1619,7 @@ internal partial class StatementBinder {
     // unrelated locals after any call to a local lambda.
     private func MayBeMutatedByUnknownCallable(path AccessPath) bool -> path.HasMembers ||
         (
-        !path
-            .Root
-            .IsReadOnly &&
+        (!path.Root.IsReadOnly || IsByReferenceRoot(path.Root)) &&
             (
             path.Root is not(LocalVariableSymbol or ParameterSymbol) ||
                 IsByReferenceRoot(path.Root) ||
@@ -1566,7 +1628,8 @@ internal partial class StatementBinder {
     )
 
     private func MayBeMutatedByUnknownWrite(mutations AssignedRootsCollector, path AccessPath) bool -> (
-        mutations.MayMutateAnyRootViaPointer && (path.HasMembers || !path.Root.IsReadOnly)
+        mutations.MayMutateAnyRootViaPointer &&
+            (path.HasMembers || !path.Root.IsReadOnly || IsByReferenceRoot(path.Root))
     ) ||
         (mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(path))
 
@@ -1581,12 +1644,12 @@ internal partial class StatementBinder {
             return nil
         }
         let before = HashSet[VariableSymbol](externalCallableAliases)
-        let collector = AssignedRootsCollector(nil, externalCallableAliases)
+        let collector = NewCollector(nil, externalCallableAliases)
         collector.VisitExpression(header)
         if collector.MayMutateAnyRootViaPointer {
             externalCallableAliases.Clear()
         }
-        externalCallableAliases.ExceptWith(collector.Roots)
+        RemoveAssignedAliases(externalCallableAliases, collector)
         if collector.MayMutateAnyRoot {
             externalCallableAliases.RemoveWhere(binderCtx.MayBeAssignedByClosure)
         }
@@ -1608,7 +1671,7 @@ internal partial class StatementBinder {
         if state.Count == 0 {
             return
         }
-        let collector = AssignedRootsCollector(nil, callableAliases ?? externalCallableAliases)
+        let collector = NewCollector(nil, callableAliases ?? externalCallableAliases)
         collector.Visit(node)
         if node.Syntax is {} syntax && (collector.MayMutateMemberPaths || collector.ContainsTry) {
             let filters = CollectCatchFiltersAbove(syntax)
@@ -1637,6 +1700,12 @@ internal partial class StatementBinder {
         }
         for root in collector.Roots {
             RemoveByRoot(state, root)
+        }
+        for path in state
+            .Keys
+            .Where((path AccessPath) -> collector.SharesStorageWithAssignedRoot(path.Root))
+            .ToArray() {
+            state.Remove(path)
         }
     }
 
@@ -1671,11 +1740,14 @@ internal partial class StatementBinder {
         private let enclosingGlobalAssignments Stack[VariableSymbol] = Stack[VariableSymbol]()
         private var globalMutationProtectedRoots HashSet[VariableSymbol]?
         private var tryAssignedVariables HashSet[VariableSymbol]?
+        private let mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?
 
         init(
             assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?,
-            externalFunctionValues IEnumerable[VariableSymbol]? = nil
+            externalFunctionValues IEnumerable[VariableSymbol]? = nil,
+            mayShareStorage((VariableSymbol, VariableSymbol) -> bool)? = nil
         ) {
+            this.mayShareStorage = mayShareStorage
             Roots = HashSet[VariableSymbol]()
             WritableReferenceRoots = HashSet[VariableSymbol]()
             this.assignmentPreservesNarrowing = assignmentPreservesNarrowing
@@ -1833,8 +1905,27 @@ internal partial class StatementBinder {
             base.VisitExpression(node)
         }
 
+        // ADR-0208 R12 (#5171): whether [`root`](paramref) may name the storage of another
+        // assigned root: one decision for every invalidation site (StatementBinder.MayShareStorage).
+        func SharesStorageWithAssignedRoot(root VariableSymbol) bool {
+            for assigned in Roots {
+                if object.ReferenceEquals(assigned, root) {
+                    continue
+                }
+                if mayShareStorage != nil {
+                    if mayShareStorage!!(assigned, root) {
+                        return true
+                    }
+                } else if StatementBinder.SharesStorage(assigned, root) {
+                    return true
+                }
+            }
+            return false
+        }
+
         func AssignsRoot(root VariableSymbol) bool {
             return Roots.Contains(root) ||
+                SharesStorageWithAssignedRoot(root) ||
                 (
                 root is ImplicitFieldVariableSymbol field && assignedFields.Contains(
                     AssignedField(field.Receiver, field.Field)
@@ -1865,6 +1956,11 @@ internal partial class StatementBinder {
             }
             if !Roots.Contains(root) {
                 return AssignsRoot(root)
+            }
+            // Another assigned root may name the same storage, so the preserving proof of this
+            // root alone is not enough.
+            if SharesStorageWithAssignedRoot(root) {
+                return true
             }
             return !SmartCastStability.IsAssignmentNarrowingRoot(root) ||
                 assignmentPreservesNarrowing == nil ||
@@ -1939,6 +2035,10 @@ internal partial class StatementBinder {
 
         protected open override func VisitPropertyPattern(node BoundPropertyPattern) {
             for field in node.Fields {
+                // A computed property of a pattern runs its getter.
+                if field.Property is {} property && !property.IsAutoProperty {
+                    MarkMayMutateGlobalRoots()
+                }
                 VisitPossiblySkipped(() -> VisitPattern(field.Pattern))
             }
         }
@@ -2327,6 +2427,8 @@ internal partial class StatementBinder {
         }
 
         private func MarkMayMutateGlobalRoots() {
+            // User code can also write members and the storage behind by-reference aliases.
+            MayMutateMemberPaths = true
             MayMutateGlobalRoots = true
             let protectedRoots = enclosingGlobalAssignments.ToHashSet()
             if globalMutationProtectedRoots == nil {
@@ -2372,6 +2474,21 @@ internal partial class StatementBinder {
 
         protected open override func VisitAssignmentExpression(node BoundAssignmentExpression) {
             if node.Variable != nil {
+                // ADR-0208 R12 (#5171): a callable stored through a `ref` alias is stored in every
+                // variable that shares its storage, and the callee is unknown.
+                if mayShareStorage != nil {
+                    for other in functionLiterals
+                        .Keys
+                        .Concat(externalFunctionValues)
+                        .Concat(unknownFunctionValues)
+                        .ToArray() {
+                        if !object.ReferenceEquals(other, node.Variable) && mayShareStorage!!(node.Variable, other) {
+                            functionLiterals.Remove(other)
+                            externalFunctionValues.Remove(other)
+                            unknownFunctionValues.Add(other)
+                        }
+                    }
+                }
                 writableReferenceAliases.Remove(node.Variable)
                 tryAssignedVariables?.Add(node.Variable)
                 let externalCallable = IsExternalCallable(node.Expression)
@@ -2637,10 +2754,10 @@ internal partial class StatementBinder {
     ) : IEquatable[FinallyFlowSummary] { }
 
     private class LoopBackEdgeMutationCollector : AssignedRootsCollector {
-        init(assignmentPreservesNarrowing(BoundAssignmentExpression, TypeSymbol) -> bool) : base(
-            assignmentPreservesNarrowing,
-            nil
-        ) { }
+        init(
+            assignmentPreservesNarrowing(BoundAssignmentExpression, TypeSymbol) -> bool,
+            mayShareStorage(VariableSymbol, VariableSymbol) -> bool
+        ) : base(assignmentPreservesNarrowing, nil, mayShareStorage) { }
     }
 
     private func HasInternallyReachableFallthrough(statement BoundStatement) bool {
@@ -4163,6 +4280,12 @@ internal partial class StatementBinder {
                 case VariableDeclarationSyntax{HasRefKindModifier: true, Initializer: {} initializer} {
                     CollectAllNames(initializer, names)
                 }
+                // `managed(x)` makes a persistent address of its operand.
+                case persistent is CallExpressionSyntax when persistent.Identifier.Text == "managed" {
+                    for argument in persistent.Arguments {
+                        CollectAllNames(argument, names)
+                    }
+                }
             }
             for child in node.GetChildren() {
                 CollectAddressTakenNames(child, names)
@@ -4176,6 +4299,88 @@ internal partial class StatementBinder {
             for child in node.GetChildren() {
                 CollectAllNames(child, names)
             }
+        }
+
+        /// ADR-0208 R12 (#5171): the plain variable that the `ref` local
+        /// [`root`](paramref) names in its initializer, or `null` when
+        /// [`root`](paramref) is not such a local.
+        internal func TryGetAliasedRoot(root VariableSymbol) VariableSymbol? {
+            if !(root is LocalVariableSymbol local) || local.RefKind == RefKind.None {
+                return nil
+            }
+            var origin BoundExpression? = local.ManagedReferenceOrigin
+            while true {
+                if origin is BoundConversionExpression conversion {
+                    origin = conversion.Expression
+                } else if origin is BoundUnaryExpression unary &&
+                    unary
+                    .Op
+                    .Kind == BoundUnaryOperatorKind.NullAssertion {
+                    origin = unary.Operand
+                } else {
+                    break
+                }
+            }
+            return (origin as BoundVariableExpression)?.Variable
+        }
+
+        // The receiver of a struct method is the caller's storage, although its RefKind is None.
+        private func IsValueTypeReceiver(parameter ParameterSymbol) bool -> parameter.IsReceiverParameter &&
+            parameter.Type is StructSymbol{IsClass: false}
+
+        /// ADR-0208 R12 (#5171): [`root`](paramref) followed by the variables
+        /// it aliases through plain `ref` local initializers.
+        internal func AliasChain(root VariableSymbol) List[VariableSymbol] {
+            let chain = List[VariableSymbol]()
+            chain.Add(root)
+            var current = TryGetAliasedRoot(root)
+            while current != nil && !chain.Contains(current) {
+                chain.Add(current)
+                current = TryGetAliasedRoot(current)
+            }
+            return chain
+        }
+
+        /// ADR-0208 R12 (#5171): whether [`root`](paramref) may name storage
+        /// that no other root names: a by-reference parameter, whose caller may
+        /// pass an element or a member, or a `ref` local whose initializer is
+        /// not a plain variable. A member, index or indirect write and any call
+        /// can change that storage.
+        internal func IsExternalStorageAlias(root VariableSymbol) bool {
+            if root is ParameterSymbol parameter {
+                return parameter.RefKind != RefKind.None || IsValueTypeReceiver(parameter)
+            }
+            if !(root is LocalVariableSymbol local) || local.RefKind == RefKind.None {
+                return false
+            }
+            let chain = AliasChain(root)
+            let last = chain[chain.Count - 1]
+            if last is ParameterSymbol lastParameter {
+                return lastParameter.RefKind != RefKind.None || IsValueTypeReceiver(lastParameter)
+            }
+            if last is LocalVariableSymbol lastLocal {
+                return lastLocal.RefKind != RefKind.None
+            }
+            // A mutable global or field can be written by any call.
+            return !last.IsReadOnly
+        }
+
+        /// ADR-0208 R12 (#5171): whether [`first`](paramref) and [`second`](paramref) may name one
+        /// storage: the same variable, an overlapping alias chain, or two external-storage aliases.
+        internal func SharesStorage(first VariableSymbol, second VariableSymbol) bool {
+            if object.ReferenceEquals(first, second) {
+                return true
+            }
+            if IsExternalStorageAlias(first) && IsExternalStorageAlias(second) {
+                return true
+            }
+            let secondChain = AliasChain(second)
+            for member in AliasChain(first) {
+                if secondChain.Contains(member) {
+                    return true
+                }
+            }
+            return false
         }
 
         /// ADR-0208 R11 (#5170): whether constructing [`type`](paramref) can run user code: a
@@ -4197,6 +4402,11 @@ internal partial class StatementBinder {
             }
             return false
         }
+
+        /// ADR-0208 R12 (#5171): whether a member, index or indirect write, or a
+        /// call, invalidates the narrowing of [`path`](paramref).
+        internal func DropsOnMemberMutation(path AccessPath) bool -> path.HasMembers ||
+            IsExternalStorageAlias(path.Root)
 
         /// Returns whether an expression kind can invoke user code or assign
         /// through a member-bearing path.

@@ -214,7 +214,7 @@ internal partial class StatementBinder {
             ShadowApplyEffects(flow, ShadowEffectsOf(initializer, flow.Current))
         }
         if header != nil {
-            let collector = AssignedRootsCollector(nil, externalCallableAliases)
+            let collector = NewCollector(nil, externalCallableAliases)
             collector.VisitExpression(header)
             ShadowApplyEffects(flow, ShadowSnapshotEffects(collector, flow.Current))
         }
@@ -336,7 +336,7 @@ internal partial class StatementBinder {
         if flow == nil || guard_ == nil {
             return
         }
-        let collector = AssignedRootsCollector(nil, externalCallableAliases)
+        let collector = NewCollector(nil, externalCallableAliases)
         collector.VisitExpression(guard_)
         ShadowApplyEffects(flow, ShadowSnapshotEffects(collector, flow.Current))
     }
@@ -384,7 +384,7 @@ internal partial class StatementBinder {
     // the paths of a state: a root of such a path counts as assigned when the
     // collector says so, which also covers implicit field and property roots.
     private func ShadowEffectsOf(statement BoundStatement, relevant NarrowingState? = nil) StatementEffects {
-        let collector = AssignedRootsCollector(nil, externalCallableAliases)
+        let collector = NewCollector(nil, externalCallableAliases)
         collector.Visit(statement)
         return ShadowSnapshotEffects(collector, relevant)
     }

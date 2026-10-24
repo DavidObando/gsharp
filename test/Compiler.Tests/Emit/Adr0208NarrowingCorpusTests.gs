@@ -20,11 +20,9 @@ import Xunit
 /// @remarks A row records the exact diagnostics (id, line and column, the
 /// shared GS9100 note excluded). A program that compiles is verified with
 /// ILVerify and run. Its output, or its `NullReferenceException`, is the
-/// result. The soundness rows (d4, d4b, f2, g2) compile today and dereference
-/// nil at run time (bug #5171). They pin that defect so that the PR that closes
-/// it flips them in the same change. The rows cA, d1, d1b and f3 (bug #5168,
-/// R10) and d3, d3b and f5 (bug #5170, R11) were flipped by their fixes and now
-/// record GS0158.
+/// result. The soundness rows (cA, d1, d1b, d3, d3b, d4, d4b, f2, f3, f5, g2)
+/// pinned run-time crashes (bugs #5168, #5170 and #5171). Each fix flipped its
+/// rows in the same change, and they now record GS0158.
 /// Each row names the row of ADR-0208 section 16 that changes it, if any.
 open class Adr0208NarrowingCorpusTests {
     /// Compiles one probe, checks its diagnostics, and for a program that
@@ -437,7 +435,7 @@ func Run() int32 {
     x = nil
     return a.Value
 }
-func Main() { Console.WriteLine(Run()) }`, "", "nre", "", "R12 (GS0158 after)"}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@9:14", "reject", "", ""}
             yield[]object{"d4_ref_local_alias", `class C {
     var Value int32 = 1
 }
@@ -452,7 +450,7 @@ func Run(n int32) int32 {
     }
     return total
 }
-func Main() { Console.WriteLine(Run(2)) }`, "", "nre", "", "R12 (GS0158 after)"}
+func Main() { Console.WriteLine(Run(2)) }`, "GS0158@10:27", "reject", "", ""}
             yield[]object{"d5_strengthened_fact_join", `open class Animal {
     var Name string = "a"
 }
@@ -792,7 +790,7 @@ func Run() int32 {
     xs[0] = nil
     return a.Value
 }
-func Main() { Console.WriteLine(Run()) }`, "", "nre", "", "R12 (GS0158 after)"}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@9:14", "reject", "", ""}
             yield[]object{"f3_replacement_exception_filter", `func Get() string? { return "a" }
 func Clear(ref s string?) bool {
     s = nil
@@ -883,7 +881,7 @@ func Run(ref a C?, xs []C?) int32 {
 func Main() {
     var xs = []C?{C{}}
     Console.WriteLine(Run(ref xs[0], xs))
-}`, "", "nre", "", "R12 (GS0158 after)"}
+}`, "GS0158@7:14", "reject", "", ""}
             yield[]object{"g3_switch_failed_guard", `func Get() string? { return "a" }
 func Clear(ref s string?) bool {
     s = nil
