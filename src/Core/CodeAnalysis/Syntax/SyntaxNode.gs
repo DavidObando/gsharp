@@ -252,11 +252,13 @@ abstract class SyntaxNode {
     /// Gets the last token in this syntax node.
     /// @returns A (cref:SyntaxToken).
     func GetLastToken() SyntaxToken {
-        if this is SyntaxToken token {
-            return token
-        }
+        // A loop, not a recursion: a long chain of operators must not overflow the call stack.
         // A syntax node should always contain at least 1 token.
-        return GetLastChild().GetLastToken()
+        var node = this
+        while !(node is SyntaxToken) {
+            node = node.GetLastChild()
+        }
+        return cast[SyntaxToken](node)
     }
 
     /// Gets the child that holds the last token of this node. This is the last child in the list.
@@ -269,11 +271,13 @@ abstract class SyntaxNode {
     /// Gets the first token in this syntax node.
     /// @returns A (cref:SyntaxToken).
     func GetFirstToken() SyntaxToken {
-        if this is SyntaxToken token {
-            return token
-        }
+        // A loop, not a recursion: a long chain of operators must not overflow the call stack.
         // A syntax node should always contain at least 1 token.
-        return GetChild(0).GetFirstToken()
+        var node = this
+        while !(node is SyntaxToken) {
+            node = node.GetChild(0)
+        }
+        return cast[SyntaxToken](node)
     }
 
     /// ```xmldoc

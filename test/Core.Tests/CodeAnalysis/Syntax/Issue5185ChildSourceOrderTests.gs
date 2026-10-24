@@ -207,6 +207,12 @@ open class Issue5185ChildSourceOrderTests {
         let source = "package p\nfunc F(x int32?) int32 { return x" + string.Concat(Enumerable.Repeat("!!", 20000)) +
             " }\n"
         let tree = SyntaxTree.Parse(source)
+        let negatedSource = "package p\nfunc F(a object) bool { return a" + " !is Dog" + " }\n"
+        let negatedTree = SyntaxTree.Parse(negatedSource)
+        var firstText = ""
+        var lastText = ""
+        var negatedFirst = ""
+        var negatedLast = ""
         var failure Exception? = nil
         var spanLength = 0
         var visited = 0
@@ -214,6 +220,14 @@ open class Issue5185ChildSourceOrderTests {
             () -> {
                 try {
                     spanLength = tree.Root.Span.Length
+                    // The outermost unary expression of a long chain: its first and last token are
+                    // found by a loop, not by one call per operator.
+                    let outer = Descendants(tree.Root).OfType[UnaryExpressionSyntax]().First()
+                    firstText = outer.GetFirstToken().Text
+                    lastText = outer.GetLastToken().Text
+                    let negated = Descendants(negatedTree.Root).OfType[UnaryExpressionSyntax]().First()
+                    negatedFirst = negated.GetFirstToken().Text
+                    negatedLast = negated.GetLastToken().Text
                     for node in Descendants(tree.Root) {
                         visited++
                     }
@@ -225,7 +239,11 @@ open class Issue5185ChildSourceOrderTests {
         )
         thread.Start()
         thread.Join()
-        Assert.Null(failure)
+        Assert.True(failure == nil, failure?.ToString() ?? "")
+        Assert.Equal("x", firstText)
+        Assert.Equal("!!", lastText)
+        Assert.Equal("a", negatedFirst)
+        Assert.Equal("Dog", negatedLast)
         Assert.True(spanLength > 40000)
         Assert.True(visited > 40000, "visited only $visited nodes")
     }
