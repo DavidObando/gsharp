@@ -49,7 +49,7 @@ public unless marked otherwise, so `Binder`, `BoundScope`, `BoundGlobalScope`,
 public at the CLR level and sit in the public-API snapshot
 (`test/Core.Tests/Baselines/gsharp-core-public-api.txt`). The
 `InternalsVisibleTo` grant to `GSharp.LanguageServer` (`src/Core/Core.gsproj:19`)
-unlocks exactly eleven members (section 2, table 2c). `test/LanguageServer.Tests`
+unlocks thirteen members in eleven groups (section 2, table 2c). `test/LanguageServer.Tests`
 has no grant and still compiles against `BoundProgram`, `GetBoundNode` and
 about fifteen `Bound*Expression` types.
 
@@ -106,7 +106,8 @@ a cancellation token.
 | B. Implementation types that are public by default | `Compilation.GlobalScope` (`.Functions`, `.Structs`, `.Interfaces`, `.Enums`, `.Delegates`, `.Variables`, `.TypeAliases`, `.Packages`, `.GetCumulativeImports()`, `.Diagnostics`); `Compilation.BoundProgram` (`.Functions`, `.Statement`, `.Structs`, `.Diagnostics`); about 25 `Bound*` node types; `Binder.TryInferExpressionType`; `BoundBodyCache`, `IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit`, `Compilation.BodyCache`/`.ReusedGlobalScope`/`.DirtyBodyTrees`; `ReferenceResolver.TryResolveType`/`.TryGetAssemblyPath`/`.ExportMetadataIndex`/`.TryUseMetadataIndex`; `ReferenceMetadataIndex`; `TypeMemberModel` (`LookupMember`, `GetMethods`, `EnumerateMembers`, `TryGetPropertyWithOwner`, ...); `ClrTypeUtilities.SafeGet*`; `Symbol.ClrType` (38 reads, ADR-0209 §1) | `SemanticLookup`, `HoverComputer`, `BoundSemantics`, `ProjectState`, `ColdStartCache`, `CrossAssemblyDefinitionResolver`, `ImportedClrMemberResolver`, `DocumentSyncHandler`, `CodeActionComputer`, `LspServer` |
 | C. `internal` members (need the grant) | table 2c | `BoundSemantics`, `SemanticLookup` |
 
-**2c. The eleven `internal` members behind the grant.**
+**2c. The `internal` members behind the grant** (thirteen members in eleven
+rows; the `StaticQualifier*` row holds three).
 
 | Member | Server site | Purpose |
 | --- | --- | --- |
@@ -280,6 +281,9 @@ class Compilation {
     func GetDeclarationDiagnostics(cancellationToken CancellationToken = default(CancellationToken)) ImmutableArray[Diagnostic]
     func GetDiagnostics(cancellationToken CancellationToken = default(CancellationToken)) ImmutableArray[Diagnostic]
 
+    // A declared type by its metadata name (package-qualified, nested types with `+`), or nil.
+    func GetTypeByMetadataName(fullyQualifiedMetadataName string) TypeSymbol?
+
     // Unchanged: GetSemanticModel(tree), References, SyntaxTrees, AssemblyName, Submission, WorkBudget, Emit, ...
     // Removed from the public surface: BodyCache, ReusedGlobalScope, DirtyBodyTrees.
 }
@@ -294,10 +298,24 @@ class Compilation {
   inherit the cache. The body cache is created by the first successor factory
   call and never by a constructor, so `gsc` has none, exactly as today.
 - `GetDiagnostics` returns `GlobalScope.Diagnostics` then
-  `BoundProgram.Diagnostics` through `ApplySourceSuppressions`, in the order
-  `Emit` reports them; `GetDeclarationDiagnostics` stops at the global scope.
-  Documentation validation and analyzers stay with their drivers
-  (`DocumentationValidator`, `GSharpAnalyzerDriver`), as `gsc` runs them.
+  `BoundProgram.Diagnostics` through `ApplySourceSuppressions`, then, when no
+  error is present, the documentation diagnostics under
+  `WarnOnMissingDocumentation`, exactly as `Emit`'s `PrepareForEmit` does
+  (`Compilation.gs:620-631`); the order is the order `Emit` reports.
+  `GetDeclarationDiagnostics` stops at the global scope. The server's own
+  `DocumentationValidator.Validate(…, program.Functions.Keys, program.Structs, …)`
+  call (`DocumentSyncHandler.gs:149-156`) goes with it. Analyzers stay with
+  `GSharpAnalyzerDriver.Run(compilation, …)`, which already takes the
+  compilation. `GetDiagnostics()` is also the warm-up the server runs after
+  workspace discovery (`WorkspaceInitializer.gs:83-95` forces `BoundProgram`
+  today).
+- `GetTypeByMetadataName` answers the sibling-project lookup of
+  `CrossAssemblyDefinitionResolver` (`:377-607` scans a sibling's
+  `GlobalScope` for a type by package and name) by the name the emitter
+  writes; it is the Roslyn query of that name. The implementation feature's
+  "structs implementing an interface" scan (`LspServer.gs:1488-1519`) becomes a
+  walk of the trees' type declarations through `GetDeclaredSymbol`, so no
+  enumeration query is added.
 
 **7b. `SemanticModel` (`CodeAnalysis/SemanticModel.gs`).** Existing queries
 widen; five are added.
@@ -381,7 +399,7 @@ where it is (open question Q5).
 | Object | Owner | Lifetime | Mutability | Threads | Cancellation |
 | --- | --- | --- | --- | --- | --- |
 | `Compilation` | the host (the server's `ProjectState`, `gsc`, the REPL engine) | until superseded by a successor or dropped | options are set before the first query and never after (today's public setters stay; the server sets them only at construction, open question Q13); `GlobalScope`, `BoundProgram`, `DiagnosticSuppressions` and the semantic models are lazily built and published once | any thread may query; lazy builds become single-flight (a lock around the build, publication after it) so concurrent first readers wait instead of binding twice | the lazy builds run under `WorkBudget.CancellationToken`; a cancelled build publishes nothing and throws `OperationCanceledException` to every waiter; the next query builds again |
-| successor `Compilation` from `ReplaceSyntaxTree`/`Add`/`Remove` | the host | as above | the predecessor is **retired**: `ReplaceSyntaxTree` may retarget the predecessor's symbols at the new tree (today's in-place repoint); a retired compilation still answers queries from state it already built, but symbol declaration spans of the edited file refer to the new tree. The host that holds the predecessor is the one that called the factory, so it alone decides when readers may still use it (`ProjectState` replaces its cached compilation under `compilationLock` today) | as above | the host cancels the predecessor's `WorkBudget` token when it retires it, which releases any waiter on a bind that is no longer wanted |
+| successor `Compilation` from `ReplaceSyntaxTree`/`Add`/`Remove` | the host | as above | the successor copies every option of the predecessor (`References`, `Nullability`, `PlatformNilChecks`, `IsLibrary`, `Optimize`, `PreprocessorSymbols`, `ImplicitSystemImport`, `AssemblyName`, `Submission`, `Logger`, `DebugInformation`, `WarnOnMissingDocumentation`, `EmbeddedResources`) except `WorkBudget`, which the host sets on the successor before its first query because it owns the token. The predecessor is **retired**: `ReplaceSyntaxTree` may retarget the predecessor's symbols at the new tree (today's in-place repoint); a retired compilation still answers queries from state it already built, but symbol declaration spans of the edited file refer to the new tree, and a query that needs state it never built throws `OperationCanceledException` once its token is cancelled. The host that holds the predecessor is the one that called the factory, so it alone decides when readers may still use it (`ProjectState` replaces its cached compilation under `compilationLock` today) | as above | the host cancels the predecessor's `WorkBudget` token when it retires it, which releases any waiter on a bind that is no longer wanted |
 | `WithReplacedSyntaxTree` result | the host | one request | never retargets the predecessor; no shared body cache | as above | as above |
 | body cache (`internal`) | the compilation chain, created by the first successor factory | the chain | thread-safe (`ConcurrentDictionary`); O(members) by eviction of a member's previous key; soundness by `ReferenceEquals(entry.Member, member)` and the body hash, as ADR-0105 states | any body-binding thread | none needed |
 | `SemanticModel` | its `Compilation` (`ConditionalWeakTable` per tree) | the compilation's | immutable after its index is built; the index is a `Lazy` (`ExecutionAndPublication`) | concurrent reads | each query checks its token before forcing the index; the index build runs under the first caller's token, and a cancelled build is not cached (the `Lazy` is replaced with a lock and a nullable field so an `OperationCanceledException` does not poison the model) |
@@ -399,10 +417,10 @@ cache or a reused scope exists.
 | Piece | Target home | Visibility | Snapshot entries affected (`gsharp-core-public-api.txt`) |
 | --- | --- | --- | --- |
 | `BoundBodyCache`, `BoundBodyCacheKey` | `src/Core/CodeAnalysis/Binding/Incremental/` | `internal`; `TryCreateKey` and the `Hits`/`Misses`/`Stores` counters, unused in production, deleted or `internal` for tests | remove `BoundBodyCache` (`:1696`), `BoundBodyCacheKey` (`:8387`), `Compilation.BodyCache` get/set (`:339, 365, 386`), the `BindProgram` overloads that take a cache (`:1467-1469`) |
-| `IncrementalGlobalScopeReuse` | `Binding/Incremental/` | `internal`, called only by `Compilation.ReplaceSyntaxTree` | remove `IncrementalGlobalScopeReuse` (`:8081`), `Compilation.ReusedGlobalScope`/`DirtyBodyTrees` get/set (`:340-341, 376, 388`, and the `DirtyBodyTrees` lines) |
+| `IncrementalGlobalScopeReuse` | `Binding/Incremental/` | `internal`, called only by `Compilation.ReplaceSyntaxTree` | remove `IncrementalGlobalScopeReuse` (`:8081`), `Compilation.ReusedGlobalScope` get/set/property (`:341, 376, 388`), `Compilation.DirtyBodyTrees` get/set/property (`:359, 367, 399`) |
 | nine `RepointDeclaration` methods | unchanged | `internal` | none |
 | `Binder.TryInferExpressionType` | `SemanticModel.GetSpeculativeTypeInfo`; the `Binder` member is deleted | n/a | remove `:1470`; add the `SemanticModel` methods of 7b to the `SemanticModel` block (`:4249-4262`) |
-| `Compilation` successor factories and diagnostics queries | `Compilation.gs` | public | add to the `Compilation` block (`:332-390`) |
+| `Compilation` successor factories, diagnostics queries, `GetTypeByMetadataName` | `Compilation.gs` | public | add to the `Compilation` block (`:332-399`) |
 | body-cache plumbing in `Binder` (parameters on six `Bind*Body` methods, about 25 call sites) | after #5140 PR 1: a `BodyBindingOptions(cache, dirtyTrees)` value on `BindingServices`, read by `BindBodyWithCache`; `Binder.gs` has no `cache` or `dirtyTrees` parameter | `internal` | the `BindProgram(globalScope, references)` overload stays public (open question Q2) |
 | submission binding (section 3) | stays in Core, isolated: `Binder.Submissions.gs`, `ExpressionBinder.Submissions.gs`, `OverloadResolver.Submissions.gs`, `BoundScope.Submissions.gs`, each a partial of its class, reached through one `internal` door class `SubmissionBinding` whose methods take the scope and return `false` when `SubmissionImports` is nil; the nil checks in the hot paths (`BoundScope.gs:556-769`, `ExpressionBinder.gs:675-681`, `CallBinding.gs:521-535`) become one `SubmissionBinding.TryX(...)` call each | `internal` | none |
 | `SubmissionImports`, `SubmissionReference`, `SubmissionBindingOptions`, `SubmissionGlobalTypeProjection` | `Binding/Submissions/` | public (the REPL and `EmittedOracle` construct them); projection stays `internal` | none (a folder move) |
@@ -456,9 +474,11 @@ the intended reading.
 2. **Binding reference gate.** A new `LanguageServer.Tests` test reads
    `GSharp.LanguageServer.dll` with `System.Reflection.Metadata` (the
    technique of `CorePublicApiSnapshotTests`) and asserts that no `TypeRef`
-   row names a type in `GSharp.Core.CodeAnalysis.Binding`. It is added red
-   in slice S2 with an allowance list of the types still referenced, the
-   list shrinks per slice, and it is empty in S7. The same test asserts that
+   row names a type in `GSharp.Core.CodeAnalysis.Binding`. It is added green
+   in slice S2 with an allowance list of the types still referenced at that
+   point; each later slice shrinks the list, and S7 empties it. A type that
+   is not on the list and is referenced fails the test, so no slice can add a
+   reach-in. The same test asserts that
    `GSharp.Core.dll` carries no `InternalsVisibleTo("GSharp.LanguageServer")`
    row after S7.
 3. **`Binder.gs` gate** (S8): `grep -c -E 'submission|Submission|BoundBodyCache|dirtyTrees|GetCumulativeImports' src/Core/CodeAnalysis/Binding/Binder.gs` is 0; the `previous` parameter remains only in the public overload signatures and the one `ArgumentException`.
@@ -481,12 +501,12 @@ shippable in the order given. "After" names the merge it needs.
 | # | Content | After | Acceptance beyond the gates | ADR-0154 witness (mutant) |
 | --- | --- | --- | --- | --- |
 | S0 | Move `InteractiveSessionHost` and `SubmissionRunResult` to `src/Repl/Engine/`; snapshot and release note | none | `Interpreter.Tests` green; `src/Core/CodeAnalysis/Execution` no longer mentions submissions | n/a (a move; the existing REPL tests are the oracle) |
-| S1 | `Compilation.ReplaceSyntaxTree`, `AddSyntaxTrees`, `RemoveSyntaxTrees`, `WithReplacedSyntaxTree`; body cache and reuse `internal` under `Binding/Incremental/`; single-flight lazy builds; `ProjectState` migrated (factories, no `BoundBodyCache`/`ReusedGlobalScope`/`DirtyBodyTrees`); snapshot companion for the removed members | none | `IncrementalDeltaBindingTests` assert `Assert.Same(previous.GlobalScope, successor.GlobalScope)` on a body-only edit through `ReplaceSyntaxTree` and not through `WithReplacedSyntaxTree`; `declarations.reuses` equal before and after on the fixed edit script; snapshot compilations no longer evict live entries (a test over the hit counter, `internal` for tests) | drop the `ReferenceEquals(entry.Member, member)` gate in `TryReuse`: the ADR-0105 renamed-sibling test goes red; skip the skeleton diff in the repoint: the signature-edit test goes red |
-| S2 | `GetSymbolInfo` answers table 2c (folded constants, static qualifiers, backing fields, substituted properties, conversions, completions, constrained owners, parentheses); `GetMemberGroup`; `BoundSemantics` reduced to calls into the model; the binding reference gate added with its initial allowance list | none | `Issue4989BoundReceiverTests` re-pointed at `GetSymbolInfo`/`GetTypeInfo` and green; the eleven members of table 2c have no server caller | stop peeling `StaticConstantFieldRead` in `GetSymbolInfo`: the folded-constant hover test goes red; return the unsubstituted property: the constructed-receiver test goes red |
-| S3 | `GetEnclosingSymbol`, `LookupSymbols`; the server's scope reconstruction (`SemanticLookup.gs:479-1040`, `MapLocalVariables`, `MapTypeClauseReference`, `FindBoundNodes`) deleted; general completion and semantic tokens over the queries | S2 | `SemanticLookupIfLetGuardTests`, `Issue4219`, `Issue4967` and the completion tests green through the queries; `BuildModelForTest` and the incremental model counters deleted with the model | end an `if let` region at the block end instead of the guard: the guard test goes red; ignore declaration order: the use-before-declaration completion test goes red |
-| S4 | `LookupMembers`; member completion, hover member fallback, `ImportedClrMemberResolver` and the reflection member walks replaced; imported member types through the ADR-0193 readers | S2 | `ObjectInitializerHoverCompletionTests` and the member-completion tests green with the same item sets; GSA0007 green | skip inherited members: the inherited-member completion test goes red; read a member type through `FromClrType`: the ADR-0193 reader-agreement test goes red |
-| S5 | `GetSpeculativeTypeInfo`; `Binder.TryInferExpressionType` and `GetExpressionBindingContext` deleted; snapshot companion | S3 (for `LookupSymbols`); after #5140 PR 1 if it has merged, otherwise on the current constructor | initializer hover and completion tests green | ignore the in-scope locals: the local-receiver initializer test goes red |
-| S6 | `Compilation.GetDiagnostics`/`GetDeclarationDiagnostics`, `SemanticModel.GetDiagnostics`; `DocumentSyncHandler` and `CodeActionComputer` over them; `ProjectState` sets `WorkBudget` with a per-compilation token cancelled on supersede | S1 | `DocumentSyncHandlerTests` green with identical diagnostic sets and order; a test cancels a bind in flight and asserts the next query completes and the first waiter observed `OperationCanceledException` | drop the suppression filter from `GetDiagnostics`: the `@SuppressDiagnostic` test goes red; publish a partially built scope on cancellation: the cancellation test goes red |
+| S1 | `Compilation.ReplaceSyntaxTree`, `AddSyntaxTrees`, `RemoveSyntaxTrees`, `WithReplacedSyntaxTree`, `GetTypeByMetadataName`; body cache and reuse `internal` under `Binding/Incremental/`; single-flight lazy builds; `ProjectState` and `CrossAssemblyDefinitionResolver` migrated (factories, no `BoundBodyCache`/`ReusedGlobalScope`/`DirtyBodyTrees`, no sibling `GlobalScope` scan); snapshot companion for the removed and added members | none | `IncrementalDeltaBindingTests` assert `Assert.Same(previous.GlobalScope, successor.GlobalScope)` on a body-only edit through `ReplaceSyntaxTree` and not through `WithReplacedSyntaxTree`; `declarations.reuses` equal before and after on the fixed edit script; snapshot compilations no longer evict live entries (new test over the hit counter, `internal` for tests); `CrossProjectDefinitionTests` green | drop the `ReferenceEquals(entry.Member, member)` gate in `TryReuse`: `BoundBodyCacheTests.SoundnessGate_Blocks_Reuse_Across_Different_Scope_Instances` goes red; skip the skeleton diff in the repoint: `IncrementalGlobalScopeReuseTests.SignatureEdit_IsRejected_ByReuse` and `IncrementalDeltaBindingTests.SignatureEdit_FallsBackToFullRebuild` go red |
+| S2 | `GetSymbolInfo` answers table 2c (folded constants, static qualifiers, backing fields, substituted properties, conversions, completions, constrained owners, parentheses); `GetMemberGroup`; `BoundSemantics` reduced to calls into the model; the binding reference gate added with its initial allowance list | none | `Issue4989BoundReceiverTests` re-pointed at `GetSymbolInfo`/`GetTypeInfo` and green; the thirteen members of table 2c have no server caller | stop peeling `StaticConstantFieldRead` in `GetSymbolInfo`: `Issue4989BoundReceiverTests.Issue5035_BareConstantPrefix_PreservesExactMethodAndRange` goes red; return the unsubstituted property: `ObjectInitializerHoverCompletionTests.ComputeHover_OnClrInitializerProperty_ResolvesAgainstConstructedType` goes red |
+| S3 | `GetEnclosingSymbol`, `LookupSymbols`; the server's scope reconstruction (`SemanticLookup.gs:479-1040`, `MapLocalVariables`, `MapTypeClauseReference`, `FindBoundNodes`) deleted; general completion, semantic tokens and the implementation feature over the queries | S2 | `SemanticLookupIfLetGuardTests`, `Issue4219GenericLocalRecursionTests`, `Issue4967NullCoalescingAssignmentHoverTests` and `CompletionHandlerTests` green through the queries; `BuildModelForTest` and the incremental model counters deleted with the model | end an `if let` region at the block end instead of the guard: `SemanticLookupIfLetGuardTests.Statement_GuardAndThenUses_ResolveToTheBinding_ElseAndAfterToTheOuterLocal` goes red; ignore declaration order in `LookupSymbols`: a new completion test (a local used before its declaration is not offered) goes red |
+| S4 | `LookupMembers`; member completion, hover member fallback, `ImportedClrMemberResolver` and the reflection member walks replaced; imported member types through the ADR-0193 readers | S2 | `ObjectInitializerHoverCompletionTests`, `UnifiedMemberResolutionCharacterizationTests` and `CompletionHandlerTests` green with the same item sets; GSA0007 green | skip inherited members: `ObjectInitializerHoverCompletionTests.ComputeCompletions_InsideGSharpClassInitializerBlock_OffersInheritedAndOwnFieldsAndProperties` goes red; read a member type through `FromClrType`: `Adr0193NullabilityImportRuleTests` (Core.Tests) goes red |
+| S5 | `GetSpeculativeTypeInfo`; `Binder.TryInferExpressionType` and `GetExpressionBindingContext` deleted; snapshot companion | S3 (for `LookupSymbols`); after #5140 PR 1 if it has merged, otherwise on the current constructor | `ObjectInitializerHoverCompletionTests` green | ignore the in-scope locals: a new test (an initializer whose receiver is a local declared in the enclosing body) goes red |
+| S6 | `Compilation.GetDiagnostics`/`GetDeclarationDiagnostics` (with documentation diagnostics as `Emit` produces them), `SemanticModel.GetDiagnostics`; `DocumentSyncHandler` and `CodeActionComputer` over them; `WorkspaceInitializer` warms through `GetDiagnostics`; `ProjectState` sets `WorkBudget` with a per-compilation token cancelled on supersede | S1 | `DocumentSyncHandlerTests` green with identical diagnostic sets and order; a new test cancels a bind in flight and asserts the next query completes and the first waiter observed `OperationCanceledException` | drop the suppression filter from `GetDiagnostics`: `DocumentSyncHandlerTests.ComputeDiagnostics_HonoursSuppressDiagnosticForCompilerWarnings` goes red; drop the documentation pass: a new missing-documentation case goes red; publish a partially built scope on cancellation: the new cancellation test goes red |
 | S6b | `ProjectState` sets `Compilation.AssemblyName` (**behaviour change**: friend-assembly members become visible in the server as they are in `gsc`); release note | S6 | a `LanguageServer.Tests` case over a reference with `InternalsVisibleTo` to the project reports no false GS diagnostic | revert the assignment: the new test goes red |
 | S7 | Remove the `InternalsVisibleTo("GSharp.LanguageServer")` grant; binding reference gate allowance list empty; delete the dead server code (`SemanticLookup.SemanticModel`, remaining `Bound*` imports) | S2 to S6 | gate 2 green; `src/LanguageServer` has no `import GSharp.Core.CodeAnalysis.Binding` | n/a (the gate is the oracle) |
 | S8 | Binder consolidation: submission partials and the `SubmissionBinding` door; `BodyBindingOptions` on `BindingServices`; the `previous` walks deleted and a non-nil `previous` rejected; `Binding/Submissions/` folder | #5140 PR 1 | gate 3; `compiler-bench.py` parity on the three cells; `Interpreter.Tests` and the `EmittedOracle` population green | make the door return `false` for a prior-cell global write: `Issue3251IndexAssignmentSubmissionGlobalTests` goes red; keep a `previous` loop: no test, the deletion is covered by the parity gate |
@@ -571,7 +591,7 @@ server side; S8 waits for #5140 PR 1 and is the only slice that edits
 
 - The server asks semantic questions and gets symbols; about 2,000 lines of
   bound-tree interpretation, reflection member walks and scope reconstruction
-  leave the server, and the eleven `internal` reach-ins and the
+  leave the server, and the thirteen `internal` reach-ins and the
   `InternalsVisibleTo` grant go with them.
 - `SemanticModel` answers folded constants, static qualifiers, backing
   fields, member groups, position-based lookup and speculative binding for
@@ -637,7 +657,7 @@ server side; S8 waits for #5140 PR 1 and is the only slice that edits
   that lowering and emit read, and the test oracle depends on the seam;
   isolation inside Core is the behaviour-preserving step, and the
   static-import redesign (Q1) is the real simplification.
-- **Leave the server's parallel semantic model and only fix the eleven
+- **Leave the server's parallel semantic model and only fix the thirteen
   internals by making them public.** Rejected: it keeps two semantic models
   with one name, keeps the heuristics of table 2d (whole-program scans by
   name, declaration by name ignoring shadowing, message-text parsing) and
