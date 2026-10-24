@@ -398,11 +398,7 @@ internal partial class StatementBinder {
                 ) ||
                     (
                     if statementCollector != nil {
-                        DropsOnMemberMutation(
-                            key,
-                            dropAllMemberPaths,
-                            statementCollector.MayMutateReferenceStorage
-                        ) ||
+                        DropsOnMemberMutation(key, dropAllMemberPaths, statementCollector.MayMutateReferenceStorage) ||
                             (IsExternalStorageAlias(key.Root) && statementCollector.CallMayReachStorageOf(key.Root))
                     } else {
                         DropsOnMemberMutation(key, dropAllMemberPaths, dropAllMemberPaths)
@@ -1784,10 +1780,9 @@ internal partial class StatementBinder {
 
         // ADR-0208 R12 (#5292): the by-value operands (receiver and arguments) of the calls whose callee is
         // known: the type of each, and the variable it reads when it is a plain variable read.
-        private let callOperands List[(Type TypeSymbol?, Source VariableSymbol?)] = List[(
-            Type TypeSymbol?,
-            Source VariableSymbol?
-        )]()
+        private let callOperands List[(Type TypeSymbol?, Source VariableSymbol?)] = List[
+            (Type TypeSymbol?, Source VariableSymbol?)
+        ]()
 
         private func RecordCallOperands(call BoundExpression, arguments ImmutableArray[BoundExpression]) {
             if call is BoundUserInstanceCallExpression userCall {
@@ -1918,7 +1913,8 @@ internal partial class StatementBinder {
             }
             if StatementBinder.IsMemberStorageWriteExpression(node.Kind) ||
                 (
-                StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) && node is not BoundCallOperationExpression
+                StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) &&
+                    node is not BoundCallOperationExpression
             ) {
                 MayMutateReferenceStorage = true
             }
@@ -4469,7 +4465,8 @@ internal partial class StatementBinder {
             return MayHoldOtherStorage(left) || MayHoldOtherStorage(right)
         }
 
-        private func MayHoldOtherStorage(type TypeSymbol) bool -> type is TypeParameterSymbol or InterfaceSymbol ||
+        private func MayHoldOtherStorage(type TypeSymbol) bool -> type is TypeParameterSymbol or
+            InterfaceSymbol ||
             type is StructSymbol{IsClass: false} ||
             object.ReferenceEquals(type.ClrType, typeof(object)) ||
             (type.ClrType != nil && type.ClrType.IsValueType && !type.ClrType.IsPrimitive && !type.ClrType.IsEnum)
@@ -4481,7 +4478,8 @@ internal partial class StatementBinder {
             if object.ReferenceEquals(first, second) {
                 return true
             }
-            if IsExternalStorageAlias(first) && IsExternalStorageAlias(second) &&
+            if IsExternalStorageAlias(first) &&
+                IsExternalStorageAlias(second) &&
                 ByReferenceTypesMayOverlap(first.Type, second.Type) {
                 return true
             }
@@ -4531,11 +4529,10 @@ internal partial class StatementBinder {
                 (mayMutateReferenceStorage || (mayMutateMemberPaths && CallsMayWriteAliasedStorage(path.Root)))
         )
 
-        internal func DropsOnMemberMutation(path AccessPath, mutations AssignedRootsCollector) bool -> DropsOnMemberMutation(
-            path,
-            mutations.MayMutateMemberPaths,
-            mutations.MayMutateReferenceStorage
-        ) ||
+        internal func DropsOnMemberMutation(
+            path AccessPath,
+            mutations AssignedRootsCollector
+        ) bool -> DropsOnMemberMutation(path, mutations.MayMutateMemberPaths, mutations.MayMutateReferenceStorage) ||
             (IsExternalStorageAlias(path.Root) && mutations.CallMayReachStorageOf(path.Root))
 
         /// ADR-0208 R12 (#5292): whether a value of [`type`](paramref) can hold a reference through which a
@@ -4554,7 +4551,11 @@ internal partial class StatementBinder {
             if clr == nil {
                 return true
             }
-            return clr.IsArray || clr.IsByRef || clr.IsPointer || clr.IsByRefLike || clr.IsInterface ||
+            return clr.IsArray ||
+                clr.IsByRef ||
+                clr.IsPointer ||
+                clr.IsByRefLike ||
+                clr.IsInterface ||
                 clr.IsGenericParameter ||
                 object.ReferenceEquals(clr, typeof(object))
         }
@@ -4591,7 +4592,9 @@ internal partial class StatementBinder {
 
         /// ADR-0208 R12 (#5292): whether an expression kind writes through a member, index or indirect
         /// target, which can change the storage that a by-reference parameter names.
-        internal func IsMemberStorageWriteExpression(kind BoundNodeKind) bool -> kind == BoundNodeKind.FieldAssignmentExpression ||
+        internal func IsMemberStorageWriteExpression(
+            kind BoundNodeKind
+        ) bool -> kind == BoundNodeKind.FieldAssignmentExpression ||
             kind == BoundNodeKind.PropertyAssignmentExpression ||
             kind == BoundNodeKind.IndexAssignmentExpression ||
             kind == BoundNodeKind.ClrPropertyAssignmentExpression ||
