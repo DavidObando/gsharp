@@ -1212,12 +1212,21 @@ implementation and reference outputs. The F1 decoder/signature visitor uses
 a depth budget of 256, diagnosing exhaustion instead of changing storage.
 This is a metadata resource ceiling, not certification of all CLR layouts
 below it or a supported-length increase beyond 32.
-The current F1 scaffolding fails closed for marked fixed-bearing interface
-inheritance and generic constraints: `InterfaceImpl` and constraint nullability
-positions do not yet have admitted receiver-aware readers.
-That coverage gap remains in #5236; it is not a new
-permanent language restriction or proof that F1 is complete. Unmarked ordinary
-CLR interface contracts keep their existing treatment.
+F1 reads `InterfaceImpl` and type/method `GenericParamConstraint` annotations
+from their metadata rows, through the ADR-0186/0193 declaration readers and
+receiver-aware projection. It validates public declared members, including
+constructors and inherited static members, at each projected hierarchy node.
+Independent implementation/reference witnesses cover marked closed receivers
+over unmarked generic bases, transitive interface/base relationships and
+framework-forwarded interface identities. Unsubstituted CLR declarations keep
+their declared annotations; substituted slots use the canonical open-slot rule.
+Unreadable, ambiguous or contradictory marked relationships diagnose GS0630.
+Fixed-bearing unmanaged pointer/function-pointer signatures also fail closed;
+the ordinary element-position query does not admit those unsafe boundaries.
+Different nullability paths to one fixed-bearing CLR interface are ambiguous;
+the importer must not choose a path by traversal order. Unmarked ordinary CLR
+contracts keep their existing treatment. These readers do not grant raw
+carriers source-level fixed-array authority or complete the remaining F1 gates.
 
 Distinct lengths and invariant generic instantiations remain distinct.
 Aliases of the same source shape share `C(T,N)`; this does not merge distinct
@@ -1418,13 +1427,23 @@ are implementation acceptance tests, not facts a design edit can establish.
 Go-family admission and audio workload acceptance remain ADR-0191 gates;
 M0 still reports `migrationReady: false`.
 
-F1 implementation and evidence are tracked separately in #5236. Its local
-carrier/implementation/reference witnesses do not close the full-runtime
-strict gate: ILVerify 10.0.8 reports the same two `ReturnPtrToStack` diagnostics
-in existing native-slice `AsSpan` methods in both the changed SDK runtime and
-the published 0.5.212 runtime. No suppression or gate waiver is authorized by
-this ADR. The implementation stays unshipped while that gate, the recorded
-interface/constraint gap and applicable architecture/AOT evidence remain open.
+F1 implementation and evidence are tracked separately in #5236. The
+interface/constraint readers have discriminating product-driver witnesses.
+The pinned 0.5.212 compiler also publishes and runs the production carriers
+under actual macOS arm64 NativeAOT: all 33 lengths, independent invariant
+exchange and selected generic/nested/reference/nullable/CLR-array copies.
+A buildable generic-value-loss mutant fails that native witness. This is
+host-specific evidence, not certification of every release-supported target.
+Reproduce with `python3 e2etests/fixed-array-abi-aot.py --rid osx-arm64`;
+supply installed native linker dependency paths when the host requires them.
+
+These witnesses do not close the full-runtime strict gate: ILVerify 10.0.8
+reports the same two `ReturnPtrToStack` diagnostics in existing native-slice
+`AsSpan` methods in both the changed SDK runtime and published 0.5.212 runtime.
+The separate P2 blocker is [#5244](https://github.com/DavidObando/gsharp/issues/5244),
+with an exact published-binary reproduction and upstream provenance.
+No suppression or gate waiver is authorized. F1 stays unshipped while this
+gate and any applicable release-target evidence remain open.
 
 #### Recorded maintainer decisions
 

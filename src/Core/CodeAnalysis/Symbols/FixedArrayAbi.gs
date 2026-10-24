@@ -113,6 +113,9 @@ internal class FixedArrayAbi {
             shape = shape!!.GetElementType()
         }
         shape = NullableLifting.GetValueTypeNullableUnderlyingClr(shape) ?? shape
+        if (shape?.IsPointer == true || shape?.IsFunctionPointer == true) && ContainsCandidate(shape!!) {
+            throw InvalidDataException("fixed-array contracts behind unmanaged pointers are unsupported")
+        }
         if IsCandidate(shape) {
             let decoded = Decode(shape!!)
             if positions.Length != (
@@ -152,6 +155,13 @@ internal class FixedArrayAbi {
             }
             if type.HasElementType {
                 return ContainsCandidateCore(type.GetElementType()!!, depth + 1)
+            }
+            if type.IsFunctionPointer {
+                return ContainsCandidateCore(type.GetFunctionPointerReturnType(), depth + 1) ||
+                    type
+                    .GetFunctionPointerParameterTypes().Any(
+                    (parameter Type) -> ContainsCandidateCore(parameter, depth + 1)
+                )
             }
             return type.IsGenericType && type.GetGenericArguments().Any(
                 (argument Type) -> ContainsCandidateCore(argument, depth + 1)

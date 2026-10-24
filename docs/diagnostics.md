@@ -6,7 +6,7 @@ Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severi
 
 | Code | Severity | Meaning | Remedy |
 | --- | --- | --- | --- |
-| GS0630 | Error | A marked fixed-array contract has an unsupported revision/inheritance/constraint position, missing/incompatible canonical owner, malformed shape or contradictory repeated element nullability. | Reference the matching SDK-owned V1 definitions and correct producer metadata. Lengths must be 0-32 with canonical balanced children and identical element positions. Marked fixed-bearing interface inheritance and generic constraints are not yet admitted; do not substitute arrays or lookalike carriers. |
+| GS0630 | Error | A marked fixed-array contract has an unsupported revision/unsafe boundary, missing/incompatible canonical owner, malformed shape, unreadable/ambiguous relationship metadata or contradictory element nullability. | Reference the matching SDK-owned V1 definitions and correct producer metadata. Lengths must be 0-32 with canonical balanced children and identical element positions. Interface/base clauses, type/method constraints and inherited public signatures retain receiver-projected annotations. Resolve contradictory paths to one fixed-bearing interface; do not substitute arrays or lookalike carriers. |
 
 This validates explicitly marked CLR contracts; it does not enable the planned
 value lowering of ordinary source `[N]T`.

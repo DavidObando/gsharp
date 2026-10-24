@@ -620,18 +620,27 @@ namespace Gsharp.Values.FixedArrays.V1 {
     }
 
     @Theory
-    @InlineData(false, false)
-    @InlineData(false, true)
-    @InlineData(true, false)
-    @InlineData(true, true)
-    func FixedBearingInterfaceInheritanceFailsClosedOnlyWhenMarked(marked bool, malformed bool) {
+    @InlineData(false, "valid", false)
+    @InlineData(false, "valid", true)
+    @InlineData(false, "split", false)
+    @InlineData(false, "split", true)
+    @InlineData(false, "nullable", false)
+    @InlineData(false, "nullable", true)
+    @InlineData(true, "valid", false)
+    @InlineData(true, "valid", true)
+    @InlineData(true, "split", false)
+    @InlineData(true, "split", true)
+    @InlineData(true, "nullable", false)
+    @InlineData(true, "nullable", true)
+    func FixedBearingInterfaceInheritanceIsValidated(marked bool, shapeCase string, referenceAssembly bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
-        let shape = if malformed {
-            "Branch<int,Empty<int>,Branch<int,Leaf<int>,Leaf<int>>>"
-        } else {
-            "Leaf<string?>"
+        let reference = Path.Combine(fixture.Directory, "interface.ref.dll")
+        let shape = switch shapeCase {
+            case "split": "Branch<int,Empty<int>,Branch<int,Leaf<int>,Leaf<int>>>"
+            case "nullable": "Branch<string,Leaf<string?>,Leaf<string?>>"
+            default: "Branch<string?,Leaf<string?>,Leaf<string?>>"
         }
-        let foreign = fixture.CompileCSharp(`
+        let foreign = fixture.CompileCSharpWithReference(`
 using System.Reflection;
 using Gsharp.Values.FixedArrays.V1;
 ` + (
@@ -643,31 +652,57 @@ using Gsharp.Values.FixedArrays.V1;
             ) + `
 public interface Parent<T> { }
 public interface Child: Parent<` + shape + `> { }
-`, "InterfaceShape")
+`, "InterfaceShape", reference)
         let (code, diagnostics) = fixture.TryCompile(
             "package InterfaceConsumer\nfunc Main() { }\n",
             "interface-shape",
             true,
-            "/reference:" + foreign
+            "/reference:" +
+                (
+                if referenceAssembly {
+                    reference
+                } else {
+                    foreign
+                }
+            )
         )
-        if marked {
+        if marked && shapeCase != "valid" {
             Assert.NotEqual(0, code)
             Assert.Contains("GS0630", diagnostics, StringComparison.Ordinal)
             Assert.Contains("interface-shape.gs(1,1,3,1): error GS0630:", diagnostics, StringComparison.Ordinal)
-            Assert.Contains("interface-inheritance", diagnostics, StringComparison.Ordinal)
         } else {
             Assert.True(code == 0, diagnostics)
         }
+        IlVerifier.Verify(foreign)
+        IlVerifier.Verify(reference)
     }
 
     @Theory
-    @InlineData(false, false)
-    @InlineData(false, true)
-    @InlineData(true, false)
-    @InlineData(true, true)
-    func FixedBearingGenericConstraintsFailClosedOnlyWhenMarked(marked bool, method bool) {
+    @InlineData(false, false, false, false)
+    @InlineData(false, false, false, true)
+    @InlineData(false, false, true, false)
+    @InlineData(false, false, true, true)
+    @InlineData(false, true, false, false)
+    @InlineData(false, true, false, true)
+    @InlineData(false, true, true, false)
+    @InlineData(false, true, true, true)
+    @InlineData(true, false, false, false)
+    @InlineData(true, false, false, true)
+    @InlineData(true, false, true, false)
+    @InlineData(true, false, true, true)
+    @InlineData(true, true, false, false)
+    @InlineData(true, true, false, true)
+    @InlineData(true, true, true, false)
+    @InlineData(true, true, true, true)
+    func FixedBearingGenericConstraintsAreValidated(marked bool, method bool, valid bool, referenceAssembly bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
-        let foreign = fixture.CompileCSharp(`
+        let reference = Path.Combine(fixture.Directory, "constraint.ref.dll")
+        let shape = if valid {
+            "Branch<string?,Leaf<string?>,Leaf<string?>>"
+        } else {
+            "Branch<string,Leaf<string?>,Leaf<string?>>"
+        }
+        let foreign = fixture.CompileCSharpWithReference(`
 using System.Reflection;
 using Gsharp.Values.FixedArrays.V1;
 ` + (
@@ -680,22 +715,407 @@ using Gsharp.Values.FixedArrays.V1;
 public interface Parent<T> { }
 ` + (
                 if method {
-                    "public class Api { public static void Consume<T>() where T: Parent<Branch<string,Leaf<string?>,Leaf<string?>>> { } }"
+                    "public class Api { public static void Consume<T>() where T: Parent<" + shape + "> { } }"
                 } else {
-                    "public class Api<T> where T: Parent<Branch<string,Leaf<string?>,Leaf<string?>>> { }"
+                    "public class Api<T> where T: Parent<" + shape + "> { }"
                 }
-            ), "ConstraintShape")
+            ), "ConstraintShape", reference)
         let (code, diagnostics) = fixture.TryCompile(
             "package ConstraintConsumer\nfunc Main() { }\n",
             "constraint-shape",
             true,
-            "/reference:" + foreign
+            "/reference:" +
+                (
+                if referenceAssembly {
+                    reference
+                } else {
+                    foreign
+                }
+            )
         )
-        if marked {
+        if marked && !valid {
             Assert.NotEqual(0, code)
             Assert.Contains("GS0630", diagnostics, StringComparison.Ordinal)
             Assert.Contains("constraint-shape.gs(1,1,3,1): error GS0630:", diagnostics, StringComparison.Ordinal)
-            Assert.Contains("generic-constraint", diagnostics, StringComparison.Ordinal)
+        } else {
+            Assert.True(code == 0, diagnostics)
+        }
+        IlVerifier.Verify(foreign)
+        IlVerifier.Verify(reference)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func InterfaceFixedElementNullabilitySurvivesImport(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "interface-nullable.ref.dll")
+        let foreign = fixture.CompileCSharpWithReference(`
+using System.Reflection;
+using Gsharp.Values.FixedArrays.V1;
+[assembly: AssemblyMetadata("GSharp.FixedArrays", "1")]
+namespace InterfaceNullable {
+    public interface Root<T> { T Item { get; } }
+    public interface Middle<T>: Root<Branch<T,Leaf<T>,Leaf<T>>> { }
+    public interface Child: Middle<string?> { }
+    public static class Api { public static Child Make() => null!; }
+}`, "InterfaceNullable", reference)
+        let (code, diagnostics) = fixture.TryCompile(`
+package InterfaceNullRejected
+import InterfaceNullable
+func Needs(value string) { }
+func Main() { Needs(Api.Make().Item.Left.Item) }
+`, "interface-null-rejected", true, "/reference:" +
+                (
+                if referenceAssembly {
+                    reference
+                } else {
+                    foreign
+                }
+            ))
+        Assert.NotEqual(0, code)
+        Assert.Contains("interface-null-rejected.gs(5,21,5,46): error GS0154:", diagnostics, StringComparison.Ordinal)
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func InheritedMethodConstraintSubstitutionValidatesElementAnnotations(valid bool, referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "inherited-constraint.ref.dll")
+        let referenceDirectory = Directory.CreateDirectory(Path.Combine(fixture.Directory, "ref")).FullName
+        let baseReference = Path.Combine(referenceDirectory, "ConstraintBase.dll")
+        let baseContract = fixture.CompileCSharpWithReference(`
+using Gsharp.Values.FixedArrays.V1;
+public interface Parent<T> { }
+public class Api<T> {
+    public static void Consume<U>() where U: Parent<Branch<T,Leaf<T?>,Leaf<T?>>> { }
+}
+`, "ConstraintBase", baseReference)
+        let baseImport = if referenceAssembly {
+            baseReference
+        } else {
+            baseContract
+        }
+        let foreign = fixture.CompileCSharpWithReference(`
+using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.FixedArrays", "1")]
+public class ClosedApi: Api<` + (
+                if valid {
+                    "string?"
+                } else {
+                    "string"
+                }
+            ) + `> { }
+`, "InheritedConstraint", reference, baseImport)
+        let (code, diagnostics) = fixture.TryCompile(
+            "package ConstraintConsumer\nfunc Main() { }\n",
+            "inherited-constraint",
+            true,
+            "/reference:" +
+                (
+                if referenceAssembly {
+                    reference
+                } else {
+                    foreign
+                }
+            ),
+            "/reference:" + baseImport
+        )
+        if valid {
+            Assert.True(code == 0, diagnostics)
+        } else {
+            Assert.NotEqual(0, code)
+            Assert.Contains("inherited-constraint.gs(1,1,3,1): error GS0630:", diagnostics, StringComparison.Ordinal)
+            Assert.Contains("contradictory element nullability", diagnostics, StringComparison.Ordinal)
+        }
+    }
+
+    @Theory
+    @InlineData(false, false, false)
+    @InlineData(false, false, true)
+    @InlineData(false, true, false)
+    @InlineData(false, true, true)
+    @InlineData(true, false, false)
+    @InlineData(true, false, true)
+    @InlineData(true, true, false)
+    @InlineData(true, true, true)
+    func TransitiveFixedRelationshipsValidateClosedElementAnnotations(
+        interfaceType bool,
+        valid bool,
+        referenceAssembly bool
+    ) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "transitive-relationship.ref.dll")
+        let referenceDirectory = Directory.CreateDirectory(Path.Combine(fixture.Directory, "ref")).FullName
+        let baseReference = Path.Combine(referenceDirectory, "TransitiveBase.dll")
+        let kind = if interfaceType {
+            "interface"
+        } else {
+            "class"
+        }
+        let baseContract = fixture.CompileCSharpWithReference(`
+using Gsharp.Values.FixedArrays.V1;
+public ` + kind + ` Parent<T> { }
+public ` + kind + ` Middle<T>: Parent<Branch<T,Leaf<T?>,Leaf<T?>>> { }
+`, "TransitiveBase", baseReference)
+        let baseImport = if referenceAssembly {
+            baseReference
+        } else {
+            baseContract
+        }
+        let foreign = fixture.CompileCSharpWithReference(`
+using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.FixedArrays", "1")]
+public ` + kind + ` Child: Middle<` + (
+                if valid {
+                    "string?"
+                } else {
+                    "string"
+                }
+            ) + `> { }
+`, "TransitiveRelationship", reference, baseImport)
+        let (code, diagnostics) = fixture.TryCompile(
+            "package TransitiveConsumer\nfunc Main() { }\n",
+            "transitive-relationship",
+            true,
+            "/reference:" +
+                (
+                if referenceAssembly {
+                    reference
+                } else {
+                    foreign
+                }
+            ),
+            "/reference:" + baseImport
+        )
+        if valid {
+            Assert.True(code == 0, diagnostics)
+        } else {
+            Assert.NotEqual(0, code)
+            Assert.Contains("transitive-relationship.gs(1,1,3,1): error GS0630:", diagnostics, StringComparison.Ordinal)
+            Assert.Contains("contradictory element nullability", diagnostics, StringComparison.Ordinal)
+        }
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func ConstructorFixedSignaturesUseReceiverAnnotations(valid bool, referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "constructor-nullable.ref.dll")
+        let referenceDirectory = Directory.CreateDirectory(Path.Combine(fixture.Directory, "ref")).FullName
+        let baseReference = Path.Combine(referenceDirectory, "ConstructorBase.dll")
+        let baseContract = fixture.CompileCSharpWithReference(`
+using Gsharp.Values.FixedArrays.V1;
+public class Parent<T> {
+    public Parent(Branch<T,Leaf<T?>,Leaf<T?>> value) { }
+}
+`, "ConstructorBase", baseReference)
+        let baseImport = if referenceAssembly {
+            baseReference
+        } else {
+            baseContract
+        }
+        let foreign = fixture.CompileCSharpWithReference(`
+using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.FixedArrays", "1")]
+public class Child: Parent<` + (
+                if valid {
+                    "string?"
+                } else {
+                    "string"
+                }
+            ) + `> {
+    public Child(): base(default) { }
+}
+`, "ConstructorNullable", reference, baseImport)
+        let (code, diagnostics) = fixture.TryCompile(
+            "package ConstructorConsumer\nfunc Main() { }\n",
+            "constructor-nullable",
+            true,
+            "/reference:" +
+                (
+                if referenceAssembly {
+                    reference
+                } else {
+                    foreign
+                }
+            ),
+            "/reference:" + baseImport
+        )
+        if valid {
+            Assert.True(code == 0, diagnostics)
+        } else {
+            Assert.NotEqual(0, code)
+            Assert.Contains("constructor-nullable.gs(1,1,3,1): error GS0630:", diagnostics, StringComparison.Ordinal)
+            Assert.Contains("contradictory element nullability", diagnostics, StringComparison.Ordinal)
+        }
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func AmbiguousFixedInterfaceAnnotationsRequireAnExplicitContract(marked bool, referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "ambiguous-interface.ref.dll")
+        let foreign = fixture.CompileCSharpWithReference(`
+using System.Reflection;
+using Gsharp.Values.FixedArrays.V1;
+` + (
+                if marked {
+                    "[assembly: AssemblyMetadata(\"GSharp.FixedArrays\", \"1\")]"
+                } else {
+                    ""
+                }
+            ) + `
+public interface Parent<T> { }
+public interface Left: Parent<Leaf<string>> { }
+public interface Right: Parent<Leaf<string?>> { }
+public interface Child: Left,Right { }
+`, "AmbiguousInterface", reference)
+        let (code, diagnostics) = fixture.TryCompile(
+            "package AmbiguousConsumer\nfunc Main() { }\n",
+            "ambiguous-interface",
+            true,
+            "/reference:" +
+                (
+                if referenceAssembly {
+                    reference
+                } else {
+                    foreign
+                }
+            )
+        )
+        if marked {
+            Assert.NotEqual(0, code)
+            Assert.Contains("ambiguous-interface.gs(1,1,3,1): error GS0630:", diagnostics, StringComparison.Ordinal)
+            Assert.Contains("ambiguous fixed-bearing interface annotations", diagnostics, StringComparison.Ordinal)
+        } else {
+            Assert.True(code == 0, diagnostics)
+        }
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func FixedInterfaceRowsResolveFrameworkForwarders(valid bool, referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "framework-interface.ref.dll")
+        let shape = if valid {
+            "Leaf<string?>"
+        } else {
+            "Branch<string,Leaf<string?>,Leaf<string?>>"
+        }
+        let foreign = fixture.CompileCSharpWithReference(`
+using System.Reflection;
+using Gsharp.Values.FixedArrays.V1;
+[assembly: AssemblyMetadata("GSharp.FixedArrays", "1")]
+public interface Child: System.Collections.Generic.IEnumerable<` + shape + `> { }
+`, "FrameworkInterface", reference)
+        let (code, diagnostics) = fixture.TryCompile(
+            "package FrameworkConsumer\nfunc Main() { }\n",
+            "framework-interface",
+            true,
+            "/reference:" +
+                (
+                if referenceAssembly {
+                    reference
+                } else {
+                    foreign
+                }
+            )
+        )
+        if valid {
+            Assert.True(code == 0, diagnostics)
+        } else {
+            Assert.NotEqual(0, code)
+            Assert.Contains("framework-interface.gs(1,1,3,1): error GS0630:", diagnostics, StringComparison.Ordinal)
+            Assert.Contains("contradictory element nullability", diagnostics, StringComparison.Ordinal)
+        }
+        IlVerifier.Verify(foreign)
+        IlVerifier.Verify(reference)
+    }
+
+    @Theory
+    @InlineData(false, false, false)
+    @InlineData(false, false, true)
+    @InlineData(false, true, false)
+    @InlineData(false, true, true)
+    @InlineData(true, false, false)
+    @InlineData(true, false, true)
+    @InlineData(true, true, false)
+    @InlineData(true, true, true)
+    func UnsafeFixedSignatureClaimsFailClosed(marked bool, functionPointer bool, referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let signature = if functionPointer {
+            "delegate*<Branch<int,Leaf<int>,Empty<int>>,void>"
+        } else {
+            "Branch<int,Leaf<int>,Empty<int>>*"
+        }
+        let source = `
+using System.Reflection;
+using Gsharp.Values.FixedArrays.V1;
+` + (
+            if marked {
+                "[assembly: AssemblyMetadata(\"GSharp.FixedArrays\", \"1\")]"
+            } else {
+                ""
+            }
+        ) + `
+public static unsafe class Api { public static ` + signature + ` Value; }
+`
+        let paths = ReferenceResolver
+            .HostTrustedPlatformAssemblyPaths()
+            .Append(typeof(Slice[_]).Assembly.Location)
+            .Distinct(StringComparer.Ordinal)
+        let compilation = CSharpCompilation.Create(
+            "UnsafeFixedContract",
+            []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(source)},
+            paths.Select((path string) -> MetadataReference.CreateFromFile(path)),
+            CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                allowUnsafe: true,
+                nullableContextOptions: NullableContextOptions.Enable
+            )
+        )
+        let foreign = Path.Combine(fixture.Directory, "UnsafeFixedContract.dll")
+        let reference = Path.Combine(fixture.Directory, "unsafe-fixed.ref.dll")
+        {
+            using let implementation = File.Create(foreign)
+            using let refStream = File.Create(reference)
+            let emitted = compilation.Emit(
+                implementation,
+                metadataPEStream: refStream,
+                options: Microsoft.CodeAnalysis.Emit.EmitOptions(includePrivateMembers: false)
+            )
+            Assert.True(emitted.Success, string.Join("\n", emitted.Diagnostics))
+        }
+        let (code, diagnostics) = fixture.TryCompile(
+            "package UnsafeConsumer\nfunc Main() { }\n",
+            "unsafe-fixed",
+            true,
+            "/reference:" +
+                (
+                if referenceAssembly {
+                    reference
+                } else {
+                    foreign
+                }
+            )
+        )
+        if marked {
+            Assert.NotEqual(0, code)
+            Assert.Contains("unsafe-fixed.gs(1,1,3,1): error GS0630:", diagnostics, StringComparison.Ordinal)
+            Assert.Contains("behind unmanaged pointers are unsupported", diagnostics, StringComparison.Ordinal)
         } else {
             Assert.True(code == 0, diagnostics)
         }

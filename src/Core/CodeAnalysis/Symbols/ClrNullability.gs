@@ -487,6 +487,47 @@ shared class ClrNullability {
         return SymbolFromLayoutFlags(actual, layout, flags)
     }
 
+    /// Reads the declared interfaces and their InterfaceImpl annotations.
+    /// @param declaration The reflected declaring type.
+    /// @param project An optional receiver-aware projection.
+    /// @returns Annotated direct interface signatures in metadata order.
+    @NullabilityFunnel
+    internal func GetInterfaceTypeSymbols(declaration Type, project Func[Type, TypeSymbol]? = nil) ImmutableArray[
+        TypeSymbol
+    ] {
+        return ClrSignatureMetadata
+            .Interfaces(declaration)
+            .Select(
+            (row(Layout Type, Flags ImmutableArray[uint8])) -> if project is {} projector {
+                NullableFlagsBuilder.MergeDeclarationNullability(projector(row.Layout), row.Layout, row.Flags)
+            } else {
+                SymbolFromLayoutFlags(row.Layout, row.Layout, row.Flags)
+            }
+        )
+            .ToImmutableArray()
+    }
+
+    /// Reads annotated type bounds of a type or method parameter.
+    /// @param parameter The reflected generic parameter.
+    /// @param project An optional receiver-aware projection.
+    /// @returns Annotated constraints in metadata order.
+    @NullabilityFunnel
+    internal func GetGenericParameterConstraintTypeSymbols(
+        parameter Type,
+        project Func[Type, TypeSymbol]? = nil
+    ) ImmutableArray[TypeSymbol] {
+        return ClrSignatureMetadata
+            .Constraints(parameter)
+            .Select(
+            (row(Layout Type, Flags ImmutableArray[uint8])) -> if project is {} projector {
+                NullableFlagsBuilder.MergeDeclarationNullability(projector(row.Layout), row.Layout, row.Flags)
+            } else {
+                SymbolFromLayoutFlags(row.Layout, row.Layout, row.Flags)
+            }
+        )
+            .ToImmutableArray()
+    }
+
     /// Reads the full `[NullableAttribute]` byte array for a declaration,
     /// falling back to a single-element array derived from the surrounding
     /// `[NullableContextAttribute]` when no explicit `[Nullable]` is
@@ -503,6 +544,11 @@ shared class ClrNullability {
         if !own.IsDefault {
             return own
         }
+        return ReadNullableContext(enclosingMember)
+    }
+
+    @NullabilityFunnel
+    internal func ReadNullableContext(enclosingMember MemberInfo?) ImmutableArray[uint8] {
         for var member MemberInfo? = enclosingMember; member != nil; member = member!!.DeclaringType {
             let context = ReadRawNullableFlags(member, context: true)
             if !context.IsDefault {
