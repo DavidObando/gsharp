@@ -275,19 +275,26 @@ aliases one, on its own: the callee has no name for the caller's storage,
 and `Use(path); Use(path)` or a call in a loop body is the commonest shape
 of the rule (the translated compiler source reads an `out` parameter after
 a `TryGetValue(path, out found)` in a loop). A call kills the fact only
-when it can reach the storage: (a) one of its by-value operands (the
-receiver or an argument other than a plain read of the narrowed root
-itself) has a type that can hold a reference, that is a type with no CLR
-type yet (a user type), an array or slice, a pointer or reference, an
-interface, `object` or a type parameter (probe `ref-parameter-call`:
-`Clear(xs)` with `xs` holding the element that `a` names); primitives,
-strings, enums and imported class types cannot; (b) the call has a
+when it can reach the storage: (a) one of its operands (the receiver, written
+or implicit, and every argument, the narrowed root itself included) has a
+type whose graph holds the container of a storage of the root's type: an
+array or slice of that type, or a type with an instance field of that type,
+followed through the fields and auto properties of user types, the public
+instance fields of imported types (`StrongBox[T].Value`) and the elements of
+arrays; an interface, `object`, a type parameter, a delegate or a function
+type can hold anything, so they reach (probes `ref-parameter-call`, the
+cyclic-object cases, `ref-parameter-base-interface-call` and the imported
+holder row h3); primitives, strings and enums reach nothing; (b) the call has a
 `ref`/`out` argument that may share storage with the root (below); (c) the
 callee is a delegate or function value of unknown origin, a computed
 property accessor, a constructor or struct-literal initializer with user
 code, or any other user code the table lists (they keep the full class
 kill); (d) the root is a `ref` local of an element or member, or of a
-mutable global, which any call can reach. Two by-reference parameters may
+mutable global, which any call can reach. A by-reference parameter may alias a mutable global that a callee with no
+operand writes (`Run(ref g)` guarding `a`, then `Clear()` assigning `g`); the
+rule does not prove callee effects, so such a call keeps the fact, as C#
+nullable analysis does. This is the accepted cost of the maintainer's
+decision on #5292, and the write forms above still kill it. Two by-reference parameters may
 share a storage only when their types can overlap: equal types ignoring
 nullability, or a value-type aggregate, `object`, an interface or a type
 parameter on either side. A `ref` argument cannot change the type of its

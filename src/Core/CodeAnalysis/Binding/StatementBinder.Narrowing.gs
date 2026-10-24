@@ -1778,43 +1778,28 @@ internal partial class StatementBinder {
             private set;
         }
 
-        // ADR-0208 R12 (#5292): the by-value operands (receiver and arguments) of the calls whose callee is
-        // known: the type of each, and the variable it reads when it is a plain variable read.
-        private let callOperands List[(Type TypeSymbol?, Source VariableSymbol?)] = List[
-            (Type TypeSymbol?, Source VariableSymbol?)
-        ]()
+        // ADR-0208 R12 (#5292): the types of the operands (the receiver, implicit or written, and every
+        // argument) of the calls whose callee is known.
+        private let callOperandTypes List[TypeSymbol?] = List[TypeSymbol?]()
 
-        private func RecordCallOperands(call BoundExpression, arguments ImmutableArray[BoundExpression]) {
-            if call is BoundUserInstanceCallExpression userCall {
-                RecordCallOperand(userCall.Receiver)
-            } else if call is BoundImportedInstanceCallExpression importedCall {
-                RecordCallOperand(importedCall.Receiver)
+        private func RecordCallOperands(call BoundExpression) {
+            for child in call.ChildNodes {
+                if child is BoundExpression operand {
+                    // A `ref`/`out` argument passes the storage; the callee reaches what its value reaches.
+                    var value = operand
+                    while value is BoundAddressOfExpression address {
+                        value = address.Operand
+                    }
+                    callOperandTypes.Add(value.Type)
+                }
             }
-            for argument in arguments {
-                RecordCallOperand(argument)
-            }
-        }
-
-        private func RecordCallOperand(operand BoundExpression) {
-            var expression = operand
-            while expression is BoundConversionExpression conversion {
-                expression = conversion.Expression
-            }
-            if expression is BoundAddressOfExpression {
-                // A reference operand is a write: RecordWritableReference holds it.
-                return
-            }
-            callOperands.Add((expression.Type, (expression as BoundVariableExpression)?.Variable))
         }
 
         // ADR-0208 R12 (#5292): whether a call of this node may reach the storage that [`root`](paramref) names:
-        // through an operand whose type can hold a reference to it.
+        // through an operand whose type graph holds the container of a storage of the type of the root.
         func CallMayReachStorageOf(root VariableSymbol) bool {
-            for operand in callOperands {
-                if operand.Source != nil && object.ReferenceEquals(operand.Source, root) {
-                    continue
-                }
-                if StatementBinder.TypeMayExposeStorage(operand.Type) {
+            for type in callOperandTypes {
+                if StatementBinder.TypeGraphMayHoldStorageOf(type, root.Type) {
                     return true
                 }
             }
@@ -1954,7 +1939,7 @@ internal partial class StatementBinder {
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function, Arguments: var arguments} {
                 // ADR-0208 R12 (#5292): a call reaches by-reference storage only through its operands.
                 MarkMayMutateGlobalRoots(writesReferenceStorage: false)
-                RecordCallOperands(node, arguments)
+                RecordCallOperands(node)
                 if function.HasCaptures {
                     MayMutateAnyRoot = true
                 }
@@ -1967,7 +1952,7 @@ internal partial class StatementBinder {
             }
             if node is BoundCallOperationExpression call {
                 if call.CalledFunction is not FunctionSymbol {
-                    RecordCallOperands(node, call.Arguments)
+                    RecordCallOperands(node)
                 }
                 AnalyzeCallableArguments(call.Arguments)
             }
@@ -4535,29 +4520,111 @@ internal partial class StatementBinder {
         ) bool -> DropsOnMemberMutation(path, mutations.MayMutateMemberPaths, mutations.MayMutateReferenceStorage) ||
             (IsExternalStorageAlias(path.Root) && mutations.CallMayReachStorageOf(path.Root))
 
-        /// ADR-0208 R12 (#5292): whether a value of [`type`](paramref) can hold a reference through which a
-        /// callee writes caller storage: an array, slice, pointer or reference, an interface, `object`, a type
-        /// parameter, or a user type. Primitives, strings, enums and imported class types cannot.
-        internal func TypeMayExposeStorage(type TypeSymbol?) bool {
-            var current = type
-            while current is NullableTypeSymbol or PlatformTypeSymbol {
-                current = if current is NullableTypeSymbol nullable {
-                    nullable.UnderlyingType
-                } else {
-                    (current as PlatformTypeSymbol)!!.UnderlyingType
-                }
-            }
-            let clr = current?.ClrType
-            if clr == nil {
+        /// ADR-0208 R12 (#5292): whether a callee that receives a value of [`operand`](paramref) can reach
+        /// a container of a storage of type [`stored`](paramref): the type graph of the operand, followed
+        /// through the instance fields and properties of user types, the public instance fields of imported
+        /// types and the elements of arrays and slices, has an array of the stored type or a type with a field
+        /// of the stored type. An interface, `object`, a type parameter, a function or a delegate can hold any
+        /// type, so they reach. Primitives, strings and enums reach nothing.
+        internal func TypeGraphMayHoldStorageOf(operand TypeSymbol?, stored TypeSymbol?) bool {
+            let target = StripNullability(stored)
+            if operand == nil || target == nil {
                 return true
             }
-            return clr.IsArray ||
-                clr.IsByRef ||
-                clr.IsPointer ||
-                clr.IsByRefLike ||
-                clr.IsInterface ||
-                clr.IsGenericParameter ||
-                object.ReferenceEquals(clr, typeof(object))
+            return GraphReaches(StripNullability(operand), target, HashSet[TypeSymbol](), 0)
+        }
+
+        private func SameStoredType(candidate TypeSymbol?, target TypeSymbol) bool {
+            let stripped = StripNullability(candidate)
+            return stripped != nil &&
+                (
+                object.Equals(stripped, target) ||
+                    (
+                    stripped.ClrType != nil && target.ClrType != nil && ClrTypeInspector.IsSameAs(
+                        stripped.ClrType,
+                        target.ClrType
+                    )
+                )
+            )
+        }
+
+        private func GraphReaches(type TypeSymbol?, target TypeSymbol, visited HashSet[TypeSymbol], depth int32) bool {
+            if type == nil || depth > 24 {
+                return true
+            }
+            if !visited.Add(type) {
+                return false
+            }
+            if type is TypeParameterSymbol or
+                InterfaceSymbol or
+                DelegateTypeSymbol or
+                FunctionTypeSymbol ||
+                object.ReferenceEquals(type.ClrType, typeof(object)) {
+                return true
+            }
+            if type is ArrayTypeSymbol array {
+                return SameStoredType(array.ElementType, target) ||
+                    GraphReaches(StripNullability(array.ElementType), target, visited, depth + 1)
+            }
+            if type is SliceTypeSymbol slice {
+                return SameStoredType(slice.ElementType, target) ||
+                    GraphReaches(StripNullability(slice.ElementType), target, visited, depth + 1)
+            }
+            if type is StructSymbol structure {
+                var current StructSymbol? = structure
+                for var hops = 0; current != nil && hops < 64; hops++ {
+                    let definition = current.Definition ?? current
+                    for field in definition.Fields {
+                        if !field.IsStatic &&
+                            (
+                            SameStoredType(field.Type, target) ||
+                                GraphReaches(StripNullability(field.Type), target, visited, depth + 1)
+                        ) {
+                            return true
+                        }
+                    }
+                    for property in definition.Properties {
+                        if !property.IsStatic &&
+                            property.IsAutoProperty &&
+                            (
+                            SameStoredType(property.Type, target) ||
+                                GraphReaches(StripNullability(property.Type), target, visited, depth + 1)
+                        ) {
+                            return true
+                        }
+                    }
+                    current = definition.BaseClass
+                }
+                return false
+            }
+            let clr = type.ClrType
+            if clr == nil {
+                // Tuples, channels, maps and other structural types: any element can be the container.
+                return !(type is EnumSymbol)
+            }
+            if clr.IsArray {
+                let element = clr.GetElementType()
+                return element == nil ||
+                    (target.ClrType != nil && ClrTypeInspector.IsSameAs(element, target.ClrType)) ||
+                    !(element.IsPrimitive || element == typeof(string))
+            }
+            if clr.IsPrimitive || clr.IsEnum || object.ReferenceEquals(clr, typeof(string)) {
+                return false
+            }
+            if clr.IsByRef || clr.IsPointer || clr.IsByRefLike {
+                return true
+            }
+            for field in clr.GetFields(BindingFlags.Instance | BindingFlags.Public) {
+                let fieldType = field.FieldType
+                if target.ClrType != nil && ClrTypeInspector.IsSameAs(fieldType, target.ClrType) {
+                    return true
+                }
+                if !(fieldType.IsPrimitive || fieldType.IsEnum || object.ReferenceEquals(fieldType, typeof(string))) &&
+                    GraphReaches(ClrNullability.GetFieldTypeSymbol(field), target, visited, depth + 1) {
+                    return true
+                }
+            }
+            return false
         }
 
         /// ADR-0208 R12 (#5292): whether a call can write the storage that the external-storage alias

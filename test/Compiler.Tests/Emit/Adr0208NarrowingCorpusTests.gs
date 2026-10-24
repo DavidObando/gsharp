@@ -165,6 +165,7 @@ open class Adr0208NarrowingCorpusTests {
                 "g5_yield_after_guard",
                 "h1_by_ref_param_survives_calls",
                 "h2_by_ref_param_call_with_container",
+                "h3_by_ref_param_call_with_imported_holder",
                 "out-alias_out_ref_alias"
             },
             names
@@ -964,6 +965,20 @@ func Main() {
     var xs = []C?{C{}}
     Console.WriteLine(Run(ref xs[0], xs))
 }`, "GS0158@8:14", "reject", "", ""}
+            yield[]object{"h3_by_ref_param_call_with_imported_holder", `import System.Runtime.CompilerServices
+class C {
+    var Value int32 = 1
+}
+func Clear(box StrongBox[C?]) { box.Value = nil }
+func Run(ref a C?, box StrongBox[C?]) int32 {
+    if a == nil { return 0 }
+    Clear(box)
+    return a.Value
+}
+func Main() {
+    let box = StrongBox[C?](C{})
+    Console.WriteLine(Run(ref box.Value, box))
+}`, "GS0158@9:14", "reject", "", ""}
             yield[]object{"out-alias_out_ref_alias", `class C { func M() { } }
 func Run(out c C?, ref alias C?) {
     c = C()

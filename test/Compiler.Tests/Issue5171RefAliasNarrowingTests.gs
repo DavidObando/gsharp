@@ -101,6 +101,68 @@ open class Issue5171RefAliasNarrowingTests {
         /// Gets the rejected programs: each is (name, source).
         /// @returns The case data.
         func RejectedCases() sequence[[]object] {
+            yield[]object{"ref-parameter-base-interface-call", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+interface IClear {
+    func Reset() { }
+    func Clear() { Reset() }
+}
+class Holder : IClear {
+    var Field C? = C{}
+    func Reset() { Field = nil }
+    func Run(ref a C?) int32 {
+        if a == nil { return 0 }
+        base[IClear].Clear()
+        return a.Value
+    }
+}
+func Main() {
+    let h = Holder{}
+    Console.WriteLine(h.Run(ref h.Field))
+}
+`}
+            yield[]object{"ref-parameter-cyclic-object-argument", `
+import System
+
+class Node {
+    var Value int32 = 1
+    var Link Node? = nil
+}
+func Clear(n Node) { n.Link = nil }
+func Run(ref a Node?) int32 {
+    if a == nil { return 0 }
+    Clear(a)
+    return a.Value
+}
+func Main() {
+    let c = Node{}
+    c.Link = c
+    Console.WriteLine(Run(ref c.Link))
+}
+`}
+            yield[]object{"ref-parameter-cyclic-object-receiver", `
+import System
+
+class Node {
+    var Value int32 = 1
+    var Link Node? = nil
+    func Detach() { Link = nil }
+}
+func Run(ref a Node?) int32 {
+    if a == nil { return 0 }
+    a.Detach()
+    return a.Value
+}
+func Main() {
+    let c = Node{}
+    c.Link = c
+    Console.WriteLine(Run(ref c.Link))
+}
+`}
             yield[]object{"ref-parameter-call-with-same-typed-ref-argument", `
 import System
 
