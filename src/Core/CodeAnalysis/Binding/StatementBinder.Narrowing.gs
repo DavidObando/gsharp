@@ -4614,6 +4614,17 @@ internal partial class StatementBinder {
             if clr.IsByRef || clr.IsPointer || clr.IsByRefLike {
                 return true
             }
+            // A public property that exposes an array (`ArraySegment<T>.Array`) or a reference exposes storage too.
+            for property in clr.GetProperties(BindingFlags.Instance | BindingFlags.Public) {
+                let propertyType = property.PropertyType
+                if propertyType.IsArray || propertyType.IsByRef {
+                    let element = propertyType.GetElementType()
+                    if element == nil || target.ClrType == nil || ClrTypeInspector.IsSameAs(element, target.ClrType) ||
+                        !(element.IsPrimitive || object.ReferenceEquals(element, typeof(string))) {
+                        return true
+                    }
+                }
+            }
             for field in clr.GetFields(BindingFlags.Instance | BindingFlags.Public) {
                 let fieldType = field.FieldType
                 if target.ClrType != nil && ClrTypeInspector.IsSameAs(fieldType, target.ClrType) {

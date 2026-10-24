@@ -166,6 +166,7 @@ open class Adr0208NarrowingCorpusTests {
                 "h1_by_ref_param_survives_calls",
                 "h2_by_ref_param_call_with_container",
                 "h3_by_ref_param_call_with_imported_holder",
+                "h4_by_ref_param_call_with_array_segment",
                 "out-alias_out_ref_alias"
             },
             names
@@ -979,6 +980,19 @@ func Main() {
     let box = StrongBox[C?](C{})
     Console.WriteLine(Run(ref box.Value, box))
 }`, "GS0158@9:14", "reject", "", ""}
+            yield[]object{"h4_by_ref_param_call_with_array_segment", `class C {
+    var Value int32 = 1
+}
+func Clear(segment ArraySegment[C?]) { segment.Array!![0] = nil }
+func Run(ref a C?, segment ArraySegment[C?]) int32 {
+    if a == nil { return 0 }
+    Clear(segment)
+    return a.Value
+}
+func Main() {
+    var items = []C?{C{}}
+    Console.WriteLine(Run(ref items[0], ArraySegment[C?](items)))
+}`, "GS0158@8:14", "reject", "", ""}
             yield[]object{"out-alias_out_ref_alias", `class C { func M() { } }
 func Run(out c C?, ref alias C?) {
     c = C()
