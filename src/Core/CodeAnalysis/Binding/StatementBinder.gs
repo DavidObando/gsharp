@@ -459,12 +459,10 @@ internal partial class StatementBinder {
         // After each call statement whose method carries [MemberNotNull], the
         // named fields are added to this frame and remain narrowed for all
         // subsequent statements in the block (until assignment invalidates them).
-        let memberNotNullFrame = Dictionary[AccessPath, TypeSymbol]()
         let inheritedAssignmentGenerations = Dictionary[VariableSymbol, int32](binderCtx.AssignmentNarrowingGenerations)
         let inheritedFallthrough = currentStatementListFallsThrough
         let inheritedPotentialReachabilityLabel = binderCtx.PotentialReachabilityLabel
-        binderCtx.BeginNarrowingProof(memberNotNullFrame)
-        binderCtx.NarrowedVariables.Add(memberNotNullFrame)
+        let memberNotNullFrame = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol]())
         let shadowSavedOverlay = ShadowEnterList()
         let shadowSavedBase = binderCtx.ShadowOverlayBase
         try {
@@ -594,7 +592,7 @@ internal partial class StatementBinder {
                                 expression: "usingLowering.ErrorStatement"
                             )
                         )
-                        InvalidateNarrowingsForAssignedVariables(statementSyntax)
+                        InvalidateNarrowingsForAssignedVariables(statementSyntax, usingLowering.Declaration)
                         continue
                     }
                     statements.Add(
@@ -606,7 +604,7 @@ internal partial class StatementBinder {
                             )
                         )
                     )
-                    InvalidateNarrowingsForAssignedVariables(statementSyntax)
+                    InvalidateNarrowingsForAssignedVariables(statementSyntax, usingLowering.Declaration)
                     let innerStatements = ImmutableArray.CreateBuilder[BoundStatement]()
                     let cleanupEffect = BoundExpressionStatement(nil, usingLowering.Cleanup!!)
                     let fallsThrough = BindWithinSynthesizedCleanup(
@@ -651,7 +649,7 @@ internal partial class StatementBinder {
                                 expression: "awaitUsingLowering.ErrorStatement"
                             )
                         )
-                        InvalidateNarrowingsForAssignedVariables(statementSyntax)
+                        InvalidateNarrowingsForAssignedVariables(statementSyntax, awaitUsingLowering.Declaration)
                         continue
                     }
                     statements.Add(
@@ -663,7 +661,7 @@ internal partial class StatementBinder {
                             )
                         )
                     )
-                    InvalidateNarrowingsForAssignedVariables(statementSyntax)
+                    InvalidateNarrowingsForAssignedVariables(statementSyntax, awaitUsingLowering.Declaration)
                     let innerStatements = ImmutableArray.CreateBuilder[BoundStatement]()
                     let cleanupEffect = BoundExpressionStatement(nil, awaitUsingLowering.Cleanup!!)
                     let fallsThrough = BindWithinSynthesizedCleanup(

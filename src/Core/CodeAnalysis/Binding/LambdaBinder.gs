@@ -3518,7 +3518,7 @@ internal class LambdaBinder {
         /// @returns A new frame stack, parallel in shape to [`outerFrames`](paramref),
         /// containing only the entries that are sound to keep visible while
         /// binding the closure body.
-        private func FilterNarrowingsSurvivingClosureCapture(outerFrames List[Dictionary[AccessPath, TypeSymbol]]) List[
+        private func FilterNarrowingsSurvivingClosureCapture(outerFrames List[NarrowingFrame]) List[
             Dictionary[AccessPath, TypeSymbol]
         ] {
             let result = List[Dictionary[AccessPath, TypeSymbol]](outerFrames.Count)

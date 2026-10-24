@@ -306,10 +306,7 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
         /// innermost frame that holds a path wins, like the frame query.
         /// @param frames The frames, outermost first.
         /// @param callables The variables that definitely hold an external callable.
-        func FromFrames(
-            frames IReadOnlyList[Dictionary[AccessPath, TypeSymbol]],
-            callables IEnumerable[VariableSymbol]
-        ) NarrowingState {
+        func FromFrames(frames IReadOnlyList[NarrowingFrame], callables IEnumerable[VariableSymbol]) NarrowingState {
             var result = Empty
             for frame in frames {
                 for fact in frame {

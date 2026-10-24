@@ -434,7 +434,7 @@ internal partial class StatementBinder {
     /// integrates with the enclosing block's narrowing frame.
     private func BindGuardLetStatement(syntax GuardLetStatementSyntax) BoundStatement {
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-        let pseudoFrame = Dictionary[AccessPath, TypeSymbol]()
+        let pseudoFrame = NarrowingFrame()
         BindGuardLetStatementInBlock(syntax, statements, pseudoFrame)
         return BoundBlockStatement(syntax, statements.ToImmutable())
     }
@@ -449,7 +449,7 @@ internal partial class StatementBinder {
     private func BindGuardLetStatementInBlock(
         syntax GuardLetStatementSyntax,
         statements ImmutableArray[BoundStatement].Builder,
-        persistentFrame Dictionary[AccessPath, TypeSymbol]
+        persistentFrame NarrowingFrame
     ) {
         // The else block must be re-bound once per binding arm because the
         // ControlFlowGraph builder demands that each BoundStatement appear
@@ -877,8 +877,7 @@ internal partial class StatementBinder {
                     expression: "BindStatement(syntax)"
                 )
             }
-            binderCtx.BeginNarrowingProof(frame)
-            binderCtx.NarrowedVariables.Add(frame)
+            binderCtx.PushNarrowingFrame(frame)
             try {
                 return Invariant.Required(
                     BindStatement(syntax),
@@ -904,8 +903,7 @@ internal partial class StatementBinder {
         if frame == nil {
             return bindExpressionWithTargetType(syntax, TypeSymbol.Bool)
         }
-        binderCtx.BeginNarrowingProof(frame)
-        binderCtx.NarrowedVariables.Add(frame)
+        binderCtx.PushNarrowingFrame(frame)
         try {
             return bindExpressionWithTargetType(syntax, TypeSymbol.Bool)
         } finally {

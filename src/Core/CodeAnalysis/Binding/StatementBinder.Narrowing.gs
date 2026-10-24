@@ -88,7 +88,7 @@ internal partial class StatementBinder {
     /// called function carries `[MemberNotNull("_f", …)]`, narrows each
     /// named field (via its (cref:ImplicitFieldVariableSymbol)) to its
     /// underlying non-nullable type in [`frame`](paramref).
-    private func ApplyMemberNotNullNarrowings(statement BoundStatement?, frame Dictionary[AccessPath, TypeSymbol]) {
+    private func ApplyMemberNotNullNarrowings(statement BoundStatement?, frame NarrowingFrame) {
         var statement = statement
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
@@ -147,12 +147,28 @@ internal partial class StatementBinder {
         }
     }
 
+    private func NarrowFieldIfNullable(fieldName string, frame NarrowingFrame) {
+        if $scope.TryLookupSymbol(fieldName) is ImplicitFieldVariableSymbol fieldVar &&
+            fieldVar.Type is NullableTypeSymbol nullable {
+            SetPersistentNarrowing(frame, fieldVar, nullable.UnderlyingType)
+        }
+    }
+
+    private func SetPersistentNarrowing(frame NarrowingFrame, path AccessPath, narrowedType TypeSymbol) {
+        frame[path] = narrowedType
+        NoteAssignmentNarrowing(path)
+    }
+
     private func SetPersistentNarrowing(
         frame Dictionary[AccessPath, TypeSymbol],
         path AccessPath,
         narrowedType TypeSymbol
     ) {
         frame[path] = narrowedType
+        NoteAssignmentNarrowing(path)
+    }
+
+    private func NoteAssignmentNarrowing(path AccessPath) {
         if !path.HasMembers {
             binderCtx.AssignmentNarrowingGeneration++
             binderCtx.AssignmentNarrowingGenerations[path.Root] = binderCtx.AssignmentNarrowingGeneration
@@ -167,7 +183,7 @@ internal partial class StatementBinder {
     // writable reference and that no branch or plain assignment touches.
     private func RestoreEarlyExitLiftsWrittenOnlyByCondition(
         statement BoundStatement?,
-        persistentFrame Dictionary[AccessPath, TypeSymbol]
+        persistentFrame NarrowingFrame
     ) {
         var statement = statement
         if lastEarlyExitLifts.Count == 0 {
@@ -295,7 +311,16 @@ internal partial class StatementBinder {
             }
             anyRootAssigned = assignedRoots.Count > 0
         }
-        if !anyRootAssigned && !dropAllMemberPaths && !dropAllRoots && !dropGlobalRoots {
+        // ADR-0208 R10 (#5168): a statement that runs user code or catches a replacement exception can
+        // run after a filter of an enclosing try, so the filter writes join the statement effects.
+        var filterNames HashSet[string]? = nil
+        if statementCollector != nil && (statementCollector.MayMutateMemberPaths || statementCollector.ContainsTry) {
+            let filters = CollectCatchFiltersAbove(statementSyntax)
+            if filters.Count > 0 {
+                filterNames = CollectEnclosingFilterNames(filters)
+            }
+        }
+        if !anyRootAssigned && !dropAllMemberPaths && !dropAllRoots && !dropGlobalRoots && filterNames == nil {
             return
         }
         // Issue #208: iterate ALL frames (not just the top) because the
@@ -308,7 +333,10 @@ internal partial class StatementBinder {
             }
             var toRemove List[AccessPath]? = nil
             for key in frame.Keys {
-                let drop = (statementCollector != nil && MayBeMutatedByUnknownWrite(statementCollector, key)) ||
+                let drop = (
+                    filterNames != nil && (filterNames.Contains(key.Root.Name) || MayBeMutatedByUnknownCallable(key))
+                ) ||
+                    (statementCollector != nil && MayBeMutatedByUnknownWrite(statementCollector, key)) ||
                     (dropGlobalRoots && key.Root is GlobalVariableSymbol && !key.Root.IsReadOnly) ||
                     (
                     if statementCollector != nil {
@@ -355,6 +383,15 @@ internal partial class StatementBinder {
         // The summary serves one statement; later statements recompute it.
         ClearStatementEffects()
         ApplyCallableAliasExitState(externalCallableAliases, statement, aliasesAtEntry, collector)
+        // A filter of an enclosing try can run between any two statements of its protected block,
+        // when a nested handler catches a replacement exception.
+        if externalCallableAliases.Count > 0 && statement.Syntax is {} syntax {
+            let filters = CollectCatchFiltersAbove(syntax)
+            filters.AddRange(CollectCatchFiltersWithin(syntax))
+            if filters.Count > 0 {
+                RemoveFilterAffectedAliases(externalCallableAliases, filters)
+            }
+        }
     }
 
     // Returns the effect summary of [`statement`](paramref) for the entry alias
@@ -611,10 +648,7 @@ internal partial class StatementBinder {
     /// (cref:BindIfStatement)) is non-empty, merge that frame into
     /// [`persistentFrame`](paramref) so subsequent statements in the
     /// enclosing block see the narrowing.
-    private func ApplyEarlyExitNarrowings(
-        statement BoundStatement?,
-        persistentFrame Dictionary[AccessPath, TypeSymbol]
-    ) {
+    private func ApplyEarlyExitNarrowings(statement BoundStatement?, persistentFrame NarrowingFrame) {
         var statement = statement
         lastEarlyExitLifts.Clear()
         var isLabeledStatement = false
@@ -681,10 +715,7 @@ internal partial class StatementBinder {
     /// (cref:InvalidateNarrowingsForAssignedVariables) clears it on a
     /// subsequent mutation. Called after invalidation so the fresh narrowing
     /// supersedes the clearing pass for this same statement.
-    private func ApplyAssignmentNarrowing(
-        statement BoundStatement?,
-        persistentFrame Dictionary[AccessPath, TypeSymbol]
-    ) {
+    private func ApplyAssignmentNarrowing(statement BoundStatement?, persistentFrame NarrowingFrame) {
         var statement = statement
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
@@ -780,7 +811,7 @@ internal partial class StatementBinder {
                     .Count {
                     binderCtx.NarrowedVariables[frameIndex]
                 } else {
-                    binderCtx.NarrowedVariables[^1]
+                    binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1]
                 }
                 targetFrame.Add(entry.Key, entry.Value)
                 if !entry.Key.HasMembers && incomingSnapshots[0].AssignmentGenerations.TryGetValue(
@@ -1052,10 +1083,7 @@ internal partial class StatementBinder {
         }
     }
 
-    private func ApplyTryFinallyFallthroughNarrowings(
-        statement BoundStatement,
-        persistentFrame Dictionary[AccessPath, TypeSymbol]
-    ) {
+    private func ApplyTryFinallyFallthroughNarrowings(statement BoundStatement, persistentFrame NarrowingFrame) {
         var statement = statement
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
@@ -1296,7 +1324,7 @@ internal partial class StatementBinder {
     /// fresh join narrowing supersedes the clearing pass; a later statement that
     /// reassigns the local to a nullable value re-nullable-izes it through its
     /// own invalidation pass.
-    private func ApplyIfJoinNarrowings(statement BoundStatement?, persistentFrame Dictionary[AccessPath, TypeSymbol]) {
+    private func ApplyIfJoinNarrowings(statement BoundStatement?, persistentFrame NarrowingFrame) {
         // Issues #4285 and #4290: arbitrary user jumps invalidate the
         // dominance assumptions behind branch-exit narrowing.
         if binderCtx.FunctionContainsUserGotoOrLabel {
@@ -1582,6 +1610,18 @@ internal partial class StatementBinder {
         }
         let collector = AssignedRootsCollector(nil, callableAliases ?? externalCallableAliases)
         collector.Visit(node)
+        if node.Syntax is {} syntax && (collector.MayMutateMemberPaths || collector.ContainsTry) {
+            let filters = CollectCatchFiltersAbove(syntax)
+            if filters.Count > 0 {
+                let names = CollectEnclosingFilterNames(filters)
+                for path in state
+                    .Keys
+                    .Where((path AccessPath) -> names.Contains(path.Root.Name) || MayBeMutatedByUnknownCallable(path))
+                    .ToArray() {
+                    state.Remove(path)
+                }
+            }
+        }
         if collector.MayMutateAnyRoot {
             for path in state.Keys.Where((path AccessPath) -> MayBeMutatedByUnknownWrite(collector, path)).ToArray() {
                 state.Remove(path)
@@ -1655,6 +1695,12 @@ internal partial class StatementBinder {
         }
 
         prop MayMutateMemberPaths bool {
+            get;
+            private set;
+        }
+
+        // A nested try can catch a replacement exception, after the filters of an enclosing try ran.
+        prop ContainsTry bool {
             get;
             private set;
         }
@@ -2100,6 +2146,7 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitTryStatement(node BoundTryStatement) {
+            ContainsTry = true
             let branchStart = CaptureCallableState()
             let outerTryAssignments = tryAssignedVariables
             let assignedInTry = HashSet[VariableSymbol]()
@@ -2108,11 +2155,20 @@ internal partial class StatementBinder {
             tryAssignedVariables = outerTryAssignments
             outerTryAssignments?.UnionWith(assignedInTry)
             let tryState = CaptureCallableState()
-            let exceptionalState = CloneCallableState(branchStart)
+            var exceptionalState = CloneCallableState(branchStart)
             for variable in assignedInTry {
                 exceptionalState.Literals.Remove(variable)
                 exceptionalState.External.Remove(variable)
                 exceptionalState.Unknown.Add(variable)
+            }
+            // ADR-0208 R10 (#5168): a replacement exception reaches a clause after the filters of
+            // all clauses ran, so every handler starts from the state with their effects.
+            for clause in node.CatchClauses {
+                if clause.Filter != nil {
+                    RestoreCallableState(exceptionalState)
+                    VisitExpression(clause.Filter)
+                    exceptionalState = JoinCallableStates(exceptionalState, CaptureCallableState())
+                }
             }
             var finallyEntries = JoinCallableStates(CloneCallableState(tryState), exceptionalState)
             var joined(
