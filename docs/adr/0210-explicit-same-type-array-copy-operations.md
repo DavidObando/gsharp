@@ -1218,11 +1218,18 @@ receiver-aware projection. It validates public declared members, including
 constructors and inherited static members, at each projected hierarchy node.
 Independent implementation/reference witnesses cover marked closed receivers
 over unmarked generic bases, transitive interface/base relationships and
-framework-forwarded interface identities. Unsubstituted CLR declarations keep
+framework-forwarded interface identities, including nested types forwarded
+through their declaring type. Constructed declaring contexts must match the
+selected closed CLR identity, not just its generic definition. Projection
+memoizes unsuccessful annotation-aware receiver states within each search;
+shared diamonds must not cause exponential metadata work.
+Unsubstituted CLR declarations keep
 their declared annotations; substituted slots use the canonical open-slot rule.
 Unreadable, ambiguous or contradictory marked relationships diagnose GS0630.
 Fixed-bearing unmanaged pointer/function-pointer signatures also fail closed;
 the ordinary element-position query does not admit those unsafe boundaries.
+Fixed-bearing detection includes projected public members and constraints,
+not only the interface's type arguments.
 Different nullability paths to one fixed-bearing CLR interface are ambiguous;
 the importer must not choose a path by traversal order. Unmarked ordinary CLR
 contracts keep their existing treatment. These readers do not grant raw

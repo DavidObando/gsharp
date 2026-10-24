@@ -6056,7 +6056,8 @@ internal class MemberLookup {
             declaringType Type?,
             out openDefinition Type?,
             out typeArguments ImmutableArray[TypeSymbol],
-            depth int32
+            depth int32,
+            unsuccessful HashSet[(Type, string)]? = nil
         ) bool {
             openDefinition = nil
             typeArguments = default(ImmutableArray[TypeSymbol])
@@ -6099,9 +6100,22 @@ internal class MemberLookup {
                 declaringType
             }
             if ClrTypeUtilities.AreSame(receiverOpenDefinition, openDefinition) {
+                if declaringType.IsGenericType && !declaringType.IsGenericTypeDefinition && !ClrTypeUtilities.AreSame(
+                    imported.ClrType,
+                    declaringType
+                ) {
+                    return false
+                }
+                CompilationMeasurements.Count("metadata.receiver-context-visits")
                 typeArguments = receiverTypeArguments
                 return true
             }
+            let misses = unsuccessful ?? HashSet[(Type, string)]()
+            let key = (imported.ClrType!!, Convert.ToBase64String(NullableFlagsBuilder.Build(imported).ToArray()))
+            if misses.Contains(key) {
+                return false
+            }
+            CompilationMeasurements.Count("metadata.receiver-context-visits")
             {
                 let symbolicBase = ClrNullability.GetBaseTypeSymbol(
                     receiverOpenDefinition,
@@ -6114,7 +6128,8 @@ internal class MemberLookup {
                     declaringType,
                     out var baseDefinition,
                     out var baseArguments,
-                    depth + 1
+                    depth + 1,
+                    misses
                 ) {
                     openDefinition = baseDefinition
                     typeArguments = baseArguments
@@ -6146,7 +6161,8 @@ internal class MemberLookup {
                         declaringType,
                         out var interfaceDefinition,
                         out var interfaceArguments,
-                        depth + 1
+                        depth + 1,
+                        misses
                     ) {
                         openDefinition = interfaceDefinition
                         typeArguments = interfaceArguments
@@ -6155,6 +6171,8 @@ internal class MemberLookup {
                 }
             }
             if depth > 0 {
+                // Cache only misses; successful projections retain their own symbolic arguments.
+                misses.Add(key)
                 return false
             }
             if imported.OpenDefinition != nil &&

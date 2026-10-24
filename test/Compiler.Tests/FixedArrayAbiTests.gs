@@ -4,6 +4,8 @@ package GSharp.Compiler.Tests
 
 import Gsharp.Values
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Tests
 import System
@@ -958,11 +960,19 @@ public class Child: Parent<` + (
     }
 
     @Theory
-    @InlineData(false, false)
-    @InlineData(false, true)
-    @InlineData(true, false)
-    @InlineData(true, true)
-    func AmbiguousFixedInterfaceAnnotationsRequireAnExplicitContract(marked bool, referenceAssembly bool) {
+    @InlineData(false, false, false)
+    @InlineData(false, false, true)
+    @InlineData(false, true, false)
+    @InlineData(false, true, true)
+    @InlineData(true, false, false)
+    @InlineData(true, false, true)
+    @InlineData(true, true, false)
+    @InlineData(true, true, true)
+    func AmbiguousFixedInterfaceAnnotationsRequireAnExplicitContract(
+        marked bool,
+        referenceAssembly bool,
+        memberCarrier bool
+    ) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let reference = Path.Combine(fixture.Directory, "ambiguous-interface.ref.dll")
         let foreign = fixture.CompileCSharpWithReference(`
@@ -974,10 +984,21 @@ using Gsharp.Values.FixedArrays.V1;
                 } else {
                     ""
                 }
-            ) + `
+            ) + (
+                if memberCarrier {
+                    `
+public interface Parent<T> { Leaf<T> Item { get; } }
+public interface Left: Parent<string> { }
+public interface Right: Parent<string?> { }
+`
+                } else {
+                    `
 public interface Parent<T> { }
 public interface Left: Parent<Leaf<string>> { }
 public interface Right: Parent<Leaf<string?>> { }
+`
+                }
+            ) + `
 public interface Child: Left,Right { }
 `, "AmbiguousInterface", reference)
         let (code, diagnostics) = fixture.TryCompile(
@@ -1000,6 +1021,214 @@ public interface Child: Left,Right { }
         } else {
             Assert.True(code == 0, diagnostics)
         }
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func ConstructedInterfaceMemberProjectionSelectsTheActualOverload(reverse bool, referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "multiple-interfaces.ref.dll")
+        let foreign = fixture.CompileCSharpWithReference(`
+namespace MultipleInterfaces {
+    public interface Parent<T> { T Echo(T value); }
+    public interface Child: ` + (
+                if reverse {
+                    "Parent<string>,Parent<int>"
+                } else {
+                    "Parent<int>,Parent<string>"
+                }
+            ) + ` { }
+    public sealed class Implementation: Child {
+        public int Echo(int value) => value + 1;
+        public string Echo(string value) => "typed:" + value;
+    }
+    public static class Api { public static Child Make() => new Implementation(); }
+}`, "MultipleInterfaces", reference)
+        let consumer = fixture.Compile(`package InterfaceOverloads
+import System
+import MultipleInterfaces
+func Main() {
+    Console.WriteLine(Api.Make().Echo("ok"))
+    Console.WriteLine(Api.Make().Echo(3))
+}
+`, "interface-overloads", true, "/reference:" +
+                (
+                if referenceAssembly {
+                    reference
+                } else {
+                    foreign
+                }
+            ))
+        IlVerifier.Verify(foreign)
+        IlVerifier.Verify(reference)
+        IlVerifier.Verify(consumer, []string{foreign})
+        Assert.Equal("typed:ok\n4\n", fixture.Run(consumer))
+        using let resolver = ReferenceResolver.WithReferences(
+            []string{
+                if referenceAssembly {
+                    reference
+                } else {
+                    foreign
+                }
+            }
+        )
+        Assert.True(resolver.TryResolveType("MultipleInterfaces.Child", out var child))
+        let receiver = TypeSymbol.FromClrTypeWithoutNullability(child, NullabilityFreeReason.ResolvedTypeName)
+        for parent in child.GetInterfaces() {
+            let method = parent.GetMethod("Echo")!!
+            Assert.Equal(
+                method.ReturnType.FullName,
+                MemberLookup.GetClrMethodReturnTypeSymbol(receiver, method).ClrType?.FullName
+            )
+            Assert.Equal(
+                method.GetParameters()[0].ParameterType.FullName,
+                MemberLookup.GetClrMethodParameterTypeSymbol(receiver, method, 0).ClrType?.FullName
+            )
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConsistentFixedMemberDiamondRetainsNullableElements(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "member-diamond.ref.dll")
+        let foreign = fixture.CompileCSharpWithReference(`
+using System.Reflection;
+using Gsharp.Values.FixedArrays.V1;
+[assembly: AssemblyMetadata("GSharp.FixedArrays", "1")]
+namespace MemberDiamond {
+    public interface Parent<T> { Leaf<T> Item { get; } }
+    public interface Left: Parent<string?> { }
+    public interface Right: Parent<string?> { }
+    public interface Child: Left,Right { }
+    public static class Api { public static Child Make() => null!; }
+}`, "MemberDiamond", reference)
+        let (code, diagnostics) = fixture.TryCompile(`package MemberDiamondRejected
+import MemberDiamond
+func Needs(value string) { }
+func Main() { Needs(Api.Make().Item.Item) }
+`, "member-diamond-rejected", true, "/reference:" +
+                (
+                if referenceAssembly {
+                    reference
+                } else {
+                    foreign
+                }
+            ))
+        Assert.NotEqual(0, code)
+        Assert.Contains("error GS0154:", diagnostics, StringComparison.Ordinal)
+        Assert.DoesNotContain("error GS0630:", diagnostics, StringComparison.Ordinal)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func SharedInterfaceDiamondsHaveBoundedProjectionWork(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = StringBuilder("namespace SharedDiamonds {\npublic interface L0 { }\npublic interface R0 { }\n")
+        for var depth = 1; depth <= 8; depth++ {
+            for name in[]string{"L", "R"} {
+                source
+                    .Append("public interface ")
+                    .Append(name)
+                    .Append(depth)
+                    .Append(": L")
+                    .Append(depth - 1)
+                    .Append(",R")
+                    .Append(depth - 1)
+                    .Append(" { }\n")
+            }
+        }
+        source.Append(`
+public interface Target<T> { T Echo(T value); }
+public interface Child: L8,R8,Target<string> { }
+public sealed class Implementation: Child { public string Echo(string value) => value; }
+public static class Api { public static Child Make() => new Implementation(); }
+}`)
+        let reference = Path.Combine(fixture.Directory, "shared-diamonds.ref.dll")
+        let foreign = fixture.CompileCSharpWithReference(source.ToString(), "SharedDiamonds", reference)
+        let consumer = fixture.Compile(`package BoundedDiamond
+import System
+import SharedDiamonds
+func Main() { Console.WriteLine(Api.Make().Echo("bounded")) }
+`, "shared-diamonds", true, "/reference:" +
+                (
+                if referenceAssembly {
+                    reference
+                } else {
+                    foreign
+                }
+            ))
+        IlVerifier.Verify(consumer, []string{foreign})
+        Assert.Equal("bounded\n", fixture.Run(consumer))
+        using let resolver = ReferenceResolver.WithReferences(
+            []string{
+                if referenceAssembly {
+                    reference
+                } else {
+                    foreign
+                }
+            }
+        )
+        Assert.True(resolver.TryResolveType("SharedDiamonds.Child", out var child))
+        let receiver = TypeSymbol.FromClrTypeWithoutNullability(child, NullabilityFreeReason.ResolvedTypeName)
+        let method = child.GetInterfaces().Single((type Type) -> type.Name == "Target`1").GetMethod("Echo")!!
+        using let measurements = CompilationMeasurements.Start("fixed-interface-diamond")
+        Assert.Equal("System.String", MemberLookup.GetClrMethodReturnTypeSymbol(receiver, method).ClrType?.FullName)
+        let visits = measurements.GetCounter("metadata.receiver-context-visits")
+        this.output.WriteLine("diamond receiver visits: " + visits.ToString())
+        Assert.InRange(visits, 1L, 128L)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func FixedInterfaceRowsResolveNestedTypeForwarders(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let oldFacade = fixture.CompileCSharp(
+            "public class Outer { public sealed class Element { } }",
+            "ForwardedElements"
+        )
+        let reference = Path.Combine(fixture.Directory, "nested-forwarder.ref.dll")
+        let foreign = fixture.CompileCSharpWithReference(`
+using System.Reflection;
+using Gsharp.Values.FixedArrays.V1;
+[assembly: AssemblyMetadata("GSharp.FixedArrays", "1")]
+public interface Box<T> { }
+public interface Child: Box<Leaf<Outer.Element>> { }
+`, "NestedForwarder", reference, oldFacade)
+        let target = fixture.CompileCSharp(
+            "public class Outer { public sealed class Element { } }",
+            "ElementDefinitions"
+        )
+        let facade = fixture.CompileCSharp(
+            "using System.Runtime.CompilerServices;\n[assembly: TypeForwardedTo(typeof(Outer))]",
+            "ForwardedElements",
+            target
+        )
+        let consumer = fixture.Compile(
+            "package NestedForwarderConsumer\nfunc Main() { }\n",
+            "nested-forwarder",
+            true,
+            "/reference:" +
+                (
+                if referenceAssembly {
+                    reference
+                } else {
+                    foreign
+                }
+            ),
+            "/reference:" + facade,
+            "/reference:" + target
+        )
+        IlVerifier.Verify(foreign, []string{facade, target})
+        IlVerifier.Verify(reference, []string{facade, target})
+        IlVerifier.Verify(facade, []string{target})
+        IlVerifier.Verify(consumer, []string{foreign, facade, target})
     }
 
     @Theory

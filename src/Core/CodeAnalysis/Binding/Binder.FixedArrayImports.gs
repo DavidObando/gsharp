@@ -54,36 +54,64 @@ partial class Binder {
             }
         }
 
-        private func ValidateFixedArrayMembers(receiver TypeSymbol, abi FixedArrayAbi) {
+        private func ValidateFixedArrayMembers(receiver TypeSymbol, abi FixedArrayAbi) bool {
             let type = receiver.ClrType!!
             let definition = if type.IsGenericType {
                 type.GetGenericTypeDefinition()
             } else {
                 type
             }
-            ValidateFixedArrayConstraints(receiver, definition.GetGenericArguments(), abi)
+            var fixedBearing = ValidateFixedArrayConstraints(receiver, definition.GetGenericArguments(), abi)
             const Flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly
             for field in type.GetFields(Flags) {
-                abi.ValidateSignature(MemberLookup.GetClrFieldTypeSymbol(receiver, field))
+                fixedBearing = ValidateFixedArraySignature(MemberLookup.GetClrFieldTypeSymbol(receiver, field), abi) ||
+                    fixedBearing
             }
             for property in type.GetProperties(Flags) {
-                abi.ValidateSignature(MemberLookup.GetClrPropertyTypeSymbol(receiver, property))
+                fixedBearing = ValidateFixedArraySignature(
+                    MemberLookup.GetClrPropertyTypeSymbol(receiver, property),
+                    abi
+                ) ||
+                    fixedBearing
             }
             for eventInfo in type.GetEvents(Flags) {
-                abi.ValidateSignature(MemberLookup.GetClrEventHandlerTypeSymbol(receiver, eventInfo))
+                fixedBearing = ValidateFixedArraySignature(
+                    MemberLookup.GetClrEventHandlerTypeSymbol(receiver, eventInfo),
+                    abi
+                ) ||
+                    fixedBearing
             }
             for method in type.GetMethods(Flags) {
-                ValidateFixedArrayConstraints(receiver, method.GetGenericArguments(), abi)
-                abi.ValidateSignature(MemberLookup.GetClrMethodReturnTypeSymbol(receiver, method))
+                fixedBearing = ValidateFixedArrayConstraints(receiver, method.GetGenericArguments(), abi) ||
+                    fixedBearing
+                fixedBearing = ValidateFixedArraySignature(
+                    MemberLookup.GetClrMethodReturnTypeSymbol(receiver, method),
+                    abi
+                ) ||
+                    fixedBearing
                 for var index = 0; index < method.GetParameters().Length; index++ {
-                    abi.ValidateSignature(MemberLookup.GetClrMethodParameterTypeSymbol(receiver, method, index))
+                    fixedBearing = ValidateFixedArraySignature(
+                        MemberLookup.GetClrMethodParameterTypeSymbol(receiver, method, index),
+                        abi
+                    ) ||
+                        fixedBearing
                 }
             }
             for constructor in type.GetConstructors(Flags) {
                 for var index = 0; index < constructor.GetParameters().Length; index++ {
-                    abi.ValidateSignature(MemberLookup.GetClrMethodParameterTypeSymbol(receiver, constructor, index))
+                    fixedBearing = ValidateFixedArraySignature(
+                        MemberLookup.GetClrMethodParameterTypeSymbol(receiver, constructor, index),
+                        abi
+                    ) ||
+                        fixedBearing
                 }
             }
+            return fixedBearing
+        }
+
+        private func ValidateFixedArraySignature(signature TypeSymbol, abi FixedArrayAbi) bool {
+            abi.ValidateSignature(signature)
+            return signature.ClrType is {} type && FixedArrayAbi.ContainsCandidate(type)
         }
 
         private func ValidateFixedArrayRelationships(receiver TypeSymbol, abi FixedArrayAbi) {
@@ -107,8 +135,8 @@ partial class Binder {
                     continue
                 }
                 abi.ValidateSignature(signature)
-                ValidateFixedArrayMembers(signature, abi)
-                if type.IsInterface && FixedArrayAbi.ContainsCandidate(type) {
+                let fixedMembers = ValidateFixedArrayMembers(signature, abi)
+                if type.IsInterface && (FixedArrayAbi.ContainsCandidate(type) || fixedMembers) {
                     if interfaceAnnotations.TryGetValue(type, out var previous) && previous != flags {
                         throw InvalidDataException("ambiguous fixed-bearing interface annotations")
                     }
@@ -120,15 +148,17 @@ partial class Binder {
             }
         }
 
-        private func ValidateFixedArrayConstraints(receiver TypeSymbol, parameters[]Type, abi FixedArrayAbi) {
+        private func ValidateFixedArrayConstraints(receiver TypeSymbol, parameters[]Type, abi FixedArrayAbi) bool {
+            var fixedBearing = false
             for parameter in parameters {
                 if !parameter.IsGenericParameter || parameter.GetGenericParameterConstraints().Length == 0 {
                     continue
                 }
                 for signature in MemberLookup.GetClrGenericParameterConstraintTypeSymbols(receiver, parameter) {
-                    abi.ValidateSignature(signature)
+                    fixedBearing = ValidateFixedArraySignature(signature, abi) || fixedBearing
                 }
             }
+            return fixedBearing
         }
     }
 }
