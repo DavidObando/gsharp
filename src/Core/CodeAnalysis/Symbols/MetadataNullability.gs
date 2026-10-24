@@ -131,6 +131,10 @@ internal shared class MetadataNullability {
     /// parameter, or a `Nullable<T>` over such a value type. Anything with type arguments, an element type, tuple
     /// elements or a pointer is read by a later stage.
     internal func IsSinglePosition(type TypeSymbol) bool {
+        // Custom modifiers are data beside the type: they never add a position (reflection does not show them either).
+        if type is MetadataModifiedTypeSymbol modified {
+            return IsSinglePosition(modified.Unmodified)
+        }
         if type is NullableTypeSymbol nullable {
             return IsSinglePosition(nullable.UnderlyingType)
         }
