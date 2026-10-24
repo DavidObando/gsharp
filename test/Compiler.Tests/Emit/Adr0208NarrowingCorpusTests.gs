@@ -25,7 +25,7 @@ import Xunit
 /// rows in the same change, and they now record GS0158.
 /// Each row names the row of ADR-0208 section 16 that changes it, if any.
 /// PR 2, slice 2a flipped e7 (Run2), e8, e10, e21, f1, f6 and g4 (rows R1, R3,
-/// R5) and added h1 to h7, i1, i2, j1, k1 and k2 (issue #5206, amendment A1). They now
+/// R5) and added h1 to h7, i1, i2, j1, k1, k2, l1, l2, m1 and n1 (issue #5206, amendment A1). They now
 /// record the new result. The rows h1 and h2 stay rejected until slice 2b (R2).
 open class Adr0208NarrowingCorpusTests {
     /// Compiles one probe, checks its diagnostics, and for a program that
@@ -169,6 +169,7 @@ open class Adr0208NarrowingCorpusTests {
                 "h1_assign_in_exiting_branch_new_fact",
                 "h2_call_in_exiting_branch_member_path",
                 "h3_call_in_condition_before_fact",
+                "h3b_unknown_call_in_condition_before_fact",
                 "h4_call_in_then_branch_member_path",
                 "h5_strengthening_gain",
                 "h6_call_in_condition_kills_entry_member_path",
@@ -178,6 +179,10 @@ open class Adr0208NarrowingCorpusTests {
                 "j1_else_if_chain_nary_join",
                 "k1_legacy_lift_keeps_the_stronger_join",
                 "k2_header_write_before_branch_read",
+                "l1_condition_call_kills_alias_fact",
+                "l2_condition_call_kills_member_path_on_alias",
+                "m1_unrelated_interface_refinement",
+                "n1_boxed_value_type_test",
                 "out-alias_out_ref_alias"
             },
             names
@@ -1093,6 +1098,87 @@ func Run(b Box) string {
     return b.Pet.Bark()
 }
 func Main() { Console.WriteLine(Run(Box(Dog()))) }`, "GS0159@14:18", "reject", "", "R2 (accepted after)"}
+            yield[]object{"l1_condition_call_kills_alias_fact", `class C {
+    var Value int32 = 1
+}
+func Clear(xs []C?) bool {
+    xs[0] = nil
+    return true
+}
+func Run(ref a C?, xs []C?) int32 {
+    if a != nil && Clear(xs) {
+    } else {
+        return 0
+    }
+    return a.Value
+}
+func Main() {
+    var xs = []C?{C{}}
+    Console.WriteLine(Run(ref xs[0], xs))
+}`, "GS0158@13:14", "reject", "", ""}
+            yield[]object{"m1_unrelated_interface_refinement", `interface IA {
+    func Id() string;
+}
+interface IB {
+    func Extra() string;
+}
+class Both : IA, IB {
+    func Id() string { return "id" }
+    func Extra() string { return "extra" }
+}
+func Run(x IA?) string {
+    if x == nil { return "" }
+    if x is IB {
+    } else {
+        return ""
+    }
+    return x.Extra()
+}
+func Main() { Console.WriteLine(Run(Both())) }`, "", "run", "extra", ""}
+            yield[]object{"h3b_unknown_call_in_condition_before_fact", `open class Animal { var Name string = "a" }
+class Dog : Animal { func Bark() string { return "woof" } }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Run(b Box) string {
+    let ready = func() bool { return true }
+    if ready() && b.Pet is Dog {
+    } else {
+        return ""
+    }
+    return b.Pet.Bark()
+}
+func Main() { Console.WriteLine(Run(Box(Dog()))) }`, "", "run", "woof", ""}
+            yield[]object{"l2_condition_call_kills_member_path_on_alias", `class Pet { var Name string = "a" }
+class Box {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Clear(xs []Box) bool {
+    xs[0] = Box(nil)
+    return true
+}
+func Run(ref b Box, xs []Box) string {
+    if b.Pet != nil && Clear(xs) {
+    } else {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() {
+    var xs = []Box{Box(Pet())}
+    Console.WriteLine(Run(ref xs[0], xs))
+}`, "GS0158@15:18", "reject", "", ""}
+            yield[]object{"n1_boxed_value_type_test", `func Run(x object?) int32 {
+    if x == nil { return 0 }
+    if x is int32 {
+    } else {
+        return 0
+    }
+    return x
+}
+func Main() { Console.WriteLine(Run(5)) }`, "", "run", "5", ""}
             yield[]object{"i1_5206_type_test_against_unrelated_interface", `interface IInit {
     func Init();
 }

@@ -103,14 +103,16 @@ internal partial class StatementBinder {
             return
         }
         var effects AssignedRootsCollector? = nil
+        var branchEffects AssignedRootsCollector? = nil
         var filterNames HashSet[string]? = nil
         var branchesMutateMembers = false
+        var statementMutatesMembers = false
         for path in exit.Paths {
             let joined = exit.NarrowedType(path)
             if joined == nil || !IsJoinGain(path, joined, entry) {
                 continue
             }
-            if effects == nil {
+            if effects == nil || branchEffects == nil {
                 effects = GetStatementEffects(statement, aliasesAtEntry)
                 let syntax = statement.Syntax
                 filterNames = if syntax == nil {
@@ -118,72 +120,88 @@ internal partial class StatementBinder {
                 } else {
                     EnclosingFilterNames(syntax, effects)
                 }
-                branchesMutateMembers = BranchesMayMutateMemberPaths(statement, aliasesAtEntry)
+                let branches = BranchStatements(statement)
+                branchEffects = NewCollector(nil, aliasesAtEntry)
+                var syntaxMutates = false
+                for branch in branches {
+                    branchEffects.Visit(branch)
+                    let branchSyntax = branch.Syntax
+                    syntaxMutates = syntaxMutates || branchSyntax == nil || SyntaxMayMutateMemberPaths(branchSyntax)
+                }
+                branchesMutateMembers = syntaxMutates || branchEffects.MayMutateMemberPaths
+                statementMutatesMembers = branchesMutateMembers ||
+                    effects.MayMutateMemberPaths ||
+                    syntax == nil ||
+                    SyntaxMayMutateMemberPaths(syntax)
             }
-            // The legacy passes own every kill that a write causes (row R2, a later PR).
-            // A call in the condition runs before the condition proves its facts (row R5).
             let killedByFilter = filterNames != nil &&
                 (filterNames.Contains(path.Root.Name) || MayBeMutatedByUnknownCallable(path))
-            if !killedByFilter && !StatementKillsPath(effects, path, branchesMutateMembers) {
+            if !killedByFilter &&
+                !KillsJoinGain(path, effects, branchEffects, branchesMutateMembers, statementMutatesMembers) {
                 SetPersistentNarrowing(persistentFrame, path, joined)
             }
         }
     }
 
-    // Whether the branches of an `if`, or the statements of a bare block, can mutate
-    // a member path. The condition and the initializer run before the facts hold.
-    private func BranchesMayMutateMemberPaths(
-        statement BoundStatement,
-        aliasesAtEntry IReadOnlyCollection[VariableSymbol]
+    // The one kill rule for a gain. The legacy passes own every kill that a write causes
+    // (row R2, a later PR). A member-path fact is proved after the calls of the condition
+    // and the initializer (row R5), so only the branches' effects and the writes of the
+    // whole statement kill it. A fact on a plain root, or on an external-storage alias, is
+    // proved by a test that a later call in the condition can follow, so the whole
+    // statement kills it.
+    private func KillsJoinGain(
+        path AccessPath,
+        statementEffects AssignedRootsCollector,
+        branchEffects AssignedRootsCollector,
+        branchesMutateMembers bool,
+        statementMutatesMembers bool
     ) bool {
+        if path.HasMembers && !IsExternalStorageAlias(path.Root) {
+            return statementEffects.AssignsRoot(path.Root) ||
+                StatementKillsPath(branchEffects, path, branchesMutateMembers)
+        }
+        return StatementKillsPath(statementEffects, path, statementMutatesMembers)
+    }
+
+    // The statements that run after the facts of an `if` hold: its branches. A bare
+    // block is all branch. The condition and the initializer run before the facts hold.
+    private func BranchStatements(statement BoundStatement) List[BoundStatement] {
+        let result = List[BoundStatement]()
         switch statement {
             case ifStatement is BoundIfStatement {
-                return MayMutateMemberPaths(ifStatement.ThenStatement, aliasesAtEntry) ||
-                    (
-                    ifStatement.ElseStatement != nil && MayMutateMemberPaths(ifStatement.ElseStatement, aliasesAtEntry)
-                )
+                result.Add(ifStatement.ThenStatement)
+                if ifStatement.ElseStatement != nil {
+                    result.Add(ifStatement.ElseStatement)
+                }
             }
             case initialized is BoundBlockStatement when initialized.Syntax is IfStatementSyntax &&
                 initialized
                 .Statements
                 .Length == 2 &&
                 initialized.Statements[1] is BoundIfStatement {
-                return BranchesMayMutateMemberPaths(initialized.Statements[1], aliasesAtEntry)
+                result.AddRange(BranchStatements(initialized.Statements[1]))
             }
             default {
-                return MayMutateMemberPaths(statement, aliasesAtEntry)
+                result.Add(statement)
             }
         }
-    }
-
-    // A property getter with user code is no call expression in the syntax, so the
-    // bound effects answer as well.
-    private func MayMutateMemberPaths(
-        statement BoundStatement,
-        aliasesAtEntry IReadOnlyCollection[VariableSymbol]
-    ) bool {
-        let syntax = statement.Syntax
-        if syntax == nil || SyntaxMayMutateMemberPaths(syntax) {
-            return true
-        }
-        let collector = NewCollector(nil, aliasesAtEntry)
-        collector.Visit(statement)
-        return collector.MayMutateMemberPaths
+        return result
     }
 
     // A gain is a fact that the statement proved and the frames do not hold. A
-    // fact that the entry state held is not a gain unless the join strengthens it.
+    // fact that the entry state held is not a gain unless the join refines it: a
+    // type that the held type converts to is weaker or equal, and any other type
+    // is a test that the held fact did not cover (`x IA?` tested against `IB`).
     // Putting back an entry fact that a write killed belongs to a later PR (row R2).
     private func IsJoinGain(path AccessPath, joined TypeSymbol, entry NarrowingState) bool {
         let entryType = entry.NarrowedType(path)
-        if entryType != nil &&
-            (object.Equals(entryType, joined) || !Conversion.IsRepresentationPreservingImplicit(joined, entryType)) {
+        if entryType != nil && IsWeakerOrEqual(entryType, joined) {
             return false
         }
         let currentType = binderCtx.Narrowing.NarrowedType(path)
-        if currentType == nil {
-            return true
-        }
-        return !object.Equals(currentType, joined) && Conversion.IsRepresentationPreservingImplicit(joined, currentType)
+        return currentType == nil || !IsWeakerOrEqual(currentType, joined)
     }
+
+    private func IsWeakerOrEqual(held TypeSymbol, joined TypeSymbol) bool -> object.Equals(held, joined) ||
+        Conversion.IsRepresentationPreservingImplicit(held, joined)
 }
