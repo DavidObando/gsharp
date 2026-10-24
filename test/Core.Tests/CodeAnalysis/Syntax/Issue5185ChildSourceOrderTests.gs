@@ -138,6 +138,63 @@ open class Issue5185ChildSourceOrderTests {
         Assert.Equal("func ( v int32 ) Scale ( f int32 ) int32 { return v * f }", Leaves(function))
     }
 
+    /// A node that lists its annotations among the child properties must either declare them
+    /// first or sort its children by source position. An annotation is written before the rest of
+    /// the declaration, so an `Annotations` property declared after other child properties
+    /// breaks the order (the shared cause in review of #5275). The test also checks the order
+    /// of the rare forms: a fixed buffer, an explicit interface property and an explicit interface event.
+    @Fact
+    func NodesWithAnnotations_DeclareThemFirstOrSortTheirChildren() {
+        var checkedTypes = 0
+        for type in Issue1675SyntaxNodeChildEnumerationTests.GetConcreteNodeTypes() {
+            let properties = SyntaxNode.GetChildPropertiesInEnumerationOrder(type)
+            let annotations = properties.ToList().FindIndex(
+                (p System.Reflection.PropertyInfo) -> p.PropertyType == typeof(
+                    System.Collections.Immutable.ImmutableArray[AnnotationSyntax]
+                )
+            )
+            if annotations < 0 {
+                continue
+            }
+            checkedTypes++
+            Assert.True(
+                annotations == 0 || SyntaxNode.IsSourceOrdered(type),
+                "${type.Name} lists Annotations after other children but does not carry @SyntaxChildSourceOrder"
+            )
+        }
+        Assert.True(checkedTypes >= 8, "only $checkedTypes node types have annotations")
+    }
+
+    @Fact
+    func FixedBufferAndExplicitInterfaceForms_AreInTheCorpusAndInSourceOrder() {
+        var fixedFields = 0
+        var explicitProperties = 0
+        var explicitEvents = 0
+        for tree in Issue1675SyntaxNodeChildEnumerationTests.ParseCorpus() {
+            for node in Descendants(tree.Root) {
+                if node is FieldDeclarationSyntax field && field.FixedKeyword != nil {
+                    fixedFields++
+                    Assert.Equal("fixed", node.GetFirstToken().Text)
+                } else if node is PropertyDeclarationSyntax property && property.ExplicitInterfaceType != nil {
+                    explicitProperties++
+                    Assert.True(node.GetFirstToken().Position <= property.PropKeyword.Position)
+                } else if node is EventDeclarationSyntax declaration && declaration.ExplicitInterfaceType != nil {
+                    explicitEvents++
+                }
+                var previous SyntaxNode? = nil
+                if node is FieldDeclarationSyntax ||
+                    node is PropertyDeclarationSyntax ||
+                    node is EventDeclarationSyntax {
+                    for child in node.GetChildren() {
+                        Assert.True(previous == nil || child.Span.Start >= previous.Span.Start, node.GetType().Name)
+                        previous = child
+                    }
+                }
+            }
+        }
+        Assert.True(fixedFields > 0 && explicitProperties > 0 && explicitEvents > 0, "forms missing from the corpus")
+    }
+
     /// Reflection and the generated accessors order the children the same way.
     @Fact
     func ReflectionOracle_UsesTheSameOrder() {

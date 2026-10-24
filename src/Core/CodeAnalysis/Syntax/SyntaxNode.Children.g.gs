@@ -2609,143 +2609,48 @@ partial class EventDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override prop ChildCount int32 {
-        get {
-            var count = 0
-            count += Annotations.Length
-            if IsPresent(AccessibilityModifier) {
-                count++
-            }
-            if IsPresent(OpenModifier) {
-                count++
-            }
-            if IsPresent(OverrideModifier) {
-                count++
-            }
-            if IsPresent(EventKeyword) {
-                count++
-            }
-            if IsPresent(Identifier) {
-                count++
-            }
-            if IsPresent(Type) {
-                count++
-            }
-            if IsPresent(OpenBraceToken) {
-                count++
-            }
-            count += Accessors.Length
-            if IsPresent(CloseBraceToken) {
-                count++
-            }
-            if IsPresent(ExplicitInterfaceOpenParenthesisToken) {
-                count++
-            }
-            if IsPresent(ExplicitInterfaceType) {
-                count++
-            }
-            if IsPresent(ExplicitInterfaceCloseParenthesisToken) {
-                count++
-            }
-            return count
+    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+        let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
+        for itemAnnotations in Annotations {
+            builder.Add(itemAnnotations)
         }
-    }
-
-    /// ```xmldoc
-    /// <inheritdoc />
-    /// ```
-    internal override func GetChild(index int32) SyntaxNode {
-        var remaining = index
-        if remaining >= 0 {
-            let child0 = Annotations
-            if remaining < child0.Length {
-                return child0[remaining]
-            }
-            remaining -= child0.Length
-            let child1 = AccessibilityModifier
-            if IsPresent(child1) {
-                if remaining == 0 {
-                    return child1!!
-                }
-                remaining--
-            }
-            let child2 = OpenModifier
-            if IsPresent(child2) {
-                if remaining == 0 {
-                    return child2!!
-                }
-                remaining--
-            }
-            let child3 = OverrideModifier
-            if IsPresent(child3) {
-                if remaining == 0 {
-                    return child3!!
-                }
-                remaining--
-            }
-            let child4 = EventKeyword
-            if IsPresent(child4) {
-                if remaining == 0 {
-                    return child4
-                }
-                remaining--
-            }
-            let child5 = Identifier
-            if IsPresent(child5) {
-                if remaining == 0 {
-                    return child5
-                }
-                remaining--
-            }
-            let child6 = Type
-            if IsPresent(child6) {
-                if remaining == 0 {
-                    return child6!!
-                }
-                remaining--
-            }
-            let child7 = OpenBraceToken
-            if IsPresent(child7) {
-                if remaining == 0 {
-                    return child7!!
-                }
-                remaining--
-            }
-            let child8 = Accessors
-            if remaining < child8.Length {
-                return child8[remaining]
-            }
-            remaining -= child8.Length
-            let child9 = CloseBraceToken
-            if IsPresent(child9) {
-                if remaining == 0 {
-                    return child9!!
-                }
-                remaining--
-            }
-            let child10 = ExplicitInterfaceOpenParenthesisToken
-            if IsPresent(child10) {
-                if remaining == 0 {
-                    return child10!!
-                }
-                remaining--
-            }
-            let child11 = ExplicitInterfaceType
-            if IsPresent(child11) {
-                if remaining == 0 {
-                    return child11!!
-                }
-                remaining--
-            }
-            let child12 = ExplicitInterfaceCloseParenthesisToken
-            if IsPresent(child12) {
-                if remaining == 0 {
-                    return child12!!
-                }
-                remaining--
-            }
+        if IsPresent(AccessibilityModifier) {
+            builder.Add(AccessibilityModifier!!)
         }
-        throw ArgumentOutOfRangeException(nameof(index))
+        if IsPresent(OpenModifier) {
+            builder.Add(OpenModifier!!)
+        }
+        if IsPresent(OverrideModifier) {
+            builder.Add(OverrideModifier!!)
+        }
+        if IsPresent(EventKeyword) {
+            builder.Add(EventKeyword)
+        }
+        if IsPresent(Identifier) {
+            builder.Add(Identifier)
+        }
+        if IsPresent(Type) {
+            builder.Add(Type!!)
+        }
+        if IsPresent(OpenBraceToken) {
+            builder.Add(OpenBraceToken!!)
+        }
+        for itemAccessors in Accessors {
+            builder.Add(itemAccessors)
+        }
+        if IsPresent(CloseBraceToken) {
+            builder.Add(CloseBraceToken!!)
+        }
+        if IsPresent(ExplicitInterfaceOpenParenthesisToken) {
+            builder.Add(ExplicitInterfaceOpenParenthesisToken!!)
+        }
+        if IsPresent(ExplicitInterfaceType) {
+            builder.Add(ExplicitInterfaceType!!)
+        }
+        if IsPresent(ExplicitInterfaceCloseParenthesisToken) {
+            builder.Add(ExplicitInterfaceCloseParenthesisToken!!)
+        }
+        return SortBySourcePosition(builder.ToImmutable())
     }
 }
 
@@ -2983,97 +2888,33 @@ partial class FieldDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override prop ChildCount int32 {
-        get {
-            var count = 0
-            count += Annotations.Length
-            if IsPresent(AccessibilityModifier) {
-                count++
-            }
-            if IsPresent(VarOrLetKeyword) {
-                count++
-            }
-            if IsPresent(Identifier) {
-                count++
-            }
-            if IsPresent(Type) {
-                count++
-            }
-            if IsPresent(EqualsToken) {
-                count++
-            }
-            if IsPresent(Initializer) {
-                count++
-            }
-            if IsPresent(FixedKeyword) {
-                count++
-            }
-            return count
+    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+        let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
+        for itemAnnotations in Annotations {
+            builder.Add(itemAnnotations)
         }
-    }
-
-    /// ```xmldoc
-    /// <inheritdoc />
-    /// ```
-    internal override func GetChild(index int32) SyntaxNode {
-        var remaining = index
-        if remaining >= 0 {
-            let child0 = Annotations
-            if remaining < child0.Length {
-                return child0[remaining]
-            }
-            remaining -= child0.Length
-            let child1 = AccessibilityModifier
-            if IsPresent(child1) {
-                if remaining == 0 {
-                    return child1!!
-                }
-                remaining--
-            }
-            let child2 = VarOrLetKeyword
-            if IsPresent(child2) {
-                if remaining == 0 {
-                    return child2!!
-                }
-                remaining--
-            }
-            let child3 = Identifier
-            if IsPresent(child3) {
-                if remaining == 0 {
-                    return child3
-                }
-                remaining--
-            }
-            let child4 = Type
-            if IsPresent(child4) {
-                if remaining == 0 {
-                    return child4
-                }
-                remaining--
-            }
-            let child5 = EqualsToken
-            if IsPresent(child5) {
-                if remaining == 0 {
-                    return child5!!
-                }
-                remaining--
-            }
-            let child6 = Initializer
-            if IsPresent(child6) {
-                if remaining == 0 {
-                    return child6!!
-                }
-                remaining--
-            }
-            let child7 = FixedKeyword
-            if IsPresent(child7) {
-                if remaining == 0 {
-                    return child7!!
-                }
-                remaining--
-            }
+        if IsPresent(AccessibilityModifier) {
+            builder.Add(AccessibilityModifier!!)
         }
-        throw ArgumentOutOfRangeException(nameof(index))
+        if IsPresent(VarOrLetKeyword) {
+            builder.Add(VarOrLetKeyword!!)
+        }
+        if IsPresent(Identifier) {
+            builder.Add(Identifier)
+        }
+        if IsPresent(Type) {
+            builder.Add(Type)
+        }
+        if IsPresent(EqualsToken) {
+            builder.Add(EqualsToken!!)
+        }
+        if IsPresent(Initializer) {
+            builder.Add(Initializer!!)
+        }
+        if IsPresent(FixedKeyword) {
+            builder.Add(FixedKeyword!!)
+        }
+        return SortBySourcePosition(builder.ToImmutable())
     }
 }
 
@@ -6602,209 +6443,67 @@ partial class PropertyDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override prop ChildCount int32 {
-        get {
-            var count = 0
-            count += Annotations.Length
-            if IsPresent(AccessibilityModifier) {
-                count++
-            }
-            if IsPresent(OpenModifier) {
-                count++
-            }
-            if IsPresent(OverrideModifier) {
-                count++
-            }
-            if IsPresent(AbstractModifier) {
-                count++
-            }
-            if IsPresent(ExplicitInterfaceOpenParenthesisToken) {
-                count++
-            }
-            if IsPresent(ExplicitInterfaceType) {
-                count++
-            }
-            if IsPresent(ExplicitInterfaceCloseParenthesisToken) {
-                count++
-            }
-            if IsPresent(PropKeyword) {
-                count++
-            }
-            if IsPresent(Identifier) {
-                count++
-            }
-            if IsPresent(ThisKeyword) {
-                count++
-            }
-            if IsPresent(OpenBracketToken) {
-                count++
-            }
-            count += SeparatedLength(Parameters)
-            if IsPresent(CloseBracketToken) {
-                count++
-            }
-            if IsPresent(ReturnRefModifier) {
-                count++
-            }
-            if IsPresent(ReturnReadOnlyModifier) {
-                count++
-            }
-            if IsPresent(Type) {
-                count++
-            }
-            if IsPresent(OpenBraceToken) {
-                count++
-            }
-            count += Accessors.Length
-            if IsPresent(CloseBraceToken) {
-                count++
-            }
-            return count
+    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+        let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
+        for itemAnnotations in Annotations {
+            builder.Add(itemAnnotations)
         }
-    }
-
-    /// ```xmldoc
-    /// <inheritdoc />
-    /// ```
-    internal override func GetChild(index int32) SyntaxNode {
-        var remaining = index
-        if remaining >= 0 {
-            let child0 = Annotations
-            if remaining < child0.Length {
-                return child0[remaining]
-            }
-            remaining -= child0.Length
-            let child1 = AccessibilityModifier
-            if IsPresent(child1) {
-                if remaining == 0 {
-                    return child1!!
-                }
-                remaining--
-            }
-            let child2 = OpenModifier
-            if IsPresent(child2) {
-                if remaining == 0 {
-                    return child2!!
-                }
-                remaining--
-            }
-            let child3 = OverrideModifier
-            if IsPresent(child3) {
-                if remaining == 0 {
-                    return child3!!
-                }
-                remaining--
-            }
-            let child4 = AbstractModifier
-            if IsPresent(child4) {
-                if remaining == 0 {
-                    return child4!!
-                }
-                remaining--
-            }
-            let child5 = ExplicitInterfaceOpenParenthesisToken
-            if IsPresent(child5) {
-                if remaining == 0 {
-                    return child5!!
-                }
-                remaining--
-            }
-            let child6 = ExplicitInterfaceType
-            if IsPresent(child6) {
-                if remaining == 0 {
-                    return child6!!
-                }
-                remaining--
-            }
-            let child7 = ExplicitInterfaceCloseParenthesisToken
-            if IsPresent(child7) {
-                if remaining == 0 {
-                    return child7!!
-                }
-                remaining--
-            }
-            let child8 = PropKeyword
-            if IsPresent(child8) {
-                if remaining == 0 {
-                    return child8
-                }
-                remaining--
-            }
-            let child9 = Identifier
-            if IsPresent(child9) {
-                if remaining == 0 {
-                    return child9
-                }
-                remaining--
-            }
-            let child10 = ThisKeyword
-            if IsPresent(child10) {
-                if remaining == 0 {
-                    return child10!!
-                }
-                remaining--
-            }
-            let child11 = OpenBracketToken
-            if IsPresent(child11) {
-                if remaining == 0 {
-                    return child11!!
-                }
-                remaining--
-            }
-            let child12 = SeparatedItems(Parameters)
-            if remaining < child12.Length {
-                return child12[remaining]
-            }
-            remaining -= child12.Length
-            let child13 = CloseBracketToken
-            if IsPresent(child13) {
-                if remaining == 0 {
-                    return child13!!
-                }
-                remaining--
-            }
-            let child14 = ReturnRefModifier
-            if IsPresent(child14) {
-                if remaining == 0 {
-                    return child14!!
-                }
-                remaining--
-            }
-            let child15 = ReturnReadOnlyModifier
-            if IsPresent(child15) {
-                if remaining == 0 {
-                    return child15!!
-                }
-                remaining--
-            }
-            let child16 = Type
-            if IsPresent(child16) {
-                if remaining == 0 {
-                    return child16!!
-                }
-                remaining--
-            }
-            let child17 = OpenBraceToken
-            if IsPresent(child17) {
-                if remaining == 0 {
-                    return child17!!
-                }
-                remaining--
-            }
-            let child18 = Accessors
-            if remaining < child18.Length {
-                return child18[remaining]
-            }
-            remaining -= child18.Length
-            let child19 = CloseBraceToken
-            if IsPresent(child19) {
-                if remaining == 0 {
-                    return child19!!
-                }
-                remaining--
-            }
+        if IsPresent(AccessibilityModifier) {
+            builder.Add(AccessibilityModifier!!)
         }
-        throw ArgumentOutOfRangeException(nameof(index))
+        if IsPresent(OpenModifier) {
+            builder.Add(OpenModifier!!)
+        }
+        if IsPresent(OverrideModifier) {
+            builder.Add(OverrideModifier!!)
+        }
+        if IsPresent(AbstractModifier) {
+            builder.Add(AbstractModifier!!)
+        }
+        if IsPresent(ExplicitInterfaceOpenParenthesisToken) {
+            builder.Add(ExplicitInterfaceOpenParenthesisToken!!)
+        }
+        if IsPresent(ExplicitInterfaceType) {
+            builder.Add(ExplicitInterfaceType!!)
+        }
+        if IsPresent(ExplicitInterfaceCloseParenthesisToken) {
+            builder.Add(ExplicitInterfaceCloseParenthesisToken!!)
+        }
+        if IsPresent(PropKeyword) {
+            builder.Add(PropKeyword)
+        }
+        if IsPresent(Identifier) {
+            builder.Add(Identifier)
+        }
+        if IsPresent(ThisKeyword) {
+            builder.Add(ThisKeyword!!)
+        }
+        if IsPresent(OpenBracketToken) {
+            builder.Add(OpenBracketToken!!)
+        }
+        builder.AddRange(SeparatedItems(Parameters))
+        if IsPresent(CloseBracketToken) {
+            builder.Add(CloseBracketToken!!)
+        }
+        if IsPresent(ReturnRefModifier) {
+            builder.Add(ReturnRefModifier!!)
+        }
+        if IsPresent(ReturnReadOnlyModifier) {
+            builder.Add(ReturnReadOnlyModifier!!)
+        }
+        if IsPresent(Type) {
+            builder.Add(Type!!)
+        }
+        if IsPresent(OpenBraceToken) {
+            builder.Add(OpenBraceToken!!)
+        }
+        for itemAccessors in Accessors {
+            builder.Add(itemAccessors)
+        }
+        if IsPresent(CloseBraceToken) {
+            builder.Add(CloseBraceToken!!)
+        }
+        return SortBySourcePosition(builder.ToImmutable())
     }
 }
 

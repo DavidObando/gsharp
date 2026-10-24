@@ -403,6 +403,11 @@ func F() int32 {
             throw InvalidOperationException("repository root not found from " + AppContext.BaseDirectory)
         }
 
+        /// Snippets for the shapes of issue #5185: fixed buffers and explicit interface members.
+        private let SourceOrderForms IReadOnlyList[string] = []string{
+            "package p\ninterface IA { prop V int32 { get; } event Changed Action }\nunsafe struct Buf {\n    fixed data [4]int32\n}\nclass C : IA {\n    private prop (IA) V int32 -> 1\n    private event (IA) Changed Action {\n        add { }\n        remove { }\n    }\n}\n"
+        }
+
         internal func GetConcreteNodeTypes() List[Type] {
             return typeof(SyntaxNode)
                 .Assembly
@@ -414,6 +419,10 @@ func F() int32 {
 
         internal func ParseCorpus() sequence[SyntaxTree] {
             for snippet in Snippets {
+                yield SyntaxTree.Parse(snippet)
+            }
+            // Forms whose properties are not in source order (issue #5185).
+            for snippet in SourceOrderForms {
                 yield SyntaxTree.Parse(snippet)
             }
             let samplesDirectory string? = LocateSamplesDirectory()
