@@ -49,7 +49,7 @@ internal class WellKnownTypes {
         if existing != nil {
             return existing
         }
-        let created = set.TryResolveVisibleName(Names[index]) ??
+        let created = set.TryResolveVisibleName(Names[index], CoreLibraryOnly.Contains(index)) ??
             ResolvedTypeReference(set.GetMissing(nil, Names[index]))
         return Interlocked.CompareExchange(&resolved[index], created, nil) ?? created
     }
@@ -164,6 +164,19 @@ internal class WellKnownTypes {
         private let Names ImmutableArray[string] = BuildNames()
         private let SpecialIndex Dictionary[SpecialType, int32] = BuildSpecialIndex()
         private let NameIndex Dictionary[string, int32] = BuildNameIndex()
+
+        // The names that the runtime binds specially: every tagged type and System.TypedReference.
+        // A definition of one of these in a library that is not a core library is a namesake.
+        private let CoreLibraryOnly HashSet[int32] = BuildCoreLibraryOnly()
+
+        private func BuildCoreLibraryOnly() HashSet[int32] {
+            let indexes = HashSet[int32]()
+            for pair in SpecialIndex {
+                indexes.Add(pair.Value)
+            }
+            indexes.Add(NameIndex["System.TypedReference"])
+            return indexes
+        }
 
         private func BuildSpecialIndex() Dictionary[SpecialType, int32] {
             let index = Dictionary[SpecialType, int32]()

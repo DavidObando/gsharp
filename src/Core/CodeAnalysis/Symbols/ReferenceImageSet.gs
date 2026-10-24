@@ -137,31 +137,32 @@ internal class ReferenceImageSet {
     }
 
     /// Finds the type definition that a well-known name denotes.
-    /// The first searched module that supplies the name owns it, unless the type is not public.
-    /// Then the first public type of that name in a searched module wins, because a dependency can embed
-    /// an internal copy of a framework type (#3445, #4233). With no public copy, the first writer stands.
+    /// With `requireCoreLibrary`, the definition must live in a core library, the same rule as (cref:IsWellKnown):
+    /// a namesake in another assembly never becomes the entry, even when it comes first. The names that the runtime
+    /// binds specially need it (the tagged types and `System.TypedReference`). Other framework types, such as
+    /// `System.Collections.Generic.List`1`, live in several assemblies of a reference set, so the first writer owns them.
+    /// Among the allowed definitions, the first public one in reference order wins, because a dependency can embed
+    /// an internal copy of a framework type (#3445, #4233). With no public copy, the first allowed definition stands.
+    /// No allowed definition gives `null`, and the table then holds a missing type.
     /// @remarks The grant of `InternalsVisibleTo` to the consumer is not applied here.
     /// It belongs to the compilation, not to the set (ADR-0209 section 7c).
-    internal func TryResolveVisibleName(fullName string) ResolvedTypeReference? {
-        let first = TryResolveName(fullName)
-        if first == nil {
-            return nil
-        }
-        let firstModule = first.Module
-        if firstModule == nil || firstModule.IsExternallyVisible(first.Handle) {
-            return first
-        }
+    internal func TryResolveVisibleName(fullName string, requireCoreLibrary bool) ResolvedTypeReference? {
+        var firstAllowed ResolvedTypeReference? = nil
         for var i = 0; i < SearchedCount; i++ {
-            let candidate = ResolveInModule(Modules[i], first.FullName, HashSet[string](StringComparer.Ordinal))
+            let candidate = ResolveInModule(Modules[i], fullName, HashSet[string](StringComparer.Ordinal))
             if candidate == nil {
                 continue
             }
             let candidateModule = candidate.Module
-            if candidateModule != nil && candidateModule.IsExternallyVisible(candidate.Handle) {
+            if candidateModule == nil || requireCoreLibrary && !candidateModule.IsCoreLibrary {
+                continue
+            }
+            if candidateModule.IsExternallyVisible(candidate.Handle) {
                 return candidate
             }
+            firstAllowed ??= candidate
         }
-        return first
+        return firstAllowed
     }
 
     /// Finds a type that one named assembly defines, after the forwards of that assembly.

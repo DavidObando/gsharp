@@ -75,7 +75,7 @@ internal class MetadataSignatureDecoder : ISignatureTypeProvider[TypeSymbol, Met
     func GetPointerType(elementType TypeSymbol) TypeSymbol -> PointerTypeSymbol.Get(elementType)
 
     func GetPrimitiveType(typeCode PrimitiveTypeCode) TypeSymbol {
-        // TypedReference has no built-in symbol: it is the definition that the set supplies, or a missing type.
+        // TypedReference has no built-in symbol: it is the core library definition that the set supplies, or a missing type.
         if typeCode == PrimitiveTypeCode.TypedReference {
             return Canonical(module.Set.WellKnown.TryGet("System.TypedReference")!!)
         }

@@ -224,6 +224,28 @@ open class Issue5144MemberSymbolTests {
     }
 
     @Fact
+    func ANamesakeTypedReferenceThatComesFirst_IsNotTheWellKnownType() {
+        using let namesake = CSharpFixture(
+            "namespace System { public struct TypedReference {} }",
+            assemblyName: "TypedFirst5144"
+        )
+        let coreLibPath = typeof(object).Assembly.Location
+        let set = ReferenceImageSet(
+            ImmutableArray.Create(
+                ReferenceImage(File.ReadAllBytes(namesake.AssemblyPath), namesake.AssemblyPath, true),
+                ReferenceImage(File.ReadAllBytes(coreLibPath), coreLibPath, true)
+            )
+        )
+        let decoded = set.FindModule("TypedFirst5144")!!.Decoder.GetPrimitiveType(PrimitiveTypeCode.TypedReference)
+        Assert.Equal("System.Private.CoreLib!System.TypedReference", MetadataTypeKeys.Of(decoded))
+        // Without a core library the table holds a missing type, not the namesake.
+        let bare = ReferenceImageSet(
+            ImmutableArray.Create(ReferenceImage(File.ReadAllBytes(namesake.AssemblyPath), namesake.AssemblyPath, true))
+        )
+        Assert.IsType[MissingTypeSymbol](bare.Modules[0].Decoder.GetPrimitiveType(PrimitiveTypeCode.TypedReference))
+    }
+
+    @Fact
     func OneSymbolForOneMemberRow_EvenWhenManyThreadsAsk() {
         using let resolver = HandleResolver([]string{typeof(ReferenceResolver).Assembly.Location})
         let module = resolver.ImageSet!!.FindModule("System.Private.CoreLib")!!
