@@ -48,7 +48,7 @@ open class Issue5144ModifierTests {
             "System.Void{req:System.Private.CoreLib!System.Runtime.CompilerServices.IsExternalInit;opt:}",
             MetadataMemberComparison.DescribeMethod(setter)
         )
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact
@@ -81,8 +81,8 @@ open class Issue5144ModifierTests {
             MetadataModifiers.Format(ordered.FieldType)
         )
         Assert.True(
-            MetadataModelComparison.Compare(resolver, set).Count == 0,
-            MetadataModelComparison.FormatReport(MetadataModelComparison.Compare(resolver, set))
+            MetadataModelComparison.CompareFixture(resolver, set).Count == 0,
+            MetadataModelComparison.FormatReport(MetadataModelComparison.CompareFixture(resolver, set))
         )
     }
 
@@ -192,7 +192,7 @@ open class Issue5144ModifierTests {
         let ctor = shapes.Methods.First((m MetadataMethodSymbol) -> m.Name == ".ctor")
         Assert.Equal(1, MetadataModifiers.Of(ctor.Signature.ReturnType).Length)
         Assert.DoesNotContain("{req", MetadataMemberComparison.DescribeMethod(ctor))
-        Assert.Empty(MetadataModelComparison.Compare(resolver, resolver.ImageSet!!))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, resolver.ImageSet!!))
     }
 
     shared {

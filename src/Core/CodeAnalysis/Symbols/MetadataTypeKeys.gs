@@ -130,6 +130,16 @@ internal shared class MetadataTypeKeys {
         return Definition(type.Assembly.GetName().Name ?? "", type.FullName ?? "", IsCoreLibrary(type.Assembly))
     }
 
+    /// Tells whether a symbol is one of the built-in types.
+    internal func IsBuiltIn(type TypeSymbol) bool {
+        for builtIn in BuiltIns {
+            if object.ReferenceEquals(builtIn.Key, type) {
+                return true
+            }
+        }
+        return false
+    }
+
     /// Lists the types that a type is made of, in order: the element of an array, the pointee, the underlying type of a
     /// nullable, the arguments of a construction, the return type and parameters of a function pointer, and the type
     /// beneath a modified type. This is the only place that knows the shapes. Every walk over nested types uses it, so a

@@ -98,7 +98,7 @@ open class Issue5144SignatureDecoderTests {
         let variant = module.GetTypeSymbol(variantHandle)
         Assert.Equal(TypeParameterVariance.In, variant.TypeParameters[0].Variance)
         Assert.Equal(TypeParameterVariance.Out, variant.TypeParameters[1].Variance)
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact
@@ -117,7 +117,7 @@ open class Issue5144SignatureDecoderTests {
         module.TryGetDefinition("Holder5144L`1", out var handle)
         let holder = module.GetTypeSymbol(handle)
         Assert.IsType[MissingTypeSymbol](holder.GetConstraintTypes(0)[0])
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact
@@ -144,7 +144,7 @@ open class Issue5144SignatureDecoderTests {
         Assert.True(MetadataTypeKeys.ContainsMissing(symbol.BaseType))
         Assert.False(symbol.IsBaseChainComplete)
         Assert.Contains("|base-missing|", MetadataModelComparison.DescribeSymbol(symbol))
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact
@@ -187,7 +187,7 @@ open class Issue5144SignatureDecoderTests {
             described,
             MetadataModelComparison.DescribeType(resolver.FindTypeForComparison("Pair5144P", "Pair5144P`2")!!)
         )
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact
@@ -286,7 +286,7 @@ open class Issue5144SignatureDecoderTests {
             described,
             MetadataModelComparison.DescribeType(resolver.FindTypeForComparison("LeafQ5144", "Leaf5144Q`1")!!)
         )
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact

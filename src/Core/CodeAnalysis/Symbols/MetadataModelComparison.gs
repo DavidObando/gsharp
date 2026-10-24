@@ -50,17 +50,42 @@ internal shared class MetadataModelComparison {
     /// @param resolver The resolver, which answers for the `MetadataLoadContext` model.
     /// @param set The handle model over the same images, or `null` when it could not be built.
     /// @returns The different answers, in a fixed order: by module, then by table row.
-    internal func Compare(resolver ReferenceResolver, set ReferenceImageSet?) List[ModelDisagreement] {
+    internal func Compare(resolver ReferenceResolver, set ReferenceImageSet?) List[ModelDisagreement] -> Compare(
+        resolver,
+        set,
+        false
+    )
+
+    /// Compares the two models over the modules of the reference set, leaving out the host fallback assemblies
+    /// (the framework implementation that the resolver appends behind the supplied references). A test that builds a
+    /// small fixture uses it, so that the test compares its own modules and not the whole framework again.
+    internal func CompareFixture(resolver ReferenceResolver, set ReferenceImageSet?) List[ModelDisagreement] -> Compare(
+        resolver,
+        set,
+        true
+    )
+
+    /// Tells whether the comparison covers a module.
+    internal func Includes(
+        resolver ReferenceResolver,
+        module MetadataModule,
+        skipHostFallback bool
+    ) bool -> !skipHostFallback ||
+        !resolver.IsHostFallbackName(module.Identity.Name)
+
+    private func Compare(resolver ReferenceResolver, set ReferenceImageSet?, skipHostFallback bool) List[
+        ModelDisagreement
+    ] {
         let result = List[ModelDisagreement]()
         if set == nil {
             result.Add(ModelDisagreement("Q1.set", "reference set", "built", "not built"))
             return result
         }
-        CompareNames(resolver, set, result)
-        CompareTypeReferences(resolver, set, result)
+        CompareNames(resolver, set, result, skipHostFallback)
+        CompareTypeReferences(resolver, set, result, skipHostFallback)
         CompareWellKnownTypes(resolver, set, result)
-        CompareTypeDefinitions(resolver, set, result)
-        MetadataMemberComparison.Compare(resolver, set, result)
+        CompareTypeDefinitions(resolver, set, result, skipHostFallback)
+        MetadataMemberComparison.Compare(resolver, set, result, skipHostFallback)
         return result
     }
 
@@ -99,13 +124,21 @@ internal shared class MetadataModelComparison {
     }
 
     // Q1: the indexed names of each searched module, in order.
-    private func CompareNames(resolver ReferenceResolver, set ReferenceImageSet, result List[ModelDisagreement]) {
+    private func CompareNames(
+        resolver ReferenceResolver,
+        set ReferenceImageSet,
+        result List[ModelDisagreement],
+        skipHostFallback bool
+    ) {
         let expected = resolver.ReadIndexedTypeNames()
         if expected.Count != set.SearchedCount {
             result.Add(ModelDisagreement("Q1.modules", "reference set", "${expected.Count}", "${set.SearchedCount}"))
             return
         }
         for var i = 0; i < expected.Count; i++ {
+            if !Includes(resolver, set.Modules[i], skipHostFallback) {
+                continue
+            }
             let actual = set.GetIndexedNames(i)
             if expected[i].SequenceEqual(actual) {
                 continue
@@ -135,9 +168,13 @@ internal shared class MetadataModelComparison {
     private func CompareTypeReferences(
         resolver ReferenceResolver,
         set ReferenceImageSet,
-        result List[ModelDisagreement]
+        result List[ModelDisagreement],
+        skipHostFallback bool
     ) {
         for module in set.Modules {
+            if !Includes(resolver, module, skipHostFallback) {
+                continue
+            }
             for handle in module.Reader.TypeReferences {
                 let actual = set.ResolveTypeReference(module, handle)
                 var assemblyName = ""
@@ -216,10 +253,14 @@ internal shared class MetadataModelComparison {
     private func CompareTypeDefinitions(
         resolver ReferenceResolver,
         set ReferenceImageSet,
-        result List[ModelDisagreement]
+        result List[ModelDisagreement],
+        skipHostFallback bool
     ) {
         for var m = 0; m < set.SearchedCount; m++ {
             let module = set.Modules[m]
+            if !Includes(resolver, module, skipHostFallback) {
+                continue
+            }
             for fullName in module.DefinedNames {
                 module.TryGetDefinition(fullName, out var handle)
                 let symbol = module.GetTypeSymbol(handle)
