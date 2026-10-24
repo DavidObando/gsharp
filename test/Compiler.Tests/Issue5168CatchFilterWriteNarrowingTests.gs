@@ -422,6 +422,67 @@ func Run(callback () -> void) int32 {
 }
 func Main() { Console.WriteLine(Run(() -> { })) }
 `}
+            // A branch join must not restore a fact that an enclosing filter cleared.
+            yield[]object{"enclosing-filter-if-join", `
+package P
+import System
+
+func Clear(ref s string?) bool {
+    s = nil
+    return false
+}
+func Run(flag bool) int32 {
+    let f = FormatException("f")
+    let g = InvalidOperationException("g")
+    var s string? = nil
+    try {
+        if flag {
+            s = "a"
+            try {
+                try {
+                    throw f
+                } finally {
+                    throw g
+                }
+            } catch (InvalidOperationException) {
+            }
+        } else {
+            s = "b"
+        }
+        return s.Length
+    } catch (FormatException) when Clear(ref s) {
+        return 0
+    }
+}
+func Main() { Console.WriteLine(Run(true)) }
+`}
+            // The exit state of a try keeps the callable alias that its own declining filter replaced.
+            yield[]object{"own-filter-alias-after-try", `
+package P
+import System
+
+func Run(callback () -> void) int32 {
+    var s string? = "abc"
+    let clear = func() { s = nil }
+    var action = callback
+    let flip = func() bool {
+        action = clear
+        return false
+    }
+    try {
+        throw Exception("x")
+    } catch when flip() {
+        return 1
+    } catch {
+    }
+    if s != nil {
+        action()
+        return s.Length
+    }
+    return 0
+}
+func Main() { Console.WriteLine(Run(() -> { })) }
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
@@ -554,6 +615,27 @@ func Run() int32 {
     try {
         throw Exception("x")
     } catch when Check(in s) {
+        return 1
+    } catch {
+        return s.Length
+    }
+}
+func Main() { Console.WriteLine(Run()) }
+`, []string{"3"}}
+            // An index input of a ref operand is only read, so the narrowed local keeps its fact.
+            yield[]object{"filter-ref-operand-index-read", `
+package P
+import System
+
+func Get() string? { return "abc" }
+func Touch(ref slot int32) bool { return false }
+func Run() int32 {
+    let s string? = Get()
+    if s == nil { return 0 }
+    var items = []int32{0, 0, 0, 0}
+    try {
+        throw Exception("x")
+    } catch when Touch(ref items[s.Length]) {
         return 1
     } catch {
         return s.Length

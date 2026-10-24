@@ -498,6 +498,32 @@ internal partial class StatementBinder {
         return names
     }
 
+    /// ADR-0208 R10 (#5168): after a statement that can run user code or catch a replacement
+    /// exception, a filter of an enclosing try may have run. Runs after the joins of the statement,
+    /// which would otherwise restore the facts that the filter writes.
+    private func ApplyEnclosingFilterEffects(syntax SyntaxNode, statement BoundStatement) {
+        let filters = CollectCatchFiltersAbove(syntax)
+        if filters.Count == 0 || !HasAnyActiveNarrowings() {
+            return
+        }
+        let effects = GetStatementEffects(statement, externalCallableAliases)
+        if effects.MayMutateMemberPaths || effects.ContainsTry {
+            InvalidateNarrowingsForEnclosingFilters(filters)
+        }
+    }
+
+    /// ADR-0208 R10 (#5168): adds the storage that the `ref` or `out` operand [`operand`](paramref)
+    /// writes: the variable itself, or the receiver of an index. An index input is only read.
+    private func CollectWriteTargetNames(operand SyntaxNode, names HashSet[string]) {
+        if operand is ParenthesizedExpressionSyntax parenthesized {
+            CollectWriteTargetNames(parenthesized.Expression, names)
+        } else if operand is IndexExpressionSyntax indexed {
+            CollectWriteTargetNames(indexed.Target, names)
+        } else {
+            CollectAllNames(operand, names)
+        }
+    }
+
     /// ADR-0208 R10 (#5168): collects the names under `ref` and `out` arguments. An `in` argument
     /// cannot write its storage.
     private func CollectWritableRefArgumentNames(node SyntaxNode, names HashSet[string]) {
@@ -506,7 +532,11 @@ internal partial class StatementBinder {
             "in",
             StringComparison.Ordinal
         ) {
-            CollectAllNames(node, names)
+            if reference.Expression != nil {
+                CollectWriteTargetNames(reference.Expression, names)
+            } else {
+                CollectAllNames(node, names)
+            }
             return
         }
         for child in node.GetChildren() {
