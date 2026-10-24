@@ -55,7 +55,8 @@ internal partial class StatementBinder {
     ) AssignedRootsCollector -> AssignedRootsCollector(
         assignmentPreservesNarrowing,
         externalFunctionValues,
-        (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second)
+        (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second),
+        (operand TypeSymbol?, stored TypeSymbol?) -> OperandMayReachStorage(operand, stored)
     )
 
     /// ADR-0208 R12 (#5171): removes the callable aliases that [`collector`](paramref) assigns, and
@@ -91,6 +92,201 @@ internal partial class StatementBinder {
         for key in state.Keys.Where((key AccessPath) -> MayShareStorage(key.Root, root)).ToArray() {
             state.Remove(key)
         }
+    }
+
+    // ADR-0208 R12 (#5292): the imported types whose instances are inert for storage reach: no public
+    // instance field and no array or by-reference property that a caller could alias. This is the only
+    // list; every other imported class is reached by default. Core's `NarrowedVariables[i].TryGetValue(path,
+    // out found)` reads a Dictionary; the others are the BCL containers a program uses the same way.
+    private let inertImportedContainers HashSet[string] = HashSet[string]{
+        "System.Collections.Generic.List`1",
+        "System.Collections.Generic.Dictionary`2",
+        "System.Collections.Generic.HashSet`1",
+        "System.Collections.Generic.Queue`1",
+        "System.Collections.Generic.Stack`1",
+        "System.Collections.Generic.SortedDictionary`2",
+        "System.Collections.Generic.SortedSet`1",
+        "System.Collections.Generic.LinkedList`1",
+        "System.Collections.Generic.KeyValuePair`2",
+        "System.Collections.Immutable.ImmutableArray`1",
+        "System.Collections.Immutable.ImmutableList`1",
+        "System.Collections.Immutable.ImmutableDictionary`2",
+        "System.Collections.Immutable.ImmutableHashSet`1"
+    }
+
+    /// ADR-0208 R12 (#5292): whether a callee that receives a value of [`operand`](paramref) can reach a
+    /// container of a storage of type [`stored`](paramref). A type is inert only when it is provably so:
+    /// a primitive, a string or an enum; an array or slice of inert elements; a sealed or value type from
+    /// this compilation, or an allowlisted imported container, whose own members, base chain and (for an open
+    /// class) known subclasses are all inert. Everything else reaches: interfaces, `object`, type
+    /// parameters, delegates, structural types, unlisted imported classes and any type with a field of the
+    /// stored type.
+    private func OperandMayReachStorage(operand TypeSymbol?, stored TypeSymbol?) bool {
+        let target = StripNullability(stored)
+        if operand == nil || target == nil {
+            return true
+        }
+        return TypeReaches(StripNullability(operand), target, HashSet[TypeSymbol](), 0)
+    }
+
+    private func IsStoredType(candidate TypeSymbol?, target TypeSymbol) bool {
+        let stripped = StripNullability(candidate)
+        return stripped != nil &&
+            (
+            object.Equals(stripped, target) ||
+                (
+                stripped.ClrType != nil && target.ClrType != nil && ClrTypeInspector.IsSameAs(
+                    stripped.ClrType,
+                    target.ClrType
+                )
+            )
+        )
+    }
+
+    private func MemberTypeReaches(
+        memberType TypeSymbol?,
+        target TypeSymbol,
+        visited HashSet[TypeSymbol],
+        depth int32
+    ) bool -> IsStoredType(memberType, target) ||
+        TypeReaches(StripNullability(memberType), target, visited, depth + 1)
+
+    private func TypeReaches(type TypeSymbol?, target TypeSymbol, visited HashSet[TypeSymbol], depth int32) bool {
+        if type == nil || depth > 24 {
+            return true
+        }
+        if !visited.Add(type) {
+            return false
+        }
+        if type is EnumSymbol {
+            return false
+        }
+        if type is TypeParameterSymbol or InterfaceSymbol or DelegateTypeSymbol or FunctionTypeSymbol {
+            return true
+        }
+        if type is ArrayTypeSymbol array {
+            return MemberTypeReaches(array.ElementType, target, visited, depth)
+        }
+        if type is SliceTypeSymbol slice {
+            return MemberTypeReaches(slice.ElementType, target, visited, depth)
+        }
+        if type is StructSymbol structure {
+            return SourceTypeReaches(structure, target, visited, depth)
+        }
+        let clr = type.ClrType
+        if clr == nil {
+            // Tuples, channels, maps and other structural types.
+            return true
+        }
+        return ImportedTypeReaches(type, clr, target, visited, depth)
+    }
+
+    private func SourceTypeReaches(
+        structure StructSymbol,
+        target TypeSymbol,
+        visited HashSet[TypeSymbol],
+        depth int32
+    ) bool {
+        var current StructSymbol? = structure
+        for var hops = 0; current != nil && hops < 64; hops++ {
+            let definition = current.Definition ?? current
+            for field in definition.Fields {
+                if !field.IsStatic && MemberTypeReaches(field.Type, target, visited, depth) {
+                    return true
+                }
+            }
+            for property in definition.Properties {
+                if !property.IsStatic &&
+                    property.IsAutoProperty &&
+                    MemberTypeReaches(property.Type, target, visited, depth) {
+                    return true
+                }
+            }
+            if definition.ImportedBaseType is {} importedBase &&
+                !(importedBase.ClrType != nil && ClrTypeInspector.IsSameAs(importedBase.ClrType, typeof(object))) &&
+                TypeReaches(importedBase, target, visited, depth + 1) {
+                return true
+            }
+            current = definition.BaseClass
+        }
+        // A subclass of an open or abstract class can add storage: visit every subclass of this compilation.
+        if structure.IsClass && (structure.IsOpen || structure.IsAbstract) {
+            for candidate in binderCtx.RootScope.GetDeclaredStructs() {
+                if !candidate.IsClass || object.ReferenceEquals(candidate, structure) {
+                    continue
+                }
+                let definition = structure.Definition ?? structure
+                if candidate.GetHierarchy().Any(
+                    (ancestor StructSymbol) -> object.ReferenceEquals(ancestor.Definition ?? ancestor, definition)
+                ) &&
+                    TypeReaches(candidate, target, visited, depth + 1) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func ImportedTypeReaches(
+        type TypeSymbol,
+        clr Type,
+        target TypeSymbol,
+        visited HashSet[TypeSymbol],
+        depth int32
+    ) bool {
+        if clr.IsPrimitive || clr.IsEnum || ClrTypeInspector.IsSameAs(clr, typeof(string)) {
+            return false
+        }
+        if clr.IsInterface ||
+            clr.IsGenericParameter ||
+            clr.IsByRef ||
+            clr.IsPointer ||
+            clr.IsByRefLike ||
+            ClrTypeInspector.IsSameAs(clr, typeof(object)) {
+            return true
+        }
+        if clr.IsArray {
+            let element = clr.GetElementType()
+            return element == nil ||
+                (target.ClrType != nil && ClrTypeInspector.IsSameAs(element, target.ClrType)) ||
+                !(element.IsPrimitive || ClrTypeInspector.IsSameAs(element, typeof(string)) || element.IsEnum)
+        }
+        let definition = if clr.IsGenericType && !clr.IsGenericTypeDefinition {
+            clr.GetGenericTypeDefinition()
+        } else {
+            clr
+        }
+        let listed = definition.FullName != nil && inertImportedContainers.Contains(definition.FullName)
+        if listed {
+            // The container is inert, but its elements are reachable through it.
+            let arguments = if type is ImportedTypeSymbol imported && !imported.TypeArguments.IsDefaultOrEmpty {
+                imported.TypeArguments
+            } else {
+                type.ConstructedTypeArguments
+            }
+            for argument in arguments {
+                if TypeReaches(StripNullability(argument), target, visited, depth + 1) {
+                    return true
+                }
+            }
+            return false
+        }
+        // An unlisted class that is not sealed may be a subclass with storage; a sealed class or a value
+        // type is scanned for what a caller can alias.
+        if !clr.IsValueType && !clr.IsSealed {
+            return true
+        }
+        for property in clr.GetProperties(BindingFlags.Instance | BindingFlags.Public) {
+            if property.PropertyType.IsArray || property.PropertyType.IsByRef {
+                return true
+            }
+        }
+        for field in clr.GetFields(BindingFlags.Instance | BindingFlags.Public) {
+            if MemberTypeReaches(ClrNullability.GetFieldTypeSymbol(field), target, visited, depth) {
+                return true
+            }
+        }
+        return false
     }
 
     private func RestoreJoinedExternalCallableAliases(
@@ -678,7 +874,8 @@ internal partial class StatementBinder {
         )
         let collector = LoopBackEdgeMutationCollector(
             AssignmentPreservesNarrowing,
-            (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second)
+            (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second),
+            (operand TypeSymbol?, stored TypeSymbol?) -> OperandMayReachStorage(operand, stored)
         )
         if markerBlock == nil {
             return collector
@@ -1748,13 +1945,16 @@ internal partial class StatementBinder {
         private var globalMutationProtectedRoots HashSet[VariableSymbol]?
         private var tryAssignedVariables HashSet[VariableSymbol]?
         private let mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?
+        private let operandMayReach((TypeSymbol?, TypeSymbol?) -> bool)?
 
         init(
             assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?,
             externalFunctionValues IEnumerable[VariableSymbol]? = nil,
-            mayShareStorage((VariableSymbol, VariableSymbol) -> bool)? = nil
+            mayShareStorage((VariableSymbol, VariableSymbol) -> bool)? = nil,
+            operandMayReach((TypeSymbol?, TypeSymbol?) -> bool)? = nil
         ) {
             this.mayShareStorage = mayShareStorage
+            this.operandMayReach = operandMayReach
             Roots = HashSet[VariableSymbol]()
             WritableReferenceRoots = HashSet[VariableSymbol]()
             this.assignmentPreservesNarrowing = assignmentPreservesNarrowing
@@ -1799,7 +1999,7 @@ internal partial class StatementBinder {
         // through an operand whose type graph holds the container of a storage of the type of the root.
         func CallMayReachStorageOf(root VariableSymbol) bool {
             for type in callOperandTypes {
-                if StatementBinder.TypeGraphMayHoldStorageOf(type, root.Type) {
+                if operandMayReach == nil || operandMayReach(type, root.Type) {
                     return true
                 }
             }
@@ -2816,8 +3016,9 @@ internal partial class StatementBinder {
     private class LoopBackEdgeMutationCollector : AssignedRootsCollector {
         init(
             assignmentPreservesNarrowing(BoundAssignmentExpression, TypeSymbol) -> bool,
-            mayShareStorage(VariableSymbol, VariableSymbol) -> bool
-        ) : base(assignmentPreservesNarrowing, nil, mayShareStorage) { }
+            mayShareStorage(VariableSymbol, VariableSymbol) -> bool,
+            operandMayReach(TypeSymbol?, TypeSymbol?) -> bool
+        ) : base(assignmentPreservesNarrowing, nil, mayShareStorage, operandMayReach) { }
     }
 
     private func HasInternallyReachableFallthrough(statement BoundStatement) bool {
@@ -4453,7 +4654,7 @@ internal partial class StatementBinder {
         private func MayHoldOtherStorage(type TypeSymbol) bool -> type is TypeParameterSymbol or
             InterfaceSymbol ||
             type is StructSymbol{IsClass: false} ||
-            object.ReferenceEquals(type.ClrType, typeof(object)) ||
+            (type.ClrType != nil && ClrTypeInspector.IsSameAs(type.ClrType, typeof(object))) ||
             (type.ClrType != nil && type.ClrType.IsValueType && !type.ClrType.IsPrimitive && !type.ClrType.IsEnum)
 
         /// ADR-0208 R12 (#5171): whether [`first`](paramref) and [`second`](paramref) may name one
@@ -4519,124 +4720,6 @@ internal partial class StatementBinder {
             mutations AssignedRootsCollector
         ) bool -> DropsOnMemberMutation(path, mutations.MayMutateMemberPaths, mutations.MayMutateReferenceStorage) ||
             (IsExternalStorageAlias(path.Root) && mutations.CallMayReachStorageOf(path.Root))
-
-        /// ADR-0208 R12 (#5292): whether a callee that receives a value of [`operand`](paramref) can reach
-        /// a container of a storage of type [`stored`](paramref): the type graph of the operand, followed
-        /// through the instance fields and properties of user types, the public instance fields of imported
-        /// types and the elements of arrays and slices, has an array of the stored type or a type with a field
-        /// of the stored type. An interface, `object`, a type parameter, a function or a delegate can hold any
-        /// type, so they reach. Primitives, strings and enums reach nothing.
-        internal func TypeGraphMayHoldStorageOf(operand TypeSymbol?, stored TypeSymbol?) bool {
-            let target = StripNullability(stored)
-            if operand == nil || target == nil {
-                return true
-            }
-            return GraphReaches(StripNullability(operand), target, HashSet[TypeSymbol](), 0)
-        }
-
-        private func SameStoredType(candidate TypeSymbol?, target TypeSymbol) bool {
-            let stripped = StripNullability(candidate)
-            return stripped != nil &&
-                (
-                object.Equals(stripped, target) ||
-                    (
-                    stripped.ClrType != nil && target.ClrType != nil && ClrTypeInspector.IsSameAs(
-                        stripped.ClrType,
-                        target.ClrType
-                    )
-                )
-            )
-        }
-
-        private func GraphReaches(type TypeSymbol?, target TypeSymbol, visited HashSet[TypeSymbol], depth int32) bool {
-            if type == nil || depth > 24 {
-                return true
-            }
-            if !visited.Add(type) {
-                return false
-            }
-            if type is TypeParameterSymbol or
-                InterfaceSymbol or
-                DelegateTypeSymbol or
-                FunctionTypeSymbol ||
-                object.ReferenceEquals(type.ClrType, typeof(object)) {
-                return true
-            }
-            if type is ArrayTypeSymbol array {
-                return SameStoredType(array.ElementType, target) ||
-                    GraphReaches(StripNullability(array.ElementType), target, visited, depth + 1)
-            }
-            if type is SliceTypeSymbol slice {
-                return SameStoredType(slice.ElementType, target) ||
-                    GraphReaches(StripNullability(slice.ElementType), target, visited, depth + 1)
-            }
-            if type is StructSymbol structure {
-                var current StructSymbol? = structure
-                for var hops = 0; current != nil && hops < 64; hops++ {
-                    let definition = current.Definition ?? current
-                    for field in definition.Fields {
-                        if !field.IsStatic &&
-                            (
-                            SameStoredType(field.Type, target) ||
-                                GraphReaches(StripNullability(field.Type), target, visited, depth + 1)
-                        ) {
-                            return true
-                        }
-                    }
-                    for property in definition.Properties {
-                        if !property.IsStatic &&
-                            property.IsAutoProperty &&
-                            (
-                            SameStoredType(property.Type, target) ||
-                                GraphReaches(StripNullability(property.Type), target, visited, depth + 1)
-                        ) {
-                            return true
-                        }
-                    }
-                    current = definition.BaseClass
-                }
-                return false
-            }
-            let clr = type.ClrType
-            if clr == nil {
-                // Tuples, channels, maps and other structural types: any element can be the container.
-                return !(type is EnumSymbol)
-            }
-            if clr.IsArray {
-                let element = clr.GetElementType()
-                return element == nil ||
-                    (target.ClrType != nil && ClrTypeInspector.IsSameAs(element, target.ClrType)) ||
-                    !(element.IsPrimitive || element == typeof(string))
-            }
-            if clr.IsPrimitive || clr.IsEnum || object.ReferenceEquals(clr, typeof(string)) {
-                return false
-            }
-            if clr.IsByRef || clr.IsPointer || clr.IsByRefLike {
-                return true
-            }
-            // A public property that exposes an array (`ArraySegment<T>.Array`) or a reference exposes storage too.
-            for property in clr.GetProperties(BindingFlags.Instance | BindingFlags.Public) {
-                let propertyType = property.PropertyType
-                if propertyType.IsArray || propertyType.IsByRef {
-                    let element = propertyType.GetElementType()
-                    if element == nil || target.ClrType == nil || ClrTypeInspector.IsSameAs(element, target.ClrType) ||
-                        !(element.IsPrimitive || object.ReferenceEquals(element, typeof(string))) {
-                        return true
-                    }
-                }
-            }
-            for field in clr.GetFields(BindingFlags.Instance | BindingFlags.Public) {
-                let fieldType = field.FieldType
-                if target.ClrType != nil && ClrTypeInspector.IsSameAs(fieldType, target.ClrType) {
-                    return true
-                }
-                if !(fieldType.IsPrimitive || fieldType.IsEnum || object.ReferenceEquals(fieldType, typeof(string))) &&
-                    GraphReaches(ClrNullability.GetFieldTypeSymbol(field), target, visited, depth + 1) {
-                    return true
-                }
-            }
-            return false
-        }
 
         /// ADR-0208 R12 (#5292): whether a call can write the storage that the external-storage alias
         /// [`root`](paramref) names. A by-reference parameter (or a `ref` local that aliases one) names

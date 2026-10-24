@@ -167,6 +167,9 @@ open class Adr0208NarrowingCorpusTests {
                 "h2_by_ref_param_call_with_container",
                 "h3_by_ref_param_call_with_imported_holder",
                 "h4_by_ref_param_call_with_array_segment",
+                "h5_by_ref_param_call_with_imported_interface",
+                "h6_by_ref_param_call_with_open_base",
+                "h7_by_ref_param_call_with_imported_base_holder",
                 "out-alias_out_ref_alias"
             },
             names
@@ -993,6 +996,60 @@ func Main() {
     var items = []C?{C{}}
     Console.WriteLine(Run(ref items[0], ArraySegment[C?](items)))
 }`, "GS0158@8:14", "reject", "", ""}
+            yield[]object{"h5_by_ref_param_call_with_imported_interface", `class C {
+    var Value int32 = 1
+}
+class Holder : IDisposable {
+    var Field C? = C{}
+    func Dispose() { Field = nil }
+}
+func Close(d IDisposable) { d.Dispose() }
+func Run(ref a C?, h Holder) int32 {
+    if a == nil { return 0 }
+    Close(h)
+    return a.Value
+}
+func Main() {
+    let h = Holder{}
+    Console.WriteLine(Run(ref h.Field, h))
+}`, "GS0158@12:14", "reject", "", ""}
+            yield[]object{"h6_by_ref_param_call_with_open_base", `class C {
+    var Value int32 = 1
+}
+open class Base {
+}
+class Holder : Base {
+    var Field C? = C{}
+}
+func Clear(b Base) {
+    if b is Holder h { h.Field = nil }
+}
+func Run(ref a C?, h Holder) int32 {
+    if a == nil { return 0 }
+    Clear(h)
+    return a.Value
+}
+func Main() {
+    let h = Holder{}
+    Console.WriteLine(Run(ref h.Field, h))
+}`, "GS0158@15:14", "reject", "", ""}
+            yield[]object{"h7_by_ref_param_call_with_imported_base_holder", `import System.Runtime.CompilerServices
+class C {
+    var Value int32 = 1
+}
+class Holder : StrongBox[C?] {
+}
+func Clear(h Holder) { h.Value = nil }
+func Run(ref a C?, h Holder) int32 {
+    if a == nil { return 0 }
+    Clear(h)
+    return a.Value
+}
+func Main() {
+    let h = Holder()
+    h.Value = C{}
+    Console.WriteLine(Run(ref h.Value, h))
+}`, "GS0158@11:14", "reject", "", ""}
             yield[]object{"out-alias_out_ref_alias", `class C { func M() { } }
 func Run(out c C?, ref alias C?) {
     c = C()
