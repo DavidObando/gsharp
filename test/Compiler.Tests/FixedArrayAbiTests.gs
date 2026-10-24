@@ -7,9 +7,12 @@ import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import GSharp.Tests
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.IO
 import System.Linq
 import System.Reflection
@@ -1091,6 +1094,186 @@ func Main() {
     }
 
     @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func SameNamedInterfaceElementsRetainTheirAssemblyIdentity(reverse bool, referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let common = fixture.CompileCSharp(`
+using Gsharp.Values.FixedArrays.V1;
+namespace IdentityContracts {
+    public interface Parent<T> { Leaf<T> Echo(Leaf<T> value); Leaf<T> Value { get; } }
+}`, "IdentityContracts")
+        let referenceDirectory = Directory.CreateDirectory(Path.Combine(fixture.Directory, "ref")).FullName
+        let leftReference = Path.Combine(referenceDirectory, "LeftIdentity.dll")
+        let left = fixture.CompileCSharpWithReference(`
+namespace Contracts { public class Item { } }
+namespace LeftIdentity { public interface Side: IdentityContracts.Parent<Contracts.Item> { } }
+`, "LeftIdentity", leftReference, common)
+        let rightReference = Path.Combine(referenceDirectory, "RightIdentity.dll")
+        let right = fixture.CompileCSharpWithReference(`
+namespace Contracts { public class Item { } }
+namespace RightIdentity { public interface Side: IdentityContracts.Parent<Contracts.Item> { } }
+`, "RightIdentity", rightReference, common)
+        let reference = Path.Combine(referenceDirectory, "IdentityBridge.dll")
+        let foreign = fixture.CompileCSharpWithReference(`
+using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.FixedArrays", "1")]
+namespace IdentityBridge { public interface Child: ` + (
+                if reverse {
+                    "RightIdentity.Side,LeftIdentity.Side"
+                } else {
+                    "LeftIdentity.Side,RightIdentity.Side"
+                }
+            ) + ` { } }
+`, "IdentityBridge", reference, common, left, right)
+        let selectedLeft = if referenceAssembly {
+            leftReference
+        } else {
+            left
+        }
+        let selectedRight = if referenceAssembly {
+            rightReference
+        } else {
+            right
+        }
+        let selected = if referenceAssembly {
+            reference
+        } else {
+            foreign
+        }
+        let (code, diagnostics) = fixture.TryCompile(
+            "package IdentityConsumer\nfunc Main() { }\n",
+            "identity-consumer",
+            true,
+            "/reference:" + selected,
+            "/reference:" + selectedLeft,
+            "/reference:" + selectedRight,
+            "/reference:" + common
+        )
+        Assert.True(code == 0, diagnostics)
+        using let resolver = ReferenceResolver.WithReferences([]string{selected, selectedLeft, selectedRight, common})
+        Assert.True(resolver.TryResolveType("IdentityBridge.Child", out var child))
+        let receiver = TypeSymbol.FromClrTypeWithoutNullability(child, NullabilityFreeReason.ResolvedTypeName)
+        let parents = child
+            .GetInterfaces()
+            .Where(
+            (type Type) -> type.IsGenericType && type.GetGenericTypeDefinition()
+                .FullName == "IdentityContracts.Parent`1"
+        )
+            .ToArray()
+        Assert.Equal(2, parents.Length)
+        Assert.NotEqual(
+            parents[0].GetGenericArguments()[0].AssemblyQualifiedName,
+            parents[1].GetGenericArguments()[0].AssemblyQualifiedName
+        )
+        for parent in parents {
+            let method = parent.GetMethod("Echo")!!
+            Assert.Equal(
+                method.ReturnType.AssemblyQualifiedName,
+                MemberLookup.GetClrMethodReturnTypeSymbol(receiver, method).ClrType?.AssemblyQualifiedName
+            )
+            Assert.Equal(
+                method.GetParameters()[0].ParameterType.AssemblyQualifiedName,
+                MemberLookup.GetClrMethodParameterTypeSymbol(receiver, method, 0).ClrType?.AssemblyQualifiedName
+            )
+            let property = parent.GetProperty("Value")!!
+            Assert.Equal(
+                property.PropertyType.AssemblyQualifiedName,
+                MemberLookup.GetClrPropertyTypeSymbol(receiver, property).ClrType?.AssemblyQualifiedName
+            )
+        }
+        for image in[]string{left, leftReference, right, rightReference, foreign, reference} {
+            IlVerifier.Verify(image, []string{common, left, right})
+        }
+        IlVerifier.Verify(common)
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func UnreadableMarkedAnnotationsFailClosed(marked bool, referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "unreadable-annotations.ref.dll")
+        let foreign = fixture.CompileCSharpWithReference(`
+using System.Reflection;
+using Gsharp.Values.FixedArrays.V1;
+` + (
+                if marked {
+                    "[assembly: AssemblyMetadata(\"GSharp.FixedArrays\", \"1\")]"
+                } else {
+                    ""
+                }
+            ) + `
+public static class Api { public static Branch<string,Leaf<string?>,Leaf<string?>> Value; }
+`, "UnreadableAnnotations", reference)
+        using let original = ReferenceResolver.WithReferences(
+            []string{
+                if referenceAssembly {
+                    reference
+                } else {
+                    foreign
+                },
+                typeof(Slice[_]).Assembly.Location
+            }
+        )
+        let assembly = original.Assemblies.Single(
+            (candidate Assembly) -> candidate.GetName().Name == "UnreadableAnnotations"
+        )
+        let fault = UnreadableAnnotationAssembly(assembly)
+        using let resolver = ReferenceResolver.WithRuntimeReferences(
+            nil,
+            original
+                .Assemblies
+                .Select(
+                (candidate Assembly) -> if object.ReferenceEquals(candidate, assembly) {
+                    cast[Assembly](fault)
+                } else {
+                    candidate
+                }
+            )
+                .ToImmutableArray()
+        )
+        if !marked {
+            let declaration = Assert.Single(fault.GetExportedTypes())
+            MemberLookup.GetClrFieldTypeSymbol(
+                TypeSymbol.FromClrTypeWithoutNullability(declaration, NullabilityFreeReason.ResolvedTypeName),
+                Assert.Single(declaration.GetFields(BindingFlags.Public | BindingFlags.Static))
+            )
+        }
+        let compilation = GSharp
+            .Core
+            .CodeAnalysis
+            .Compilation
+            .Compilation(
+            resolver,
+            GSharp
+                .Core
+                .CodeAnalysis
+                .Syntax
+                .SyntaxTree
+                .Parse(SourceText.From("package UnreadableConsumer\nfunc Main() { }\n"))
+        )
+        using let image = MemoryStream()
+        let result = compilation.Emit(image)
+        Assert.True(fault.ReadFailures > 0, "the canonical annotation reader must encounter the injected failure")
+        if marked {
+            Assert.False(result.Success)
+            let diagnostic = Assert.Single(
+                result.Diagnostics,
+                (item GSharp.Core.CodeAnalysis.Diagnostic) -> item.Id == "GS0630"
+            )
+            Assert.Equal(0, diagnostic.Location.Span.Start)
+            Assert.Contains("annotations could not be read", diagnostic.Message, StringComparison.Ordinal)
+        } else {
+            Assert.True(result.Success, string.Join("\n", result.Diagnostics))
+        }
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func ConsistentFixedMemberDiamondRetainsNullableElements(referenceAssembly bool) {
@@ -1381,6 +1564,109 @@ func Main() { Needs(Api.Make().Item.Left.Item) }
         Assert.NotEqual(0, code)
         Assert.Contains("GS0154", diagnostics, StringComparison.Ordinal)
         Assert.Contains("inherited-null-rejected.gs(5,21,5,46)", diagnostics, StringComparison.Ordinal)
+    }
+
+    private class UnreadableAnnotationAssembly : Assembly {
+        private let assembly Assembly
+        internal var ReadFailures int32
+
+        internal init(assembly Assembly) {
+            this.assembly = assembly
+        }
+
+        override prop FullName string? -> assembly.FullName
+        override prop Location string -> assembly.Location
+
+        override func GetName() AssemblyName -> assembly.GetName()
+
+        override func GetName(copiedName bool) AssemblyName -> assembly.GetName(copiedName)
+
+        override func GetReferencedAssemblies()[]AssemblyName -> assembly.GetReferencedAssemblies()
+
+        override func GetCustomAttributesData() IList[CustomAttributeData] -> assembly.GetCustomAttributesData()
+
+        override func GetTypes()[]Type -> GetExportedTypes()
+
+        override func GetExportedTypes()[]Type -> []Type{UnreadableAnnotationType(assembly.GetType("Api")!!, this)}
+
+        override func GetType(name string, throwOnError bool, ignoreCase bool) Type? -> assembly.GetType(
+            name,
+            throwOnError,
+            ignoreCase
+        )
+    }
+
+    private class UnreadableAnnotationType : TypeDelegator {
+        private let source Type
+        private let owner UnreadableAnnotationAssembly
+
+        internal init(source Type, owner UnreadableAnnotationAssembly) : base(source) {
+            this.source = source
+            this.owner = owner
+        }
+
+        override func GetGenericArguments()[]Type -> source.GetGenericArguments()
+
+        override func GetCustomAttributesData() IList[CustomAttributeData] -> source.GetCustomAttributesData()
+
+        override func GetFields(flags BindingFlags)[]FieldInfo -> source
+            .GetFields(flags)
+            .Select((field FieldInfo) -> cast[FieldInfo](UnreadableAnnotationField(field, owner, this)))
+            .ToArray()
+
+        override func GetField(name string, flags BindingFlags) FieldInfo? -> if source.GetField(
+            name,
+            flags
+        ) is {} field {
+            UnreadableAnnotationField(field, owner, this)
+        } else {
+            nil
+        }
+    }
+
+    private class UnreadableAnnotationField : FieldInfo {
+        private let field FieldInfo
+        private let owner UnreadableAnnotationAssembly
+        private let declaration Type
+
+        internal init(field FieldInfo, owner UnreadableAnnotationAssembly, declaration Type) {
+            this.field = field
+            this.owner = owner
+            this.declaration = declaration
+        }
+
+        override func GetCustomAttributesData() IList[CustomAttributeData] {
+            owner.ReadFailures++
+            throw FileNotFoundException("injected retryable annotation read failure")
+        }
+
+        override prop Name string -> field.Name
+        override prop DeclaringType Type? -> declaration
+        override prop ReflectedType Type? -> declaration
+        override prop FieldType Type -> field.FieldType
+        override prop Attributes FieldAttributes -> field.Attributes
+        override prop FieldHandle RuntimeFieldHandle -> field.FieldHandle
+        override prop MetadataToken int32 -> field.MetadataToken
+        override prop Module Module -> field.Module
+
+        override func GetValue(obj object?) object? -> field.GetValue(obj)
+
+        override func GetCustomAttributes(inherit bool)[]object -> field.GetCustomAttributes(inherit)
+
+        override func GetCustomAttributes(attributeType Type, inherit bool)[]object -> field.GetCustomAttributes(
+            attributeType,
+            inherit
+        )
+
+        override func IsDefined(attributeType Type, inherit bool) bool -> field.IsDefined(attributeType, inherit)
+
+        override func SetValue(
+            obj object?,
+            value object?,
+            invokeAttr BindingFlags,
+            binder System.Reflection.Binder?,
+            culture System.Globalization.CultureInfo?
+        ) -> field.SetValue(obj, value, invokeAttr, binder, culture)
     }
 
     shared {

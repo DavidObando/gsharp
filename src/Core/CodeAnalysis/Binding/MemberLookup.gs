@@ -6099,12 +6099,12 @@ internal class MemberLookup {
             } else {
                 declaringType
             }
-            if ClrTypeUtilities.AreSame(receiverOpenDefinition, openDefinition) {
-                // Cached all-object erasure can precede a more precise nested construction.
-                if declaringType.IsGenericType && !declaringType.IsGenericTypeDefinition && !ClrTypeUtilities.AreSame(
-                    imported.ReifyClosedClrType(),
-                    declaringType
-                ) {
+            if HaveSameDeclaringIdentity(receiverOpenDefinition, openDefinition) {
+                // Root members can retain the receiver's cached erasure. Ancestor paths must match the current constructed identity.
+                if declaringType.IsGenericType &&
+                    !declaringType.IsGenericTypeDefinition &&
+                    !HaveSameDeclaringIdentity(imported.ReifyClosedClrType(), declaringType) &&
+                    (depth != 0 || !HaveSameDeclaringIdentity(imported.ClrType, declaringType)) {
                     return false
                 }
                 CompilationMeasurements.Count("metadata.receiver-context-visits")
@@ -6196,6 +6196,52 @@ internal class MemberLookup {
                 return true
             }
             typeArguments = ImmutableArray[TypeSymbol].Empty
+            return true
+        }
+
+        private func HaveSameDeclaringIdentity(left Type?, right Type?) bool {
+            if object.ReferenceEquals(left, right) {
+                return true
+            }
+            if left == nil || right == nil {
+                return false
+            }
+            if (!left.ContainsGenericParameters && !right.ContainsGenericParameters) ||
+                (left.IsGenericTypeDefinition && right.IsGenericTypeDefinition) {
+                return TypeIdentityComparer.Instance.Equals(left, right)
+            }
+            // Open constructions have no qualified name. Compare their structure without using a name-only fallback.
+            if left.HasElementType || right.HasElementType {
+                return left.IsArray == right.IsArray &&
+                    left.IsByRef == right.IsByRef &&
+                    left.IsPointer == right.IsPointer &&
+                    (
+                    !left.IsArray || (left.IsSZArray == right.IsSZArray && left.GetArrayRank() == right.GetArrayRank())
+                ) &&
+                    HaveSameDeclaringIdentity(left.GetElementType(), right.GetElementType())
+            }
+            if !left.IsGenericType ||
+                !right.IsGenericType ||
+                left.IsGenericTypeDefinition ||
+                right.IsGenericTypeDefinition {
+                return false
+            }
+            if !TypeIdentityComparer.Instance.Equals(
+                left.GetGenericTypeDefinition(),
+                right.GetGenericTypeDefinition()
+            ) {
+                return false
+            }
+            let leftArguments = left.GetGenericArguments()
+            let rightArguments = right.GetGenericArguments()
+            if leftArguments.Length != rightArguments.Length {
+                return false
+            }
+            for var index = 0; index < leftArguments.Length; index++ {
+                if !HaveSameDeclaringIdentity(leftArguments[index], rightArguments[index]) {
+                    return false
+                }
+            }
             return true
         }
 

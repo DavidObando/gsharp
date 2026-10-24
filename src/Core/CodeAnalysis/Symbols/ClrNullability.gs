@@ -115,15 +115,18 @@ shared class ClrNullability {
         MetadataReadFailures.Value.Count++
     }
 
-    /// Returns a mark to pass to (cref:StoreDecodedSignature) after the decode.
-    private func BeginDecode() int32 -> MetadataReadFailures.Value.Count
+    /// Returns a mark for metadata reads on the current thread.
+    internal func MarkMetadataReadFailures() int32 -> MetadataReadFailures.Value.Count
+
+    /// Reports metadata read failures since [`mark`](paramref) on the current thread.
+    internal func MetadataReadFailedSince(mark int32) bool -> MetadataReadFailures.Value.Count != mark
 
     /// Stores a decoded symbol for the current nullability mode, unless a metadata
     /// read failed on this thread since [`mark`](paramref). A failed decode returns
     /// its fallback symbol and leaves the slot empty, so the next call decodes again.
     /// Call under the slots lock.
     private func StoreDecodedSignature(slots DecodedSignature, decoded TypeSymbol, mark int32) TypeSymbol {
-        if MetadataReadFailures.Value.Count != mark {
+        if MetadataReadFailedSince(mark) {
             CompilationMeasurements.Count("metadata.signature-decode-failures")
             return decoded
         }
@@ -151,7 +154,7 @@ shared class ClrNullability {
             if cached != nil {
                 return cached
             }
-            let mark = BeginDecode()
+            let mark = MarkMetadataReadFailures()
             return StoreDecodedSignature(slots, DecodePropertyTypeSymbol(property), mark)
         }
     }
@@ -217,7 +220,7 @@ shared class ClrNullability {
             if cached != nil {
                 return cached
             }
-            let mark = BeginDecode()
+            let mark = MarkMetadataReadFailures()
             return StoreDecodedSignature(slots, DecodeFieldTypeSymbol(field), mark)
         }
     }
@@ -255,7 +258,7 @@ shared class ClrNullability {
             if cached != nil {
                 return cached
             }
-            let mark = BeginDecode()
+            let mark = MarkMetadataReadFailures()
             return StoreDecodedSignature(slots, DecodeReturnTypeSymbol(method), mark)
         }
     }
@@ -299,7 +302,7 @@ shared class ClrNullability {
             if cached != nil {
                 return cached
             }
-            let mark = BeginDecode()
+            let mark = MarkMetadataReadFailures()
             return StoreDecodedSignature(slots, DecodeParameterTypeSymbol(parameter), mark)
         }
     }
