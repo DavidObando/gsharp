@@ -409,6 +409,70 @@ func set(arr []int32) {
         Assert.Contains(diagnostics, (d Diagnostic) -> d.Id == "GS0226")
     }
 
+    // Issue #5216: `Dictionary.GetAlternateLookup[TAlternateKey]` declares `allows ref struct`
+    // (the CLR AllowByRefLike flag), so a by-ref-like type argument binds without a diagnostic.
+    @Fact
+    func AllowsRefStruct_ImportedMethod_AcceptsByRefLikeTypeArgument() {
+        let source = `
+import System
+import System.Collections.Generic
+func probe() int32 {
+    let d = Dictionary[string, int32]()
+    let lookup = d.GetAlternateLookup[ReadOnlySpan[char]]()
+    return lookup["a".AsSpan()]
+}
+`
+        let diagnostics = Bind(source)
+        Assert.DoesNotContain(diagnostics, (d Diagnostic) -> d.IsError)
+    }
+
+    // Issue #5216: the constructed nested type `AlternateLookup[ReadOnlySpan[char]]` names the
+    // same `allows ref struct` parameter in a type position.
+    @Fact
+    func AllowsRefStruct_ImportedNestedType_AcceptsByRefLikeTypeArgument() {
+        let source = `
+import System
+import System.Collections.Generic
+func probe(d Dictionary[string, int32]) int32 {
+    var lookup Dictionary[string, int32].AlternateLookup[ReadOnlySpan[char]] = d.GetAlternateLookup[ReadOnlySpan[char]]()
+    return lookup["a".AsSpan()]
+}
+`
+        let diagnostics = Bind(source)
+        Assert.DoesNotContain(diagnostics, (d Diagnostic) -> d.IsError)
+    }
+
+    // Issue #5216: a parameter without the flag still rejects the argument. `List[T]` reports
+    // GS0219 in a type position and GS0152 on a constructor call, and `Array.Empty[T]` finds no
+    // applicable function (GS0159).
+    @Fact
+    func NoAllowsRefStruct_ImportedGenericType_RejectsByRefLikeTypeArgument() {
+        let source = `
+import System
+import System.Collections.Generic
+func f() {
+    var l List[ReadOnlySpan[int32]]
+    let m = List[ReadOnlySpan[int32]]()
+}
+`
+        let diagnostics = Bind(source)
+        let errors = diagnostics.Where((d Diagnostic) -> d.IsError).Select((d Diagnostic) -> d.Id).ToArray()
+        Assert.Equal([]string{"GS0219", "GS0152"}, errors)
+    }
+
+    @Fact
+    func NoAllowsRefStruct_ImportedGenericMethod_RejectsByRefLikeTypeArgument() {
+        let source = `
+import System
+func f() {
+    let a = Array.Empty[ReadOnlySpan[char]]()
+}
+`
+        let diagnostics = Bind(source)
+        let errors = diagnostics.Where((d Diagnostic) -> d.IsError).Select((d Diagnostic) -> d.Id).ToArray()
+        Assert.Equal([]string{"GS0159"}, errors)
+    }
+
     // Walks bound function bodies and records every BoundDereferenceExpression
     // whose operand is a BoundClrIndexExpression — i.e. an auto-dereferenced
     // ref-returning indexer read (ADR-0056 §1/§2).
