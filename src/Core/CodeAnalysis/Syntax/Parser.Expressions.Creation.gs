@@ -601,6 +601,7 @@ open partial class Parser {
             )
         ) {
             current = ParseNativeBufferExpression()
+            current = MaybeWrapWithObjectInitializer(current)
         } else if allowContextualOperators &&
             Current.Kind == SyntaxKind.IdentifierToken &&
             Current.Text == "make" &&
@@ -763,8 +764,9 @@ open partial class Parser {
             return literal
         }
         let open_ = MatchToken(SyntaxKind.OpenParenthesisToken)
-        let values = ParseArguments()
+        var values = ParseArguments()
         let close = MatchToken(SyntaxKind.CloseParenthesisToken)
+        values = MaybeAppendTrailingLambda(values)
         return CallExpressionSyntax(syntaxTree, type, open_, values, close)
     }
 

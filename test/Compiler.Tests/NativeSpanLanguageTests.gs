@@ -182,6 +182,15 @@ func Main() {
 }`, "16\n3\n")
     @InlineData(`func span[T](value T) T -> value
 func Main() { Console.WriteLine(span[int32](7)) }`, "7\n")
+    @InlineData(`class span[T] { var Value T }
+func Main() {
+    let value = span[int32]() { Value = 7 }
+    Console.WriteLine(value.Value)
+}`, "7\n")
+    @InlineData(`func span[T](callback () -> void) { callback() }
+func Main() {
+    span[int32]() func() { Console.WriteLine(7) }
+}`, "7\n")
     func OrdinaryUserNamesKeepPrecedence(declarations string, expected string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let assembly = fixture.Compile(
