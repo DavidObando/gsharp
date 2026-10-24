@@ -365,14 +365,13 @@ open partial class Parser {
         }
         let pos = op.Position
         let OneLiteral = func () LiteralExpressionSyntax {
-            return LiteralExpressionSyntax(syntaxTree, SyntaxToken(syntaxTree, SyntaxKind.NumberToken, pos, "1", 1), 1)
+            return LiteralExpressionSyntax(syntaxTree, SyntaxToken.Synthesized(syntaxTree, SyntaxKind.NumberToken, pos, "1", 1), 1)
         }
-        let compoundToken = SyntaxToken(
+        let compoundToken = SyntaxToken.Synthesized(
             syntaxTree,
             compoundOpKind,
             pos,
-            SyntaxFacts.GetTextOrEmpty(compoundOpKind),
-            nil
+            SyntaxFacts.GetTextOrEmpty(compoundOpKind)
         )
         var write ExpressionSyntax
         let unwrappedOperand = AssignmentTargetSyntaxFacts.UnwrapParentheses(operand)

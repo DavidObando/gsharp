@@ -1247,8 +1247,12 @@ open partial class Parser {
         // declaration head is not <c>{</c>.
         let isBodyless = Current.Kind != SyntaxKind.OpenBraceToken
         if isBodyless {
-            openBrace = SyntaxToken(syntaxTree, SyntaxKind.OpenBraceToken, Current.Position, "{", nil)
-            let syntheticCloseBrace = SyntaxToken(syntaxTree, SyntaxKind.CloseBraceToken, Current.Position, "}", nil)
+            // Issue #5277: the braces are not written. They sit, zero-width, at the end of the last
+            // token of the declaration, so the declaration's span stops there and does not reach
+            // the next declaration that starts at (cref:Current).
+            let bodylessEnd = if position > 0 { tokens[position - 1].Span.End } else { Current.Position }
+            openBrace = SyntaxToken.Synthesized(syntaxTree, SyntaxKind.OpenBraceToken, bodylessEnd, "{")
+            let syntheticCloseBrace = SyntaxToken.Synthesized(syntaxTree, SyntaxKind.CloseBraceToken, bodylessEnd, "}")
             let bodylessDecl = StructDeclarationSyntax(
                 syntaxTree,
                 accessibilityModifier,
