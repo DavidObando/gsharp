@@ -164,6 +164,10 @@ open class Adr0208NarrowingCorpusTests {
                 "g4_overload_ambiguity_after_join",
                 "g5_yield_after_guard",
                 "h10_by_ref_param_call_with_memory_span",
+                "h11_by_ref_param_call_with_linked_list_node",
+                "h12_by_ref_param_call_with_struct_list_slot",
+                "h13_by_ref_param_call_with_generic_holder",
+                "h14_by_ref_param_call_with_queue_copy_destination",
                 "h1_by_ref_param_survives_calls",
                 "h2_by_ref_param_call_with_container",
                 "h3_by_ref_param_call_with_imported_holder",
@@ -1098,6 +1102,70 @@ func Run(ref a C?, memory Memory[C?]) int32 {
 func Main() {
     var items = []C?{C{}}
     Console.WriteLine(Run(ref items[0], Memory[C?](items)))
+}`, "GS0158@8:14", "reject", "", ""}
+            yield[]object{"h11_by_ref_param_call_with_linked_list_node", `import System.Collections.Generic
+class C {
+    var Value int32 = 1
+}
+func Clear(items LinkedList[C?]) { items.First!!.Value = nil }
+func Run(ref a C?, items LinkedList[C?]) int32 {
+    if a == nil { return 0 }
+    Clear(items)
+    return a.Value
+}
+func Main() {
+    let items = LinkedList[C?]()
+    items.AddFirst(C{})
+    var alias C? = items.First!!.Value
+    Console.WriteLine(Run(ref alias, items))
+}`, "GS0158@9:14", "reject", "", ""}
+            yield[]object{"h12_by_ref_param_call_with_struct_list_slot", `import System.Collections.Generic
+import System.Runtime.InteropServices
+class C {
+    var Value int32 = 1
+}
+struct Slot {
+    var Field C?
+}
+func Run(ref a C?, items List[Slot]) int32 {
+    if a == nil { return 0 }
+    items.Clear()
+    return a.Value
+}
+func Main() {
+    let items = List[Slot]()
+    items.Add(Slot{Field: C{}})
+    Console.WriteLine(Run(ref CollectionsMarshal.AsSpan(items)[0].Field, items))
+}`, "GS0158@12:14", "reject", "", ""}
+            yield[]object{"h13_by_ref_param_call_with_generic_holder", `class C {
+    var Value int32 = 1
+}
+class Holder[T] {
+    var Field T
+}
+func Clear(h Holder[C?]) { h.Field = nil }
+func Run(ref a C?, h Holder[C?]) int32 {
+    if a == nil { return 0 }
+    Clear(h)
+    return a.Value
+}
+func Main() {
+    let h = Holder[C?]()
+    h.Field = C{}
+    Console.WriteLine(Run(ref h.Field, h))
+}`, "GS0158@11:14", "reject", "", ""}
+            yield[]object{"h14_by_ref_param_call_with_queue_copy_destination", `import System.Collections.Generic
+class C {
+    var Value int32 = 1
+}
+func Run(ref a C?, queue Queue[C?], destination []C?) int32 {
+    if a == nil { return 0 }
+    queue.CopyTo(destination, 0)
+    return a.Value
+}
+func Main() {
+    var items = []C?{C{}}
+    Console.WriteLine(Run(ref items[0], Queue[C?](), items))
 }`, "GS0158@8:14", "reject", "", ""}
             yield[]object{"out-alias_out_ref_alias", `class C { func M() { } }
 func Run(out c C?, ref alias C?) {

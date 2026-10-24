@@ -96,8 +96,8 @@ internal partial class StatementBinder {
 
     // ADR-0208 R12 (#5292): the imported types whose instances are inert for storage reach: no public
     // instance field and no array or by-reference property that a caller could alias. This is the only
-    // list; every other imported class is reached by default. Core's `NarrowedVariables[i].TryGetValue(path,
-    // out found)` reads a Dictionary; the others are the BCL containers a program uses the same way.
+    // list; every other imported class is reached by default. Core's frame lookup (`TryGetValue(path,
+    // out found)` on a frame dictionary) reads a Dictionary; the others are the BCL containers a program uses the same way.
     // Type-argument positions whose values a caller can alias by reference through the BCL
     // (`CollectionsMarshal.AsSpan(list)`, `GetValueRefOrNullRef(dictionary)`, `ImmutableCollectionsMarshal`).
     // A Dictionary key is not aliasable.
@@ -105,6 +105,7 @@ internal partial class StatementBinder {
         definitionName == "System.Collections.Generic.List`1" && position == 0
     ) ||
         (definitionName == "System.Collections.Generic.Dictionary`2" && position == 1) ||
+        (definitionName == "System.Collections.Generic.LinkedList`1" && position == 0) ||
         (definitionName == "System.Collections.Immutable.ImmutableArray`1" && position == 0)
 
     /// ADR-0208 R12 (#5292): whether a callee that receives a value of [`operand`](paramref) can reach a
@@ -123,9 +124,104 @@ internal partial class StatementBinder {
             return true
         }
         if slotsOnly {
-            return ListedContainerSlotsHold(StripNullability(operand), target)
+            return ArgumentHoldsSlots(StripNullability(operand), target, 0)
         }
         return TypeReaches(StripNullability(operand), target, HashSet[TypeSymbol](), 0)
+    }
+
+    // ADR-0208 R12 (#5292): whether a value of [`type`](paramref) embeds a storage of the stored type: the
+    // type itself, or a value-type aggregate (struct, tuple) with such a member, by value. A reference-type
+    // member is another object, not a slot of this value.
+    private func ValueAggregateContains(type TypeSymbol?, target TypeSymbol, depth int32) bool {
+        let stripped = StripNullability(type)
+        if stripped == nil || depth > 8 {
+            return true
+        }
+        if IsStoredType(stripped, target) {
+            return true
+        }
+        if stripped is StructSymbol structure {
+            if structure.IsClass {
+                return false
+            }
+            for field in structure.Fields {
+                if !field.IsStatic && ValueAggregateContains(field.Type, target, depth + 1) {
+                    return true
+                }
+            }
+            for property in structure.Properties {
+                if !property.IsStatic &&
+                    property.IsAutoProperty &&
+                    ValueAggregateContains(property.Type, target, depth + 1) {
+                    return true
+                }
+            }
+            return false
+        }
+        if stripped is EnumSymbol {
+            return false
+        }
+        let clr = stripped.ClrType
+        if clr == nil {
+            // Tuples and other structural value types.
+            return stripped is not(ArrayTypeSymbol or SliceTypeSymbol or ChannelTypeSymbol or MapTypeSymbol)
+        }
+        if clr.IsPrimitive || clr.IsEnum || ClrTypeInspector.IsSameAs(clr, typeof(string)) || !clr.IsValueType {
+            return false
+        }
+        // An imported struct: listed ones (KeyValuePair, Nullable) hold their arguments by value.
+        return !InertImportedTypes.Contains((clr.IsGenericType ? clr.GetGenericTypeDefinition(): clr).FullName ?? "") ||
+            stripped
+            .ConstructedTypeArguments
+            .Any((argument TypeSymbol) -> ValueAggregateContains(argument, target, depth + 1))
+    }
+
+    // ADR-0208 R12 (#5292): whether a listed BCL method that is handed [`type`](paramref) can write a slot of
+    // the stored type through it: an array or slice whose elements embed the stored type, a listed container
+    // with an aliasable slot of it, or an opaque value (an unlisted imported type, an interface, `object`).
+    // A user class is not followed: the BCL method does not reach into its members.
+    private func ArgumentHoldsSlots(type TypeSymbol?, target TypeSymbol, depth int32) bool {
+        if type == nil || depth > 8 {
+            return true
+        }
+        if type is ArrayTypeSymbol array {
+            return ValueAggregateContains(array.ElementType, target, 0) ||
+                ArgumentHoldsSlots(StripNullability(array.ElementType), target, depth + 1)
+        }
+        if type is SliceTypeSymbol slice {
+            return ValueAggregateContains(slice.ElementType, target, 0) ||
+                ArgumentHoldsSlots(StripNullability(slice.ElementType), target, depth + 1)
+        }
+        if type is TypeParameterSymbol or InterfaceSymbol or DelegateTypeSymbol or FunctionTypeSymbol {
+            return true
+        }
+        if type is EnumSymbol {
+            return false
+        }
+        if type is StructSymbol structure {
+            return !structure.IsClass && TypeReaches(structure, target, HashSet[TypeSymbol](), 0)
+        }
+        let clr = type.ClrType
+        if clr == nil {
+            return true
+        }
+        if clr.IsPrimitive || clr.IsEnum || ClrTypeInspector.IsSameAs(clr, typeof(string)) {
+            return false
+        }
+        if clr.IsArray {
+            let element = clr.GetElementType()
+            return element == nil || target.ClrType == nil || ClrTypeInspector.IsSameAs(element, target.ClrType) ||
+                !(element.IsPrimitive || ClrTypeInspector.IsSameAs(element, typeof(string)) || element.IsEnum)
+        }
+        let definition = if clr.IsGenericType && !clr.IsGenericTypeDefinition {
+            clr.GetGenericTypeDefinition()
+        } else {
+            clr
+        }
+        if definition.FullName == nil || !InertImportedTypes.Contains(definition.FullName) {
+            return true
+        }
+        return ListedContainerSlotsHold(type, target)
     }
 
     private func ListedContainerSlotsHold(operand TypeSymbol?, target TypeSymbol) bool {
@@ -144,7 +240,8 @@ internal partial class StatementBinder {
             operand.ConstructedTypeArguments
         }
         for var i = 0; i < arguments.Length; i++ {
-            if IsAliasableSlotArgument(definition.FullName ?? "", i) && IsStoredType(arguments[i], target) {
+            if IsAliasableSlotArgument(definition.FullName ?? "", i) &&
+                ValueAggregateContains(arguments[i], target, 0) {
                 return true
             }
         }
@@ -211,27 +308,25 @@ internal partial class StatementBinder {
         visited HashSet[TypeSymbol],
         depth int32
     ) bool {
-        var current StructSymbol? = structure
-        for var hops = 0; current != nil && hops < 64; hops++ {
-            let definition = current.Definition ?? current
-            for field in definition.Fields {
+        // Read the constructed symbol's members (they substitute type arguments), then its bases.
+        for current in structure.GetHierarchy() {
+            for field in current.Fields {
                 if !field.IsStatic && MemberTypeReaches(field.Type, target, visited, depth) {
                     return true
                 }
             }
-            for property in definition.Properties {
+            for property in current.Properties {
                 if !property.IsStatic &&
                     property.IsAutoProperty &&
                     MemberTypeReaches(property.Type, target, visited, depth) {
                     return true
                 }
             }
-            if definition.ImportedBaseType is {} importedBase &&
+            if current.ImportedBaseType is {} importedBase &&
                 !(importedBase.ClrType != nil && ClrTypeInspector.IsSameAs(importedBase.ClrType, typeof(object))) &&
                 TypeReaches(importedBase, target, visited, depth + 1) {
                 return true
             }
-            current = definition.BaseClass
         }
         // A subclass of an open or abstract class can add storage: visit every subclass of this compilation.
         if structure.IsClass && (structure.IsOpen || structure.IsAbstract) {
@@ -296,7 +391,8 @@ internal partial class StatementBinder {
             type.ConstructedTypeArguments
         }
         for var i = 0; i < arguments.Length; i++ {
-            if IsAliasableSlotArgument(definition.FullName ?? "", i) && IsStoredType(arguments[i], target) {
+            if IsAliasableSlotArgument(definition.FullName ?? "", i) &&
+                ValueAggregateContains(arguments[i], target, 0) {
                 return true
             }
             if TypeReaches(StripNullability(arguments[i]), target, visited, depth + 1) {
@@ -2038,9 +2134,16 @@ internal partial class StatementBinder {
 
         private func RecordCallOperands(call BoundExpression, listedContainerMethod bool = false) {
             if listedContainerMethod {
-                // Only the receiver can reach the caller's slots through a listed BCL container method.
-                if call is BoundImportedInstanceCallExpression importedCall {
-                    callOperandTypes.Add((importedCall.Receiver.Type, true))
+                // A listed BCL container method writes caller data only through slots: those of the receiver and
+                // those of an array, span or container it is handed.
+                for child in call.ChildNodes {
+                    if child is BoundExpression operand {
+                        var value = operand
+                        while value is BoundAddressOfExpression address {
+                            value = address.Operand
+                        }
+                        callOperandTypes.Add((value.Type, true))
+                    }
                 }
                 return
             }
@@ -4357,7 +4460,10 @@ internal partial class StatementBinder {
             FunctionTypeSymbol or
             InterfaceSymbol or
             TypeParameterSymbol ||
-            (type.ClrType != nil && (type.ClrType.IsInterface || typeof(Delegate).IsAssignableFrom(type.ClrType)))
+            (
+            type.ClrType != nil &&
+                (type.ClrType.IsInterface || ClrLoadContext.IsAssignable(typeof(Delegate), type.ClrType))
+        )
 
         // Whether [`method`](paramref) is declared on one of the listed imported types.
         internal func IsListedContainerMethod(method MethodInfo?) bool {

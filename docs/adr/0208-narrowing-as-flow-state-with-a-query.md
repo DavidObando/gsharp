@@ -269,6 +269,27 @@ local, and probe g2: the same through a `ref` parameter, both compile and
 throw today; bug #5171, second and fourth shapes). The rule does not try to
 tell which members of the class the write can reach.
 
+**The contract of the call rule (amendment A3, #5292).** A plain call
+keeps the narrowing of a by-reference parameter only when no statically
+typed operand of the call (the receiver, written or implicit, or an
+argument) can lead the callee to a container of a storage of the
+parameter's type, as decided by the walk below. The rule does not follow
+anything that is not a static operand type. It knowingly does not cover:
+(1) a mutable global or static that a callee assigns while the by-reference
+parameter aliases it, with no operand involved; (2) a subclass declared in
+another assembly; (3) the values behind an `object`, interface, type
+parameter or delegate typed member of an operand's type graph (the
+operand's own type is followed); (4) implicit user callbacks that a listed
+BCL method runs on its data (`Equals`, `GetHashCode`, `ToString`, a
+comparer reached through an argument whose type is a plain class); (5)
+BCL APIs that hand out a slot of a listed container other than the ones
+named (`CollectionsMarshal` over `List`, `Dictionary` values and
+`LinkedListNode<T>.ValueRef`); (6) aliases made with unsafe code or
+reflection. A finding in this list is a documented limitation; a finding
+that names a static operand type, a slot of a listed container, a member
+of a constructed generic, or a destination argument is a defect of the
+walk.
+
 **When a call kills by-reference facts (amendment A3, #5292).** A call does
 not kill the fact of a by-reference parameter, or of a `ref` local that
 aliases one, on its own: the callee has no name for the caller's storage,
