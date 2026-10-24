@@ -173,7 +173,7 @@ internal shared class MetadataTypeKeys {
     }
 
     // The reflection side of MetadataModule.IsCoreLibrary.
-    private func IsCoreLibrary(assembly Assembly) bool {
+    internal func IsCoreLibrary(assembly Assembly) bool {
         let objectType = assembly.GetType("System.Object", false)
         return objectType != nil && objectType.Assembly == assembly && objectType.BaseType == nil
     }

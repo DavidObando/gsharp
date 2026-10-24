@@ -6,6 +6,7 @@ package GSharp.Core.Tests.CodeAnalysis.Symbols
 
 import AssemblyIdentity = GSharp.Core.CodeAnalysis.Symbols.AssemblyIdentity
 import GSharp.Core.CodeAnalysis.Symbols
+import SpecialType = GSharp.Core.CodeAnalysis.Symbols.SpecialType
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
@@ -236,6 +237,13 @@ open class Issue5144MemberSymbolTests {
                 ReferenceImage(File.ReadAllBytes(coreLibPath), coreLibPath, true)
             )
         )
+        // The comparison applies the same rule to the context: a resolver with the namesake first has no disagreement.
+        using let resolver = HandleResolver([]string{namesake.AssemblyPath})
+        Assert.Empty(
+            MetadataModelComparison.Compare(resolver, resolver.ImageSet!!).Where(
+                (d ModelDisagreement) -> d.Question == "Q1.well-known"
+            )
+        )
         let decoded = set.FindModule("TypedFirst5144")!!.Decoder.GetPrimitiveType(PrimitiveTypeCode.TypedReference)
         Assert.Equal("System.Private.CoreLib!System.TypedReference", MetadataTypeKeys.Of(decoded))
         // Without a core library the table holds a missing type, not the namesake.
@@ -243,6 +251,25 @@ open class Issue5144MemberSymbolTests {
             ImmutableArray.Create(ReferenceImage(File.ReadAllBytes(namesake.AssemblyPath), namesake.AssemblyPath, true))
         )
         Assert.IsType[MissingTypeSymbol](bare.Modules[0].Decoder.GetPrimitiveType(PrimitiveTypeCode.TypedReference))
+    }
+
+    @Fact
+    func TuplesInTheirOwnAssembly_AreTheWellKnownTuples() {
+        // System.ValueTuple may live outside the core library. The rule for specially bound names does not apply to it.
+        using let tuples = CSharpFixture(
+            "namespace System { public struct ValueTuple<T1, T2> {} }",
+            assemblyName: "Tuples5144"
+        )
+        let set = ReferenceImageSet(
+            ImmutableArray.Create(ReferenceImage(File.ReadAllBytes(tuples.AssemblyPath), tuples.AssemblyPath, true))
+        )
+        let entry = set.WellKnown.Get(SpecialType.ValueTuple2)
+        Assert.True(entry.IsResolved)
+        Assert.Equal("Tuples5144", entry.Module!!.Identity.Name)
+        Assert.False(WellKnownTypes.RequiresCoreLibrary(SpecialType.ValueTuple2))
+        Assert.True(WellKnownTypes.RequiresCoreLibrary(SpecialType.Decimal))
+        Assert.True(WellKnownTypes.RequiresCoreLibrary("System.TypedReference"))
+        Assert.False(WellKnownTypes.RequiresCoreLibrary("System.Collections.Generic.List`1"))
     }
 
     @Fact

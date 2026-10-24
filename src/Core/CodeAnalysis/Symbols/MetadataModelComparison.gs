@@ -168,17 +168,43 @@ internal shared class MetadataModelComparison {
     ) {
         for fullName in set.WellKnown.FullNames {
             let actual = set.WellKnown.TryGet(fullName)!!
-            var found Type? = nil
-            let expected = if resolver.TryResolveType(fullName, false, out found) {
-                Identify(found!!)
-            } else {
+            let found = ExpectedWellKnown(resolver, fullName)
+            let expected = if found == nil {
                 "missing"
+            } else {
+                Identify(found)
             }
             let actualText = Describe(actual)
             if !string.Equals(expected, actualText, StringComparison.OrdinalIgnoreCase) {
                 result.Add(ModelDisagreement("Q1.well-known", fullName, expected, actualText))
             }
         }
+    }
+
+    // The context's answer for a well-known name. A name that the runtime binds specially needs a core library, the same
+    // rule as the table: the first public core library definition, else the first one. Another name is the resolver's own
+    // answer, the first writer with the accessible copy preferred.
+    private func ExpectedWellKnown(resolver ReferenceResolver, fullName string) Type? {
+        if !WellKnownTypes.RequiresCoreLibrary(fullName) {
+            var found Type? = nil
+            return if resolver.TryResolveType(fullName, false, out found) {
+                found
+            } else {
+                nil
+            }
+        }
+        var firstCoreLibrary Type? = nil
+        for assembly in resolver.Assemblies {
+            let candidate = resolver.FindTypeForComparison(assembly.GetName().Name ?? "", fullName)
+            if candidate == nil || !MetadataTypeKeys.IsCoreLibrary(candidate.Assembly) {
+                continue
+            }
+            if candidate.IsVisible {
+                return candidate
+            }
+            firstCoreLibrary ??= candidate
+        }
+        return firstCoreLibrary
     }
 
     private func Identify(type Type) string -> (type.Assembly.GetName().Name ?? string.Empty) +
