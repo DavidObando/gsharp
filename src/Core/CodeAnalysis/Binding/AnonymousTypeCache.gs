@@ -25,6 +25,22 @@ internal class AnonymousTypeCache {
     /// Gets every distinct synthesized anonymous type created so far in this cache, in creation order.
     prop Symbols IReadOnlyList[StructSymbol] -> symbols
 
+    /// Issue #5281: creates a cache for one body-binding pass, seeded with every shape this cache
+    /// holds and continuing its counter. The body pass mutates only the copy, so repeated or
+    /// concurrent `BindProgram` calls over one declaration scope neither race on this cache nor
+    /// see types created by another call's (possibly superseded) bodies. This cache must not be
+    /// written after the declaration pass completes.
+    /// @returns An independent cache with the same shapes, symbols and counter.
+    func CreateBodyPassCopy() AnonymousTypeCache {
+        let copy = AnonymousTypeCache()
+        for pair in byShape {
+            copy.byShape[pair.Key] = pair.Value
+        }
+        copy.symbols.AddRange(symbols)
+        copy.counter = counter
+        return copy
+    }
+
     /// Returns the cached synthesized type for the given ordered member
     /// shape (name + type, order-sensitive like C# anonymous types),
     /// creating and caching a new one on first use.

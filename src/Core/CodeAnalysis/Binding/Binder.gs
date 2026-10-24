@@ -7840,7 +7840,7 @@ partial class Binder {
             // Issue #5281: continue the declaration pass's anonymous-type cache so a shape
             // used at top level and in a body is ONE type and no two types share a name.
             if globalScope?.AnonymousTypeCache != nil {
-                parentScope.InstallAnonymousTypeCache(globalScope.AnonymousTypeCache!!)
+                parentScope.InstallAnonymousTypeCache(globalScope.AnonymousTypeCache!!.CreateBodyPassCopy())
             }
             // ADR-0146 / issue #2243: rehydrate the rich anonymous-object literal →
             // synthesized-class map onto this pass's scope chain so a literal

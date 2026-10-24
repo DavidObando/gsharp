@@ -117,7 +117,9 @@ Console.WriteLine(plain.T.ToString() + record.T.ToString() + F1().ToString())
                         names.Add(reader.GetString(type.Namespace) + "." + reader.GetString(type.Name))
                     }
                 }
-                let duplicates = names.GroupBy((n string) -> n).Where((g IGrouping[string, string]) -> g.Count() > 1)
+                let duplicates = names
+                    .GroupBy((n string) -> n)
+                    .Where((g IGrouping[string, string]) -> g.Count() > 1)
                     .Select((g IGrouping[string, string]) -> g.Key)
                     .ToArray()
                 Assert.Empty(duplicates)
