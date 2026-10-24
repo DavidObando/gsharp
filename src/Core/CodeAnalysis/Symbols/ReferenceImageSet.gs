@@ -44,6 +44,10 @@ internal class ReferenceImageSet {
     // imported signatures only.
     private let constructions ConcurrentDictionary[(MetadataTypeSymbol, TypeArgsKey), ConstructedMetadataTypeSymbol] =
     ConcurrentDictionary[(MetadataTypeSymbol, TypeArgsKey), ConstructedMetadataTypeSymbol]()
+    private let functionPointers ConcurrentDictionary[
+        (SignatureCallingConvention, TypeArgsKey),
+        MetadataFunctionPointerTypeSymbol
+    ] = ConcurrentDictionary[(SignatureCallingConvention, TypeArgsKey), MetadataFunctionPointerTypeSymbol]()
     private let arrays ConcurrentDictionary[TypeSymbol, MetadataArrayTypeSymbol] = ConcurrentDictionary[
         TypeSymbol,
         MetadataArrayTypeSymbol
@@ -235,6 +239,26 @@ internal class ReferenceImageSet {
         (definition, TypeArgsKey(typeArguments)),
         (key(MetadataTypeSymbol, TypeArgsKey)) -> ConstructedMetadataTypeSymbol(definition, typeArguments)
     )
+
+    /// Gets the interned function pointer type of a header, a return type and parameter types.
+    internal func GetFunctionPointer(
+        callingConvention SignatureCallingConvention,
+        returnType TypeSymbol,
+        parameterTypes ImmutableArray[TypeSymbol]
+    ) MetadataFunctionPointerTypeSymbol {
+        // The return type is the first part of the key, so one list of objects holds the whole signature.
+        let parts = ImmutableArray.CreateBuilder[TypeSymbol](parameterTypes.Length + 1)
+        parts.Add(returnType)
+        parts.AddRange(parameterTypes)
+        return functionPointers.GetOrAdd(
+            (callingConvention, TypeArgsKey(parts.ToImmutable())),
+            (key(SignatureCallingConvention, TypeArgsKey)) -> MetadataFunctionPointerTypeSymbol(
+                callingConvention,
+                returnType,
+                parameterTypes
+            )
+        )
+    }
 
     /// Gets the interned single-dimensional array of an element type.
     internal func GetArray(elementType TypeSymbol) MetadataArrayTypeSymbol -> arrays.GetOrAdd(

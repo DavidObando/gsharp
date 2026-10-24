@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Compilation
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.IO
 import System.Linq
 import System.Reflection.Metadata
@@ -59,6 +60,7 @@ internal shared class MetadataModelComparison {
         CompareTypeReferences(resolver, set, result)
         CompareWellKnownTypes(resolver, set, result)
         CompareTypeDefinitions(resolver, set, result)
+        MetadataMemberComparison.Compare(resolver, set, result)
         return result
     }
 
@@ -251,24 +253,30 @@ internal shared class MetadataModelComparison {
 
     // Q13: the constraint rows of each generic parameter. A parameter whose constraint names a type that the context
     // cannot load is written "constraints-missing" on both sides; the other parameters still compare (table 7b).
-    private func ConstraintsOf(symbol MetadataTypeSymbol) string {
+    // Types and methods share these two functions.
+    private func ConstraintsOf(symbol MetadataTypeSymbol) string -> ConstraintsOf(
+        symbol.TypeParameters.Select((p TypeParameterSymbol) -> symbol.GetConstraintTypes(p.Ordinal)).ToImmutableArray()
+    )
+
+    internal func ConstraintsOf(constraints ImmutableArray[ImmutableArray[TypeSymbol]]) string {
         let parts = List[string]()
-        for var i = 0; i < symbol.TypeParameters.Length; i++ {
-            let constraints = symbol.GetConstraintTypes(i)
+        for parameter in constraints {
             parts.Add(
-                if constraints.Any((c TypeSymbol) -> MetadataTypeKeys.ContainsMissing(c)) {
+                if parameter.Any((c TypeSymbol) -> MetadataTypeKeys.ContainsMissing(c)) {
                     "constraints-missing"
                 } else {
-                    string.Join("+", constraints.Select((c TypeSymbol) -> MetadataTypeKeys.Of(c)))
+                    string.Join("+", parameter.Select((c TypeSymbol) -> MetadataTypeKeys.Of(c)))
                 }
             )
         }
         return string.Join(",", parts)
     }
 
-    private func ConstraintsOf(type Type) string {
+    private func ConstraintsOf(type Type) string -> ConstraintsOf(type.GetGenericArguments())
+
+    internal func ConstraintsOf(arguments[]Type) string {
         let parts = List[string]()
-        for argument in type.GetGenericArguments() {
+        for argument in arguments {
             try {
                 parts.Add(
                     string.Join(

@@ -115,6 +115,7 @@ internal class WellKnownTypes {
         private let OtherTypes[]string = []string{
             "System.Attribute",
             "System.Type",
+            "System.TypedReference",
             "System.Exception",
             "System.NullReferenceException",
             "System.IDisposable",

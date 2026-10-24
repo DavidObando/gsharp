@@ -11,8 +11,7 @@ import System.Reflection.Metadata
 /// Decodes the type structure of a signature blob into type symbols (ADR-0209 section 5, "One decoder").
 /// @remarks The result holds no nullability: the funnel of ADR-0193 applies it later, once, from the attribute blobs.
 /// This stage covers the structure that a base type, a constraint and a field type need.
-/// Custom modifiers, function pointers and tuple canonical forms come with the member symbols.
-/// A function pointer decodes to a missing type named `fnptr`, so that it never passes for a real type.
+/// Custom modifiers and tuple canonical forms come with the nullability stage.
 internal class MetadataSignatureDecoder : ISignatureTypeProvider[TypeSymbol, MetadataGenericContext] {
     private let module MetadataModule
 
@@ -31,7 +30,11 @@ internal class MetadataSignatureDecoder : ISignatureTypeProvider[TypeSymbol, Met
 
     func GetByReferenceType(elementType TypeSymbol) TypeSymbol -> ByRefTypeSymbol.Get(elementType)
 
-    func GetFunctionPointerType(signature MethodSignature[TypeSymbol]) TypeSymbol -> module.Set.GetMissing(nil, "fnptr")
+    func GetFunctionPointerType(signature MethodSignature[TypeSymbol]) TypeSymbol -> module.Set.GetFunctionPointer(
+        signature.Header.CallingConvention,
+        signature.ReturnType,
+        signature.ParameterTypes
+    )
 
     func GetGenericInstantiation(genericType TypeSymbol, typeArguments ImmutableArray[TypeSymbol]) TypeSymbol {
         if genericType is not MetadataTypeSymbol definition {
@@ -70,7 +73,13 @@ internal class MetadataSignatureDecoder : ISignatureTypeProvider[TypeSymbol, Met
 
     func GetPointerType(elementType TypeSymbol) TypeSymbol -> PointerTypeSymbol.Get(elementType)
 
-    func GetPrimitiveType(typeCode PrimitiveTypeCode) TypeSymbol -> BuiltIn(typeCode)
+    func GetPrimitiveType(typeCode PrimitiveTypeCode) TypeSymbol {
+        // TypedReference has no built-in symbol: it is the definition that the set supplies, or a missing type.
+        if typeCode == PrimitiveTypeCode.TypedReference {
+            return Canonical(module.Set.WellKnown.TryGet("System.TypedReference")!!)
+        }
+        return BuiltIn(typeCode)
+    }
 
     func GetSZArrayType(elementType TypeSymbol) TypeSymbol -> module.Set.GetArray(elementType)
 
