@@ -13,6 +13,69 @@ import Xunit
 
 class Utf8LiteralLanguageTests {
     @Fact
+    func AwaitedConditionalsAndArgumentsOnlyDeferStaticLiteralValues() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let assembly = fixture.Compile(`package Utf8Spill
+import System
+import System.Threading.Tasks
+async func Choose(value bool) Task[bool] {
+    await Task.Yield()
+    return value
+}
+async func Extra() Task[int32] {
+    await Task.Yield()
+    return 1
+}
+func Consume(value readonly span[byte], extra int32) int32 -> int32(value[0]) + extra
+async func Read(flag bool) Task[string] {
+    let value = (await Choose(flag)) ? u8"Aé" : u8"B\0"
+    return Convert.ToHexString(value)
+}
+async func Argument() Task[int32] -> Consume(u8"A", await Extra())
+async func Receiver() Task[int32] -> int32(u8"AB".Slice(await Extra(), 1)[0])
+func Main() {
+    Console.WriteLine(Read(true).Result)
+    Console.WriteLine(Read(false).Result)
+    Console.WriteLine(Argument().Result)
+    Console.WriteLine(Receiver().Result)
+}`, "Utf8Spill", true)
+        IlVerifier.Verify(assembly)
+        Assert.Equal("41C3A9\n4200\n66\n66\n", fixture.Run(assembly))
+    }
+
+    @Fact
+    func StaticLiteralElementsCanEscapeAsReadonlyReferences() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let assembly = fixture.Compile(`package Utf8Element
+import System
+func First() ref readonly byte { return ref u8"A"[0] }
+func Last() ref readonly byte { return ref (u8"A" + u8"B")[1] }
+func Main() {
+    let ref readonly saved = First()
+    GC.Collect()
+    GC.WaitForPendingFinalizers()
+    Console.WriteLine(int32(saved))
+    Console.WriteLine(int32(Last()))
+}`, "Utf8Element", true)
+        IlVerifier.Verify(assembly)
+        Assert.Equal("65\n66\n", fixture.Run(assembly))
+    }
+
+    @Theory
+    @InlineData(`func Bad(scoped value readonly span[byte]) ref readonly byte { return ref value[0] }`)
+    @InlineData(`func Bad() ref readonly byte {
+    let value = default(readonly span[byte])
+    return ref value[0]
+}`)
+    func ArbitraryReadonlySpansDoNotAcquireStaticLiteralReferentScope(source string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile("package Utf8RefReject\n" + source, "Utf8RefReject", false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0254", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+    }
+
+    @Fact
     func LambdaBodiesAndExplicitCopyBoundariesRetainLiteralBytes() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let assembly = fixture.Compile(`package Utf8Copies
