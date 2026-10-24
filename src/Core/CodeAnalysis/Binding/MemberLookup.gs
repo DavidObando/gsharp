@@ -39,12 +39,12 @@ internal enum ClrIndexerResolutionOutcome {
 /// it does not construct `BoundExpression` values, and it does not
 /// mutate (cref:BinderContext.NarrowedVariables) or
 /// (cref:BinderContext.LoopStack). The cache fields on
-/// (cref:BinderContext) for imported `[Extension]` classes
-/// ((cref:BinderContext.CachedImportedExtensionClasses) and
-/// (cref:BinderContext.CachedImportedExtensionImportCount)) are
+/// (cref:BindingServices) for imported `[Extension]` classes
+/// ((cref:BindingServices.CachedImportedExtensionClasses) and
+/// (cref:BindingServices.CachedImportedExtensionImportCount)) are
 /// intentionally written by (cref:GetImportedExtensionClasses) —
-/// those fields exist on the context precisely so this facade can populate
-/// them.
+/// those fields exist on the binding services precisely so this facade can
+/// populate them and every body of the pass can reuse them.
 ///
 /// All decisions about "what to do with no candidate" — diagnostic emission
 /// (e.g. `GS0159`, `GS0125`, `GS0187`), error-recovery
@@ -306,9 +306,11 @@ internal class MemberLookup {
     /// @returns The list of candidate (cref:MethodInfo) overloads.
     func CollectImportedExtensionMethods(methodName string) List[MethodInfo] {
         let classes = this.GetImportedExtensionClasses()
-        let cache = binderCtx.CachedImportedExtensionMethods ??
+        let cache = binderCtx
+            .Services
+            .CachedImportedExtensionMethods ??
             Dictionary[string, ImmutableArray[MethodInfo]](StringComparer.Ordinal)
-        binderCtx.CachedImportedExtensionMethods = cache
+        binderCtx.Services.CachedImportedExtensionMethods = cache
         if cache.TryGetValue(methodName, out var cached) {
             CompilationMeasurements.Count("extensions.name-index-hits")
             return cached.ToList()
@@ -474,7 +476,7 @@ internal class MemberLookup {
     /// Issue #294: enumerates static classes declared in the currently
     /// imported namespaces that carry `[Extension]` (i.e. host
     /// extension methods). The result is cached on the
-    /// (cref:BinderContext). Reference, import, file, and consumer identities
+    /// (cref:BindingServices) of the binding pass. Reference, import, file, and consumer identities
     /// invalidate the cache; an equivalent lexical child scope does not.
     /// @returns The imported static extension-holding classes.
     func GetImportedExtensionClasses() List[Type] {
@@ -484,25 +486,22 @@ internal class MemberLookup {
         } else {
             imports.Length
         }
-        if this
-            .binderCtx
-            .CachedImportedExtensionClasses != nil &&
-            this
-            .binderCtx
-            .CachedImportedExtensionImportCount == importCount &&
-            object.ReferenceEquals(binderCtx.CachedImportedExtensionReferences, binderCtx.References) &&
-            binderCtx.CachedImportedExtensionAssemblyName == binderCtx
+        let services = binderCtx.Services
+        if services.CachedImportedExtensionClasses != nil &&
+            services.CachedImportedExtensionImportCount == importCount &&
+            object.ReferenceEquals(services.CachedImportedExtensionReferences, binderCtx.References) &&
+            services.CachedImportedExtensionAssemblyName == binderCtx
             .References
             .CurrentAssemblyName &&
-            binderCtx
+            services
             .CachedImportedExtensionImports
             .SequenceEqual(imports) && object.ReferenceEquals(
-            this.binderCtx.CachedImportedExtensionSyntaxTree,
-            this.binderCtx.RootScope.GetCurrentReferencingSyntaxTreeForCache()
+            services.CachedImportedExtensionSyntaxTree,
+            binderCtx.RootScope.GetCurrentReferencingSyntaxTreeForCache()
         ) {
-            return this.binderCtx.CachedImportedExtensionClasses!!
+            return services.CachedImportedExtensionClasses!!
         }
-        binderCtx.CachedImportedExtensionMethods = nil
+        services.CachedImportedExtensionMethods = nil
         let namespaces = HashSet[string](StringComparer.Ordinal)
         if !imports.IsDefault {
             for import_ in imports {
@@ -535,17 +534,12 @@ internal class MemberLookup {
                 classes.Add(holder.Candidate)
             }
         }
-        this.binderCtx.CachedImportedExtensionClasses = classes
-        this.binderCtx.CachedImportedExtensionImportCount = importCount
-        binderCtx.CachedImportedExtensionImports = imports
-        binderCtx.CachedImportedExtensionReferences = binderCtx.References
-        binderCtx.CachedImportedExtensionAssemblyName = binderCtx.References.CurrentAssemblyName
-        this
-            .binderCtx
-            .CachedImportedExtensionSyntaxTree = this
-            .binderCtx
-            .RootScope
-            .GetCurrentReferencingSyntaxTreeForCache()
+        services.CachedImportedExtensionClasses = classes
+        services.CachedImportedExtensionImportCount = importCount
+        services.CachedImportedExtensionImports = imports
+        services.CachedImportedExtensionReferences = binderCtx.References
+        services.CachedImportedExtensionAssemblyName = binderCtx.References.CurrentAssemblyName
+        services.CachedImportedExtensionSyntaxTree = binderCtx.RootScope.GetCurrentReferencingSyntaxTreeForCache()
         return classes
     }
 
