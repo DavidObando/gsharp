@@ -112,6 +112,11 @@ open class Adr0212ScopeQueryTests {
     }
 
     @Fact
+    func LetBoundFunctionLiteral_SeesItselfInItsBody() {
+        Assert.IsType[LocalVariableSymbol](Single("PSelf", "fact"))
+    }
+
+    @Fact
     func PatternVariable_IsVisibleAfterItsDeclarationInTheBlock() {
         // Documented row: any other pattern variable stays visible to the end of its block.
         Assert.Contains("typed", Names("PAfterPattern"))
@@ -143,6 +148,12 @@ open class Adr0212ScopeQueryTests {
         Assert.Contains("Count", names)
         Assert.DoesNotContain("Value", names)
         Assert.DoesNotContain("this", names)
+    }
+
+    @Fact
+    func SharedClass_SeesItsMembersAndHasAnEnclosingSymbol() {
+        Assert.Contains("Items", Names("PStatic"))
+        Assert.Equal("Statics", Assert.IsType[StructSymbol](Enclosing("PStaticType")).Name)
     }
 
     @Fact
@@ -354,6 +365,13 @@ class Counter : IShape {
         }
     }
 }
+shared class Statics {
+    func Items(x int32) int32 {
+        return Wrap(x) // PStatic
+    }
+    func Wrap(x int32) int32 -> x
+    // PStaticType
+}
 func Blocks() int32 {
     if true {
         let innerOnly = 1 // PInBlock
@@ -406,8 +424,12 @@ func Shadow(Total int32, maybe string?, items []int32) int32 {
         default { }
     }
     let afterPattern = 3 // PAfterPattern
+    let fact = func(n int32) int32 {
+        if n <= 1 { return 1 }
+        return n * fact(n - 1) // PSelf
+    }
     let later = 2
-    return Total + first("x", 2) + g(1) + d((1, 2))
+    return Total + fact(3) + first("x", 2) + g(1) + d((1, 2))
 }
 `
 

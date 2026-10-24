@@ -271,7 +271,8 @@ partial class SemanticModel {
         StaticQualifierTypes Dictionary[SyntaxNode, TypeSymbol?],
         TypeClauseTokens Dictionary[SyntaxToken, TypeSymbol],
         LocalDeclarations ImmutableArray[(Anchor SyntaxNode, Local Symbol)],
-        LocalDeclarationsByName Dictionary[string, ImmutableArray[(Anchor SyntaxNode, Local Symbol)]]
+        LocalDeclarationsByName Dictionary[string, ImmutableArray[(Anchor SyntaxNode, Local Symbol)]],
+        StructsByIdentifier Dictionary[SyntaxToken, StructSymbol]
     ) : IEquatable[SemanticModel.Index] { }
 
     /// Records the outermost bound node per syntax node (first-win in a
@@ -409,6 +410,17 @@ partial class SemanticModel {
                 RecordDeclarations(symbol, tree, declaredBySyntax)
             }
             SemanticModel.RecordTypeClauses(globalScope, tree, typeClauseTokens)
+            // A shared class's declaration node is a copy the binder made when it moved the members
+            // into the shared block; the identifier token is the same object in both.
+            let structsByIdentifier = Dictionary[SyntaxToken, StructSymbol](ReferenceEqualityComparer.Instance)
+            for declaredStruct in program.Structs {
+                if declaredStruct.Declaration is {} structDeclaration && object.ReferenceEquals(
+                    structDeclaration.Identifier.SyntaxTree,
+                    tree
+                ) {
+                    structsByIdentifier.TryAdd(structDeclaration.Identifier, declaredStruct)
+                }
+            }
             let walker = IndexingWalker(
                 tree,
                 boundBySyntax,
@@ -433,7 +445,8 @@ partial class SemanticModel {
                 staticQualifierTypes,
                 typeClauseTokens,
                 localDeclarations,
-                SemanticModel.GroupByName(localDeclarations)
+                SemanticModel.GroupByName(localDeclarations),
+                structsByIdentifier
             )
         }
 

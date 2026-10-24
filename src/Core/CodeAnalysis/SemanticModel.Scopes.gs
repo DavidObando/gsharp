@@ -12,6 +12,7 @@ import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
+import System.Runtime.CompilerServices
 import System.Threading
 
 /// Position-based queries of (cref:SemanticModel) (ADR-0212 section 7b): the
@@ -39,7 +40,11 @@ partial class SemanticModel {
     /// @returns The enclosing symbol, or null.
     func GetEnclosingSymbol(position int32, cancellationToken CancellationToken = default(CancellationToken)) Symbol? {
         cancellationToken.ThrowIfCancellationRequested()
-        var node SyntaxNode? = FindInnermostNode(position)
+        return EnclosingSymbolOf(FindInnermostNode(position), cancellationToken)
+    }
+
+    private func EnclosingSymbolOf(innermost SyntaxNode, cancellationToken CancellationToken) Symbol? {
+        var node SyntaxNode? = innermost
         while node is {} current {
             let symbol = DeclarationSymbolOf(current, cancellationToken)
             if symbol != nil {
@@ -56,8 +61,9 @@ partial class SemanticModel {
     /// answers a name no inner tier answered.
     /// <list type="table">
     /// <item>Locals (tier 1): a `let` or `var` is visible from the end of its
-    /// declaration to the end of the nearest enclosing block or block
-    /// expression; an `if`, `for` or `if let` header initializer to the end of
+    /// declaration (from the start of its initializer when that is a function
+    /// literal, so it can call itself) to the end of the nearest enclosing block or
+    /// block expression; an `if`, `for` or `if let` header initializer to the end of
     /// its statement; an `if let` binding from the end of its clause to the end
     /// of the then-region (never the else branch); a `while let` binding from
     /// the end of its clause to the end of the body; a `guard let` binding to
@@ -91,11 +97,16 @@ partial class SemanticModel {
         let result = ImmutableArray.CreateBuilder[Symbol]()
         let seen = HashSet[string](StringComparer.Ordinal)
         AddScopedLocals(position, name, result, seen)
-        AddImplicitThis(position, name, result, seen)
         if name != nil && result.Count > 0 {
             return result.ToImmutable()
         }
-        AddReceiverlessMembers(position, name, result, seen)
+        // The declaration walk below is shared by the implicit `this` and the members.
+        let innermost = FindInnermostNode(position)
+        AddImplicitThis(innermost, name, result, seen, cancellationToken)
+        if name != nil && result.Count > 0 {
+            return result.ToImmutable()
+        }
+        AddReceiverlessMembers(innermost, name, result, seen)
         if name != nil && result.Count > 0 {
             return result.ToImmutable()
         }
@@ -131,17 +142,16 @@ partial class SemanticModel {
             // A local function is visible in its whole block, so that local functions can
             // call themselves and each other; every other local follows its declaration.
             let hoisted = local is FunctionSymbol
-            if !hoisted && anchor.Span.End > position {
-                continue
-            }
             let region = RegionOf(anchor)
             if region == nil {
                 continue
             }
+            // The one declaration-order rule: a local is visible from the end of its own
+            // declaration, or from where its region starts when that is later.
             let start = if hoisted {
                 region.Owner.Span.Start
             } else {
-                region.Start
+                Math.Max(region.Start, anchor.Span.End)
             }
             if !RegionContains(start, region.End, position) {
                 continue
@@ -165,12 +175,13 @@ partial class SemanticModel {
     /// Adds the implicit `this` parameter of the enclosing instance method, constructor or
     /// accessor, after the declared locals and parameters.
     private func AddImplicitThis(
-        position int32,
+        innermost SyntaxNode,
         name string?,
         result ImmutableArray[Symbol].Builder,
-        seen HashSet[string]
+        seen HashSet[string],
+        cancellationToken CancellationToken
     ) {
-        if GetEnclosingSymbol(position) is FunctionSymbol{ThisParameter: {} thisParameter} &&
+        if EnclosingSymbolOf(innermost, cancellationToken) is FunctionSymbol{ThisParameter: {} thisParameter} &&
             (name == nil || string.Equals(thisParameter.Name, name, StringComparison.Ordinal)) &&
             seen.Add(thisParameter.Name) {
             result.Add(thisParameter)
@@ -178,12 +189,12 @@ partial class SemanticModel {
     }
 
     private func AddReceiverlessMembers(
-        position int32,
+        innermost SyntaxNode,
         name string?,
         result ImmutableArray[Symbol].Builder,
         seen HashSet[string]
     ) {
-        var node SyntaxNode? = FindInnermostNode(position)
+        var node SyntaxNode? = innermost
         var insideMember = false
         var isShared = false
         var owner StructDeclarationSyntax? = nil
@@ -200,7 +211,7 @@ partial class SemanticModel {
             }
             node = current.Parent
         }
-        if owner == nil || GetDeclaredSymbol(owner) is not StructSymbol structSymbol {
+        if owner == nil || StructSymbolOf(owner) is not{} structSymbol {
             return
         }
         let query = if isShared {
@@ -216,6 +227,10 @@ partial class SemanticModel {
             return
         }
         for member in TypeMemberModel.EnumerateMembers(structSymbol, query) {
+            // A field-like event's backing field is not a name a user wrote.
+            if member is FieldSymbol{IsEventBackingField: true} {
+                continue
+            }
             if IsListable(member.Name) && seen.Add(member.Name) {
                 result.Add(member)
             }
@@ -228,51 +243,40 @@ partial class SemanticModel {
         result ImmutableArray[Symbol].Builder,
         seen HashSet[string]
     ) {
-        for function in globalScope.Functions {
-            AddGlobal(function, name, result, seen)
+        let table = GlobalTables.GetValue(globalScope, (table BoundGlobalScope) -> BuildGlobalTable(table))
+        if name != nil {
+            if table.ByName.TryGetValue(name, out var found) && seen.Add(name) {
+                result.Add(found)
+            }
+            return
         }
-        for variable in globalScope.Variables {
-            AddGlobal(variable, name, result, seen)
-        }
-        for aggregate in globalScope.Structs {
-            AddGlobal(aggregate, name, result, seen)
-        }
-        for declaredInterface in globalScope.Interfaces {
-            AddGlobal(declaredInterface, name, result, seen)
-        }
-        for declaredEnum in globalScope.Enums {
-            AddGlobal(declaredEnum, name, result, seen)
-        }
-        for declaredDelegate in globalScope.Delegates {
-            AddGlobal(declaredDelegate, name, result, seen)
-        }
-        for alias in globalScope.TypeAliases.OrderBy(
-            (pair KeyValuePair[string, TypeSymbol]) -> pair.Key,
-            StringComparer.Ordinal
-        ) {
-            if IsListable(alias.Key) &&
-                (name == nil || string.Equals(alias.Key, name, StringComparison.Ordinal)) &&
-                seen.Add(alias.Key) {
-                result.Add(alias.Value)
+        for entry in table.Ordered {
+            if seen.Add(entry.Name) {
+                result.Add(entry.Symbol)
             }
         }
     }
 
-    private func AddGlobal(symbol Symbol, name string?, result ImmutableArray[Symbol].Builder, seen HashSet[string]) {
-        if !IsListable(symbol.Name) {
-            return
+    private func StructSymbolOf(
+        declaration StructDeclarationSyntax,
+        cancellationToken CancellationToken = default(CancellationToken)
+    ) StructSymbol? {
+        if GetDeclaredSymbol(declaration, cancellationToken) is StructSymbol declared {
+            return declared
         }
-        if name != nil && !string.Equals(symbol.Name, name, StringComparison.Ordinal) {
-            return
-        }
-        if seen.Add(symbol.Name) {
-            result.Add(symbol)
+        return if index.Value.StructsByIdentifier.TryGetValue(declaration.Identifier, out var byIdentifier) {
+            byIdentifier
+        } else {
+            default(StructSymbol?)
         }
     }
 
     private func DeclarationSymbolOf(node SyntaxNode, cancellationToken CancellationToken) Symbol? {
-        if node is FunctionDeclarationSyntax or StructDeclarationSyntax or InterfaceDeclarationSyntax {
+        if node is FunctionDeclarationSyntax or InterfaceDeclarationSyntax {
             return GetDeclaredSymbol(node, cancellationToken)
+        }
+        if node is StructDeclarationSyntax structDeclaration {
+            return StructSymbolOf(structDeclaration, cancellationToken)
         }
         // A property is declared at its identifier, not at its declaration node.
         if node is PropertyDeclarationSyntax propertyDeclaration {
@@ -280,7 +284,7 @@ partial class SemanticModel {
         }
         if node is ConstructorDeclarationSyntax constructor {
             if constructor.FirstAncestorOrSelf[StructDeclarationSyntax]() is {} owner &&
-                GetDeclaredSymbol(owner, cancellationToken) is StructSymbol structSymbol {
+                StructSymbolOf(owner, cancellationToken) is {} structSymbol {
                 for candidate in structSymbol.ExplicitConstructors {
                     if object.ReferenceEquals(candidate.Declaration, constructor) {
                         return candidate.Function
@@ -427,7 +431,13 @@ partial class SemanticModel {
         }
         if declaration != nil {
             let owner = DeclarationScope(declaration)
-            return Region(owner, declaration.Span.End, owner.Span.End)
+            // A `let`-bound function literal sees itself, so that it can recurse.
+            let start = if declaration.Initializer is FunctionLiteralExpressionSyntax literal {
+                literal.Span.Start
+            } else {
+                declaration.Span.End
+            }
+            return Region(owner, start, owner.Span.End)
         }
         let block = EnclosingBlock(anchor)
         return Region(block, anchor.Span.End, block.Span.End)
@@ -484,7 +494,60 @@ partial class SemanticModel {
         return syntaxTree.Root
     }
 
+    private data class GlobalTable(
+        Ordered ImmutableArray[(Name string, Symbol Symbol)],
+        ByName Dictionary[string, Symbol]
+    ) : IEquatable[GlobalTable] { }
+
     shared {
+        /// The global names of each scope, built once. The table is only looked up by name, and
+        /// enumerated in its ordered form, never as the dictionary.
+        private let GlobalTables ConditionalWeakTable[BoundGlobalScope, GlobalTable] = ConditionalWeakTable[
+            BoundGlobalScope,
+            GlobalTable
+        ]()
+
+        private func BuildGlobalTable(globalScope BoundGlobalScope) GlobalTable {
+            let ordered = ImmutableArray.CreateBuilder[(Name string, Symbol Symbol)]()
+            let byName = Dictionary[string, Symbol](StringComparer.Ordinal)
+            for function in globalScope.Functions {
+                AddGlobalEntry(ordered, byName, function.Name, function)
+            }
+            for variable in globalScope.Variables {
+                AddGlobalEntry(ordered, byName, variable.Name, variable)
+            }
+            for aggregate in globalScope.Structs {
+                AddGlobalEntry(ordered, byName, aggregate.Name, aggregate)
+            }
+            for declaredInterface in globalScope.Interfaces {
+                AddGlobalEntry(ordered, byName, declaredInterface.Name, declaredInterface)
+            }
+            for declaredEnum in globalScope.Enums {
+                AddGlobalEntry(ordered, byName, declaredEnum.Name, declaredEnum)
+            }
+            for declaredDelegate in globalScope.Delegates {
+                AddGlobalEntry(ordered, byName, declaredDelegate.Name, declaredDelegate)
+            }
+            for alias in globalScope.TypeAliases.OrderBy(
+                (pair KeyValuePair[string, TypeSymbol]) -> pair.Key,
+                StringComparer.Ordinal
+            ) {
+                AddGlobalEntry(ordered, byName, alias.Key, alias.Value)
+            }
+            return GlobalTable(ordered.ToImmutable(), byName)
+        }
+
+        private func AddGlobalEntry(
+            ordered ImmutableArray[(Name string, Symbol Symbol)].Builder,
+            byName Dictionary[string, Symbol],
+            globalName string,
+            symbol Symbol
+        ) {
+            if IsListable(globalName) && byName.TryAdd(globalName, symbol) {
+                ordered.Add((globalName, symbol))
+            }
+        }
+
         /// Whether a name is one a user wrote, as opposed to a synthesized one.
         private func IsListable(name string?) bool {
             return !string.IsNullOrEmpty(name) && name!![0] != '<' && name!![0] != '$'
