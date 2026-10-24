@@ -13,6 +13,11 @@ partial class AccessorExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -62,6 +67,11 @@ partial class AccessorExpressionSyntax {
 }
 
 partial class AnnotationSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -171,6 +181,11 @@ partial class AnnotationTargetSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -210,6 +225,11 @@ partial class AnnotationTargetSyntax {
 }
 
 partial class AnonymousClassExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -333,6 +353,11 @@ partial class AnonymousClassMemberInitializerSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -402,6 +427,11 @@ partial class AnonymousClassMemberInitializerSyntax {
 }
 
 partial class ArrayCreationExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -509,6 +539,11 @@ partial class AsExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -558,6 +593,11 @@ partial class AsExpressionSyntax {
 }
 
 partial class AssignmentExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -613,6 +653,11 @@ partial class AwaitExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -652,6 +697,11 @@ partial class AwaitExpressionSyntax {
 }
 
 partial class AwaitForRangeStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -767,6 +817,11 @@ partial class AwaitUsingStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -819,6 +874,11 @@ partial class BaseClassCallExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -868,6 +928,11 @@ partial class BaseClassCallExpressionSyntax {
 }
 
 partial class BaseInterfaceCallExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -1013,6 +1078,18 @@ partial class BinaryExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 {
+        get {
+            if GetType() != ExactTypeOfBinaryExpressionSyntax {
+                return ReflectedSpanPlan(GetType())
+            }
+            return 1
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             if GetType() != ExactTypeOfBinaryExpressionSyntax {
@@ -1071,6 +1148,11 @@ partial class BinaryPatternSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -1120,6 +1202,11 @@ partial class BinaryPatternSyntax {
 }
 
 partial class BlockExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -1178,6 +1265,11 @@ partial class BlockExpressionSyntax {
 }
 
 partial class BlockStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -1263,6 +1355,18 @@ partial class BreakStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 {
+        get {
+            if GetType() != ExactTypeOfBreakStatementSyntax {
+                return ReflectedSpanPlan(GetType())
+            }
+            return 1
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             if GetType() != ExactTypeOfBreakStatementSyntax {
@@ -1308,6 +1412,11 @@ partial class BreakStatementSyntax {
 }
 
 partial class CallExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -1419,6 +1528,11 @@ partial class CatchClauseSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -1521,6 +1635,11 @@ partial class ChannelCreationExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -1579,6 +1698,11 @@ partial class ChannelSendStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -1628,6 +1752,11 @@ partial class ChannelSendStatementSyntax {
 }
 
 partial class CheckedExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -1690,6 +1819,11 @@ partial class CheckedExpressionSyntax {
 }
 
 partial class CollectionInitializerExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -1765,6 +1899,18 @@ partial class CompilationUnitSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 {
+        get {
+            if GetType() != ExactTypeOfCompilationUnitSyntax {
+                return ReflectedSpanPlan(GetType())
+            }
+            return 7
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         if GetType() != ExactTypeOfCompilationUnitSyntax {
             return BuildUnsortedChildrenByReflection()
@@ -1781,9 +1927,123 @@ partial class CompilationUnitSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        if GetType() != ExactTypeOfCompilationUnitSyntax {
+            return false
+        }
+        var last = int32.MinValue
+        for item0 in FileAttributes {
+            let start0 = item0.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        for item1 in Members {
+            let start1 = item1.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = EndOfFileToken
+        if IsPresent(node2) {
+            let start2 = node2.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            if GetType() != ExactTypeOfCompilationUnitSyntax {
+                return CachedChildren().Length
+            }
+            var count = 0
+            count += FileAttributes.Length
+            count += Members.Length
+            if IsPresent(EndOfFileToken) {
+                count++
+            }
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        if GetType() != ExactTypeOfCompilationUnitSyntax {
+            return ChildAt(CachedChildren(), index)
+        }
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = FileAttributes
+            if remaining < child0.Length {
+                return child0[remaining]
+            }
+            remaining -= child0.Length
+            let child1 = Members
+            if remaining < child1.Length {
+                return child1[remaining]
+            }
+            remaining -= child1.Length
+            let child2 = EndOfFileToken
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2
+                }
+                remaining--
+            }
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if GetType() != ExactTypeOfCompilationUnitSyntax {
+                return CachedChildren().Length
+            }
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if GetType() != ExactTypeOfCompilationUnitSyntax {
+            return ChildAt(CachedChildren(), index)
+        }
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class CompoundIndexAssignmentExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 7
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -1800,9 +2060,118 @@ partial class CompoundIndexAssignmentExpressionSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        let node0 = Target
+        if IsPresent(node0) {
+            let start0 = node0.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = OperatorToken
+        if IsPresent(node1) {
+            let start1 = node1.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = Value
+        if IsPresent(node2) {
+            let start2 = node2.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            if IsPresent(Target) {
+                count++
+            }
+            if IsPresent(OperatorToken) {
+                count++
+            }
+            if IsPresent(Value) {
+                count++
+            }
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = Target
+            if IsPresent(child0) {
+                if remaining == 0 {
+                    return child0
+                }
+                remaining--
+            }
+            let child1 = OperatorToken
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1
+                }
+                remaining--
+            }
+            let child2 = Value
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2
+                }
+                remaining--
+            }
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class ConditionalExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -1875,6 +2244,11 @@ partial class ConditionalExpressionSyntax {
 }
 
 partial class ConditionalRefArgumentExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -1970,6 +2344,11 @@ partial class ConstantPatternSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -1999,6 +2378,11 @@ partial class ConstantPatternSyntax {
 }
 
 partial class ConstructorDeclarationSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 6
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -2041,11 +2425,292 @@ partial class ConstructorDeclarationSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        let node0 = AccessibilityModifier
+        if IsPresent(node0) {
+            let start0 = node0!!.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = ConvenienceModifier
+        if IsPresent(node1) {
+            let start1 = node1!!.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = InitKeyword
+        if IsPresent(node2) {
+            let start2 = node2.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        let node3 = OpenParenthesisToken
+        if IsPresent(node3) {
+            let start3 = node3.Span.Start
+            if start3 < last {
+                return false
+            }
+            last = start3
+        }
+        for item4 in SeparatedItems(Parameters) {
+            let start4 = item4.Span.Start
+            if start4 < last {
+                return false
+            }
+            last = start4
+        }
+        let node5 = CloseParenthesisToken
+        if IsPresent(node5) {
+            let start5 = node5.Span.Start
+            if start5 < last {
+                return false
+            }
+            last = start5
+        }
+        let node6 = BaseColonToken
+        if IsPresent(node6) {
+            let start6 = node6!!.Span.Start
+            if start6 < last {
+                return false
+            }
+            last = start6
+        }
+        let node7 = BaseKeyword
+        if IsPresent(node7) {
+            let start7 = node7!!.Span.Start
+            if start7 < last {
+                return false
+            }
+            last = start7
+        }
+        let node8 = BaseOpenParenthesisToken
+        if IsPresent(node8) {
+            let start8 = node8!!.Span.Start
+            if start8 < last {
+                return false
+            }
+            last = start8
+        }
+        for item9 in SeparatedItems(BaseArguments) {
+            let start9 = item9.Span.Start
+            if start9 < last {
+                return false
+            }
+            last = start9
+        }
+        let node10 = BaseCloseParenthesisToken
+        if IsPresent(node10) {
+            let start10 = node10!!.Span.Start
+            if start10 < last {
+                return false
+            }
+            last = start10
+        }
+        let node11 = Body
+        if IsPresent(node11) {
+            let start11 = node11.Span.Start
+            if start11 < last {
+                return false
+            }
+            last = start11
+        }
+        for item12 in Annotations {
+            let start12 = item12.Span.Start
+            if start12 < last {
+                return false
+            }
+            last = start12
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            if IsPresent(AccessibilityModifier) {
+                count++
+            }
+            if IsPresent(ConvenienceModifier) {
+                count++
+            }
+            if IsPresent(InitKeyword) {
+                count++
+            }
+            if IsPresent(OpenParenthesisToken) {
+                count++
+            }
+            count += SeparatedLength(Parameters)
+            if IsPresent(CloseParenthesisToken) {
+                count++
+            }
+            if IsPresent(BaseColonToken) {
+                count++
+            }
+            if IsPresent(BaseKeyword) {
+                count++
+            }
+            if IsPresent(BaseOpenParenthesisToken) {
+                count++
+            }
+            count += SeparatedLength(BaseArguments)
+            if IsPresent(BaseCloseParenthesisToken) {
+                count++
+            }
+            if IsPresent(Body) {
+                count++
+            }
+            count += Annotations.Length
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = AccessibilityModifier
+            if IsPresent(child0) {
+                if remaining == 0 {
+                    return child0!!
+                }
+                remaining--
+            }
+            let child1 = ConvenienceModifier
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1!!
+                }
+                remaining--
+            }
+            let child2 = InitKeyword
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2
+                }
+                remaining--
+            }
+            let child3 = OpenParenthesisToken
+            if IsPresent(child3) {
+                if remaining == 0 {
+                    return child3
+                }
+                remaining--
+            }
+            let child4 = SeparatedItems(Parameters)
+            if remaining < child4.Length {
+                return child4[remaining]
+            }
+            remaining -= child4.Length
+            let child5 = CloseParenthesisToken
+            if IsPresent(child5) {
+                if remaining == 0 {
+                    return child5
+                }
+                remaining--
+            }
+            let child6 = BaseColonToken
+            if IsPresent(child6) {
+                if remaining == 0 {
+                    return child6!!
+                }
+                remaining--
+            }
+            let child7 = BaseKeyword
+            if IsPresent(child7) {
+                if remaining == 0 {
+                    return child7!!
+                }
+                remaining--
+            }
+            let child8 = BaseOpenParenthesisToken
+            if IsPresent(child8) {
+                if remaining == 0 {
+                    return child8!!
+                }
+                remaining--
+            }
+            let child9 = SeparatedItems(BaseArguments)
+            if remaining < child9.Length {
+                return child9[remaining]
+            }
+            remaining -= child9.Length
+            let child10 = BaseCloseParenthesisToken
+            if IsPresent(child10) {
+                if remaining == 0 {
+                    return child10!!
+                }
+                remaining--
+            }
+            let child11 = Body
+            if IsPresent(child11) {
+                if remaining == 0 {
+                    return child11
+                }
+                remaining--
+            }
+            let child12 = Annotations
+            if remaining < child12.Length {
+                return child12[remaining]
+            }
+            remaining -= child12.Length
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class ContinueStatementSyntax {
     shared {
         internal let ExactTypeOfContinueStatementSyntax Type = typeof(ContinueStatementSyntax)
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 {
+        get {
+            if GetType() != ExactTypeOfContinueStatementSyntax {
+                return ReflectedSpanPlan(GetType())
+            }
+            return 1
+        }
     }
 
     /// ```xmldoc
@@ -2096,6 +2761,11 @@ partial class ContinueStatementSyntax {
 }
 
 partial class DefaultExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -2161,6 +2831,11 @@ partial class DeferStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -2203,6 +2878,11 @@ partial class DeinitDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 6
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(DeinitKeyword) {
@@ -2216,9 +2896,113 @@ partial class DeinitDeclarationSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        let node0 = DeinitKeyword
+        if IsPresent(node0) {
+            let start0 = node0.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = Body
+        if IsPresent(node1) {
+            let start1 = node1.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        for item2 in Annotations {
+            let start2 = item2.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            if IsPresent(DeinitKeyword) {
+                count++
+            }
+            if IsPresent(Body) {
+                count++
+            }
+            count += Annotations.Length
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = DeinitKeyword
+            if IsPresent(child0) {
+                if remaining == 0 {
+                    return child0
+                }
+                remaining--
+            }
+            let child1 = Body
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1
+                }
+                remaining--
+            }
+            let child2 = Annotations
+            if remaining < child2.Length {
+                return child2[remaining]
+            }
+            remaining -= child2.Length
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class DelegateDeclarationSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 7
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -2263,9 +3047,288 @@ partial class DelegateDeclarationSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        let node0 = AccessibilityModifier
+        if IsPresent(node0) {
+            let start0 = node0!!.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = TypeKeyword
+        if IsPresent(node1) {
+            let start1 = node1!!.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = Identifier
+        if IsPresent(node2) {
+            let start2 = node2.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        let node3 = TypeParameterList
+        if IsPresent(node3) {
+            let start3 = node3!!.Span.Start
+            if start3 < last {
+                return false
+            }
+            last = start3
+        }
+        let node4 = EqualsToken
+        if IsPresent(node4) {
+            let start4 = node4!!.Span.Start
+            if start4 < last {
+                return false
+            }
+            last = start4
+        }
+        let node5 = DelegateKeyword
+        if IsPresent(node5) {
+            let start5 = node5.Span.Start
+            if start5 < last {
+                return false
+            }
+            last = start5
+        }
+        let node6 = FuncKeyword
+        if IsPresent(node6) {
+            let start6 = node6!!.Span.Start
+            if start6 < last {
+                return false
+            }
+            last = start6
+        }
+        let node7 = SemicolonToken
+        if IsPresent(node7) {
+            let start7 = node7!!.Span.Start
+            if start7 < last {
+                return false
+            }
+            last = start7
+        }
+        let node8 = OpenParenToken
+        if IsPresent(node8) {
+            let start8 = node8.Span.Start
+            if start8 < last {
+                return false
+            }
+            last = start8
+        }
+        for item9 in SeparatedItems(Parameters) {
+            let start9 = item9.Span.Start
+            if start9 < last {
+                return false
+            }
+            last = start9
+        }
+        let node10 = CloseParenToken
+        if IsPresent(node10) {
+            let start10 = node10.Span.Start
+            if start10 < last {
+                return false
+            }
+            last = start10
+        }
+        let node11 = ReturnType
+        if IsPresent(node11) {
+            let start11 = node11!!.Span.Start
+            if start11 < last {
+                return false
+            }
+            last = start11
+        }
+        for item12 in Annotations {
+            let start12 = item12.Span.Start
+            if start12 < last {
+                return false
+            }
+            last = start12
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            if IsPresent(AccessibilityModifier) {
+                count++
+            }
+            if IsPresent(TypeKeyword) {
+                count++
+            }
+            if IsPresent(Identifier) {
+                count++
+            }
+            if IsPresent(TypeParameterList) {
+                count++
+            }
+            if IsPresent(EqualsToken) {
+                count++
+            }
+            if IsPresent(DelegateKeyword) {
+                count++
+            }
+            if IsPresent(FuncKeyword) {
+                count++
+            }
+            if IsPresent(SemicolonToken) {
+                count++
+            }
+            if IsPresent(OpenParenToken) {
+                count++
+            }
+            count += SeparatedLength(Parameters)
+            if IsPresent(CloseParenToken) {
+                count++
+            }
+            if IsPresent(ReturnType) {
+                count++
+            }
+            count += Annotations.Length
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = AccessibilityModifier
+            if IsPresent(child0) {
+                if remaining == 0 {
+                    return child0!!
+                }
+                remaining--
+            }
+            let child1 = TypeKeyword
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1!!
+                }
+                remaining--
+            }
+            let child2 = Identifier
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2
+                }
+                remaining--
+            }
+            let child3 = TypeParameterList
+            if IsPresent(child3) {
+                if remaining == 0 {
+                    return child3!!
+                }
+                remaining--
+            }
+            let child4 = EqualsToken
+            if IsPresent(child4) {
+                if remaining == 0 {
+                    return child4!!
+                }
+                remaining--
+            }
+            let child5 = DelegateKeyword
+            if IsPresent(child5) {
+                if remaining == 0 {
+                    return child5
+                }
+                remaining--
+            }
+            let child6 = FuncKeyword
+            if IsPresent(child6) {
+                if remaining == 0 {
+                    return child6!!
+                }
+                remaining--
+            }
+            let child7 = SemicolonToken
+            if IsPresent(child7) {
+                if remaining == 0 {
+                    return child7!!
+                }
+                remaining--
+            }
+            let child8 = OpenParenToken
+            if IsPresent(child8) {
+                if remaining == 0 {
+                    return child8
+                }
+                remaining--
+            }
+            let child9 = SeparatedItems(Parameters)
+            if remaining < child9.Length {
+                return child9[remaining]
+            }
+            remaining -= child9.Length
+            let child10 = CloseParenToken
+            if IsPresent(child10) {
+                if remaining == 0 {
+                    return child10
+                }
+                remaining--
+            }
+            let child11 = ReturnType
+            if IsPresent(child11) {
+                if remaining == 0 {
+                    return child11!!
+                }
+                remaining--
+            }
+            let child12 = Annotations
+            if remaining < child12.Length {
+                return child12[remaining]
+            }
+            remaining -= child12.Length
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class DiscardPatternSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -2298,6 +3361,11 @@ partial class DiscardPatternSyntax {
 }
 
 partial class DoWhileStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -2363,6 +3431,11 @@ partial class ElseClauseSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -2405,6 +3478,11 @@ partial class EnumDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 7
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(AccessibilityModifier) {
@@ -2434,9 +3512,216 @@ partial class EnumDeclarationSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        let node0 = AccessibilityModifier
+        if IsPresent(node0) {
+            let start0 = node0!!.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = TypeKeyword
+        if IsPresent(node1) {
+            let start1 = node1!!.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = Identifier
+        if IsPresent(node2) {
+            let start2 = node2.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        let node3 = EnumKeyword
+        if IsPresent(node3) {
+            let start3 = node3.Span.Start
+            if start3 < last {
+                return false
+            }
+            last = start3
+        }
+        let node4 = OpenBraceToken
+        if IsPresent(node4) {
+            let start4 = node4.Span.Start
+            if start4 < last {
+                return false
+            }
+            last = start4
+        }
+        for item5 in SeparatedItems(Members) {
+            let start5 = item5.Span.Start
+            if start5 < last {
+                return false
+            }
+            last = start5
+        }
+        let node6 = CloseBraceToken
+        if IsPresent(node6) {
+            let start6 = node6.Span.Start
+            if start6 < last {
+                return false
+            }
+            last = start6
+        }
+        let node7 = SealedKeyword
+        if IsPresent(node7) {
+            let start7 = node7!!.Span.Start
+            if start7 < last {
+                return false
+            }
+            last = start7
+        }
+        for item8 in Annotations {
+            let start8 = item8.Span.Start
+            if start8 < last {
+                return false
+            }
+            last = start8
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            if IsPresent(AccessibilityModifier) {
+                count++
+            }
+            if IsPresent(TypeKeyword) {
+                count++
+            }
+            if IsPresent(Identifier) {
+                count++
+            }
+            if IsPresent(EnumKeyword) {
+                count++
+            }
+            if IsPresent(OpenBraceToken) {
+                count++
+            }
+            count += SeparatedLength(Members)
+            if IsPresent(CloseBraceToken) {
+                count++
+            }
+            if IsPresent(SealedKeyword) {
+                count++
+            }
+            count += Annotations.Length
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = AccessibilityModifier
+            if IsPresent(child0) {
+                if remaining == 0 {
+                    return child0!!
+                }
+                remaining--
+            }
+            let child1 = TypeKeyword
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1!!
+                }
+                remaining--
+            }
+            let child2 = Identifier
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2
+                }
+                remaining--
+            }
+            let child3 = EnumKeyword
+            if IsPresent(child3) {
+                if remaining == 0 {
+                    return child3
+                }
+                remaining--
+            }
+            let child4 = OpenBraceToken
+            if IsPresent(child4) {
+                if remaining == 0 {
+                    return child4
+                }
+                remaining--
+            }
+            let child5 = SeparatedItems(Members)
+            if remaining < child5.Length {
+                return child5[remaining]
+            }
+            remaining -= child5.Length
+            let child6 = CloseBraceToken
+            if IsPresent(child6) {
+                if remaining == 0 {
+                    return child6
+                }
+                remaining--
+            }
+            let child7 = SealedKeyword
+            if IsPresent(child7) {
+                if remaining == 0 {
+                    return child7!!
+                }
+                remaining--
+            }
+            let child8 = Annotations
+            if remaining < child8.Length {
+                return child8[remaining]
+            }
+            remaining -= child8.Length
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class EnumMemberSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -2524,6 +3809,11 @@ partial class EventAccessorSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -2576,6 +3866,11 @@ partial class EventDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 7
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         for itemAnnotations in Annotations {
@@ -2619,9 +3914,288 @@ partial class EventDeclarationSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        for item0 in Annotations {
+            let start0 = item0.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = AccessibilityModifier
+        if IsPresent(node1) {
+            let start1 = node1!!.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = OpenModifier
+        if IsPresent(node2) {
+            let start2 = node2!!.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        let node3 = OverrideModifier
+        if IsPresent(node3) {
+            let start3 = node3!!.Span.Start
+            if start3 < last {
+                return false
+            }
+            last = start3
+        }
+        let node4 = EventKeyword
+        if IsPresent(node4) {
+            let start4 = node4.Span.Start
+            if start4 < last {
+                return false
+            }
+            last = start4
+        }
+        let node5 = Identifier
+        if IsPresent(node5) {
+            let start5 = node5.Span.Start
+            if start5 < last {
+                return false
+            }
+            last = start5
+        }
+        let node6 = Type
+        if IsPresent(node6) {
+            let start6 = node6!!.Span.Start
+            if start6 < last {
+                return false
+            }
+            last = start6
+        }
+        let node7 = OpenBraceToken
+        if IsPresent(node7) {
+            let start7 = node7!!.Span.Start
+            if start7 < last {
+                return false
+            }
+            last = start7
+        }
+        for item8 in Accessors {
+            let start8 = item8.Span.Start
+            if start8 < last {
+                return false
+            }
+            last = start8
+        }
+        let node9 = CloseBraceToken
+        if IsPresent(node9) {
+            let start9 = node9!!.Span.Start
+            if start9 < last {
+                return false
+            }
+            last = start9
+        }
+        let node10 = ExplicitInterfaceOpenParenthesisToken
+        if IsPresent(node10) {
+            let start10 = node10!!.Span.Start
+            if start10 < last {
+                return false
+            }
+            last = start10
+        }
+        let node11 = ExplicitInterfaceType
+        if IsPresent(node11) {
+            let start11 = node11!!.Span.Start
+            if start11 < last {
+                return false
+            }
+            last = start11
+        }
+        let node12 = ExplicitInterfaceCloseParenthesisToken
+        if IsPresent(node12) {
+            let start12 = node12!!.Span.Start
+            if start12 < last {
+                return false
+            }
+            last = start12
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            count += Annotations.Length
+            if IsPresent(AccessibilityModifier) {
+                count++
+            }
+            if IsPresent(OpenModifier) {
+                count++
+            }
+            if IsPresent(OverrideModifier) {
+                count++
+            }
+            if IsPresent(EventKeyword) {
+                count++
+            }
+            if IsPresent(Identifier) {
+                count++
+            }
+            if IsPresent(Type) {
+                count++
+            }
+            if IsPresent(OpenBraceToken) {
+                count++
+            }
+            count += Accessors.Length
+            if IsPresent(CloseBraceToken) {
+                count++
+            }
+            if IsPresent(ExplicitInterfaceOpenParenthesisToken) {
+                count++
+            }
+            if IsPresent(ExplicitInterfaceType) {
+                count++
+            }
+            if IsPresent(ExplicitInterfaceCloseParenthesisToken) {
+                count++
+            }
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = Annotations
+            if remaining < child0.Length {
+                return child0[remaining]
+            }
+            remaining -= child0.Length
+            let child1 = AccessibilityModifier
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1!!
+                }
+                remaining--
+            }
+            let child2 = OpenModifier
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2!!
+                }
+                remaining--
+            }
+            let child3 = OverrideModifier
+            if IsPresent(child3) {
+                if remaining == 0 {
+                    return child3!!
+                }
+                remaining--
+            }
+            let child4 = EventKeyword
+            if IsPresent(child4) {
+                if remaining == 0 {
+                    return child4
+                }
+                remaining--
+            }
+            let child5 = Identifier
+            if IsPresent(child5) {
+                if remaining == 0 {
+                    return child5
+                }
+                remaining--
+            }
+            let child6 = Type
+            if IsPresent(child6) {
+                if remaining == 0 {
+                    return child6!!
+                }
+                remaining--
+            }
+            let child7 = OpenBraceToken
+            if IsPresent(child7) {
+                if remaining == 0 {
+                    return child7!!
+                }
+                remaining--
+            }
+            let child8 = Accessors
+            if remaining < child8.Length {
+                return child8[remaining]
+            }
+            remaining -= child8.Length
+            let child9 = CloseBraceToken
+            if IsPresent(child9) {
+                if remaining == 0 {
+                    return child9!!
+                }
+                remaining--
+            }
+            let child10 = ExplicitInterfaceOpenParenthesisToken
+            if IsPresent(child10) {
+                if remaining == 0 {
+                    return child10!!
+                }
+                remaining--
+            }
+            let child11 = ExplicitInterfaceType
+            if IsPresent(child11) {
+                if remaining == 0 {
+                    return child11!!
+                }
+                remaining--
+            }
+            let child12 = ExplicitInterfaceCloseParenthesisToken
+            if IsPresent(child12) {
+                if remaining == 0 {
+                    return child12!!
+                }
+                remaining--
+            }
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class EventSubscriptionExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 7
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -2638,9 +4212,118 @@ partial class EventSubscriptionExpressionSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        let node0 = LeftHandSide
+        if IsPresent(node0) {
+            let start0 = node0.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = OperatorToken
+        if IsPresent(node1) {
+            let start1 = node1.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = Value
+        if IsPresent(node2) {
+            let start2 = node2.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            if IsPresent(LeftHandSide) {
+                count++
+            }
+            if IsPresent(OperatorToken) {
+                count++
+            }
+            if IsPresent(Value) {
+                count++
+            }
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = LeftHandSide
+            if IsPresent(child0) {
+                if remaining == 0 {
+                    return child0
+                }
+                remaining--
+            }
+            let child1 = OperatorToken
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1
+                }
+                remaining--
+            }
+            let child2 = Value
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2
+                }
+                remaining--
+            }
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class ExpressionCollectionElementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -2675,6 +4358,18 @@ partial class ExpressionCollectionElementSyntax {
 partial class ExpressionStatementSyntax {
     shared {
         internal let ExactTypeOfExpressionStatementSyntax Type = typeof(ExpressionStatementSyntax)
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 {
+        get {
+            if GetType() != ExactTypeOfExpressionStatementSyntax {
+                return ReflectedSpanPlan(GetType())
+            }
+            return 1
+        }
     }
 
     /// ```xmldoc
@@ -2718,6 +4413,11 @@ partial class FallthroughStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -2747,6 +4447,11 @@ partial class FallthroughStatementSyntax {
 }
 
 partial class FieldAssignmentExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -2822,6 +4527,11 @@ partial class FieldDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 7
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         for itemAnnotations in Annotations {
@@ -2850,9 +4560,203 @@ partial class FieldDeclarationSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        for item0 in Annotations {
+            let start0 = item0.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = AccessibilityModifier
+        if IsPresent(node1) {
+            let start1 = node1!!.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = VarOrLetKeyword
+        if IsPresent(node2) {
+            let start2 = node2!!.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        let node3 = Identifier
+        if IsPresent(node3) {
+            let start3 = node3.Span.Start
+            if start3 < last {
+                return false
+            }
+            last = start3
+        }
+        let node4 = Type
+        if IsPresent(node4) {
+            let start4 = node4.Span.Start
+            if start4 < last {
+                return false
+            }
+            last = start4
+        }
+        let node5 = EqualsToken
+        if IsPresent(node5) {
+            let start5 = node5!!.Span.Start
+            if start5 < last {
+                return false
+            }
+            last = start5
+        }
+        let node6 = Initializer
+        if IsPresent(node6) {
+            let start6 = node6!!.Span.Start
+            if start6 < last {
+                return false
+            }
+            last = start6
+        }
+        let node7 = FixedKeyword
+        if IsPresent(node7) {
+            let start7 = node7!!.Span.Start
+            if start7 < last {
+                return false
+            }
+            last = start7
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            count += Annotations.Length
+            if IsPresent(AccessibilityModifier) {
+                count++
+            }
+            if IsPresent(VarOrLetKeyword) {
+                count++
+            }
+            if IsPresent(Identifier) {
+                count++
+            }
+            if IsPresent(Type) {
+                count++
+            }
+            if IsPresent(EqualsToken) {
+                count++
+            }
+            if IsPresent(Initializer) {
+                count++
+            }
+            if IsPresent(FixedKeyword) {
+                count++
+            }
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = Annotations
+            if remaining < child0.Length {
+                return child0[remaining]
+            }
+            remaining -= child0.Length
+            let child1 = AccessibilityModifier
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1!!
+                }
+                remaining--
+            }
+            let child2 = VarOrLetKeyword
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2!!
+                }
+                remaining--
+            }
+            let child3 = Identifier
+            if IsPresent(child3) {
+                if remaining == 0 {
+                    return child3
+                }
+                remaining--
+            }
+            let child4 = Type
+            if IsPresent(child4) {
+                if remaining == 0 {
+                    return child4
+                }
+                remaining--
+            }
+            let child5 = EqualsToken
+            if IsPresent(child5) {
+                if remaining == 0 {
+                    return child5!!
+                }
+                remaining--
+            }
+            let child6 = Initializer
+            if IsPresent(child6) {
+                if remaining == 0 {
+                    return child6!!
+                }
+                remaining--
+            }
+            let child7 = FixedKeyword
+            if IsPresent(child7) {
+                if remaining == 0 {
+                    return child7!!
+                }
+                remaining--
+            }
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class FieldInitializerSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -2908,6 +4812,11 @@ partial class FinallyClauseSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -2947,6 +4856,11 @@ partial class FinallyClauseSyntax {
 }
 
 partial class FixedStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -3029,6 +4943,11 @@ partial class FixedStatementSyntax {
 }
 
 partial class ForClauseStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -3124,6 +5043,11 @@ partial class ForConditionStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -3173,6 +5097,11 @@ partial class ForConditionStatementSyntax {
 }
 
 partial class ForEllipsisStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -3268,6 +5197,11 @@ partial class ForInfiniteStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -3307,6 +5241,11 @@ partial class ForInfiniteStatementSyntax {
 }
 
 partial class ForRangeStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -3432,6 +5371,11 @@ partial class ForTupleRangeStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -3520,6 +5464,11 @@ partial class FromEndIndexExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -3559,6 +5508,11 @@ partial class FromEndIndexExpressionSyntax {
 }
 
 partial class FunctionDeclarationSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 7
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -3639,9 +5593,504 @@ partial class FunctionDeclarationSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        let node0 = SemicolonBodyToken
+        if IsPresent(node0) {
+            let start0 = node0!!.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = PartialModifier
+        if IsPresent(node1) {
+            let start1 = node1!!.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = ReceiverOpenParenthesisToken
+        if IsPresent(node2) {
+            let start2 = node2!!.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        let node3 = Receiver
+        if IsPresent(node3) {
+            let start3 = node3!!.Span.Start
+            if start3 < last {
+                return false
+            }
+            last = start3
+        }
+        let node4 = ReceiverCloseParenthesisToken
+        if IsPresent(node4) {
+            let start4 = node4!!.Span.Start
+            if start4 < last {
+                return false
+            }
+            last = start4
+        }
+        let node5 = ExplicitInterfaceOpenParenthesisToken
+        if IsPresent(node5) {
+            let start5 = node5!!.Span.Start
+            if start5 < last {
+                return false
+            }
+            last = start5
+        }
+        let node6 = ExplicitInterfaceType
+        if IsPresent(node6) {
+            let start6 = node6!!.Span.Start
+            if start6 < last {
+                return false
+            }
+            last = start6
+        }
+        let node7 = ExplicitInterfaceCloseParenthesisToken
+        if IsPresent(node7) {
+            let start7 = node7!!.Span.Start
+            if start7 < last {
+                return false
+            }
+            last = start7
+        }
+        let node8 = AccessibilityModifier
+        if IsPresent(node8) {
+            let start8 = node8!!.Span.Start
+            if start8 < last {
+                return false
+            }
+            last = start8
+        }
+        let node9 = OpenModifier
+        if IsPresent(node9) {
+            let start9 = node9!!.Span.Start
+            if start9 < last {
+                return false
+            }
+            last = start9
+        }
+        let node10 = OverrideModifier
+        if IsPresent(node10) {
+            let start10 = node10!!.Span.Start
+            if start10 < last {
+                return false
+            }
+            last = start10
+        }
+        let node11 = AsyncModifier
+        if IsPresent(node11) {
+            let start11 = node11!!.Span.Start
+            if start11 < last {
+                return false
+            }
+            last = start11
+        }
+        let node12 = ReturnRefModifier
+        if IsPresent(node12) {
+            let start12 = node12!!.Span.Start
+            if start12 < last {
+                return false
+            }
+            last = start12
+        }
+        let node13 = ReturnReadOnlyModifier
+        if IsPresent(node13) {
+            let start13 = node13!!.Span.Start
+            if start13 < last {
+                return false
+            }
+            last = start13
+        }
+        let node14 = UnsafeModifier
+        if IsPresent(node14) {
+            let start14 = node14!!.Span.Start
+            if start14 < last {
+                return false
+            }
+            last = start14
+        }
+        let node15 = FunctionKeyword
+        if IsPresent(node15) {
+            let start15 = node15.Span.Start
+            if start15 < last {
+                return false
+            }
+            last = start15
+        }
+        let node16 = RetiredExtensionKeyword
+        if IsPresent(node16) {
+            let start16 = node16!!.Span.Start
+            if start16 < last {
+                return false
+            }
+            last = start16
+        }
+        let node17 = Identifier
+        if IsPresent(node17) {
+            let start17 = node17.Span.Start
+            if start17 < last {
+                return false
+            }
+            last = start17
+        }
+        let node18 = TypeParameterList
+        if IsPresent(node18) {
+            let start18 = node18!!.Span.Start
+            if start18 < last {
+                return false
+            }
+            last = start18
+        }
+        let node19 = OpenParenthesisToken
+        if IsPresent(node19) {
+            let start19 = node19.Span.Start
+            if start19 < last {
+                return false
+            }
+            last = start19
+        }
+        for item20 in SeparatedItems(Parameters) {
+            let start20 = item20.Span.Start
+            if start20 < last {
+                return false
+            }
+            last = start20
+        }
+        let node21 = CloseParenthesisToken
+        if IsPresent(node21) {
+            let start21 = node21.Span.Start
+            if start21 < last {
+                return false
+            }
+            last = start21
+        }
+        let node22 = Type
+        if IsPresent(node22) {
+            let start22 = node22!!.Span.Start
+            if start22 < last {
+                return false
+            }
+            last = start22
+        }
+        let node23 = Body
+        if IsPresent(node23) {
+            let start23 = node23!!.Span.Start
+            if start23 < last {
+                return false
+            }
+            last = start23
+        }
+        for item24 in Annotations {
+            let start24 = item24.Span.Start
+            if start24 < last {
+                return false
+            }
+            last = start24
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            if IsPresent(SemicolonBodyToken) {
+                count++
+            }
+            if IsPresent(PartialModifier) {
+                count++
+            }
+            if IsPresent(ReceiverOpenParenthesisToken) {
+                count++
+            }
+            if IsPresent(Receiver) {
+                count++
+            }
+            if IsPresent(ReceiverCloseParenthesisToken) {
+                count++
+            }
+            if IsPresent(ExplicitInterfaceOpenParenthesisToken) {
+                count++
+            }
+            if IsPresent(ExplicitInterfaceType) {
+                count++
+            }
+            if IsPresent(ExplicitInterfaceCloseParenthesisToken) {
+                count++
+            }
+            if IsPresent(AccessibilityModifier) {
+                count++
+            }
+            if IsPresent(OpenModifier) {
+                count++
+            }
+            if IsPresent(OverrideModifier) {
+                count++
+            }
+            if IsPresent(AsyncModifier) {
+                count++
+            }
+            if IsPresent(ReturnRefModifier) {
+                count++
+            }
+            if IsPresent(ReturnReadOnlyModifier) {
+                count++
+            }
+            if IsPresent(UnsafeModifier) {
+                count++
+            }
+            if IsPresent(FunctionKeyword) {
+                count++
+            }
+            if IsPresent(RetiredExtensionKeyword) {
+                count++
+            }
+            if IsPresent(Identifier) {
+                count++
+            }
+            if IsPresent(TypeParameterList) {
+                count++
+            }
+            if IsPresent(OpenParenthesisToken) {
+                count++
+            }
+            count += SeparatedLength(Parameters)
+            if IsPresent(CloseParenthesisToken) {
+                count++
+            }
+            if IsPresent(Type) {
+                count++
+            }
+            if IsPresent(Body) {
+                count++
+            }
+            count += Annotations.Length
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = SemicolonBodyToken
+            if IsPresent(child0) {
+                if remaining == 0 {
+                    return child0!!
+                }
+                remaining--
+            }
+            let child1 = PartialModifier
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1!!
+                }
+                remaining--
+            }
+            let child2 = ReceiverOpenParenthesisToken
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2!!
+                }
+                remaining--
+            }
+            let child3 = Receiver
+            if IsPresent(child3) {
+                if remaining == 0 {
+                    return child3!!
+                }
+                remaining--
+            }
+            let child4 = ReceiverCloseParenthesisToken
+            if IsPresent(child4) {
+                if remaining == 0 {
+                    return child4!!
+                }
+                remaining--
+            }
+            let child5 = ExplicitInterfaceOpenParenthesisToken
+            if IsPresent(child5) {
+                if remaining == 0 {
+                    return child5!!
+                }
+                remaining--
+            }
+            let child6 = ExplicitInterfaceType
+            if IsPresent(child6) {
+                if remaining == 0 {
+                    return child6!!
+                }
+                remaining--
+            }
+            let child7 = ExplicitInterfaceCloseParenthesisToken
+            if IsPresent(child7) {
+                if remaining == 0 {
+                    return child7!!
+                }
+                remaining--
+            }
+            let child8 = AccessibilityModifier
+            if IsPresent(child8) {
+                if remaining == 0 {
+                    return child8!!
+                }
+                remaining--
+            }
+            let child9 = OpenModifier
+            if IsPresent(child9) {
+                if remaining == 0 {
+                    return child9!!
+                }
+                remaining--
+            }
+            let child10 = OverrideModifier
+            if IsPresent(child10) {
+                if remaining == 0 {
+                    return child10!!
+                }
+                remaining--
+            }
+            let child11 = AsyncModifier
+            if IsPresent(child11) {
+                if remaining == 0 {
+                    return child11!!
+                }
+                remaining--
+            }
+            let child12 = ReturnRefModifier
+            if IsPresent(child12) {
+                if remaining == 0 {
+                    return child12!!
+                }
+                remaining--
+            }
+            let child13 = ReturnReadOnlyModifier
+            if IsPresent(child13) {
+                if remaining == 0 {
+                    return child13!!
+                }
+                remaining--
+            }
+            let child14 = UnsafeModifier
+            if IsPresent(child14) {
+                if remaining == 0 {
+                    return child14!!
+                }
+                remaining--
+            }
+            let child15 = FunctionKeyword
+            if IsPresent(child15) {
+                if remaining == 0 {
+                    return child15
+                }
+                remaining--
+            }
+            let child16 = RetiredExtensionKeyword
+            if IsPresent(child16) {
+                if remaining == 0 {
+                    return child16!!
+                }
+                remaining--
+            }
+            let child17 = Identifier
+            if IsPresent(child17) {
+                if remaining == 0 {
+                    return child17
+                }
+                remaining--
+            }
+            let child18 = TypeParameterList
+            if IsPresent(child18) {
+                if remaining == 0 {
+                    return child18!!
+                }
+                remaining--
+            }
+            let child19 = OpenParenthesisToken
+            if IsPresent(child19) {
+                if remaining == 0 {
+                    return child19
+                }
+                remaining--
+            }
+            let child20 = SeparatedItems(Parameters)
+            if remaining < child20.Length {
+                return child20[remaining]
+            }
+            remaining -= child20.Length
+            let child21 = CloseParenthesisToken
+            if IsPresent(child21) {
+                if remaining == 0 {
+                    return child21
+                }
+                remaining--
+            }
+            let child22 = Type
+            if IsPresent(child22) {
+                if remaining == 0 {
+                    return child22!!
+                }
+                remaining--
+            }
+            let child23 = Body
+            if IsPresent(child23) {
+                if remaining == 0 {
+                    return child23!!
+                }
+                remaining--
+            }
+            let child24 = Annotations
+            if remaining < child24.Length {
+                return child24[remaining]
+            }
+            remaining -= child24.Length
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class FunctionLiteralExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -3753,6 +6202,11 @@ partial class GenericNameExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -3819,6 +6273,18 @@ partial class GlobalStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 {
+        get {
+            if GetType() != ExactTypeOfGlobalStatementSyntax {
+                return ReflectedSpanPlan(GetType())
+            }
+            return 7
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         if GetType() != ExactTypeOfGlobalStatementSyntax {
             return BuildUnsortedChildrenByReflection()
@@ -3832,9 +6298,110 @@ partial class GlobalStatementSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        if GetType() != ExactTypeOfGlobalStatementSyntax {
+            return false
+        }
+        var last = int32.MinValue
+        let node0 = Statement
+        if IsPresent(node0) {
+            let start0 = node0.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        for item1 in Annotations {
+            let start1 = item1.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            if GetType() != ExactTypeOfGlobalStatementSyntax {
+                return CachedChildren().Length
+            }
+            var count = 0
+            if IsPresent(Statement) {
+                count++
+            }
+            count += Annotations.Length
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        if GetType() != ExactTypeOfGlobalStatementSyntax {
+            return ChildAt(CachedChildren(), index)
+        }
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = Statement
+            if IsPresent(child0) {
+                if remaining == 0 {
+                    return child0
+                }
+                remaining--
+            }
+            let child1 = Annotations
+            if remaining < child1.Length {
+                return child1[remaining]
+            }
+            remaining -= child1.Length
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if GetType() != ExactTypeOfGlobalStatementSyntax {
+                return CachedChildren().Length
+            }
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if GetType() != ExactTypeOfGlobalStatementSyntax {
+            return ChildAt(CachedChildren(), index)
+        }
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class GoStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -3880,6 +6447,11 @@ partial class GotoStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -3919,6 +6491,11 @@ partial class GotoStatementSyntax {
 }
 
 partial class GuardLetStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -3997,6 +6574,11 @@ partial class GuardLetStatementSyntax {
 }
 
 partial class IfExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -4092,6 +6674,11 @@ partial class IfLetBindingClauseSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -4161,6 +6748,11 @@ partial class IfLetBindingClauseSyntax {
 }
 
 partial class IfLetExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -4252,6 +6844,11 @@ partial class IfLetStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -4327,6 +6924,11 @@ partial class IfLetStatementSyntax {
 }
 
 partial class IfStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -4412,6 +7014,11 @@ partial class ImportSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 7
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(ImportKeyword) {
@@ -4434,9 +7041,157 @@ partial class ImportSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        let node0 = ImportKeyword
+        if IsPresent(node0) {
+            let start0 = node0.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = AliasIdentifier
+        if IsPresent(node1) {
+            let start1 = node1!!.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = EqualsToken
+        if IsPresent(node2) {
+            let start2 = node2!!.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        for item3 in Identifiers {
+            let start3 = item3.Span.Start
+            if start3 < last {
+                return false
+            }
+            last = start3
+        }
+        for item4 in IdentifiersWithDots {
+            let start4 = item4.Span.Start
+            if start4 < last {
+                return false
+            }
+            last = start4
+        }
+        for item5 in Annotations {
+            let start5 = item5.Span.Start
+            if start5 < last {
+                return false
+            }
+            last = start5
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            if IsPresent(ImportKeyword) {
+                count++
+            }
+            if IsPresent(AliasIdentifier) {
+                count++
+            }
+            if IsPresent(EqualsToken) {
+                count++
+            }
+            count += Identifiers.Length
+            count += IdentifiersWithDots.Length
+            count += Annotations.Length
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = ImportKeyword
+            if IsPresent(child0) {
+                if remaining == 0 {
+                    return child0
+                }
+                remaining--
+            }
+            let child1 = AliasIdentifier
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1!!
+                }
+                remaining--
+            }
+            let child2 = EqualsToken
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2!!
+                }
+                remaining--
+            }
+            let child3 = Identifiers
+            if remaining < child3.Length {
+                return child3[remaining]
+            }
+            remaining -= child3.Length
+            let child4 = IdentifiersWithDots
+            if remaining < child4.Length {
+                return child4[remaining]
+            }
+            remaining -= child4.Length
+            let child5 = Annotations
+            if remaining < child5.Length {
+                return child5[remaining]
+            }
+            remaining -= child5.Length
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class IndexAssignmentExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -4518,6 +7273,11 @@ partial class IndexExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -4573,6 +7333,11 @@ partial class IndexExpressionSyntax {
 }
 
 partial class IndexedCollectionElementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -4648,6 +7413,11 @@ partial class IndirectAssignmentExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -4700,6 +7470,11 @@ partial class IndirectCompoundAssignmentExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 7
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(Target) {
@@ -4713,9 +7488,118 @@ partial class IndirectCompoundAssignmentExpressionSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        let node0 = Target
+        if IsPresent(node0) {
+            let start0 = node0.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = OperatorToken
+        if IsPresent(node1) {
+            let start1 = node1.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = Value
+        if IsPresent(node2) {
+            let start2 = node2.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            if IsPresent(Target) {
+                count++
+            }
+            if IsPresent(OperatorToken) {
+                count++
+            }
+            if IsPresent(Value) {
+                count++
+            }
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = Target
+            if IsPresent(child0) {
+                if remaining == 0 {
+                    return child0
+                }
+                remaining--
+            }
+            let child1 = OperatorToken
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1
+                }
+                remaining--
+            }
+            let child2 = Value
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2
+                }
+                remaining--
+            }
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class InterfaceDeclarationSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 7
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -4769,9 +7653,322 @@ partial class InterfaceDeclarationSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        let node0 = AccessibilityModifier
+        if IsPresent(node0) {
+            let start0 = node0!!.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = TypeKeyword
+        if IsPresent(node1) {
+            let start1 = node1!!.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = Identifier
+        if IsPresent(node2) {
+            let start2 = node2.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        let node3 = TypeParameterList
+        if IsPresent(node3) {
+            let start3 = node3!!.Span.Start
+            if start3 < last {
+                return false
+            }
+            last = start3
+        }
+        let node4 = SealedKeyword
+        if IsPresent(node4) {
+            let start4 = node4!!.Span.Start
+            if start4 < last {
+                return false
+            }
+            last = start4
+        }
+        let node5 = InterfaceKeyword
+        if IsPresent(node5) {
+            let start5 = node5.Span.Start
+            if start5 < last {
+                return false
+            }
+            last = start5
+        }
+        let node6 = OpenBraceToken
+        if IsPresent(node6) {
+            let start6 = node6.Span.Start
+            if start6 < last {
+                return false
+            }
+            last = start6
+        }
+        for item7 in Properties {
+            let start7 = item7.Span.Start
+            if start7 < last {
+                return false
+            }
+            last = start7
+        }
+        for item8 in Events {
+            let start8 = item8.Span.Start
+            if start8 < last {
+                return false
+            }
+            last = start8
+        }
+        for item9 in Methods {
+            let start9 = item9.Span.Start
+            if start9 < last {
+                return false
+            }
+            last = start9
+        }
+        let node10 = CloseBraceToken
+        if IsPresent(node10) {
+            let start10 = node10.Span.Start
+            if start10 < last {
+                return false
+            }
+            last = start10
+        }
+        let node11 = BaseColonToken
+        if IsPresent(node11) {
+            let start11 = node11!!.Span.Start
+            if start11 < last {
+                return false
+            }
+            last = start11
+        }
+        for item12 in SeparatedItems(BaseTypeClauses) {
+            let start12 = item12.Span.Start
+            if start12 < last {
+                return false
+            }
+            last = start12
+        }
+        let node13 = PartialModifier
+        if IsPresent(node13) {
+            let start13 = node13!!.Span.Start
+            if start13 < last {
+                return false
+            }
+            last = start13
+        }
+        for item14 in StaticFields {
+            let start14 = item14.Span.Start
+            if start14 < last {
+                return false
+            }
+            last = start14
+        }
+        for item15 in Annotations {
+            let start15 = item15.Span.Start
+            if start15 < last {
+                return false
+            }
+            last = start15
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            if IsPresent(AccessibilityModifier) {
+                count++
+            }
+            if IsPresent(TypeKeyword) {
+                count++
+            }
+            if IsPresent(Identifier) {
+                count++
+            }
+            if IsPresent(TypeParameterList) {
+                count++
+            }
+            if IsPresent(SealedKeyword) {
+                count++
+            }
+            if IsPresent(InterfaceKeyword) {
+                count++
+            }
+            if IsPresent(OpenBraceToken) {
+                count++
+            }
+            count += Properties.Length
+            count += Events.Length
+            count += Methods.Length
+            if IsPresent(CloseBraceToken) {
+                count++
+            }
+            if IsPresent(BaseColonToken) {
+                count++
+            }
+            count += SeparatedLength(BaseTypeClauses)
+            if IsPresent(PartialModifier) {
+                count++
+            }
+            count += StaticFields.Length
+            count += Annotations.Length
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = AccessibilityModifier
+            if IsPresent(child0) {
+                if remaining == 0 {
+                    return child0!!
+                }
+                remaining--
+            }
+            let child1 = TypeKeyword
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1!!
+                }
+                remaining--
+            }
+            let child2 = Identifier
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2
+                }
+                remaining--
+            }
+            let child3 = TypeParameterList
+            if IsPresent(child3) {
+                if remaining == 0 {
+                    return child3!!
+                }
+                remaining--
+            }
+            let child4 = SealedKeyword
+            if IsPresent(child4) {
+                if remaining == 0 {
+                    return child4!!
+                }
+                remaining--
+            }
+            let child5 = InterfaceKeyword
+            if IsPresent(child5) {
+                if remaining == 0 {
+                    return child5
+                }
+                remaining--
+            }
+            let child6 = OpenBraceToken
+            if IsPresent(child6) {
+                if remaining == 0 {
+                    return child6
+                }
+                remaining--
+            }
+            let child7 = Properties
+            if remaining < child7.Length {
+                return child7[remaining]
+            }
+            remaining -= child7.Length
+            let child8 = Events
+            if remaining < child8.Length {
+                return child8[remaining]
+            }
+            remaining -= child8.Length
+            let child9 = Methods
+            if remaining < child9.Length {
+                return child9[remaining]
+            }
+            remaining -= child9.Length
+            let child10 = CloseBraceToken
+            if IsPresent(child10) {
+                if remaining == 0 {
+                    return child10
+                }
+                remaining--
+            }
+            let child11 = BaseColonToken
+            if IsPresent(child11) {
+                if remaining == 0 {
+                    return child11!!
+                }
+                remaining--
+            }
+            let child12 = SeparatedItems(BaseTypeClauses)
+            if remaining < child12.Length {
+                return child12[remaining]
+            }
+            remaining -= child12.Length
+            let child13 = PartialModifier
+            if IsPresent(child13) {
+                if remaining == 0 {
+                    return child13!!
+                }
+                remaining--
+            }
+            let child14 = StaticFields
+            if remaining < child14.Length {
+                return child14[remaining]
+            }
+            remaining -= child14.Length
+            let child15 = Annotations
+            if remaining < child15.Length {
+                return child15[remaining]
+            }
+            remaining -= child15.Length
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class InterpolatedStringExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 0
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -4786,6 +7983,11 @@ partial class InterpolatedStringExpressionSyntax {
 }
 
 partial class IsExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -4841,6 +8043,11 @@ partial class KeyedCollectionElementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -4893,6 +8100,11 @@ partial class LabeledStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -4942,6 +8154,11 @@ partial class LabeledStatementSyntax {
 }
 
 partial class LambdaExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -5023,6 +8240,11 @@ partial class ListPatternSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -5071,6 +8293,11 @@ partial class LiteralExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -5100,6 +8327,11 @@ partial class LiteralExpressionSyntax {
 }
 
 partial class LockStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -5152,6 +8384,11 @@ partial class LockStatementSyntax {
 }
 
 partial class MakeChannelExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -5237,6 +8474,11 @@ partial class MapCreationExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -5295,6 +8537,11 @@ partial class MapEntrySyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -5347,6 +8594,11 @@ partial class MemberCollectionElementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -5386,6 +8638,11 @@ partial class MemberCollectionElementSyntax {
 }
 
 partial class MemberFieldAssignmentExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -5461,6 +8718,11 @@ partial class MemberIndexAssignmentExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -5513,6 +8775,11 @@ partial class MultiAssignmentDeclarationExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -5552,6 +8819,11 @@ partial class MultiAssignmentDeclarationExpressionSyntax {
 }
 
 partial class MultiAssignmentStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -5603,6 +8875,18 @@ partial class NameExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 {
+        get {
+            if GetType() != ExactTypeOfNameExpressionSyntax {
+                return ReflectedSpanPlan(GetType())
+            }
+            return 1
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             if GetType() != ExactTypeOfNameExpressionSyntax {
@@ -5638,6 +8922,11 @@ partial class NameExpressionSyntax {
 }
 
 partial class NameOfExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -5703,6 +8992,11 @@ partial class NamedArgumentExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -5755,6 +9049,11 @@ partial class NamedDeconstructionFieldSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -5804,6 +9103,11 @@ partial class NamedDeconstructionFieldSyntax {
 }
 
 partial class NamedDeconstructionStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -5885,6 +9189,11 @@ partial class NamedTupleElementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -5937,6 +9246,11 @@ partial class NotPatternSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -5976,6 +9290,11 @@ partial class NotPatternSyntax {
 }
 
 partial class NullCoalescingAssignmentExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -6028,6 +9347,11 @@ partial class NullCoalescingAssignmentExpressionSyntax {
 }
 
 partial class ObjectCreationExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -6089,6 +9413,11 @@ partial class PackageSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 7
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(PackageKeyword) {
@@ -6105,9 +9434,121 @@ partial class PackageSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        let node0 = PackageKeyword
+        if IsPresent(node0) {
+            let start0 = node0.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        for item1 in Identifiers {
+            let start1 = item1.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        for item2 in IdentifiersWithDots {
+            let start2 = item2.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        for item3 in Annotations {
+            let start3 = item3.Span.Start
+            if start3 < last {
+                return false
+            }
+            last = start3
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            if IsPresent(PackageKeyword) {
+                count++
+            }
+            count += Identifiers.Length
+            count += IdentifiersWithDots.Length
+            count += Annotations.Length
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = PackageKeyword
+            if IsPresent(child0) {
+                if remaining == 0 {
+                    return child0
+                }
+                remaining--
+            }
+            let child1 = Identifiers
+            if remaining < child1.Length {
+                return child1[remaining]
+            }
+            remaining -= child1.Length
+            let child2 = IdentifiersWithDots
+            if remaining < child2.Length {
+                return child2[remaining]
+            }
+            remaining -= child2.Length
+            let child3 = Annotations
+            if remaining < child3.Length {
+                return child3[remaining]
+            }
+            remaining -= child3.Length
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class ParameterSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 7
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -6142,9 +9583,221 @@ partial class ParameterSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        for item0 in Annotations {
+            let start0 = item0.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = Identifier
+        if IsPresent(node1) {
+            let start1 = node1!!.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = DeconstructionPattern
+        if IsPresent(node2) {
+            let start2 = node2!!.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        let node3 = EllipsisToken
+        if IsPresent(node3) {
+            let start3 = node3!!.Span.Start
+            if start3 < last {
+                return false
+            }
+            last = start3
+        }
+        let node4 = Type
+        if IsPresent(node4) {
+            let start4 = node4!!.Span.Start
+            if start4 < last {
+                return false
+            }
+            last = start4
+        }
+        let node5 = ScopedModifier
+        if IsPresent(node5) {
+            let start5 = node5!!.Span.Start
+            if start5 < last {
+                return false
+            }
+            last = start5
+        }
+        let node6 = RefKindModifier
+        if IsPresent(node6) {
+            let start6 = node6!!.Span.Start
+            if start6 < last {
+                return false
+            }
+            last = start6
+        }
+        let node7 = EqualsToken
+        if IsPresent(node7) {
+            let start7 = node7!!.Span.Start
+            if start7 < last {
+                return false
+            }
+            last = start7
+        }
+        let node8 = DefaultValue
+        if IsPresent(node8) {
+            let start8 = node8!!.Span.Start
+            if start8 < last {
+                return false
+            }
+            last = start8
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            count += Annotations.Length
+            if IsPresent(Identifier) {
+                count++
+            }
+            if IsPresent(DeconstructionPattern) {
+                count++
+            }
+            if IsPresent(EllipsisToken) {
+                count++
+            }
+            if IsPresent(Type) {
+                count++
+            }
+            if IsPresent(ScopedModifier) {
+                count++
+            }
+            if IsPresent(RefKindModifier) {
+                count++
+            }
+            if IsPresent(EqualsToken) {
+                count++
+            }
+            if IsPresent(DefaultValue) {
+                count++
+            }
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = Annotations
+            if remaining < child0.Length {
+                return child0[remaining]
+            }
+            remaining -= child0.Length
+            let child1 = Identifier
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1!!
+                }
+                remaining--
+            }
+            let child2 = DeconstructionPattern
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2!!
+                }
+                remaining--
+            }
+            let child3 = EllipsisToken
+            if IsPresent(child3) {
+                if remaining == 0 {
+                    return child3!!
+                }
+                remaining--
+            }
+            let child4 = Type
+            if IsPresent(child4) {
+                if remaining == 0 {
+                    return child4!!
+                }
+                remaining--
+            }
+            let child5 = ScopedModifier
+            if IsPresent(child5) {
+                if remaining == 0 {
+                    return child5!!
+                }
+                remaining--
+            }
+            let child6 = RefKindModifier
+            if IsPresent(child6) {
+                if remaining == 0 {
+                    return child6!!
+                }
+                remaining--
+            }
+            let child7 = EqualsToken
+            if IsPresent(child7) {
+                if remaining == 0 {
+                    return child7!!
+                }
+                remaining--
+            }
+            let child8 = DefaultValue
+            if IsPresent(child8) {
+                if remaining == 0 {
+                    return child8!!
+                }
+                remaining--
+            }
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class ParenthesizedExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -6200,6 +9853,11 @@ partial class ParenthesizedPatternSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -6249,6 +9907,11 @@ partial class ParenthesizedPatternSyntax {
 }
 
 partial class PropertyAccessorSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -6344,6 +10007,11 @@ partial class PropertyDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 7
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         for itemAnnotations in Annotations {
@@ -6406,9 +10074,409 @@ partial class PropertyDeclarationSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        for item0 in Annotations {
+            let start0 = item0.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = AccessibilityModifier
+        if IsPresent(node1) {
+            let start1 = node1!!.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = OpenModifier
+        if IsPresent(node2) {
+            let start2 = node2!!.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        let node3 = OverrideModifier
+        if IsPresent(node3) {
+            let start3 = node3!!.Span.Start
+            if start3 < last {
+                return false
+            }
+            last = start3
+        }
+        let node4 = AbstractModifier
+        if IsPresent(node4) {
+            let start4 = node4!!.Span.Start
+            if start4 < last {
+                return false
+            }
+            last = start4
+        }
+        let node5 = ExplicitInterfaceOpenParenthesisToken
+        if IsPresent(node5) {
+            let start5 = node5!!.Span.Start
+            if start5 < last {
+                return false
+            }
+            last = start5
+        }
+        let node6 = ExplicitInterfaceType
+        if IsPresent(node6) {
+            let start6 = node6!!.Span.Start
+            if start6 < last {
+                return false
+            }
+            last = start6
+        }
+        let node7 = ExplicitInterfaceCloseParenthesisToken
+        if IsPresent(node7) {
+            let start7 = node7!!.Span.Start
+            if start7 < last {
+                return false
+            }
+            last = start7
+        }
+        let node8 = PropKeyword
+        if IsPresent(node8) {
+            let start8 = node8.Span.Start
+            if start8 < last {
+                return false
+            }
+            last = start8
+        }
+        let node9 = Identifier
+        if IsPresent(node9) {
+            let start9 = node9.Span.Start
+            if start9 < last {
+                return false
+            }
+            last = start9
+        }
+        let node10 = ThisKeyword
+        if IsPresent(node10) {
+            let start10 = node10!!.Span.Start
+            if start10 < last {
+                return false
+            }
+            last = start10
+        }
+        let node11 = OpenBracketToken
+        if IsPresent(node11) {
+            let start11 = node11!!.Span.Start
+            if start11 < last {
+                return false
+            }
+            last = start11
+        }
+        for item12 in SeparatedItems(Parameters) {
+            let start12 = item12.Span.Start
+            if start12 < last {
+                return false
+            }
+            last = start12
+        }
+        let node13 = CloseBracketToken
+        if IsPresent(node13) {
+            let start13 = node13!!.Span.Start
+            if start13 < last {
+                return false
+            }
+            last = start13
+        }
+        let node14 = ReturnRefModifier
+        if IsPresent(node14) {
+            let start14 = node14!!.Span.Start
+            if start14 < last {
+                return false
+            }
+            last = start14
+        }
+        let node15 = ReturnReadOnlyModifier
+        if IsPresent(node15) {
+            let start15 = node15!!.Span.Start
+            if start15 < last {
+                return false
+            }
+            last = start15
+        }
+        let node16 = Type
+        if IsPresent(node16) {
+            let start16 = node16!!.Span.Start
+            if start16 < last {
+                return false
+            }
+            last = start16
+        }
+        let node17 = OpenBraceToken
+        if IsPresent(node17) {
+            let start17 = node17!!.Span.Start
+            if start17 < last {
+                return false
+            }
+            last = start17
+        }
+        for item18 in Accessors {
+            let start18 = item18.Span.Start
+            if start18 < last {
+                return false
+            }
+            last = start18
+        }
+        let node19 = CloseBraceToken
+        if IsPresent(node19) {
+            let start19 = node19!!.Span.Start
+            if start19 < last {
+                return false
+            }
+            last = start19
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            count += Annotations.Length
+            if IsPresent(AccessibilityModifier) {
+                count++
+            }
+            if IsPresent(OpenModifier) {
+                count++
+            }
+            if IsPresent(OverrideModifier) {
+                count++
+            }
+            if IsPresent(AbstractModifier) {
+                count++
+            }
+            if IsPresent(ExplicitInterfaceOpenParenthesisToken) {
+                count++
+            }
+            if IsPresent(ExplicitInterfaceType) {
+                count++
+            }
+            if IsPresent(ExplicitInterfaceCloseParenthesisToken) {
+                count++
+            }
+            if IsPresent(PropKeyword) {
+                count++
+            }
+            if IsPresent(Identifier) {
+                count++
+            }
+            if IsPresent(ThisKeyword) {
+                count++
+            }
+            if IsPresent(OpenBracketToken) {
+                count++
+            }
+            count += SeparatedLength(Parameters)
+            if IsPresent(CloseBracketToken) {
+                count++
+            }
+            if IsPresent(ReturnRefModifier) {
+                count++
+            }
+            if IsPresent(ReturnReadOnlyModifier) {
+                count++
+            }
+            if IsPresent(Type) {
+                count++
+            }
+            if IsPresent(OpenBraceToken) {
+                count++
+            }
+            count += Accessors.Length
+            if IsPresent(CloseBraceToken) {
+                count++
+            }
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = Annotations
+            if remaining < child0.Length {
+                return child0[remaining]
+            }
+            remaining -= child0.Length
+            let child1 = AccessibilityModifier
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1!!
+                }
+                remaining--
+            }
+            let child2 = OpenModifier
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2!!
+                }
+                remaining--
+            }
+            let child3 = OverrideModifier
+            if IsPresent(child3) {
+                if remaining == 0 {
+                    return child3!!
+                }
+                remaining--
+            }
+            let child4 = AbstractModifier
+            if IsPresent(child4) {
+                if remaining == 0 {
+                    return child4!!
+                }
+                remaining--
+            }
+            let child5 = ExplicitInterfaceOpenParenthesisToken
+            if IsPresent(child5) {
+                if remaining == 0 {
+                    return child5!!
+                }
+                remaining--
+            }
+            let child6 = ExplicitInterfaceType
+            if IsPresent(child6) {
+                if remaining == 0 {
+                    return child6!!
+                }
+                remaining--
+            }
+            let child7 = ExplicitInterfaceCloseParenthesisToken
+            if IsPresent(child7) {
+                if remaining == 0 {
+                    return child7!!
+                }
+                remaining--
+            }
+            let child8 = PropKeyword
+            if IsPresent(child8) {
+                if remaining == 0 {
+                    return child8
+                }
+                remaining--
+            }
+            let child9 = Identifier
+            if IsPresent(child9) {
+                if remaining == 0 {
+                    return child9
+                }
+                remaining--
+            }
+            let child10 = ThisKeyword
+            if IsPresent(child10) {
+                if remaining == 0 {
+                    return child10!!
+                }
+                remaining--
+            }
+            let child11 = OpenBracketToken
+            if IsPresent(child11) {
+                if remaining == 0 {
+                    return child11!!
+                }
+                remaining--
+            }
+            let child12 = SeparatedItems(Parameters)
+            if remaining < child12.Length {
+                return child12[remaining]
+            }
+            remaining -= child12.Length
+            let child13 = CloseBracketToken
+            if IsPresent(child13) {
+                if remaining == 0 {
+                    return child13!!
+                }
+                remaining--
+            }
+            let child14 = ReturnRefModifier
+            if IsPresent(child14) {
+                if remaining == 0 {
+                    return child14!!
+                }
+                remaining--
+            }
+            let child15 = ReturnReadOnlyModifier
+            if IsPresent(child15) {
+                if remaining == 0 {
+                    return child15!!
+                }
+                remaining--
+            }
+            let child16 = Type
+            if IsPresent(child16) {
+                if remaining == 0 {
+                    return child16!!
+                }
+                remaining--
+            }
+            let child17 = OpenBraceToken
+            if IsPresent(child17) {
+                if remaining == 0 {
+                    return child17!!
+                }
+                remaining--
+            }
+            let child18 = Accessors
+            if remaining < child18.Length {
+                return child18[remaining]
+            }
+            remaining -= child18.Length
+            let child19 = CloseBraceToken
+            if IsPresent(child19) {
+                if remaining == 0 {
+                    return child19!!
+                }
+                remaining--
+            }
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class PropertyInitializerSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -6464,6 +10532,11 @@ partial class PropertyPatternFieldSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -6513,6 +10586,11 @@ partial class PropertyPatternFieldSyntax {
 }
 
 partial class PropertyPatternSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -6574,6 +10652,11 @@ partial class RangeExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -6623,6 +10706,11 @@ partial class RangeExpressionSyntax {
 }
 
 partial class RefArgumentExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -6708,6 +10796,11 @@ partial class RelationalPatternSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -6750,6 +10843,11 @@ partial class RethrowStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -6779,6 +10877,11 @@ partial class RethrowStatementSyntax {
 }
 
 partial class ReturnStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -6834,6 +10937,11 @@ partial class ScopeStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -6873,6 +10981,11 @@ partial class ScopeStatementSyntax {
 }
 
 partial class SelectCaseSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -6968,6 +11081,11 @@ partial class SelectStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -7023,6 +11141,11 @@ partial class SelectStatementSyntax {
 }
 
 partial class SharedBlockSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -7108,6 +11231,11 @@ partial class SizeOfExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -7170,6 +11298,11 @@ partial class SlicePatternSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -7222,6 +11355,11 @@ partial class SpreadElementExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -7261,6 +11399,11 @@ partial class SpreadElementExpressionSyntax {
 }
 
 partial class StackAllocExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -7362,6 +11505,11 @@ partial class StaticInitializerBlockSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -7401,6 +11549,11 @@ partial class StaticInitializerBlockSyntax {
 }
 
 partial class StructDeclarationSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 3
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -7514,6 +11667,11 @@ partial class StructLiteralContentElementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -7546,6 +11704,11 @@ partial class StructLiteralExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 7
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(TypeIdentifier) {
@@ -7572,9 +11735,203 @@ partial class StructLiteralExpressionSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        let node0 = TypeIdentifier
+        if IsPresent(node0) {
+            let start0 = node0.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = OpenBraceToken
+        if IsPresent(node1) {
+            let start1 = node1.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = SpreadToken
+        if IsPresent(node2) {
+            let start2 = node2!!.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        let node3 = SpreadExpression
+        if IsPresent(node3) {
+            let start3 = node3!!.Span.Start
+            if start3 < last {
+                return false
+            }
+            last = start3
+        }
+        let node4 = SpreadSeparatorToken
+        if IsPresent(node4) {
+            let start4 = node4!!.Span.Start
+            if start4 < last {
+                return false
+            }
+            last = start4
+        }
+        for item5 in SeparatedItems(Elements) {
+            let start5 = item5.Span.Start
+            if start5 < last {
+                return false
+            }
+            last = start5
+        }
+        let node6 = CloseBraceToken
+        if IsPresent(node6) {
+            let start6 = node6.Span.Start
+            if start6 < last {
+                return false
+            }
+            last = start6
+        }
+        let node7 = TypeArgumentList
+        if IsPresent(node7) {
+            let start7 = node7!!.Span.Start
+            if start7 < last {
+                return false
+            }
+            last = start7
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            if IsPresent(TypeIdentifier) {
+                count++
+            }
+            if IsPresent(OpenBraceToken) {
+                count++
+            }
+            if IsPresent(SpreadToken) {
+                count++
+            }
+            if IsPresent(SpreadExpression) {
+                count++
+            }
+            if IsPresent(SpreadSeparatorToken) {
+                count++
+            }
+            count += SeparatedLength(Elements)
+            if IsPresent(CloseBraceToken) {
+                count++
+            }
+            if IsPresent(TypeArgumentList) {
+                count++
+            }
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = TypeIdentifier
+            if IsPresent(child0) {
+                if remaining == 0 {
+                    return child0
+                }
+                remaining--
+            }
+            let child1 = OpenBraceToken
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1
+                }
+                remaining--
+            }
+            let child2 = SpreadToken
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2!!
+                }
+                remaining--
+            }
+            let child3 = SpreadExpression
+            if IsPresent(child3) {
+                if remaining == 0 {
+                    return child3!!
+                }
+                remaining--
+            }
+            let child4 = SpreadSeparatorToken
+            if IsPresent(child4) {
+                if remaining == 0 {
+                    return child4!!
+                }
+                remaining--
+            }
+            let child5 = SeparatedItems(Elements)
+            if remaining < child5.Length {
+                return child5[remaining]
+            }
+            remaining -= child5.Length
+            let child6 = CloseBraceToken
+            if IsPresent(child6) {
+                if remaining == 0 {
+                    return child6
+                }
+                remaining--
+            }
+            let child7 = TypeArgumentList
+            if IsPresent(child7) {
+                if remaining == 0 {
+                    return child7!!
+                }
+                remaining--
+            }
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class SwitchCaseSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -7647,6 +12004,11 @@ partial class SwitchCaseSyntax {
 }
 
 partial class SwitchExpressionArmSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -7732,6 +12094,11 @@ partial class SwitchExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -7797,6 +12164,11 @@ partial class SwitchExpressionSyntax {
 }
 
 partial class SwitchStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -7872,6 +12244,18 @@ partial class SyntaxToken {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 {
+        get {
+            if GetType() != ExactTypeOfSyntaxToken {
+                return ReflectedSpanPlan(GetType())
+            }
+            return 0
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             if GetType() != ExactTypeOfSyntaxToken {
@@ -7893,6 +12277,11 @@ partial class SyntaxToken {
 }
 
 partial class ThrowExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -7938,6 +12327,11 @@ partial class ThrowStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -7977,6 +12371,11 @@ partial class ThrowStatementSyntax {
 }
 
 partial class TryStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -8038,6 +12437,11 @@ partial class TupleDeconstructionPatternSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -8083,6 +12487,11 @@ partial class TupleDeconstructionPatternSyntax {
 }
 
 partial class TupleDeconstructionStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -8164,6 +12573,11 @@ partial class TupleLiteralExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -8212,6 +12626,11 @@ partial class TypeAliasDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 7
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(AccessibilityModifier) {
@@ -8234,9 +12653,167 @@ partial class TypeAliasDeclarationSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        let node0 = AccessibilityModifier
+        if IsPresent(node0) {
+            let start0 = node0!!.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = TypeKeyword
+        if IsPresent(node1) {
+            let start1 = node1!!.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = Identifier
+        if IsPresent(node2) {
+            let start2 = node2.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        let node3 = EqualsToken
+        if IsPresent(node3) {
+            let start3 = node3.Span.Start
+            if start3 < last {
+                return false
+            }
+            last = start3
+        }
+        let node4 = AliasedType
+        if IsPresent(node4) {
+            let start4 = node4.Span.Start
+            if start4 < last {
+                return false
+            }
+            last = start4
+        }
+        for item5 in Annotations {
+            let start5 = item5.Span.Start
+            if start5 < last {
+                return false
+            }
+            last = start5
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            var count = 0
+            if IsPresent(AccessibilityModifier) {
+                count++
+            }
+            if IsPresent(TypeKeyword) {
+                count++
+            }
+            if IsPresent(Identifier) {
+                count++
+            }
+            if IsPresent(EqualsToken) {
+                count++
+            }
+            if IsPresent(AliasedType) {
+                count++
+            }
+            count += Annotations.Length
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = AccessibilityModifier
+            if IsPresent(child0) {
+                if remaining == 0 {
+                    return child0!!
+                }
+                remaining--
+            }
+            let child1 = TypeKeyword
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1!!
+                }
+                remaining--
+            }
+            let child2 = Identifier
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2
+                }
+                remaining--
+            }
+            let child3 = EqualsToken
+            if IsPresent(child3) {
+                if remaining == 0 {
+                    return child3
+                }
+                remaining--
+            }
+            let child4 = AliasedType
+            if IsPresent(child4) {
+                if remaining == 0 {
+                    return child4
+                }
+                remaining--
+            }
+            let child5 = Annotations
+            if remaining < child5.Length {
+                return child5[remaining]
+            }
+            remaining -= child5.Length
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class TypeArgumentListSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -8285,6 +12862,11 @@ partial class TypeArgumentListSyntax {
 }
 
 partial class TypeClauseSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 3
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -8440,6 +13022,11 @@ partial class TypeOfExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -8502,6 +13089,11 @@ partial class TypeOrConstantPatternSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -8541,6 +13133,11 @@ partial class TypeOrConstantPatternSyntax {
 }
 
 partial class TypeParameterListSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -8589,6 +13186,11 @@ partial class TypeParameterListSyntax {
 }
 
 partial class TypeParameterSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -8740,6 +13342,11 @@ partial class TypePatternSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -8816,6 +13423,18 @@ partial class UnaryExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 {
+        get {
+            if GetType() != ExactTypeOfUnaryExpressionSyntax {
+                return ReflectedSpanPlan(GetType())
+            }
+            return 7
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         if GetType() != ExactTypeOfUnaryExpressionSyntax {
             return BuildUnsortedChildrenByReflection()
@@ -8829,9 +13448,115 @@ partial class UnaryExpressionSyntax {
         }
         return builder.ToImmutable()
     }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        if GetType() != ExactTypeOfUnaryExpressionSyntax {
+            return false
+        }
+        var last = int32.MinValue
+        let node0 = OperatorToken
+        if IsPresent(node0) {
+            let start0 = node0.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = Operand
+        if IsPresent(node1) {
+            let start1 = node1.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
+        get {
+            if GetType() != ExactTypeOfUnaryExpressionSyntax {
+                return CachedChildren().Length
+            }
+            var count = 0
+            if IsPresent(OperatorToken) {
+                count++
+            }
+            if IsPresent(Operand) {
+                count++
+            }
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyChild(index int32) SyntaxNode {
+        if GetType() != ExactTypeOfUnaryExpressionSyntax {
+            return ChildAt(CachedChildren(), index)
+        }
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = OperatorToken
+            if IsPresent(child0) {
+                if remaining == 0 {
+                    return child0
+                }
+                remaining--
+            }
+            let child1 = Operand
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1
+                }
+                remaining--
+            }
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if GetType() != ExactTypeOfUnaryExpressionSyntax {
+                return CachedChildren().Length
+            }
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if GetType() != ExactTypeOfUnaryExpressionSyntax {
+            return ChildAt(CachedChildren(), index)
+        }
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
+    }
 }
 
 partial class UsingStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -8877,6 +13602,11 @@ partial class VarPatternSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -8916,6 +13646,11 @@ partial class VarPatternSyntax {
 }
 
 partial class VariableDeclarationSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -9057,6 +13792,11 @@ partial class WhileLetStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -9125,6 +13865,11 @@ partial class WhileStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     internal override prop ChildCount int32 {
         get {
             var count = 0
@@ -9174,6 +13919,11 @@ partial class WhileStatementSyntax {
 }
 
 partial class WithExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
@@ -9242,6 +13992,11 @@ partial class WithExpressionSyntax {
 }
 
 partial class YieldStatementSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```

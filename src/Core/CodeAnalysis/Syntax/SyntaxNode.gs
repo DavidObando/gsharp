@@ -28,6 +28,12 @@ abstract class SyntaxNode {
     /// "not built yet". Published as one reference store, like (cref:cachedSpan).
     private var childrenBox ChildrenBox?
 
+    /// Whether the property-order children of an in-place source-ordered node start in source
+    /// order: 0 not decided yet, 1 yes (the node reads them in place), 2 no (it reads the sorted
+    /// array). Decided once by (cref:InPlaceOrdered). The value is a pure function of the
+    /// children, so a race between two threads stores the same value (issue #5279).
+    private var childOrder int32
+
     /// Initializes a new instance of the (cref:SyntaxNode) class.
     /// @param syntaxTree The parent syntax tree.
     protected init(syntaxTree SyntaxTree) {
@@ -147,7 +153,7 @@ abstract class SyntaxNode {
     /// @returns The children in the order of (cref:GetChildren).
     internal open func BuildChildren() ImmutableArray[SyntaxNode] {
         let unsorted = BuildUnsortedChildren()
-        return if IsSourceOrdered(GetType()) {
+        return if (SpanPlan & PlanSourceOrdered) != 0 {
             SortBySourcePosition(unsorted)
         } else {
             unsorted
@@ -159,6 +165,49 @@ abstract class SyntaxNode {
     /// (issue #5185). The base implementation reads the properties by reflection.
     /// @returns The children in property order.
     internal open func BuildUnsortedChildren() ImmutableArray[SyntaxNode] -> BuildUnsortedChildrenByReflection()
+
+    /// Describes how a span and the child order of this node are computed, as the bits
+    /// `PlanBaseSpan`, `PlanSourceOrdered` and `PlanInPlace`. A generated class returns a constant,
+    /// so a span computation does not look up the type of each node (issue #5279). A class that the
+    /// generator did not see, and a subclass of a generated open class, reads the plan by reflection.
+    internal open prop SpanPlan int32 -> ReflectedSpanPlan(GetType())
+
+    /// Gets the number of children in property order. Only a node whose plan has `PlanInPlace`
+    /// reads its properties in place; a span reads these accessors, never the sorted children
+    /// (issue #5185).
+    internal open prop PropertyChildCount int32 -> CachedChildren().Length
+
+    /// Gets one child in property order. See (cref:PropertyChildCount).
+    /// @param index The index of the child.
+    /// @returns The child.
+    internal open func PropertyChild(index int32) SyntaxNode -> ChildAt(CachedChildren(), index)
+
+    /// Tests, without allocating, whether the children of an in-place source-ordered node start in
+    /// property order, using the rule of (cref:SortBySourcePosition). The base implementation says no.
+    /// @returns `true` when the property order is the source order.
+    internal open func PropertyOrderIsSourceOrder() bool -> false
+
+    /// Returns whether this node reads its children in place: its plan is in place and the property
+    /// order is the source order. The answer is computed once per node. A node with an inversion
+    /// builds the sorted array instead (cref:CachedChildren).
+    /// @returns `true` when (cref:ChildCount) and (cref:GetChild) read the properties.
+    internal func InPlaceOrdered() bool {
+        let state = childOrder
+        if state != 0 {
+            return state == 1
+        }
+        let ordered = PropertyOrderIsSourceOrder()
+        childOrder = if ordered {
+            1
+        } else {
+            2
+        }
+        if !ordered {
+            // Only the rare inversion is counted: a count for every node would cost more than the check.
+            CompilationMeasurements.Count("syntax.child-order-inversions")
+        }
+        return ordered
+    }
 
     /// Builds the children in property order by reflection over the public properties.
     /// @returns The children in property order.
@@ -305,6 +354,7 @@ abstract class SyntaxNode {
     internal func InvalidateCachedSpan() {
         cachedSpan = nil
         childrenBox = nil
+        childOrder = 0
     }
 
     /// Computes and caches the span of this node. The span is the minimum start and the maximum end
@@ -325,7 +375,12 @@ abstract class SyntaxNode {
             return cachedSpan!!.Value
         }
         let box = childrenBox
-        let unsorted = if box == nil && IsSourceOrdered(GetType()) {
+        let plan = SpanPlan
+        // A node that reads its properties in place needs no array. A source-ordered node that
+        // cannot (a computed property) builds its children in property order, which is not
+        // sorted, so the span never needs the sort (issues #5185, #5279).
+        let inPlace = box == nil && (plan & PlanInPlace) != 0
+        let unsorted = if box == nil && !inPlace && (plan & PlanSourceOrdered) != 0 {
             BuildUnsortedChildren()
         } else {
             default(ImmutableArray[SyntaxNode])
@@ -335,7 +390,9 @@ abstract class SyntaxNode {
         } else {
             unsorted
         }
-        let count = if items.IsDefault {
+        let count = if inPlace {
+            PropertyChildCount
+        } else if items.IsDefault {
             ChildCount
         } else {
             items.Length
@@ -344,7 +401,9 @@ abstract class SyntaxNode {
         var start = int32.MaxValue
         var end = int32.MinValue
         for var i = 0; i < count; i++ {
-            let child = if items.IsDefault {
+            let child = if inPlace {
+                PropertyChild(i)
+            } else if items.IsDefault {
                 GetChild(i)
             } else {
                 items[i]
@@ -370,7 +429,7 @@ abstract class SyntaxNode {
     }
 
     private func SpanForParent(depth int32) TextSpan {
-        if this is SyntaxToken || cachedSpan != nil || !HasBaseSpan(GetType()) {
+        if this is SyntaxToken || cachedSpan != nil || (SpanPlan & PlanBaseSpan) == 0 {
             return Span
         }
         return ComputeSpan(depth)
@@ -399,25 +458,31 @@ abstract class SyntaxNode {
             CompilationMeasurements.Count("syntax.deep-span-nodes")
             pending.Push((node, true))
             let box = node.childrenBox
+            let plan = node.SpanPlan
+            let inPlace = box == nil && (plan & PlanInPlace) != 0
             let items = if box != nil {
                 box.Items
-            } else if IsSourceOrdered(node.GetType()) {
+            } else if !inPlace && (plan & PlanSourceOrdered) != 0 {
                 node.BuildUnsortedChildren()
             } else {
                 default(ImmutableArray[SyntaxNode])
             }
-            let count = if items.IsDefault {
+            let count = if inPlace {
+                node.PropertyChildCount
+            } else if items.IsDefault {
                 node.ChildCount
             } else {
                 items.Length
             }
             for var i = 0; i < count; i++ {
-                let child = if items.IsDefault {
+                let child = if inPlace {
+                    node.PropertyChild(i)
+                } else if items.IsDefault {
                     node.GetChild(i)
                 } else {
                     items[i]
                 }
-                if !(child is SyntaxToken) && child.cachedSpan == nil && HasBaseSpan(child.GetType()) {
+                if !(child is SyntaxToken) && child.cachedSpan == nil && (child.SpanPlan & PlanBaseSpan) != 0 {
                     pending.Push((child, false))
                 }
             }
@@ -493,6 +558,34 @@ abstract class SyntaxNode {
         private let MaxSpanDepth int32 = 128
 
         private let SourceOrderedByType ConcurrentDictionary[Type, bool] = ConcurrentDictionary[Type, bool]()
+
+        /// The bits of (cref:SpanPlan): the node uses the span of this class.
+        internal let PlanBaseSpan int32 = 1
+
+        /// The bits of (cref:SpanPlan): the node class has `@SyntaxChildSourceOrder`.
+        internal let PlanSourceOrdered int32 = 2
+
+        /// The bits of (cref:SpanPlan): the node reads its children in place while they are in
+        /// source order. Implies `PlanSourceOrdered`.
+        internal let PlanInPlace int32 = 4
+
+        /// Computes the plan of a node class by reflection. A generated class returns a constant
+        /// with the same value; `Issue5279SpanPlanTests` compares both on a corpus.
+        /// @param nodeType The runtime type of a node.
+        /// @returns The bits of (cref:SpanPlan), without `PlanInPlace`.
+        internal func ReflectedSpanPlan(nodeType Type) int32 {
+            let baseSpan = if HasBaseSpan(nodeType) {
+                PlanBaseSpan
+            } else {
+                0
+            }
+            let ordered = if IsSourceOrdered(nodeType) {
+                PlanSourceOrdered
+            } else {
+                0
+            }
+            return baseSpan | ordered
+        }
 
         /// Returns whether a node class uses the (cref:Span) getter of this class. A class that
         /// overrides it, including a class outside this assembly, keeps its own value, so a parent
