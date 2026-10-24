@@ -1554,6 +1554,18 @@ class BoundScope {
         )!!
     }
 
+    /// Issue #5281: makes this scope's chain share an anonymous-type cache
+    /// created by an earlier pass, so shapes and the `<>AnonymousTypeN` counter
+    /// continue across the declaration and body passes.
+    /// @param cache The cache to share.
+    internal func InstallAnonymousTypeCache(cache AnonymousTypeCache) {
+        if SynthesisParent != nil {
+            Parent!!.InstallAnonymousTypeCache(cache)
+            return
+        }
+        anonymousTypeCache = cache
+    }
+
     /// Issue #3501 A2: gets the per-compile-pass synthesized ref-kind
     /// delegate cache (see (cref:SynthesizedRefDelegateCache)), walking
     /// to the root of this scope's chain so every scope in one bind pass
