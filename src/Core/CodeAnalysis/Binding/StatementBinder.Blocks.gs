@@ -298,6 +298,11 @@ internal partial class StatementBinder {
         tryMutations.Visit(tryBlock)
         let callableExceptionalEntry = HashSet[VariableSymbol](callableEntry)
         callableExceptionalEntry.ExceptWith(tryMutations.Roots)
+        // ADR-0208 R10 (#5168): an enclosing filter can run user code that assigns a callable alias.
+        let enclosingFilters = CollectEnclosingCatchFilters(syntax)
+        if enclosingFilters.Count > 0 {
+            RemoveFilterAffectedAliases(callableExceptionalEntry, enclosingFilters)
+        }
         var callableFinallyEntries = JoinExternalCallableAliases(
             HashSet[VariableSymbol](callableTryExit),
             callableExceptionalEntry
@@ -323,6 +328,7 @@ internal partial class StatementBinder {
         let unfilteredCoverage = List[TypeSymbol]()
         for catchSyntax in syntax.CatchClauses {
             RestoreExternalCallableAliases(callableExceptionalEntry)
+            InvalidateNarrowingsForEnclosingFilters(enclosingFilters)
             let inheritedReachability = currentStatementListFallsThrough
             currentStatementListFallsThrough = handlersReachable
             // ADR-0177 A: a bare `catch { … }` carries no type clause and means
@@ -354,6 +360,12 @@ internal partial class StatementBinder {
             }
             let filter BoundExpression? = BindCatchFilter(catchSyntax)
             callableExceptionalEntry.ExceptWith(ApplyHeaderCallableEffects(filter) ?? HashSet[VariableSymbol]())
+            // ADR-0208 R10 (#5168): a filter runs before its handler is chosen. A
+            // false or throwing filter continues the search (ADR-0177), so its
+            // writes reach this body, every later clause and the finally block.
+            if filter != nil {
+                InvalidateNarrowingsForAssignedVariables(catchSyntax.Filter!!, BoundExpressionStatement(nil, filter))
+            }
             let (filterWhenTrue, _) = PatternVariables.Classify(filter)
             exceptionHandlerRegions.Push(catchSyntax)
             var body BoundStatement
@@ -386,6 +398,7 @@ internal partial class StatementBinder {
         }
         var finallyBlock BoundStatement? = nil
         if syntax.FinallyClause != nil {
+            InvalidateNarrowingsForEnclosingFilters(enclosingFilters)
             RestoreExternalCallableAliases(callableFinallyEntries)
             finallyEntryExternalCallableAliases[syntax.FinallyClause!!] = callableExits?.ToImmutableArray() ??
                 ImmutableArray[VariableSymbol].Empty
@@ -422,6 +435,157 @@ internal partial class StatementBinder {
             }
         }
         return BoundTryStatement(syntax, tryBlock, catches.ToImmutable(), finallyBlock)
+    }
+
+    /// ADR-0208 R10 (#5168): the `when` filters of [`syntax`](paramref) and of every enclosing `try`
+    /// whose protected block contains it. The CLR runs those filters in the first pass,
+    /// before this `try` runs a `finally` block, and a replacement exception can reach a
+    /// handler of this `try` after them.
+    private func CollectEnclosingCatchFilters(syntax TryStatementSyntax) List[ExpressionSyntax] {
+        let filters = List[ExpressionSyntax]()
+        // A replacement exception from a nested finally reaches an earlier clause of this try after
+        // the filter of a later clause has run for the original exception.
+        for clause in syntax.CatchClauses {
+            if clause.Filter != nil {
+                filters.Add(clause.Filter)
+            }
+        }
+        filters.AddRange(CollectCatchFiltersAbove(syntax))
+        return filters
+    }
+
+    /// ADR-0208 R10 (#5168): the `when` filters of every `try` whose protected block contains
+    /// [`start`](paramref).
+    private func CollectCatchFiltersAbove(start SyntaxNode) List[ExpressionSyntax] {
+        let filters = List[ExpressionSyntax]()
+        var child SyntaxNode = start
+        var parent = start.Parent
+        while parent != nil {
+            if parent is TryStatementSyntax outer && object.ReferenceEquals(outer.TryBlock, child) {
+                for clause in outer.CatchClauses {
+                    if clause.Filter != nil {
+                        filters.Add(clause.Filter)
+                    }
+                }
+            }
+            child = parent
+            parent = parent.Parent
+        }
+        return filters
+    }
+
+    /// ADR-0208 R10 (#5168): removes the external-callable aliases that a filter may reassign: a
+    /// name the filter writes, or a variable that a closure assigns.
+    private func RemoveFilterAffectedAliases(aliases HashSet[VariableSymbol], filters List[ExpressionSyntax]) {
+        let filterNames = CollectEnclosingFilterNames(filters)
+        aliases.RemoveWhere(
+            (alias VariableSymbol) -> filterNames.Contains(alias.Name) || binderCtx.MayBeAssignedByClosure(alias)
+        )
+    }
+
+    /// ADR-0208 R10 (#5168): the names that [`filters`](paramref) may write: assignment targets,
+    /// `??=` targets, and `ref`, `out` and `&` operands. A name that a filter only reads is not
+    /// written. Also anchors the closure-assigned name set.
+    private func CollectEnclosingFilterNames(filters List[ExpressionSyntax]) HashSet[string] {
+        EnsureClosureAssignedNames(filters[0])
+        let names = HashSet[string]()
+        for filter in filters {
+            CollectAssignedNamesAndMemberMutation(filter, names)
+            CollectWritableRefArgumentNames(filter, names)
+            CollectFilterWriteTargets(filter, names)
+        }
+        return names
+    }
+
+    /// ADR-0208 R10 (#5168): collects the targets of `??=` and `&` in a filter. An index input of the
+    /// target is only read; nested writes stay found by the traversal.
+    private func CollectFilterWriteTargets(node SyntaxNode, names HashSet[string]) {
+        if node is NullCoalescingAssignmentExpressionSyntax coalescing {
+            CollectWriteTargetNames(coalescing.Target, names)
+        } else if node is UnaryExpressionSyntax unary && unary.OperatorToken.Kind == SyntaxKind.AmpersandToken {
+            CollectWriteTargetNames(unary.Operand, names)
+        }
+        for child in node.GetChildren() {
+            CollectFilterWriteTargets(child, names)
+        }
+    }
+
+    /// ADR-0208 R10 (#5168): the `when` filters of every `try` at or below [`node`](paramref).
+    private func CollectCatchFiltersWithin(node SyntaxNode) List[ExpressionSyntax] {
+        let filters = List[ExpressionSyntax]()
+        if node is TryStatementSyntax tryStatement {
+            for clause in tryStatement.CatchClauses {
+                if clause.Filter != nil {
+                    filters.Add(clause.Filter)
+                }
+            }
+        }
+        for child in node.GetChildren() {
+            filters.AddRange(CollectCatchFiltersWithin(child))
+        }
+        return filters
+    }
+
+    /// ADR-0208 R10 (#5168): adds the storage that the `ref` or `out` operand [`operand`](paramref)
+    /// writes: the variable itself, or the receiver of an index. An index input is only read.
+    private func CollectWriteTargetNames(operand SyntaxNode, names HashSet[string]) {
+        if operand is ParenthesizedExpressionSyntax parenthesized {
+            CollectWriteTargetNames(parenthesized.Expression, names)
+        } else if operand is IndexExpressionSyntax indexed {
+            CollectWriteTargetNames(indexed.Target, names)
+        } else if operand is AccessorExpressionSyntax accessor {
+            CollectWriteTargetNames(accessor.LeftPart, names)
+        } else {
+            CollectAllNames(operand, names)
+        }
+    }
+
+    /// ADR-0208 R10 (#5168): collects the names under `ref` and `out` arguments. An `in` argument
+    /// cannot write its storage.
+    private func CollectWritableRefArgumentNames(node SyntaxNode, names HashSet[string]) {
+        if node is RefArgumentExpressionSyntax reference && !string.Equals(
+            reference.RefKindModifier.Text,
+            "in",
+            StringComparison.Ordinal
+        ) {
+            if reference.Expression != nil {
+                CollectWriteTargetNames(reference.Expression, names)
+            } else {
+                CollectAllNames(node, names)
+            }
+        }
+        // An operand can contain nested writes, such as `ref items[Next(ref index)]`.
+        for child in node.GetChildren() {
+            CollectWritableRefArgumentNames(child, names)
+        }
+    }
+
+    /// ADR-0208 R10 (#5168): drops the facts that [`filters`](paramref) may write. The filters
+    /// are not bound yet, so every variable that a filter may write counts as written, and
+    /// a filter counts as an unknown call: a getter, an indexer or a conversion can run user code
+    /// without a call expression.
+    private func InvalidateNarrowingsForEnclosingFilters(filters List[ExpressionSyntax]) {
+        if filters.Count == 0 {
+            return
+        }
+        let names = CollectEnclosingFilterNames(filters)
+        if !HasAnyActiveNarrowings() {
+            return
+        }
+        for frame in binderCtx.NarrowedVariables {
+            if frame.Count == 0 {
+                continue
+            }
+            let toRemove = List[AccessPath]()
+            for key in frame.Keys {
+                if names.Contains(key.Root.Name) || MayBeMutatedByUnknownCallable(key) {
+                    toRemove.Add(key)
+                }
+            }
+            for key in toRemove {
+                frame.Remove(key)
+            }
+        }
     }
 
     private func BindWithinFinallyScope(finallyClause FinallyClauseSyntax?, bind() -> BoundStatement) BoundStatement {

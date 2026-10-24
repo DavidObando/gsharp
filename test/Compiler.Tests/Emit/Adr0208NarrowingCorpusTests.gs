@@ -312,7 +312,7 @@ func Run() int32 {
         return s.Length
     }
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0612@11:24", "nre", "", "R10 (GS0158 after)"}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@14:18", "reject", "", ""}
             yield[]object{"cB_local_function_captures", `func Get() string? { return "a" }
 func Run(n int32) int32 {
     var s string? = Get()
@@ -369,7 +369,7 @@ func Run() int32 {
     }
     return 2
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0612@17:24", "run", "filter|finally: nil|filter|1", "R10 (GS0158 after)"}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@15:33", "reject", "", ""}
             yield[]object{"d1_enclosing_filter_before_finally", `func Get() string? { return "a" }
 func Consume(n int32) { Console.WriteLine(n) }
 func Clear(ref s string?) bool {
@@ -390,7 +390,7 @@ func Run() int32 {
     }
     return 2
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0612@16:24", "run", "1", "R10 (GS0158 after)"}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@14:23", "reject", "", ""}
             yield[]object{"d2_shadowed_type_name", `import System.Text
 func Get() StringBuilder? { return StringBuilder() }
 func Run(n int32) int32 {
@@ -814,7 +814,7 @@ func Run() int32 {
     }
     return 2
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0612@19:42", "nre", "", "R10 (GS0158 after)"}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@17:22", "reject", "", ""}
             yield[]object{"f4_nullable_construction_boxes_nil", `func Get() object? { return "a" }
 func Run(n int32) int32 {
     var x object? = Get()
