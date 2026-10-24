@@ -71,7 +71,8 @@ internal shared class Program {
             if !result.Changed {
                 return 0
             }
-            ReportCheckFailure(options, List[string]{name})
+            options.Out.WriteLine(name)
+            options.Err.WriteLine("gsfmt: $name needs formatting. Pipe it through 'gsfmt' with no flags to format it.")
             return 1
         }
         if options.List {
@@ -126,7 +127,7 @@ internal shared class Program {
                 continue
             }
             changedPaths.Add(path)
-            if options.List {
+            if options.List && !options.Check {
                 options.Out.WriteLine(path)
             }
             if options.Write {
@@ -137,14 +138,17 @@ internal shared class Program {
                 options.Out.Write(formatted)
             }
         }
+        if options.Check && changedPaths.Count > 0 {
+            ReportCheckFailure(options, changedPaths)
+        }
         if failed {
             return 2
         }
-        if options.Check && changedPaths.Count > 0 {
-            ReportCheckFailure(options, changedPaths)
-            return 1
+        return if options.Check && changedPaths.Count > 0 {
+            1
+        } else {
+            0
         }
-        return 0
     }
 
     // `--check` names every file that would change on stdout, one per line in the order `-l` uses, then
@@ -156,9 +160,23 @@ internal shared class Program {
         let target = if options.Paths.Count == 0 {
             "."
         } else {
-            string.Join(" ", options.Paths)
+            string.Join(" ", options.Paths.Select((p string) -> QuoteForShell(p)))
         }
         options.Err.WriteLine("gsfmt: ${changedPaths.Count} file(s) need formatting. Run 'gsfmt -w $target' to fix.")
+    }
+
+    private func QuoteForShell(argument string) string {
+        var plain = argument.Length > 0
+        for ch in argument {
+            if !(char.IsAsciiLetterOrDigit(ch) || ch == '_' || ch == '.' || ch == '/' || ch == '-') {
+                plain = false
+            }
+        }
+        return if plain {
+            argument
+        } else {
+            "'" + argument.Replace("'", "'\\''", StringComparison.Ordinal) + "'"
+        }
     }
 
     private func CollectFiles(paths IEnumerable[string]) IReadOnlyList[string] {

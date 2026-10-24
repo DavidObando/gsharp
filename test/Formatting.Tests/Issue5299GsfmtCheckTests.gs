@@ -56,6 +56,55 @@ class Issue5299GsfmtCheckTests {
         }
     }
 
+    @Fact
+    func Check_WithListPrintsEachFileOnce() {
+        let root = Path.Combine(Path.GetTempPath(), "gsfmt-check-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root)
+        let bad1 = Path.Combine(root, "A.gs")
+        let bad2 = Path.Combine(root, "B.gs")
+        try {
+            File.WriteAllText(bad1, Unformatted())
+            File.WriteAllText(bad2, Unformatted())
+            let stdout = StringWriter()
+            let exitCode = Program.Run([]string{"--check", "-l", root}, stdout, StringWriter())
+            Assert.Equal(1, exitCode)
+            Assert.Equal(bad1 + "\n" + bad2 + "\n", stdout.ToString().Replace("\r\n", "\n"))
+        } finally {
+            Directory.Delete(root, recursive: true)
+        }
+    }
+
+    @Fact
+    func Check_StillListsChangedFilesWhenAnotherFileFailsToParse() {
+        let root = Path.Combine(Path.GetTempPath(), "gsfmt-check-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root)
+        let bad = Path.Combine(root, "A.gs")
+        try {
+            File.WriteAllText(bad, Unformatted())
+            File.WriteAllText(Path.Combine(root, "B.gs"), "package P\n\nfunc (\n")
+            let stdout = StringWriter()
+            let exitCode = Program.Run([]string{"--check", root}, stdout, StringWriter())
+            Assert.Equal(2, exitCode)
+            Assert.Equal(bad + "\n", stdout.ToString().Replace("\r\n", "\n"))
+        } finally {
+            Directory.Delete(root, recursive: true)
+        }
+    }
+
+    @Fact
+    func Check_QuotesFixCommandArgumentsThatTheShellWouldSplit() {
+        let root = Path.Combine(Path.GetTempPath(), "gsfmt check " + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root)
+        try {
+            File.WriteAllText(Path.Combine(root, "A.gs"), Unformatted())
+            let stderr = StringWriter()
+            Program.Run([]string{"--check", root}, StringWriter(), stderr)
+            Assert.Contains("gsfmt -w '" + root + "'", stderr.ToString())
+        } finally {
+            Directory.Delete(root, recursive: true)
+        }
+    }
+
     private func FormatCanonical(text string) string {
         let result = GSharpFormatter.Format(SourceText.From(text, "x.gs"))
         return result.Text?.ToString() ?? text
