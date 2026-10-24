@@ -290,13 +290,23 @@ analysis. The fact still dies on:
 
 A variable that a call passes by `ref`/`out` once does not kill the facts of
 the other by-reference parameters; only an overlapping `ref` alias chain
-does. Two by-reference parameters may share a storage in a direct write only
-when their types can overlap: equal types ignoring nullability, a type that
-mentions an unresolved type parameter (`Run[T](ref a Box[T]?, ref b
-Box[C]?)` with `T = C`), a value-type aggregate, `object` or an interface. A
-`ref` argument cannot change the type of its parameter, so `Run(ref a C?,
-ref b string?)` never shares storage, while `Run(ref x, ref x)` with two
-`C?` parameters still does.
+does. Two by-reference parameters are treated as different storages in a direct
+write only when that is provable: both types are plain named reference
+types that are not generic and mention no type parameter (a source class, or
+an imported class, interface or `object`), or primitives or strings, after
+the outer nullability is stripped, and they are different types (`Run(ref
+path AccessPath?, ref found TypeSymbol?)`, `Run(ref symbol ISymbol?, ref name
+string?)`). A by-reference argument has the exact type of its parameter, so
+a different reference type is a different storage. Everything else overlaps:
+equal types, any generic instantiation (annotations nested in a construction
+are not told apart: `Box[C]?` and `Box[C?]?`), tuples, structs and other
+value aggregates (they embed the other as a member), arrays, source
+interfaces, type parameters (also nested in tuples, maps, function types or
+enclosing-type arguments, as `TypeSymbol.ContainsTypeParameter` decides) and
+any type that cannot be classified. The occurrences of a
+variable among the receiver and the arguments of a call are collected
+through conversions, null assertions, address-of operands and each branch of
+a conditional (`Clear(ref b, b!!)`, `Clear2(ref flag ? b : b, ref b)`).
 
 **Known limitations of the call rule.** Because a plain call does not kill
 the fact, the rule does not cover a callee that writes the storage by a path

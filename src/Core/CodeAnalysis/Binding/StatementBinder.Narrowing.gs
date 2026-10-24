@@ -1921,7 +1921,7 @@ internal partial class StatementBinder {
                 }
             }
             if node is BoundCallOperationExpression call {
-                RecordCallSiteAliasing(call.Arguments)
+                RecordCallSiteAliasing(call)
                 AnalyzeCallableArguments(call.Arguments)
             }
             base.VisitExpression(node)
@@ -1963,23 +1963,53 @@ internal partial class StatementBinder {
 
         // ADR-0208 R12 (#5292, amendment A3): records the variables that this call passes more than once, at least
         // once by `ref`/`out`.
-        func RecordCallSiteAliasing(arguments ImmutableArray[BoundExpression]) {
+        func RecordCallSiteAliasing(call BoundCallOperationExpression) {
             let byReference = Dictionary[VariableSymbol, int32]()
             let byValue = Dictionary[VariableSymbol, int32]()
-            for argument in arguments {
-                var expression = argument
-                var isReference = false
-                while true {
-                    if expression is BoundAddressOfExpression address {
-                        isReference = true
-                        expression = address.Operand
-                    } else if expression is BoundConversionExpression conversion {
-                        expression = conversion.Expression
-                    } else {
-                        break
-                    }
+            for child in call.ChildNodes {
+                if child is BoundExpression operand {
+                    CollectOccurrences(operand, false, byReference, byValue)
                 }
-                if expression is BoundVariableExpression variable {
+            }
+            for entry in byReference {
+                let valueUses = if byValue.TryGetValue(entry.Key, out var uses) {
+                    uses
+                } else {
+                    0
+                }
+                if entry.Value + valueUses >= 2 {
+                    callAliasedRoots.Add(entry.Key)
+                }
+            }
+        }
+
+        // Every occurrence of a variable among the receiver and the arguments counts: through conversions,
+        // null assertions, address-of operands and each branch of a conditional.
+        private func CollectOccurrences(
+            expression BoundExpression,
+            isReference bool,
+            byReference Dictionary[VariableSymbol, int32],
+            byValue Dictionary[VariableSymbol, int32]
+        ) {
+            switch expression {
+                case address is BoundAddressOfExpression {
+                    CollectOccurrences(address.Operand, true, byReference, byValue)
+                }
+                case conversion is BoundConversionExpression {
+                    CollectOccurrences(conversion.Expression, isReference, byReference, byValue)
+                }
+                case BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.NullAssertion}} assertion {
+                    CollectOccurrences(assertion.Operand, isReference, byReference, byValue)
+                }
+                case conditionalAddress is BoundConditionalAddressExpression {
+                    CollectOccurrences(conditionalAddress.WhenTrueOperand, true, byReference, byValue)
+                    CollectOccurrences(conditionalAddress.WhenFalseOperand, true, byReference, byValue)
+                }
+                case conditional is BoundConditionalExpression {
+                    CollectOccurrences(conditional.WhenTrue, isReference, byReference, byValue)
+                    CollectOccurrences(conditional.WhenFalse, isReference, byReference, byValue)
+                }
+                case variable is BoundVariableExpression {
                     let counts = if isReference {
                         byReference
                     } else {
@@ -1993,16 +2023,6 @@ internal partial class StatementBinder {
                         }
                     ) +
                         1
-                }
-            }
-            for entry in byReference {
-                let valueUses = if byValue.TryGetValue(entry.Key, out var uses) {
-                    uses
-                } else {
-                    0
-                }
-                if entry.Value + valueUses >= 2 {
-                    callAliasedRoots.Add(entry.Key)
                 }
             }
         }
@@ -4479,63 +4499,50 @@ internal partial class StatementBinder {
         }
 
         /// ADR-0208 R12 (#5292, amendment A3): whether two by-reference storages of these types can be one
-        /// storage. A by-reference argument has the exact type of its parameter, so two different
-        /// reference-like or primitive types cannot share a storage. The answer is "yes" for equal types,
-        /// for a type that mentions an unresolved type parameter, and for a value-type aggregate (it may
-        /// hold the other as a field), `object` or an interface. This is the one distinction that keeps
-        /// `if TryGet(e, out path) { ...; found = nil }` from killing the fact of another `out` parameter.
+        /// storage. The answer is "no" only when the types are provably disjoint: both are plain named class
+        /// types that are not generic and mention no type parameter (a source or imported class), or a
+        /// primitive or a string, after the outer nullability is stripped, and they are different types.
+        /// Everything else overlaps: the same type, any generic instantiation (annotations nested in a
+        /// construction are not told apart), a tuple, a struct or other value aggregate, an array, an
+        /// interface, `object`, a type parameter, and any type that cannot be classified.
         internal func ByReferenceTypesMayOverlap(first TypeSymbol?, second TypeSymbol?) bool {
             let left = StripNullability(first)
             let right = StripNullability(second)
             if left == nil || right == nil || object.Equals(left, right) {
                 return true
             }
-            return MentionsTypeParameter(left, 0) ||
-                MentionsTypeParameter(right, 0) ||
-                MayHoldOtherStorage(left) ||
-                MayHoldOtherStorage(right)
+            return !(IsPlainClassOrScalar(left) && IsPlainClassOrScalar(right))
         }
 
-        private func MentionsTypeParameter(type TypeSymbol?, depth int32) bool {
-            let stripped = StripNullability(type)
-            if stripped == nil || depth > 8 {
-                return true
-            }
-            if stripped is TypeParameterSymbol {
-                return true
-            }
-            if stripped is ArrayTypeSymbol array {
-                return MentionsTypeParameter(array.ElementType, depth + 1)
-            }
-            if stripped is SliceTypeSymbol slice {
-                return MentionsTypeParameter(slice.ElementType, depth + 1)
-            }
-            if stripped is StructSymbol structure {
-                if !structure.TypeParameters.IsDefaultOrEmpty && structure.TypeArguments.IsDefaultOrEmpty {
-                    return true
-                }
-                for argument in structure.TypeArguments {
-                    if MentionsTypeParameter(argument, depth + 1) {
-                        return true
-                    }
-                }
+        private func IsPlainClassOrScalar(type TypeSymbol) bool {
+            if TypeSymbol.ContainsTypeParameter(type) {
                 return false
             }
-            if stripped is ImportedTypeSymbol imported {
-                for argument in imported.TypeArguments {
-                    if MentionsTypeParameter(argument, depth + 1) {
-                        return true
-                    }
-                }
+            if type is StructSymbol structure {
+                return structure.IsClass &&
+                    structure
+                    .TypeParameters
+                    .IsDefaultOrEmpty &&
+                    structure
+                    .TypeArguments
+                    .IsDefaultOrEmpty
             }
-            return false
+            let clr = type.ClrType
+            if clr == nil || type is TypeParameterSymbol or InterfaceSymbol {
+                return false
+            }
+            if clr.IsPrimitive || ClrTypeInspector.IsSameAs(clr, typeof(string)) {
+                return true
+            }
+            // An imported non-generic class, interface or `object`: a by-reference argument has the exact type of
+            // its parameter, so a different reference type is a different storage.
+            return type is ImportedTypeSymbol &&
+                !clr.IsValueType &&
+                !clr.IsGenericType &&
+                !clr.IsArray &&
+                !clr.IsByRef &&
+                !clr.IsPointer
         }
-
-        private func MayHoldOtherStorage(type TypeSymbol) bool -> type is TypeParameterSymbol or
-            InterfaceSymbol ||
-            type is StructSymbol{IsClass: false} ||
-            (type.ClrType != nil && ClrTypeInspector.IsSameAs(type.ClrType, typeof(object))) ||
-            (type.ClrType != nil && type.ClrType.IsValueType && !type.ClrType.IsPrimitive && !type.ClrType.IsEnum)
 
         /// ADR-0208 R12 (#5292): whether [`first`](paramref) and [`second`](paramref) are one variable or have
         /// overlapping `ref` alias chains. This is the sharing that a `ref`/`out` call argument can create.

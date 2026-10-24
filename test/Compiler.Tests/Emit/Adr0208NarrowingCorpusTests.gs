@@ -163,11 +163,16 @@ open class Adr0208NarrowingCorpusTests {
                 "g3_switch_failed_guard",
                 "g4_overload_ambiguity_after_join",
                 "g5_yield_after_guard",
+                "h10_tuple_by_ref_parameter_overlaps_element",
                 "h1_by_ref_param_survives_calls",
                 "h2_limitation_call_with_container_operand",
                 "h3_limitation_call_writes_global",
                 "h4_same_variable_two_ref_arguments",
                 "h5_generic_by_ref_parameters_may_overlap",
+                "h6_null_assertion_repeats_ref_argument",
+                "h7_conditional_address_repeats_ref_argument",
+                "h8_nested_annotation_by_ref_parameters_overlap",
+                "h9_nested_type_parameter_by_ref_parameters_overlap",
                 "out-alias_out_ref_alias"
             },
             names
@@ -1005,6 +1010,73 @@ func Main() {
     var x Box[C]? = Box[C]()
     Console.WriteLine(Run[C](ref x, ref x))
 }`, "GS0158@9:14", "reject", "", ""}
+            yield[]object{"h6_null_assertion_repeats_ref_argument", `class C {
+    var Value int32 = 1
+}
+func Clear(ref x C?, y C) { x = nil }
+func Run(ref a C?, ref b C?) int32 {
+    if a == nil { return 0 }
+    Clear(ref b, b!!)
+    return a.Value
+}
+func Main() {
+    var v C? = C{}
+    Console.WriteLine(Run(ref v, ref v))
+}`, "GS0158@8:14", "reject", "", ""}
+            yield[]object{"h7_conditional_address_repeats_ref_argument", `class C {
+    var Value int32 = 1
+}
+func Clear2(ref x C?, ref y C?) { x = nil }
+func Run(ref a C?, ref b C?, flag bool) int32 {
+    if a == nil { return 0 }
+    Clear2(ref flag ? b : b, ref b)
+    return a.Value
+}
+func Main() {
+    var v C? = C{}
+    Console.WriteLine(Run(ref v, ref v, true))
+}`, "GS0158@8:14", "reject", "", ""}
+            yield[]object{"h8_nested_annotation_by_ref_parameters_overlap", `class C {
+}
+class Box[T] {
+    var Item int32 = 1
+}
+func Run(ref a Box[C]?, ref b Box[C?]?) int32 {
+    if a == nil { return 0 }
+    b = nil
+    return a.Item
+}
+func Main() {
+    var x Box[C]? = Box[C]()
+    Console.WriteLine(Run(ref x, ref x))
+}`, "GS0158@9:14 GS0612@13:34", "reject", "", ""}
+            yield[]object{"h9_nested_type_parameter_by_ref_parameters_overlap", `class C {
+}
+class Box[T] {
+    var Item int32 = 1
+}
+func Run[T](ref a Box[(T, int32)]?, ref b Box[(C, int32)]?) int32 {
+    if a == nil { return 0 }
+    b = nil
+    return a.Item
+}
+func Main() {
+    var x Box[(C, int32)]? = Box[(C, int32)]()
+    Console.WriteLine(Run[C](ref x, ref x))
+}`, "GS0158@9:14", "reject", "", ""}
+            yield[]object{"h10_tuple_by_ref_parameter_overlaps_element", `class C {
+    var Value int32 = 1
+}
+func Run(ref a C?, ref whole (C?, int32)) int32 {
+    if a == nil { return 0 }
+    whole = (nil, 0)
+    return a.Value
+}
+func Main() {
+    var element C? = C{}
+    var t (C?, int32) = (C{}, 1)
+    Console.WriteLine(Run(ref element, ref t))
+}`, "GS0158@7:14", "reject", "", ""}
             yield[]object{"out-alias_out_ref_alias", `class C { func M() { } }
 func Run(out c C?, ref alias C?) {
     c = C()

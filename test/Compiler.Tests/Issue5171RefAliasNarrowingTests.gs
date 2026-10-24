@@ -674,6 +674,26 @@ Console.WriteLine(Run(ref box.Field, box))
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
         /// @returns The case data.
         func AcceptedCases() sequence[[]object] {
+            yield[]object{"out-parameters-of-interface-and-string-types-do-not-overlap", `
+import System
+
+func Describe(items []IDisposable?, out symbol IDisposable?, out name string?) bool {
+    symbol = nil
+    name = nil
+    symbol = items[0]
+    if symbol == nil {
+        return false
+    }
+    name = symbol.ToString()
+    return symbol.ToString() == name
+}
+func Main() {
+    var symbol IDisposable? = nil
+    var name string? = nil
+    let items = []IDisposable?{nil}
+    Console.WriteLine(Describe(items, out symbol, out name))
+}
+`, []string{"False"}}
             yield[]object{"ref-argument-to-another-variable-keeps-fact", `
 import System
 
