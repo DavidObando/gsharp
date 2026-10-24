@@ -61,9 +61,10 @@ not against `main` at the time of writing. The assumptions, each named so a
 reviewer can check it when the in-flight work lands:
 
 - **A1 (threaded state).** `BinderContext.Narrowing NarrowingState` is the
-  state at the current program point and the frame stack is gone or is a
-  projection of it (PR 2 slices 1 and 2a of #5130, #5230 and #5247, and the
-  slice that deletes the frames). This ADR's kills are `NarrowingState`
+  state at the current program point. After #5230 it is threaded beside
+  the frame stack and is a projection of the frames (the innermost frame
+  wins); the #5130 slice that deletes the frames makes it the only
+  mechanism. This ADR's kills are `NarrowingState`
   operations; where the frames still exist when a slice lands, the slice
   applies the same kill to the frames through the one entry point the
   legacy pass uses (`InvalidateInheritedNarrowings`), and the parity
@@ -300,20 +301,29 @@ region is bound**, by the walker of section 7.
 **Why there is no fixed point and no widening.** A dataflow fixed point
 iterates because the state at the head depends on the state at the back
 edge, which depends on the head. Here the dependency is cut by
-construction: `L` is closed under `R`'s effects (`L.Kill(e) = L` for every
-effect `e` the walker attributes to `R`, because `L` already lacks every
-fact such an effect could remove). Three consequences, each used below:
+construction. A fact on a root `r` is in `L` only in one of two cases:
+no effect in `R` can write `r` (then `L.Kill(e) = L` for every effect `e`
+of `R` on that fact), or every write to `r` in `R` is a P7 write (section
+8) whose value has the fact's type (then every write re-establishes the
+fact's truth even though the straight-line transfer after the write
+records only the declared non-null type, ADR-0208 P2). Three consequences,
+each used below:
 
-1. **Every state inside `R` includes `L`.** Facts proven inside `R` are
-   added on top of `L` and may be killed again inside `R`; facts of `L`
-   cannot be killed inside `R`. So the state on the back edge, on every
-   `continue`, on every exceptional edge out of a point in `R` and at
-   every jump out of `R` is at least `L`.
+1. **Every fact in `L` holds at every point inside `R`**, on the back
+   edge, on every `continue`, on every exceptional edge out of a point in
+   `R` and at every jump out of `R`. For the first case the state itself
+   includes the fact everywhere in `R` (facts proven inside `R` are added
+   on top and may be killed again; facts of `L` cannot be). For the second
+   case the fact is true everywhere in `R` because every value written to
+   `r` has its type, whether or not the state after the write records it
+   (a read after such a write in the same iteration sees the state's
+   weaker fact, as it does today).
 2. **The header is bound once, under `L`, and its result is a lower bound
-   for every evaluation.** The entry evaluation runs under `S ⊇ L`; every
-   later evaluation runs under a back-edge state `⊇ L` by (1). The
-   condition's then- and else-states computed from `L` are therefore sound
-   for every iteration (P1 is monotone in its input state).
+   for every evaluation.** The entry evaluation runs under `S`, whose facts
+   include `L`'s; every later evaluation runs under a back-edge state at
+   which every fact of `L` holds, by (1). The condition's then- and
+   else-states computed from `L` are therefore sound for every iteration
+   (P1 is monotone in its input state).
 3. **Termination is trivial.** One syntax walk per region, one bind. There
    is nothing to iterate and nothing to widen. The only "iteration" in
    this area today, the re-bind, is gone.
@@ -353,11 +363,11 @@ known when the region's binding ends. Section 9 gives it per loop kind.
 The kill set is computed by `RegionEffectScanner` (name indicative), a
 syntax walker that maps each syntax kind to the effect class of the bound
 kind it binds to (ADR-0208 section 8, construct table) and composes
-bottom-up. It replaces and generalises `CollectAssignedNamesAndMemberMutation`
-(`StatementBinder.Narrowing.gs:4017`), `SyntaxMayMutateMemberPaths`
-(`:496`) and the `when`-filter scan of ADR-0208 section 10, which become
-three uses of one walker. Its output for a node is a `RegionEffects`
-record:
+bottom-up. It generalises `CollectAssignedNamesAndMemberMutation`
+(`StatementBinder.Narrowing.gs:4017`) and `SyntaxMayMutateMemberPaths`
+(`:496`), which L1 retires, and it can serve the `when`-filter scan of
+ADR-0208 section 10, which is #5130's code and may be consolidated onto
+this walker in L3. Its output for a node is a `RegionEffects` record:
 
 - `AssignedNames`: names written by a root-write effect in the node and
   **not** declared by a declaration in the node that lexically encloses
@@ -384,9 +394,12 @@ The rules, each an instance of the construct table and of the lower bound:
   to any other name is resolved at the region's entry scope with
   `$scope.TryLookupSymbol`; a name that resolves to a variable kills every
   fact on that root (and, if the root is in the alias class, the shared
-  predicate decides what else). A declaration form the walker does not
+  predicate decides what else); an unqualified name that resolves to a
+  field or property of the enclosing type (an implicit `this` member) is a
+  member write (`ContainsMemberWrite`; the implicit-field path and every
+  other member-bearing path die). A declaration form the walker does not
   recognise declares nothing, which kills the outer variable; a name that
-  does not resolve kills nothing (it is not a root the state can hold).
+  resolves to nothing kills nothing (the state cannot hold a fact on it).
   This is the symbol-identity rule of #2943 and the fix direction of
   [#5239](https://github.com/DavidObando/gsharp/issues/5239) applied to
   regions.
@@ -413,28 +426,52 @@ The rules, each an instance of the construct table and of the lower bound:
   straight-line code). What `call` removes is the shared predicate's
   answer (A2, A3): member-bearing paths, mutable globals, closure-assigned
   locals, and the alias-class facts the amended R12 names.
-- **W5 Member reads.** A member access or index read whose receiver chain
-  the walker cannot resolve to a field, an auto property or an array
-  element is `call` (ADR-0208 row R14 and A2: a getter with user code,
-  source or imported, is a call; [#5231](https://github.com/DavidObando/gsharp/issues/5231)).
-  The resolution is name-based at the region's entry scope: the receiver
-  root resolves to a variable, the variable's type is known, and the
-  member is looked up by name on that type; any step that fails is `call`.
-  L0 reports both the strict count (every member read is `call`) and the
-  resolved count so the maintainer sees what the resolution buys (section
-  23, question 7). Until L0's numbers are in, the rule is the strict one.
-- **W6 Closed kind list.** A syntax kind the walker does not list is
-  `call`, and `ContainsUnknownKind` is set. A test enumerates every
-  `SyntaxKind` (or `SyntaxNode` subtype) against the walker's list, so a
-  new kind fails the test until someone decides its effect. This is the
-  same mitigation ADR-0208 section 20 gives the filter scan, now one test
-  for one walker.
+- **W5 Member reads.** A member access or index read is reported as
+  `ContainsMemberRead` with what the walker could resolve about it. The
+  kill it causes is the shared predicate's classification of that read
+  (A2; ADR-0208 row R14: a getter with user code is a call; the open
+  decision of [#5231](https://github.com/DavidObando/gsharp/issues/5231)
+  on imported getters applies here the day it is made). Two variants of
+  what the walker resolves: the *strict* walker resolves nothing, so every
+  member read is an unknown getter and takes the `call` classification;
+  the *resolved* walker resolves the receiver chain at the region's entry
+  scope (the receiver root resolves to a variable, the variable's type is
+  known, the member is looked up by name on that type) and reports a
+  field, an auto property or an array element as `none`, anything else as
+  an unknown getter. L0 reports both counts so the maintainer sees what the
+  resolution buys (section 23, question 7). Until L0's numbers are in, the
+  rule is the strict one.
+- **W6 Closed kind list.** A syntax kind the walker does not list sets
+  `ContainsUnknownKind`, and a region with that flag is bound from
+  `NarrowingState.Empty`: every fact is removed. This is stronger than the
+  `call` default of ADR-0208's construct table and filter scan, on
+  purpose: a bound node of unknown kind has children the table still
+  classifies, while an unknown syntax kind can hide a write to a plain
+  local that `call` would not remove. A test enumerates every `SyntaxKind`
+  (or `SyntaxNode` subtype) against the walker's list, so a new kind fails
+  the test until someone decides its effect.
 - **W7 Nested regions and closures.** A nested loop's or span's effects are
   its children's effects; a function literal's body is walked for
   `AssignedNames` (a closure that assigns a root is a write in the region;
   the root is also in the function-wide closure-assigned set) and its
   creation is `none`. Nothing inside a nested function body other than
   writes to captured names is attributed to the region.
+
+**From `RegionEffects` to `L` (the consumer rule).** For each fact in `S`
+on a path with root `r`, in this order: (i) if `ContainsUnknownKind`, drop
+(W6); (ii) if the path is member-bearing and `ContainsMemberWrite`,
+`ContainsCall`, or an unresolved member read is present, drop (the shared
+predicate's member-path rule); (iii) if `ContainsCall`, `ContainsPointerWrite`,
+`ContainsRefOrOutArgument` on `r` or on a member of its alias class, or
+`ContainsAliasTake` on `r`, apply the shared predicate for that effect to
+`r` (globals, closure-assigned locals, the alias class as amended by A3);
+(iv) if `r` is in `AssignedNames` and some write to `r` is not in
+`NonNullAssignments`, drop; (v) if `r` is in `AssignedNames` and every
+write to `r` is in `NonNullAssignments`, keep the nullability fact, and
+keep a type-test fact only when every write's proven type converts to it
+by identity or an implicit reference conversion (section 8); (vi)
+otherwise keep. Only (v) distinguishes `AssignedNames` from
+`NonNullAssignments`; everything else is a membership test.
 
 **Composition and cost.** `RegionEffects` is composed bottom-up and cached
 per syntax node in a per-body side table (`Dictionary[SyntaxNode,
@@ -484,9 +521,21 @@ details:
 - Both construction syntaxes count (row R7 (d); closes #5169).
 
 A P7 assignment inside the region is **also** a P2 assignment when it is
-bound (the straight-line rule), so the fact is re-established at the
-assignment's own point for the rest of the iteration whatever the kill set
-says. P7 only decides whether the fact survives *into* the region's entry.
+bound (the straight-line rule): for a nullable root it re-establishes the
+nullability fact at the assignment's own point, at the declared non-null
+type and never the assigned class (ADR-0069 #4989 addendum); for a
+non-nullable root it adds nothing. So a type-test fact kept by P7 holds
+semantically after the write (section 6, case two) but the state records
+the declared type there, exactly as today: a hidden-member read after
+`x = Dog{}` in the same iteration selects the declared type's member, one
+before it selects the narrowed type's (row R7 (d)). P7 decides only
+whether a fact survives *into* the region's entry.
+
+P7 accepts a global root, but a region whose writes to a global are all
+P7 keeps the global's fact only if the region contains no call (step (iii)
+of the consumer rule: ADR-0208 R11, #5170). `NonNullAssignmentAfterUse_
+OnTopLevelVariable_ReportsNullableReceiver` keeps its rejection for that
+reason (the body calls `c.Print()`), not because of P7.
 
 ### 9. Transfer table: loops
 
@@ -720,10 +769,10 @@ direction. "Probe" refers to the ADR-0208 corpus and to section 24.
 | R7 (b) | A loop reassigns the root from a variable or a call, which the bound proof accepted: `node.Value; node = Make()` with `Make() Node` (e3); the `local` (`c = fresh`) and `function` (`c = Mk(33)`) rows of `NonNullAssignmentAfterUse_PreservesInheritedNarrowing`; `access = inner` in `ExpressionBinder.Assignments.gs:5435-5494` | accepted | `GS0158` / `GS0159` | less permissive (P7; question 1 and 4) |
 | R7 (c) | A loop that contains a call reads an inherited fact on a root in the indirect-write class: q3 (an escaped closure the callee invokes; `main` compiles it and it throws) and whatever the shared predicate (A2, A3) kills for a call; the alias-class part follows the amended R12 | q3 accepted, throws; others per `main` | `GS0158` | less permissive (soundness for q3; conservative default for the rest; question 3) |
 | R7 (d) | Output change in accepted programs: `x = Dog{}` keeps a type-test fact like `x = Dog()` (c8 prints `dog`, as c8b does; closes #5169); a reassignment from a variable or a call drops a type-test fact that the bound proof kept, so a hidden-member read in the loop binds on the declared type | c8 prints `animal`; the reassignment shape selects the narrowed type's member | c8 prints `dog`; the declared type's member | output change, no diagnostic (question 2) |
-| R7 (e) | A loop that reads a member the walker cannot resolve to a field, an auto property or an array element is a `call`. For inherited member-bearing paths this is today's loop result (q5a, a source getter, and q5b, an imported getter, both reject `b.Pet.Name` today). The change is on plain roots in the indirect-write class: `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { Consume(sb.Length); total += x.Value }` (q5c) | q5c accepted, prints `2` | `GS0158` on `x.Value` | less permissive (W5 and A2; question 7; count from L0) |
+| R7 (e) | A loop that reads a member the walker cannot resolve to a field, an auto property or an array element takes the shared predicate's classification of an unknown getter (`call` under ADR-0208 R14 as read today). For inherited member-bearing paths this is today's loop result (q5a, a source getter, and q5b, an imported getter, both reject `b.Pet.Name` today). The change is on plain roots in the indirect-write class: `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { Consume(sb.Length); total += x.Value }` (q5c) | q5c accepted, prints `2` | `GS0158` on `x.Value` under today's R14 reading; whatever #5231 decides for imported getters, the day it decides it | less permissive (W5 and A2; question 7; count from L0) |
 | R8 (a) | A backward-jump span reassigns the root from a variable or a call, which the deferred proof accepted | accepted | `GS0158` / `GS0159` at the read | less permissive (P7) |
 | R8 (a') | The span assigns nil inside a `try` whose `finally` restores a non-null value before the jump (probe cC) | accepted, prints `4` | `GS0158` | less permissive (section 12; question 5) |
-| R8 (b) | A type-test fact killed at the label makes a read bind at the declared type: `TypeTestNarrowingThroughUpcast_ReportsConversion` and `*ThroughNullableUpcast*` (valid programs) are accepted; `*AtForSource*` moves from `GS0155` to `GS0116` at `x`; `*ThroughNullSafeCall*` moves from `GS0155` to `GS0159` at the same read | `GS0155` | accepted, or the declared type's own diagnostic | more permissive, or a changed id at the same read |
+| R8 (b) | A type-test fact killed at the label makes a read bind at the declared type: `TypeTestNarrowingThroughUpcast_ReportsConversion` and `*ThroughNullableUpcast*` (valid programs) are accepted; q1 (`x.Name` where `Animal` declares `Name`) is accepted and prints `animal,animal,`; `*AtForSource*` moves from `GS0155` to `GS0116` at `x`; `*ThroughNullSafeCall*` moves from `GS0155` to `GS0159` at the same read | `GS0155`; q1 `GS0158` | accepted, or the declared type's own diagnostic | more permissive, or a changed id at the same read |
 | R8 (b') | A span whose only writes are P7 values keeps the fact at the label: e15 (`s = "ab"`); a span with no write: e18/Run | `GS0158` (#4285) | accepted | more permissive (R6 of ADR-0208 extended to backward jumps) |
 | R8 (c) | Every other `BackwardGoto_*` result: the deferred re-report becomes the ordinary diagnostic at the same read, with the same id, or the read binds at the declared type with no diagnostic (the `*DoesNotRequireNarrowedType`, `Inherited*`, `Hidden*Keeps*` families) | as today | same id and location | no change |
 | R8 (d) | `GS0536` on an optimistic fact in a span (q2) is impossible by construction: a `!!` after a label whose span kills the fact is a real check | accepted (because of #4285) | accepted | no change; closes the hazard of section 3d |
@@ -843,7 +892,7 @@ section 24) or a named test.
 | I8 | Reachability: dead jumps record no edge, non-completing `finally` records no edge, a label without a reachable edge is bound under the facts in force | d6, `Unreachable{Forward,Backward}Goto_DoesNotInvalidateReachableNarrowing` | count a `goto` through a non-completing `finally` as a participant (d6 rejected: conservative, so the mutant turns the row red by changing an accepted result) |
 | I9 | Span covers every label from the earliest backward target through the last participant `goto` | c3a, c3b, e15, e18, q9 | shrink the span to label-through-its-own-`goto` (c3b accepted); exclude labels that are not backward targets from participation (c3a accepted) |
 | I10 | Determinism: no result depends on iteration order | the existing byte-identity harness (two compiles of Core compared) | none (structural) |
-| I11 | No optimistic fact: a `!!` or a type-test read after a label is bound at the label's `L` | q2 (accepted, no `GS0536`), q1 (rejected) | bind the label under `S` with the deferred checker removed (q2 reports `GS0536`; q1 accepted and `InvalidCastException` at run time) |
+| I11 | No optimistic fact: a `!!` or a type-test read after a label is bound at the label's `L` | q2 (accepted, no `GS0536`), q1 (accepted, prints `animal,animal,`) | bind the label under `S` with the deferred checker removed (q2 reports `GS0536`; q1 binds `Dog.Name` with a `castclass` and throws `InvalidCastException` on the second iteration) |
 
 Rows that **cannot** carry a mutant witness are listed as such: I8's
 "when the walker cannot tell, the `goto` counts" has no accepted program
@@ -887,9 +936,10 @@ Oahu; the list of repository sites each of R7 (a), (b), (c), (e) would
 reject. Acceptance: byte-identical output; every disagreement falls under a
 row of section 16 (a disagreement outside the table is a defect of this
 ADR, amended before L1); the enumeration test red under the "unlisted kind
-is `none`" mutant. Does not: change any state, delete anything, touch the
-backward-`goto` checker. Prerequisite: none (it adds files and one hook in
-`BindLoopBody`); it may land in parallel with #5247.
+is `none`" mutant. User-visible changes: none. Does not: change any state,
+delete anything, touch the backward-`goto` checker. Prerequisite: none (it
+adds files and one hook in `BindLoopBody`); it may land in parallel with
+#5247.
 
 **L1. Loops: kill at entry, bind once (R7 (a) to (e)).** `BindLoopBody`
 computes `L` from the walker, applies it to the entry state (and to the
@@ -912,7 +962,13 @@ Acceptance: the L0 comparison report's disagreements all fall under R7;
 `narrowing.loop-rebinds` reports 0; no `Lowerer.Lower` or
 `ControlFlowGraph.Create` frame under `BindLoopBody` in the profile; the
 bootstrap list of section 18 confirmed by the response-file compile.
-Does not: touch spans or the backward-`goto` checker (the loop snapshot's
+User-visible changes: new rejects e2b (`s.Length; if c { s = nil; break
+}`), e3 (`node = Make()`), the `local` and `function` rows of
+`NonNullAssignmentAfterUse_PreservesInheritedNarrowing`, q3 (an escaped
+closure the callee invokes; a crash today), q5c (a member read as a call
+for an indirect-write root), and the Core `access = inner` site; new
+accepts: none; output change: c8 prints `dog` (as c8b); no diagnostic id
+changes. Does not: touch spans or the backward-`goto` checker (the loop snapshot's
 clone of `BackwardGotoNarrowingStates` goes with the snapshot; the checker
 still reads the live structure). Prerequisite: L0's report; #5130's slice
 that deletes the frame stack is recommended first so L1 does not have to
@@ -935,7 +991,15 @@ Tests: the 102 `BackwardGoto_*` re-expectations per the draft's inventory
 with the new id recorded per row; a new test for R8 (a) with a run-time
 witness; q1, q2, q6 join the corpus; e15 and e18 flip; cC flips to
 rejected (question 5). Acceptance: the span count and label list from L0
-match on Oahu; output identity except the listed rows. **Ordering with
+match on Oahu; output identity except the listed rows. User-visible
+changes: new rejects cC (`x = nil` in a `try` whose `finally` restores
+before `goto Again`) and the R8 (a) shape (a span that reassigns from a
+variable or a call); new accepts e15 (`again: ... s = "ab"; goto again`),
+e18/Run (a span without writes), q1 (`x.Name` on `Animal` after the span
+kills `Dog`), `TypeTestNarrowingThroughUpcast_ReportsConversion` and
+`*ThroughNullableUpcast*`; id changes at the same read: `*AtForSource*`
+(`GS0155` to `GS0116`), `*ThroughNullSafeCall*` (`GS0155` to `GS0159`).
+**Ordering with
 #5130:** L2 lands before the slice that removes the #4285/#4290
 suppressions, or that slice keeps the suppression inside backward-jump
 spans (a syntactic test the L0 walker already provides) until L2 lands;
@@ -1095,16 +1159,16 @@ measured for this ADR; the sources are in the References section.
 
 | Probe | Shape | 0.5.212 | After |
 | --- | --- | --- | --- |
-| q1 | `x Animal = Dog{}`; hiding `Name`; `if x is Dog { Again: last = last + x.Name; x = Animal{}; i++; if i < n { goto Again } }` | `GS0158` on `x.Name` (the deferred checker) | `GS0158` at the same read, from the ordinary bind at the declared type (R8 (c)) |
+| q1 | `x Animal = Dog{}`; hiding `Name` on `Animal` and `Dog`; `if x is Dog { Again: last = last + x.Name + ","; x = Animal{}; i++; if i < n { goto Again } }` | `GS0158` on `x.Name` (the deferred checker re-reports a member that `Animal` has) | accepted, prints `animal,animal,`: the span's write kills `x -> Dog`, the read binds on `Animal` (R8 (b)) |
 | q2 | guard; `Again: i = i + s!!.Length; s = nil; if i < n { s = Get(); goto Again }` | accepted (no `GS0536`, because of #4285), prints `5` | accepted, prints `5` (R8 (d)); under the R6 slice without L2: `GS0536` |
 | q3 | `var x C? = C{}; let h = Holder{}; h.Callback = func() { x = nil }; if x == nil { return 0 }; for ... { total += x.Value; Wrapper(h) }` where `Wrapper(h Holder) { h.Callback() }` | accepted; throws `NullReferenceException` | `GS0158` on `x.Value` (R7 (c)) |
 | q4 | guard on `s`; loop body `let s string? = Get(); if s == nil { continue }; Consume(s.Length)`; after the loop `s.Length` | accepted, prints `3` | accepted, prints `3` (W1) |
 | q5a | `if b.Pet == nil { return }`; loop body `Consume(x.Count); b.Pet.Name.Length` where `Count` is a source getter with a body | `GS0158` on `b.Pet.Name` | `GS0158` (R7 (e), no change) |
 | q5b | as q5a with `sb.Length` on a `StringBuilder` (an imported getter) | `GS0158` on `b.Pet.Name` | `GS0158` (R7 (e), no change) |
-| q5c | `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { Consume(sb.Length); total += x.Value }; clear()` | accepted, prints `2` | `GS0158` on `x.Value` (R7 (e)) |
+| q5c | `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { Consume(sb.Length); total += x.Value }; clear()` | accepted, prints `2` | `GS0158` on `x.Value` (R7 (e), under today's R14 reading of an imported getter; follows #5231) |
 | q6 | `if skip { goto Inside }; if s == nil { return 0 }; while count < 3 && s.Length < 9 { Inside: count++ }` | `GS0158` on the header read (#4285) | `GS0158` on the header read (I2, J6); under the R6 slice without J6: accepted and the header dereferences nil |
 | q7 | `while s != nil { if c { break }; s = Next(s) }; s.Length` | `GS0158` | `GS0158` (T1 exit) |
-| q8 | guard; `do { n = n + s.Length; s = Next(s) } while n < 10` | `GS0158`, `GS0154` | `GS0158` (T6) |
+| q8 | guard; `do { n = n + s.Length; s = Next(s) } while n < 10` | `GS0158`, `GS0154` | `GS0158`, `GS0154` (T6; `Next(s)` still receives a `string?`) |
 | q9 | guard; `Again: i = i + s.Length; for ... { s = nil }; s = Get(); if i < n { goto Again }` | `GS0158` | `GS0158` (I1, I9) |
 
 ## Consequences
