@@ -63,7 +63,15 @@ internal partial class ExpressionBinder {
                 )
                 return BoundErrorExpression(syntax)
             }
-            if bindTypeClause(spanType) is not ImportedTypeSymbol target || target.ClrType is not{} clrType {
+            let boundTarget = bindTypeClause(spanType)
+            if boundTarget == nil || boundTarget == TypeSymbol.Error {
+                return BoundErrorExpression(syntax)
+            }
+            if boundTarget is not ImportedTypeSymbol target || target.ClrType is not{} clrType {
+                Diagnostics.ReportNativeSpanType(
+                    spanType.Location,
+                    "span constructor heads require a non-nullable CLR span type"
+                )
                 return BoundErrorExpression(syntax)
             }
             if TryBindClrConstructorFromType(

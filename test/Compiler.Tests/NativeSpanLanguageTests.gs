@@ -158,6 +158,8 @@ func Main() {
     @InlineData("let value = readonly span[byte]{1, 2}", "no collection-literal allocation")
     @InlineData("let value = span[byte]{}", "no collection-literal allocation")
     @InlineData("let value = span[byte]{Value: 1}", "no collection-literal allocation")
+    @InlineData("let value = span[byte]?([]byte{1})", "non-nullable CLR span type")
+    @InlineData("let value = readonly span[byte]?([]byte{1})", "non-nullable CLR span type")
     func InvalidAliasesReportLocatedDiagnostics(statement string, reason string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let (code, output) = fixture.TryCompile(

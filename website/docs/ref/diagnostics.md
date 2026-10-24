@@ -32,7 +32,7 @@ Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severi
 
 | Code | Severity | Meaning | Remedy |
 | --- | --- | --- | --- |
-| GS0631 | Error | Invalid native CLR span alias: wrong arity or element type, a shadowed readonly form, unavailable core-library span types, or an unsupported allocation literal. | Use one heap-storable element type and a target core library providing CLR spans. If `span` is shadowed, use `System.ReadOnlySpan[T]` explicitly. Use existing CLR span constructors, not native collection allocation syntax. |
+| GS0631 | Error | Invalid native CLR span alias: wrong arity or element type, a shadowed readonly form, unavailable core-library span types, a nullable constructor target, or an unsupported allocation literal. | Use one heap-storable element type and a target core library providing CLR spans. If `span` is shadowed, use `System.ReadOnlySpan[T]` explicitly. Construct a non-nullable CLR span; use existing CLR span constructors, not native collection allocation syntax. |
 
 ## Severity levels
 
