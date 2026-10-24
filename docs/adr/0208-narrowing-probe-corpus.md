@@ -105,6 +105,35 @@ threading); g4 is an accepted program that R1 (c) rejects with GS0266; g5
 is an accepted, correct program that R13 rejects under the conservative
 default.
 
+## PR 2, slice 2a: rows that changed and rows that were added
+
+Slice 2a (amendment A1 in `NarrowingState.JoinTypes`, and the lift of the join of `if` and bare-block exit
+states) flipped these rows. The corpus test records the new result, and the "0.5.212" column above is still
+the pinned compiler's result.
+
+| Probe | After slice 2a | Row |
+| --- | --- | --- |
+| e7 (Run2) | accepted, `b.Pet.Bark()` | R1 (a), member path |
+| e8 | accepted | R1 (a) |
+| e10 | accepted | R3 |
+| e21 | accepted | R5 |
+| f1 | accepted | R1 (a) |
+| f6 | prints `dog` | R1 (b) |
+| g4 | `GS0266` at the call | R1 (c) |
+
+The rows e9 (R4), e17 (R2), g1 and the `goto` rows (R6) did not change. New rows:
+
+| Probe | Shape | Result |
+| --- | --- | --- |
+| h1 | `var t = Get(); if t == nil { t = "x"; return 1 }` then `t.Length` | rejected until slice 2b (R2): a write in the statement stays a legacy kill |
+| h2 | `if b.Pet is Dog { } else { Log(); return "" }` then `b.Pet.Bark()` | rejected until slice 2b (R2): a call in a branch stays a legacy kill |
+| h3 | `if Ready() && b.Pet is Dog { } else { return "" }` then `b.Pet.Bark()` | accepted (R5): a call in the condition runs before the fact holds |
+| h4 | the same with `Log()` in the then-branch | rejected: the call runs after the fact and kills the member path |
+| h5 | `if x == nil { return }`, `if x is Dog { } else { return }`, then `x.Bark()` | accepted: the join strengthens the fact of the guard |
+| i1 | `Make[T class init()]`: `if settings is IInit init { }` then `return settings` (#5206) | accepted before and after; the shadow report names a dropped fact if A1 is reverted |
+| i2 | the same with a forward `goto Done` out of the type test | rejected by 0.5.212 with GS0155, accepted after: the `goto` join takes the declared type (A1) |
+| j1 | `x object?`; `if k == 0 { x !is Animal ... } else if k == 1 { x !is Dog ... } else { x !is Cat ... }` | accepted: the `else if` chain joins three states at once |
+
 ## Experiments on the deferred loop rule
 
 These measured the loop kill set that ADR-0208 section 10 defers to the

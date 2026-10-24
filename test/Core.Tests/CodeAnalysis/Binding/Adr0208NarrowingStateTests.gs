@@ -9,6 +9,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import System
 import System.Collections.Generic
 import System.Linq
+import System.Text
 import Xunit
 
 /// ADR-0208 sections 6 and 7: the immutable narrowing state, its query, its
@@ -142,15 +143,68 @@ open class Adr0208NarrowingStateTests {
     }
 
     @Fact
-    func Join_DropsAPathWhenNoRuleKeepsIt() {
-        // `int32` boxes to `object`, which is not a representation-preserving
-        // conversion, and `string` does not convert to `int32`.
+    func Join_KeepsTheDeclaredNonNullTypeWhenNoIncomingTypeConverts() {
+        // Amendment A1 (#5206): `int32` boxes to `object`, which is not a
+        // representation-preserving conversion, and `string` does not convert to
+        // `int32`. Both are facts, so the path keeps its declared type `object`.
         let x = Local("x", false, NullableTypeSymbol.Get(TypeSymbol.Object))
         let path = AccessPath.ForVariable(x)
         let joined = NarrowingState
             .Empty
             .With(path, TypeSymbol.Int32)
             .Join(NarrowingState.Empty.With(path, TypeSymbol.String))
+        Assert.Equal(TypeSymbol.Object, joined.NarrowedType(path))
+    }
+
+    @Fact
+    func Join_KeepsTheDeclaredTypeOfAnUnrelatedInterfaceRefinement() {
+        // Probe i1 (#5206): `settings T?` holds `IDisposable` on one path and `T`
+        // on the other. `IDisposable` does not convert to `T`.
+        let t = TypeSymbol.FromClrType(typeof(StringBuilder))
+        let x = Local("settings", false, NullableTypeSymbol.Get(t))
+        let path = AccessPath.ForVariable(x)
+        let joined = NarrowingState
+            .Empty
+            .With(path, TypeSymbol.FromClrType(typeof(IDisposable)))
+            .Join(NarrowingState.Empty.With(path, t))
+        Assert.Equal(t, joined.NarrowedType(path))
+    }
+
+    @Fact
+    func Join_KeepsTheDeclaredTypeOfAStableMemberPath() {
+        // Amendment A1 extends the fallback to a member path: the last link gives
+        // the declared type, with one nullable layer removed.
+        // `Exception.InnerException` is declared `Exception?`.
+        let owner = Local("owner", true, TypeSymbol.FromClrType(typeof(Exception)))
+        let member = typeof(Exception).GetProperty("InnerException")!!
+        let path = AccessPath.ForVariable(owner).Append(member)
+        let dog = TypeSymbol.FromClrType(typeof(ArgumentException))
+        let cat = TypeSymbol.FromClrType(typeof(InvalidOperationException))
+        let joined = NarrowingState.Empty.With(path, dog).Join(NarrowingState.Empty.With(path, cat))
+        Assert.Equal(TypeSymbol.FromClrType(typeof(Exception)), joined.NarrowedType(path))
+        Assert.Equal(TypeSymbol.FromClrType(typeof(Exception)), NarrowingState.DeclaredNonNullType(path))
+    }
+
+    @Fact
+    func Join_DropsAMemberPathWhoseDeclaredTypeIsNotKnown() {
+        // A member of a generic CLR type does not record the receiver's type
+        // arguments, so the fallback cannot name the declared type.
+        let owner = Local("owner", true, TypeSymbol.FromClrType(typeof(List[string])))
+        let member = typeof(List[string]).GetProperty("Capacity")!!
+        let path = AccessPath.ForVariable(owner).Append(member)
+        let joined = NarrowingState
+            .Empty
+            .With(path, TypeSymbol.Int32)
+            .Join(NarrowingState.Empty.With(path, TypeSymbol.String))
+        Assert.Null(joined.NarrowedType(path))
+        Assert.Null(NarrowingState.DeclaredNonNullType(path))
+    }
+
+    @Fact
+    func Join_DropsAPathThatSomePredecessorLacks() {
+        let x = Local("x", false, NullableTypeSymbol.Get(TypeSymbol.Object))
+        let path = AccessPath.ForVariable(x)
+        let joined = NarrowingState.Empty.With(path, TypeSymbol.String).Join(NarrowingState.Empty)
         Assert.Null(joined.NarrowedType(path))
     }
 

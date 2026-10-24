@@ -9,6 +9,7 @@ import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
+import System.Reflection
 
 /// The narrowing facts that hold at one program point (ADR-0208 sections 6
 /// and 7).
@@ -320,10 +321,10 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
         }
 
         /// Merge (ADR-0208 section 6) over ALL predecessors of a merge point
-        /// at once. A path survives with the incoming type that every other
-        /// incoming type converts to, else with the declared non-null type of
-        /// a plain root when every incoming type preserves its representation
-        /// into it, else it is dropped. External-callable facts intersect.
+        /// at once. A path that every reachable predecessor holds survives
+        /// with the incoming type that every other incoming type converts to,
+        /// else with its declared non-null type (cref:JoinTypes). A path that
+        /// some predecessor lacks is dropped. External-callable facts intersect.
         /// Unreachable predecessors are skipped. Callers must not fold this
         /// pairwise: the result for `Dog`, `Cat` and `Animal` on `x object?`
         /// is `Animal`, while a binary fold gives `object`.
@@ -371,10 +372,11 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
             return result
         }
 
-        /// The type of one path after a join (ADR-0069 issue #4989 addendum):
-        /// the first incoming type that every incoming type converts to
-        /// without changing representation, else the declared non-null type
-        /// of a plain root when all of them convert to it, else `nil`.
+        /// The type of one path after a join (ADR-0069 issue #4989 addendum and
+        /// ADR-0208 amendment A1): the first incoming type that every incoming
+        /// type converts to without changing representation, else the declared
+        /// non-null type of the path (cref:DeclaredNonNullType).
+        /// Every incoming type is a fact, so the declared type is always sound.
         /// The forward-`goto` join and the shadow join share this one rule.
         /// @param path The joined path.
         /// @param sourceTypes The incoming types, in source order.
@@ -390,21 +392,46 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
             if commonType != nil {
                 return commonType
             }
+            return DeclaredNonNullType(path)
+        }
+
+        /// The declared type of the storage that [`path`](paramref) names, with
+        /// one nullable layer removed (ADR-0208 section 6, amendment A1). A plain
+        /// root gives its own type. A member path gives the type of its last
+        /// link, read from the source symbol or through the CLR nullability
+        /// reader. A member whose declared type names a type parameter, or
+        /// whose CLR declaring type is generic, gives `nil`, because the
+        /// path does not record the receiver's type arguments.
+        /// @param path The path.
+        /// @returns The declared non-null type, or `nil` when it is not known.
+        func DeclaredNonNullType(path AccessPath) TypeSymbol? {
+            var declared TypeSymbol? = path.Root.Type
             if path.HasMembers {
-                return nil
+                declared = DeclaredTypeOfLink(path.Members[path.Members.Length - 1])
+                if declared == nil || TypeSymbol.ContainsTypeParameter(declared) {
+                    return nil
+                }
             }
-            let declaredType = if path.Root.Type is NullableTypeSymbol nullable {
-                nullable.UnderlyingType
-            } else {
-                path.Root.Type
+            if declared is NullableTypeSymbol nullable {
+                return nullable.UnderlyingType
             }
-            return if sourceTypes.All(
-                (source TypeSymbol) -> Conversion.IsRepresentationPreservingImplicit(source, declaredType)
-            ) {
-                declaredType
-            } else {
-                default(TypeSymbol?)
+            return declared
+        }
+
+        private func DeclaredTypeOfLink(link PathMember) TypeSymbol? {
+            if link.SourceSymbol is FieldSymbol field {
+                return field.Type
             }
+            if link.SourceSymbol is PropertySymbol property {
+                return property.Type
+            }
+            if link.ClrMember is FieldInfo clrField && clrField.DeclaringType?.IsGenericType != true {
+                return ClrNullability.GetFieldTypeSymbol(clrField)
+            }
+            if link.ClrMember is PropertyInfo clrProperty && clrProperty.DeclaringType?.IsGenericType != true {
+                return ClrNullability.GetPropertyTypeSymbol(clrProperty)
+            }
+            return nil
         }
     }
 }

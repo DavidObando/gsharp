@@ -54,12 +54,15 @@ internal partial class StatementBinder {
             let (patternThen, patternElse) = PatternVariables.Classify(condition)
             let callableEntry = CaptureExternalCallableAliases()
             let shadowFlow = ShadowBegin(condition)
+            let joinEntry = binderCtx.Narrowing
+            let joinExits = List[NarrowingState]()
             let thenStatement = BindWithPatternVariables(
                 patternThen,
                 () -> {
                     return BindStatementWithNarrowing(syntax.ThenStatement, thenNarrow)
                 }
             )
+            AddBranchExits(joinExits, thenStatement)
             ShadowAddBranch(shadowFlow, thenNarrow, thenStatement)
             let callableThenExit = CaptureExternalCallableAliases()
             RestoreExternalCallableAliases(callableEntry)
@@ -74,6 +77,11 @@ internal partial class StatementBinder {
                     }
                 )
             }
+            if elseStatement == nil {
+                joinExits.Add(SkippedBranchExit(joinEntry, elseNarrow))
+            } else {
+                AddBranchExits(joinExits, elseStatement)
+            }
             ShadowAddBranch(shadowFlow, elseNarrow, elseStatement)
             let callableElseExit = if syntax.ElseClause == nil {
                 callableEntry
@@ -82,6 +90,7 @@ internal partial class StatementBinder {
             }
             RestoreJoinedExternalCallableAliases(callableThenExit, callableElseExit)
             let result = BoundIfStatement(syntax, condition, thenStatement, elseStatement)
+            RecordIfExit(result, joinEntry, joinExits)
             ShadowFinish(shadowFlow, "if", syntax.Location, []BoundStatement{result}, false, false)
             // ADR-0069 / issue #700: record the else-frame so `BindBlockStatements`
             // can lift it into the enclosing block when the then-branch ends in
@@ -115,12 +124,15 @@ internal partial class StatementBinder {
         let (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition)
         let initCallableEntry = CaptureExternalCallableAliases()
         let initShadowFlow = ShadowBegin(initCondition, initStatement)
+        let initJoinEntry = binderCtx.Narrowing
+        let initJoinExits = List[NarrowingState]()
         let initThen = BindWithPatternVariables(
             initPatternThen,
             () -> {
                 return BindStatementWithNarrowing(syntax.ThenStatement, initThenNarrow)
             }
         )
+        AddBranchExits(initJoinExits, initThen)
         ShadowAddBranch(initShadowFlow, initThenNarrow, initThen)
         let initCallableThenExit = CaptureExternalCallableAliases()
         RestoreExternalCallableAliases(initCallableEntry)
@@ -134,6 +146,11 @@ internal partial class StatementBinder {
                     return BindStatementWithNarrowing(syntax.ElseClause!!.ElseStatement, initElseNarrow)
                 }
             )
+        }
+        if initElse == nil {
+            initJoinExits.Add(SkippedBranchExit(initJoinEntry, initElseNarrow))
+        } else {
+            AddBranchExits(initJoinExits, initElse)
         }
         ShadowAddBranch(initShadowFlow, initElseNarrow, initElse)
         let initCallableElseExit = if syntax.ElseClause == nil {
@@ -159,6 +176,7 @@ internal partial class StatementBinder {
             )
         )
         ShadowFinish(initShadowFlow, "if", syntax.Location, []BoundStatement{inner, initResult}, false, false)
+        RecordIfExit(initResult, initJoinEntry, initJoinExits)
         return initResult
     }
 

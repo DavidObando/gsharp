@@ -324,16 +324,11 @@ internal partial class StatementBinder {
             }
             var toRemove List[AccessPath]? = nil
             for key in frame.Keys {
-                let drop = (statementCollector != nil && MayBeMutatedByUnknownWrite(statementCollector, key)) ||
-                    (dropGlobalRoots && key.Root is GlobalVariableSymbol && !key.Root.IsReadOnly) ||
-                    (
-                    if statementCollector != nil {
-                        statementCollector.AssignsRoot(key.Root)
-                    } else {
-                        assignedRoots!!.Contains(key.Root)
-                    }
-                ) ||
-                    (key.HasMembers && dropAllMemberPaths)
+                let drop = if statementCollector != nil {
+                    StatementKillsPath(statementCollector, key, dropAllMemberPaths)
+                } else {
+                    assignedRoots!!.Contains(key.Root) || (key.HasMembers && dropAllMemberPaths)
+                }
                 if drop {
                     (
                         (
@@ -353,6 +348,18 @@ internal partial class StatementBinder {
             }
         }
     }
+
+    // The one rule for the facts that a statement kills: a root it assigns, a root
+    // an unknown write reaches, a mutable global when it can write one, and every
+    // member path when it can mutate one (ADR-0069 #1180, #2943).
+    private func StatementKillsPath(
+        effects AssignedRootsCollector,
+        path AccessPath,
+        dropAllMemberPaths bool
+    ) bool -> MayBeMutatedByUnknownWrite(effects, path) ||
+        (effects.MayMutateGlobalRoots && path.Root is GlobalVariableSymbol && !path.Root.IsReadOnly) ||
+        effects.AssignsRoot(path.Root) ||
+        (path.HasMembers && dropAllMemberPaths)
 
     private func UpdateExternalCallableAliases(
         statement BoundStatement,

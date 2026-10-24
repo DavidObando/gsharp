@@ -315,6 +315,7 @@ internal partial class StatementBinder {
     internal func BindBlockStatement(syntax BlockStatementSyntax) BoundStatement {
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         let reachableOnEntry = currentStatementListFallsThrough
+        let joinEntry = binderCtx.Narrowing
         $scope = BoundScope($scope)
         // ADR-0175 (#3820/#3824): a block statement accepts only the
         // compiler-intrinsic scope annotations — `@SuppressDiagnostic`, and
@@ -356,6 +357,7 @@ internal partial class StatementBinder {
             let fallsThrough = BindBlockStatements(syntax.Statements, 0, statements)
             let block = BoundBlockStatement(syntax, statements.ToImmutable())
             ShadowRecordBlock(block, shadowEntry)
+            RecordBlockExit(block, joinEntry)
             if !reachableOnEntry && fallsThrough {
                 internallyReachableFallthroughStatements.Add(block)
             }
@@ -720,6 +722,10 @@ internal partial class StatementBinder {
                 // block see the variable at its declared (nullable) type again.
                 InvalidateNarrowingsForAssignedVariables(statementSyntax, statement)
                 RestoreEarlyExitLiftsWrittenOnlyByCondition(statement, memberNotNullFrame)
+                // ADR-0208: lift what the join of the branch exits proves, for an
+                // `if` and for a bare block. It runs after the invalidation above,
+                // which owns every kill that a write causes.
+                ApplyJoinExitNarrowings(statement, memberNotNullFrame)
                 // Issue #1123: assignment-based smart cast. After invalidation
                 // (which clears any stale narrowing on the assigned variable),
                 // re-narrow a nullable `var` local that was just assigned a
@@ -754,6 +760,7 @@ internal partial class StatementBinder {
             return currentStatementListFallsThrough
         } finally {
             ShadowLeaveList(shadowSavedOverlay, shadowSavedBase)
+            NoteListExit()
             binderCtx.EndNarrowingProof()
             binderCtx.AssignmentNarrowingGenerations.Clear()
             for entry in inheritedAssignmentGenerations {

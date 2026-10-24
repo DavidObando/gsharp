@@ -26,6 +26,9 @@ import Xunit
 /// rows d3, d3b and f5 (bug #5170, R11) were flipped by that fix and now
 /// record its GS0158.
 /// Each row names the row of ADR-0208 section 16 that changes it, if any.
+/// PR 2, slice 2a flipped e7 (Run2), e8, e10, e21, f1, f6 and g4 (rows R1, R3,
+/// R5) and added h1 to h5, i1, i2 and j1 (issue #5206, amendment A1). They now
+/// record the new result. The rows h1 and h2 stay rejected until slice 2b (R2).
 open class Adr0208NarrowingCorpusTests {
     /// Compiles one probe, checks its diagnostics, and for a program that
     /// compiles verifies and runs it.
@@ -165,6 +168,14 @@ open class Adr0208NarrowingCorpusTests {
                 "g3_switch_failed_guard",
                 "g4_overload_ambiguity_after_join",
                 "g5_yield_after_guard",
+                "h1_assign_in_exiting_branch_new_fact",
+                "h2_call_in_exiting_branch_member_path",
+                "h3_call_in_condition_before_fact",
+                "h4_call_in_then_branch_member_path",
+                "h5_strengthening_gain",
+                "i1_5206_type_test_against_unrelated_interface",
+                "i2_5206_goto_join_keeps_declared_type",
+                "j1_else_if_chain_nary_join",
                 "out-alias_out_ref_alias"
             },
             names
@@ -491,7 +502,7 @@ func Run() int32 {
     }
     return s.Length
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0158@7:14", "reject", "", "R3 (accepted after)"}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "0", ""}
             yield[]object{"e11_bang_narrows", `func Get() string? { return nil }
 func Run() int32 {
     var s string? = Get()
@@ -639,7 +650,7 @@ func Run2(b Box) int32 {
     if b.Name == nil { return 0 }
     return b.Name.Length
 }
-func Main() { Console.WriteLine(Run(Box("ab"))) }`, "GS0158@7:19", "reject", "", "R5 (accepted after)"}
+func Main() { Console.WriteLine(Run(Box("ab"))) }`, "", "run", "2", ""}
             yield[]object{"e2b_loop_read_before_exitwrite", `func Get() string? { return nil }
 func Run(c bool, n int32) int32 {
     var s string? = Get()
@@ -750,14 +761,14 @@ func Run3(b Box) string {
     if b.Pet !is Dog { return "" }
     return b.Pet.Bark()
 }
-func Main() { Console.WriteLine(Run(Box(Dog()))) }`, "GS0159@13:18", "reject", "", "R1 (Run2 accepted after)"}
+func Main() { Console.WriteLine(Run2(Box(Dog()))) }`, "", "run", "woof", ""}
             yield[]object{"e8_else_exit", `func Get() string? { return nil }
 func Run() int32 {
     let s string? = Get()
     if s != nil { Console.WriteLine("y") } else { return 0 }
     return s.Length
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0158@5:14", "reject", "", "R1 (accepted after)"}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "0", ""}
             yield[]object{"e9_switch_assign_join", `func Run(k int32) int32 {
     var s string? = nil
     switch k {
@@ -781,7 +792,7 @@ func Run(x Animal?, c bool) string {
     }
     return x.Name
 }
-func Main() { Console.WriteLine(Run(Dog(), true)) }`, "GS0158@12:14", "reject", "", "R1 (accepted after)"}
+func Main() { Console.WriteLine(Run(Dog(), true)) }`, "", "run", "a", ""}
             yield[]object{"f2_ref_element_alias", `class C {
     var Value int32 = 1
 }
@@ -852,7 +863,7 @@ func Run(x Animal) string {
     if x is Dog { } else { return "" }
     return x.Name
 }
-func Main() { Console.WriteLine(Run(Dog())) }`, "", "run", "animal", "R1 (b): prints dog after"}
+func Main() { Console.WriteLine(Run(Dog())) }`, "", "run", "dog", ""}
             yield[]object{"g1_three_predecessor_goto", `open class Animal {
     var Name string = "a"
 }
@@ -911,7 +922,7 @@ func Run(x IA) string {
     if x is Both { } else { return "" }
     return Factory.Take(x)
 }
-func Main() { Console.WriteLine(Run(Both())) }`, "", "run", "IA", "R1 (c): GS0266 after"}
+func Main() { Console.WriteLine(Run(Both())) }`, "GS0266@12:20", "reject", "", ""}
             yield[]object{"g5_yield_after_guard", `func Get() string? { return "a" }
 func Items() sequence[int32] {
     var s string? = Get()
@@ -941,6 +952,130 @@ func Main() {
     var x C? = nil
     Run(out x, ref x)
 }`, "GS0159@6:15", "reject", "", ""}
+            yield[]object{"h1_assign_in_exiting_branch_new_fact", `func Get() string? { return nil }
+func Run() int32 {
+    var t = Get()
+    if t == nil {
+        t = "x"
+        return 1
+    }
+    return t.Length
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@8:14", "reject", "", "R2 (accepted after)"}
+            yield[]object{"h2_call_in_exiting_branch_member_path", `open class Animal { var Name string = "" }
+class Dog : Animal { func Bark() string { return "woof" } }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Log() { }
+func Run(b Box) string {
+    if b.Pet is Dog {
+    } else {
+        Log()
+        return ""
+    }
+    return b.Pet.Bark()
+}
+func Main() { Console.WriteLine(Run(Box(Dog()))) }`, "GS0159@14:18", "reject", "", "R2 (accepted after)"}
+            yield[]object{"h3_call_in_condition_before_fact", `open class Animal { var Name string = "" }
+class Dog : Animal { func Bark() string { return "woof" } }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Ready() bool { return true }
+func Run(b Box) string {
+    if Ready() && b.Pet is Dog {
+    } else {
+        return ""
+    }
+    return b.Pet.Bark()
+}
+func Main() { Console.WriteLine(Run(Box(Dog()))) }`, "", "run", "woof", ""}
+            yield[]object{"h4_call_in_then_branch_member_path", `open class Animal { var Name string = "" }
+class Dog : Animal { func Bark() string { return "woof" } }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Log() { }
+func Run(b Box) string {
+    if b.Pet is Dog {
+        Log()
+    } else {
+        return ""
+    }
+    return b.Pet.Bark()
+}
+func Main() { Console.WriteLine(Run(Box(Dog()))) }`, "GS0159@14:18", "reject", "", ""}
+            yield[]object{"h5_strengthening_gain", `open class Animal { var Name string = "a" }
+class Dog : Animal { func Bark() string { return "woof" } }
+func Run(x Animal?) string {
+    if x == nil { return "" }
+    if x is Dog {
+    } else {
+        return ""
+    }
+    return x.Bark()
+}
+func Main() { Console.WriteLine(Run(Dog())) }`, "", "run", "woof", ""}
+            yield[]object{"j1_else_if_chain_nary_join", `open class Animal { var Name string = "a" }
+class Dog : Animal { }
+class Cat : Animal { }
+func Run(x object?, k int32) string {
+    if k == 0 {
+        if x !is Animal { return "" }
+    } else if k == 1 {
+        if x !is Dog { return "" }
+    } else {
+        if x !is Cat { return "" }
+    }
+    return x.Name
+}
+func Main() { Console.WriteLine(Run(Dog(), 1)) }`, "", "run", "a", ""}
+            yield[]object{"i1_5206_type_test_against_unrelated_interface", `interface IInit {
+    func Init();
+}
+class Plain {
+    var Ready bool = false
+}
+class Setup : IInit {
+    var Ready bool = false
+    func Init() { Ready = true }
+}
+func Make[T class init()]() T {
+    var settings T? = nil
+    settings = T()
+    if settings is IInit init {
+        init.Init()
+    }
+    return settings
+}
+func Main() {
+    Console.WriteLine(Make[Plain]().Ready)
+    Console.WriteLine(Make[Setup]().Ready)
+}`, "", "run", "False|True", ""}
+            yield[]object{"i2_5206_goto_join_keeps_declared_type", `interface IInit {
+    func Init();
+}
+class Setup : IInit {
+    var Ready bool = false
+    func Init() { Ready = true }
+}
+func Make[T class init()](k int32) T {
+    var settings T? = nil
+    settings = T()
+    if k == 0 {
+        if settings is IInit init {
+            init.Init()
+            goto Done
+        }
+    }
+Done:
+    return settings
+}
+func Main() { Console.WriteLine(Make[Setup](0).Ready) }`, "", "run", "True", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
