@@ -1280,7 +1280,9 @@ shared class SemanticLookup {
     func FindTokenAt(tree SyntaxTree, position int32) SyntaxToken? {
         var best SyntaxToken? = nil
         for token in EnumerateTokens(tree.Root) {
-            if token.IsMissing {
+            // Issue #5277: a synthesized token is not written in source. It has a zero-width span at
+            // the end of the token before it, so it must not win the caret there.
+            if token.IsMissing || token.IsSynthesized {
                 continue
             }
             if token.Span.Start <= position && position <= token.Span.End {

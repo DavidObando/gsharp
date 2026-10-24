@@ -364,14 +364,22 @@ open partial class Parser {
             SyntaxKind.MinusEqualsToken
         }
         let pos = op.Position
+        // The written `++`/`--` stays a real token of the same width (a `+=` is as wide as `++`), so
+        // the span of the expression still covers it. Only the literal `1` is synthesized: it is
+        // zero-width at the end of the operator.
         let OneLiteral = func () LiteralExpressionSyntax {
-            return LiteralExpressionSyntax(syntaxTree, SyntaxToken.Synthesized(syntaxTree, SyntaxKind.NumberToken, pos, "1", 1), 1)
+            return LiteralExpressionSyntax(
+                syntaxTree,
+                SyntaxToken.Synthesized(syntaxTree, SyntaxKind.NumberToken, op.Span.End, "1", 1),
+                1
+            )
         }
-        let compoundToken = SyntaxToken.Synthesized(
+        let compoundToken = SyntaxToken(
             syntaxTree,
             compoundOpKind,
             pos,
-            SyntaxFacts.GetTextOrEmpty(compoundOpKind)
+            SyntaxFacts.GetTextOrEmpty(compoundOpKind),
+            nil
         )
         var write ExpressionSyntax
         let unwrappedOperand = AssignmentTargetSyntaxFacts.UnwrapParentheses(operand)

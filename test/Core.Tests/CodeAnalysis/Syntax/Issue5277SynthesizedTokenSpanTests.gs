@@ -72,6 +72,20 @@ open class Issue5277SynthesizedTokenSpanTests {
         Assert.Equal(0, call.CloseParenthesisToken.Span.Length)
     }
 
+    /// `i++` and `i--` keep the written operator in their span.
+    @Fact
+    func PostfixIncrement_SpanCoversTheWrittenOperator() {
+        let source = "package p\nfunc F() { var i = 0\ni++\ni--\n--i }\n"
+        let tree = SyntaxTree.Parse(source)
+        let texts = List[string]()
+        for node in Descendants(tree.Root) {
+            if node is EventSubscriptionExpressionSyntax {
+                texts.Add(source.Substring(node.Span.Start, node.Span.Length))
+            }
+        }
+        Assert.Equal("i++,i--,--i", string.Join(",", texts))
+    }
+
     private func Descendants(root SyntaxNode) sequence[SyntaxNode] {
         let stack = Stack[SyntaxNode]()
         stack.Push(root)

@@ -69,7 +69,14 @@ open partial class SyntaxToken : SyntaxNode {
     /// @remarks Issue #5277: a synthesized token (see (cref:IsSynthesized)) has text but is not
     /// written in source, so its span is zero-width at (cref:Position). It then never overlaps the
     /// real token that happens to start there, and never widens the span of the node that holds it.
-    open override prop Span TextSpan -> TextSpan(Position, if IsSynthesized { 0 } else { Text?.Length ?? 0 })
+    open override prop Span TextSpan -> TextSpan(
+        Position,
+        if IsSynthesized {
+            0
+        } else {
+            Text?.Length ?? 0
+        }
+    )
 
     /// Gets a value indicating whether the parser made this token to complete a desugared form
     /// (the braces of a body-less type, the `return` of an expression body, the parentheses of
