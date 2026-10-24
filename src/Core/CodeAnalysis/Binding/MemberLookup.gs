@@ -6094,8 +6094,9 @@ internal class MemberLookup {
                 declaringType
             }
             if ClrTypeUtilities.AreSame(receiverOpenDefinition, openDefinition) {
+                // Cached all-object erasure can precede a more precise nested construction.
                 if declaringType.IsGenericType && !declaringType.IsGenericTypeDefinition && !ClrTypeUtilities.AreSame(
-                    imported.ClrType,
+                    imported.ReifyClosedClrType(),
                     declaringType
                 ) {
                     return false
