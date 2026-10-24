@@ -5446,6 +5446,76 @@ internal class MemberLookup {
             return ClrNullability.GetReturnTypeSymbol(closedMethod)
         }
 
+        /// Reads base and interface signatures through their declaring receiver.
+        /// @param targetType The symbolic imported receiver.
+        /// @returns Annotated direct relationships in metadata order.
+        @NullabilityFunnel
+        internal func GetClrRelationshipTypeSymbols(targetType TypeSymbol) ImmutableArray[TypeSymbol] {
+            if GetProjectionReceiverImportedType(targetType) is not{} imported ||
+                !TryGetSymbolicDeclaringContext(imported, imported.ClrType, out var definition, out var arguments) ||
+                definition == nil {
+                return ImmutableArray[TypeSymbol].Empty
+            }
+            let project = (layout Type) -> MapOpenClrTypeToSymbolic(layout, definition, arguments)
+            let result = ImmutableArray.CreateBuilder[TypeSymbol]()
+            if ClrNullability.GetBaseTypeSymbol(definition, project) is {} baseType {
+                result.Add(baseType)
+            }
+            result.AddRange(ClrNullability.GetInterfaceTypeSymbols(definition, project))
+            return result.ToImmutable()
+        }
+
+        /// Reads generic bounds through their declaring receiver.
+        /// @param targetType The symbolic imported receiver.
+        /// @param parameter The reflected type or method parameter.
+        /// @returns Receiver-projected annotated constraints.
+        @NullabilityFunnel
+        internal func GetClrGenericParameterConstraintTypeSymbols(targetType TypeSymbol, parameter Type) ImmutableArray[
+            TypeSymbol
+        ] {
+            if GetProjectionReceiverImportedType(targetType) is {} imported &&
+                TryGetSymbolicDeclaringContext(
+                imported,
+                parameter.DeclaringType,
+                out var definition,
+                out var arguments
+            ) &&
+                definition != nil {
+                let method = parameter.DeclaringMethod as MethodInfo
+                let openMethod = if method != nil {
+                    TryGetOpenMethodOnDeclaringType(definition, method)
+                } else {
+                    nil
+                }
+                let openParameter = if openMethod != nil {
+                    openMethod.GetGenericArguments()[parameter.GenericParameterPosition]
+                } else {
+                    if method == nil {
+                        definition.GetGenericArguments()[parameter.GenericParameterPosition]
+                    } else {
+                        parameter
+                    }
+                }
+                let methodArguments = (method?.GetGenericArguments() ?? []Type{}).Select(
+                    (argument Type) -> cast[TypeSymbol?](
+                        TypeSymbol.FromClrTypeWithoutNullability(argument, NullabilityFreeReason.TypeStructure)
+                    )
+                )
+                    .ToImmutableArray()
+                return ClrNullability.GetGenericParameterConstraintTypeSymbols(
+                    openParameter,
+                    (layout Type) -> MapOpenClrTypeToSymbolic(
+                        layout,
+                        definition,
+                        arguments,
+                        openMethod,
+                        methodArguments
+                    )
+                )
+            }
+            return ClrNullability.GetGenericParameterConstraintTypeSymbols(parameter)
+        }
+
         /// Resolves an imported method parameter through a symbolic receiver.
         /// @param targetType The symbolic imported receiver type.
         /// @param closedMethod The reflected method selected from the erased receiver.
@@ -5454,7 +5524,7 @@ internal class MemberLookup {
         @NullabilityFunnel
         internal func GetClrMethodParameterTypeSymbol(
             targetType TypeSymbol,
-            closedMethod MethodInfo,
+            closedMethod MethodBase,
             parameterIndex int32
         ) TypeSymbol {
             if GetProjectionReceiverImportedType(targetType) is ImportedTypeSymbol imported &&
@@ -5465,7 +5535,15 @@ internal class MemberLookup {
                 out var declaringTypeArguments
             ) &&
                 openDefinition != nil {
-                let openMethod = TryGetOpenMethodOnDeclaringType(openDefinition, closedMethod)
+                let openMethod MethodBase? = if closedMethod is MethodInfo methodInfo {
+                    TryGetOpenMethodOnDeclaringType(openDefinition, methodInfo)
+                } else {
+                    ClrTypeUtilities.FindMetadataDefinition(
+                        openDefinition,
+                        closedMethod,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static
+                    ) as MethodBase
+                }
                 let openParameters[]?ParameterInfo = openMethod?.GetParameters()
                 if openParameters != nil && uint32(parameterIndex) < uint32(openParameters.Length) {
                     // Issue #3705 (family 2): as with the return slot above, the
@@ -5970,11 +6048,23 @@ internal class MemberLookup {
             declaringType Type?,
             out openDefinition Type?,
             out typeArguments ImmutableArray[TypeSymbol]
+        ) bool -> TryGetSymbolicDeclaringContextCore(imported, declaringType, out openDefinition, out typeArguments, 0)
+
+        @NullabilityFunnel
+        private func TryGetSymbolicDeclaringContextCore(
+            imported ImportedTypeSymbol,
+            declaringType Type?,
+            out openDefinition Type?,
+            out typeArguments ImmutableArray[TypeSymbol],
+            depth int32
         ) bool {
             openDefinition = nil
             typeArguments = default(ImmutableArray[TypeSymbol])
             if imported?.ClrType == nil || declaringType == nil {
                 return false
+            }
+            if depth >= 256 {
+                throw System.IO.InvalidDataException("CLR declaring hierarchy exceeds the metadata complexity limit")
             }
             let receiverOpenDefinition = imported.OpenDefinition ??
                 (
@@ -6012,23 +6102,60 @@ internal class MemberLookup {
                 typeArguments = receiverTypeArguments
                 return true
             }
-            if !declaringType.IsInterface {
+            {
                 let symbolicBase = ClrNullability.GetBaseTypeSymbol(
                     receiverOpenDefinition,
                     (layout Type) -> MapOpenClrTypeToSymbolic(layout, receiverOpenDefinition, receiverTypeArguments)
                 )
                 if symbolicBase != nil &&
                     GetProjectionReceiverImportedType(symbolicBase) is {} baseReceiver &&
-                    TryGetSymbolicDeclaringContext(
+                    TryGetSymbolicDeclaringContextCore(
                     baseReceiver,
                     declaringType,
                     out var baseDefinition,
-                    out var baseArguments
+                    out var baseArguments,
+                    depth + 1
                 ) {
                     openDefinition = baseDefinition
                     typeArguments = baseArguments
                     return true
                 }
+            }
+            if declaringType.IsInterface {
+                var interfaces = ImmutableArray[TypeSymbol].Empty
+                try {
+                    interfaces = ClrNullability.GetInterfaceTypeSymbols(
+                        receiverOpenDefinition,
+                        (layout Type) -> MapOpenClrTypeToSymbolic(layout, receiverOpenDefinition, receiverTypeArguments)
+                    )
+                } catch (error Exception) when error is System
+                    .IO
+                    .InvalidDataException ||
+                    error is System
+                    .IO
+                    .IOException ||
+                    error is BadImageFormatException ||
+                    error is NotSupportedException {
+                    // Marked contracts diagnose unreadable relationship metadata during import preflight.
+                    ClrNullability.RecordMetadataReadFailure()
+                }
+                for signature in interfaces {
+                    if GetProjectionReceiverImportedType(signature) is {} interfaceReceiver &&
+                        TryGetSymbolicDeclaringContextCore(
+                        interfaceReceiver,
+                        declaringType,
+                        out var interfaceDefinition,
+                        out var interfaceArguments,
+                        depth + 1
+                    ) {
+                        openDefinition = interfaceDefinition
+                        typeArguments = interfaceArguments
+                        return true
+                    }
+                }
+            }
+            if depth > 0 {
+                return false
             }
             if imported.OpenDefinition != nil &&
                 !imported
