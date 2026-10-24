@@ -44,6 +44,10 @@ internal shared class MetadataTypeKeys {
         if type == nil {
             return ""
         }
+        // A modified type has the identity of its unmodified type; the modifiers are compared as data beside it.
+        if type is MetadataModifiedTypeSymbol modified {
+            return Of(modified.Unmodified)
+        }
         for builtIn in BuiltIns {
             if object.ReferenceEquals(builtIn.Key, type) {
                 return builtIn.Value
@@ -133,6 +137,9 @@ internal shared class MetadataTypeKeys {
         if type is MissingTypeSymbol {
             return true
         }
+        if type is MetadataModifiedTypeSymbol modified {
+            return ContainsMissing(modified.Unmodified) || MetadataModifiers.ContainsMissing(modified)
+        }
         if type is NullableTypeSymbol nullable {
             return ContainsMissing(nullable.UnderlyingType)
         }
@@ -190,8 +197,10 @@ internal shared class MetadataTypeKeys {
         }
     }
 
-    // The one spelling of a function pointer: the return type, then the parameters. The calling convention modifiers
-    // arrive with the custom modifiers.
+    // The one spelling of a function pointer: the return type, then the parameters. The calling convention modifiers are
+    // not part of it: MetadataLoadContext reports none for a function pointer (its GetFunctionPointerCallingConventions
+    // is empty even when the return type carries CallConv modifiers), so the context cannot answer that question.
+    // The modifiers are kept on the symbol (MetadataFunctionPointerTypeSymbol.UnmanagedConventions) and tested there.
     private func FunctionPointer(returnType string, parameters List[string]) string -> "fnptr(" +
         returnType +
         ";" +

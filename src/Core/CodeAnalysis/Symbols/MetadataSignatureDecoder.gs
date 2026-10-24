@@ -11,7 +11,7 @@ import System.Reflection.Metadata
 /// Decodes the type structure of a signature blob into type symbols (ADR-0209 section 5, "One decoder").
 /// @remarks The result holds no nullability: the funnel of ADR-0193 applies it later, once, from the attribute blobs.
 /// This stage covers the structure that a base type, a constraint and a field type need.
-/// Custom modifiers and tuple canonical forms come with the nullability stage.
+/// Tuple canonical forms come with the nullability stage.
 internal class MetadataSignatureDecoder : ISignatureTypeProvider[TypeSymbol, MetadataGenericContext] {
     private let module MetadataModule
 
@@ -67,8 +67,12 @@ internal class MetadataSignatureDecoder : ISignatureTypeProvider[TypeSymbol, Met
         return module.Set.GetMissing(nil, "!${index}")
     }
 
-    // Custom modifiers are data beside the type (ADR-0209 section 6). They arrive with the member symbols.
-    func GetModifiedType(modifier TypeSymbol, unmodifiedType TypeSymbol, isRequired bool) TypeSymbol -> unmodifiedType
+    // Custom modifiers are data beside the type (ADR-0209 section 6): a modified type wraps the type and keeps blob order.
+    func GetModifiedType(
+        modifier TypeSymbol,
+        unmodifiedType TypeSymbol,
+        isRequired bool
+    ) TypeSymbol -> MetadataModifiers.Add(modifier, isRequired, unmodifiedType)
 
     func GetPinnedType(elementType TypeSymbol) TypeSymbol -> elementType
 
