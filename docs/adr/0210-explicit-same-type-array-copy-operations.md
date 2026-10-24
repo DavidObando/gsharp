@@ -1152,8 +1152,24 @@ explicit capability revision, not edits to `V1` or automatic element adapters.
 Do not publish another owner assembly or move definitions by type forwarding
 in v1. Keep old definitions available when introducing a new ABI.
 
+F1 (#5236) freezes the measured owner as
+`Gsharp.Runtime.Values, Version=0.5.0.0, Culture=neutral, PublicKeyToken=null`,
+with default sequential packing and no explicit layout size. The runtime
+advertises `AssemblyMetadata("GSharp.FixedArrayAbi", "1")`; a producer
+explicitly claiming fixed shapes advertises
+`AssemblyMetadata("GSharp.FixedArrays", "1")`. Duplicate or unsupported
+markers diagnose. The owner's public definitions must originate in that
+assembly, not forwarded replacements. The required `struct` constraints are
+the CLR value-type/default-constructor flags; a redundant `System.ValueType`
+constraint row does not change their meaning.
+An extra `unmanaged` constraint is not equivalent and must be rejected.
+
 The SDK supplies one canonical reference/runtime pair. Producers reference
-that owner instead of embedding its definitions. Reexports preserve the
+that owner instead of embedding its definitions. Tool payloads can contain
+physical copies, but every packaged copy must match the SDK-owned runtime.
+`build/check-fixed-array-owner.py` checks actual package bytes against that
+runtime before the SDK end-to-end test changes its sample pin.
+Reexports preserve the
 originating owner and closed generic arguments. A resolver must unify
 compatible references to that actual owner; unresolved or conflicting owners
 diagnose. A lookalike namespace, assembly name or manifest claim is insufficient.
@@ -1187,6 +1203,21 @@ CLR types; they cannot convert to `[N]T`. A producer claiming that such a type
 is a fixed array must diagnose on import. Actual reference assemblies must
 contain every needed public definition, signature, helper and annotation.
 Import cannot depend on private fields or reference method bodies.
+
+F1 validates these explicit claims without replacing ordinary source
+`ArrayTypeSymbol` or granting semantic authority to raw imported CLR carriers.
+Automatic capability emission for newly lowered native `[N]T` signatures
+belongs to F2; a handwritten F1 marker is emitted unchanged through both
+implementation and reference outputs. The F1 decoder/signature visitor uses
+a depth budget of 256, diagnosing exhaustion instead of changing storage.
+This is a metadata resource ceiling, not certification of all CLR layouts
+below it or a supported-length increase beyond 32.
+The current F1 scaffolding fails closed for marked fixed-bearing interface
+inheritance and generic constraints: `InterfaceImpl` and constraint nullability
+positions do not yet have admitted receiver-aware readers.
+That coverage gap remains in #5236; it is not a new
+permanent language restriction or proof that F1 is complete. Unmarked ordinary
+CLR interface contracts keep their existing treatment.
 
 Distinct lengths and invariant generic instantiations remain distinct.
 Aliases of the same source shape share `C(T,N)`; this does not merge distinct
@@ -1376,7 +1407,7 @@ If a verifier, runtime or pinned-compiler limitation blocks a slice, keep
 that slice unshipped and report it. Do not add a source exclusion, change
 the SDK pin or use an unreleased compiler to bypass it.
 
-Current evidence is **only** section 8/#5225: 33 integer lengths, selected
+At design approval, the evidence was **only** section 8/#5225: 33 integer lengths, selected
 reference/open/nested shapes, implementation/ref exchange, explicit retained
 owners and three discriminating prototype mutants. The prototype's verifier
 exclusions and unverified scenario IL remain exclusions. Automatic promotion,
@@ -1386,6 +1417,14 @@ No new executable investigation is needed to choose this proposal; those
 are implementation acceptance tests, not facts a design edit can establish.
 Go-family admission and audio workload acceptance remain ADR-0191 gates;
 M0 still reports `migrationReady: false`.
+
+F1 implementation and evidence are tracked separately in #5236. Its local
+carrier/implementation/reference witnesses do not close the full-runtime
+strict gate: ILVerify 10.0.8 reports the same two `ReturnPtrToStack` diagnostics
+in existing native-slice `AsSpan` methods in both the changed SDK runtime and
+the published 0.5.212 runtime. No suppression or gate waiver is authorized by
+this ADR. The implementation stays unshipped while that gate, the recorded
+interface/constraint gap and applicable architecture/AOT evidence remain open.
 
 #### Recorded maintainer decisions
 

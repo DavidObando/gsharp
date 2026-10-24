@@ -1714,6 +1714,11 @@ class ReferenceResolver : IDisposable {
                 if string.Equals(Path.GetFullPath(path), bundledPath, StringComparison.OrdinalIgnoreCase) {
                     return
                 }
+                if Path.GetFileName(bundledPath) == "Gsharp.Runtime.Values.dll" && File.Exists(path) &&
+                    AssemblyName
+                    .GetAssemblyName(path).Name == NativeSliceTypes.AssemblyName {
+                    return
+                }
             }
             paths.Add(bundledPath)
         }

@@ -13,6 +13,7 @@ mkdir -p .nugs
 cp out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg .nugs/
 
 NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg | head -1)
+python3 build/check-fixed-array-owner.py "$NUPKG" out/bin/Release/Gsharp.Runtime.Values/Gsharp.Runtime.Values.dll
 VER="${NUPKG##*Gsharp.NET.Sdk.}"
 VER="${VER%.nupkg}"
 

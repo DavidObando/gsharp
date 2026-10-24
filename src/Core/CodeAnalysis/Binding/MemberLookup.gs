@@ -5958,6 +5958,7 @@ internal class MemberLookup {
         /// @param openDefinition The open declaring type definition.
         /// @param typeArguments The receiver-projected declaring type arguments.
         /// @returns `true` when a symbolic declaring context was found.
+        @NullabilityFunnel
         internal func TryGetSymbolicDeclaringContext(
             imported ImportedTypeSymbol,
             declaringType Type?,
@@ -6004,6 +6005,24 @@ internal class MemberLookup {
             if ClrTypeUtilities.AreSame(receiverOpenDefinition, openDefinition) {
                 typeArguments = receiverTypeArguments
                 return true
+            }
+            if !declaringType.IsInterface {
+                let symbolicBase = ClrNullability.GetBaseTypeSymbol(
+                    receiverOpenDefinition,
+                    (layout Type) -> MapOpenClrTypeToSymbolic(layout, receiverOpenDefinition, receiverTypeArguments)
+                )
+                if symbolicBase != nil &&
+                    GetProjectionReceiverImportedType(symbolicBase) is {} baseReceiver &&
+                    TryGetSymbolicDeclaringContext(
+                    baseReceiver,
+                    declaringType,
+                    out var baseDefinition,
+                    out var baseArguments
+                ) {
+                    openDefinition = baseDefinition
+                    typeArguments = baseArguments
+                    return true
+                }
             }
             if imported.OpenDefinition != nil &&
                 !imported
@@ -6061,6 +6080,9 @@ internal class MemberLookup {
         /// @param type The receiver type a member was reflected through.
         /// @returns The imported type carrying the symbolic arguments, or `null`.
         internal func GetProjectionReceiverImportedType(type TypeSymbol) ImportedTypeSymbol? {
+            if type is PlatformTypeSymbol platform {
+                return GetProjectionReceiverImportedType(platform.UnderlyingType)
+            }
             let imported ImportedTypeSymbol? = GetImportedTypeSymbol(type)
             let receiverClr Type? = imported?.ClrType
             if type is NullabilityAnnotatedTypeSymbol annotated &&

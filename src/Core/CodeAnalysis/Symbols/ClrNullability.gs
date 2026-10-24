@@ -464,6 +464,29 @@ shared class ClrNullability {
         return false
     }
 
+    /// Reads a base-class signature with its declaration's nullable metadata.
+    /// @param declaration The reflected open or constructed declaring type.
+    /// @param project An optional receiver-aware projection of the open base layout.
+    /// @returns The annotated base type, or null when there is no base.
+    @NullabilityFunnel
+    internal func GetBaseTypeSymbol(declaration Type, project Func[Type, TypeSymbol]? = nil) TypeSymbol? {
+        let actual = declaration.BaseType
+        if actual == nil {
+            return nil
+        }
+        let definition = if declaration.IsGenericType {
+            declaration.GetGenericTypeDefinition()
+        } else {
+            declaration
+        }
+        let layout = definition.BaseType ?? actual
+        let flags = ReadNullableFlags(definition, definition)
+        if project is {} projector {
+            return NullableFlagsBuilder.MergeDeclarationNullability(projector(layout), layout, flags)
+        }
+        return SymbolFromLayoutFlags(actual, layout, flags)
+    }
+
     /// Reads the full `[NullableAttribute]` byte array for a declaration,
     /// falling back to a single-element array derived from the surrounding
     /// `[NullableContextAttribute]` when no explicit `[Nullable]` is
