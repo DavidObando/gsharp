@@ -27,7 +27,7 @@ import Xunit
 /// record GS0158.
 /// Each row names the row of ADR-0208 section 16 that changes it, if any.
 /// PR 2, slice 2a flipped e7 (Run2), e8, e10, e21, f1, f6 and g4 (rows R1, R3,
-/// R5) and added h1 to h5, i1, i2 and j1 (issue #5206, amendment A1). They now
+/// R5) and added h1 to h6, i1, i2 and j1 (issue #5206, amendment A1). They now
 /// record the new result. The rows h1 and h2 stay rejected until slice 2b (R2).
 open class Adr0208NarrowingCorpusTests {
     /// Compiles one probe, checks its diagnostics, and for a program that
@@ -173,6 +173,7 @@ open class Adr0208NarrowingCorpusTests {
                 "h3_call_in_condition_before_fact",
                 "h4_call_in_then_branch_member_path",
                 "h5_strengthening_gain",
+                "h6_call_in_condition_kills_entry_member_path",
                 "i1_5206_type_test_against_unrelated_interface",
                 "i2_5206_goto_join_keeps_declared_type",
                 "j1_else_if_chain_nary_join",
@@ -1034,6 +1035,21 @@ func Run(x object?, k int32) string {
     return x.Name
 }
 func Main() { Console.WriteLine(Run(Dog(), 1)) }`, "", "run", "a", ""}
+            yield[]object{"h6_call_in_condition_kills_entry_member_path", `open class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Ready() bool { return true }
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    if Ready() {
+    } else {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run(Box(Animal()))) }`, "GS0158@13:18", "reject", "", "R14 (the condition call kills; stays rejected)"}
             yield[]object{"i1_5206_type_test_against_unrelated_interface", `interface IInit {
     func Init();
 }

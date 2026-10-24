@@ -130,6 +130,7 @@ The rows e9 (R4), e17 (R2), g1 and the `goto` rows (R6) did not change. New rows
 | h3 | `if Ready() && b.Pet is Dog { } else { return "" }` then `b.Pet.Bark()` | accepted (R5): a call in the condition runs before the fact holds |
 | h4 | the same with `Log()` in the then-branch | rejected: the call runs after the fact and kills the member path |
 | h5 | `if x == nil { return }`, `if x is Dog { } else { return }`, then `x.Bark()` | accepted: the join strengthens the fact of the guard |
+| h6 | `if b.Pet == nil { return }`, `if Ready() { } else { return }`, then `b.Pet.Name` | rejected: the call in the condition kills the entry fact, and a join never puts an entry fact back (row R14 keeps it rejected) |
 | i1 | `Make[T class init()]`: `if settings is IInit init { }` then `return settings` (#5206) | accepted before and after; the shadow report names a dropped fact if A1 is reverted |
 | i2 | the same with a forward `goto Done` out of the type test | rejected by 0.5.212 with GS0155, accepted after: the `goto` join takes the declared type (A1) |
 | j1 | `x object?`; `if k == 0 { x !is Animal ... } else if k == 1 { x !is Dog ... } else { x !is Cat ... }` | accepted: the `else if` chain joins three states at once |
