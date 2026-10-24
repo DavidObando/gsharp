@@ -92,7 +92,7 @@ class Adr0193NullabilityFunnelMembersTests {
             "MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(Type, ImportedTypeSymbol, NullabilityFreeReason)",
             "MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(Type, Type, ImmutableArray`1, NullabilityFreeReason)",
             "MemberLookup.TryGetSymbolicDeclaringContext(ImportedTypeSymbol, Type, Type&, ImmutableArray`1&)",
-            "MemberLookup.TryGetSymbolicDeclaringContextCore(ImportedTypeSymbol, Type, Type&, ImmutableArray`1&, Int32)",
+            "MemberLookup.TryGetSymbolicDeclaringContextCore(ImportedTypeSymbol, Type, Type&, ImmutableArray`1&, Int32, HashSet`1)",
             "MetadataMemberComparison.PositionMark(Type, ICustomAttributeProvider, MemberInfo)",
             "MetadataNullability.ApplyPosition(ReferenceImageSet, TypeSymbol, ImmutableArray`1)",
             "MetadataNullability.ReadFlags(MetadataModule, EntityHandle, IEnumerable`1)",

@@ -182,6 +182,11 @@ internal shared class ClrSignatureMetadata {
         if depth >= 32 {
             throw InvalidDataException("type-forwarder chain exceeds the metadata complexity limit")
         }
+        // CLR nested identities follow the forwarder of their outermost declaring type.
+        var forwarded = actual
+        while forwarded.DeclaringType is {} declaring {
+            forwarded = declaring
+        }
         using let image = ReferenceResolver.OpenReferencedAssemblyImage(origin, assemblyScope)
         if image == nil {
             return false
@@ -193,7 +198,7 @@ internal shared class ClrSignatureMetadata {
             if QualifiedName(
                 reader.GetString(exported.Namespace),
                 reader.GetString(exported.Name)
-            ) != actual.FullName ||
+            ) != forwarded.FullName ||
                 !exported.IsForwarder ||
                 exported
                 .Implementation
