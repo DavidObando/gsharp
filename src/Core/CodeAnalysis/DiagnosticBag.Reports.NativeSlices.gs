@@ -8,6 +8,12 @@ import GSharp.Core.CodeAnalysis.Text
 import System.Collections.Generic
 
 partial class DiagnosticBag : IEnumerable[Diagnostic] {
+    internal func ReportNativeSpanType(location TextLocation, reason string) -> Report(
+        location,
+        DiagnosticDescriptors.NativeSpanType,
+        reason
+    )
+
     internal func ReportNativeSliceRuntime(location TextLocation) -> Report(
         location,
         DiagnosticDescriptors.NativeSliceRuntime

@@ -4179,6 +4179,58 @@ partial class Binder {
         }
         if !syntax.HasQualifier &&
             syntax.HasTypeArguments &&
+            syntax.Identifier is {} spanName &&
+            binderCtx
+            .CanUseSpanAlias($scope, spanName, function) {
+            let arguments = Invariant.Required(
+                syntax.TypeArguments,
+                "HasTypeArguments establishes the span argument list",
+                expression: "syntax.TypeArguments"
+            )
+            if arguments.Count != 1 {
+                Diagnostics.ReportNativeSpanType(
+                    syntax.Location,
+                    "span[T] and readonly span[T] require exactly one element type"
+                )
+                return nil
+            }
+            let element = BindTypeClause(arguments[0])
+            if element == nil || element == TypeSymbol.Error {
+                return nil
+            }
+            if element == TypeSymbol.Void ||
+                (element is ByRefTypeSymbol or PointerTypeSymbol or FunctionPointerTypeSymbol) ||
+                TypeSymbol
+                .IsByRefLike(element) {
+                Diagnostics.ReportNativeSpanType(
+                    arguments[0].Location,
+                    "CLR spans require an ordinary heap-storable element type"
+                )
+                return nil
+            }
+            if !ClrSpanTypes.TryResolveDefinition(
+                $scope.References!!,
+                syntax.ReadOnlySpanModifier != nil,
+                out var definition
+            ) {
+                Diagnostics.ReportNativeSpanType(
+                    syntax.Location,
+                    "the target core library must provide CLR Span[T] and ReadOnlySpan[T]"
+                )
+                return nil
+            }
+            var symbolic = false
+            return ApplyArraySuffix(
+                syntax,
+                ImportedTypeSymbol.GetConstructed(
+                    definition.MakeGenericType(ProjectGenericArgument(element, typeof(object), &symbolic)),
+                    definition,
+                    ImmutableArray.Create(element)
+                )
+            )
+        }
+        if !syntax.HasQualifier &&
+            syntax.HasTypeArguments &&
             syntax.Identifier is {Text: "managed"} managedName &&
             binderCtx
             .CanUseIntrinsicAlias($scope, managedName, function) {
@@ -4759,6 +4811,20 @@ partial class Binder {
         let bindingScope = $scope
         let previousTree = bindingScope.SetCurrentReferencingSyntaxTree(syntax.SyntaxTree)
         try {
+            if syntax.ReadOnlySpanModifier != nil &&
+                (
+                syntax.HasQualifier || syntax.Identifier == nil || !binderCtx.CanUseSpanAlias(
+                    $scope,
+                    syntax.Identifier,
+                    function
+                )
+            ) {
+                Diagnostics.ReportNativeSpanType(
+                    syntax.ReadOnlySpanModifier!!.Location,
+                    "readonly requires the unshadowed native span alias; use System.ReadOnlySpan[T] explicitly when span is shadowed"
+                )
+                return nil
+            }
             var bound TypeSymbol? = BindNonNullableTypeClause(syntax)
             if bound == nil {
                 return nil

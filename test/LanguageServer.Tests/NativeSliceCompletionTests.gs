@@ -14,7 +14,15 @@ class NativeSliceCompletionTests {
     func NativeTypeSnippetsRetainDistinctRepresentations() {
         const source = "func use(value ) { }\n"
         let items = CompletionComputer.ComputeCompletions(LanguageServerTestHelpers.Content(source), Position(0, 15))
-        for label in[]string{"slice[T]", "readonly slice[T]", "array[T]", "managed[T]", "readonly managed[T]"} {
+        for label in[]string{
+            "slice[T]",
+            "readonly slice[T]",
+            "array[T]",
+            "managed[T]",
+            "readonly managed[T]",
+            "span[T]",
+            "readonly span[T]"
+        } {
             let item = Assert.Single(items, (item CompletionItem) -> item.Label == label)
             Assert.Contains("$${1:T}", item.InsertText)
         }

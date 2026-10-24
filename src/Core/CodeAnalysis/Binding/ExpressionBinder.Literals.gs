@@ -112,7 +112,49 @@ internal partial class ExpressionBinder {
         // can never silently become non-generic `Action`).
         let typeClause = syntax.TypeClause
         var typeSymbol TypeSymbol? = nil
-        if typeClause.Identifier is {} typeClauseIdentifier && !typeClause.IsArray && !typeClause.IsNullable {
+        if typeClause.ReadOnlySpanModifier != nil &&
+            (
+            typeClause.HasQualifier || typeClause.Identifier == nil || !binderCtx.CanUseSpanAlias(
+                $scope,
+                typeClause.Identifier,
+                getCurrentFunction()
+            )
+        ) {
+            bindTypeClause(typeClause)
+            return BoundErrorExpression(nil)
+        }
+        var spanArity = 1
+        if !typeClause.HasQualifier &&
+            !typeClause.IsArray &&
+            !typeClause.IsNullable &&
+            typeClause.Identifier is {} spanName &&
+            binderCtx.CanUseSpanAlias($scope, spanName, getCurrentFunction()) &&
+            (!typeClause.HasTypeArguments || TryGetUnboundGenericArity(typeClause, out spanArity)) {
+            if spanArity != 1 {
+                Diagnostics.ReportNativeSpanType(
+                    typeClause.Location,
+                    "span[T] and readonly span[T] require exactly one element type"
+                )
+                return BoundErrorExpression(nil)
+            }
+            if !ClrSpanTypes.TryResolveDefinition(
+                $scope.References!!,
+                typeClause.ReadOnlySpanModifier != nil,
+                out var definition
+            ) {
+                Diagnostics.ReportNativeSpanType(
+                    typeClause.Location,
+                    "the target core library must provide CLR Span[T] and ReadOnlySpan[T]"
+                )
+                return BoundErrorExpression(nil)
+            }
+            typeSymbol = TypeSymbol.FromClrTypeWithoutNullability(definition, NullabilityFreeReason.ResolvedTypeName)
+        }
+        if typeSymbol == nil &&
+            typeClause.Identifier is {} typeClauseIdentifier &&
+            !typeClause.IsArray &&
+            !typeClause
+            .IsNullable {
             if !typeClause.HasQualifier && !typeClause.HasTypeArguments {
                 TryResolveOpenGenericImportedType(typeClauseIdentifier.ValueText, out typeSymbol)
             } else if TryGetNestedUnboundGenericReflectionSegments(

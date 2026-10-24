@@ -451,6 +451,14 @@ internal class BinderContext {
     /// context before their function symbol exists.
     prop CurrentContainingType TypeSymbol?
 
+    func CanUseSpanAlias(
+        $scope BoundScope,
+        identifier SyntaxToken,
+        currentFunction FunctionSymbol?,
+        expression bool = false
+    ) bool ->
+    identifier.Text == "span" && CanUseIntrinsicAlias($scope, identifier, currentFunction, expression)
+
     func CanUseNativeBufferAlias(
         $scope BoundScope,
         identifier SyntaxToken,
