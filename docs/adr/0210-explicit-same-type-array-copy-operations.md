@@ -1496,6 +1496,9 @@ returns remain failures. Other compiler outputs require separate review;
 this does not certify the whole UTF-8 feature or change any rollout gate.
 The human-readable finite records and immutable positive/true-byref-negative
 images are under `test/Compiler.Tests/TestData/IlVerify`.
+Each matched certificate requires its complete unique diagnostic set:
+the runtime pair, product triple or research singleton.
+An internally consistent shortened report is incomplete and grants no admission.
 
 The verifier must run over the entire runtime without ignore or scope flags.
 Report its exact invocation, raw exit/stdout/stderr, accepted diagnostics,
