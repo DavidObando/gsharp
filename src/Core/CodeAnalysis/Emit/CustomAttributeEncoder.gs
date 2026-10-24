@@ -747,8 +747,10 @@ internal class CustomAttributeEncoder {
                     ) {
                         unsupportedParameter = offending
                     } else {
+                        // A by-reference parameter keeps no narrowing across a call (ADR-0208 R12).
+                        let resolvedTypes = paramTypes
                         SawProjectable(&sawProjectableCandidate)
-                        if TryBuildUserAttributeConstructorArguments(slots, paramTypes, out effectiveArguments) {
+                        if TryBuildUserAttributeConstructorArguments(slots, resolvedTypes, out effectiveArguments) {
                             ctorToken = this.resolvePrimaryCtorToken!!(attributeType)
                             return true
                         }

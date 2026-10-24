@@ -691,8 +691,14 @@ internal partial class StatementBinder {
                 // (b) `ApplyEarlyExitNarrowings` lifts each binding's non-nil
                 // narrowing into the persistent block frame for subsequent reads.
                 if statementSyntax is GuardLetStatementSyntax guardLetSyntax {
+                    let guardLetStart = statements.Count
                     BindGuardLetStatementInBlock(guardLetSyntax, statements, memberNotNullFrame)
-                    InvalidateNarrowingsForAssignedVariables(statementSyntax)
+                    // The bound statements carry effects that the syntax cannot show, such as a getter in
+                    // an initializer (ADR-0208 R12).
+                    InvalidateNarrowingsForAssignedVariables(
+                        statementSyntax,
+                        BoundBlockStatement(nil, statements.Skip(guardLetStart).ToImmutableArray())
+                    )
                     continue
                 }
                 let externalCallableAliasesAtEntry = externalCallableAliases.ToArray()

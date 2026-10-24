@@ -462,6 +462,9 @@ internal partial class StatementBinder {
         for binding in syntax.Bindings {
             let (variable, underlying, decl) = BindIfLetBindingClause(binding)
             statements.Add(decl)
+            // The initializer ran before the else block and the next binding: a getter in it can clear
+            // storage that a guarded alias names (ADR-0208 R12).
+            InvalidateNarrowingsForAssignedVariables(binding, decl)
             if variable == nil || underlying == nil {
                 continue
             }
