@@ -30,10 +30,7 @@ open class Issue5276ChildSingleEnumerationTests {
             }
         }
         Assert.True(nodes > 10_000, "corpus unexpectedly small: $nodes nodes")
-        Assert.True(
-            found.Count == 0,
-            "Children returned twice (${found.Count} shapes):\n" + string.Join("\n", found)
-        )
+        Assert.True(found.Count == 0, "Children returned twice (${found.Count} shapes):\n" + string.Join("\n", found))
     }
 
     @Fact
