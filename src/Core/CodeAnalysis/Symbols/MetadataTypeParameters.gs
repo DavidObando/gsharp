@@ -29,7 +29,8 @@ internal shared class MetadataTypeParameters {
                 parameter.TypeParameterBound ??= bound
             } else if IsInterfaceType(constraint) {
                 parameter.ClrInterfaceConstraint ??= constraint
-            } else if constraint is MetadataTypeSymbol || constraint is ConstructedMetadataTypeSymbol {
+            } else if !IsValueTypeMarker(constraint) &&
+                (constraint is MetadataTypeSymbol || constraint is ConstructedMetadataTypeSymbol) {
                 parameter.ClassConstraint ??= constraint
             }
         }
@@ -46,6 +47,21 @@ internal shared class MetadataTypeParameters {
         } else {
             TypeParameterVariance.None
         }
+    }
+
+    // `where T : struct` stores a System.ValueType row, and `where T : Enum` stores a System.Enum row. Neither is a
+    // reference-type bound, and ClassConstraint promises one (TypeParameterSymbol.ClassConstraint). The row stays in the
+    // full list; it stays out of the legacy slot.
+    private func IsValueTypeMarker(type TypeSymbol) bool {
+        if type is not MetadataTypeSymbol definition {
+            return false
+        }
+        let set = definition.Module.Set
+        return set.IsWellKnown(definition.Module, definition.Handle, SpecialType.ValueType) || set.IsWellKnown(
+            definition.Module,
+            definition.Handle,
+            SpecialType.Enum
+        )
     }
 
     // The one rule that tells an interface constraint from a base class constraint.

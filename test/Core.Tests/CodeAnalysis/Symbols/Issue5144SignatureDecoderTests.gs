@@ -87,6 +87,9 @@ open class Issue5144SignatureDecoderTests {
         Assert.Same(t, (cast[ConstructedMetadataTypeSymbol](t.ClrInterfaceConstraint)).TypeArguments[0])
         Assert.Same(t, parameters[1].TypeParameterBound)
         Assert.True(parameters[2].HasValueTypeConstraint)
+        // The System.ValueType row stays in the full list, and out of the legacy reference-type slot.
+        Assert.Null(parameters[2].ClassConstraint)
+        Assert.Equal("System.Private.CoreLib!System.ValueType", MetadataTypeKeys.Of(box.GetConstraintTypes(2)[0]))
         let w = parameters[3]
         Assert.Equal("System.Private.CoreLib!System.Exception", MetadataTypeKeys.Of(w.ClassConstraint))
         Assert.Equal("System.Private.CoreLib!System.IDisposable", MetadataTypeKeys.Of(w.ClrInterfaceConstraint))
@@ -142,6 +145,25 @@ open class Issue5144SignatureDecoderTests {
         Assert.False(symbol.IsBaseChainComplete)
         Assert.EndsWith("|base-missing", MetadataModelComparison.DescribeSymbol(symbol))
         Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+    }
+
+    @Fact
+    func AnEnumConstraint_IsNotAReferenceTypeBound() {
+        using let fixture = CSharpFixture(
+            "using System; namespace N5144E { public class Enums<E, D> where E : Enum where D : Delegate {} }",
+            assemblyName: "Enums5144E"
+        )
+        using let resolver = HandleResolver([]string{fixture.AssemblyPath})
+        let module = resolver.ImageSet!!.FindModule("Enums5144E")!!
+        module.TryGetDefinition("N5144E.Enums`2", out var handle)
+        let symbol = module.GetTypeSymbol(handle)
+        // An enum is a value type, so System.Enum bounds no reference type. System.Delegate does.
+        Assert.Null(symbol.TypeParameters[0].ClassConstraint)
+        Assert.Equal(
+            "System.Private.CoreLib!System.Delegate",
+            MetadataTypeKeys.Of(symbol.TypeParameters[1].ClassConstraint)
+        )
+        Assert.Equal(1, symbol.GetConstraintTypes(0).Length)
     }
 
     @Fact
