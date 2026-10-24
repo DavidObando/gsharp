@@ -369,6 +369,31 @@ shared class ClrTypeUtilities {
         }
     }
 
+    /// Issue #5216: returns whether a CLR generic parameter declares `allows ref struct`
+    /// (the `AllowByRefLike` flag). Only such a parameter accepts a by-ref-like type argument.
+    /// @param attributes The attributes of the generic parameter.
+    /// @returns `true` when the parameter admits by-ref-like type arguments.
+    internal func AllowsByRefLikeArgument(attributes GenericParameterAttributes) bool {
+        return (attributes & GenericParameterAttributes.AllowByRefLike) != 0
+    }
+
+    /// Issue #5216: returns whether the generic parameter at [`index`](paramref) of an open CLR generic
+    /// definition declares `allows ref struct`. A metadata-load failure answers `false`.
+    /// @param openDefinition The open generic type or method definition.
+    /// @param index The position of the generic parameter, in reflection order.
+    /// @returns `true` when that parameter admits by-ref-like type arguments.
+    internal func GenericParameterAllowsByRefLike(openDefinition Type?, index int32) bool {
+        if openDefinition == nil || index < 0 {
+            return false
+        }
+        try {
+            let parameters = openDefinition.GetGenericArguments()
+            return index < parameters.Length && AllowsByRefLikeArgument(parameters[index].GenericParameterAttributes)
+        } catch (ex Exception) when IsMetadataLoadFailure(ex) {
+            return false
+        }
+    }
+
     /// Issue #338 (generalizing the #321 fix): determines whether an exception
     /// thrown while reflecting over a CLR member's signature is a
     /// metadata/assembly load failure. Such failures arise when a member's
