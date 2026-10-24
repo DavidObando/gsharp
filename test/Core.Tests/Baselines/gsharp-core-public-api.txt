@@ -3960,19 +3960,6 @@ type sealed class GSharp.Core.CodeAnalysis.Execution.EmittedProgramResult : Syst
   property public Int32 ExitCode { get; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics { get; }
   property public System.Exception UnhandledException { get; }
-type sealed class GSharp.Core.CodeAnalysis.Execution.InteractiveSessionHost : System.Object, System.IDisposable
-  method public GSharp.Core.CodeAnalysis.Execution.SubmissionRunResult RunSubmission(Byte[] peImage, String assemblyName)
-  method public Object ReadStaticField(System.Reflection.Assembly assembly, String typeFullName, String fieldName)
-  method public Void .ctor(System.Collections.Generic.IReadOnlyList`1<String> referencePaths = null)
-  method public Void Reset()
-  method public sealed Void Dispose()
-type sealed class GSharp.Core.CodeAnalysis.Execution.SubmissionRunResult : System.Object
-  method public Object get_ReturnValue()
-  method public System.Exception get_UnhandledException()
-  method public System.Reflection.Assembly get_Assembly()
-  property public Object ReturnValue { get; }
-  property public System.Exception UnhandledException { get; }
-  property public System.Reflection.Assembly Assembly { get; }
 type sealed class GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderInfo : System.Object
   method public Boolean get_IsValid()
   method public GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderKind get_Kind()
