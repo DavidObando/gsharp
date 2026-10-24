@@ -5,6 +5,15 @@ import System.Diagnostics.CodeAnalysis
 import System.Reflection
 
 internal shared class ClrSpanTypes {
+    internal func TryResolveUtf8Type(references ReferenceResolver, @NotNullWhen(true) out spanType Type?) bool {
+        spanType = nil
+        if !TryResolveDefinition(references, true, out var definition) {
+            return false
+        }
+        spanType = definition.MakeGenericType([]Type{references.GetCoreType("System.Byte")})
+        return true
+    }
+
     internal func TryResolveUtf8Literal(
         references ReferenceResolver,
         @NotNullWhen(true) out spanType Type?,
@@ -14,15 +23,14 @@ internal shared class ClrSpanTypes {
         spanType = nil
         createSpan = nil
         slice = nil
-        if !TryResolveDefinition(references, true, out var definition) {
+        if !TryResolveUtf8Type(references, out var resolvedSpan) {
             return false
         }
         let byteType = references.GetCoreType("System.Byte")
         let intType = references.GetCoreType("System.Int32")
-        let resolvedSpan = definition.MakeGenericType([]Type{byteType})
         spanType = resolvedSpan
         slice = resolvedSpan.GetMethod("Slice", []Type{intType, intType})
-        let helpers = definition.Assembly.GetType("System.Runtime.CompilerServices.RuntimeHelpers")
+        let helpers = resolvedSpan.Assembly.GetType("System.Runtime.CompilerServices.RuntimeHelpers")
         if helpers == nil || slice == nil || slice.ReturnType != spanType {
             return false
         }
