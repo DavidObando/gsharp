@@ -452,7 +452,13 @@ internal partial class StatementBinder {
         let prelude = typedVariablePrelude.AddRange(
             bindLoopPrelude?(valueVariable) ?? ImmutableArray[BoundStatement].Empty
         )
-        var body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel)
+        var body = BindLoopBody(
+            syntax.Body,
+            labelName,
+            out var breakLabel,
+            out var continueLabel,
+            iterationRunsUserCode: iterationKind != ForRangeKind.Indexed
+        )
         if !prelude.IsEmpty {
             body = BoundBlockStatement(originatingSyntax, prelude.Add(body))
         }

@@ -155,6 +155,66 @@ internal class ReferenceImageSet {
         return ResolveInModule(module, fullName, HashSet[string](StringComparer.Ordinal))
     }
 
+    /// Gets the symbol of a resolved type definition, or `null` for a missing type.
+    internal func GetTypeSymbol(resolved ResolvedTypeReference) MetadataTypeSymbol? {
+        let module = resolved.Module
+        return if module == nil {
+            nil
+        } else {
+            module.GetTypeSymbol(resolved.Handle)
+        }
+    }
+
+    /// Resolves the type named by a TypeDef, TypeRef or TypeSpec handle to its definition.
+    /// A TypeSpec resolves to the generic type it instantiates, because only the head is read at this stage.
+    /// @returns The answer, or `null` for a TypeSpec that is not a generic instantiation.
+    internal func ResolveTypeEntity(module MetadataModule, entity EntityHandle) ResolvedTypeReference? {
+        if entity.Kind == HandleKind.TypeDefinition {
+            return ResolvedTypeReference(module, cast[TypeDefinitionHandle](entity))
+        }
+        if entity.Kind == HandleKind.TypeReference {
+            return ResolveTypeReference(module, cast[TypeReferenceHandle](entity))
+        }
+        if entity.Kind != HandleKind.TypeSpecification {
+            return nil
+        }
+        var blob = module.Reader.GetBlobReader(
+            module.Reader.GetTypeSpecification(cast[TypeSpecificationHandle](entity)).Signature
+        )
+        if blob.ReadSignatureTypeCode() != SignatureTypeCode.GenericTypeInstance {
+            return nil
+        }
+        // The kind byte (class or value type) comes before the type handle.
+        blob.ReadByte()
+        let head = blob.ReadTypeHandle()
+        return if head.Kind == HandleKind.TypeSpecification {
+            nil
+        } else {
+            ResolveTypeEntity(module, head)
+        }
+    }
+
+    /// Tells whether a definition is the well-known type with this tag.
+    /// The definition counts when it is the table entry itself, or when it has the name of the entry and
+    /// lives in a core library. A core library defines its own special types.
+    internal func IsWellKnown(module MetadataModule, handle TypeDefinitionHandle, special SpecialType) bool {
+        let known = WellKnown.Get(special)
+        if known.Module != nil && object.ReferenceEquals(known.Module, module) && known.Handle == handle {
+            return true
+        }
+        return module.IsCoreLibrary && string.Equals(
+            module.GetFullName(handle),
+            known.FullName,
+            StringComparison.Ordinal
+        )
+    }
+
+    /// Tells whether an answer is the well-known type with this tag.
+    internal func IsWellKnown(resolved ResolvedTypeReference, special SpecialType) bool {
+        let module = resolved.Module
+        return module != nil && IsWellKnown(module, resolved.Handle, special)
+    }
+
     /// Gets the interned missing type for a pair of assembly identity and full name.
     internal func GetMissing(identity AssemblyIdentity?, fullName string) MissingTypeSymbol -> missingTypes.GetOrAdd(
         MissingTypeKey(identity, fullName),

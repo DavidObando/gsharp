@@ -21,8 +21,11 @@ import System.Threading
 internal class MetadataModule {
     private let peReader PEReader
     private let names Lazy[MetadataModuleNames]
+    private let isCoreLibrary Lazy[bool]
     // One slot for each TypeRef row. A race publishes one winner (ADR-0209 section 11).
     private let typeReferences[]ResolvedTypeReference?
+    // One slot for each TypeDef row, indexed by row number.
+    private let typeSymbols[]MetadataTypeSymbol?
 
     /// Creates a module over an image.
     /// @param set The set that owns the module.
@@ -47,7 +50,9 @@ internal class MetadataModule {
         }
         Identity = AssemblyIdentity.FromDefinition(Reader)
         typeReferences = [Reader.GetTableRowCount(TableIndex.TypeRef) + 1]ResolvedTypeReference?
+        typeSymbols = [Reader.GetTableRowCount(TableIndex.TypeDef) + 1]MetadataTypeSymbol?
         names = Lazy[MetadataModuleNames](ReadNames, LazyThreadSafetyMode.ExecutionAndPublication)
+        isCoreLibrary = Lazy[bool](DefinesObject, LazyThreadSafetyMode.ExecutionAndPublication)
     }
 
     /// Gets the set that owns the module.
@@ -88,6 +93,10 @@ internal class MetadataModule {
         .ByName
         .TryGetValue(fullName, out handle)
 
+    /// Gets whether this module is a core library: it defines `System.Object`, and that type has no base.
+    /// Inside a core library, `System.ValueType` and the other special types are the module's own definitions.
+    internal prop IsCoreLibrary bool -> isCoreLibrary.Value
+
     /// Gets whether outside code can name a type definition: the type and each enclosing type is public.
     /// This ignores `InternalsVisibleTo`, which depends on the consumer (ADR-0209 section 7c).
     internal func IsExternallyVisible(handle TypeDefinitionHandle) bool {
@@ -126,6 +135,17 @@ internal class MetadataModule {
         }
     }
 
+    /// Gets the symbol of a type definition row. A race creates one winner, and the loser is dropped unseen.
+    internal func GetTypeSymbol(handle TypeDefinitionHandle) MetadataTypeSymbol {
+        let row = MetadataTokens.GetRowNumber(handle)
+        let existing = typeSymbols[row]
+        if existing != nil {
+            return existing
+        }
+        let created = MetadataTypeSymbol(this, handle)
+        return Interlocked.CompareExchange(&typeSymbols[row], created, nil) ?? created
+    }
+
     // Reads and publishes the resolution of a TypeRef row.
     internal func GetOrAddTypeReference(
         handle TypeReferenceHandle,
@@ -138,6 +158,13 @@ internal class MetadataModule {
         }
         let created = resolve()
         return Interlocked.CompareExchange(&typeReferences[row], created, nil) ?? created
+    }
+
+    private func DefinesObject() bool {
+        if !names.Value.ByName.TryGetValue("System.Object", out var handle) {
+            return false
+        }
+        return Reader.GetTypeDefinition(handle).BaseType.IsNil
     }
 
     private func ReadNames() MetadataModuleNames {
