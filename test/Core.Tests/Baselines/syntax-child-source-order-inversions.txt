@@ -37,6 +37,7 @@ StructDeclarationSyntax: IdentifierToken -> TypeClause
 StructDeclarationSyntax: TypeClause -> IdentifierToken
 StructLiteralExpressionSyntax: CloseBraceToken -> TypeArgumentList
 TypeClauseSyntax: CloseParenthesisToken -> TypeClause
+TypeClauseSyntax: CloseSquareBracketToken -> OpenSquareBracketToken
 TypeClauseSyntax: CloseSquareBracketToken -> TypeClause
 TypeClauseSyntax: DotToken -> IdentifierToken
 TypeClauseSyntax: IdentifierToken -> IdentifierToken

@@ -63,7 +63,8 @@ internal class DocumentTranslationState {
         DeconstructionTempNamesByBody = Dictionary[SyntaxNode, HashSet[string]]()
         SynthesizedLocalOccupiedNamesByBody = Dictionary[SyntaxNode, HashSet[string]]()
         GSharpNullablePatternReceivers = HashSet[GExpression](ReferenceEqualityComparer.Instance)
-        PromotedNullablePatternMembers = HashSet[GExpression](ReferenceEqualityComparer.Instance)
+        BareSlicePatternSlots = HashSet[GExpression](ReferenceEqualityComparer.Instance)
+        BareSliceElementReads = HashSet[GExpression](ReferenceEqualityComparer.Instance)
         StablePatternMemberReads = HashSet[GExpression](ReferenceEqualityComparer.Instance)
         CollectionElementSlots = Dictionary[SyntaxNode, ITypeSymbol]()
         StoredPatternCaptures = HashSet[GExpression](ReferenceEqualityComparer.Instance)
@@ -364,12 +365,19 @@ internal class DocumentTranslationState {
         get;
     }
 
-    // Issue #4315: pattern-lowering member reads (and the locals they are bound
-    // to) that the nullability funnel renders `T?` although Roslyn types them
-    // non-null (ShouldPromoteToNullableReference). Together with the receiver's
-    // type this decides whether a recursive pattern's `!= nil` guard would be a
-    // dead check on a bare slice (GS0523). Keyed by node identity.
-    prop PromotedNullablePatternMembers HashSet[GExpression] {
+    // Issue #4315: pattern-lowering reads of a declared G# slot of bare slice type
+    // (an unannotated C# array field/property the nullability funnel does not
+    // promote to `T?`), and the `let` locals such a read is bound to. gsc's
+    // empty-instance zero value makes them never nil, so NullGuardIsProvablyRedundant
+    // omits the dead `!= nil` guard (GS0523) for exactly these. Keyed by node identity.
+    prop BareSlicePatternSlots HashSet[GExpression] {
+        get;
+    }
+
+    // Issue #4315: the `let` locals a list ELEMENT read is bound to once; an
+    // element of bare slice type can hold a CLR null, so its guard is kept and
+    // spelled `object(x) != nil` (BuildReceiverNullGuard).
+    prop BareSliceElementReads HashSet[GExpression] {
         get;
     }
 

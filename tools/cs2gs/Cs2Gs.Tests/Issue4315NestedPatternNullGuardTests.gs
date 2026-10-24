@@ -202,7 +202,79 @@ public static class C
         Console.WriteLine(h is { Arr: { } });
     }
 }`)
+        // A range slice is never nil, so it takes no guard in either spelling.
+        Assert.DoesNotContain("[..]", printed.Replace("h.Flat[..].Length", ""), StringComparison.Ordinal)
         Assert.Equal("True,1,True,1,True,True,True,False,False", Normalize(CompileAndRun(printed, "C.Run()")))
+    }
+
+    /// Round 3 of the Copilot review: one rule (NullGuardIsProvablyRedundant)
+    /// decides when the guard may be omitted. Each branch has a boundary here:
+    /// a promoted/top-level `null!` array local and a default-initialized jagged
+    /// array element keep their guard (false, not true and not a
+    /// NullReferenceException), while the `params` array, the value-type tuple
+    /// slot, the range slice and the declared bare-slice member omit it.
+    @Fact
+    func NullGuardRule_BoundaryPerBranch_NullableEnabled() {
+        let printed = Translate(`#nullable enable
+using System;
+namespace Sample;
+public class H { public (int, int) T = (0, 0); public int[] Flat = new[] { 1, 2 }; }
+public static class C
+{
+    public static bool Q(params int[] a) => a is { Length: > 0 };
+    public static void Run()
+    {
+        int[] n = null!;
+        Console.WriteLine(n is { });
+        Console.WriteLine(n is { Length: > 0 });
+        var j = new int[1][];
+        Console.WriteLine(j is [{ }]);
+        Console.WriteLine(j is [{ Length: > 0 }]);
+        var j2 = new[] { new[] { 1 } };
+        Console.WriteLine(j2 is [{ Length: > 0 }]);
+        var h = new H();
+        Console.WriteLine(h is { T: (0, 0) });
+        Console.WriteLine(h is { Flat: [.. { Length: > 0 }] });
+        Console.WriteLine(h is { Flat: { Length: 2 } });
+        Console.WriteLine(Q(1, 2));
+        Console.WriteLine(Q());
+    }
+}`)
+        Assert.Equal(BoundaryExpected(), Normalize(CompileAndRun(printed, "C.Run()")))
+    }
+
+    @Fact
+    func NullGuardRule_BoundaryPerBranch_NullableDisabled() {
+        let printed = Translate(`#nullable disable
+using System;
+namespace Sample;
+public class H { public (int, int) T = (0, 0); public int[] Flat = new[] { 1, 2 }; }
+public static class C
+{
+    public static bool Q(params int[] a) => a is { Length: > 0 };
+    public static void Run()
+    {
+        int[] n = null;
+        Console.WriteLine(n is { });
+        Console.WriteLine(n is { Length: > 0 });
+        var j = new int[1][];
+        Console.WriteLine(j is [{ }]);
+        Console.WriteLine(j is [{ Length: > 0 }]);
+        var j2 = new[] { new[] { 1 } };
+        Console.WriteLine(j2 is [{ Length: > 0 }]);
+        var h = new H();
+        Console.WriteLine(h is { T: (0, 0) });
+        Console.WriteLine(h is { Flat: [.. { Length: > 0 }] });
+        Console.WriteLine(h is { Flat: { Length: 2 } });
+        Console.WriteLine(Q(1, 2));
+        Console.WriteLine(Q());
+    }
+}`)
+        Assert.Equal(BoundaryExpected(), Normalize(CompileAndRun(printed, "C.Run()")))
+    }
+
+    private func BoundaryExpected() string {
+        return "False,False,False,False,True,True,True,True,True,False"
     }
 
     private func Expected() string {
@@ -243,7 +315,7 @@ Translated G#:
 ` + printed
                 )
                 // GS0523 is the dead-nil-check warning a guard on a bare slice raises.
-                Assert.DoesNotContain("GS0523", compileOut, StringComparison.Ordinal)
+                Assert.False(compileOut.Contains("GS0523", StringComparison.Ordinal), compileOut + printed)
                 let (runExit, stdout) = RunDotnet("\"$dllPath\"")
                 Assert.True(runExit == 0, "Translated snippet must run. Output:\n" + stdout + `
 
