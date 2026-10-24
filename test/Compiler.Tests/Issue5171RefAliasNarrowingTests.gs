@@ -478,6 +478,64 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
+            yield[]object{"ref-parameter-and-mutable-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var g C? = nil
+func Run(ref a C?) int32 {
+    g = C{}
+    a = nil
+    return g.Value
+}
+Console.WriteLine(Run(ref g))
+`}
+            yield[]object{"guard-let-getter-clears-aliased-member", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Box {
+    var Field C? = C{}
+    prop Clear int32? {
+        get {
+            Field = nil
+            return 1
+        }
+    }
+}
+func Run(ref a C?, box Box) int32 {
+    if a == nil { return 0 }
+    guard let n = box.Clear else { return 0 }
+    return a.Value + n
+}
+let box = Box{}
+Console.WriteLine(Run(ref box.Field, box))
+`}
+            yield[]object{"literal-initializer-clears-aliased-element", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var store []C? = []C?{C{}}
+func Boom() int32 {
+    store[0] = nil
+    return 1
+}
+class Maker {
+    var n int32 = Boom()
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    let m = Maker{}
+    return a.Value + m.n
+}
+Console.WriteLine(Run(ref store[0]))
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).

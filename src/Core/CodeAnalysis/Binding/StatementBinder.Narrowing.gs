@@ -65,13 +65,16 @@ internal partial class StatementBinder {
         if SharesStorage(first, second) {
             return true
         }
-        let firstChain = AliasChain(first)
-        let secondChain = AliasChain(second)
-        return (
-            IsExternalStorageAlias(first) && binderCtx.MayBeAssignedByClosure(secondChain[secondChain.Count - 1])
-        ) ||
-            (IsExternalStorageAlias(second) && binderCtx.MayBeAssignedByClosure(firstChain[firstChain.Count - 1]))
+        let firstEnd = AliasChain(first).Last()
+        let secondEnd = AliasChain(second).Last()
+        return (IsExternalStorageAlias(first) && MayBeReachedByAlias(secondEnd)) ||
+            (IsExternalStorageAlias(second) && MayBeReachedByAlias(firstEnd))
     }
+
+    // A caller can pass any mutable global by reference; an address-taken or closure-assigned root can be
+    // reached through an alias as well.
+    private func MayBeReachedByAlias(root VariableSymbol) bool -> (root is GlobalVariableSymbol && !root.IsReadOnly) ||
+        binderCtx.MayBeAssignedByClosure(root)
 
     /// ADR-0208 R12 (#5171): removes every narrowing whose root may share storage with
     /// [`root`](paramref).
@@ -978,10 +981,7 @@ internal partial class StatementBinder {
                 if activeCleanupSet.Contains(cleanup) {
                     continue
                 }
-                let mutations = NewCollector(
-                    AssignmentPreservesNarrowing,
-                    snapshot.ExternalCallableAliases
-                )
+                let mutations = NewCollector(AssignmentPreservesNarrowing, snapshot.ExternalCallableAliases)
                 mutations.Visit(cleanup)
                 summary = FinallyFlowSummary(
                     mutations,
@@ -1019,10 +1019,7 @@ internal partial class StatementBinder {
         finallyBlock BoundStatement,
         callableAliases IReadOnlyCollection[VariableSymbol]
     ) FinallyFlowSummary {
-        let mutations = NewCollector(
-            AssignmentPreservesNarrowing,
-            callableAliases
-        )
+        let mutations = NewCollector(AssignmentPreservesNarrowing, callableAliases)
         mutations.Visit(finallyBlock)
         let nonNullOnNormalExit = if !CanCompleteNormally(finallyBlock) {
             default(Dictionary[AccessPath, TypeSymbol]?)
@@ -1079,10 +1076,7 @@ internal partial class StatementBinder {
                 return nil
             }
             let aliasesAtEntry = aliases.ToArray()
-            let mutations = NewCollector(
-                AssignmentPreservesNarrowing,
-                aliasesAtEntry
-            )
+            let mutations = NewCollector(AssignmentPreservesNarrowing, aliasesAtEntry)
             mutations.Visit(statement)
             ApplyMutationsToState(state, mutations)
             ApplyCallableAliasExitState(aliases, statement, aliasesAtEntry, mutations)
@@ -2364,6 +2358,8 @@ internal partial class StatementBinder {
         }
 
         private func MarkMayMutateGlobalRoots() {
+            // User code can also write members and the storage behind by-reference aliases.
+            MayMutateMemberPaths = true
             MayMutateGlobalRoots = true
             let protectedRoots = enclosingGlobalAssignments.ToHashSet()
             if globalMutationProtectedRoots == nil {
