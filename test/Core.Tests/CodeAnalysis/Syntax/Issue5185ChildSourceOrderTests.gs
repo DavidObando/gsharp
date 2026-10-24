@@ -10,6 +10,7 @@ import System
 import System.Collections.Generic
 import System.IO
 import System.Linq
+import System.Threading
 import Xunit
 
 /// Issue #5185: `GetChildren` yields the children of every node in source order. These tests run
@@ -193,6 +194,49 @@ open class Issue5185ChildSourceOrderTests {
             }
         }
         Assert.True(fixedFields > 0 && explicitProperties > 0 && explicitEvents > 0, "forms missing from the corpus")
+    }
+
+    /// The parser builds a long postfix `!!` chain in a loop, so the tree is very deep. Sorting
+    /// the children and computing spans must not recurse on the call stack (review of #5275).
+    /// The walk runs on a thread with a small stack, where recursion over 20,000 levels fails.
+    @Fact
+    func DeepPostfixChain_ListsChildrenAndSpansWithoutRecursion() {
+        let source = "package p\nfunc F(x int32?) int32 { return x" + string.Concat(Enumerable.Repeat("!!", 20000)) +
+            " }\n"
+        let tree = SyntaxTree.Parse(source)
+        var failure Exception? = nil
+        var spanLength = 0
+        var visited = 0
+        let thread = Thread(
+            () -> {
+                try {
+                    spanLength = tree.Root.Span.Length
+                    for node in Descendants(tree.Root) {
+                        visited++
+                    }
+                } catch (ex Exception) {
+                    failure = ex
+                }
+            },
+            524288
+        )
+        thread.Start()
+        thread.Join()
+        Assert.Null(failure)
+        Assert.True(spanLength > 40000)
+        Assert.True(visited > 40000, "visited only $visited nodes")
+    }
+
+    /// An incomplete `1 !is` ends in a missing pattern token. The REPL uses this token to decide
+    /// whether to wait for more input (review of #5275).
+    @Fact
+    func IncompleteNegatedIs_LastTokenIsTheMissingPattern() {
+        let tree = SyntaxTree.Parse("1 !is")
+        Assert.True(tree.Root.Members.Length > 0)
+        Assert.True(tree.Root.Members[^1].GetLastToken().IsMissing)
+        let complete = SyntaxTree.Parse("a !is Dog")
+        Assert.Equal("Dog", complete.Root.Members[^1].GetLastToken().Text)
+        Assert.Equal("a", complete.Root.Members[^1].GetFirstToken().Text)
     }
 
     /// Reflection and the generated accessors order the children the same way.

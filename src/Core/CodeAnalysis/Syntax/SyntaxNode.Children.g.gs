@@ -1765,9 +1765,9 @@ partial class CompilationUnitSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         if GetType() != ExactTypeOfCompilationUnitSyntax {
-            return BuildChildrenByReflection()
+            return BuildUnsortedChildrenByReflection()
         }
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         for itemFileAttributes in FileAttributes {
@@ -1779,7 +1779,7 @@ partial class CompilationUnitSyntax {
         if IsPresent(EndOfFileToken) {
             builder.Add(EndOfFileToken)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -2035,7 +2035,7 @@ partial class ConstructorDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(AccessibilityModifier) {
             builder.Add(AccessibilityModifier!!)
@@ -2072,7 +2072,7 @@ partial class ConstructorDeclarationSyntax {
         for itemAnnotations in Annotations {
             builder.Add(itemAnnotations)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -2236,7 +2236,7 @@ partial class DeinitDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(DeinitKeyword) {
             builder.Add(DeinitKeyword)
@@ -2247,7 +2247,7 @@ partial class DeinitDeclarationSyntax {
         for itemAnnotations in Annotations {
             builder.Add(itemAnnotations)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -2255,7 +2255,7 @@ partial class DelegateDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(AccessibilityModifier) {
             builder.Add(AccessibilityModifier!!)
@@ -2294,7 +2294,7 @@ partial class DelegateDeclarationSyntax {
         for itemAnnotations in Annotations {
             builder.Add(itemAnnotations)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -2438,7 +2438,7 @@ partial class EnumDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(AccessibilityModifier) {
             builder.Add(AccessibilityModifier!!)
@@ -2465,7 +2465,7 @@ partial class EnumDeclarationSyntax {
         for itemAnnotations in Annotations {
             builder.Add(itemAnnotations)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -2609,7 +2609,7 @@ partial class EventDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         for itemAnnotations in Annotations {
             builder.Add(itemAnnotations)
@@ -2650,7 +2650,7 @@ partial class EventDeclarationSyntax {
         if IsPresent(ExplicitInterfaceCloseParenthesisToken) {
             builder.Add(ExplicitInterfaceCloseParenthesisToken!!)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -2888,7 +2888,7 @@ partial class FieldDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         for itemAnnotations in Annotations {
             builder.Add(itemAnnotations)
@@ -2914,7 +2914,7 @@ partial class FieldDeclarationSyntax {
         if IsPresent(FixedKeyword) {
             builder.Add(FixedKeyword!!)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -3628,7 +3628,7 @@ partial class FunctionDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(SemicolonBodyToken) {
             builder.Add(SemicolonBodyToken!!)
@@ -3703,7 +3703,7 @@ partial class FunctionDeclarationSyntax {
         for itemAnnotations in Annotations {
             builder.Add(itemAnnotations)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -3885,9 +3885,9 @@ partial class GlobalStatementSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         if GetType() != ExactTypeOfGlobalStatementSyntax {
-            return BuildChildrenByReflection()
+            return BuildUnsortedChildrenByReflection()
         }
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(Statement) {
@@ -3896,7 +3896,7 @@ partial class GlobalStatementSyntax {
         for itemAnnotations in Annotations {
             builder.Add(itemAnnotations)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -4478,7 +4478,7 @@ partial class ImportSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(ImportKeyword) {
             builder.Add(ImportKeyword)
@@ -4498,7 +4498,7 @@ partial class ImportSyntax {
         for itemAnnotations in Annotations {
             builder.Add(itemAnnotations)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -4818,7 +4818,7 @@ partial class InterfaceDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(AccessibilityModifier) {
             builder.Add(AccessibilityModifier!!)
@@ -4866,7 +4866,7 @@ partial class InterfaceDeclarationSyntax {
         for itemAnnotations in Annotations {
             builder.Add(itemAnnotations)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -6188,7 +6188,7 @@ partial class PackageSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(PackageKeyword) {
             builder.Add(PackageKeyword)
@@ -6202,7 +6202,7 @@ partial class PackageSyntax {
         for itemAnnotations in Annotations {
             builder.Add(itemAnnotations)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -6210,7 +6210,7 @@ partial class ParameterSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         for itemAnnotations in Annotations {
             builder.Add(itemAnnotations)
@@ -6239,7 +6239,7 @@ partial class ParameterSyntax {
         if IsPresent(DefaultValue) {
             builder.Add(DefaultValue!!)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -6443,7 +6443,7 @@ partial class PropertyDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         for itemAnnotations in Annotations {
             builder.Add(itemAnnotations)
@@ -6503,7 +6503,7 @@ partial class PropertyDeclarationSyntax {
         if IsPresent(CloseBraceToken) {
             builder.Add(CloseBraceToken!!)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -7503,7 +7503,7 @@ partial class StructDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(AccessibilityModifier) {
             builder.Add(AccessibilityModifier!!)
@@ -7605,7 +7605,7 @@ partial class StructDeclarationSyntax {
         for itemAnnotations in Annotations {
             builder.Add(itemAnnotations)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -7645,7 +7645,7 @@ partial class StructLiteralExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(TypeIdentifier) {
             builder.Add(TypeIdentifier)
@@ -7669,7 +7669,7 @@ partial class StructLiteralExpressionSyntax {
         if IsPresent(TypeArgumentList) {
             builder.Add(TypeArgumentList!!)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -8311,7 +8311,7 @@ partial class TypeAliasDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(AccessibilityModifier) {
             builder.Add(AccessibilityModifier!!)
@@ -8331,7 +8331,7 @@ partial class TypeAliasDeclarationSyntax {
         for itemAnnotations in Annotations {
             builder.Add(itemAnnotations)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -8387,7 +8387,7 @@ partial class TypeClauseSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(ReadOnlySliceModifier) {
             builder.Add(ReadOnlySliceModifier!!)
@@ -8531,7 +8531,7 @@ partial class TypeClauseSyntax {
         if IsPresent(AsyncModifier) {
             builder.Add(AsyncModifier!!)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 
@@ -8915,9 +8915,9 @@ partial class UnaryExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func BuildChildren() ImmutableArray[SyntaxNode] {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
         if GetType() != ExactTypeOfUnaryExpressionSyntax {
-            return BuildChildrenByReflection()
+            return BuildUnsortedChildrenByReflection()
         }
         let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
         if IsPresent(OperatorToken) {
@@ -8926,7 +8926,7 @@ partial class UnaryExpressionSyntax {
         if IsPresent(Operand) {
             builder.Add(Operand)
         }
-        return SortBySourcePosition(builder.ToImmutable())
+        return builder.ToImmutable()
     }
 }
 

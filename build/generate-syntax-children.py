@@ -10,7 +10,7 @@ and writes `SyntaxNode.Children.g.gs`: for each concrete node class, a
 The children are in the same order that the reflection path returns them: the
 public instance properties of the class in declaration order, then those of
 each base class. A class marked `@SyntaxChildSourceOrder` (or derived from one) then
-sorts them by source position, because its property order is not the source order
+sorts them by source position (in the base class), because its property order is not the source order
 for every shape (issue #5185). A property is a child when its type is a syntax node, a
 `SeparatedSyntaxList`, or a collection of syntax nodes, and it has no
 `@SyntaxChildIgnore` attribute. The reflection path stays in `SyntaxNode.gs` as
@@ -275,10 +275,15 @@ def emit_class(cls: Cls, props: list[tuple[Prop, str]], source_ordered: bool) ->
         out.append("    /// ```xmldoc")
         out.append("    /// <inheritdoc />")
         out.append("    /// ```")
-        out.append("    internal override func BuildChildren() ImmutableArray[SyntaxNode] {")
+        # A source-ordered class builds the children in property order here. The base class
+        # sorts them (BuildChildren) and computes spans from this unsorted array, so a span
+        # never needs the sort (issue #5185).
+        builder_name = "BuildUnsortedChildren" if source_ordered else "BuildChildren"
+        fallback = "BuildUnsortedChildrenByReflection" if source_ordered else "BuildChildrenByReflection"
+        out.append(f"    internal override func {builder_name}() ImmutableArray[SyntaxNode] {{")
         if cls.is_open:
             out.append(f"        if {guard} {{")
-            out.append("            return BuildChildrenByReflection()")
+            out.append(f"            return {fallback}()")
             out.append("        }")
         out.append("        let builder = ImmutableArray.CreateBuilder[SyntaxNode]()")
         for prop, kind in props:
@@ -297,10 +302,7 @@ def emit_class(cls: Cls, props: list[tuple[Prop, str]], source_ordered: bool) ->
                 out.append(f"        for item{prop.name} in {prop.name} {{")
                 out.append(f"            builder.Add(item{prop.name})")
                 out.append("        }")
-        if source_ordered:
-            out.append("        return SortBySourcePosition(builder.ToImmutable())")
-        else:
-            out.append("        return builder.ToImmutable()")
+        out.append("        return builder.ToImmutable()")
         out.append("    }")
         out.append("}")
         return out

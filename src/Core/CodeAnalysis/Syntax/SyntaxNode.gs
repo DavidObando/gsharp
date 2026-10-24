@@ -146,7 +146,27 @@ abstract class SyntaxNode {
     /// properties by reflection on the runtime type. A generated class overrides it when a
     /// property cannot be indexed in place, and guards the override by the exact runtime type.
     /// @returns The children in the order of (cref:GetChildren).
-    internal open func BuildChildren() ImmutableArray[SyntaxNode] -> BuildChildrenByReflection()
+    internal open func BuildChildren() ImmutableArray[SyntaxNode] {
+        let unsorted = BuildUnsortedChildren()
+        return if IsSourceOrdered(GetType()) {
+            SortBySourcePosition(unsorted)
+        } else {
+            unsorted
+        }
+    }
+
+    /// Builds the children of this node in property order, before the sort of a class with
+    /// `@SyntaxChildSourceOrder`. A span reads this array, so it never needs the sorted children
+    /// (issue #5185). The base implementation reads the properties by reflection.
+    /// @returns The children in property order.
+    internal open func BuildUnsortedChildren() ImmutableArray[SyntaxNode] -> BuildUnsortedChildrenByReflection()
+
+    /// Builds the children in property order by reflection over the public properties.
+    /// @returns The children in property order.
+    internal func BuildUnsortedChildrenByReflection() ImmutableArray[SyntaxNode] {
+        CompilationMeasurements.Count("syntax.child-reflection-fallbacks")
+        return EnumerateChildrenByProperty().ToImmutableArray()
+    }
 
     /// Returns the children array of this node, built once per node. The parser clears it through
     /// (cref:InvalidateCachedSpan) when it assigns a child-bearing property after construction.
@@ -236,8 +256,17 @@ abstract class SyntaxNode {
         if this is SyntaxToken token {
             return token
         }
-        // A syntax node should always contain at least 1 token.
-        return GetChild(ChildCount - 1).GetLastToken()
+        // A syntax node should always contain at least 1 token. The last child in the list is
+        // the last in the source, except for a child that lies inside an earlier child and ends
+        // before it: the `!` of `a !is T` lies inside the `is` expression (issue #5185).
+        var last = GetChild(ChildCount - 1)
+        for var i = ChildCount - 2; i >= 0; i-- {
+            let earlier = GetChild(i)
+            if earlier.Span.End > last.Span.End && last.Span.Start > earlier.Span.Start {
+                last = earlier
+            }
+        }
+        return last.GetLastToken()
     }
 
     /// Gets the first token in this syntax node.
@@ -277,30 +306,103 @@ abstract class SyntaxNode {
         childrenBox = nil
     }
 
+    /// Whether the span of this node is the bounds of its children. A class that overrides
+    /// (cref:Span) returns `false`.
+    internal open prop SpanFromChildren bool -> true
+
     private func ComputeSpan() TextSpan {
         // Take the minimum start and the maximum end over all children. Children can overlap
         // even in source order: an interpolated string token contains its holes, and the parser
         // synthesizes tokens at the position of a real one (issue #5185). The first and last
         // child would give a truncated span and break position-based walks such as the language
         // server's interpolated-string hole detection (issue #5136).
-        var hasChild = false
-        var start = int32.MaxValue
-        var end = int32.MinValue
-        let count = ChildCount
-        for var i = 0; i < count; i++ {
-            var childSpan = GetChild(i).Span
-            if childSpan.Start < start {
-                start = childSpan.Start
+        // The walk uses an explicit stack, so a deep chain (for example many postfix `!!`)
+        // cannot overflow the call stack, and it reads the children in property order, so it
+        // does not need the sorted children, which need the spans (issue #5185).
+        let frames = Stack[SpanFrame]()
+        frames.Push(SpanFrame(this))
+        while true {
+            let frame = frames.Peek()
+            if frame.Index < frame.Count {
+                let child = frame.Child(frame.Index)
+                frame.Index++
+                if child is SyntaxToken || !child.SpanFromChildren || child.cachedSpan != nil {
+                    frame.Include(child.Span)
+                } else {
+                    frames.Push(SpanFrame(child))
+                }
+                continue
             }
-            if childSpan.End > end {
-                end = childSpan.End
+            frames.Pop()
+            let computed = frame.Result()
+            if frames.Count == 0 {
+                return computed
             }
-            hasChild = true
+            frame.Node.cachedSpan = SpanBox(computed)
+            frames.Peek().Include(computed)
         }
-        return if hasChild {
-            TextSpan.FromBounds(start, end)
-        } else {
-            TextSpan(0, 0)
+    }
+
+    private class SpanFrame {
+        init(node SyntaxNode) {
+            Node = node
+            // A class with a sort reads its unsorted children. Other classes read in place.
+            let box = node.childrenBox
+            if box != nil {
+                Kids = box.Items
+            } else if IsSourceOrdered(node.GetType()) {
+                Kids = node.BuildUnsortedChildren()
+            } else {
+                Kids = default(ImmutableArray[SyntaxNode])
+            }
+            Count = if Kids.IsDefault {
+                node.ChildCount
+            } else {
+                Kids.Length
+            }
+        }
+
+        prop Node SyntaxNode {
+            get;
+        }
+
+        prop Kids ImmutableArray[SyntaxNode] {
+            get;
+        }
+
+        prop Count int32 {
+            get;
+        }
+
+        prop Index int32 {
+            get;
+            set;
+        }
+
+        private var start int32 = int32.MaxValue
+        private var end int32 = int32.MinValue
+        private var any bool = false
+
+        func Child(index int32) SyntaxNode {
+            return if Kids.IsDefault {
+                Node.GetChild(index)
+            } else {
+                Kids[index]
+            }
+        }
+
+        func Include(span TextSpan) {
+            start = Math.Min(start, span.Start)
+            end = Math.Max(end, span.End)
+            any = true
+        }
+
+        func Result() TextSpan {
+            return if any {
+                TextSpan.FromBounds(start, end)
+            } else {
+                TextSpan(0, 0)
+            }
         }
     }
 

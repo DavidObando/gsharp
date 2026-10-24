@@ -30,7 +30,10 @@ open class Issue5136GeneratedChildrenTests {
         for type in types {
             // A class with a computed child sequence overrides BuildChildren instead.
             let direct = type.GetProperty("ChildCount", flags) != nil && type.GetMethod("GetChild", flags) != nil
-            if !direct && type.GetMethod("BuildChildren", flags) == nil {
+            if !direct && type.GetMethod("BuildChildren", flags) == nil && type.GetMethod(
+                "BuildUnsortedChildren",
+                flags
+            ) == nil {
                 missing.Add(type.Name)
             }
         }

@@ -35,6 +35,9 @@ partial class InterpolatedStringExpressionSyntax : ExpressionSyntax {
     /// span to end at the last hole.
     override prop Span TextSpan -> StringToken.Span
 
+    /// Gets a value that tells that this node takes its span from an override, not from its children.
+    internal override prop SpanFromChildren bool -> false
+
     /// Gets the source token.
     prop StringToken SyntaxToken {
         get;
