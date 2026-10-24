@@ -22,32 +22,37 @@ import System.Collections.Generic
 
 func Length(value string) int32 -> value.Length
 
-var value string? = "key"
-var list = List[string]()
-list.Add("a")
-list.Add("b")
-var values IEnumerable[string]? = list
-var dict = Dictionary[string, int32]()
-var total = 0
+// A call may assign a top-level variable (ADR-0208 R11), so the guarded variables are locals.
+func Run() int32 {
+    var value string? = "key"
+    var list = List[string]()
+    list.Add("a")
+    list.Add("b")
+    var values IEnumerable[string]? = list
+    var dict = Dictionary[string, int32]()
+    var total = 0
 
-if value != nil {
-    var assigned string = value
-    total += Length(value)
-    dict[value] = assigned.Length
-}
-
-if !String.IsNullOrEmpty(value) {
-    total += Length(value)
-}
-
-if values != nil {
-    for item in values {
-        total += item.Length
+    if value != nil {
+        var assigned string = value
+        total += Length(value)
+        dict[value] = assigned.Length
     }
+
+    if !String.IsNullOrEmpty(value) {
+        total += Length(value)
+    }
+
+    if values != nil {
+        for item in values {
+            total += item.Length
+        }
+    }
+
+    total += Length(value!!)
+    return total
 }
 
-total += Length(value!!)
-total`)
+Run()`)
         Assert.Empty(result.Diagnostics)
         Assert.Equal(11, result.Value)
     }

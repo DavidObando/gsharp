@@ -2080,7 +2080,13 @@ internal partial class StatementBinder {
             )
             typedVariablePrelude = BoundVariableDeclaration(syntax, declaredVariable, convertedValue)
         }
-        var body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel)
+        var body = BindLoopBody(
+            syntax.Body,
+            labelName,
+            out var breakLabel,
+            out var continueLabel,
+            iterationRunsUserCode: true
+        )
         if typedVariablePrelude != nil {
             body = BoundBlockStatement(originatingSyntax, ImmutableArray.Create(typedVariablePrelude, body))
         }

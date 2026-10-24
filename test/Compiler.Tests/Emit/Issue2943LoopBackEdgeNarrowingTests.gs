@@ -166,59 +166,34 @@ ok
     }
 
     @Theory
-    @InlineData("constructor", "c = C(33)", "function")
-    @InlineData("local", "c = fresh", "function")
-    @InlineData("function", "c = Mk(33)", "function")
-    @InlineData("constructor", "c = C(33)", "top-level")
-    @InlineData("local", "c = fresh", "top-level")
-    @InlineData("function", "c = Mk(33)", "top-level")
-    func NonNullAssignmentAfterUse_PreservesInheritedNarrowing(
-        shape string,
-        secondIterationAssignment string,
-        $scope string
-    ) {
-        let declarations = `import System
-
-class C {
-    let Value int32
-
-    init(value int32) {
-        Value = value
-    }
-
-    func Print() {
-        Console.WriteLine(Value)
-    }
-}
-
-func Mk(value int32) C {
-    return C(value)
-}`
-        let body = (`var c C? = C(11)
-let fresh C = C(33)
-if c != nil {
-    for var i = 0; i < 3; i++ {
-        c.Print()
-        if i == 0 {
-            c = C(22)
-        }
-        if i == 1 {
-            ` + "$secondIterationAssignment" + `
-        }
-    }
-}`)
-        let source = if $scope == "top-level" {
-            declarations + Environment.NewLine + body
-        } else {
-            declarations + Environment.NewLine + (`
-func Main() {
-` + "${Indent(body)}" + `
-}`)
-        }
+    @InlineData("constructor", "c = C(33)")
+    @InlineData("local", "c = fresh")
+    @InlineData("function", "c = Mk(33)")
+    func NonNullAssignmentAfterUse_PreservesInheritedNarrowing(shape string, secondIterationAssignment string) {
         Assert.Equal(
             "11${Environment.NewLine}22${Environment.NewLine}33${Environment.NewLine}",
-            CompileAndRun(source, "non-null-after-use-$shape-$$scope")
+            CompileAndRun(NonNullAssignmentSource(secondIterationAssignment, "function"), "non-null-after-use-$shape")
         )
+    }
+
+    // ADR-0208 R11 (#5170): a call may assign a top-level variable, so `c.Print()` cannot rely on
+    // the guard of a top-level `c`.
+    @Theory
+    @InlineData("constructor", "c = C(33)")
+    @InlineData("local", "c = fresh")
+    @InlineData("function", "c = Mk(33)")
+    func NonNullAssignmentAfterUse_OnTopLevelVariable_ReportsNullableReceiver(
+        shape string,
+        secondIterationAssignment string
+    ) {
+        let source = NonNullAssignmentSource(secondIterationAssignment, "top-level")
+        let (exitCode, output) = CompileWithDriver(source, "non-null-after-use-top-level-$shape")
+        Assert.NotEqual(0, exitCode)
+        let marker = "c.Print()"
+        let index = source.IndexOf(marker, StringComparison.Ordinal)
+        let line = source.Substring(0, index).Count((character char) -> character == '\n') + 1
+        let column = index - source.LastIndexOf('\n', index) + 2
+        Assert.Contains("test.gs($line,$column,$line,${column + 7}): error GS0159", output, StringComparison.Ordinal)
     }
 
     @Theory
@@ -607,6 +582,46 @@ func Run() {
     }
 
     shared {
+        private func NonNullAssignmentSource(secondIterationAssignment string, $scope string) string {
+            let declarations = `import System
+
+class C {
+    let Value int32
+
+    init(value int32) {
+        Value = value
+    }
+
+    func Print() {
+        Console.WriteLine(Value)
+    }
+}
+
+func Mk(value int32) C {
+    return C(value)
+}`
+            let body = (`var c C? = C(11)
+let fresh C = C(33)
+if c != nil {
+    for var i = 0; i < 3; i++ {
+        c.Print()
+        if i == 0 {
+            c = C(22)
+        }
+        if i == 1 {
+            ` + "$secondIterationAssignment" + `
+        }
+    }
+}`)
+            if $scope == "top-level" {
+                return declarations + Environment.NewLine + body
+            }
+            return declarations + Environment.NewLine + (`
+func Main() {
+` + "${Indent(body)}" + `
+}`)
+        }
+
         private func Compile(source string) GsCompilation -> GsCompilation(GsSyntaxTree.Parse(SourceText.From(source)))
 
         private func Indent(source string) string -> string.Join(

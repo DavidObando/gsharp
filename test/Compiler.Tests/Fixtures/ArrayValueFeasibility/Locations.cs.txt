@@ -1,0 +1,101 @@
+namespace ArrayValueResearch
+{
+using System;
+
+public sealed class Cell<T> { public T Value; }
+public delegate ref T Field<P, T>(ref P parent);
+internal delegate ref T Resolve<T>();
+
+// Each resolution walks the retained owner path, never a saved value or raw byref.
+public sealed class Place<T>
+{
+    private readonly Resolve<T> resolve;
+    private Place(Resolve<T> resolve) { this.resolve = resolve; }
+    internal ref T Borrow() => ref resolve();
+    public T Value { get => Borrow(); set => Borrow() = value; }
+
+    public static Place<T> From(object owner, int index = 0)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        if (owner is Cell<T> cell)
+        {
+            if (index != 0) throw new ArgumentOutOfRangeException(nameof(index));
+            return new Place<T>(() => ref cell.Value);
+        }
+        if (owner.GetType() == typeof(T[]))
+        {
+            var array = (T[])owner;
+            if ((uint)index >= (uint)array.Length) throw new ArgumentOutOfRangeException(nameof(index));
+            return new Place<T>(() => ref array[index]);
+        }
+        throw new NotSupportedException("An exact array or explicitly promoted Cell is required");
+    }
+
+    public Place<U> Select<U>(Field<T, U> field)
+    {
+        // The fixture accepts trusted, pure field projections, not arbitrary source expressions.
+        ArgumentNullException.ThrowIfNull(field);
+        return new Place<U>(() => ref field(ref Borrow()));
+    }
+}
+
+public sealed class ReadHandle<T>
+{
+    private readonly Place<T> place;
+    internal ReadHandle(Place<T> place) { this.place = place; }
+    public T Value => place.Value;
+}
+
+public sealed class WriteHandle<T>
+{
+    private readonly Place<T> place;
+    internal WriteHandle(Place<T> place) { this.place = place; }
+    public T Value { get => place.Value; set => place.Value = value; }
+    public ReadHandle<T> AsReadOnly() => new(place);
+}
+
+public sealed class ReadView<T, S> where S : struct, IStorage<T, S>
+{
+    private readonly Place<S> place;
+    private readonly int start;
+    public int Count { get; }
+    internal ReadView(Place<S> place, int start, int count)
+    { this.place = place; this.start = start; Count = count; }
+    public T this[int index] => Handle(index).Value;
+    public ReadHandle<T> Handle(int index)
+    {
+        WriteView<T, S>.CheckIndex(index, Count);
+        int selected = start + index;
+        return new ReadHandle<T>(place.Select((ref S value) => ref Element(ref value, selected)));
+    }
+    private static ref T Element(ref S value, int selected) => ref S.At(ref value, selected);
+}
+
+public sealed class WriteView<T, S> where S : struct, IStorage<T, S>
+{
+    private readonly Place<S> place;
+    private readonly int start;
+    public int Count { get; }
+    public WriteView(Place<S> place, int start, int count)
+    {
+        ArgumentNullException.ThrowIfNull(place);
+        Shape.Import(typeof(S), typeof(T), S.Count);
+        if (start < 0 || count < 0 || count > S.Count || start > S.Count - count)
+            throw new ArgumentOutOfRangeException(nameof(start));
+        this.place = place; this.start = start; Count = count;
+    }
+    internal static void CheckIndex(int index, int count)
+    {
+        if ((uint)index >= (uint)count) throw new ArgumentOutOfRangeException(nameof(index));
+    }
+    public T this[int index] { get => Handle(index).Value; set => Handle(index).Value = value; }
+    public WriteHandle<T> Handle(int index)
+    {
+        CheckIndex(index, Count);
+        int selected = start + index;
+        return new WriteHandle<T>(place.Select((ref S value) => ref Element(ref value, selected)));
+    }
+    private static ref T Element(ref S value, int selected) => ref S.At(ref value, selected);
+    public ReadView<T, S> AsReadOnly() => new(place, start, Count);
+}
+}
