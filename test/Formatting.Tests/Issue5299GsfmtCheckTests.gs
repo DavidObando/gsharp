@@ -31,7 +31,7 @@ class Issue5299GsfmtCheckTests {
             Assert.Equal(1, exitCode)
             Assert.Equal(bad1 + "\n" + bad2 + "\n", stdout.ToString().Replace("\r\n", "\n"))
             Assert.Contains("2 file(s) need formatting", stderr.ToString())
-            Assert.Contains("gsfmt -w " + root, stderr.ToString())
+            Assert.Contains("Run 'gsfmt -w ", stderr.ToString())
             Assert.Equal(Unformatted(), File.ReadAllText(bad1))
         } finally {
             Directory.Delete(root, recursive: true)
