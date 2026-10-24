@@ -263,7 +263,7 @@ the current reachability rule (ADR-0208 section 6; probe d6 depends on it).
 | Core, Core.Tests, gsc | same, keeping today's bound non-null proof | 0 errors | same |
 | Core, Core.Tests, gsc | every call also kills closure-assigned and by-reference roots (draft rules 4 and 5, unamended) | 22 errors in three Core functions (`BinderContext.gs:906-923`, `MemberLookup.gs:1108-1120`, `:3100-3172`); 0 elsewhere | same; superseded by A3, re-measured in L0 |
 | Core / Core.Tests / gsc / Oahu | `narrowing.loop-rebinds` | 62 / 0 / 0 / 7 | PR 1 (#5212) |
-| 0.5.212 | probes q1 to q13 (section 24) | q3 compiles and throws; q1, q5a, q5b, q6, q7, q8, q9, q10, q11, q12 rejected; q2 accepted, prints `5`; q4 accepted, prints `3`; q5c and q13 accepted, print `2` | this ADR |
+| 0.5.212 | probes q1 to q14 (section 24) | q3, q5d and q14 compile and throw `NullReferenceException`; q1, q5a, q5b, q6, q7, q8, q9, q10, q11, q12 rejected; q2 accepted, prints `5`; q4 accepted, prints `3`; q5c and q13 accepted, print `2` | this ADR |
 
 Not measured yet, and therefore an output of slice L0 rather than an input
 to this ADR: the comparison of the syntactic kill set of section 7 against
@@ -387,10 +387,24 @@ this walker in L3. Its output for a node is a `RegionEffects` record:
   P7 (section 8), with the proven type.
 - `DeclaredNames`: names the node declares, with their scope extents, for
   W1 composition.
+- `Calls`: one entry per call-class site (W4, W5), carrying what the shared
+  predicate asks of a call: the call category (invocation, construction,
+  getter, iteration, cleanup, suspension, user-defined operator), the
+  receiver's and each argument's root resolved at the region's entry scope
+  with its declared type, each argument's `ref`/`out`/`in` mode, and an
+  `Unresolved` mark for every operand the walker could not resolve to a
+  variable. The alias-reachability predicate of A3 (PR #5298's
+  call-reachability test, which examines operand types to decide whether a
+  call can reach a by-reference parameter's storage) is answered from
+  these entries; an `Unresolved` operand is answered as "may reach any
+  storage", the most destructive answer, so `ReadOnly()` and `Mutate(xs)`
+  give different kills when `xs` resolves and the same kill when it does
+  not.
 - flags, as in `StatementEffects` (ADR-0208 section 13):
   `ContainsCall`, `ContainsMemberWrite`, `ContainsMemberRead`,
   `ContainsPointerWrite`, `ContainsAliasTake`, `ContainsRefOrOutArgument`
   (with the argument names), `ContainsClosure`, `ContainsSuspension`,
+  `ContainsHandler` (a `catch` clause inside the region, W8),
   `ContainsUnknownKind`.
 
 The rules, each an instance of the construct table and of the lower bound:
@@ -487,6 +501,23 @@ The rules, each an instance of the construct table and of the lower bound:
   the root is also in the function-wide closure-assigned set) and its
   creation is `none`. Nothing inside a nested function body other than
   writes to captured names is attributed to the region.
+- **W8 Enclosing `when` filters.** A `when` filter of a `try` that
+  encloses the region runs in the first pass of an exception thrown
+  inside the region, before any `finally` and before a `catch` inside the
+  region handles the replacement exception that a `finally` may throw
+  (ADR-0208 section 9, probe f3). If a `catch` inside the region then
+  completes normally, execution resumes inside the region with the
+  filter's writes applied, and the back edge carries them, although no
+  syntax of the region wrote the root. So a region with `ContainsHandler`
+  (a `catch` clause anywhere inside it) adds the function-wide filter
+  write set (ADR-0208 section 10's scan, `FilterWrites`, which applies this
+  same walker to every `when` filter of the function) to its own record.
+  A region without a `catch` needs nothing: an exception that leaves the
+  region never comes back to its back edge. Probe q14 (the f3 shape inside
+  `while s.Length > 0 && n < 2`, inner `catch (InvalidOperationException)`
+  falling through, outer `catch (FormatException) when Clear(ref s)` with
+  `Clear` storing nil and returning true) is the witness: the header is
+  evaluated with `s` nil after the inner handler resumes the loop.
 
 **From `RegionEffects` to `L` (the consumer rule).** For each fact in `S`
 on a path with root `r`, in this order: (i) if `ContainsUnknownKind`, drop
@@ -500,7 +531,10 @@ record reports to `r`'s fact, exactly as the straight-line pass applies it
 to a statement with those effects: `ContainsCall`, `ContainsMemberWrite`
 (R12: a member, index or indirect write kills the alias class, `MayShareStorage`),
 `ContainsPointerWrite`, `ContainsRefOrOutArgument` on `r` or on a member of
-its alias class, `ContainsAliasTake` on `r`, and every root `w` **other than `r`** in
+its alias class, `ContainsAliasTake` on `r`, each entry of `Calls` with its resolved
+operands (an `Unresolved` operand answers the alias-reachability question
+of A3 as "may reach any storage"), the filter write set when
+`ContainsHandler` (W8), and every root `w` **other than `r`** in
 `AssignedNames` with `MayShareStorage(w, r)` (a write to `x` kills the facts
 of a `ref` local `a` that aliases `x`: probe d4; `MayShareStorage(r, r)` is
 true by `SharesStorage`, so the identical root is excluded here and its
@@ -750,7 +784,11 @@ them after the R6 slice is deleted here.
 - A `catch` inside the body is entered under `Lower(S_try, ...)` with
   `S_try ⊇ L`, and its normal exit joins the statement after the `try`
   (ADR-0208 section 9). The handler re-enters the body, so writes in the
-  handler are in `R` and in the kill set (W7, nested regions).
+  handler are in `R` and in the kill set (W7, nested regions), and so are
+  the writes of every `when` filter of an enclosing `try`, which can run
+  before the handler and whose effects the handler's normal exit carries
+  to the back edge (W8, probe q14). The handler-entry rule of ADR-0208
+  alone does not protect the header, which was bound before the handler.
 - A throw out of the body into a handler outside the loop: the handler's
   lower bound is computed from the bound effects of the protected block,
   which include the loop's (J12).
@@ -965,7 +1003,7 @@ section 24) or a named test.
 
 | # | Invariant | Rows | Mutant |
 | --- | --- | --- | --- |
-| I1 | Region closure: every effect the walker finds in `R` is applied to `S` before `R` is bound, so every state inside `R` includes `L` and the back edge carries `⊇ L` | e4, f4, e2b (after), e3 (after), d3 loop form, d4 loop form, `out-alias`, c5, c6, c7, cB, q3, q9 | exempt writes followed by `break`/`return` (e2b accepted); treat a call as `none` (q3, c5, c6, cB accepted); treat `out`/`ref` arguments as reads (`out-alias` accepted) |
+| I1 | Region closure: every effect the walker finds in `R`, and every enclosing-filter write a `catch` in `R` can carry back (W8), is applied to `S` before `R` is bound, so every fact of `L` holds everywhere in `R` and on the back edge | q14, e4, f4, e2b (after), e3 (after), d3 loop form, d4 loop form, `out-alias`, c5, c6, c7, cB, q3, q9 | exempt writes followed by `break`/`return` (e2b accepted); treat a call as `none` (q3, c5, c6, cB accepted); treat `out`/`ref` arguments as reads (`out-alias` accepted) |
 | I2 | Entry completeness: `S` joins every edge into `R` from outside, forward `goto`s into labels inside `R` included | c3a, q6 (a forward `goto` into a `while` body past the guard; rejected today and after) | build `S` from the fall-in state only (c3a accepted; q6 accepted and the header dereferences nil at run time) |
 | I3 | Scope-aware names: a region-local declaration does not kill the outer variable; an unrecognised declaration kills | e16, q4 (a loop body's `let s` shadowing the narrowed `s` with a guard inside; accepted) | resolve names without the declaration stack (e16 rejected) |
 | I4 | Closed kind list: an unlisted syntax kind empties the region's entry state (W6; stronger than `call`, which keeps plain locals) | the `SyntaxKind` enumeration test, and a walker unit test that an unlisted kind yields `ContainsUnknownKind` and `L = Empty` | class an unlisted kind `none` or `call` (both red) |
@@ -1129,7 +1167,8 @@ reverted; the slice's PR body lists the mutant and the rows it turned red:
 | M21 `goto` inside a `try` excluded because the `finally` ends in `return` | section 11 participants | q10 |
 | M22 span bound from `L` at its labels only, not at its first statement | section 11 span entry | q11 (the header read is accepted under the mutant and dereferences nil) |
 | M23 shared predicate consulted after P7 (steps (ii) to (iv) after (vi)) | section 7 consumer rule | d4 loop form, f2 loop form, a `b = Box{}` row after a guard on `b.Pet` |
-| M24 a member read resolved at the entry scope as a field or auto property classed `none` | W5 | q5d (`if b is Derived { let n = b.Count }` inside the loop, where `Base.Count` is a field and `Derived.Count` a getter with a body that clears a guarded root; accepted under the mutant and dereferences nil) |
+| M24 a member read resolved at the entry scope as a field or auto property classed `none` | W5 | q5d (`x.Value` read first, then `if b is Derived { let c = b.Count }`, two iterations; `Base.Count` is a field and `Derived.Count` a getter with a body that clears `x`; the stale fact is reached through the back edge, not caught by the straight-line kill after the getter; accepted under the mutant and dereferences nil) |
+| M27 filter write set omitted from a region that contains a `catch` | W8 | q14 (accepted under the mutant; the header dereferences nil after the inner handler resumes the loop) |
 | M26 `MayShareStorage(r, r)` applied to the identical root in step (iv) | section 7 consumer rule | e15, c8 (`dog`), the `constructor` rows of `NonNullAssignmentAfterUse_PreservesInheritedNarrowing` (all rejected under the mutant) |
 | M13 `do` body bound under `S` | T6 | q8 |
 | M14 span shrunk to label-through-own-`goto` | section 11 | c3b |
@@ -1269,7 +1308,7 @@ measured for this ADR; the sources are in the References section.
 | q5a | `if b.Pet == nil { return }`; loop body `Consume(x.Count); b.Pet.Name.Length` where `Count` is a source getter with a body | `GS0158` on `b.Pet.Name` | `GS0158` (R7 (e), no change) |
 | q5b | as q5a with `sb.Length` on a `StringBuilder` (an imported getter) | `GS0158` on `b.Pet.Name` | `GS0158` (R7 (e), no change) |
 | q5c | `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { let len = sb.Length; total = total + x.Value + len }; clear()` (no call in the loop) | accepted, prints `2` | `GS0158` on `x.Value` (R7 (e), under today's R14 reading of an imported getter; follows #5231) |
-| q5d | `open class Base { var Count int32 }`, `class Derived : Base { prop Count int32 { get { clear(); return 0 } } }` (hiding a field with a getter that clears a guarded closure-assigned root); guard; loop body `if b is Derived { let n = b.Count }; total += x.Value` | to measure in L0 (expected accepted and throws on today's compiler if the straight-line getter rule does not see the hidden getter) | `GS0158` on `x.Value` (R7 (e); M24) |
+| q5d | `open class Base { var Count int32 }`, `class Derived : Base { prop Count int32 { get { clear(); return 0 } } }` (hiding a field with a getter that clears a guarded closure-assigned root `x`); `let b Base = Derived(clear)`; guard; loop body `total = total + x.Value; if b is Derived { let c = b.Count }`, run for two iterations | accepted; throws `NullReferenceException` on the second iteration | `GS0158` on `x.Value` (R7 (e); M24) |
 | q6 | `if skip { goto Inside }; if s == nil { return 0 }; while count < 3 && s.Length < 9 { Inside: count++ }` | `GS0158` on the header read (#4285) | `GS0158` on the header read (I2, J6); under the R6 slice without J6: accepted and the header dereferences nil |
 | q7 | `while s != nil { if c { break }; s = Next(s) }; s.Length` | `GS0158` | `GS0158` (T1 exit) |
 | q8 | guard; `do { n = n + s.Length; s = Next(s) } while n < 10` | `GS0158`, `GS0154` | `GS0158`, `GS0154` (T6; `Next(s)` still receives a `string?`) |
@@ -1278,6 +1317,7 @@ measured for this ADR; the sources are in the References section.
 | q11 | guard; `while count < 3 && s.Length < 9 { Inside: count++; i++ }; s = nil; if i < n { goto Inside }` | `GS0158` on the header read (#4285) | `GS0158` on the header read (section 11, span entry: the span starts at the `while` statement and is bound from `L`; M22) |
 | q12 | `var s string? = Get(c); while s == nil { s = "ok" }; return s.Length` | `GS0158` | accepted, prints `2` (R7 (f); M12) |
 | q13 | as q12 with `return s!!.Length` | accepted, prints `2` | `GS0536` on `s!!` (R7 (f) compatibility; the `!!` is redundant after the loop) |
+| q14 | guard; `try { while s.Length > 0 && n < 2 { n++; try { try { throw FormatException("f") } finally { throw InvalidOperationException("g") } } catch (InvalidOperationException) { } } } catch (FormatException) when Clear(ref s) { return -1 }` with `Clear` storing nil and returning true | accepted (warning GS0612 only); throws `NullReferenceException` at the header on the second iteration | `GS0158` on the header read (W8; M27) |
 
 ## Consequences
 
