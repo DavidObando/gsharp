@@ -2000,7 +2000,7 @@ internal class TypeDefEmitter {
             importedBaseType.HasSubstitutableTypeArgument == true {
             let signature = BlobBuilder()
             this.encodeTypeSymbol(BlobEncoder(signature).TypeSpecificationSignature(), importedBaseType)
-            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(signature))
+            return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(signature))
         }
         return this.getImportedTypeHandle(
             Invariant.Required(
@@ -2048,7 +2048,7 @@ internal class TypeDefEmitter {
         )
         return this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: this.GetImportedBaseTypeHandle(importedBaseType),
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),

@@ -431,7 +431,7 @@ internal class UserTokenResolver {
         for var i = 0; i < args.Length; i++ {
             this.signatures.EncodeTypeSymbol(argsEnc.AddArgument(), args[i])
         }
-        return this.emitCtx.Metadata.AddMethodSpecification(openMethod, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        return this.emitCtx.MetadataRows.AddMethodSpecification(openMethod, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
     }
 
     /// Issue #2793: builds the user-struct `TypeSpec` cache key for
@@ -498,7 +498,9 @@ internal class UserTokenResolver {
         for arg in typeArgs {
             this.signatures.EncodeTypeSymbol(gi.AddArgument(), arg)
         }
-        let spec = EntityHandle(this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob)))
+        let spec = EntityHandle(
+            this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        )
         this.userStructTypeSpecCache[cacheKey] = spec
         return spec
     }
@@ -623,7 +625,9 @@ internal class UserTokenResolver {
         for arg in typeArgs {
             this.signatures.EncodeTypeSymbol(gi.AddArgument(), arg)
         }
-        let spec = EntityHandle(this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob)))
+        let spec = EntityHandle(
+            this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        )
         this.userEnumTypeSpecCache[cacheKey] = spec
         return spec
     }
@@ -663,7 +667,9 @@ internal class UserTokenResolver {
         for arg in typeArgs {
             this.signatures.EncodeTypeSymbol(gi.AddArgument(), arg)
         }
-        let spec = EntityHandle(this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob)))
+        let spec = EntityHandle(
+            this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        )
         this.userDelegateTypeSpecCache[cacheKey] = spec
         return spec
     }
@@ -702,7 +708,7 @@ internal class UserTokenResolver {
         let memberRef = EntityHandle(
             this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -755,7 +761,7 @@ internal class UserTokenResolver {
         let memberRef = EntityHandle(
             this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString("Invoke"),
@@ -834,7 +840,7 @@ internal class UserTokenResolver {
         let memberRef = EntityHandle(
             this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString(defField.Name),
@@ -873,7 +879,7 @@ internal class UserTokenResolver {
             this.signatures.EncodeTypeSymbol(BlobEncoder(signature).FieldSignature(), field.Type)
             return this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 this.ResolveUserTypeToken(containingType),
                 this.emitCtx.Metadata.GetOrAddString(field.Name),
@@ -924,7 +930,7 @@ internal class UserTokenResolver {
         let memberRef = EntityHandle(
             this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString(defField.Name),
@@ -957,7 +963,7 @@ internal class UserTokenResolver {
         let memberRef = EntityHandle(
             this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString(methodName),
@@ -1274,7 +1280,7 @@ internal class UserTokenResolver {
         let memberRef = EntityHandle(
             this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString(methodName),
@@ -1524,7 +1530,9 @@ internal class UserTokenResolver {
         for arg in typeArgs {
             this.signatures.EncodeTypeSymbol(gi.AddArgument(), arg)
         }
-        let spec = EntityHandle(this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob)))
+        let spec = EntityHandle(
+            this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        )
         this.userInterfaceTypeSpecCache[cacheKey] = spec
         return spec
     }
@@ -1556,7 +1564,7 @@ internal class UserTokenResolver {
         let memberRef = EntityHandle(
             this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString(openMethod.Name),

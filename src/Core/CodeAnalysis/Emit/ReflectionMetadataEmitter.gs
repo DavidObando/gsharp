@@ -4720,7 +4720,7 @@ internal class ReflectionMetadataEmitter {
         blob.WriteCompressedInteger(CodedIndex.TypeDefOrRefOrSpec(valueTypeRef))
         this.unmanagedConstraintTypeSpec = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(blob))
         return this.unmanagedConstraintTypeSpec
     }

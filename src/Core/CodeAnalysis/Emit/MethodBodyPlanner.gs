@@ -748,7 +748,7 @@ internal class MethodBodyPlanner {
         let encoder = BlobEncoder(sigBlob).TypeSpecificationSignature()
         let gi = encoder.GenericInstantiation(openHandle, genericArgumentCount: 1, isValueType: false)
         this.encodeTypeSymbol(gi.AddArgument(), elementType)
-        return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
     }
 
     func AddAsyncIteratorInterfaceImplementations(smClass StructSymbol, plan AsyncIteratorPlan) {

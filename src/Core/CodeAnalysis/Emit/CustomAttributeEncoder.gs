@@ -104,7 +104,7 @@ internal class CustomAttributeEncoder {
         )
         let ctorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -151,7 +151,7 @@ internal class CustomAttributeEncoder {
         )
         let ctorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -597,7 +597,7 @@ internal class CustomAttributeEncoder {
         let attrTypeRef = this.getTypeReference(resolved!!)
         let ctorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
