@@ -170,7 +170,7 @@ open class Issue5144MetadataTypeSymbolTests {
         // The description keeps the parameter rows although the base is missing, on both sides.
         let described = MetadataModelComparison.DescribeSymbol(leaf)
         Assert.Contains("T:0:0,U:1:0", described)
-        Assert.EndsWith("|base-missing", described)
+        Assert.Contains("|base-missing|", described)
         Assert.Equal(
             described,
             MetadataModelComparison.DescribeType(resolver.FindTypeForComparison("LeafG5144", "Leaf5144`2")!!)
@@ -202,7 +202,7 @@ open class Issue5144MetadataTypeSymbolTests {
         Assert.False(symbol.IsBaseChainComplete)
         let described = MetadataModelComparison.DescribeSymbol(symbol)
         Assert.Contains("T:0:0", described)
-        Assert.EndsWith("|base-missing", described)
+        Assert.Contains("|base-missing|", described)
         Assert.Equal(
             described,
             MetadataModelComparison.DescribeType(resolver.FindTypeForComparison("LeafH5144", "LeafH5144`1")!!)

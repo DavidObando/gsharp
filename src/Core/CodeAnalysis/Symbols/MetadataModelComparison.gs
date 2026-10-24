@@ -235,8 +235,9 @@ internal shared class MetadataModelComparison {
             kinds.IsSealed,
             symbol.EnclosingType?.FullName ?? ""
         )
+        // The constraints do not depend on the base chain, so they compare even when the chain is not complete.
         if !symbol.IsBaseChainComplete {
-            return own + "|base-missing"
+            return own + "|base-missing|" + ConstraintsOf(symbol)
         }
         return own + "|" + string.Join(
             "|",
@@ -320,7 +321,7 @@ internal shared class MetadataModelComparison {
             ex is FileLoadException ||
             ex is BadImageFormatException ||
             ex is TypeLoadException {
-            return own + "|base-missing"
+            return own + "|base-missing|" + ConstraintsOf(type)
         }
     }
 

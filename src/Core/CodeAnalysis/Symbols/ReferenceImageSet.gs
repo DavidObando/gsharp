@@ -208,13 +208,10 @@ internal class ReferenceImageSet {
     }
 
     /// Tells whether a definition is the well-known type with this tag.
-    /// The definition counts when it is the table entry itself, or when it has the name of the entry and
-    /// lives in a core library. A core library defines its own special types.
+    /// The definition must have the name of the table entry and live in a core library. A namesake in any other
+    /// assembly is not the special type, even when it comes first in the table.
     internal func IsWellKnown(module MetadataModule, handle TypeDefinitionHandle, special SpecialType) bool {
         let known = WellKnown.Get(special)
-        if known.Module != nil && object.ReferenceEquals(known.Module, module) && known.Handle == handle {
-            return true
-        }
         return module.IsCoreLibrary && string.Equals(
             module.GetFullName(handle),
             known.FullName,

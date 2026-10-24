@@ -143,7 +143,7 @@ open class Issue5144SignatureDecoderTests {
         Assert.True(symbol.BaseDefinition!!.IsResolved)
         Assert.True(MetadataTypeKeys.ContainsMissing(symbol.BaseType))
         Assert.False(symbol.IsBaseChainComplete)
-        Assert.EndsWith("|base-missing", MetadataModelComparison.DescribeSymbol(symbol))
+        Assert.Contains("|base-missing|", MetadataModelComparison.DescribeSymbol(symbol))
         Assert.Empty(MetadataModelComparison.Compare(resolver, set))
     }
 
@@ -232,6 +232,61 @@ open class Issue5144SignatureDecoderTests {
         module.TryGetDefinition("System.Decimal", out var decimalHandle)
         Assert.Equal("Namesake5144N!System.Decimal", MetadataTypeKeys.Of(module.GetTypeSymbol(decimalHandle)))
         Assert.Equal("System.Nullable`1<System.Int32>", MetadataTypeKeys.Of(typeof(Nullable[int32])))
+    }
+
+    @Fact
+    func ANamesakeThatComesFirst_IsNotCanonicalizedToTheBuiltInOrNullable() {
+        using let namesake = CSharpFixture(
+            "namespace System { public class Nullable<T> where T : struct {} public struct Decimal {} }",
+            assemblyName: "NamesakeFirst5144"
+        )
+        let coreLibPath = typeof(object).Assembly.Location
+        // The namesake comes first, so it is the first writer of both names in the table.
+        let set = ReferenceImageSet(
+            ImmutableArray.Create(
+                ReferenceImage(System.IO.File.ReadAllBytes(namesake.AssemblyPath), namesake.AssemblyPath, true),
+                ReferenceImage(System.IO.File.ReadAllBytes(coreLibPath), coreLibPath, true)
+            )
+        )
+        let module = set.FindModule("NamesakeFirst5144")!!
+        module.TryGetDefinition("System.Decimal", out var decimalHandle)
+        module.TryGetDefinition("System.Nullable`1", out var nullableHandle)
+        let decoder = module.Decoder
+        let decimalSymbol = decoder.GetTypeFromDefinition(module.Reader, decimalHandle, 0)
+        Assert.NotSame(TypeSymbol.Decimal, decimalSymbol)
+        Assert.IsType[MetadataTypeSymbol](decimalSymbol)
+        let nullableSymbol = decoder.GetTypeFromDefinition(module.Reader, nullableHandle, 0)
+        Assert.IsType[ConstructedMetadataTypeSymbol](
+            decoder.GetGenericInstantiation(nullableSymbol, ImmutableArray.Create[TypeSymbol](TypeSymbol.Int32))
+        )
+        // The framework copies still canonicalize.
+        let coreLib = set.FindModule("System.Private.CoreLib")!!
+        coreLib.TryGetDefinition("System.Decimal", out var frameworkDecimal)
+        Assert.Same(TypeSymbol.Decimal, coreLib.Decoder.GetTypeFromDefinition(coreLib.Reader, frameworkDecimal, 0))
+    }
+
+    @Fact
+    func AReadableConstraint_StillComparesWhenTheBaseIsMissing() {
+        using let lib = CSharpFixture("namespace N5144Q { public class Root {} }", assemblyName: "RootQ5144")
+        using let leaf = CSharpFixture(
+            "using System; public class Leaf5144Q<T> : N5144Q.Root where T : IDisposable {}",
+            []Microsoft
+                .CodeAnalysis
+                .MetadataReference{Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(lib.AssemblyPath)},
+            assemblyName: "LeafQ5144"
+        )
+        using let resolver = HandleResolver([]string{leaf.AssemblyPath})
+        let set = resolver.ImageSet!!
+        let module = set.FindModule("LeafQ5144")!!
+        module.TryGetDefinition("Leaf5144Q`1", out var handle)
+        let symbol = module.GetTypeSymbol(handle)
+        let described = MetadataModelComparison.DescribeSymbol(symbol)
+        Assert.Contains("|base-missing|System.Private.CoreLib!System.IDisposable", described)
+        Assert.Equal(
+            described,
+            MetadataModelComparison.DescribeType(resolver.FindTypeForComparison("LeafQ5144", "Leaf5144Q`1")!!)
+        )
+        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
     }
 
     @Fact
