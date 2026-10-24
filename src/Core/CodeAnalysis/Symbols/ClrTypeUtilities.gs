@@ -900,6 +900,20 @@ shared class ClrTypeUtilities {
         )
     }
 
+    /// Enumerates [`type`](paramref) followed by every interface it implements,
+    /// using the guarded transitive walk of (cref:SafeGetInterfaces).
+    /// @param type The starting CLR type.
+    /// @param includeSelfWhenClass When false, [`type`](paramref) itself is yielded only if it is an interface.
+    /// @returns The type (per the self policy) and then its interfaces in walk order.
+    internal func EnumerateSelfAndInterfaces(type Type, includeSelfWhenClass bool) sequence[Type] {
+        if includeSelfWhenClass || type.IsInterface {
+            yield type
+        }
+        for implemented in SafeGetInterfaces(type) {
+            yield implemented
+        }
+    }
+
     @return: NotNullIfNotNull("type")
     internal func RemapHostCoreTypeToContext(type Type?, contextObject Type?) Type? {
         if type == nil || contextObject == nil || object.ReferenceEquals(
