@@ -385,6 +385,14 @@ internal partial class ExpressionBinder {
         return FinishPostfixCompoundAssignment(indexSyntax, statements, previousDeclaration, previousValue, assignment)
     }
 
+    private func RejectNativeSpanAllocation(syntax ExpressionSyntax) BoundExpression {
+        Diagnostics.ReportNativeSpanType(
+            syntax.Location,
+            "span aliases add no collection-literal allocation; use an existing CLR span constructor explicitly"
+        )
+        return BoundErrorExpression(syntax)
+    }
+
     private func BindNativeBufferLiteral(syntax CollectionInitializerExpressionSyntax) BoundExpression {
         if syntax.BufferType is {Identifier: {} spanName} spanType &&
             (
@@ -395,12 +403,9 @@ internal partial class ExpressionBinder {
                 expression: true
             )
         ) {
-            Diagnostics.ReportNativeSpanType(
-                syntax.Location,
-                "span aliases add no collection-literal allocation; use an existing CLR span constructor explicitly"
-            )
-            return BoundErrorExpression(syntax)
+            return RejectNativeSpanAllocation(syntax)
         }
+
         if syntax.BufferType is {ReadOnlySliceModifier: nil, Identifier: {} name} ordinaryType &&
             !binderCtx
             .CanUseNativeBufferAlias($scope, name, getCurrentFunction(), expression: true) {
