@@ -145,8 +145,8 @@ internal partial class StatementBinder {
 
     // The one kill rule for a gain. The legacy passes own every kill that a write causes
     // (row R2, a later PR). A member-path fact is proved after the calls of the condition
-    // and the initializer (row R5), so only the branches' effects and the writes of the
-    // whole statement kill it. A fact on a plain root, or on an external-storage alias, is
+    // and the initializer (row R5), so only the branches' effects, the writes of the
+    // whole statement and an unknown write to its root kill it. A fact on a plain root, or on an external-storage alias, is
     // proved by a test that a later call in the condition can follow, so the whole
     // statement kills it.
     private func KillsJoinGain(
@@ -157,7 +157,10 @@ internal partial class StatementBinder {
         statementMutatesMembers bool
     ) bool {
         if path.HasMembers && !IsExternalStorageAlias(path.Root) {
+            // The members are immutable, so a call in the condition can only invalidate the
+            // fact by replacing the root, and it can do that after the test.
             return statementEffects.AssignsRoot(path.Root) ||
+                MayBeMutatedByUnknownWrite(statementEffects, AccessPath.ForVariable(path.Root)) ||
                 StatementKillsPath(branchEffects, path, branchesMutateMembers)
         }
         return StatementKillsPath(statementEffects, path, statementMutatesMembers)

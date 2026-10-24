@@ -25,7 +25,7 @@ import Xunit
 /// rows in the same change, and they now record GS0158.
 /// Each row names the row of ADR-0208 section 16 that changes it, if any.
 /// PR 2, slice 2a flipped e7 (Run2), e8, e10, e21, f1, f6 and g4 (rows R1, R3,
-/// R5) and added h1 to h7, i1, i2, j1, k1, k2, l1, l2, m1 and n1 (issue #5206, amendment A1). They now
+/// R5) and added h1 to h7, i1, i2, j1, k1, k2, l1, l2, m1, n1, o1, o2 and o3 (issue #5206, amendment A1). They now
 /// record the new result. The rows h1 and h2 stay rejected until slice 2b (R2).
 open class Adr0208NarrowingCorpusTests {
     /// Compiles one probe, checks its diagnostics, and for a program that
@@ -183,6 +183,9 @@ open class Adr0208NarrowingCorpusTests {
                 "l2_condition_call_kills_member_path_on_alias",
                 "m1_unrelated_interface_refinement",
                 "n1_boxed_value_type_test",
+                "o1_callback_after_test_replaces_root",
+                "o2_callback_in_or_arm_replaces_root",
+                "o3_callback_in_else_if_replaces_root",
                 "out-alias_out_ref_alias"
             },
             names
@@ -1179,6 +1182,61 @@ func Main() {
     return x
 }
 func Main() { Console.WriteLine(Run(5)) }`, "", "run", "5", ""}
+            yield[]object{"o1_callback_after_test_replaces_root", `class Pet { var Name string = "a" }
+class Box {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Run() string {
+    var b = Box(Pet())
+    let clear = func() bool {
+        b = Box(nil)
+        return true
+    }
+    if b.Pet != nil && clear() {
+    } else {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@16:18", "reject", "", ""}
+            yield[]object{"o2_callback_in_or_arm_replaces_root", `class Pet { var Name string = "a" }
+class Box {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Run() string {
+    var b = Box(Pet())
+    let clear = func() bool {
+        b = Box(nil)
+        return false
+    }
+    if b.Pet == nil || clear() {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@15:18", "reject", "", ""}
+            yield[]object{"o3_callback_in_else_if_replaces_root", `class Pet { var Name string = "a" }
+class Box {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Run(c bool) string {
+    var b = Box(Pet())
+    let clear = func() bool {
+        b = Box(nil)
+        return true
+    }
+    if c {
+        return ""
+    } else if b.Pet != nil && clear() {
+    } else {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run(false)) }`, "GS0158@18:18", "reject", "", ""}
             yield[]object{"i1_5206_type_test_against_unrelated_interface", `interface IInit {
     func Init();
 }
