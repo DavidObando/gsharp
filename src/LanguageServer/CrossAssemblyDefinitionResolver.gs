@@ -578,7 +578,7 @@ internal shared class CrossAssemblyDefinitionResolver {
         declaration = nil
         // Reuse never re-points a delegate's declaration, so read the current trees for the syntax.
         if FindDeclaredType(compilation, type) is DelegateTypeSymbol found {
-            declaration = FindCurrentDelegateDeclaration(compilation!!, found.Declaration)
+            declaration = FindCurrentDelegateDeclaration(compilation!!, found.Declaration) ?? found.Declaration
             return declaration != nil
         }
         return false
@@ -608,7 +608,7 @@ internal shared class CrossAssemblyDefinitionResolver {
                 !string.IsNullOrEmpty(fileName) && string.Equals(
                     tree.Text?.FileName,
                     fileName,
-                    StringComparison.Ordinal
+                    StringComparison.OrdinalIgnoreCase
                 )
             ) {
                 let currents = List[DelegateDeclarationSyntax]()
