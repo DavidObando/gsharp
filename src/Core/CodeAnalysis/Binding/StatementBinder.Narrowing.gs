@@ -73,7 +73,9 @@ internal partial class StatementBinder {
 
     // A caller can pass any mutable global by reference; an address-taken or closure-assigned root can be
     // reached through an alias as well.
-    private func MayBeReachedByAlias(root VariableSymbol) bool -> (root is GlobalVariableSymbol && !root.IsReadOnly) ||
+    private func MayBeReachedByAlias(root VariableSymbol) bool -> (
+        !(root is LocalVariableSymbol) && !(root is ParameterSymbol) && !root.IsReadOnly
+    ) ||
         binderCtx.MayBeAssignedByClosure(root)
 
     /// ADR-0208 R12 (#5171): removes every narrowing whose root may share storage with
@@ -4234,6 +4236,10 @@ internal partial class StatementBinder {
             return (origin as BoundVariableExpression)?.Variable
         }
 
+        // The receiver of a struct method is the caller's storage, although its RefKind is None.
+        private func IsValueTypeReceiver(parameter ParameterSymbol) bool -> parameter.IsReceiverParameter &&
+            parameter.Type is StructSymbol{IsClass: false}
+
         /// ADR-0208 R12 (#5171): [`root`](paramref) followed by the variables
         /// it aliases through plain `ref` local initializers.
         internal func AliasChain(root VariableSymbol) List[VariableSymbol] {
@@ -4254,7 +4260,7 @@ internal partial class StatementBinder {
         /// can change that storage.
         internal func IsExternalStorageAlias(root VariableSymbol) bool {
             if root is ParameterSymbol parameter {
-                return parameter.RefKind != RefKind.None
+                return parameter.RefKind != RefKind.None || IsValueTypeReceiver(parameter)
             }
             if !(root is LocalVariableSymbol local) || local.RefKind == RefKind.None {
                 return false
@@ -4262,7 +4268,7 @@ internal partial class StatementBinder {
             let chain = AliasChain(root)
             let last = chain[chain.Count - 1]
             if last is ParameterSymbol lastParameter {
-                return lastParameter.RefKind != RefKind.None
+                return lastParameter.RefKind != RefKind.None || IsValueTypeReceiver(lastParameter)
             }
             if last is LocalVariableSymbol lastLocal {
                 return lastLocal.RefKind != RefKind.None

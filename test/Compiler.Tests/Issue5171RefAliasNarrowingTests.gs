@@ -536,6 +536,73 @@ func Run(ref a C?) int32 {
 }
 Console.WriteLine(Run(ref store[0]))
 `}
+            yield[]object{"member-not-null-field-and-ref-parameter", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Box {
+    var Field C?
+
+    @System.Diagnostics.CodeAnalysis.MemberNotNull(members: []string{"Field"})
+    func Init() {
+        Field = C{}
+    }
+
+    func Run(ref a C?) int32 {
+        this.Init()
+        a = nil
+        return Field.Value
+    }
+}
+let box = Box{}
+Console.WriteLine(box.Run(ref box.Field))
+`}
+            yield[]object{"using-let-getter-clears-aliased-member", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Res : IDisposable {
+    func Dispose() { }
+}
+class Box {
+    var Field C? = C{}
+    prop Clear Res {
+        get {
+            Field = nil
+            return Res{}
+        }
+    }
+}
+func Run(ref a C?, box Box) int32 {
+    if a == nil { return 0 }
+    using let r = box.Clear
+    return a.Value
+}
+let box = Box{}
+Console.WriteLine(Run(ref box.Field, box))
+`}
+            yield[]object{"struct-receiver-and-ref-parameter", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+struct S {
+    let Field C?
+
+    func Read(ref other S, empty S) int32 {
+        if this.Field == nil { return 0 }
+        other = empty
+        return this.Field.Value
+    }
+}
+var s = S{Field: C{}}
+Console.WriteLine(s.Read(ref s, S{}))
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
