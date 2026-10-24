@@ -323,6 +323,22 @@ internal shared class NullabilityImportRule {
                 // Pointers are not reference types (issue #2176).
                 return TypeArgumentKind.Value
             }
+            case modified is MetadataModifiedTypeSymbol {
+                return ClassifyArgument(modified.Unmodified)
+            }
+            case definition is MetadataTypeSymbol {
+                return if definition.Kinds.IsValueType {
+                    TypeArgumentKind.Value
+                } else {
+                    TypeArgumentKind.Reference
+                }
+            }
+            case constructed is ConstructedMetadataTypeSymbol {
+                return ClassifyArgument(constructed.Definition)
+            }
+            case _ is MetadataFunctionPointerTypeSymbol {
+                return TypeArgumentKind.Value
+            }
             case imported is ImportedTypeSymbol when imported.OpenDefinition?.IsValueType == true {
                 return TypeArgumentKind.Value
             }
