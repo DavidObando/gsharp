@@ -9,6 +9,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// member-access chain ending at the event name (so multi-segment receivers
 /// such as `foo.Bar.Baz.Event += h` are captured naturally as an
 /// (cref:AccessorExpressionSyntax)).
+@SyntaxChildSourceOrder
 partial class EventSubscriptionExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:EventSubscriptionExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.

@@ -5,7 +5,7 @@ Each test builds a small syntax directory in a temporary folder and runs the
 generator on it. The checks cover the property order (declared properties
 first, then each base class), the classification of child types, the skipped
 members, the failure on an unsupported collection type, and the `--check` mode.
-The last test runs `--check` on the real repository, so a change to a node
+Source-order tests cover the `@SyntaxChildSourceOrder` marker (issue #5185). The last test runs `--check` on the real repository, so a change to a node
 class without a regenerated file fails here as well as in CI.
 """
 
@@ -76,6 +76,20 @@ open class PairSyntax : MemberSyntax {
         prop Static SyntaxToken {
             get;
         }
+    }
+}
+"""
+
+
+PLAIN = """package GSharp.Core.CodeAnalysis.Syntax
+
+class PlainSyntax : SyntaxNode {
+    prop First SyntaxToken {
+        get;
+    }
+
+    prop Second SyntaxToken {
+        get;
     }
 }
 """
@@ -155,7 +169,7 @@ class GeneratorCase(unittest.TestCase):
         self.assertEqual(set(generated), expected)
         for name, part in sorted(generated.items()):
             guard = f"GetType() != ExactTypeOf{name}"
-            accessors = [m for m in ("ChildCount", "GetChild(", "BuildChildren(") if m in part]
+            accessors = [m for m in ("ChildCount", "GetChild(", "BuildChildren(", "BuildUnsortedChildren(") if m in part]
             self.assertTrue(accessors, name)
             if classes[name].is_open:
                 bodies = part.split("internal override ")[1:]
@@ -166,10 +180,35 @@ class GeneratorCase(unittest.TestCase):
                 self.assertNotIn("GetType()", part, name)
             self.assertNotRegex(part, r"[=!]=\s*typeof\(", f"{name}: Issue835 pattern")
             for body in part.split("internal override ")[1:]:
-                if body.startswith("func BuildChildren"):
+                if body.startswith(("func BuildChildren", "func BuildUnsortedChildren")):
                     continue
                 for computed in ("EnumerableItems(", "PresentTokens("):
                     self.assertNotIn(computed, body, f"{name}: lookup copies a computed property")
+
+    def test_source_ordered_class_sorts_its_children(self) -> None:
+        """A class with @SyntaxChildSourceOrder, or derived from one, sorts by source position."""
+        marked = BASE.replace("abstract class MemberSyntax", "@SyntaxChildSourceOrder\nabstract class MemberSyntax")
+        root = make_tree({"Base.gs": marked, "PairSyntax.gs": NODE, "Plain.gs": PLAIN})
+        text = gen.generate(root)
+        pair = text[text.index("partial class PairSyntax"):text.index("partial class PlainSyntax")]
+        plain = text[text.index("partial class PlainSyntax"):]
+        self.assertIn("internal override func BuildUnsortedChildren()", pair)
+        self.assertNotIn("func BuildChildren()", pair)
+        self.assertNotIn("SortBySourcePosition", pair)
+        self.assertNotIn("BuildUnsortedChildren", plain)
+        self.assertIn("internal override prop ChildCount", plain)
+
+    def test_attribute_on_the_class_itself_is_enough(self) -> None:
+        own = PLAIN.replace("class PlainSyntax", "@SyntaxChildSourceOrder\nclass PlainSyntax")
+        root = make_tree({"Base.gs": BASE, "Plain.gs": own})
+        self.assertIn("func BuildUnsortedChildren()", gen.generate(root))
+
+    def test_repository_sorts_the_known_shape_dependent_classes(self) -> None:
+        text = gen.generate(REPO)
+        for name in ("UnaryExpressionSyntax", "TypeClauseSyntax", "StructDeclarationSyntax", "FunctionDeclarationSyntax"):
+            part = text[text.index(f"partial class {name} {{"):]
+            part = part[:part.index("\n}\n")]
+            self.assertIn("func BuildUnsortedChildren()", part, name)
 
     def test_repository_file_is_current(self) -> None:
         result = self.run_script(REPO, "--check")

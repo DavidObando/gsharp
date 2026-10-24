@@ -9,7 +9,9 @@ and writes `SyntaxNode.Children.g.gs`: for each concrete node class, a
 
 The children are in the same order that the reflection path returns them: the
 public instance properties of the class in declaration order, then those of
-each base class. A property is a child when its type is a syntax node, a
+each base class. A class marked `@SyntaxChildSourceOrder` (or derived from one) then
+sorts them by source position (in the base class), because its property order is not the source order
+for every shape (issue #5185). A property is a child when its type is a syntax node, a
 `SeparatedSyntaxList`, or a collection of syntax nodes, and it has no
 `@SyntaxChildIgnore` attribute. The reflection path stays in `SyntaxNode.gs` as
 the fallback for a class without generated code and as the test oracle
@@ -43,6 +45,7 @@ PROP_RE = re.compile(
     r"(?P<name>\w+)\s+(?P<type>[^{>]*?)\s*(?:\{|->|$)"
 )
 MEMBER_INDENT = "    "
+SOURCE_ORDER_ATTRIBUTE = "@SyntaxChildSourceOrder"
 
 
 @dataclass
@@ -61,6 +64,7 @@ class Cls:
     abstract: bool
     base: str | None
     is_open: bool = False
+    own_source_order: bool = False
     props: list[Prop] = field(default_factory=list)
 
 
@@ -72,11 +76,16 @@ def parse_file(path: Path, text: str) -> list[Cls]:
     classes: list[Cls] = []
     current: Cls | None = None
     pending_attrs: list[str] = []
+    class_attrs: list[str] = []
     lines = text.split("\n")
     i = 0
     while i < len(lines):
         raw = lines[i]
         line = strip_comment_and_strings(raw)
+        if line.startswith("@"):
+            class_attrs.append(line.strip())
+            i += 1
+            continue
         m = CLASS_RE.match(line)
         if m and not raw.startswith(" "):
             # Header: collect up to the line that opens the class body.
@@ -98,8 +107,10 @@ def parse_file(path: Path, text: str) -> list[Cls]:
                 abstract="abstract" in m.group("mods").split(),
                 base=base,
                 is_open="open" in m.group("mods").split(),
+                own_source_order=any(a.startswith(SOURCE_ORDER_ATTRIBUTE) for a in class_attrs),
             )
             classes.append(current)
+            class_attrs = []
             pending_attrs = []
             i = j + 1
             continue
@@ -150,6 +161,7 @@ def parse_all(root: Path) -> dict[str, Cls]:
                 # Another part of a partial class: merge the properties in file order.
                 existing.props.extend(cls.props)
                 existing.base = existing.base or cls.base
+                existing.own_source_order = existing.own_source_order or cls.own_source_order
     return classes
 
 
@@ -222,7 +234,17 @@ def effective_props(name: str, classes: dict[str, Cls], nodes: set[str]) -> list
 COMPUTED_KINDS = ("enum", "tokens")
 
 
-def emit_class(cls: Cls, props: list[tuple[Prop, str]]) -> list[str]:
+def is_source_ordered(name: str, classes: dict[str, Cls]) -> bool:
+    """A class is source ordered when it or a base class has @SyntaxChildSourceOrder."""
+    cur: str | None = name
+    while cur is not None and cur in classes:
+        if classes[cur].own_source_order:
+            return True
+        cur = classes[cur].base
+    return False
+
+
+def emit_class(cls: Cls, props: list[tuple[Prop, str]], source_ordered: bool) -> list[str]:
     """Emit the generated part of one concrete class.
 
     Two invariants hold for every class (tested in build/test-generate-syntax-children.py):
@@ -231,6 +253,9 @@ def emit_class(cls: Cls, props: list[tuple[Prop, str]]) -> list[str]:
     2. A class with a property that is computed on each read (a sequence, or a token list that
        allows absent entries) builds its children once into an array, so each lookup is O(1).
        The other classes read their properties in place.
+    3. A class marked `@SyntaxChildSourceOrder` (directly or through a base class) lists the
+       children in the order of their source positions. Its property order is not the source
+       order for every shape, so it builds the children once and sorts them (issue #5185).
     """
     out: list[str] = []
     # The guard compares the runtime type of a live node with a static field. The node always
@@ -239,7 +264,7 @@ def emit_class(cls: Cls, props: list[tuple[Prop, str]]) -> list[str]:
     # the Issue835 guard test scans for.
     exact = f"ExactTypeOf{cls.name}"
     guard = f"GetType() != {exact}"
-    cached = any(kind in COMPUTED_KINDS for _, kind in props)
+    cached = source_ordered or any(kind in COMPUTED_KINDS for _, kind in props)
     out.append(f"partial class {cls.name} {{")
     if cls.is_open:
         out.append("    shared {")
@@ -250,10 +275,15 @@ def emit_class(cls: Cls, props: list[tuple[Prop, str]]) -> list[str]:
         out.append("    /// ```xmldoc")
         out.append("    /// <inheritdoc />")
         out.append("    /// ```")
-        out.append("    internal override func BuildChildren() ImmutableArray[SyntaxNode] {")
+        # A source-ordered class builds the children in property order here. The base class
+        # sorts them (BuildChildren) and computes spans from this unsorted array, so a span
+        # never needs the sort (issue #5185).
+        builder_name = "BuildUnsortedChildren" if source_ordered else "BuildChildren"
+        fallback = "BuildUnsortedChildrenByReflection" if source_ordered else "BuildChildrenByReflection"
+        out.append(f"    internal override func {builder_name}() ImmutableArray[SyntaxNode] {{")
         if cls.is_open:
             out.append(f"        if {guard} {{")
-            out.append("            return BuildChildrenByReflection()")
+            out.append(f"            return {fallback}()")
             out.append("        }")
         out.append("        let builder = ImmutableArray.CreateBuilder[SyntaxNode]()")
         for prop, kind in props:
@@ -347,7 +377,7 @@ def emit_class(cls: Cls, props: list[tuple[Prop, str]]) -> list[str]:
 HEADER = """// <auto-generated>
 // Generated by build/generate-syntax-children.py from the syntax node classes in this directory.
 // Do not edit by hand. Run `python3 build/generate-syntax-children.py` after a change to a
-// child-bearing property, and add `partial` to the new class. Issue #5136.
+// child-bearing property, and add `partial` to the new class. Issues #5136 and #5185.
 // </auto-generated>
 
 package GSharp.Core.CodeAnalysis.Syntax
@@ -366,7 +396,7 @@ def generate(root: Path) -> str:
         if name not in nodes or name == ROOT_NODE or cls.abstract:
             continue
         props = effective_props(name, classes, nodes)
-        chunks.append("\n".join(emit_class(cls, props)) + "\n")
+        chunks.append("\n".join(emit_class(cls, props, is_source_ordered(name, classes))) + "\n")
     return "\n".join(chunks)
 
 
