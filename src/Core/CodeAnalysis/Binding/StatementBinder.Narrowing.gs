@@ -1982,6 +1982,10 @@ internal partial class StatementBinder {
 
         protected open override func VisitPropertyPattern(node BoundPropertyPattern) {
             for field in node.Fields {
+                // A computed property of a pattern runs its getter.
+                if field.Property is {} property && !property.IsAutoProperty {
+                    MarkMayMutateGlobalRoots()
+                }
                 VisitPossiblySkipped(() -> VisitPattern(field.Pattern))
             }
         }
@@ -4197,6 +4201,12 @@ internal partial class StatementBinder {
                 }
                 case VariableDeclarationSyntax{HasRefKindModifier: true, Initializer: {} initializer} {
                     CollectAllNames(initializer, names)
+                }
+                // `managed(x)` makes a persistent address of its operand.
+                case persistent is CallExpressionSyntax when persistent.Identifier.Text == "managed" {
+                    for argument in persistent.Arguments {
+                        CollectAllNames(argument, names)
+                    }
                 }
             }
             for child in node.GetChildren() {

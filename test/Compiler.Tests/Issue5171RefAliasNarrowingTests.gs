@@ -603,6 +603,45 @@ struct S {
 var s = S{Field: C{}}
 Console.WriteLine(s.Read(ref s, S{}))
 `}
+            yield[]object{"persistent-address-alias", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Run() int32 {
+    var x C? = C{}
+    let p = managed(x)
+    let ref a C? = *p
+    if a == nil { return 0 }
+    x = nil
+    return a.Value
+}
+Console.WriteLine(Run())
+`}
+            yield[]object{"property-pattern-getter-clears-aliased-member", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Box {
+    var Field C? = C{}
+    prop Clear int32 {
+        get {
+            Field = nil
+            return 1
+        }
+    }
+}
+func Run(ref a C?, box Box) int32 {
+    if a == nil { return 0 }
+    let matched = box is { Clear: 1 }
+    return a.Value
+}
+let box = Box{}
+Console.WriteLine(Run(ref box.Field, box))
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
