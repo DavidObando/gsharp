@@ -1,7 +1,10 @@
 # ADR-0213: Loop and backward-jump narrowing from a syntactic region lower bound
 
-- **Status**: Proposed
-- **Date**: 2026-10-24
+- **Status**: Accepted (maintainer decision on PR
+  [#5302](https://github.com/DavidObando/gsharp/pull/5302), 2026-10-24; the
+  nine questions of section 23 were decided as recommended on the same
+  day)
+- **Date**: 2026-10-24 (accepted 2026-10-24)
 - **Phase**: Compiler architecture (study roadmap item M1b, second half;
   implementation is tracked under
   [#5130](https://github.com/DavidObando/gsharp/issues/5130) as slices L0
@@ -257,7 +260,7 @@ the current reachability rule (ADR-0208 section 6; probe d6 depends on it).
 | Core, Core.Tests, gsc | same, keeping today's bound non-null proof | 0 errors | same |
 | Core, Core.Tests, gsc | every call also kills closure-assigned and by-reference roots (draft rules 4 and 5, unamended) | 22 errors in three Core functions (`BinderContext.gs:906-923`, `MemberLookup.gs:1108-1120`, `:3100-3172`); 0 elsewhere | same; superseded by A3, re-measured in L0 |
 | Core / Core.Tests / gsc / Oahu | `narrowing.loop-rebinds` | 62 / 0 / 0 / 7 | PR 1 (#5212) |
-| 0.5.212 | probes q1 to q9 (section 24) | q3 compiles and throws; q1, q5a, q5b, q6, q7, q8, q9 rejected; q2 accepted, prints `5`; q4 accepted, prints `3`; q5c accepted, prints `2` | this ADR |
+| 0.5.212 | probes q1 to q12 (section 24) | q3 compiles and throws; q1, q5a, q5b, q6, q7, q8, q9, q10, q11, q12 rejected; q2 accepted, prints `5`; q4 accepted, prints `3`; q5c accepted, prints `2` | this ADR |
 
 Not measured yet, and therefore an output of slice L0 rather than an input
 to this ADR: the comparison of the syntactic kill set of section 7 against
@@ -441,10 +444,15 @@ The rules, each an instance of the construct table and of the lower bound:
   the *resolved* walker resolves the receiver chain at the region's entry
   scope (the receiver root resolves to a variable, the variable's type is
   known, the member is looked up by name on that type) and reports a
-  field, an auto property or an array element as `none`, anything else as
-  an unknown getter. L0 reports both counts so the maintainer sees what the
-  resolution buys (section 23, question 7). Until L0's numbers are in, the
-  rule is the strict one.
+  field, an array element, or an auto property that **cannot dispatch to
+  user code** (not `open`, not `override`, not an interface member, not on
+  a type parameter: an `open` auto property can be overridden by a getter
+  with a body, `Issue4312ReferenceReceiverAccessorOpcodeTests.gs:218-226`)
+  as `none`, anything else as an unknown getter. L0 reports both counts so
+  the maintainer sees what the resolution buys (section 23, question 7),
+  and the resolved-W5 corpus rows include the `open` auto property shape
+  with the mutant "any auto property is `none`". Until L0's numbers are
+  in, the rule is the strict one.
 - **W6 Closed kind list.** A syntax kind the walker does not list sets
   `ContainsUnknownKind`, and a region with that flag is bound from
   `NarrowingState.Empty`: every fact is removed. This is stronger than the
@@ -465,17 +473,27 @@ The rules, each an instance of the construct table and of the lower bound:
 on a path with root `r`, in this order: (i) if `ContainsUnknownKind`, drop
 (W6); (ii) if the path is member-bearing and `ContainsMemberWrite`,
 `ContainsCall`, or an unresolved member read is present, drop (the shared
-predicate's member-path rule); (iii) if `ContainsCall`, `ContainsPointerWrite`,
-`ContainsRefOrOutArgument` on `r` or on a member of its alias class, or
-`ContainsAliasTake` on `r`, apply the shared predicate for that effect to
-`r` (globals, closure-assigned locals, the alias class as amended by A3);
-(iv) if `r` is in `AssignedNames` and some write to `r` is not in
-`NonNullAssignments`, drop; (v) if `r` is in `AssignedNames` and every
-write to `r` is in `NonNullAssignments`, keep the nullability fact, and
-keep a type-test fact only when every write's proven type converts to it
-by identity or an implicit reference conversion (section 8); (vi)
-otherwise keep. Only (v) distinguishes `AssignedNames` from
-`NonNullAssignments`; everything else is a membership test.
+predicate's member-path rule, `DropsOnMemberMutation`); (iii) if the path
+is member-bearing and `r` is in `AssignedNames`, drop (a root replacement
+kills every descendant path, whatever the new value is: `b = Box{}` after
+a guard on `b.Pet`); (iv) apply the shared predicate for every effect the
+record reports to `r`'s fact, exactly as the straight-line pass applies it
+to a statement with those effects: `ContainsCall`, `ContainsMemberWrite`
+(R12: a member, index or indirect write kills the alias class, `MayShareStorage`),
+`ContainsPointerWrite`, `ContainsRefOrOutArgument` on `r` or on a member of
+its alias class, `ContainsAliasTake` on `r`, and every root `w` in
+`AssignedNames` with `MayShareStorage(w, r)` (a write to `x` kills the facts
+of a `ref` local `a` that aliases `x`: probe d4); any of these that the
+predicate says kills, drops; (v) if `r` is in `AssignedNames` and some
+write to `r` is not in `NonNullAssignments`, drop; (vi) if `r` is in
+`AssignedNames` and every write to `r` is in `NonNullAssignments`, keep
+the nullability fact, and keep a type-test fact only when every write's
+proven type converts to it by identity or an implicit reference conversion
+(section 8); (vii) otherwise keep. Steps (ii) to (iv) run before P7 is
+consulted, so P7 can only keep a plain-root fact whose root no other
+effect touches; only (vi) distinguishes `AssignedNames` from
+`NonNullAssignments`, and everything else is a membership test or a call
+into the shared predicate.
 
 **Composition and cost.** `RegionEffects` is composed bottom-up and cached
 per syntax node in a per-body side table (`Dictionary[SyntaxNode,
@@ -512,8 +530,8 @@ details:
   layer removed" are asked through the ADR-0193 readers.
 - A value-type construction is not proof (`System.Nullable[int32]()` boxes
   to nil: probe f4 stays rejected). A variable, a call, a user-defined or
-  unknown conversion, a `??`, a `?:`, a cast: not proof (open question 1
-  for calls; question 4 for pattern-bound names). `FunctionReturnsDefinitelyNonNull`,
+  unknown conversion, a `??`, a `?:`, a cast: not proof (decided question
+  1 for calls; question 4 for pattern-bound names). `FunctionReturnsDefinitelyNonNull`,
   `IsDefinitelyNonNullSyntax` and the bound-tree variable proof are
   deleted with the collector.
 - The proof keeps a nullability fact, and a type-test fact when `T`
@@ -575,8 +593,10 @@ Probes for the table: e13 (`while node != nil` re-proves per iteration;
 accepted), e4 (nullable reassignment in the body; rejected), e16 (shadowed
 `var s` in the body; accepted), q7 (`while s != nil { if c { break } s =
 Next(s) }; s.Length`: `L_f` lacks the fact, the `break` state has it, the
-join drops it; rejected today and after), q8 (`do { s.Length; s = Next(s)
-} while ...`; rejected today and after), f5 (iterator header assigns a
+join drops it; rejected today and after), q12 (`while s == nil { s = "ok"
+}; s.Length`: `L_f` has the fact and there is no `break`, so the exit has
+it; rejected today, accepted after, row R7 (f)), q8 (`do { s.Length; s =
+Next(s) } while ...`; rejected today and after), f5 (iterator header assigns a
 global; rejected), e12 (a loop inside an `if` branch contributes its exit
 state to the `if` join; accepted).
 
@@ -590,8 +610,8 @@ state to the `if` join; accepted).
 | J4 | forward `goto` from inside a region to a label after it | an ordinary jump state on that label through pending cleanup (ADR-0208 section 9); the label's entry is `Jmp(label, fallThrough)` |
 | J5 | forward `goto` from inside a region to a label inside the same region | ordinary jump state; both states are `⊇ L` |
 | J6 | forward `goto` from **outside** a region to a label **inside** it (bound before the region) | its recorded state is a predecessor of the region's entry state `S` (section 6) **and** of the label's own `Jmp`; if the target label is in a backward-jump span, section 11 applies |
-| J7 | backward `goto` (to a label at or before the `goto`, in the span of section 11) | records no state; the target is a participant label and its entry is the span's lower bound. A backward `goto` from inside a loop body to a label before the loop is J7 for the span, which contains the loop |
-| J8 | `goto` from an unreachable point, or through a cleanup region that cannot complete normally (a `finally` ending in `return`, `throw`, `goto`, `break` or `continue`) | records no edge and is not a participant (section 11; probe d6 stays accepted and prints `4`) |
+| J7 | backward `goto` (to a label at or before the `goto`, in the span of section 11) | records no state; the target is a participant label and its entry is the span's lower bound `L`, and so is the span's first statement. A backward `goto` from inside a loop body to a label before the loop is J7 for the span, which contains the loop; a backward `goto` from after a loop to a label inside its body is J7 for a span that starts at the loop statement, so the loop header is bound from `L` and the jump cannot invalidate it (probe q11) |
+| J8 | `goto` from an unreachable point, or whose path to its label leaves a cleanup region that cannot complete normally (a `finally` ending in `return`, `throw`, `goto`, `break` or `continue`, with the label outside that `try`) | records no edge and is not a participant (section 11; probe d6 stays accepted and prints `4`). A `goto` to a label inside the same `try` runs no `finally` and is a live edge (probe q10) |
 | J9 | `yield`, `await` inside a region | `call` (ADR-0208 R13); on `L` the identity; kills facts proven inside the region before the suspension as in straight-line code |
 | J10 | `defer`, `using`, `lock` inside a region | cleanup regions with an empty handler list (ADR-0208 section 9): their cleanup is `call` (W4) |
 | J11 | `try`/`catch`/`finally` inside a region | the handler and `finally` entries are `Lower(S_try, T ∪ ...)` as ADR-0208 section 9 states, with `S_try ⊇ L`; a `catch` that completes normally re-enters the body with its exit state (a join predecessor like any other); a `continue`/`break`/`goto` out of the `try` goes through the `finally`'s exit transfer before its target joins it |
@@ -624,24 +644,40 @@ section 6):
 - **Participants.** A `goto` that records no edge under the reachability
   rule (J8) is not a participant: one at an unreachable point (after an
   unconditional exit with no label between, in the same statement list), or
-  one inside a `try` whose `finally` syntactically ends in `return`,
-  `throw`, `goto`, `break` or `continue`. When the walker cannot tell, the
-  `goto` counts, which only adds kills. Probe d6: `goto Enter` sits in a
-  `try` whose `finally { return 4 }` cannot complete, so there is no edge,
-  no span and no region; `Enter: x = nil; goto Use` is dead and records no
-  edge; `Use` has no reachable incoming edge and is bound under the facts
-  in force, so `x.Length` binds and the program prints `4`.
+  one whose jump **leaves** a `try` whose `finally` syntactically ends in
+  `return`, `throw`, `goto`, `break` or `continue`, that is, the `finally`
+  lies on the path from the `goto` to its label (the label is outside the
+  `try` and the `goto` inside it). A `goto` to a label inside the same
+  `try` does not run that `finally` and is a live back edge whatever the
+  `finally` ends in (probe q10: `try { Again: i = i + s.Length; s = nil;
+  if i < n { goto Again } } finally { return i }` is a span and `s.Length`
+  is rejected). When the walker cannot tell, the `goto` counts, which only
+  adds kills. Probe d6: `goto Enter` sits in a `try` whose `finally {
+  return 4 }` cannot complete and `Enter` is outside that `try`, so there
+  is no edge, no span and no region; `Enter: x = nil; goto Use` is dead and
+  records no edge; `Use` has no reachable incoming edge and is bound under
+  the facts in force, so `x.Length` binds and the program prints `4`.
 - **Entry state.** `S` is the join of the fall-through state at the span's
   first statement and the recorded state of every forward `goto` from
   before the span to any label inside it (J6). Both are known before the
   span is bound.
-- **Label entry.** Every participant label, the first included, has entry
-  state `L = Lower(S, span)`, with the kill set computed by the walker over
-  the whole span (W1 to W7). Jumps between labels inside the span are
-  internal (J7, J5); jumps from inside the span to labels after it are
-  ordinary (J4). A guard after a label re-proves facts for the code after
-  it (`BackwardGoto_StackedLabeledGuardReestablishesNarrowing` keeps
-  running).
+- **Span entry.** The span is a region like a loop: its **first statement**
+  is bound from `L = Lower(S, span)`, with the kill set computed by the
+  walker over the whole span (W1 to W7), and every participant label has
+  entry state `L` as well. Binding the first statement from `L`, not only
+  the labels, matters when a participant label sits inside a statement
+  that has code before the label: a loop whose body holds the label. A
+  backward `goto` from after the loop to that label enters the body
+  without passing the header, so the header must have been bound under a
+  state the jump cannot invalidate; `L` is that state (probe q11: `while
+  count < 3 && s.Length < 9 { Inside: count++; i++ }; s = nil; if i < n {
+  goto Inside }`: the span starts at the `while` statement, `s = nil` is in
+  the kill set, and the header read is rejected). The loop's own entry
+  state is then derived from `L` and its own lower bound is applied on top
+  (nesting, below). Jumps between labels inside the span are internal (J7,
+  J5); jumps from inside the span to labels after it are ordinary (J4). A
+  guard after a label re-proves facts for the code after it
+  (`BackwardGoto_StackedLabeledGuardReestablishesNarrowing` keeps running).
 - **Reachability.** A participant label is reachable when fall-through
   reaches it, a forward `goto` recorded an edge to it, or a participant
   `goto` targets it. The last clause is syntactic and may count a `goto`
@@ -773,7 +809,8 @@ direction. "Probe" refers to the ADR-0208 corpus and to section 24.
 | R7 (b) | A loop reassigns the root from a variable or a call, which the bound proof accepted: `node.Value; node = Make()` with `Make() Node` (e3); the `local` (`c = fresh`) and `function` (`c = Mk(33)`) rows of `NonNullAssignmentAfterUse_PreservesInheritedNarrowing`; `access = inner` in `ExpressionBinder.Assignments.gs:5435-5494` | accepted | `GS0158` / `GS0159` | less permissive (P7; question 1 and 4) |
 | R7 (c) | A loop that contains a call reads an inherited fact on a root in the indirect-write class: q3 (an escaped closure the callee invokes; `main` compiles it and it throws) and whatever the shared predicate (A2, A3) kills for a call; the alias-class part follows the amended R12 | q3 accepted, throws; others per `main` | `GS0158` | less permissive (soundness for q3; conservative default for the rest; question 3) |
 | R7 (d) | Output change in accepted programs: `x = Dog{}` keeps a type-test fact like `x = Dog()` (c8 prints `dog`, as c8b does; closes #5169); a reassignment from a variable or a call drops a type-test fact that the bound proof kept, so a hidden-member read in the loop binds on the declared type | c8 prints `animal`; the reassignment shape selects the narrowed type's member | c8 prints `dog`; the declared type's member | output change, no diagnostic (question 2) |
-| R7 (e) | A loop that reads a member the walker cannot resolve to a field, an auto property or an array element takes the shared predicate's classification of an unknown getter (`call` under ADR-0208 R14 as read today). For inherited member-bearing paths this is today's loop result (q5a, a source getter, and q5b, an imported getter, both reject `b.Pet.Name` today). The change is on plain roots in the indirect-write class: `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { Consume(sb.Length); total += x.Value }` (q5c) | q5c accepted, prints `2` | `GS0158` on `x.Value` under today's R14 reading; whatever #5231 decides for imported getters, the day it decides it | less permissive (W5 and A2; question 7; count from L0) |
+| R7 (e) | A loop that reads a member the walker cannot resolve to a field, a non-dispatching auto property or an array element takes the shared predicate's classification of an unknown getter (`call` under ADR-0208 R14 as read today). For inherited member-bearing paths this is today's loop result (q5a, a source getter, and q5b, an imported getter, both reject `b.Pet.Name` today). The change is on plain roots in the indirect-write class: `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { let len = sb.Length; total = total + x.Value + len }` (q5c; no call in the loop other than the getter) | q5c accepted, prints `2` | `GS0158` on `x.Value` under today's R14 reading; whatever #5231 decides for imported getters, the day it decides it | less permissive (W5 and A2; question 7; count from L0) |
+| R7 (f) | The loop's exit state joins the header's false state, so a fact the condition proves on exit survives: `while s == nil { s = "ok" }; s.Length` (q12) | `GS0158` | accepted, prints `2` | more permissive (T1 exit; I6) |
 | R8 (a) | A backward-jump span reassigns the root from a variable or a call, which the deferred proof accepted | accepted | `GS0158` / `GS0159` at the read | less permissive (P7) |
 | R8 (a') | The span assigns nil inside a `try` whose `finally` restores a non-null value before the jump (probe cC) | accepted, prints `4` | `GS0158` | less permissive (section 12; question 5) |
 | R8 (b) | A type-test fact killed at the label makes a read bind at the declared type: `TypeTestNarrowingThroughUpcast_ReportsConversion` and `*ThroughNullableUpcast*` (valid programs) are accepted; q1 (`x.Name` where `Animal` declares `Name`) is accepted and prints `animal,animal,`; `*AtForSource*` moves from `GS0155` to `GS0116` at `x`; `*ThroughNullSafeCall*` moves from `GS0155` to `GS0159` at the same read | `GS0155`; q1 `GS0158` | accepted, or the declared type's own diagnostic | more permissive, or a changed id at the same read |
@@ -818,7 +855,16 @@ Details per row:
   Core.Tests, gsc and Oahu; L1 ships the resolved rule if the strict rule
   rejects any site there, otherwise the strict rule (question 7). The
   resolved rule does not help q5c (an imported getter is never a field),
-  only reads of fields, auto properties and array elements.
+  only reads of fields, non-dispatching auto properties and array elements.
+  q5c has no call other than the getter, so the mutant "member reads are
+  `none`" accepts it while the rule rejects it.
+- **R7 (f).** q12 joins the corpus with the M12 mutant. Today's loop exit
+  keeps only the facts that were in force before the loop and never adds
+  the condition's false state; the T1 exit rule is `JoinJumps` over the
+  header's false state and the `break` states, which is where the gain
+  comes from. The same join makes `while s == nil && Try(out s) { }`
+  shapes work as users expect. Compatibility: more permissive, no
+  diagnostic change for programs that compile today.
 - **R8.** `Issue4519GotoAssignmentNarrowingTests` has 102 `BackwardGoto_*`
   tests; the family-by-family inventory of the ADR-0208 draft (commit
   001ee4ff5, section 16, "R8") is the re-expectation list and L2 copies it
@@ -889,12 +935,12 @@ section 24) or a named test.
 | I1 | Region closure: every effect the walker finds in `R` is applied to `S` before `R` is bound, so every state inside `R` includes `L` and the back edge carries `⊇ L` | e4, f4, e2b (after), e3 (after), d3 loop form, d4 loop form, `out-alias`, c5, c6, c7, cB, q3, q9 | exempt writes followed by `break`/`return` (e2b accepted); treat a call as `none` (q3, c5, c6, cB accepted); treat `out`/`ref` arguments as reads (`out-alias` accepted) |
 | I2 | Entry completeness: `S` joins every edge into `R` from outside, forward `goto`s into labels inside `R` included | c3a, q6 (a forward `goto` into a `while` body past the guard; rejected today and after) | build `S` from the fall-in state only (c3a accepted; q6 accepted and the header dereferences nil at run time) |
 | I3 | Scope-aware names: a region-local declaration does not kill the outer variable; an unrecognised declaration kills | e16, q4 (a loop body's `let s` shadowing the narrowed `s` with a guard inside; accepted) | resolve names without the declaration stack (e16 rejected) |
-| I4 | Closed kind list: an unlisted syntax kind is `call` | the `SyntaxKind` enumeration test | class an unlisted kind `none` (test red) |
+| I4 | Closed kind list: an unlisted syntax kind empties the region's entry state (W6; stronger than `call`, which keeps plain locals) | the `SyntaxKind` enumeration test, and a walker unit test that an unlisted kind yields `ContainsUnknownKind` and `L = Empty` | class an unlisted kind `none` or `call` (both red) |
 | I5 | P7 exact storage and reference-type construction only | `out-alias`, f4, d2, c8/c8b (`dog` for both), `NonNullAssignmentToDifferentSubtype_InvalidatesTypeNarrowing`, e3 (rejected after) | accept any construction (f4 accepted); accept a `ref` target (`out-alias` accepted); accept a call (e3 accepted) |
-| I6 | Header bound once under `L`; exit = `Jmp(break, header-false)` | e13, q7, q8, g1-with-`break` row | bind the header under `S` (a new row: `while s.Length > 0 { s = Get() }` with `s` nullable, accepted under the mutant, rejected after); join the entry state into the exit (q7 accepted) |
+| I6 | Header bound once under `L`; exit = `Jmp(break, header-false)`, never the entry state | e13, q7, q8, q12, g1-with-`break` row | bind the header under `S` (a new row: `while s.Length > 0 { s = Get() }` with `s` nullable, accepted under the mutant, rejected after); join the entry state into the exit (q12 rejected: `while s == nil { s = "ok" }; s.Length` gains the fact from the header-false state and the fact-free entry would remove it; q7 cannot distinguish this mutant because its header-false state already lacks the fact) |
 | I7 | Cleanup transfers on jumps out of regions; cleanup order not modelled | `GotoLeavingTry_*`, `*Finally*` rows of `Issue4519`, cC (rejected after) | skip the `finally` exit transfer on `break` states (a `finally` that assigns nil before a `break` is accepted) |
-| I8 | Reachability: dead jumps record no edge, non-completing `finally` records no edge, a label without a reachable edge is bound under the facts in force | d6, `Unreachable{Forward,Backward}Goto_DoesNotInvalidateReachableNarrowing` | count a `goto` through a non-completing `finally` as a participant (d6 rejected: conservative, so the mutant turns the row red by changing an accepted result) |
-| I9 | Span covers every label from the earliest backward target through the last participant `goto` | c3a, c3b, e15, e18, q9 | shrink the span to label-through-its-own-`goto` (c3b accepted); exclude labels that are not backward targets from participation (c3a accepted) |
+| I8 | Reachability: dead jumps record no edge, a jump that leaves a non-completing `finally` records no edge, a jump inside the same `try` is live, a label without a reachable edge is bound under the facts in force | d6, q10, `Unreachable{Forward,Backward}Goto_DoesNotInvalidateReachableNarrowing` | count a `goto` through a non-completing `finally` as a participant (d6 rejected: conservative, so the mutant turns the row red by changing an accepted result); exclude a `goto` inside the `try` (q10 accepted and dereferences nil, M21) |
+| I9 | Span covers every label from the earliest backward target through the last participant `goto`, and is bound from `L` at its first statement | c3a, c3b, e15, e18, q9, q11 | shrink the span to label-through-its-own-`goto` (c3b accepted); exclude labels that are not backward targets from participation (c3a accepted); bind only the labels from `L` (q11 accepted, M22) |
 | I10 | Determinism: no result depends on iteration order | the existing byte-identity harness (two compiles of Core compared) | none (structural) |
 | I11 | No optimistic fact: a `!!` or a type-test read after a label is bound at the label's `L` | q2 (accepted, no `GS0536`), q1 (accepted, prints `animal,animal,`) | bind the label under `S` with the deferred checker removed (q2 reports `GS0536`; q1 binds `Dog.Name` with a `castclass` and throws `InvalidCastException` on the second iteration) |
 
@@ -971,8 +1017,8 @@ User-visible changes: new rejects e2b (`s.Length; if c { s = nil; break
 `NonNullAssignmentAfterUse_PreservesInheritedNarrowing`, q3 (an escaped
 closure the callee invokes; a crash today), q5c (a member read as a call
 for an indirect-write root), and the Core `access = inner` site; new
-accepts: none; output change: c8 prints `dog` (as c8b); no diagnostic id
-changes. Does not: touch spans or the backward-`goto` checker (the loop snapshot's
+accepts: q12 (`while s == nil { s = "ok" }; s.Length`, R7 (f)); output
+change: c8 prints `dog` (as c8b); no diagnostic id changes. Does not: touch spans or the backward-`goto` checker (the loop snapshot's
 clone of `BackwardGotoNarrowingStates` goes with the snapshot; the checker
 still reads the live structure). Prerequisite: L0's report; #5130's slice
 that deletes the frame stack is recommended first so L1 does not have to
@@ -993,7 +1039,7 @@ and `MemberLookup`, the proof generations, `ReportUnsafeBackwardGotoNarrowings`,
 `LambdaBinder` save and restore) and the remaining #4285/#4290 code.
 Tests: the 102 `BackwardGoto_*` re-expectations per the draft's inventory
 with the new id recorded per row; a new test for R8 (a) with a run-time
-witness; q1, q2, q6 join the corpus; e15 and e18 flip; cC flips to
+witness; q1, q2, q6, q10 and q11 join the corpus; e15 and e18 flip; cC flips to
 rejected (question 5). Acceptance: the span count and label list from L0
 match on Oahu; output identity except the listed rows. User-visible
 changes: new rejects cC (`x = nil` in a `try` whose `finally` restores
@@ -1043,7 +1089,11 @@ reverted; the slice's PR body lists the mutant and the rows it turned red:
 | M9 call classed `none` for the alias class (within what A3 keeps) | W4 / A2 | c7, d4 loop form, g2 loop form |
 | M10 member read classed `none` | W5 | q5, #5231 loop form |
 | M11 header bound under `S` | T1 | the I6 header row |
-| M12 entry state joined into the exit | T1 exit | q7 |
+| M12 entry state joined into the exit | T1 exit | q12 (accepted after; the mutant rejects it) |
+| M21 `goto` inside a `try` excluded because the `finally` ends in `return` | section 11 participants | q10 |
+| M22 span bound from `L` at its labels only, not at its first statement | section 11 span entry | q11 (the header read is accepted under the mutant and dereferences nil) |
+| M23 shared predicate consulted after P7 (steps (ii) to (iv) after (vi)) | section 7 consumer rule | d4 loop form, f2 loop form, a `b = Box{}` row after a guard on `b.Pet` |
+| M24 `open` auto property resolved as `none` | W5 resolved | the resolved-W5 `open` auto property row |
 | M13 `do` body bound under `S` | T6 | q8 |
 | M14 span shrunk to label-through-own-`goto` | section 11 | c3b |
 | M15 non-target labels excluded from participation | section 11 | c3a |
@@ -1078,10 +1128,15 @@ reverted; the slice's PR body lists the mutant and the rows it turned red:
   #5301 (section 3d) asks the R6 slice to join the jump into the loop's
   entry state under the mechanism it keeps.
 
-### 23. Open questions for the maintainer, each with a recommendation
+### 23. Decided questions
 
-Questions 1 to 3 are ADR-0208's deferred questions 4, 7 and 6. The slice
-named with each question is the one that first depends on it.
+The maintainer accepted this ADR on 2026-10-24 and decided each question
+below as recommended, so every recommendation is a decision. The two
+marked *provisional* are decided as recommended too: their default stands
+unless slice L0's numbers meet the stated condition, in which case the
+stated alternative applies without a further decision. Questions 1 to 3
+are ADR-0208's deferred questions 4, 7 and 6. The slice named with each
+question is the one that first depends on it.
 
 1. **(ADR-0208 Q4) Should a call to a function whose declared return type
    is non-nullable count as a non-null proof across a back edge?** Today's
@@ -1134,8 +1189,9 @@ named with each question is the one that first depends on it.
    between the write and the exit reintroduces the back edge; the user's
    fix is a re-test after the loop. L1.
 7. **W5: strict (every member read in a region is `call`) or resolved
-   (receiver chain resolved at the entry scope; a field, auto property or
-   array element is `none`)?** Recommendation: **strict in L0's report,
+   (receiver chain resolved at the entry scope; a field, an array element
+   or an auto property that cannot dispatch to user code is `none`)?**
+   Recommendation: **strict in L0's report,
    decided by L0's numbers**, *provisional*: ship the resolved rule in L1
    only if the strict rule rejects a site in Core, Core.Tests, gsc or
    Oahu, because the resolution is the one piece of the walker that
@@ -1169,11 +1225,14 @@ measured for this ADR; the sources are in the References section.
 | q4 | guard on `s`; loop body `let s string? = Get(); if s == nil { continue }; Consume(s.Length)`; after the loop `s.Length` | accepted, prints `3` | accepted, prints `3` (W1) |
 | q5a | `if b.Pet == nil { return }`; loop body `Consume(x.Count); b.Pet.Name.Length` where `Count` is a source getter with a body | `GS0158` on `b.Pet.Name` | `GS0158` (R7 (e), no change) |
 | q5b | as q5a with `sb.Length` on a `StringBuilder` (an imported getter) | `GS0158` on `b.Pet.Name` | `GS0158` (R7 (e), no change) |
-| q5c | `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { Consume(sb.Length); total += x.Value }; clear()` | accepted, prints `2` | `GS0158` on `x.Value` (R7 (e), under today's R14 reading of an imported getter; follows #5231) |
+| q5c | `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { let len = sb.Length; total = total + x.Value + len }; clear()` (no call in the loop) | accepted, prints `2` | `GS0158` on `x.Value` (R7 (e), under today's R14 reading of an imported getter; follows #5231) |
 | q6 | `if skip { goto Inside }; if s == nil { return 0 }; while count < 3 && s.Length < 9 { Inside: count++ }` | `GS0158` on the header read (#4285) | `GS0158` on the header read (I2, J6); under the R6 slice without J6: accepted and the header dereferences nil |
 | q7 | `while s != nil { if c { break }; s = Next(s) }; s.Length` | `GS0158` | `GS0158` (T1 exit) |
 | q8 | guard; `do { n = n + s.Length; s = Next(s) } while n < 10` | `GS0158`, `GS0154` | `GS0158`, `GS0154` (T6; `Next(s)` still receives a `string?`) |
 | q9 | guard; `Again: i = i + s.Length; for ... { s = nil }; s = Get(); if i < n { goto Again }` | `GS0158` | `GS0158` (I1, I9) |
+| q10 | guard; `try { Again: i = i + s.Length; s = nil; if i < n { goto Again } } finally { return i }` | `GS0158` (#4285) | `GS0158` (section 11, participants: the `goto` does not leave the `try`, so it is a live back edge; M21) |
+| q11 | guard; `while count < 3 && s.Length < 9 { Inside: count++; i++ }; s = nil; if i < n { goto Inside }` | `GS0158` on the header read (#4285) | `GS0158` on the header read (section 11, span entry: the span starts at the `while` statement and is bound from `L`; M22) |
+| q12 | `var s string? = Get(c); while s == nil { s = "ok" }; return s.Length` | `GS0158` | accepted, prints `2` (R7 (f); M12) |
 
 ## Consequences
 
