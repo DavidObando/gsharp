@@ -446,9 +446,9 @@ The rules, each an instance of the construct table and of the lower bound:
   member read is an unknown getter and takes the `call` classification;
   the *resolved* walker resolves the receiver chain at the region's entry
   scope (the receiver root resolves to a variable, the variable's type is
-  known, the member is looked up by name on that type) and reports a
-  field, an array element, or an auto property that **cannot dispatch to
-  user code and cannot be re-selected by a narrowing inside the region**
+  known, the member is looked up by name on that type) and reports an
+  array element, or a field or auto property that **cannot dispatch to
+  user code and cannot be re-selected by a narrowing inside the region**,
   as `none`, anything else as an unknown getter. "Cannot dispatch" is: not
   `open`, not `override`, not an interface member, not on a type parameter
   (an `open` auto property can be overridden by a getter with a body,
@@ -457,13 +457,19 @@ The rules, each an instance of the construct table and of the lower bound:
   struct, because the lookup happens at the region's entry scope on the
   declared type while a type-test fact proven inside the region (`if b is
   Derived { let n = b.Count }`) binds the same read on the narrowed type,
-  where a hiding `Derived.Count` with a getter body runs user code. A
-  field needs no such condition: a hiding field runs no code. L0 reports
-  both counts so the maintainer sees what the resolution buys (section 23,
-  question 7), and the resolved-W5 corpus rows include the `open` auto
-  property shape (mutant "any auto property is `none`") and the hidden
-  getter shape (mutant "resolve on the declared type without the sealed
-  condition"). Until L0's numbers are in, the rule is the strict one.
+  where a hiding `Derived.Count` with a getter body runs user code. The
+  condition applies to fields as well as to auto properties: a derived
+  computed property can hide a base field
+  (`ExpressionBinder.Access.MemberLookup.gs:810-887`), so a field found at
+  the entry scope is no proof that the read inside the region runs no
+  code. Only an array element has no hiding member. L0 reports both counts
+  so the maintainer sees what the resolution buys (section 23, question
+  7), and the resolved-W5 corpus rows include the `open` auto property
+  shape (mutant "any auto property is `none`") and the hidden getter shape
+  in both variants, a base auto property and a base field hidden by a
+  computed `Derived.Count` (mutant "resolve on the declared type without
+  the sealed condition"). Until L0's numbers are in, the rule is the
+  strict one.
 - **W6 Closed kind list.** A syntax kind the walker does not list sets
   `ContainsUnknownKind`, and a region with that flag is bound from
   `NarrowingState.Empty`: every fact is removed. This is stronger than the
@@ -822,7 +828,7 @@ direction. "Probe" refers to the ADR-0208 corpus and to section 24.
 | R7 (b) | A loop reassigns the root from a variable or a call, which the bound proof accepted: `node.Value; node = Make()` with `Make() Node` (e3); the `local` (`c = fresh`) and `function` (`c = Mk(33)`) rows of `NonNullAssignmentAfterUse_PreservesInheritedNarrowing`; `access = inner` in `ExpressionBinder.Assignments.gs:5435-5494` | accepted | `GS0158` / `GS0159` | less permissive (P7; question 1 and 4) |
 | R7 (c) | A loop that contains a call reads an inherited fact on a root in the indirect-write class: q3 (an escaped closure the callee invokes; `main` compiles it and it throws) and whatever the shared predicate (A2, A3) kills for a call; the alias-class part follows the amended R12 | q3 accepted, throws; others per `main` | `GS0158` | less permissive (soundness for q3; conservative default for the rest; question 3) |
 | R7 (d) | Output change in accepted programs: `x = Dog{}` keeps a type-test fact like `x = Dog()` (c8 prints `dog`, as c8b does; closes #5169); a reassignment from a variable or a call drops a type-test fact that the bound proof kept, so a hidden-member read in the loop binds on the declared type | c8 prints `animal`; the reassignment shape selects the narrowed type's member | c8 prints `dog`; the declared type's member | output change, no diagnostic (question 2) |
-| R7 (e) | A loop that reads a member the walker cannot resolve to a field, a non-dispatching auto property or an array element takes the shared predicate's classification of an unknown getter (`call` under ADR-0208 R14 as read today). For inherited member-bearing paths this is today's loop result (q5a, a source getter, and q5b, an imported getter, both reject `b.Pet.Name` today). The change is on plain roots in the indirect-write class: `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { let len = sb.Length; total = total + x.Value + len }` (q5c; no call in the loop other than the getter) | q5c accepted, prints `2` | `GS0158` on `x.Value` under today's R14 reading; whatever #5231 decides for imported getters, the day it decides it | less permissive (W5 and A2; question 7; count from L0) |
+| R7 (e) | A loop that reads a member the walker cannot resolve to an array element, or to a field or non-dispatching auto property on a sealed receiver type, takes the shared predicate's classification of an unknown getter (`call` under ADR-0208 R14 as read today). For inherited member-bearing paths this is today's loop result (q5a, a source getter, and q5b, an imported getter, both reject `b.Pet.Name` today). The change is on plain roots in the indirect-write class: `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { let len = sb.Length; total = total + x.Value + len }` (q5c; no call in the loop other than the getter) | q5c accepted, prints `2` | `GS0158` on `x.Value` under today's R14 reading; whatever #5231 decides for imported getters, the day it decides it | less permissive (W5 and A2; question 7; count from L0) |
 | R7 (f) | The loop's exit state joins the header's false state, so a fact the condition proves on exit survives: `while s == nil { s = "ok" }; s.Length` (q12). The same fact makes a `!!` after the loop redundant: `while s == nil { s = "ok" }; s!!.Length` (q13) | q12 `GS0158`; q13 accepted, prints `2` | q12 accepted, prints `2`; q13 `GS0536` (a warning; an error where warnings are errors) | more permissive for q12; a new `GS0536` for q13 (T1 exit; I6; section 18) |
 | R8 (a) | A backward-jump span reassigns the root from a variable or a call, which the deferred proof accepted | accepted | `GS0158` / `GS0159` at the read | less permissive (P7) |
 | R8 (a') | The span assigns nil inside a `try` whose `finally` restores a non-null value before the jump (probe cC) | accepted, prints `4` | `GS0158` | less permissive (section 12; question 5) |
@@ -868,7 +874,8 @@ Details per row:
   Core.Tests, gsc and Oahu; L1 ships the resolved rule if the strict rule
   rejects any site there, otherwise the strict rule (question 7). The
   resolved rule does not help q5c (an imported getter is never a field),
-  only reads of fields, non-dispatching auto properties and array elements.
+  only reads of array elements and of fields and non-dispatching auto
+  properties on sealed receiver types.
   q5c has no call other than the getter, so the mutant "member reads are
   `none`" accepts it while the rule rejects it.
 - **R7 (f).** q12 joins the corpus with the M12 mutant. Today's loop exit
@@ -1118,7 +1125,7 @@ reverted; the slice's PR body lists the mutant and the rows it turned red:
 | M22 span bound from `L` at its labels only, not at its first statement | section 11 span entry | q11 (the header read is accepted under the mutant and dereferences nil) |
 | M23 shared predicate consulted after P7 (steps (ii) to (iv) after (vi)) | section 7 consumer rule | d4 loop form, f2 loop form, a `b = Box{}` row after a guard on `b.Pet` |
 | M24 `open` auto property resolved as `none` | W5 resolved | the resolved-W5 `open` auto property row |
-| M25 auto property resolved on the declared type without the sealed-receiver condition | W5 resolved | the resolved-W5 hidden getter row (`if b is Derived { let n = b.Count }` inside the loop, where `Derived.Count` has a getter body that clears a guarded root) |
+| M25 field or auto property resolved on the declared type without the sealed-receiver condition | W5 resolved | the resolved-W5 hidden getter rows (`if b is Derived { let n = b.Count }` inside the loop, where `Derived.Count` has a getter body that clears a guarded root; one row with `Base.Count` an auto property, one with it a field) |
 | M26 `MayShareStorage(r, r)` applied to the identical root in step (iv) | section 7 consumer rule | e15, c8 (`dog`), the `constructor` rows of `NonNullAssignmentAfterUse_PreservesInheritedNarrowing` (all rejected under the mutant) |
 | M13 `do` body bound under `S` | T6 | q8 |
 | M14 span shrunk to label-through-own-`goto` | section 11 | c3b |
@@ -1215,8 +1222,9 @@ question is the one that first depends on it.
    between the write and the exit reintroduces the back edge; the user's
    fix is a re-test after the loop. L1.
 7. **W5: strict (every member read in a region is `call`) or resolved
-   (receiver chain resolved at the entry scope; a field, an array element
-   or an auto property that cannot dispatch to user code is `none`)?**
+   (receiver chain resolved at the entry scope; an array element, or a
+   field or auto property that cannot dispatch to user code and sits on a
+   sealed receiver type, is `none`)?**
    Recommendation: **strict in L0's report,
    decided by L0's numbers**, *provisional*: ship the resolved rule in L1
    only if the strict rule rejects a site in Core, Core.Tests, gsc or
