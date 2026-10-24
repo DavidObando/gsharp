@@ -660,7 +660,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
             return found
         }
         this.required[type] = nil
-        if ManagedReferenceTypes.TryGetElement(type, out _, out _) || NativeProtocolMetadata.IsProtocol(type) {
+        if ManagedReferenceTypes.TryGetElement(type, out _, out _) || NativeProtocolSafety.IsProtocol(type) {
             this.required[type] = type
             return type
         }
@@ -697,7 +697,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
 
     private func ReportRequired(node BoundNode, type TypeSymbol, reason string) {
         let requiredType = this.RequiredHandle(type)
-        if requiredType != nil && NativeProtocolMetadata.IsProtocol(requiredType) &&
+        if requiredType != nil && NativeProtocolSafety.IsProtocol(requiredType) &&
             (this.initializerAnchor ?? node.Syntax) is {} syntax {
             this.diagnostics.ReportNativeProtocol(
                 syntax.Location,
@@ -1099,7 +1099,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                             "source interface fields have a declaration",
                             expression: "field.Declaration ?? type.Declaration"
                         )
-                        if NativeProtocolMetadata.IsProtocol(analyzer.RequiredHandle(field.Type)!!) {
+                        if NativeProtocolSafety.IsProtocol(analyzer.RequiredHandle(field.Type)!!) {
                             diagnostics.ReportNativeProtocol(
                                 syntax.Location,
                                 "interface field '${field.Name}' requires a present protocol initializer"
