@@ -174,6 +174,20 @@ open class Issue5144ModifierTests {
             "{req:;opt:System.Private.CoreLib!System.Runtime.CompilerServices.IsConst}",
             MetadataModifiers.FormatDeep(pointer.FieldType)
         )
+        // Every shape that holds a type is walked: rectangular arrays, nullables, constructions and function pointers.
+        let nested = "{req:;opt:System.Private.CoreLib!System.Runtime.CompilerServices.IsConst}"
+        Assert.Equal(nested, MetadataModifiers.FormatDeep(RectangularArrayTypeSymbol.Get(pointer.FieldType, 2)))
+        Assert.Equal("", MetadataModifiers.FormatDeep(RectangularArrayTypeSymbol.Get(plain.FieldType, 2)))
+        let constBound = MetadataModifiers.Of(cast[PointerTypeSymbol](pointer.FieldType).PointeeType)[0].Type
+        let modifiedInt = module.Set.GetModified(
+            TypeSymbol.Int32,
+            ImmutableArray.Create(MetadataCustomModifier(constBound, true))
+        )
+        Assert.Equal(
+            "{req:System.Private.CoreLib!System.Runtime.CompilerServices.IsConst;opt:}",
+            MetadataModifiers.FormatDeep(NullableTypeSymbol.Get(modifiedInt))
+        )
+        Assert.Contains("IsConst", MetadataModifiers.FormatDeep(module.Set.GetArray(pointer.FieldType)))
         // A constructor's return modifier is kept on the symbol; reflection cannot show it.
         let ctor = shapes.Methods.First((m MetadataMethodSymbol) -> m.Name == ".ctor")
         Assert.Equal(1, MetadataModifiers.Of(ctor.Signature.ReturnType).Length)

@@ -121,32 +121,18 @@ internal shared class MetadataModifiers {
     )
 
     /// Spells the modifiers of a symbol position and of every type nested in it: element types, pointees, type arguments
-    /// and function pointer parts. Reflection exposes only the modifiers of the outer position, so the comparison uses
+    /// and function pointer parts (the list is `MetadataTypeKeys.Parts`). Reflection exposes only the modifiers of the outer position, so the comparison uses
     /// (cref:Format(TypeSymbol)); this function is for the structural tests of the nested ones.
     internal func FormatDeep(type TypeSymbol) string {
         let own = Format(type)
-        let inner = Strip(type)
-        if inner is MetadataArrayTypeSymbol array {
-            return FormatDeep(array.ElementType) + own
+        let parts = MetadataTypeKeys.Parts(Strip(type))
+        if parts.Length == 0 {
+            return own
         }
-        if inner is PointerTypeSymbol pointer {
-            return FormatDeep(pointer.PointeeType) + own
+        if parts.Length == 1 {
+            return FormatDeep(parts[0]) + own
         }
-        if inner is ByRefTypeSymbol byRef {
-            return FormatDeep(byRef.PointeeType) + own
-        }
-        if inner is ConstructedMetadataTypeSymbol constructed {
-            return "<" + string.Join(",", constructed.TypeArguments.Select((a TypeSymbol) -> FormatDeep(a))) + ">" + own
-        }
-        if inner is MetadataFunctionPointerTypeSymbol functionPointer {
-            return "fnptr(" + FormatDeep(functionPointer.ReturnType) + ";" + string.Join(
-                ";",
-                functionPointer.ParameterTypes.Select((a TypeSymbol) -> FormatDeep(a))
-            ) +
-                ")" +
-                own
-        }
-        return own
+        return "<" + string.Join(",", parts.Select((part TypeSymbol) -> FormatDeep(part))) + ">" + own
     }
 
     /// Spells the modifiers of a reflection position by the shared format.
