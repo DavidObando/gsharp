@@ -1845,7 +1845,7 @@ internal class DataStructSynthesizer {
                     )
                     let getter = this
                         .emitCtx
-                        .Metadata
+                        .MetadataRows
                         .AddMemberReference(
                         this.resolveUserTypeToken(structSym),
                         this.emitCtx.Metadata.GetOrAddString("get_" + members[i].Name),
@@ -1975,7 +1975,7 @@ internal class DataStructSynthesizer {
         for var i = 0; i < arity; i++ {
             argsEncoder.AddArgument().Object()
         }
-        return this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        return this.emitCtx.MetadataRows.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
     }
 
     /// Issue #410 / ADR-0029: produces a MethodSpec for
@@ -1985,7 +1985,7 @@ internal class DataStructSynthesizer {
         let sigBlob = BlobBuilder()
         let argsEncoder = BlobEncoder(sigBlob).MethodSpecificationSignature(1)
         argsEncoder.AddArgument().Object()
-        return this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        return this.emitCtx.MetadataRows.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
     }
 
     /// Issue #410 / ADR-0029: returns a standalone signature with one

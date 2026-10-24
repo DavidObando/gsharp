@@ -48,6 +48,7 @@ internal class EmitContext {
         this.AssemblyNameOverride = assemblyName
         this.MetadataOnly = metadataOnly
         this.Metadata = MetadataBuilder()
+        this.MetadataRows = MetadataRowInterner(this.Metadata)
         this.IlStream = BlobBuilder()
         this.MethodBodyStream = MethodBodyStreamEncoder(this.IlStream)
         this.DebugInformation = DebugInformationOptions()
@@ -130,6 +131,13 @@ internal class EmitContext {
     /// Gets the ECMA-335 metadata builder used to assemble the PE's metadata
     /// tables for this emit.
     prop Metadata MetadataBuilder {
+        get;
+    }
+
+    /// Gets the interner that adds `MemberRef`, `TypeSpec` and `MethodSpec`
+    /// rows to (cref:Metadata) once per distinct row (issue #5172). Add those
+    /// rows through it, never through (cref:Metadata) directly.
+    prop MetadataRows MetadataRowInterner {
         get;
     }
 

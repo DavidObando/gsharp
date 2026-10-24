@@ -94,7 +94,7 @@ internal class AssemblyAttributeEmitter {
         )
         let ctorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -561,7 +561,7 @@ internal class AssemblyAttributeEmitter {
         )
         let ctorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
