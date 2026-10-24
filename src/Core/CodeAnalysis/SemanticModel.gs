@@ -112,11 +112,19 @@ partial class SemanticModel {
     /// @returns The declared symbol, or null when the node declares nothing.
     func GetDeclaredSymbol(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) Symbol? {
         cancellationToken.ThrowIfCancellationRequested()
-        return if index.Value.DeclaredBySyntax.TryGetValue(node, out var symbol) {
-            symbol
-        } else {
-            default(Symbol?)
+        if index.Value.DeclaredBySyntax.TryGetValue(node, out var symbol) {
+            return symbol
         }
+        // A shared class or a part of a partial type is declared by a node the binder copied or
+        // merged; its identifier is the same token in the copy and in the tree.
+        if node is StructDeclarationSyntax structDeclaration &&
+            index
+            .Value
+            .StructsByIdentifier
+            .TryGetValue(structDeclaration.Identifier, out var declaredStruct) {
+            return declaredStruct
+        }
+        return nil
     }
 
     /// Returns the symbol referenced by [`node`](paramref) — the

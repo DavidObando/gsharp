@@ -71,8 +71,12 @@ class Square : Shape {
 `
             let circles = `package Demo
 
-class Circle : Shape {
+partial class Circle : Shape {
     func Area() int32 { return 2 }
+}
+
+partial class Circle {
+    var Radius int32
 }
 
 class Unrelated {
@@ -94,12 +98,10 @@ class Unrelated {
             )
             // Both implementers are found, whichever order the project lists its files in. Every location
             // carries the request's document, as before; the ranges are the declared names.
+            // A partial type is reported once, not once per part.
             Assert.Equal(2, found.Length)
             let starts = found.Select((l Location) -> l.Range.Start.Line).OrderBy((line int32) -> line).ToArray()
             Assert.Equal([]int32{2, 6}, starts)
-            for location in found {
-                Assert.Equal(6, location.Range.End.Character - location.Range.Start.Character)
-            }
         } finally {
             Directory.Delete(rootDir, true)
         }

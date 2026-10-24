@@ -1504,6 +1504,7 @@ class LspServer {
             return Array.Empty[Location]()
         }
         let locations = List[Location]()
+        let reported = HashSet[StructSymbol](ReferenceEqualityComparer.Instance)
         // The structs of every tree that implement the interface, in tree order then source order.
         for tree in compilation.SyntaxTrees {
             let model = BoundSemantics.GetModel(compilation, tree)
@@ -1512,11 +1513,19 @@ class LspServer {
             }
             for declaration in tree.Root.DescendantNodes().OfType[StructDeclarationSyntax]() {
                 ct.ThrowIfCancellationRequested()
+                // Every part of a partial type answers the same symbol, which is reported once at its
+                // declaration's identifier.
                 if model.GetDeclaredSymbol(declaration, ct) is StructSymbol structSym && structSym.Interfaces.Contains(
                     iface
-                ) {
+                ) &&
+                    structSym.Declaration is {} structDeclaration &&
+                    reported
+                    .Add(structSym) {
                     locations.Add(
-                        Location{Uri: request.TextDocument.Uri, Range: SemanticLookup.ToRange(declaration.Identifier)}
+                        Location{
+                            Uri: request.TextDocument.Uri,
+                            Range: SemanticLookup.ToRange(structDeclaration.Identifier)
+                        }
                     )
                 }
             }
