@@ -4,6 +4,8 @@
 - **Date**: 2026-10-23
 - **Phase**: Design approved; implementation and certification pending
 - **Approval**: The maintainer stated “ADR 0211 is approved” on 2026-10-23.
+- **Release scope**: The maintainer selected native span aliases and native
+  UTF-8 literal `+` folding on 2026-10-23.
 - **Issue**: [#5218](https://github.com/DavidObando/gsharp/issues/5218)
 - **Related**: [ADR-0204](0204-immutable-bytestring-values.md),
   [ADR-0056](0056-span-consumption-v1.md),
@@ -64,12 +66,12 @@ The maintainer approved this design, not an implemented or certified capability.
 No SDK, runtime, compiler, translator, or test behavior changes in this ADR.
 Implementation, release, SDK-pin adoption, and merge require their own authorization.
 
-Two release-scope alternatives remain explicit decisions:
+The maintainer explicitly selected both initial-release choices:
 
-- Include the recommended native aliases in section 2, or initially use CLR spelling.
-- Include native literal-only `+` in section 7, or initially fold only in cs2gs.
+- Include `span[T]` and `readonly span[T]` aliases, as defined in section 2.
+- Include native UTF-8 literal-only `+` folding, as defined in section 7.
 
-Acceptance does not select between those alternatives.
+Neither release-scope choice remains unresolved.
 The managed-helper emission in section 5 remains a candidate subject to its proof gates.
 Approval is not evidence that G# emission, strict ILVerify, NativeAOT, or translation works.
 
@@ -95,7 +97,7 @@ Do not introduce a wrapper type, text encoder at runtime, or compiler-only ABI.
 
 ### 2. Native type spelling
 
-Recommend these contextual aliases:
+Provide these contextual aliases:
 
 ```gsharp
 let utf8span readonly span[byte] = u8"Hello, World!"
@@ -119,17 +121,16 @@ Use target-reference identities and existing constructed-type machinery.
 Preserve support for symbolic element types and source-defined enum elements.
 Do not bind a user-defined lookalike `System.ReadOnlySpan`.
 
-The smaller alternative is to ship the literal with existing CLR type spelling:
+Existing CLR type spelling remains valid:
 
 ```gsharp
 import System
 let utf8span ReadOnlySpan[byte] = u8"Hello, World!"
 ```
 
-This alternative has identical literal semantics.
-It can omit the alias slice of implementation if the maintainer prefers.
-The initial release must explicitly select whether to include the native aliases.
-That release-scope choice remains open after design approval.
+This spelling has identical literal semantics and names the same CLR type.
+Both native aliases are part of the initial release, not an optional follow-up.
+They introduce no wrapper types or new runtime identity.
 
 ### 3. Lexical forms and exact encoding
 
@@ -175,6 +176,8 @@ An invalid on-disk source encoding must diagnose before bytes can be repaired.
 Interpolation-hole parsing must share the containing document's provenance.
 
 Allocate diagnostic IDs during implementation.
+GS0630 is reserved for fixed-array ABI/import failures in #5236; do not reuse it.
+This ADR reserves no diagnostic ID.
 Assert exact spans for malformed escapes, invalid scalar sequences, bad prefixes,
 unsupported raw forms, and unavailable target support.
 Recovery must not produce a successful executable containing replacement bytes.
@@ -290,7 +293,7 @@ Users can reacquire a literal after suspension or explicitly copy to heap storag
 
 ### 7. Literal-only concatenation
 
-Recommend `+` only between UTF-8 literal representations.
+Provide native `+` only between UTF-8 literal representations.
 Each operand must be a literal or another such concatenation, allowing parentheses.
 Validate each literal independently, then concatenate its bytes during compilation.
 Emit one payload and one final hidden terminator.
@@ -305,10 +308,9 @@ There is no adjacent-literal concatenation or UTF-8 `const` evaluation.
 Invalid surrogate halves cannot be repaired by joining separate literals.
 
 This choice preserves C# literal addition directly.
-Alternatively, the maintainer can defer native addition and require cs2gs to
-collapse only Roslyn-validated UTF-8 literal-addition trees into one target literal.
-Do not emit ordinary span addition in that alternative.
-That initial-release choice remains open after design approval.
+Native folding applies to handwritten and translated G#.
+Translator-only folding does not replace this language capability.
+Do not emit or introduce general span addition.
 
 ### 8. Explicit conversion and ownership boundaries
 
@@ -410,7 +412,8 @@ Do not call a printer substring assertion an allocation or semantic witness.
 ### 11. Bounded implementation sequence
 
 1. Design approval is recorded above.
-   Settle the two release-scope alternatives and obtain implementation authorization.
+   The maintainer selected native aliases and native literal-only folding.
+   Obtain implementation authorization.
    Preserve the approved encoding, raw deferral, termination, and static-storage contracts.
 2. Implement compiler token/binding and minimal static-data emission in G#.
    Reuse existing BCL symbols, escape analysis, metadata, and slot planning.
@@ -440,7 +443,7 @@ Paths below identify the inspected components, not files changed by this study.
 | --- | --- |
 | Lexing and recovery | `src/Core/CodeAnalysis/Syntax/Lexer.gs`: dispatcher, `ReadByteString`, `AppendUtf8Scalar`, `ValidateByteStringSourceEncoding`; `Text/SourceText.gs` encoding provenance; `SyntaxKind.gs`. |
 | Expression parsing | `Parser.Expressions.gs`, `Parser.Expressions.Creation.gs`, `Parser.Declarations.gs`: literal dispatch and statement/expression lookahead. |
-| Optional native aliases | `Parser.TypeClauses.gs`, `TypeClauseSyntax.gs`, `GenericNameExpressionSyntax.gs`; `Binding/Binder.gs: BindTypeClause`; `BinderContext.CanUseNativeBufferAlias`; symbol display and native type completions. Regenerate syntax children with `build/generate-syntax-children.py` when adding child properties. |
+| Native aliases | `Parser.TypeClauses.gs`, `TypeClauseSyntax.gs`, `GenericNameExpressionSyntax.gs`; `Binding/Binder.gs: BindTypeClause`; `BinderContext.CanUseNativeBufferAlias`; symbol display and native type completions. Regenerate syntax children with `build/generate-syntax-children.py` when adding child properties. |
 | Binding and folding | `Binding/ExpressionBinder.Literals.gs: BindLiteralExpression`; binary-expression binding must distinguish literal representations before ordinary operator lookup. Add one typed static-byte literal bound node and preserve it through rewriting. |
 | Escape and async | `Binding/StatementBinder.Jumps.gs: HasFunctionLocalEscapeScope`; `RefCapabilities.gs`; `RefStructAsyncLivenessAnalyzer.gs`; existing closure checks and async capture walker. |
 | Emission | `Emit/EmitContext.gs`, `ReflectionMetadataEmitter.gs: WritePe`, `MethodBodyEmitter.Expressions.gs`, `WellKnownReferences.gs`, `MetadataTokenCache.gs`, `ImportedMemberRefFactory.gs`, `MethodBodyPlanner.gs`, and `SlotPlanner.gs`. |
@@ -520,7 +523,8 @@ The literal does not become a heap-storable UTF-8 string type.
 
 The main new compiler work is RVA data emission, not a runtime value library.
 Tooling and translator integration must preserve a distinct literal kind.
-Native aliases increase the scope but are separable from the literal contract.
+Native aliases belong to the initial release and reuse existing CLR span identities.
+Native literal-only folding is part of the compiler contract, not only translator lowering.
 Raw target syntax and general span concatenation remain outside the first release.
 
 ## Alternatives considered
@@ -532,6 +536,8 @@ Raw target syntax and general span concatenation remain outside the first releas
 | Translate to array or native slice | Loses the static-data guarantee, terminator contract, and possibly natural type. |
 | Runtime `Encoding.UTF8.GetBytes` | Adds encoding and managed allocation to literal evaluation. |
 | C# postfix `"..."u8` | Compatible precedent, but does not follow the maintainer's prefix suggestion or the existing byte-prefix style. |
+| Defer native span aliases | Not selected. The maintainer explicitly included both aliases in the initial release; CLR spelling remains available for interop and name collisions. |
+| Translator-only UTF-8 literal folding | Not selected as a replacement for native folding. Handwritten and translated G# must support the same literal-only operator. |
 | General readonly-span `+` | Requires runtime ownership/allocation semantics that are unnecessary for literal folding. |
 | Native raw/multiline UTF-8 immediately | Adds delimiter and newline-policy decisions; faithful C# translation needs only escaped target syntax. |
 | New UTF-8 wrapper type | Duplicates existing CLR interop and bytestring concerns without solving this issue more directly. |
