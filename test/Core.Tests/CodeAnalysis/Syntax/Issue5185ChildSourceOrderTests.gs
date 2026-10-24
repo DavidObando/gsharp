@@ -5,9 +5,11 @@
 package GSharp.Core.Tests.CodeAnalysis.Syntax
 
 import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import GSharp.Tests
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.IO
 import System.Linq
 import System.Threading
@@ -239,6 +241,55 @@ open class Issue5185ChildSourceOrderTests {
         Assert.Equal("a", complete.Root.Members[^1].GetFirstToken().Text)
     }
 
+    /// A synthesized `return` of an expression body has a span that is wider than the body. It must
+    /// not make the method look like it ends before an unfinished class (review of #5275).
+    @Fact
+    func SynthesizedReturn_DoesNotHideTheMissingClassBrace() {
+        let unfinished = SyntaxTree.Parse("class C {\n    func F() int32 -> 1\n")
+        Assert.True(unfinished.Root.Members[^1].GetLastToken().IsMissing)
+        let finished = SyntaxTree.Parse("class C {\n    func F() int32 -> 1\n}\n")
+        Assert.Equal("}", finished.Root.Members[^1].GetLastToken().Text)
+        let tree = SyntaxTree.Parse("package p\nfunc F() int32 -> 1\n")
+        let statement = Descendants(tree.Root).OfType[ReturnStatementSyntax]().First()
+        Assert.Equal("1", statement.GetLastToken().Text)
+    }
+
+    /// Children with the same start keep the order of the properties, so the sort is stable.
+    @Fact
+    func SortBySourcePosition_KeepsTheOrderOfChildrenWithTheSameStart() {
+        let tree = SyntaxTree.Parse("package p\nfunc F() { G(1) }\n")
+        let call = Descendants(tree.Root).OfType[CallExpressionSyntax]().First()
+        let callee = call.GetChild(0)
+        // The call and its callee start at the same position.
+        Assert.Equal(call.Span.Start, callee.Span.Start)
+        let kept = SyntaxNode.SortBySourcePosition(ImmutableArray.Create[SyntaxNode](call, callee))
+        Assert.Same(call, kept[0])
+        Assert.Same(callee, kept[1])
+        let swapped = SyntaxNode.SortBySourcePosition(ImmutableArray.Create[SyntaxNode](callee, call))
+        Assert.Same(callee, swapped[0])
+        let later = call.GetChild(call.ChildCount - 1)
+        let ordered = SyntaxNode.SortBySourcePosition(ImmutableArray.Create[SyntaxNode](later, callee))
+        Assert.Same(callee, ordered[0])
+        Assert.Same(later, ordered[1])
+    }
+
+    /// A node class outside the compiler can override `Span`. A parent uses that value, whether or
+    /// not it computed its own span before (review of #5275).
+    @Fact
+    func ExternalSpanOverride_IsUsedByTheParentSpan() {
+        let tree = SyntaxTree.Parse("package p\nfunc F() int32 { return 1 + 2 }\n")
+        let binary = Descendants(tree.Root).OfType[BinaryExpressionSyntax]().First()
+        let child = SpanOverridingBinary(tree, binary.Left, binary.OperatorToken, binary.Right)
+        Assert.Equal(1005, child.Span.End)
+        let parent = BinaryExpressionSyntax(tree, child, binary.OperatorToken, binary.Right)
+        Assert.Equal(1005, parent.Span.End)
+        // The span of the child is not cached, so a second parent sees the same value.
+        let other = BinaryExpressionSyntax(tree, child, binary.OperatorToken, binary.Right)
+        Assert.Equal(1005, other.Span.End)
+        let outer = BinaryExpressionSyntax(tree, parent, binary.OperatorToken, binary.Right)
+        Assert.Equal(1005, outer.Span.End)
+    }
+
     /// Reflection and the generated accessors order the children the same way.
     @Fact
     func ReflectionOracle_UsesTheSameOrder() {
@@ -250,6 +301,17 @@ open class Issue5185ChildSourceOrderTests {
                 )
             }
         }
+    }
+
+    private class SpanOverridingBinary : BinaryExpressionSyntax {
+        init(syntaxTree SyntaxTree, left ExpressionSyntax, operatorToken SyntaxToken, right ExpressionSyntax) : base(
+            syntaxTree,
+            left,
+            operatorToken,
+            right
+        ) { }
+
+        override prop Span TextSpan -> TextSpan(1000, 5)
     }
 
     shared {

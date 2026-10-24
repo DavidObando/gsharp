@@ -41,7 +41,4 @@ partial class DeinitDeclarationSyntax : MemberSyntax {
     /// <inheritdoc />
     /// ```
     override prop Span TextSpan -> TextSpan.FromBounds(DeinitKeyword.Span.Start, Body.Span.End)
-
-    /// Gets a value that tells that this node takes its span from an override, not from its children.
-    internal override prop SpanFromChildren bool -> false
 }

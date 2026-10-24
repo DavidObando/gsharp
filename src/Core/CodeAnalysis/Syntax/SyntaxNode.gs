@@ -256,18 +256,16 @@ abstract class SyntaxNode {
         if this is SyntaxToken token {
             return token
         }
-        // A syntax node should always contain at least 1 token. The last child in the list is
-        // the last in the source, except for a child that lies inside an earlier child and ends
-        // before it: the `!` of `a !is T` lies inside the `is` expression (issue #5185).
-        var last = GetChild(ChildCount - 1)
-        for var i = ChildCount - 2; i >= 0; i-- {
-            let earlier = GetChild(i)
-            if earlier.Span.End > last.Span.End && last.Span.Start > earlier.Span.Start {
-                last = earlier
-            }
-        }
-        return last.GetLastToken()
+        // A syntax node should always contain at least 1 token.
+        return GetLastChild().GetLastToken()
     }
+
+    /// Gets the child that holds the last token of this node. This is the last child in the list.
+    /// A node whose last child lies inside an earlier child overrides it (cref:UnaryExpressionSyntax).
+    /// The rule is not general: a synthesized token has an inflated span, so containment of spans
+    /// does not show which child is last (issue #5185).
+    /// @returns The child to descend into.
+    internal open func GetLastChild() SyntaxNode -> GetChild(ChildCount - 1)
 
     /// Gets the first token in this syntax node.
     /// @returns A (cref:SyntaxToken).
@@ -306,10 +304,6 @@ abstract class SyntaxNode {
         childrenBox = nil
     }
 
-    /// Whether the span of this node is the bounds of its children. A class that overrides
-    /// (cref:Span) returns `false`.
-    internal open prop SpanFromChildren bool -> true
-
     private func ComputeSpan() TextSpan {
         // Take the minimum start and the maximum end over all children. Children can overlap
         // even in source order: an interpolated string token contains its holes, and the parser
@@ -326,7 +320,7 @@ abstract class SyntaxNode {
             if frame.Index < frame.Count {
                 let child = frame.Child(frame.Index)
                 frame.Index++
-                if child is SyntaxToken || !child.SpanFromChildren || child.cachedSpan != nil {
+                if child is SyntaxToken || child.cachedSpan != nil || !HasBaseSpan(child.GetType()) {
                     frame.Include(child.Span)
                 } else {
                     frames.Push(SpanFrame(child))
@@ -461,6 +455,20 @@ abstract class SyntaxNode {
         }
 
         private let SourceOrderedByType ConcurrentDictionary[Type, bool] = ConcurrentDictionary[Type, bool]()
+
+        /// Returns whether a node class uses the (cref:Span) getter of this class. A class that
+        /// overrides it, including a class outside this assembly, keeps its own value, so a parent
+        /// asks that node for its span and never derives it from the children.
+        /// @param nodeType The runtime type of a node.
+        /// @returns `true` when the span is the bounds of the children.
+        internal func HasBaseSpan(nodeType Type) bool {
+            return BaseSpanByType.GetOrAdd(
+                nodeType,
+                (type Type) -> type.GetProperty("Span")?.GetGetMethod()?.DeclaringType == typeof(SyntaxNode)
+            )
+        }
+
+        private let BaseSpanByType ConcurrentDictionary[Type, bool] = ConcurrentDictionary[Type, bool]()
 
         /// Returns one element of a children array, with the argument check of the generated accessors.
         /// @param items The children.
