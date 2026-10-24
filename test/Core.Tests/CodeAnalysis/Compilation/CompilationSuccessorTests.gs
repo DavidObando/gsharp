@@ -275,6 +275,33 @@ class Holder[T] {
     }
 
     @Fact
+    func ReplaceSyntaxTree_OnASuccessor_WaitsForABuildOfTheRetiredPredecessor() {
+        let (a, b) = TwoFiles()
+        let first = Compilation(a, b)
+        let scope_ = first.GlobalScope
+        let second = first.ReplaceSyntaxTree(a, Parse("A.gs", AText.Replace("return 1", "return 100")))
+        Assert.Same(scope_, second.GlobalScope)
+        let function = scope_.Functions.Single((f FunctionSymbol) -> f.Name == "B")
+        using let entered = ManualResetEventSlim(false)
+        using let release = ManualResetEventSlim(false)
+        first.BodyBindProbe = () -> {
+            entered.Set()
+            release.Wait()
+        }
+        // The retired predecessor may still bind; the successor shares its symbols.
+        let build = Task.Run(() -> first.BoundProgram)
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(30)))
+        let editedB = Parse("B.gs", BText.Replace("return 2", "return 200"))
+        let replace = Task.Run(() -> second.ReplaceSyntaxTree(b, editedB))
+        Assert.False(replace.Wait(TimeSpan.FromMilliseconds(500)))
+        Assert.Same(b, function.Declaration!!.SyntaxTree)
+        release.Set()
+        Assert.True(replace.Wait(TimeSpan.FromSeconds(30)))
+        Assert.NotNull(build.Result)
+        Assert.Same(editedB, function.Declaration!!.SyntaxTree)
+    }
+
+    @Fact
     func RequestToken_CancelsOnlyTheCallersWait_NotTheBuild() {
         let (a, b) = TwoFiles()
         let compilation = Compilation(a, b)

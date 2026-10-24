@@ -45,6 +45,43 @@ class StringBuilder { }
         Assert.Contains("StringBuilder.gs", location.Uri!!.GetFileSystemPath())
     }
 
+    /// A generic delegate navigates to the declaration of its own package, and after a body-only edit
+    /// that shifts text, to the current position of that declaration.
+    @Fact
+    func Tier1_SiblingGsharpProject_GenericDelegateKeepsPackageAndSurvivesABodyEdit() {
+        let target = typeof(Action[int32])
+        let siblingProjectName = Path.GetFileNameWithoutExtension(target.Assembly.Location)
+        let workspace = WorkspaceState()
+        let sibling = workspace.AddProject("/test/$siblingProjectName/$siblingProjectName.gsproj")
+        sibling.AssemblyName = siblingProjectName
+        let otherPath = "/test/$siblingProjectName/Other.gs"
+        let systemPath = "/test/$siblingProjectName/Delegates.gs"
+        sibling.UpdateFile(otherPath, `package Other
+
+delegate Action[T](value T);
+`)
+        let systemText = `package System
+
+func Body() int32 {
+    return 1
+}
+
+delegate Action[T](value T);
+`
+        sibling.UpdateFile(systemPath, systemText)
+        let before = sibling.GetCompilation()
+        let _ = before.GlobalScope
+        Assert.True(CrossAssemblyDefinitionResolver.TryResolveType(workspace, target, out var first))
+        Assert.Contains("Delegates.gs", first.Uri!!.GetFileSystemPath())
+        Assert.Equal(6, first.Range.Start.Line)
+        sibling.UpdateFile(systemPath, systemText.Replace("return 1", "let x int32 = 1\n    return x"))
+        let after = sibling.GetCompilation()
+        Assert.Same(before.GlobalScope, after.GlobalScope)
+        Assert.True(CrossAssemblyDefinitionResolver.TryResolveType(workspace, target, out var second))
+        Assert.Contains("Delegates.gs", second.Uri!!.GetFileSystemPath())
+        Assert.Equal(7, second.Range.Start.Line)
+    }
+
     /// Tier 1 — Sibling G# project: a method on a sibling type navigates to
     /// the matching G# method declaration's identifier (matched by name with
     /// arity-based overload resolution).

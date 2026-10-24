@@ -578,32 +578,58 @@ internal shared class CrossAssemblyDefinitionResolver {
         declaration = nil
         // Reuse never re-points a delegate's declaration, so read the current trees for the syntax.
         if FindDeclaredType(compilation, type) is DelegateTypeSymbol found {
-            for tree in compilation!!.SyntaxTrees {
-                let match DelegateDeclarationSyntax? = FindDelegateDeclaration(tree.Root, found.Name)
-                if match != nil {
-                    declaration = match
-                    return true
-                }
-            }
+            declaration = FindCurrentDelegateDeclaration(compilation!!, found.Declaration)
+            return declaration != nil
         }
         return false
     }
 
-    private func FindDelegateDeclaration(root SyntaxNode, name string) DelegateDeclarationSyntax? {
-        if root is DelegateDeclarationSyntax decl && string.Equals(
-            decl.Identifier.Text,
-            name,
-            StringComparison.Ordinal
-        ) {
-            return decl
+    // A body-only edit keeps every declaration in place, so the declaration at the same position among
+    // the delegates of the same file is the current form of the one the symbol holds. This keeps the
+    // identity of the selected delegate, including its package and arity.
+    private func FindCurrentDelegateDeclaration(
+        compilation Compilation,
+        original DelegateDeclarationSyntax?
+    ) DelegateDeclarationSyntax? {
+        if original == nil || original.SyntaxTree == nil {
+            return nil
         }
-        for child in root.GetChildren() {
-            let found DelegateDeclarationSyntax? = FindDelegateDeclaration(child, name)
-            if found != nil {
-                return found
+        let originalTree = original.SyntaxTree
+        let originals = List[DelegateDeclarationSyntax]()
+        CollectDelegateDeclarations(originalTree.Root, originals)
+        let index = originals.IndexOf(original)
+        if index < 0 {
+            return nil
+        }
+        let fileName = originalTree.Text?.FileName
+        for tree in compilation.SyntaxTrees {
+            if object.ReferenceEquals(tree, originalTree) ||
+                (
+                !string.IsNullOrEmpty(fileName) && string.Equals(
+                    tree.Text?.FileName,
+                    fileName,
+                    StringComparison.Ordinal
+                )
+            ) {
+                let currents = List[DelegateDeclarationSyntax]()
+                CollectDelegateDeclarations(tree.Root, currents)
+                return if index < currents.Count {
+                    currents[index]
+                } else {
+                    default(DelegateDeclarationSyntax?)
+                }
             }
         }
         return nil
+    }
+
+    private func CollectDelegateDeclarations(root SyntaxNode, into List[DelegateDeclarationSyntax]) {
+        if root is DelegateDeclarationSyntax declaration {
+            into.Add(declaration)
+        }
+        for child in root.GetChildren() {
+            CollectDelegateDeclarations(child, into)
+        }
     }
 
     /// Asks the sibling compilation for the type it declares under the CLR type's metadata name

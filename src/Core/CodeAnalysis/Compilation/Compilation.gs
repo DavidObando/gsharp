@@ -40,9 +40,9 @@ open class Compilation {
     private var assemblyName string?
     private var debugInformation DebugInformationOptions = DebugInformationOptions()
     // ADR-0212 §8: one gate serialises the lazy builds (single flight) and the repoint that
-    // ReplaceSyntaxTree performs on this compilation's symbols. Waiters take it with their
+    // ReplaceSyntaxTree performs on the symbols. Compilations that share symbols share the gate. Waiters take it with their
     // request token; the build itself runs under WorkBudget.CancellationToken only.
-    private let buildGate SemaphoreSlim = SemaphoreSlim(1, 1)
+    private var buildGate SemaphoreSlim = SemaphoreSlim(1, 1)
     private var bodyCache BoundBodyCache?
     private var incrementalBodyReuse bool
     // Set when ReplaceSyntaxTree re-points this compilation's symbols at a successor's tree.
@@ -440,6 +440,9 @@ open class Compilation {
                 }
                 if IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(declarations, oldTree, newTree) {
                     successor.ReusedGlobalScope = declarations
+                    // The successor shares this compilation's mutable symbols, so one gate must order
+                    // every build and re-point over them, whichever compilation starts it.
+                    successor.buildGate = buildGate
                     // A tree edited by an earlier successor whose bodies were never bound is still
                     // dirty: its unchanged members sit at shifted spans in the cache.
                     var dirty = ImmutableHashSet.Create(newTree)
