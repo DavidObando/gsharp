@@ -1480,6 +1480,20 @@ SHA-256 `38b57be6d6b8abd3be70316b48c3abb6371bccaf28e6fa6ee6188b005f557bbe`.
 That image contains exactly `41C3A900` plus its contiguous hidden zero.
 Its independent JIT/NativeAOT, GC, terminator and allocation witnesses do not
 admit other generated literal images or certify the UTF-8 feature.
+One separately reviewed **compiler-produced** witness is also finite:
+`Utf8LiteralProof.dll`, full-image SHA-256
+`d8093a176ac3bbebc3022adabd7f7ba4fa9ab02436142386b5de26981a1ab3cc`.
+Only its exact `Literals.Get`/`Empty` returns at `0x14` and `Derived` at
+`0x0F` are admitted. All three return `ReadOnlySpan<byte>` by value.
+The complete closure uses signed CLR `CreateSpan<byte>`/`Slice` targets,
+private contiguous RVA storage, bounded lengths and a hidden zero.
+Source/compiler provenance, exact IL and independent JIT/NativeAOT evidence
+are recorded with the image certificate.
+Its raw verifier result remains exit 2 with three errors; report
+approved 3 / unexpected 0, not strict clean verification.
+Changed storage, exposed terminators, renamed methods and actual byref
+returns remain failures. Other compiler outputs require separate review;
+this does not certify the whole UTF-8 feature or change any rollout gate.
 The human-readable finite records and immutable positive/true-byref-negative
 images are under `test/Compiler.Tests/TestData/IlVerify`.
 

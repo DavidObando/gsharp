@@ -922,6 +922,12 @@ for the two existing native-slice `AsSpan` false positives tracked by
 The full verifier still runs; exact signature/closure certificates and raw
 reporting replace neither safety witnesses nor unmeasured target evidence.
 Success under that exception is not strict unsuppressed ILVerify success.
+A separately reviewed UTF-8 compiler witness uses that same narrow policy.
+Its complete image digest admits only three exact by-value returns over
+private static RVA data, with independent JIT/NativeAOT and negative controls.
+Raw verification still exits 2; approved 3 / unexpected 0 is not strict clean.
+Future compiler outputs need separate review; this admits neither the full
+UTF-8 feature nor any Go-family profile.
 This does not change M0's `migrationReady: false`.
 `[]T` remains the CLR interop anchor. Native slice descriptors still share
 outer storage; fixed-array element value boundaries and views over inline
