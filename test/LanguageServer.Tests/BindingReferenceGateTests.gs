@@ -50,7 +50,7 @@ open class BindingReferenceGateTests {
     shared {
         private const BindingNamespace string = "GSharp.Core.CodeAnalysis.Binding"
 
-        // ADR-0212 slice S2 baseline. Remove entries as slices S3 to S7 migrate their uses.
+        // ADR-0212 slice S2 baseline. Remove entries as slices S4 to S7 migrate their uses.
         private let Allowed HashSet[string] = HashSet[string](AllowanceEntries(), StringComparer.Ordinal)
 
         // Simple names in the binding namespace, one per line.
@@ -58,22 +58,14 @@ open class BindingReferenceGateTests {
             Binder
             BoundBlockStatement
             BoundBodyCache
-            BoundCallExpression
             BoundClrPropertyAccessExpression
             BoundConstrainedStaticCallExpression
-            BoundDiscardPattern
             BoundExpression
-            BoundFunctionLiteralExpression
             BoundGlobalScope
             BoundImportedCallExpression
             BoundImportedInstanceCallExpression
-            BoundLocalFunctionDeclaration
             BoundNode
-            BoundPattern
             BoundProgram
-            BoundSlicePattern
-            BoundTypePattern
-            BoundVariableDeclaration
             IncrementalGlobalScopeReuse
 `
 

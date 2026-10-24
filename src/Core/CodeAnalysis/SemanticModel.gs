@@ -11,6 +11,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Concurrent
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
 import System.Reflection
 import System.Threading
@@ -267,7 +268,10 @@ partial class SemanticModel {
         DeclaredBySyntax Dictionary[SyntaxNode, Symbol],
         StaticQualifierReads Dictionary[SyntaxNode, BoundExpression?],
         LogicalCompletions Dictionary[BoundExpression, BoundExpression?],
-        StaticQualifierTypes Dictionary[SyntaxNode, TypeSymbol?]
+        StaticQualifierTypes Dictionary[SyntaxNode, TypeSymbol?],
+        TypeClauseTokens Dictionary[SyntaxToken, TypeSymbol],
+        LocalDeclarations ImmutableArray[(Anchor SyntaxNode, Local Symbol)],
+        LocalDeclarationsByName Dictionary[string, ImmutableArray[(Anchor SyntaxNode, Local Symbol)]]
     ) : IEquatable[SemanticModel.Index] { }
 
     /// Records the outermost bound node per syntax node (first-win in a
@@ -280,6 +284,7 @@ partial class SemanticModel {
         private let staticQualifierReads Dictionary[SyntaxNode, BoundExpression?]
         private let logicalCompletions Dictionary[BoundExpression, BoundExpression?]
         private let staticQualifierTypes Dictionary[SyntaxNode, TypeSymbol?]
+        private var literalDepth int32
 
         init(
             tree SyntaxTree,
@@ -310,6 +315,14 @@ partial class SemanticModel {
         override func VisitExpression(node BoundExpression?) {
             Record(node)
             base.VisitExpression(node)
+            // The walker treats a function literal as a leaf. Its body is walked here for the
+            // declarations it holds (a literal's parameters and locals), not for anchoring: syntax
+            // inside a literal keeps answering no bound node.
+            if node is BoundFunctionLiteralExpression literal {
+                literalDepth++
+                VisitStatement(literal.Body)
+                literalDepth--
+            }
         }
 
         override func VisitPattern(node BoundPattern?) {
@@ -321,11 +334,12 @@ partial class SemanticModel {
             if node == nil {
                 return
             }
-            if node.Syntax is {} syntax && object.ReferenceEquals(syntax.SyntaxTree, tree) &&
+            if literalDepth == 0 && node.Syntax is {} syntax && object.ReferenceEquals(syntax.SyntaxTree, tree) &&
                 !boundBySyntax.ContainsKey(syntax) {
                 boundBySyntax.Add(syntax, node)
             }
-            if node is BoundExpression{LogicalCompletionOperand: {} operand} completion &&
+            if literalDepth == 0 &&
+                node is BoundExpression{LogicalCompletionOperand: {} operand} completion &&
                 operand.Syntax is {} origin &&
                 object
                 .ReferenceEquals(origin.SyntaxTree, tree) {
@@ -335,7 +349,8 @@ partial class SemanticModel {
                     logicalCompletions[operand] = nil
                 }
             }
-            if node is BoundExpression{StaticMemberSyntax: {} member, StaticQualifierType: not nil} expression &&
+            if literalDepth == 0 &&
+                node is BoundExpression{StaticMemberSyntax: {} member, StaticQualifierType: not nil} expression &&
                 object
                 .ReferenceEquals(member.SyntaxTree, tree) {
                 if !staticQualifierReads.TryGetValue(member, out var existing) {
@@ -345,7 +360,8 @@ partial class SemanticModel {
                     staticQualifierReads[member] = nil
                 }
             }
-            if node is BoundExpression{StaticQualifierSyntax: {} qualifier, StaticQualifierType: {} qualifierType} &&
+            if literalDepth == 0 &&
+                node is BoundExpression{StaticQualifierSyntax: {} qualifier, StaticQualifierType: {} qualifierType} &&
                 object
                 .ReferenceEquals(qualifier.SyntaxTree, tree) {
                 if !staticQualifierTypes.TryGetValue(qualifier, out var existingType) {
@@ -354,6 +370,13 @@ partial class SemanticModel {
                     // Reads that disagree on the qualifier's type are not authority.
                     staticQualifierTypes[qualifier] = nil
                 }
+            }
+            // A variable declared at an identifier the symbol does not remember (an element of a
+            // destructured lambda parameter or of a tuple `for`) is anchored by the declaration
+            // node the binder built for it.
+            if node is BoundVariableDeclaration{Variable: {} declared, Syntax: SyntaxToken anchor} &&
+                object.ReferenceEquals(anchor.SyntaxTree, tree) && !declaredBySyntax.ContainsKey(anchor) {
+                declaredBySyntax.Add(anchor, declared)
             }
             for getter in SemanticModel.GetAccessors(node.GetType()).SymbolProperties {
                 if getter(node) is Symbol symbol {
@@ -379,11 +402,13 @@ partial class SemanticModel {
             let staticQualifierReads = Dictionary[SyntaxNode, BoundExpression?](ReferenceEqualityComparer.Instance)
             let logicalCompletions = Dictionary[BoundExpression, BoundExpression?](ReferenceEqualityComparer.Instance)
             let staticQualifierTypes = Dictionary[SyntaxNode, TypeSymbol?](ReferenceEqualityComparer.Instance)
+            let typeClauseTokens = Dictionary[SyntaxToken, TypeSymbol](ReferenceEqualityComparer.Instance)
             let program = compilation.BoundProgram
             let globalScope = compilation.GlobalScope
             for symbol in EnumerateDeclaredSymbols(program, globalScope) {
                 RecordDeclarations(symbol, tree, declaredBySyntax)
             }
+            SemanticModel.RecordTypeClauses(globalScope, tree, typeClauseTokens)
             let walker = IndexingWalker(
                 tree,
                 boundBySyntax,
@@ -399,12 +424,16 @@ partial class SemanticModel {
                 walker.Visit(body)
             }
             walker.Visit(program.Statement)
+            let localDeclarations = SemanticModel.CollectLocalDeclarations(declaredBySyntax)
             return SemanticModel.Index(
                 boundBySyntax,
                 declaredBySyntax,
                 staticQualifierReads,
                 logicalCompletions,
-                staticQualifierTypes
+                staticQualifierTypes,
+                typeClauseTokens,
+                localDeclarations,
+                SemanticModel.GroupByName(localDeclarations)
             )
         }
 

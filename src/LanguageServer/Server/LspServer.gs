@@ -1504,15 +1504,21 @@ class LspServer {
             return Array.Empty[Location]()
         }
         let locations = List[Location]()
-        for structSym in compilation.GlobalScope.Structs {
-            ct.ThrowIfCancellationRequested()
-            if structSym.Interfaces.Contains(iface) && structSym.Declaration != nil {
-                locations.Add(
-                    Location{
-                        Uri: request.TextDocument.Uri,
-                        Range: SemanticLookup.ToRange(structSym.Declaration!!.Identifier)
-                    }
-                )
+        // The structs of every tree that implement the interface, in tree order then source order.
+        for tree in compilation.SyntaxTrees {
+            let model = BoundSemantics.GetModel(compilation, tree)
+            if model == nil {
+                continue
+            }
+            for declaration in tree.Root.DescendantNodes().OfType[StructDeclarationSyntax]() {
+                ct.ThrowIfCancellationRequested()
+                if model.GetDeclaredSymbol(declaration, ct) is StructSymbol structSym && structSym.Interfaces.Contains(
+                    iface
+                ) {
+                    locations.Add(
+                        Location{Uri: request.TextDocument.Uri, Range: SemanticLookup.ToRange(declaration.Identifier)}
+                    )
+                }
             }
         }
         return locations.ToArray()

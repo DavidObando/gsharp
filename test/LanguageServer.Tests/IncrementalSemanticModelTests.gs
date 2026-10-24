@@ -17,7 +17,7 @@ import Xunit
 /// that building the model with the per-tree / per-body memo caches warm
 /// (the incremental path) produces results identical to a from-scratch build
 /// (the `useIncrementalCaches: false` oracle): `Resolve` over every
-/// token, `GetLocals` over every function, and the `globals` map all
+/// token and the `globals` map
 /// agree. They also prove the incremental path actually reuses unchanged files
 /// rather than re-walking them, and that non-body-only edits stay correct.
 @Collection("IncrementalSemanticModel")
@@ -50,16 +50,11 @@ open class IncrementalSemanticModelTests {
         SemanticLookup.ResetIncrementalCacheCounters()
         let _ = SemanticLookup.BuildModelForTest(comp2, useIncrementalCaches: true)
         let nodeStats = SemanticLookup.NodeBucketCacheStats
-        let localStats = SemanticLookup.FunctionLocalsCacheStats
         // Four files; only a.gs changed. The three unchanged trees are served
         // from the per-tree memo (instance identity), and exactly one tree
         // (a.gs) misses and is re-collected.
         Assert.True(nodeStats.Hits >= int64(3), "expected >= 3 node-bucket hits, got ${nodeStats.Hits}")
         Assert.True(nodeStats.Misses >= int64(1), "expected >= 1 node-bucket miss, got ${nodeStats.Misses}")
-        // The unchanged files' bodies are served from the BoundBodyCache as the
-        // same instances, so their local maps are reused; the edited file's
-        // body is fresh and recomputes.
-        Assert.True(localStats.Hits >= int64(1), "expected >= 1 function-locals hit, got ${localStats.Hits}")
     }
 
     @Fact
@@ -163,22 +158,7 @@ open class IncrementalSemanticModelTests {
                 }
             }
             Assert.True(tokenCount > 0)
-            // 2. GetLocals agrees for every function declaration.
-            for tree in compilation.SyntaxTrees {
-                for function in DescendantsOfType[FunctionDeclarationSyntax](tree.Root) {
-                    let incrementalLocals = incremental.GetLocals(function)
-                    let fullLocals = full.GetLocals(function)
-                    Assert.Equal(fullLocals.Count, incrementalLocals.Count)
-                    Assert.Equal(
-                        fullLocals.OrderBy((s VariableSymbol) -> s.Name).Select((s VariableSymbol) -> s.Name),
-                        incrementalLocals.OrderBy((s VariableSymbol) -> s.Name).Select((s VariableSymbol) -> s.Name)
-                    )
-                    for symbol in fullLocals {
-                        Assert.Contains(incrementalLocals, (s VariableSymbol) -> object.ReferenceEquals(s, symbol))
-                    }
-                }
-            }
-            // 3. The globals map agrees (same keys, same symbol instances).
+            // 2. The globals map agrees (same keys, same symbol instances).
             let incrementalGlobals = incremental.GlobalsSnapshot
             let fullGlobals = full.GlobalsSnapshot
             Assert.Equal(fullGlobals.Count, incrementalGlobals.Count)

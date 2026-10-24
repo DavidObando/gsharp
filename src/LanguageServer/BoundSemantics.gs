@@ -36,6 +36,25 @@ shared class BoundSemantics {
         return model.GetSymbolInfo(token).Symbol
     }
 
+    /// Gets the symbol a simple name resolves to at [`token`](paramref)'s position, by the scope
+    /// rules of the semantic model (ADR-0212 slice S3): the innermost local, then the members of
+    /// the enclosing type, then the compilation's globals.
+    /// @param compilation The compilation the token's tree belongs to.
+    /// @param token An identifier token naming a variable, a function or a type.
+    /// @returns The symbol, or null when the name resolves to nothing there.
+    func LookupName(compilation Compilation?, token SyntaxToken?) Symbol? {
+        let model = GetModel(compilation, token)
+        if model == nil || token == nil {
+            return nil
+        }
+        let symbols = model.LookupSymbols(token.Span.Start, token.Text)
+        return if symbols.IsDefaultOrEmpty {
+            default(Symbol?)
+        } else {
+            symbols[0]
+        }
+    }
+
     /// Gets the CLR member the binder bound [`token`](paramref) to when the
     /// token names an imported method or property.
     /// @param compilation The compilation the token's tree belongs to.
@@ -85,7 +104,7 @@ shared class BoundSemantics {
         return GetModel(compilation, token.SyntaxTree)
     }
 
-    private func GetModel(compilation Compilation, tree SyntaxTree?) GSharp.Core.CodeAnalysis.SemanticModel? {
+    func GetModel(compilation Compilation, tree SyntaxTree?) GSharp.Core.CodeAnalysis.SemanticModel? {
         if tree == nil {
             return nil
         }

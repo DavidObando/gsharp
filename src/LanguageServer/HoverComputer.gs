@@ -1670,66 +1670,20 @@ shared class CompletionComputer {
                 items.Add(CompletionItem{Label: keyword, Kind: CompletionItemKind.Keyword})
             }
         }
-        // Add global symbols (functions, variables, types)
-        for function in compilation.GlobalScope.Functions {
-            ct.ThrowIfCancellationRequested()
-            if seen.Add(function.Name) {
-                items.Add(
-                    CompletionItem{
-                        Label: function.Name,
-                        Kind: CompletionItemKind.Function,
-                        Detail: HoverComputer.FormatSymbol(function)
-                    }
-                )
-            }
-        }
-        for variable in compilation.GlobalScope.Variables {
-            ct.ThrowIfCancellationRequested()
-            if seen.Add(variable.Name) {
-                items.Add(
-                    CompletionItem{
-                        Label: variable.Name,
-                        Kind: CompletionItemKind.Variable,
-                        Detail: HoverComputer.FormatSymbol(variable)
-                    }
-                )
-            }
-        }
-        for structSymbol in compilation.GlobalScope.Structs {
-            ct.ThrowIfCancellationRequested()
-            if seen.Add(structSymbol.Name) {
-                items.Add(
-                    CompletionItem{
-                        Label: structSymbol.Name,
-                        Kind: CompletionItemKind.Struct,
-                        Detail: HoverComputer.FormatSymbol(structSymbol)
-                    }
-                )
-            }
-        }
-        for pair in compilation.GlobalScope.TypeAliases {
-            if seen.Add(pair.Key) {
-                items.Add(
-                    CompletionItem{
-                        Label: pair.Key,
-                        Kind: if pair.Value is EnumSymbol {
-                            CompletionItemKind.Enum
-                        } else {
-                            CompletionItemKind.Class
-                        },
-                        Detail: HoverComputer.FormatSymbol(pair.Value)
-                    }
-                )
-            }
-        }
-        // Add local symbols from the containing function
-        let containingFunction FunctionDeclarationSyntax? = FindContainingFunction(content.SyntaxTree, offset)
-        if containingFunction != nil {
-            for param in containingFunction.Parameters {
-                // ADR-0185: a named function's parameters never come from the
-                // destructured arrow-lambda path.
-                if seen.Add(param.Identifier!!.Text) {
-                    items.Add(CompletionItem{Label: param.Identifier!!.Text, Kind: CompletionItemKind.Variable})
+        // Add the names visible at the caret: locals and parameters, the enclosing type's
+        // members, then the compilation's functions, variables and types (ADR-0212 slice S3).
+        let model = BoundSemantics.GetModel(compilation, content.SyntaxTree)
+        if model != nil {
+            for symbol in model.LookupSymbols(offset, nil, ct) {
+                ct.ThrowIfCancellationRequested()
+                if seen.Add(symbol.Name) {
+                    items.Add(
+                        CompletionItem{
+                            Label: symbol.Name,
+                            Kind: GetCompletionKind(symbol),
+                            Detail: HoverComputer.FormatSymbol(symbol)
+                        }
+                    )
                 }
             }
         }
@@ -1740,6 +1694,19 @@ shared class CompletionComputer {
             }
         }
         return ApplyReplacementRange(items, replacementRange)
+    }
+
+    private func GetCompletionKind(symbol Symbol) CompletionItemKind {
+        return switch symbol {
+            case FunctionSymbol: CompletionItemKind.Function
+            case VariableSymbol: CompletionItemKind.Variable
+            case StructSymbol: CompletionItemKind.Struct
+            case EnumSymbol: CompletionItemKind.Enum
+            case FieldSymbol: CompletionItemKind.Field
+            case PropertySymbol: CompletionItemKind.Property
+            case EventSymbol: CompletionItemKind.Event
+            default: CompletionItemKind.Class
+        }
     }
 
     /// Issue #917: computes the source span of the partial identifier immediately
@@ -1996,18 +1963,6 @@ shared class CompletionComputer {
                 AddItem(items, seen, field.Name, CompletionItemKind.Field, "${field.Name}: ${field.FieldType.Name}")
             }
         }
-    }
-
-    private func FindContainingFunction(tree SyntaxTree, offset int32) FunctionDeclarationSyntax? {
-        var best FunctionDeclarationSyntax? = nil
-        for func_ in tree.Root.Members.OfType[FunctionDeclarationSyntax]() {
-            if func_.Span.Start <= offset && offset <= func_.Span.End {
-                if best == nil || func_.Span.Length < best.Span.Length {
-                    best = func_
-                }
-            }
-        }
-        return best
     }
 
     private func TryComputeMemberCompletions(
