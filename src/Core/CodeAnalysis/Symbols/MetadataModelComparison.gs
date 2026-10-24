@@ -235,15 +235,55 @@ internal shared class MetadataModelComparison {
             kinds.IsSealed,
             symbol.EnclosingType?.FullName ?? ""
         )
+        // The constraints do not depend on the base chain, so they compare even when the chain is not complete.
         if !symbol.IsBaseChainComplete {
-            return own + "|base-missing"
+            return own + "|base-missing|" + ConstraintsOf(symbol)
         }
-        let baseName = if symbol.BaseDefinition is {} resolvedBase {
-            Describe(resolvedBase)
-        } else {
-            ""
+        return own + "|" + string.Join(
+            "|",
+            kinds.IsValueType,
+            kinds.IsEnum,
+            kinds.IsDelegate,
+            MetadataTypeKeys.Of(symbol.BaseType),
+            ConstraintsOf(symbol)
+        )
+    }
+
+    // Q13: the constraint rows of each generic parameter. A parameter whose constraint names a type that the context
+    // cannot load is written "constraints-missing" on both sides; the other parameters still compare (table 7b).
+    private func ConstraintsOf(symbol MetadataTypeSymbol) string {
+        let parts = List[string]()
+        for var i = 0; i < symbol.TypeParameters.Length; i++ {
+            let constraints = symbol.GetConstraintTypes(i)
+            parts.Add(
+                if constraints.Any((c TypeSymbol) -> MetadataTypeKeys.ContainsMissing(c)) {
+                    "constraints-missing"
+                } else {
+                    string.Join("+", constraints.Select((c TypeSymbol) -> MetadataTypeKeys.Of(c)))
+                }
+            )
         }
-        return own + "|" + string.Join("|", kinds.IsValueType, kinds.IsEnum, kinds.IsDelegate, baseName)
+        return string.Join(",", parts)
+    }
+
+    private func ConstraintsOf(type Type) string {
+        let parts = List[string]()
+        for argument in type.GetGenericArguments() {
+            try {
+                parts.Add(
+                    string.Join(
+                        "+",
+                        argument.GetGenericParameterConstraints().Select((c Type) -> MetadataTypeKeys.Of(c))
+                    )
+                )
+            } catch (ex Exception) when ex is FileNotFoundException ||
+                ex is FileLoadException ||
+                ex is BadImageFormatException ||
+                ex is TypeLoadException {
+                parts.Add("constraints-missing")
+            }
+        }
+        return string.Join(",", parts)
     }
 
     internal func DescribeType(type Type) string {
@@ -274,22 +314,14 @@ internal shared class MetadataModelComparison {
             let valueType = type.IsValueTypeSafe()
             let isEnum = type.BaseType?.FullName == "System.Enum" && type.FullName != "System.Enum"
             let isDelegate = ClrTypeUtilities.IsDelegateType(type)
-            var baseName = ""
-            if type.BaseType is {} baseType {
-                // The defining assembly is part of the identity: two assemblies can define the same full name.
-                let definition = if baseType.IsGenericType {
-                    baseType.GetGenericTypeDefinition()
-                } else {
-                    baseType
-                }
-                baseName = Identify(definition)
-            }
-            return own + "|" + string.Join("|", valueType, isEnum, isDelegate, baseName)
+            // The key holds the defining assembly and the type arguments of the base.
+            let baseName = MetadataTypeKeys.Of(type.BaseType)
+            return own + "|" + string.Join("|", valueType, isEnum, isDelegate, baseName, ConstraintsOf(type))
         } catch (ex Exception) when ex is FileNotFoundException ||
             ex is FileLoadException ||
             ex is BadImageFormatException ||
             ex is TypeLoadException {
-            return own + "|base-missing"
+            return own + "|base-missing|" + ConstraintsOf(type)
         }
     }
 
