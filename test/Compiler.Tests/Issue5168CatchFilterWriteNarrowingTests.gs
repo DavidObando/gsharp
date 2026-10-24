@@ -539,6 +539,41 @@ func Run(callback () -> void, flag bool) int32 {
 }
 func Main() { Console.WriteLine(Run(() -> { }, true)) }
 `}
+            // A using declaration runs its initializer, which can run a filter of an enclosing try.
+            yield[]object{"using-initializer-under-filter", `
+package P
+import System
+
+class Res : IDisposable {
+    func Dispose() { }
+}
+func Resume() Res {
+    try {
+        throw FormatException("f")
+    } finally {
+        throw InvalidOperationException("g")
+    }
+}
+func Clear(ref s string?) bool {
+    s = nil
+    return false
+}
+func Run() int32 {
+    var s string? = "abc"
+    if s == nil { return 0 }
+    try {
+        try {
+            using let resource = Resume()
+            return s.Length
+        } catch (InvalidOperationException) {
+            return 5
+        }
+    } catch (FormatException) when Clear(ref s) {
+        return 0
+    }
+}
+func Main() { Console.WriteLine(Run()) }
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
@@ -763,6 +798,30 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `, []string{"4"}}
+            // The index of a member target is only read.
+            yield[]object{"filter-member-of-indexed-ref-read", `
+package P
+import System
+
+class Box {
+    var Value int32
+}
+func Get() string? { return "abc" }
+func Touch(ref slot int32) bool { return false }
+func Run() int32 {
+    let s string? = Get()
+    if s == nil { return 0 }
+    var boxes = []Box{Box{}, Box{}, Box{}, Box{}}
+    try {
+        throw Exception("x")
+    } catch when Touch(ref boxes[s.Length].Value) {
+        return 1
+    } catch {
+        return s.Length
+    }
+}
+func Main() { Console.WriteLine(Run()) }
+`, []string{"3"}}
         }
 
         private func Compile(dir string, source string, outPath string)(Exit int32, Log string) {

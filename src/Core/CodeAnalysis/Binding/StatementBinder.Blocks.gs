@@ -533,6 +533,8 @@ internal partial class StatementBinder {
             CollectWriteTargetNames(parenthesized.Expression, names)
         } else if operand is IndexExpressionSyntax indexed {
             CollectWriteTargetNames(indexed.Target, names)
+        } else if operand is AccessorExpressionSyntax accessor {
+            CollectWriteTargetNames(accessor.LeftPart, names)
         } else {
             CollectAllNames(operand, names)
         }
