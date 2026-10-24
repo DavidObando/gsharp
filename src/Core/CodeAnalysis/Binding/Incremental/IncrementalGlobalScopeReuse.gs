@@ -148,11 +148,7 @@ internal shared class IncrementalGlobalScopeReuse {
             if object.ReferenceEquals(diagnosticText, previousText) {
                 return false
             }
-            if !string.IsNullOrEmpty(editedFile) && string.Equals(
-                diagnosticText?.FileName,
-                editedFile,
-                StringComparison.Ordinal
-            ) {
+            if SourcePathIdentity.AreSame(diagnosticText?.FileName, editedFile) {
                 return false
             }
         }

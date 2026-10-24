@@ -266,11 +266,7 @@ open class ProjectState {
             var replaced = false
             for var i = 0; i < trees.Length; i++ {
                 let treePath = trees[i].Text?.FileName
-                if !string.IsNullOrEmpty(treePath) && string.Equals(
-                    NormalizePath(treePath!!),
-                    key,
-                    StringComparison.Ordinal
-                ) {
+                if SourcePathIdentity.AreSame(treePath, key) {
                     trees[i] = snapshotTree
                     replaced = true
                     break
@@ -284,11 +280,7 @@ open class ProjectState {
             if !isDirty && compilation != nil {
                 for tree in compilation!!.SyntaxTrees {
                     let treePath = tree.Text?.FileName
-                    if !string.IsNullOrEmpty(treePath) && string.Equals(
-                        NormalizePath(treePath!!),
-                        key,
-                        StringComparison.Ordinal
-                    ) {
+                    if SourcePathIdentity.AreSame(treePath, key) {
                         return compilation!!.WithReplacedSyntaxTree(tree, snapshotTree)
                     }
                 }
@@ -592,7 +584,7 @@ open class ProjectState {
         }
 
         private func NormalizePath(path string) string {
-            return Path.GetFullPath(path)
+            return SourcePathIdentity.Normalize(path)
         }
     }
 }

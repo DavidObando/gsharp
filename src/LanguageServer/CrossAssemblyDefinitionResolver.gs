@@ -7,6 +7,7 @@ package GSharp.LanguageServer
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import GSharp.LanguageServer.Protocol
 import Range = GSharp.LanguageServer.Protocol.Range
 import System
@@ -603,14 +604,7 @@ internal shared class CrossAssemblyDefinitionResolver {
         }
         let fileName = originalTree.Text?.FileName
         for tree in compilation.SyntaxTrees {
-            if object.ReferenceEquals(tree, originalTree) ||
-                (
-                !string.IsNullOrEmpty(fileName) && string.Equals(
-                    tree.Text?.FileName,
-                    fileName,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            ) {
+            if object.ReferenceEquals(tree, originalTree) || SourcePathIdentity.AreSame(tree.Text?.FileName, fileName) {
                 let currents = List[DelegateDeclarationSyntax]()
                 CollectDelegateDeclarations(tree.Root, currents)
                 return if index < currents.Count {

@@ -113,6 +113,34 @@ delegate Action[T](value T);
         Assert.Equal(7, location.Range.Start.Line)
     }
 
+    /// ProjectState keys files by their full path, so `./` and `..` spellings of one file are one file for
+    /// reuse; the resolver must pair the delegate's tree with the replacement the same way.
+    @Theory
+    @InlineData("/./Delegates.gs")
+    @InlineData("/sub/../Delegates.gs")
+    func Tier1_SiblingGsharpProject_GenericDelegateSurvivesAPathAliasEdit(alias string) {
+        let target = typeof(Action[int32])
+        let siblingProjectName = Path.GetFileNameWithoutExtension(target.Assembly.Location)
+        let workspace = WorkspaceState()
+        let sibling = workspace.AddProject("/test/$siblingProjectName/$siblingProjectName.gsproj")
+        sibling.AssemblyName = siblingProjectName
+        let text = `package System
+
+func Body() int32 {
+    return 1
+}
+
+delegate Action[T](value T);
+`
+        sibling.UpdateFile("/test/$siblingProjectName/Delegates.gs", text)
+        let before = sibling.GetCompilation()
+        let _ = before.GlobalScope
+        sibling.UpdateFile("/test/$siblingProjectName$alias", text.Replace("return 1", "let x int32 = 1\n    return x"))
+        Assert.Same(before.GlobalScope, sibling.GetCompilation().GlobalScope)
+        Assert.True(CrossAssemblyDefinitionResolver.TryResolveType(workspace, target, out var location))
+        Assert.Equal(7, location.Range.Start.Line)
+    }
+
     /// The delegate is the second one of its file. A body-only edit keeps its position among the
     /// file's delegates; an edit that adds a delegate before it is not body-only and binds from scratch.
     @Fact
