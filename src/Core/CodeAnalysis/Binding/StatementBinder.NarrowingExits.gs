@@ -118,7 +118,7 @@ internal partial class StatementBinder {
                 } else {
                     EnclosingFilterNames(syntax, effects)
                 }
-                branchesMutateMembers = BranchesMayMutateMemberPaths(statement)
+                branchesMutateMembers = BranchesMayMutateMemberPaths(statement, aliasesAtEntry)
             }
             // The legacy passes own every kill that a write causes (row R2, a later PR).
             // A call in the condition runs before the condition proves its facts (row R5).
@@ -132,28 +132,43 @@ internal partial class StatementBinder {
 
     // Whether the branches of an `if`, or the statements of a bare block, can mutate
     // a member path. The condition and the initializer run before the facts hold.
-    private func BranchesMayMutateMemberPaths(statement BoundStatement) bool {
+    private func BranchesMayMutateMemberPaths(
+        statement BoundStatement,
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol]
+    ) bool {
         switch statement {
             case ifStatement is BoundIfStatement {
-                return MayMutateMemberPaths(ifStatement.ThenStatement) ||
-                    (ifStatement.ElseStatement != nil && MayMutateMemberPaths(ifStatement.ElseStatement))
+                return MayMutateMemberPaths(ifStatement.ThenStatement, aliasesAtEntry) ||
+                    (
+                    ifStatement.ElseStatement != nil && MayMutateMemberPaths(ifStatement.ElseStatement, aliasesAtEntry)
+                )
             }
             case initialized is BoundBlockStatement when initialized.Syntax is IfStatementSyntax &&
                 initialized
                 .Statements
                 .Length == 2 &&
                 initialized.Statements[1] is BoundIfStatement {
-                return BranchesMayMutateMemberPaths(initialized.Statements[1])
+                return BranchesMayMutateMemberPaths(initialized.Statements[1], aliasesAtEntry)
             }
             default {
-                return MayMutateMemberPaths(statement)
+                return MayMutateMemberPaths(statement, aliasesAtEntry)
             }
         }
     }
 
-    private func MayMutateMemberPaths(statement BoundStatement) bool {
+    // A property getter with user code is no call expression in the syntax, so the
+    // bound effects answer as well.
+    private func MayMutateMemberPaths(
+        statement BoundStatement,
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol]
+    ) bool {
         let syntax = statement.Syntax
-        return syntax == nil || SyntaxMayMutateMemberPaths(syntax)
+        if syntax == nil || SyntaxMayMutateMemberPaths(syntax) {
+            return true
+        }
+        let collector = NewCollector(nil, aliasesAtEntry)
+        collector.Visit(statement)
+        return collector.MayMutateMemberPaths
     }
 
     // A gain is a fact that the statement proved and the frames do not hold. A

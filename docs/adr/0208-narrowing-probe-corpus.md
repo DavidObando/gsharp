@@ -133,6 +133,7 @@ The rows e9 (R4), e17 (R2), g1 and the `goto` rows (R6) did not change. New rows
 | h6 | `if b.Pet == nil { return }`, `if Ready() { } else { return }`, then `b.Pet.Name` | rejected: the call in the condition kills the entry fact, and a join never puts an entry fact back (row R14 keeps it rejected) |
 | k1 | `var x Animal? = a`; both branches of `if c` hold `if x !is Dog { return }`; then `x.Bark()` | accepted: the legacy `if` join lifts `Animal` first and the join then strengthens it to `Dog` |
 | k2 | `if s == nil { return 0 }`, `if Clear(ref s) { return s.Length }` where `Clear` stores nil | accepted with GS0612, throws `NullReferenceException` in 0.5.212 and now: a condition's write is not applied before its branches ([#5249](https://github.com/DavidObando/gsharp/issues/5249), slice 4) |
+| h7 | the same as h2 with a read of a property getter with user code in the exiting branch | rejected until slice 2b (R2): the getter is a call for member paths (#5214) |
 | i1 | `Make[T class init()]`: `if settings is IInit init { }` then `return settings` (#5206) | accepted before and after; the shadow report names a dropped fact if A1 is reverted |
 | i2 | the same with a forward `goto Done` out of the type test | rejected by 0.5.212 with GS0155, accepted after: the `goto` join takes the declared type (A1) |
 | j1 | `x object?`; `if k == 0 { x !is Animal ... } else if k == 1 { x !is Dog ... } else { x !is Cat ... }` | accepted: the `else if` chain joins three states at once |
