@@ -55,9 +55,7 @@ abstract class SyntaxNode {
             if cachedSpan != nil {
                 return cachedSpan!!.Value
             }
-            let computed = ComputeSpan()
-            cachedSpan = SpanBox(computed)
-            return computed
+            return ComputeSpan(0)
         }
     }
 
@@ -304,98 +302,112 @@ abstract class SyntaxNode {
         childrenBox = nil
     }
 
-    private func ComputeSpan() TextSpan {
-        // Take the minimum start and the maximum end over all children. Children can overlap
-        // even in source order: an interpolated string token contains its holes, and the parser
-        // synthesizes tokens at the position of a real one (issue #5185). The first and last
-        // child would give a truncated span and break position-based walks such as the language
-        // server's interpolated-string hole detection (issue #5136).
-        // The walk uses an explicit stack, so a deep chain (for example many postfix `!!`)
-        // cannot overflow the call stack, and it reads the children in property order, so it
-        // does not need the sorted children, which need the spans (issue #5185).
-        let frames = Stack[SpanFrame]()
-        frames.Push(SpanFrame(this))
-        while true {
-            let frame = frames.Peek()
-            if frame.Index < frame.Count {
-                let child = frame.Child(frame.Index)
-                frame.Index++
-                if child is SyntaxToken || child.cachedSpan != nil || !HasBaseSpan(child.GetType()) {
-                    frame.Include(child.Span)
-                } else {
-                    frames.Push(SpanFrame(child))
-                }
-                continue
-            }
-            frames.Pop()
-            let computed = frame.Result()
-            if frames.Count == 0 {
-                return computed
-            }
-            frame.Node.cachedSpan = SpanBox(computed)
-            frames.Peek().Include(computed)
+    /// Computes and caches the span of this node. The span is the minimum start and the maximum end
+    /// over all children. Children can overlap even in source order: an interpolated string token
+    /// contains its holes, and the parser synthesizes tokens at the position of a real one (issue
+    /// #5185). The first and last child would give a truncated span and break position-based walks
+    /// such as the language server's interpolated-string hole detection (issue #5136).
+    /// The walk reads the children in property order, so it does not need the sorted children,
+    /// which need the spans of the children (issue #5185). A node whose class overrides (cref:Span)
+    /// is asked for its span and never derived from its children.
+    /// @param depth The number of nested calls so far.
+    /// @returns The span.
+    private func ComputeSpan(depth int32) TextSpan {
+        if depth >= MaxSpanDepth {
+            // A very deep tree (for example many postfix `!!`) must not overflow the call stack.
+            // Fill the caches from the bottom with an explicit stack, then read this node.
+            CacheDeepSpansWithoutRecursion()
+            return cachedSpan!!.Value
         }
+        let box = childrenBox
+        let unsorted = if box == nil && IsSourceOrdered(GetType()) {
+            BuildUnsortedChildren()
+        } else {
+            default(ImmutableArray[SyntaxNode])
+        }
+        let items = if box != nil {
+            box.Items
+        } else {
+            unsorted
+        }
+        let count = if items.IsDefault {
+            ChildCount
+        } else {
+            items.Length
+        }
+        var hasChild = false
+        var start = int32.MaxValue
+        var end = int32.MinValue
+        for var i = 0; i < count; i++ {
+            let child = if items.IsDefault {
+                GetChild(i)
+            } else {
+                items[i]
+            }
+            let childSpan = child.SpanForParent(depth + 1)
+            start = Math.Min(start, childSpan.Start)
+            end = Math.Max(end, childSpan.End)
+            hasChild = true
+        }
+        let computed = if hasChild {
+            TextSpan.FromBounds(start, end)
+        } else {
+            TextSpan(0, 0)
+        }
+        cachedSpan = SpanBox(computed)
+        if !unsorted.IsDefault && childrenBox == nil {
+            // The spans of all children are known now, so the sort does not recurse. Publishing
+            // the sorted children saves building them again on the first child lookup.
+            CompilationMeasurements.Count("syntax.child-projections")
+            childrenBox = ChildrenBox(SortBySourcePosition(unsorted))
+        }
+        return computed
     }
 
-    private class SpanFrame {
-        init(node SyntaxNode) {
-            Node = node
-            // A class with a sort reads its unsorted children. Other classes read in place.
+    private func SpanForParent(depth int32) TextSpan {
+        if this is SyntaxToken || cachedSpan != nil || !HasBaseSpan(GetType()) {
+            return Span
+        }
+        return ComputeSpan(depth)
+    }
+
+    private func CacheDeepSpansWithoutRecursion() {
+        // Collect the nodes without a cached span in pre order: parents before children.
+        let order = List[SyntaxNode]()
+        let pending = Stack[SyntaxNode]()
+        pending.Push(this)
+        while pending.Count > 0 {
+            let node = pending.Pop()
+            order.Add(node)
             let box = node.childrenBox
-            if box != nil {
-                Kids = box.Items
+            let items = if box != nil {
+                box.Items
             } else if IsSourceOrdered(node.GetType()) {
-                Kids = node.BuildUnsortedChildren()
+                node.BuildUnsortedChildren()
             } else {
-                Kids = default(ImmutableArray[SyntaxNode])
+                default(ImmutableArray[SyntaxNode])
             }
-            Count = if Kids.IsDefault {
+            let count = if items.IsDefault {
                 node.ChildCount
             } else {
-                Kids.Length
+                items.Length
+            }
+            for var i = 0; i < count; i++ {
+                let child = if items.IsDefault {
+                    node.GetChild(i)
+                } else {
+                    items[i]
+                }
+                if !(child is SyntaxToken) && child.cachedSpan == nil && HasBaseSpan(child.GetType()) {
+                    pending.Push(child)
+                }
             }
         }
-
-        prop Node SyntaxNode {
-            get;
-        }
-
-        prop Kids ImmutableArray[SyntaxNode] {
-            get;
-        }
-
-        prop Count int32 {
-            get;
-        }
-
-        prop Index int32 {
-            get;
-            set;
-        }
-
-        private var start int32 = int32.MaxValue
-        private var end int32 = int32.MinValue
-        private var any bool = false
-
-        func Child(index int32) SyntaxNode {
-            return if Kids.IsDefault {
-                Node.GetChild(index)
-            } else {
-                Kids[index]
-            }
-        }
-
-        func Include(span TextSpan) {
-            start = Math.Min(start, span.Start)
-            end = Math.Max(end, span.End)
-            any = true
-        }
-
-        func Result() TextSpan {
-            return if any {
-                TextSpan.FromBounds(start, end)
-            } else {
-                TextSpan(0, 0)
+        // The reverse of a pre order puts every child before its parent.
+        for var i = order.Count - 1; i >= 0; i-- {
+            let node = order[i]
+            if node.cachedSpan == nil {
+                node.ComputeSpan(0)
             }
         }
     }
@@ -441,6 +453,17 @@ abstract class SyntaxNode {
         /// @param items The children in property order.
         /// @returns The children in source order.
         internal func SortBySourcePosition(items ImmutableArray[SyntaxNode]) ImmutableArray[SyntaxNode] {
+            // Most nodes are already in order, and then no new array is needed.
+            var sorted = true
+            for var i = 1; i < items.Length; i++ {
+                if items[i].Span.Start < items[i - 1].Span.Start {
+                    sorted = false
+                    break
+                }
+            }
+            if sorted {
+                return items
+            }
             return items.OrderBy((item SyntaxNode) -> item.Span.Start).ToImmutableArray()
         }
 
@@ -453,6 +476,9 @@ abstract class SyntaxNode {
                 (type Type) -> Attribute.IsDefined(type, typeof(SyntaxChildSourceOrderAttribute), true)
             )
         }
+
+        /// The number of nested span computations before the walk switches to an explicit stack.
+        private let MaxSpanDepth int32 = 128
 
         private let SourceOrderedByType ConcurrentDictionary[Type, bool] = ConcurrentDictionary[Type, bool]()
 
