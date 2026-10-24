@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 import System.Collections.Immutable
 
 /// Represents a field declaration inside a struct (Phase 3.B.1).
+@SyntaxChildSourceOrder
 partial class FieldDeclarationSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:FieldDeclarationSyntax) class.
     /// @param syntaxTree The parent syntax tree.
