@@ -440,7 +440,13 @@ open class Compilation {
                 }
                 if IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(declarations, oldTree, newTree) {
                     successor.ReusedGlobalScope = declarations
-                    successor.DirtyBodyTrees = ImmutableHashSet.Create(newTree)
+                    // A tree edited by an earlier successor whose bodies were never bound is still
+                    // dirty: its unchanged members sit at shifted spans in the cache.
+                    var dirty = ImmutableHashSet.Create(newTree)
+                    if boundProgram == nil && DirtyBodyTrees is {} pending {
+                        dirty = pending.Remove(oldTree).Add(newTree)
+                    }
+                    successor.DirtyBodyTrees = dirty
                     retired = true
                 }
             }
@@ -1111,7 +1117,8 @@ open class Compilation {
                 }
             } else if symbol is EnumSymbol declaredEnum {
                 packageName = declaredEnum.PackageName
-                simpleName = TypeDefEmitter.MangleGenericName(declaredEnum.Name, declaredEnum.TypeParameters)
+                // The emitter writes an enum's plain name even inside a generic type.
+                simpleName = declaredEnum.Name
             } else if symbol is InterfaceSymbol declaredInterface {
                 packageName = declaredInterface.PackageName
                 simpleName = TypeDefEmitter.MangleGenericName(declaredInterface.Name, declaredInterface.TypeParameters)
@@ -1145,7 +1152,8 @@ open class Compilation {
                 Format: source.Format,
                 PdbFilePath: source.PdbFilePath,
                 SourceLinkFilePath: source.SourceLinkFilePath,
-                Deterministic: source.Deterministic
+                Deterministic: source.Deterministic,
+                EmbedAllSources: source.EmbedAllSources
             }
         }
     }

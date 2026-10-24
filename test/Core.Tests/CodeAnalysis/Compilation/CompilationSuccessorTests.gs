@@ -6,10 +6,12 @@ package GSharp.Core.Tests.CodeAnalysis.Compilation
 
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
+import System.IO
 import System.Linq
 import System.Threading
 import System.Threading.Tasks
@@ -76,6 +78,8 @@ open class CompilationSuccessorTests {
     func SuccessorFactories_CopyEveryOptionExceptTheWorkBudget() {
         let (a, b) = TwoFiles()
         let budget = CompilationWorkBudget()
+        let debug = DebugInformationOptions()
+        debug.EmbedAllSources = true
         let previous = Compilation(a){
             IsLibrary = true,
             Optimize = false,
@@ -83,6 +87,7 @@ open class CompilationSuccessorTests {
             ImplicitSystemImport = false,
             WarnOnMissingDocumentation = true,
             AssemblyName = "Chain",
+            DebugInformation = debug,
             WorkBudget = budget
         }
         let successors = []Compilation{
@@ -97,6 +102,7 @@ open class CompilationSuccessorTests {
             Assert.False(successor.ImplicitSystemImport)
             Assert.True(successor.WarnOnMissingDocumentation)
             Assert.Equal("Chain", successor.AssemblyName)
+            Assert.True(successor.DebugInformation!!.EmbedAllSources)
             Assert.NotSame(budget, successor.WorkBudget)
         }
     }
@@ -156,6 +162,30 @@ open class CompilationSuccessorTests {
     }
 
     @Fact
+    func SuccessiveReplacements_KeepTheEarlierEditsTreeDirtyUntilItsBodiesAreBound() {
+        using let measurements = CompilationMeasurements.Start("pending-dirty")
+        let two = Parse("A.gs", `package P
+func A1() int32 {
+    return 1
+}
+func A2() int32 {
+    return 2
+}
+`)
+        let b = Parse("B.gs", BText)
+        let live = Compilation(two, b){IncrementalBodyReuse = true}
+        let _ = live.BoundProgram
+        // The first edit shifts A2; its bodies are not bound before the second edit.
+        let shifted = Parse("A.gs", two.Text.ToString().Replace("return 1", "let x int32 = 5\n    return 1"))
+        let first = live.ReplaceSyntaxTree(two, shifted)
+        let second = first.ReplaceSyntaxTree(b, Parse("B.gs", BText.Replace("return 2", "return 20")))
+        let hitsBefore = measurements.GetCounter("bodies.cache-hits")
+        let _ = second.BoundProgram
+        // Every body belongs to an edited tree, so none may come from the cache at a stale span.
+        Assert.Equal(hitsBefore, measurements.GetCounter("bodies.cache-hits"))
+    }
+
+    @Fact
     func GetTypeByMetadataName_FindsDeclaredTypesByTheNameTheEmitterWrites() {
         let tree = Parse("Shapes.gs", `package Shapes
 class Box[T] {
@@ -164,6 +194,9 @@ class Box[T] {
 class Outer {
     class Inner {
     }
+}
+class Holder[T] {
+    enum Kind { First, Second }
 }
 enum Color { Red, Green }
 interface IShape {
@@ -180,10 +213,24 @@ func Free() int32 -> 1
         Assert.Equal("Inner", inner.Name)
         Assert.Null(compilation.GetTypeByMetadataName("Shapes.Inner"))
         Assert.IsType[EnumSymbol](compilation.GetTypeByMetadataName("Shapes.Color"))
+        Assert.IsType[EnumSymbol](compilation.GetTypeByMetadataName("Shapes.Holder`1+Kind"))
         Assert.IsType[InterfaceSymbol](compilation.GetTypeByMetadataName("Shapes.IShape"))
         Assert.IsType[DelegateTypeSymbol](compilation.GetTypeByMetadataName("Shapes.Mapper`1"))
         Assert.Null(compilation.GetTypeByMetadataName("Shapes.Free"))
         Assert.Null(compilation.GetTypeByMetadataName("Other.Color"))
+    }
+
+    @Fact
+    func GetTypeByMetadataName_StillFindsAnEnumNestedInAGenericTypeAfterEmit() {
+        let tree = Parse("Holder.gs", `package Shapes
+class Holder[T] {
+    enum Kind { First, Second }
+}
+`)
+        let compilation = Compilation(tree){IsLibrary = true}
+        using let stream = MemoryStream()
+        Assert.True(compilation.Emit(stream).Success)
+        Assert.IsType[EnumSymbol](compilation.GetTypeByMetadataName("Shapes.Holder`1+Kind"))
     }
 
     @Fact

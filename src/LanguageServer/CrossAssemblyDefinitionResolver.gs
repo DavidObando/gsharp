@@ -576,11 +576,34 @@ internal shared class CrossAssemblyDefinitionResolver {
         out declaration DelegateDeclarationSyntax?
     ) bool {
         declaration = nil
+        // Reuse never re-points a delegate's declaration, so read the current trees for the syntax.
         if FindDeclaredType(compilation, type) is DelegateTypeSymbol found {
-            declaration = found.Declaration
-            return declaration != nil
+            for tree in compilation!!.SyntaxTrees {
+                let match DelegateDeclarationSyntax? = FindDelegateDeclaration(tree.Root, found.Name)
+                if match != nil {
+                    declaration = match
+                    return true
+                }
+            }
         }
         return false
+    }
+
+    private func FindDelegateDeclaration(root SyntaxNode, name string) DelegateDeclarationSyntax? {
+        if root is DelegateDeclarationSyntax decl && string.Equals(
+            decl.Identifier.Text,
+            name,
+            StringComparison.Ordinal
+        ) {
+            return decl
+        }
+        for child in root.GetChildren() {
+            let found DelegateDeclarationSyntax? = FindDelegateDeclaration(child, name)
+            if found != nil {
+                return found
+            }
+        }
+        return nil
     }
 
     /// Asks the sibling compilation for the type it declares under the CLR type's metadata name
