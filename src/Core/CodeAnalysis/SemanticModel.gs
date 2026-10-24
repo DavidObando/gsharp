@@ -320,10 +320,24 @@ partial class SemanticModel {
             // declarations it holds (a literal's parameters and locals), not for anchoring: syntax
             // inside a literal keeps answering no bound node.
             if node is BoundFunctionLiteralExpression literal {
+                // A parameter the body never reads is not reached through the body.
+                for parameter in literal.Function.Parameters {
+                    SemanticModel.RecordDeclarations(parameter, tree, declaredBySyntax)
+                }
                 literalDepth++
                 VisitStatement(literal.Body)
                 literalDepth--
             }
+        }
+
+        protected override func VisitTryStatement(node BoundTryStatement) {
+            // A catch variable the handler never reads is not reached through the handler.
+            for clause in node.CatchClauses {
+                if clause.Variable is {} caught {
+                    SemanticModel.RecordDeclarations(caught, tree, declaredBySyntax)
+                }
+            }
+            base.VisitTryStatement(node)
         }
 
         override func VisitPattern(node BoundPattern?) {
@@ -419,6 +433,20 @@ partial class SemanticModel {
                     tree
                 ) {
                     structsByIdentifier.TryAdd(structDeclaration.Identifier, declaredStruct)
+                }
+                // Every part of a partial type resolves to the merged type: the merged declaration
+                // lists the identifier location of each part.
+                if declaredStruct.Declaration is {PartialPartLocations: {IsDefaultOrEmpty: false} partLocations} {
+                    for part in tree.Root.Members.OfType[StructDeclarationSyntax]() {
+                        if part.Identifier is {} partIdentifier && !partIdentifier.IsMissing {
+                            for location in partLocations {
+                                if string.Equals(location.FileName, tree.Text?.FileName, StringComparison.Ordinal) &&
+                                    location.Span.Start == partIdentifier.Span.Start {
+                                    structsByIdentifier.TryAdd(partIdentifier, declaredStruct)
+                                }
+                            }
+                        }
+                    }
                 }
             }
             let walker = IndexingWalker(

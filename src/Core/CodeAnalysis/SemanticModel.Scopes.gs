@@ -68,10 +68,12 @@ partial class SemanticModel {
     /// of the then-region (never the else branch); a `while let` binding from
     /// the end of its clause to the end of the body; a `guard let` binding to
     /// the end of the enclosing block; a `for`, `await for` or tuple `for`
-    /// variable and a catch variable through their body; a parameter (also a
-    /// destructured or lambda parameter, and a setter parameter) through its
-    /// function, constructor, lambda or accessor; any other pattern variable from
-    /// its declaration to the end of the enclosing block.</item>
+    /// variable through its body; a catch variable through its `when` filter and
+    /// body; a parameter (also a destructured, lambda or function-literal
+    /// parameter) through its function, constructor, lambda, literal or accessor;
+    /// the pattern variable of a `switch` case or arm through that case or arm; any
+    /// other pattern variable from its declaration to the end of the enclosing
+    /// block.</item>
     /// <item>The implicit `this` parameter of the enclosing instance method,
     /// constructor or accessor follows the locals.</item>
     /// <item>Members (tier 2): inside an instance method, constructor or
@@ -79,8 +81,10 @@ partial class SemanticModel {
     /// a receiver, inherited ones included; inside a `shared` member, the
     /// static ones.</item>
     /// <item>Globals (tier 3): the compilation's functions, variables, structs,
-    /// interfaces, enums, delegates and type aliases, then those of the prior
-    /// submissions, newest first, when the compilation is a submission.</item>
+    /// interfaces, enums and delegates, then those of the prior submissions,
+    /// newest first, when the compilation is a submission. A type alias is found
+    /// by its name and answers the type it names; the enumeration does not list it
+    /// (the symbol would carry the target's name).</item>
     /// </list>
     /// Order: scope depth innermost first, then declaration order, so the result
     /// is deterministic. Imported (CLR) types are not listed.
@@ -173,7 +177,8 @@ partial class SemanticModel {
     }
 
     /// Adds the implicit `this` parameter of the enclosing instance method, constructor or
-    /// accessor, after the declared locals and parameters.
+    /// accessor, and the parameters the binder made without syntax (a setter's `value`),
+    /// after the declared locals and parameters.
     private func AddImplicitThis(
         innermost SyntaxNode,
         name string?,
@@ -181,10 +186,21 @@ partial class SemanticModel {
         seen HashSet[string],
         cancellationToken CancellationToken
     ) {
-        if EnclosingSymbolOf(innermost, cancellationToken) is FunctionSymbol{ThisParameter: {} thisParameter} &&
+        if EnclosingSymbolOf(innermost, cancellationToken) is not FunctionSymbol function {
+            return
+        }
+        if function.ThisParameter is {} thisParameter &&
             (name == nil || string.Equals(thisParameter.Name, name, StringComparison.Ordinal)) &&
             seen.Add(thisParameter.Name) {
             result.Add(thisParameter)
+        }
+        for parameter in function.Parameters {
+            if parameter.DeclaringSyntaxNodes.IsDefaultOrEmpty &&
+                IsListable(parameter.Name) &&
+                (name == nil || string.Equals(parameter.Name, name, StringComparison.Ordinal)) &&
+                seen.Add(parameter.Name) {
+                result.Add(parameter)
+            }
         }
     }
 
@@ -401,7 +417,8 @@ partial class SemanticModel {
             return BodyRegion(tupleFor, tupleFor.Body)
         }
         if parent is CatchClauseSyntax catchClause {
-            return BodyRegion(catchClause, catchClause.Body)
+            // The variable is declared before the `when` filter binds, so it is visible there too.
+            return Region(catchClause, catchClause.Span.Start, catchClause.Span.End)
         }
         if parent is PropertyAccessorSyntax accessor {
             return Region(accessor, accessor.Span.Start, accessor.Span.End)
@@ -413,6 +430,7 @@ partial class SemanticModel {
                 FunctionDeclarationSyntax or
                     ConstructorDeclarationSyntax or
                     LambdaExpressionSyntax or
+                    FunctionLiteralExpressionSyntax or
                     PropertyDeclarationSyntax or
                     DeinitDeclarationSyntax
             ) {
@@ -438,6 +456,14 @@ partial class SemanticModel {
                 declaration.Span.End
             }
             return Region(owner, start, owner.Span.End)
+        }
+        // A pattern variable of a `switch` case or expression arm belongs to that arm alone.
+        var ancestor SyntaxNode? = parent
+        while ancestor != nil && ancestor is not(BlockStatementSyntax or BlockExpressionSyntax) {
+            if ancestor is SwitchCaseSyntax or SwitchExpressionArmSyntax {
+                return Region(ancestor, anchor.Span.End, ancestor.Span.End)
+            }
+            ancestor = ancestor.Parent
         }
         let block = EnclosingBlock(anchor)
         return Region(block, anchor.Span.End, block.Span.End)
@@ -543,7 +569,10 @@ partial class SemanticModel {
             globalName string,
             symbol Symbol
         ) {
-            if IsListable(globalName) && byName.TryAdd(globalName, symbol) {
+            if IsListable(globalName) && byName.TryAdd(globalName, symbol) &&
+                string.Equals(globalName, symbol.Name, StringComparison.Ordinal) {
+                // An alias has no symbol of its own, so only its name finds it: listing the aliased
+                // type under the alias would give two symbols one name.
                 ordered.Add((globalName, symbol))
             }
         }

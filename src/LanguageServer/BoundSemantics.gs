@@ -11,6 +11,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Linq
 import System.Reflection
+import System.Runtime.CompilerServices
 
 /// Issue #4989: the language server's one read of what the binder decided.
 /// Hover, completion, signature help, navigation and semantic tokens ask this
@@ -29,11 +30,11 @@ shared class BoundSemantics {
     /// @param token An identifier token.
     /// @returns The symbol, or null when the binder has no answer for the token.
     func GetSymbol(compilation Compilation?, token SyntaxToken?) Symbol? {
-        let model = GetModel(compilation, token)
-        if model == nil || token == nil {
+        let bound = Bind(compilation, token, matchStaleTree: false)
+        if bound == nil {
             return nil
         }
-        return model.GetSymbolInfo(token).Symbol
+        return bound.Model.GetSymbolInfo(bound.Token).Symbol
     }
 
     /// Gets the symbol a simple name resolves to at [`token`](paramref)'s position, by the scope
@@ -43,11 +44,11 @@ shared class BoundSemantics {
     /// @param token An identifier token naming a variable, a function or a type.
     /// @returns The symbol, or null when the name resolves to nothing there.
     func LookupName(compilation Compilation?, token SyntaxToken?) Symbol? {
-        let model = GetModel(compilation, token)
-        if model == nil || token == nil {
+        let bound = Bind(compilation, token)
+        if bound == nil {
             return nil
         }
-        let symbols = model.LookupSymbols(token.Span.Start, token.Text)
+        let symbols = bound.Model.LookupSymbols(bound.Token.Span.Start, bound.Token.Text)
         return if symbols.IsDefaultOrEmpty {
             default(Symbol?)
         } else {
@@ -61,18 +62,18 @@ shared class BoundSemantics {
     /// @param token An identifier token naming a member or a call.
     /// @returns The bound member, or null when the token does not name an imported member.
     func GetImportedMember(compilation Compilation?, token SyntaxToken?) MemberInfo? {
-        let model = GetModel(compilation, token)
-        if model == nil || token == nil {
+        let bound = Bind(compilation, token, matchStaleTree: false)
+        if bound == nil {
             return nil
         }
-        let member MemberInfo? = switch model.GetReferencedExpression(token) {
+        let member MemberInfo? = switch bound.Model.GetReferencedExpression(bound.Token) {
             case instanceCall is BoundImportedInstanceCallExpression: instanceCall.Method
             case staticCall is BoundImportedCallExpression: staticCall.Function?.Method
             case constrained is BoundConstrainedStaticCallExpression: constrained.ClrMethod
             case property is BoundClrPropertyAccessExpression: property.Member
             default: default(MemberInfo?)
         }
-        return if member != nil && member.Name == token.Text {
+        return if member != nil && member.Name == bound.Token.Text {
             member
         } else {
             default(MemberInfo?)
@@ -95,14 +96,91 @@ shared class BoundSemantics {
         return model.GetReceiverTypeInfo(expression).Type
     }
 
-    /// Gets the semantic model of [`token`](paramref)'s tree when that tree
-    /// belongs to [`compilation`](paramref).
-    private func GetModel(compilation Compilation?, token SyntaxToken?) GSharp.Core.CodeAnalysis.SemanticModel? {
+    /// Gets the semantic model that answers for [`token`](paramref), and the token in that model's
+    /// tree. A token of a stale parse of a file (a cached document that the project has since
+    /// reparsed) is answered by the compilation's tree of the same file when the text is the same, for
+    /// the scope queries only; the bound-node queries answer the compilation's own tree instances.
+    private func Bind(compilation Compilation?, token SyntaxToken?, matchStaleTree bool = true)(
+        Model GSharp.Core.CodeAnalysis.SemanticModel,
+        Token SyntaxToken
+    )? {
         if compilation == nil || token == nil || token.Kind != SyntaxKind.IdentifierToken || token.IsMissing {
             return nil
         }
-        return GetModel(compilation, token.SyntaxTree)
+        let tree = if matchStaleTree {
+            MatchingTree(compilation, token.SyntaxTree)
+        } else if compilation.SyntaxTrees.Contains(token.SyntaxTree) {
+            token.SyntaxTree
+        } else {
+            default(SyntaxTree?)
+        }
+        if tree == nil {
+            return nil
+        }
+        let model = GetModel(compilation, tree)
+        if model == nil {
+            return nil
+        }
+        if object.ReferenceEquals(tree, token.SyntaxTree) {
+            return (model, token)
+        }
+        let mapped = SemanticLookup.FindTokenAt(tree, token.Span.Start)
+        if mapped == nil ||
+            mapped.Kind != token.Kind ||
+            mapped.Span.Length != token.Span.Length ||
+            !string.Equals(mapped.Text, token.Text, StringComparison.Ordinal) {
+            return nil
+        }
+        return (model, mapped)
     }
+
+    /// Gets the semantic model for positions of [`tree`](paramref): the model of the compilation's
+    /// tree of the same file with the same text, so an offset in the one is an offset in the other.
+    /// @param compilation The compilation to query.
+    /// @param tree A tree of the file, possibly a stale parse of it.
+    /// @returns The model, or null when the compilation holds no tree with that file and text.
+    func GetPositionModel(compilation Compilation, tree SyntaxTree?) GSharp.Core.CodeAnalysis.SemanticModel? {
+        if tree == nil {
+            return nil
+        }
+        let matching = MatchingTree(compilation, tree)
+        if matching == nil {
+            return nil
+        }
+        return GetModel(compilation, matching)
+    }
+
+    private data class StaleMatch(Compilation WeakReference[Compilation], Tree SyntaxTree?) : IEquatable[StaleMatch] { }
+
+    private func MatchingTree(compilation Compilation, tree SyntaxTree) SyntaxTree? {
+        if compilation.SyntaxTrees.Contains(tree) {
+            return tree
+        }
+        if StaleMatches.TryGetValue(tree, out var cached) && cached.Compilation.TryGetTarget(out var cachedFor) &&
+            object.ReferenceEquals(cachedFor, compilation) {
+            return cached.Tree
+        }
+        var found SyntaxTree? = nil
+        let fileName = tree.Text?.FileName
+        if !string.IsNullOrEmpty(fileName) {
+            for candidate in compilation.SyntaxTrees {
+                if string.Equals(candidate.Text?.FileName, fileName, StringComparison.Ordinal) &&
+                    candidate.Text.Length == tree.Text.Length &&
+                    string.Equals(candidate.Text.ToString(), tree.Text.ToString(), StringComparison.Ordinal) {
+                    found = candidate
+                    break
+                }
+            }
+        }
+        StaleMatches.AddOrUpdate(tree, StaleMatch(WeakReference[Compilation](compilation), found))
+        return found
+    }
+
+    // Stale tree to the compilation's tree of the same text, found once per compilation.
+    private let StaleMatches ConditionalWeakTable[SyntaxTree, StaleMatch] = ConditionalWeakTable[
+        SyntaxTree,
+        StaleMatch
+    ]()
 
     func GetModel(compilation Compilation, tree SyntaxTree?) GSharp.Core.CodeAnalysis.SemanticModel? {
         if tree == nil {

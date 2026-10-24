@@ -1672,7 +1672,7 @@ shared class CompletionComputer {
         }
         // Add the names visible at the caret: locals and parameters, the enclosing type's
         // members, then the compilation's functions, variables and types (ADR-0212 slice S3).
-        let model = BoundSemantics.GetModel(compilation, content.SyntaxTree)
+        let model = BoundSemantics.GetPositionModel(compilation, content.SyntaxTree)
         if model != nil {
             for symbol in model.LookupSymbols(offset, nil, ct) {
                 ct.ThrowIfCancellationRequested()

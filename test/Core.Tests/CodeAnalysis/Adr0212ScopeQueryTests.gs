@@ -95,6 +95,31 @@ open class Adr0212ScopeQueryTests {
     }
 
     @Fact
+    func FunctionLiteralParameter_IsNotVisibleAfterTheLiteral() {
+        Assert.IsType[ParameterSymbol](Single("PLambda", "q"))
+        Assert.DoesNotContain("q", Names("PAfterLiteral"))
+        Assert.DoesNotContain("unusedParam", Names("PAfterLiteral"))
+    }
+
+    @Fact
+    func UnusedFunctionLiteralParameter_IsVisibleInTheLiteralBody() {
+        Assert.IsType[ParameterSymbol](Single("PUnusedParam", "unusedParam"))
+    }
+
+    @Fact
+    func CatchVariable_IsVisibleInTheWhenFilter() {
+        let model = Compiled.Model
+        let inFilter = Source.IndexOf("e.Message.Length > 0", StringComparison.Ordinal) + 2
+        Assert.IsType[LocalVariableSymbol](Assert.Single(model.LookupSymbols(inFilter, "e")))
+    }
+
+    @Fact
+    func UnusedCatchVariable_IsVisibleInItsHandler() {
+        Assert.IsType[LocalVariableSymbol](Single("PUnusedCatch", "unusedCatch"))
+        Assert.DoesNotContain("unusedCatch", Names("PCatch"))
+    }
+
+    @Fact
     func DestructuredLambdaElement_IsVisibleInTheLambdaBody() {
         let model = Compiled.Model
         let tree = Compiled.Tree
@@ -118,8 +143,10 @@ open class Adr0212ScopeQueryTests {
 
     @Fact
     func PatternVariable_IsVisibleAfterItsDeclarationInTheBlock() {
-        // Documented row: any other pattern variable stays visible to the end of its block.
-        Assert.Contains("typed", Names("PAfterPattern"))
+        // A switch case's pattern variable belongs to its case alone.
+        Assert.Contains("typed", Names("PInCase"))
+        Assert.DoesNotContain("typed", Names("PInOtherCase"))
+        Assert.DoesNotContain("typed", Names("PAfterPattern"))
     }
 
     // ---- LookupSymbols, tier 2: members and this ----
@@ -157,6 +184,21 @@ open class Adr0212ScopeQueryTests {
     }
 
     @Fact
+    func SetterParameter_IsVisibleInTheSetterBody() {
+        // The binder gives the setter's `value` no syntax; it is the accessor function's parameter.
+        Assert.IsType[ParameterSymbol](Single("PSet", "value"))
+        Assert.DoesNotContain("value", Names("PGet"))
+    }
+
+    @Fact
+    func PartialType_EveryPartSeesTheMembersOfAllParts() {
+        let names = Names("PPart")
+        Assert.Contains("One", names)
+        Assert.Contains("Two", names)
+        Assert.Equal("Parts", Assert.IsType[StructSymbol](Enclosing("PPartBody")).Name)
+    }
+
+    @Fact
     func Accessor_SeesMembers() {
         Assert.Contains("Other", Names("PSet"))
         Assert.Contains("Value", Names("PGet"))
@@ -185,6 +227,13 @@ open class Adr0212ScopeQueryTests {
     func TypeAlias_AnswersTheTypeItNamesWhenQueriedByName() {
         // An alias has no symbol of its own: the name answers the aliased type.
         Assert.Same(TypeSymbol.Int32, Single("PTop", "Alias"))
+        Assert.Same(TypeSymbol.Int32, Single("PTop", "Alias2"))
+    }
+
+    @Fact
+    func TypeAlias_IsNotListedUnderTheTargetsName() {
+        // Two aliases of one target would otherwise give two symbols named `int32`.
+        Assert.DoesNotContain("int32", Names("PTop"))
     }
 
     @Fact
@@ -331,7 +380,18 @@ open class Adr0212ScopeQueryTests {
 import System
 enum Color { Red, Green }
 type Alias = int32
+type Alias2 = int32
 var Total = 0
+partial class Parts {
+    var One int32
+}
+partial class Parts {
+    var Two int32
+    // PPartBody
+    func Use() int32 {
+        return One + Two // PPart
+    }
+}
 interface IShape {
     func Area() int32
 }
@@ -401,12 +461,18 @@ func Shadow(Total int32, maybe string?, items []int32) int32 {
     }
     try {
         let t = 1
-    } catch (e Exception) {
+    } catch (e Exception) when e.Message.Length > 0 {
         let m = e // PCatch
+    } catch (unusedCatch ArgumentException) {
+        let z = 0 // PUnusedCatch
     }
     let afterTry = 2 // PAfterTry
     let g = func(q int32) int32 {
         return q // PLambda
+    }
+    let afterLiteral = 1 // PAfterLiteral
+    let unusedLiteral = func(unusedParam int32) int32 {
+        return 0 // PUnusedParam
     }
     let d = ((dx int32, dy int32)) -> dx + dy
     let first[T] = func(v T, depth int32) int32 {
@@ -419,7 +485,10 @@ func Shadow(Total int32, maybe string?, items []int32) int32 {
     let probe object = items[0]
     switch probe {
         case typed is int32 {
-            let seen = typed
+            let seen = typed // PInCase
+        }
+        case other is string {
+            let seenOther = other // PInOtherCase
         }
         default { }
     }

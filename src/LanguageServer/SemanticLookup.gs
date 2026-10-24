@@ -832,7 +832,7 @@ shared class SemanticLookup {
         if tree == nil {
             return (nil, Array.Empty[VariableSymbol]())
         }
-        let model = BoundSemantics.GetModel(compilation, tree)
+        let model = BoundSemantics.GetPositionModel(compilation, tree)
         if model == nil {
             return (nil, Array.Empty[VariableSymbol]())
         }
