@@ -25,9 +25,17 @@ internal shared class MetadataMemberComparison {
     BindingFlags.NonPublic
 
     /// Compares the members of each type of each searched module.
-    internal func Compare(resolver ReferenceResolver, set ReferenceImageSet, result List[ModelDisagreement]) {
+    internal func Compare(
+        resolver ReferenceResolver,
+        set ReferenceImageSet,
+        result List[ModelDisagreement],
+        skipHostFallback bool
+    ) {
         for var m = 0; m < set.SearchedCount; m++ {
             let module = set.Modules[m]
+            if !MetadataModelComparison.Includes(resolver, module, skipHostFallback) {
+                continue
+            }
             for fullName in module.DefinedNames {
                 module.TryGetDefinition(fullName, out var handle)
                 let symbol = module.GetTypeSymbol(handle)
@@ -38,6 +46,35 @@ internal shared class MetadataMemberComparison {
                 Add(result, module, fullName, TypeMembers(type, module), SymbolMembers(symbol))
             }
         }
+    }
+
+    // The legacy reader cannot always read a position's attributes: a reflection context that cannot resolve an attribute
+    // type declared in the assembly itself (a compiler-embedded `NotNullWhenAttribute`) throws a load failure, and the
+    // line says `n:n/a`. There is then no nullability to compare, and the rest of the line must still agree.
+    internal func SameWhereTheOracleCannotRead(expected string, actual string) bool {
+        let expectedFields = expected.Split('|', 6)
+        return expectedFields.Length == 6 && expectedFields[4].EndsWith("n:n/a", StringComparison.Ordinal) &&
+            WithoutNullability(expectedFields) == WithoutNullability(actual.Split('|', 6))
+    }
+
+    // Spells a split line with the nullability of its shape field (the fifth) cut off: after `/n:` for a method or a
+    // property, the whole field for a field.
+    private func WithoutNullability(fields[]string) string {
+        if fields.Length != 6 {
+            return string.Join("|", fields)
+        }
+        let shape = fields[4]
+        let cut = if shape.StartsWith("n:", StringComparison.Ordinal) {
+            0
+        } else {
+            shape.LastIndexOf("/n:", StringComparison.Ordinal)
+        }
+        let kept = if cut < 0 {
+            shape
+        } else {
+            shape.Substring(0, cut)
+        }
+        return string.Join("|", fields[0], fields[1], fields[2], fields[3], kept, fields[5])
     }
 
     private func Add(
@@ -64,7 +101,7 @@ internal shared class MetadataMemberComparison {
             } else {
                 "(none)"
             }
-            if expected != actual {
+            if expected != actual && !SameWhereTheOracleCannotRead(expected, actual) {
                 result.Add(ModelDisagreement("Q6.member", module.Identity.Name + "!" + fullName, expected, actual))
             }
         }
@@ -196,7 +233,19 @@ internal shared class MetadataMemberComparison {
                 )
             )
         }
-        return Line("method", Row(method.Handle), method.Name, cast[int32](method.Flags), shape, text)
+        let nullability = if signature.ContainsMissing {
+            "n:n/a"
+        } else {
+            "n:" + SignatureMarks(method.NullableSignature)
+        }
+        return Line(
+            "method",
+            Row(method.Handle),
+            method.Name,
+            cast[int32](method.Flags),
+            shape + "/" + nullability,
+            text
+        )
     }
 
     internal func DescribeField(field MetadataFieldSymbol) string {
@@ -205,7 +254,12 @@ internal shared class MetadataMemberComparison {
         } else {
             MetadataTypeKeys.Of(field.FieldType) + MetadataModifiers.Format(field.FieldType)
         }
-        return Line("field", Row(field.Handle), field.Name, cast[int32](field.Flags), "", text)
+        let nullability = if MetadataTypeKeys.ContainsMissing(field.FieldType) {
+            "n:n/a"
+        } else {
+            "n:" + MetadataNullability.Mark(field.NullableFieldType.Type, field.NullableFieldType.IsDeferred)
+        }
+        return Line("field", Row(field.Handle), field.Name, cast[int32](field.Flags), nullability, text)
     }
 
     internal func DescribeProperty(property MetadataPropertySymbol) string {
@@ -221,7 +275,22 @@ internal shared class MetadataMemberComparison {
             )
         }
         let accessors = Row(property.Getter).ToString() + "/" + Row(property.Setter).ToString()
-        return Line("property", Row(property.Handle), property.Name, cast[int32](property.Flags), accessors, text)
+        let nullability = if signature.ContainsMissing {
+            "n:n/a"
+        } else {
+            "n:" + MetadataNullability.Mark(
+                property.NullablePropertyType.Type,
+                property.NullablePropertyType.IsDeferred
+            )
+        }
+        return Line(
+            "property",
+            Row(property.Handle),
+            property.Name,
+            cast[int32](property.Flags),
+            accessors + "/" + nullability,
+            text
+        )
     }
 
     internal func DescribeEvent(event_ MetadataEventSymbol) string {
@@ -304,7 +373,22 @@ internal shared class MetadataMemberComparison {
         } catch (ex Exception) when IsLoadFailure(ex) {
             text = "signature-missing"
         }
-        return Line("method", Row(method.MetadataToken), method.Name, cast[int32](method.Attributes), shape, text)
+        var nullability = "n:n/a"
+        if text != "signature-missing" {
+            try {
+                nullability = "n:" + SignatureMarks(method)
+            } catch (ex Exception) when IsLoadFailure(ex) {
+                nullability = "n:n/a"
+            }
+        }
+        return Line(
+            "method",
+            Row(method.MetadataToken),
+            method.Name,
+            cast[int32](method.Attributes),
+            shape + "/" + nullability,
+            text
+        )
     }
 
     internal func DescribeField(field FieldInfo) string {
@@ -317,7 +401,15 @@ internal shared class MetadataMemberComparison {
         } catch (ex Exception) when IsLoadFailure(ex) {
             text = "signature-missing"
         }
-        return Line("field", Row(field.MetadataToken), field.Name, cast[int32](field.Attributes), "", text)
+        var nullability = "n:n/a"
+        if text != "signature-missing" {
+            try {
+                nullability = "n:" + PositionMark(field.FieldType, field, field.DeclaringType)
+            } catch (ex Exception) when IsLoadFailure(ex) {
+                nullability = "n:n/a"
+            }
+        }
+        return Line("field", Row(field.MetadataToken), field.Name, cast[int32](field.Attributes), nullability, text)
     }
 
     internal func DescribeProperty(property PropertyInfo, declaredParameterCount int32) string {
@@ -339,12 +431,20 @@ internal shared class MetadataMemberComparison {
         let getter = property.GetGetMethod(true)
         let setter = property.GetSetMethod(true)
         let accessors = AccessorRow(getter) + "/" + AccessorRow(setter)
+        var nullability = "n:n/a"
+        if text != "signature-missing" {
+            try {
+                nullability = "n:" + PositionMark(property.PropertyType, property, property.DeclaringType)
+            } catch (ex Exception) when IsLoadFailure(ex) {
+                nullability = "n:n/a"
+            }
+        }
         return Line(
             "property",
             Row(property.MetadataToken),
             property.Name,
             cast[int32](property.Attributes),
-            accessors,
+            accessors + "/" + nullability,
             text
         )
     }
@@ -381,6 +481,75 @@ internal shared class MetadataMemberComparison {
         ""
     } else {
         MetadataModifiers.Format(method.Signature.ReturnType)
+    }
+
+    // ---- nullability: the position marks of the funnel, spelled once for both sides
+
+    // The symbol side: the return mark, then one mark for each parameter.
+    private func SignatureMarks(signature MetadataNullableSignature) string -> "r" + MetadataNullability.Mark(
+        signature.Return.Type,
+        signature.Return.IsDeferred
+    ) +
+        string
+        .Concat(
+        signature.Parameters.Select(
+            (p MetadataNullablePosition) -> ";" + MetadataNullability.Mark(p.Type, p.IsDeferred)
+        )
+    )
+
+    // The legacy side: the same marks from the legacy flag reader (`ClrNullability.ReadNullableFlags`, which reads
+    // `CustomAttributeData`), the same classifier and the same decision function. What is compared is therefore the
+    // input of the funnel, the bytes and where they are read from. The legacy walkers are not asked for a symbol:
+    // they classify a value type through the raw `Type.IsValueType`, which answers false across reflection contexts
+    // (#3764), so `Interop+Error` in a host implementation assembly comes back `!`. The kind of a position is decided
+    // here by `IsValueTypeSafe` instead. A position that the handle model defers is deferred here too, by the
+    // reflection-type form of the same eligibility rule.
+    private func SignatureMarks(method MethodBase) string {
+        let returnText = if method is MethodInfo info {
+            PositionMark(info.ReturnType, info.ReturnParameter, info)
+        } else {
+            ""
+        }
+        return "r" + returnText + string.Concat(
+            method.GetParameters().Select((p ParameterInfo) -> ";" + PositionMark(p.ParameterType, p, p.Member))
+        )
+    }
+
+    private func PeelByRef(type Type) Type -> if type.IsByRef {
+        type.GetElementType()!!
+    } else {
+        type
+    }
+
+    // The kind of a position's type, as the decision function needs it. A type parameter is classified from its
+    // constraints by the one classifier; any other type is a value type by `IsValueTypeSafe`.
+    private func KindOf(type Type) TypeArgumentKind {
+        if type.IsGenericParameter {
+            return NullabilityImportRule.ClassifyArgument(type)
+        }
+        return if type.IsValueTypeSafe() || type.IsPointer || type.IsFunctionPointer {
+            TypeArgumentKind.Value
+        } else {
+            TypeArgumentKind.Reference
+        }
+    }
+
+    // One position on the legacy side. `Nullable<T>` of a value type is a stated nullable by structure, in both models.
+    @NullabilityFunnel
+    private func PositionMark(type Type, declaration ICustomAttributeProvider, enclosing MemberInfo?) string {
+        let core = PeelByRef(type)
+        if !MetadataNullability.IsSinglePosition(core) {
+            return "~"
+        }
+        if NullableLifting.GetValueTypeNullableUnderlyingClr(core) != nil {
+            return MetadataNullability.Mark(ImportedReferenceNullability.Nullable)
+        }
+        return MetadataNullability.Mark(
+            NullabilityImportRule.DecideConcrete(
+                ClrNullability.ClassifyPosition(ClrNullability.ReadNullableFlags(declaration, enclosing), 0),
+                KindOf(core)
+            )
+        )
     }
 
     // The modifiers of a parameter position, by the shared format.

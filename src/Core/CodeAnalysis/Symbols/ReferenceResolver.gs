@@ -786,6 +786,10 @@ class ReferenceResolver : IDisposable {
     /// Gets the handle-backed reference set, or `null` in `mlc` mode or when a reference has no image.
     internal prop ImageSet ReferenceImageSet? -> imageSet
 
+    /// Tells whether an assembly simple name is a host fallback assembly: a framework assembly that the resolver adds
+    /// behind the supplied references.
+    internal func IsHostFallbackName(simpleName string) bool -> hostFallbackAssemblyNames.Contains(simpleName)
+
     /// Discards the memoized results of (cref:TryResolveType).
     /// The comparison mode calls it, so that its lookups leave no state behind.
     internal func DiscardResolutionCache() {

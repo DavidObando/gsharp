@@ -83,7 +83,7 @@ open class Issue5144MemberSymbolTests {
         Assert.False(widget.Events[0].Adder.IsNil)
         Assert.False(widget.Events[0].Remover.IsNil)
         Assert.Equal("System.Private.CoreLib!System.EventHandler", MetadataTypeKeys.Of(widget.Events[0].HandlerType))
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact
@@ -117,7 +117,7 @@ open class Issue5144MemberSymbolTests {
             MetadataMemberComparison.TypeMembers(type, module)!!,
             MetadataMemberComparison.SymbolMembers(holder)
         )
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact
@@ -167,7 +167,7 @@ open class Issue5144MemberSymbolTests {
         let changed = shapes.Events[0]
         Assert.False(changed.Raiser.IsNil)
         Assert.EndsWith("|2/3/4|System.Object", MetadataMemberComparison.DescribeEvent(changed))
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact
@@ -190,7 +190,7 @@ open class Issue5144MemberSymbolTests {
         Assert.True(plain.Signature.HasThis)
         Assert.Contains("this:False/False/vararg:True", MetadataMemberComparison.DescribeMethod(log))
         Assert.Contains("this:True/False/vararg:False", MetadataMemberComparison.DescribeMethod(plain))
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact
@@ -240,7 +240,7 @@ open class Issue5144MemberSymbolTests {
         // The comparison applies the same rule to the context: a resolver with the namesake first has no disagreement.
         using let resolver = HandleResolver([]string{namesake.AssemblyPath})
         Assert.Empty(
-            MetadataModelComparison.Compare(resolver, resolver.ImageSet!!).Where(
+            MetadataModelComparison.CompareFixture(resolver, resolver.ImageSet!!).Where(
                 (d ModelDisagreement) -> d.Question == "Q1.well-known"
             )
         )
