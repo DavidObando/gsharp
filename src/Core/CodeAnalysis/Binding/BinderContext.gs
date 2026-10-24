@@ -86,17 +86,6 @@ internal class BinderContext {
     ](ReferenceEqualityComparer.Instance)
     private var narrowingProofGeneration int32
 
-    /// Issue #1201: cached set of user-defined types brought into unqualified
-    /// static-member scope via a non-alias type import (`import Ns.Type`,
-    /// the G# spelling of C#'s `using static`). `null` until first
-    /// computed by (cref:GetStaticImportTypes); invalidated when the
-    /// import sequence, canonical struct snapshot, or referencing file changes.
-    private var cachedStaticImportTypes ImmutableArray[StructSymbol]
-
-    private var hasCachedStaticImportTypes bool
-    private var cachedStaticImportImports ImmutableArray[ImportSymbol]
-    private var cachedStaticImportStructs ImmutableArray[StructSymbol]
-    private var cachedStaticImportSyntaxTree SyntaxTree?
     private var channelRuntime ChannelRuntimeBinder?
     private var closureAssignedNames HashSet[string]?
     private var closureAssignedNamesComputed bool
@@ -105,6 +94,7 @@ internal class BinderContext {
     /// @param parent The parent (cref:BoundScope) against which
     /// the binder's root scope is created.
     init(parent BoundScope) {
+        Services = parent.GetBindingServices()
         Diagnostics = DiagnosticBag()
         ScopeFrames = Stack[VariableSymbol]()
         AsyncLetCells = Stack[List[AsyncLetVariableSymbol]]()
@@ -127,6 +117,13 @@ internal class BinderContext {
         PatternVariableNames = HashSet[string](StringComparer.Ordinal)
         InitialScope = BoundScope(parent)
         RootScope = InitialScope
+    }
+
+    /// Gets the services of the binding pass this context's binder belongs to (issue #5140):
+    /// the state keyed by the reference set, imports and referencing file that every body's
+    /// binder shares.
+    prop Services BindingServices {
+        get;
     }
 
     /// Gets the diagnostics bag for the binder this context backs.
@@ -454,32 +451,6 @@ internal class BinderContext {
     /// context before their function symbol exists.
     prop CurrentContainingType TypeSymbol?
 
-    /// Gets or sets the cached list of imported static `[Extension]`
-    /// classes for instance-syntax extension-method dispatch (issue #294).
-    /// Recomputed when (cref:CachedImportedExtensionImportCount) falls
-    /// out of step with the current import count.
-    prop CachedImportedExtensionClasses List[Type]?
-
-    /// Gets or sets the import count snapshot for the entries cached in
-    /// (cref:CachedImportedExtensionClasses). Initialised to `-1`
-    /// so the first lookup always misses.
-    private var _cachedImportedExtensionImportCount int32 = -1
-
-    prop CachedImportedExtensionImportCount int32 {
-        get {
-            return _cachedImportedExtensionImportCount
-        }
-        set {
-            _cachedImportedExtensionImportCount = value
-        }
-    }
-
-    prop CachedImportedExtensionSyntaxTree SyntaxTree?
-    prop CachedImportedExtensionReferences ReferenceResolver?
-    prop CachedImportedExtensionAssemblyName string?
-    prop CachedImportedExtensionImports ImmutableArray[ImportSymbol]
-    prop CachedImportedExtensionMethods Dictionary[string, ImmutableArray[MethodInfo]]?
-
     func CanUseNativeBufferAlias(
         $scope BoundScope,
         identifier SyntaxToken,
@@ -700,12 +671,15 @@ internal class BinderContext {
         }
         let imports = RootScope.GetDeclaredImports()
         let structs = RootScope.GetDeclaredStructs()
-        if hasCachedStaticImportTypes && cachedStaticImportImports.SequenceEqual(imports) &&
-            cachedStaticImportStructs.Equals(structs) && object.ReferenceEquals(
-            cachedStaticImportSyntaxTree,
+        let services = Services
+        if services.HasCachedStaticImportTypes && services.CachedStaticImportImports.SequenceEqual(imports) &&
+            services
+            .CachedStaticImportStructs
+            .Equals(structs) && object.ReferenceEquals(
+            services.CachedStaticImportSyntaxTree,
             RootScope.GetCurrentReferencingSyntaxTreeForCache()
         ) {
-            return cachedStaticImportTypes
+            return services.CachedStaticImportTypes
         }
         var builder ImmutableArray[StructSymbol].Builder? = nil
         var seen HashSet[StructSymbol]? = nil
@@ -736,11 +710,11 @@ internal class BinderContext {
             }
         }
         let result = builder?.ToImmutable() ?? ImmutableArray[StructSymbol].Empty
-        cachedStaticImportTypes = result
-        hasCachedStaticImportTypes = true
-        cachedStaticImportImports = imports
-        cachedStaticImportStructs = structs
-        cachedStaticImportSyntaxTree = RootScope.GetCurrentReferencingSyntaxTreeForCache()
+        services.CachedStaticImportTypes = result
+        services.HasCachedStaticImportTypes = true
+        services.CachedStaticImportImports = imports
+        services.CachedStaticImportStructs = structs
+        services.CachedStaticImportSyntaxTree = RootScope.GetCurrentReferencingSyntaxTreeForCache()
         return result
     }
 
