@@ -7,6 +7,9 @@ package GSharp.Core.Tests.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Symbols
 import System
 import System.Linq
+import System.Reflection
+import System.Reflection.Metadata
+import System.Reflection.Metadata.Ecma335
 import Xunit
 
 /// ADR-0209 PR 2c-ii-b1 (#5144): nullability of the positions that have no inner position, read from the attribute blobs
@@ -222,6 +225,88 @@ open class Issue5144NullabilityTests {
         Assert.True(MetadataNullability.DecodePayload([]uint8{5, 0, 0, 0, 1}, true).IsDefault)
         Assert.True(MetadataNullability.DecodePayload([]uint8{}, false).IsDefault)
         Assert.Equal(0, MetadataNullability.DecodePayload([]uint8{0, 0, 0, 0}, true).Length)
+    }
+
+    @Fact
+    func ABlobShorterThanItsPrologOrWithAnotherProlog_IsNotADeclaration() {
+        Assert.True(MetadataNullability.DecodeBlob([]uint8{}, false).IsDefault)
+        Assert.True(MetadataNullability.DecodeBlob([]uint8{1}, false).IsDefault)
+        Assert.True(MetadataNullability.DecodeBlob([]uint8{2, 0, 1}, false).IsDefault)
+        Assert.True(MetadataNullability.DecodeBlob([]uint8{1, 0}, false).IsDefault)
+        Assert.Equal([]uint8{2}, MetadataNullability.DecodeBlob([]uint8{1, 0, 2, 0, 0}, false).ToArray())
+        Assert.Equal(
+            []uint8{2, 1},
+            MetadataNullability.DecodeBlob([]uint8{1, 0, 2, 0, 0, 0, 2, 1, 0, 0}, true).ToArray()
+        )
+    }
+
+    @Fact
+    func TheConstructorShape_IsReadPastCustomModifiers() {
+        // calling convention (has-this), parameter count, return (void), then the first parameter.
+        Assert.True(MetadataNullability.TakesByteArray([]uint8{0x20, 1, 0x01, 0x1D, 0x05}))
+        Assert.False(MetadataNullability.TakesByteArray([]uint8{0x20, 1, 0x01, 0x05}))
+        // modopt/modreq in front of the parameter, in front of the return, and with a two-byte encoded handle.
+        Assert.True(MetadataNullability.TakesByteArray([]uint8{0x20, 1, 0x01, 0x20, 0x49, 0x1D, 0x05}))
+        Assert.True(MetadataNullability.TakesByteArray([]uint8{0x20, 1, 0x20, 0x49, 0x01, 0x1D, 0x05}))
+        Assert.True(
+            MetadataNullability.TakesByteArray([]uint8{0x20, 1, 0x01, 0x1F, 0x80, 0x49, 0x20, 0x49, 0x1D, 0x05})
+        )
+        // A modified scalar is still a scalar, whatever bytes the modifier handle holds.
+        Assert.False(MetadataNullability.TakesByteArray([]uint8{0x20, 1, 0x01, 0x20, 0x1D, 0x05}))
+        Assert.False(MetadataNullability.TakesByteArray([]uint8{0x20, 1, 0x01, 0x1F, 0x1D, 0x05}))
+        // Truncated or empty signatures take nothing.
+        Assert.False(MetadataNullability.TakesByteArray([]uint8{0x20, 1, 0x01, 0x20}))
+        Assert.False(MetadataNullability.TakesByteArray([]uint8{0x20, 0, 0x01}))
+        Assert.False(MetadataNullability.TakesByteArray([]uint8{}))
+    }
+
+    @Fact
+    func AConstructorReferenceWithATypeDefinitionParent_IsTheAttributeByNamespaceAndName() {
+        let metadata = MetadataBuilder()
+        metadata.AddModule(
+            0,
+            metadata.GetOrAddString("Module5144"),
+            metadata.GetOrAddGuid(Guid.NewGuid()),
+            default(GuidHandle),
+            default(GuidHandle)
+        )
+        let assembly = metadata.AddAssembly(
+            metadata.GetOrAddString("Module5144"),
+            Version(1, 0, 0, 0),
+            default(StringHandle),
+            default(BlobHandle),
+            cast[AssemblyFlags](0),
+            AssemblyHashAlgorithm.None
+        )
+        metadata.AddTypeDefinition(
+            cast[TypeAttributes](0),
+            default(StringHandle),
+            metadata.GetOrAddString("<Module>"),
+            default(EntityHandle),
+            MetadataTokens.FieldDefinitionHandle(1),
+            MetadataTokens.MethodDefinitionHandle(1)
+        )
+        let attributeType = metadata.AddTypeDefinition(
+            TypeAttributes.Public,
+            metadata.GetOrAddString("System.Runtime.CompilerServices"),
+            metadata.GetOrAddString("NullableContextAttribute"),
+            default(EntityHandle),
+            MetadataTokens.FieldDefinitionHandle(1),
+            MetadataTokens.MethodDefinitionHandle(1)
+        )
+        let constructor = metadata.AddMemberReference(
+            attributeType,
+            metadata.GetOrAddString(".ctor"),
+            metadata.GetOrAddBlob([]uint8{0x20, 1, 0x01, 0x05})
+        )
+        metadata.AddCustomAttribute(assembly, constructor, metadata.GetOrAddBlob([]uint8{1, 0, 1, 0, 0}))
+        let image = BlobBuilder()
+        MetadataRootBuilder(metadata).Serialize(image, 0, 0)
+        using let provider = MetadataReaderProvider.FromMetadataImage(image.ToImmutableArray())
+        let reader = provider.GetMetadataReader()
+        let attribute = reader.GetCustomAttribute(reader.GetCustomAttributes(Handle.AssemblyDefinition).First())
+        Assert.True(MetadataNullability.IsAttribute(reader, attribute, "NullableContextAttribute"))
+        Assert.False(MetadataNullability.IsAttribute(reader, attribute, "NullableAttribute"))
     }
 
     @Fact

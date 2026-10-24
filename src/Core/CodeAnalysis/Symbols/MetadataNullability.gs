@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Symbols
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.Linq
 import System.Reflection.Metadata
 import System.Reflection.Metadata.Ecma335
 
@@ -202,19 +203,26 @@ internal shared class MetadataNullability {
             ) {
                 continue
             }
-            var blob = reader.GetBlobReader(attribute.Value)
-            if blob.ReadUInt16() != 1 {
-                continue
-            }
-            let payload = blob.ReadBytes(blob.RemainingBytes)
             // NullableAttribute has two constructors: (byte) and (byte[]). The constructor's own signature says which
             // one the blob was written for; the blob's length does not (named arguments can follow either).
-            let decoded = DecodePayload(payload, !context && TakesByteArray(reader, attribute.Constructor))
+            let decoded = DecodeBlob(
+                reader.GetBlobBytes(attribute.Value),
+                !context && TakesByteArray(reader.GetBlobBytes(ConstructorSignature(reader, attribute.Constructor)))
+            )
             if !decoded.IsDefault {
                 return decoded
             }
         }
         return default(ImmutableArray[uint8])
+    }
+
+    /// Decodes a whole attribute blob: the two-byte prolog (1, 0), then the fixed arguments. A blob shorter than its
+    /// prolog, or with another prolog, is not a declaration and gives the default array.
+    internal func DecodeBlob(blob[]uint8, isArray bool) ImmutableArray[uint8] {
+        if blob.Length < 2 || blob[0] != 1 || blob[1] != 0 {
+            return default(ImmutableArray[uint8])
+        }
+        return DecodePayload(blob.Skip(2).ToArray(), isArray)
     }
 
     /// Decodes the fixed arguments that follow the prolog of a `[Nullable]` or `[NullableContext]` blob: one byte, or a
@@ -238,47 +246,91 @@ internal shared class MetadataNullability {
         return ImmutableArray.Create(payload, 4, count)
     }
 
-    // Tells whether an attribute constructor's first parameter is an array: the signature is the calling convention
-    // byte, the parameter count, the return type (void), then the first parameter's element type.
-    internal func TakesByteArray(reader MetadataReader, constructor EntityHandle) bool {
-        var signature BlobHandle = default(BlobHandle)
+    // The signature blob of an attribute constructor, or the empty handle for a shape this reader does not know.
+    private func ConstructorSignature(reader MetadataReader, constructor EntityHandle) BlobHandle {
         if constructor.Kind == HandleKind.MemberReference {
-            signature = reader.GetMemberReference(cast[MemberReferenceHandle](constructor)).Signature
-        } else if constructor.Kind == HandleKind.MethodDefinition {
-            signature = reader.GetMethodDefinition(cast[MethodDefinitionHandle](constructor)).Signature
-        } else {
+            return reader.GetMemberReference(cast[MemberReferenceHandle](constructor)).Signature
+        }
+        if constructor.Kind == HandleKind.MethodDefinition {
+            return reader.GetMethodDefinition(cast[MethodDefinitionHandle](constructor)).Signature
+        }
+        return default(BlobHandle)
+    }
+
+    /// Tells whether an attribute constructor's first parameter is an array. The signature is the calling convention
+    /// byte, the parameter count, the return type (void), then the first parameter's type; each type may be preceded by
+    /// custom modifiers (`modreq` or `modopt` with an encoded type handle). A truncated signature takes no array.
+    internal func TakesByteArray(signature[]uint8) bool {
+        var at = 0
+        // calling convention, then the parameter count (a compressed integer; zero parameters take no array)
+        if signature.Length < 3 {
             return false
         }
-        var blob = reader.GetBlobReader(signature)
-        blob.ReadByte()
-        if blob.ReadCompressedInteger() < 1 {
+        at = 1
+        if signature[at] == 0 {
             return false
         }
-        blob.ReadByte()
-        return blob.ReadByte() == 0x1D
+        at = SkipModifiers(signature, at + CompressedLength(signature[at]))
+        // the return type
+        if at < 0 {
+            return false
+        }
+        at = SkipModifiers(signature, at + 1)
+        return at >= 0 && at < signature.Length && signature[at] == 0x1D
+    }
+
+    // Skips the custom modifiers (`modreq` 0x1F, `modopt` 0x20, each with a compressed type handle) that start at an
+    // offset. Gives the offset after them, or -1 when the signature ends inside one.
+    private func SkipModifiers(signature[]uint8, start int32) int32 {
+        var at = start
+        while at >= 0 && at < signature.Length && (signature[at] == 0x1F || signature[at] == 0x20) {
+            at = at + 1
+            if at >= signature.Length {
+                return -1
+            }
+            at = at + CompressedLength(signature[at])
+        }
+        return at
+    }
+
+    // The length of a compressed integer from its first byte.
+    private func CompressedLength(first uint8) int32 -> if (first & 0x80) == 0 {
+        1
+    } else if (first & 0xC0) == 0x80 {
+        2
+    } else {
+        4
     }
 
     // The attribute type is matched by namespace and name, as ADR-0209 section 6 says: the type is never constructed.
-    private func IsAttribute(reader MetadataReader, attribute CustomAttribute, name string) bool {
+    // The constructor is a method definition (the attribute is declared in this module) or a member reference whose
+    // parent is a type reference or a type definition.
+    internal func IsAttribute(reader MetadataReader, attribute CustomAttribute, name string) bool {
         let constructor = attribute.Constructor
+        var typeNamespace = default(StringHandle)
+        var typeName = default(StringHandle)
         if constructor.Kind == HandleKind.MemberReference {
             let parent = reader.GetMemberReference(cast[MemberReferenceHandle](constructor)).Parent
-            if parent.Kind != HandleKind.TypeReference {
+            if parent.Kind == HandleKind.TypeReference {
+                let reference = reader.GetTypeReference(cast[TypeReferenceHandle](parent))
+                typeNamespace = reference.Namespace
+                typeName = reference.Name
+            } else if parent.Kind == HandleKind.TypeDefinition {
+                let definition = reader.GetTypeDefinition(cast[TypeDefinitionHandle](parent))
+                typeNamespace = definition.Namespace
+                typeName = definition.Name
+            } else {
                 return false
             }
-            let reference = reader.GetTypeReference(cast[TypeReferenceHandle](parent))
-            return reader.GetString(reference.Name) == name && reader.GetString(
-                reference.Namespace
-            ) == AttributeNamespace
-        }
-        if constructor.Kind == HandleKind.MethodDefinition {
+        } else if constructor.Kind == HandleKind.MethodDefinition {
             let declaring = reader.GetTypeDefinition(
                 reader.GetMethodDefinition(cast[MethodDefinitionHandle](constructor)).GetDeclaringType()
             )
-            return reader.GetString(declaring.Name) == name && reader.GetString(
-                declaring.Namespace
-            ) == AttributeNamespace
+            typeNamespace = declaring.Namespace
+            typeName = declaring.Name
+        } else {
+            return false
         }
-        return false
+        return reader.GetString(typeName) == name && reader.GetString(typeNamespace) == AttributeNamespace
     }
 }
