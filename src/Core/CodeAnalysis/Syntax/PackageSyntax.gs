@@ -45,6 +45,8 @@ partial class PackageSyntax : MemberSyntax {
     }
 
     /// Gets the package identifiers, excluding dots.
+    /// These are the tokens of (cref:IdentifiersWithDots) without the dots, so they are not a separate child.
+    @SyntaxChildIgnore
     prop Identifiers ImmutableArray[SyntaxToken] {
         get;
     }
