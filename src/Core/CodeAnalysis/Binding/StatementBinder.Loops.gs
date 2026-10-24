@@ -678,8 +678,7 @@ internal partial class StatementBinder {
                 expression: "BindStatement(bodySyntax)"
             )
         }
-        binderCtx.BeginNarrowingProof(loopNarrow)
-        binderCtx.NarrowedVariables.Add(loopNarrow)
+        binderCtx.PushNarrowingFrame(loopNarrow)
         try {
             return Invariant.Required(
                 BindStatement(bodySyntax),

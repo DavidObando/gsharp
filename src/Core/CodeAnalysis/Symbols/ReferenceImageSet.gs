@@ -39,6 +39,19 @@ internal class ReferenceImage {
 internal class ReferenceImageSet {
     private let modulesByName Dictionary[string, MetadataModule]
     private let indexedNames Lazy[IndexedNames]
+    // Constructions and arrays over imported symbols only. Each key holds its parts strongly, so a table that can
+    // see a compilation-owned symbol must belong to the compilation (ADR-0209 section 7c); this stage decodes
+    // imported signatures only.
+    private let constructions ConcurrentDictionary[(MetadataTypeSymbol, TypeArgsKey), ConstructedMetadataTypeSymbol] =
+    ConcurrentDictionary[(MetadataTypeSymbol, TypeArgsKey), ConstructedMetadataTypeSymbol]()
+    private let arrays ConcurrentDictionary[TypeSymbol, MetadataArrayTypeSymbol] = ConcurrentDictionary[
+        TypeSymbol,
+        MetadataArrayTypeSymbol
+    ]()
+    private let nonVectorArrays ConcurrentDictionary[TypeSymbol, MetadataArrayTypeSymbol] = ConcurrentDictionary[
+        TypeSymbol,
+        MetadataArrayTypeSymbol
+    ]()
     private let missingTypes ConcurrentDictionary[MissingTypeKey, MissingTypeSymbol] = ConcurrentDictionary[
         MissingTypeKey,
         MissingTypeSymbol
@@ -195,13 +208,10 @@ internal class ReferenceImageSet {
     }
 
     /// Tells whether a definition is the well-known type with this tag.
-    /// The definition counts when it is the table entry itself, or when it has the name of the entry and
-    /// lives in a core library. A core library defines its own special types.
+    /// The definition must have the name of the table entry and live in a core library. A namesake in any other
+    /// assembly is not the special type, even when it comes first in the table.
     internal func IsWellKnown(module MetadataModule, handle TypeDefinitionHandle, special SpecialType) bool {
         let known = WellKnown.Get(special)
-        if known.Module != nil && object.ReferenceEquals(known.Module, module) && known.Handle == handle {
-            return true
-        }
         return module.IsCoreLibrary && string.Equals(
             module.GetFullName(handle),
             known.FullName,
@@ -214,6 +224,29 @@ internal class ReferenceImageSet {
         let module = resolved.Module
         return module != nil && IsWellKnown(module, resolved.Handle, special)
     }
+
+    /// Gets the interned construction of a definition over type arguments.
+    /// Two lists of the same argument objects give the same object.
+    internal func GetConstructed(
+        definition MetadataTypeSymbol,
+        typeArguments ImmutableArray[TypeSymbol]
+    ) ConstructedMetadataTypeSymbol -> constructions
+        .GetOrAdd(
+        (definition, TypeArgsKey(typeArguments)),
+        (key(MetadataTypeSymbol, TypeArgsKey)) -> ConstructedMetadataTypeSymbol(definition, typeArguments)
+    )
+
+    /// Gets the interned single-dimensional array of an element type.
+    internal func GetArray(elementType TypeSymbol) MetadataArrayTypeSymbol -> arrays.GetOrAdd(
+        elementType,
+        (key TypeSymbol) -> MetadataArrayTypeSymbol(key, true)
+    )
+
+    /// Gets the interned rank-one non-vector array of an element type (`ARRAY` with rank 1).
+    internal func GetNonVectorArray(elementType TypeSymbol) MetadataArrayTypeSymbol -> nonVectorArrays.GetOrAdd(
+        elementType,
+        (key TypeSymbol) -> MetadataArrayTypeSymbol(key, false)
+    )
 
     /// Gets the interned missing type for a pair of assembly identity and full name.
     internal func GetMissing(identity AssemblyIdentity?, fullName string) MissingTypeSymbol -> missingTypes.GetOrAdd(

@@ -286,7 +286,7 @@ internal partial class StatementBinder {
         let diagnosticCount = Diagnostics.Count
         let narrowingSnapshots = binderCtx
             .NarrowedVariables
-            .Select((frame Dictionary[AccessPath, TypeSymbol]) -> Dictionary[AccessPath, TypeSymbol](frame))
+            .Select((frame NarrowingFrame) -> Dictionary[AccessPath, TypeSymbol](frame))
             .ToArray()
         let pendingEarlyExitFrames = binderCtx.PendingEarlyExitFrames.ToArray()
         let pendingSwitchExitFrames = binderCtx.PendingSwitchExitFrames.ToArray()

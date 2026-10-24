@@ -1007,8 +1007,7 @@ internal partial class ExpressionBinder {
         if narrowing == nil {
             return bind()
         }
-        binderCtx.BeginNarrowingProof(narrowing)
-        binderCtx.NarrowedVariables.Add(narrowing)
+        binderCtx.PushNarrowingFrame(narrowing)
         try {
             return bind()
         } finally {

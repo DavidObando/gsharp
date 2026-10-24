@@ -918,10 +918,8 @@ internal partial class OverloadResolver {
     /// variable path and the result is `null` (un-narrowed).
     private func TryGetNarrowedVariableAccess(variable VariableSymbol, out path AccessPath) TypeSymbol? {
         path = AccessPath.ForVariable(variable)
-        for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {
-            if binderCtx.NarrowedVariables[i].TryGetValue(variable, out var narrowed) {
-                return narrowed
-            }
+        if binderCtx.NarrowedVariables.Query(path) is {} narrowed {
+            return narrowed
         }
         // Issue #2185: a bare field/property callee (`hn(value)` after an
         // `if hn == nil { return }` guard) records its null-guard narrowing under
@@ -941,11 +939,9 @@ internal partial class OverloadResolver {
             memberLoad != nil &&
             !(memberLoad is BoundErrorExpression) &&
             SmartCastStability.TryGetStablePath(memberLoad) is AccessPath memberPath && memberPath.HasMembers {
-            for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {
-                if binderCtx.NarrowedVariables[i].TryGetValue(memberPath, out var narrowedMember) {
-                    path = memberPath
-                    return narrowedMember
-                }
+            if binderCtx.NarrowedVariables.Query(memberPath) is {} narrowedMember {
+                path = memberPath
+                return narrowedMember
             }
         }
         return nil
