@@ -58,6 +58,13 @@ internal partial class StatementBinder {
         (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second)
     )
 
+    /// ADR-0208 R12 (#5171): removes the callable aliases that [`collector`](paramref) assigns, and
+    /// those that share storage with an assigned variable.
+    private func RemoveAssignedAliases(aliases HashSet[VariableSymbol], collector AssignedRootsCollector) {
+        aliases.ExceptWith(collector.Roots)
+        aliases.RemoveWhere((alias VariableSymbol) -> collector.SharesStorageWithAssignedRoot(alias))
+    }
+
     /// ADR-0208 R12 (#5171): whether [`first`](paramref) and [`second`](paramref) may name one
     /// storage: the same variable, an overlapping `ref` alias chain, two external-storage aliases, or
     /// an external-storage alias and a root whose address the function takes or a closure assigns.
@@ -554,7 +561,7 @@ internal partial class StatementBinder {
             aliases.Clear()
             aliases.UnionWith(collector.DefinitelyExternalFunctionValues)
         } else {
-            aliases.ExceptWith(collector.Roots)
+            RemoveAssignedAliases(aliases, collector)
         }
         if assignsExternalCallable {
             aliases.Add(
@@ -1642,7 +1649,7 @@ internal partial class StatementBinder {
         if collector.MayMutateAnyRootViaPointer {
             externalCallableAliases.Clear()
         }
-        externalCallableAliases.ExceptWith(collector.Roots)
+        RemoveAssignedAliases(externalCallableAliases, collector)
         if collector.MayMutateAnyRoot {
             externalCallableAliases.RemoveWhere(binderCtx.MayBeAssignedByClosure)
         }
@@ -2467,6 +2474,21 @@ internal partial class StatementBinder {
 
         protected open override func VisitAssignmentExpression(node BoundAssignmentExpression) {
             if node.Variable != nil {
+                // ADR-0208 R12 (#5171): a callable stored through a `ref` alias is stored in every
+                // variable that shares its storage, and the callee is unknown.
+                if mayShareStorage != nil {
+                    for other in functionLiterals
+                        .Keys
+                        .Concat(externalFunctionValues)
+                        .Concat(unknownFunctionValues)
+                        .ToArray() {
+                        if !object.ReferenceEquals(other, node.Variable) && mayShareStorage!!(node.Variable, other) {
+                            functionLiterals.Remove(other)
+                            externalFunctionValues.Remove(other)
+                            unknownFunctionValues.Add(other)
+                        }
+                    }
+                }
                 writableReferenceAliases.Remove(node.Variable)
                 tryAssignedVariables?.Add(node.Variable)
                 let externalCallable = IsExternalCallable(node.Expression)

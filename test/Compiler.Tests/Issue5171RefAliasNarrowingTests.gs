@@ -642,6 +642,50 @@ func Run(ref a C?, box Box) int32 {
 let box = Box{}
 Console.WriteLine(Run(ref box.Field, box))
 `}
+            yield[]object{"callable-stored-through-ref-alias", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    let ref alias = action
+    action = callback
+    alias = clear
+    if x != nil {
+        action()
+        return x.Value
+    }
+    return 0
+}
+func Main() { Console.WriteLine(Run(() -> { })) }
+`}
+            yield[]object{"guard-let-getter-before-else", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Box {
+    var Field C? = C{}
+    prop Clear int32? {
+        get {
+            Field = nil
+            return nil
+        }
+    }
+}
+func Run(ref a C?, box Box) int32 {
+    if a == nil { return 0 }
+    guard let n = box.Clear else { return a.Value }
+    return n
+}
+let box = Box{}
+Console.WriteLine(Run(ref box.Field, box))
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
