@@ -55,6 +55,17 @@ class CorePublicApiSnapshotTests {
     /// committed snapshot. An intentional API change regenerates it with
     /// `GSHARP_UPDATE_GOLDENS=1`.
     @Fact
+    func GSharpCore_DoesNotDefineReplExecutionHost() {
+        // ADR-0212 S0 (#5303): the REPL execution host lives in `gsi`
+        // (GSharp.Repl.Engine), not in Core.
+        let core = typeof(Compilation).Assembly
+        Assert.Null(core.GetType("GSharp.Core.CodeAnalysis.Execution.InteractiveSessionHost"))
+        Assert.Null(core.GetType("GSharp.Core.CodeAnalysis.Execution.SubmissionRunResult"))
+        Assert.Null(core.GetType("GSharp.Repl.Engine.InteractiveSessionHost"))
+        Assert.Null(core.GetType("GSharp.Repl.Engine.SubmissionRunResult"))
+    }
+
+    @Fact
     func GSharpCore_PublicApi_MatchesSnapshot() {
         let assemblyPath = typeof(Compilation).Assembly.Location
         let lines = RenderPublicApi(assemblyPath)
