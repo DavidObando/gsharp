@@ -1787,51 +1787,18 @@ partial class CompoundIndexAssignmentExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override prop ChildCount int32 {
-        get {
-            var count = 0
-            if IsPresent(Target) {
-                count++
-            }
-            if IsPresent(OperatorToken) {
-                count++
-            }
-            if IsPresent(Value) {
-                count++
-            }
-            return count
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
+        let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
+        if IsPresent(Target) {
+            builder.Add(Target)
         }
-    }
-
-    /// ```xmldoc
-    /// <inheritdoc />
-    /// ```
-    internal override func GetChild(index int32) SyntaxNode {
-        var remaining = index
-        if remaining >= 0 {
-            let child0 = Target
-            if IsPresent(child0) {
-                if remaining == 0 {
-                    return child0
-                }
-                remaining--
-            }
-            let child1 = OperatorToken
-            if IsPresent(child1) {
-                if remaining == 0 {
-                    return child1
-                }
-                remaining--
-            }
-            let child2 = Value
-            if IsPresent(child2) {
-                if remaining == 0 {
-                    return child2
-                }
-                remaining--
-            }
+        if IsPresent(OperatorToken) {
+            builder.Add(OperatorToken)
         }
-        throw ArgumentOutOfRangeException(nameof(index))
+        if IsPresent(Value) {
+            builder.Add(Value)
+        }
+        return builder.ToImmutable()
     }
 }
 
@@ -2658,51 +2625,18 @@ partial class EventSubscriptionExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override prop ChildCount int32 {
-        get {
-            var count = 0
-            if IsPresent(LeftHandSide) {
-                count++
-            }
-            if IsPresent(OperatorToken) {
-                count++
-            }
-            if IsPresent(Value) {
-                count++
-            }
-            return count
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
+        let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
+        if IsPresent(LeftHandSide) {
+            builder.Add(LeftHandSide)
         }
-    }
-
-    /// ```xmldoc
-    /// <inheritdoc />
-    /// ```
-    internal override func GetChild(index int32) SyntaxNode {
-        var remaining = index
-        if remaining >= 0 {
-            let child0 = LeftHandSide
-            if IsPresent(child0) {
-                if remaining == 0 {
-                    return child0
-                }
-                remaining--
-            }
-            let child1 = OperatorToken
-            if IsPresent(child1) {
-                if remaining == 0 {
-                    return child1
-                }
-                remaining--
-            }
-            let child2 = Value
-            if IsPresent(child2) {
-                if remaining == 0 {
-                    return child2
-                }
-                remaining--
-            }
+        if IsPresent(OperatorToken) {
+            builder.Add(OperatorToken)
         }
-        throw ArgumentOutOfRangeException(nameof(index))
+        if IsPresent(Value) {
+            builder.Add(Value)
+        }
+        return builder.ToImmutable()
     }
 }
 
@@ -4766,51 +4700,18 @@ partial class IndirectCompoundAssignmentExpressionSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override prop ChildCount int32 {
-        get {
-            var count = 0
-            if IsPresent(Target) {
-                count++
-            }
-            if IsPresent(OperatorToken) {
-                count++
-            }
-            if IsPresent(Value) {
-                count++
-            }
-            return count
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
+        let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
+        if IsPresent(Target) {
+            builder.Add(Target)
         }
-    }
-
-    /// ```xmldoc
-    /// <inheritdoc />
-    /// ```
-    internal override func GetChild(index int32) SyntaxNode {
-        var remaining = index
-        if remaining >= 0 {
-            let child0 = Target
-            if IsPresent(child0) {
-                if remaining == 0 {
-                    return child0
-                }
-                remaining--
-            }
-            let child1 = OperatorToken
-            if IsPresent(child1) {
-                if remaining == 0 {
-                    return child1
-                }
-                remaining--
-            }
-            let child2 = Value
-            if IsPresent(child2) {
-                if remaining == 0 {
-                    return child2
-                }
-                remaining--
-            }
+        if IsPresent(OperatorToken) {
+            builder.Add(OperatorToken)
         }
-        throw ArgumentOutOfRangeException(nameof(index))
+        if IsPresent(Value) {
+            builder.Add(Value)
+        }
+        return builder.ToImmutable()
     }
 }
 

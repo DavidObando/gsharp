@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Concurrent
@@ -372,13 +373,27 @@ abstract class SyntaxNode {
     }
 
     private func CacheDeepSpansWithoutRecursion() {
-        // Collect the nodes without a cached span in pre order: parents before children.
-        let order = List[SyntaxNode]()
-        let pending = Stack[SyntaxNode]()
-        pending.Push(this)
+        // A post-order walk with an explicit stack. A node that two paths reach (a graph that a
+        // caller built by hand) is finished before the second path pops it, so the walk stays
+        // linear in the number of distinct nodes.
+        let pending = Stack[(Node SyntaxNode, Expanded bool)]()
+        pending.Push((this, false))
         while pending.Count > 0 {
-            let node = pending.Pop()
-            order.Add(node)
+            let entry = pending.Pop()
+            let node = entry.Node
+            if entry.Expanded {
+                if node.cachedSpan == nil {
+                    // The spans of all children are cached, so this call does not recurse.
+                    node.ComputeSpan(0)
+                }
+                continue
+            }
+            if node.cachedSpan != nil {
+                // Already planned and finished: a node that two paths reach.
+                continue
+            }
+            CompilationMeasurements.Count("syntax.deep-span-nodes")
+            pending.Push((node, true))
             let box = node.childrenBox
             let items = if box != nil {
                 box.Items
@@ -399,15 +414,8 @@ abstract class SyntaxNode {
                     items[i]
                 }
                 if !(child is SyntaxToken) && child.cachedSpan == nil && HasBaseSpan(child.GetType()) {
-                    pending.Push(child)
+                    pending.Push((child, false))
                 }
-            }
-        }
-        // The reverse of a pre order puts every child before its parent.
-        for var i = order.Count - 1; i >= 0; i-- {
-            let node = order[i]
-            if node.cachedSpan == nil {
-                node.ComputeSpan(0)
             }
         }
     }
@@ -488,10 +496,14 @@ abstract class SyntaxNode {
         /// @param nodeType The runtime type of a node.
         /// @returns `true` when the span is the bounds of the children.
         internal func HasBaseSpan(nodeType Type) bool {
-            return BaseSpanByType.GetOrAdd(
-                nodeType,
-                (type Type) -> type.GetProperty("Span")?.GetGetMethod()?.DeclaringType == typeof(SyntaxNode)
-            )
+            return BaseSpanByType.GetOrAdd(nodeType, (type Type) -> DeclaresBaseSpan(type))
+        }
+
+        // The type of a live node always belongs to the compiler's own load context, so this is
+        // not the MetadataLoadContext case of issue #835. IsSameAs is the sanctioned comparison.
+        private func DeclaresBaseSpan(type Type) bool {
+            let declaring = type.GetProperty("Span")?.GetGetMethod()?.DeclaringType
+            return declaring != nil && declaring.IsSameAs(typeof(SyntaxNode))
         }
 
         private let BaseSpanByType ConcurrentDictionary[Type, bool] = ConcurrentDictionary[Type, bool]()

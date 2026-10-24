@@ -31,22 +31,20 @@ open partial class UnaryExpressionSyntax : ExpressionSyntax {
         get;
     }
 
-    /// The `!` of `a !is T` lies inside its operand, the `is` expression, so the children in
-    /// source order end with the operator. The last token is then the last token of the operand
-    /// (issue #5185).
+    /// The `!` of `a !is T` is the last child in source order, but it lies inside its operand, the
+    /// `is` expression, so the last token is the last token of the operand. Only this shape is
+    /// handled: a span can end late because of a synthesized token, so spans do not show
+    /// containment (issue #5185).
     internal override func GetLastChild() SyntaxNode {
         let last = base.GetLastChild()
         if object.ReferenceEquals(last, OperatorToken) &&
+            OperatorToken.Kind == SyntaxKind.BangToken &&
+            Operand is IsExpressionSyntax &&
             Operand
             .Span
             .Start < OperatorToken
             .Span
-            .Start &&
-            OperatorToken
-            .Span
-            .End <= Operand
-            .Span
-            .End {
+            .Start {
             return Operand
         }
         return last

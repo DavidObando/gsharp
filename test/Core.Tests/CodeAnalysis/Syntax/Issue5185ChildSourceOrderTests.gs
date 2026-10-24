@@ -4,6 +4,7 @@
 
 package GSharp.Core.Tests.CodeAnalysis.Syntax
 
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import GSharp.Tests
@@ -288,6 +289,131 @@ open class Issue5185ChildSourceOrderTests {
         Assert.Equal(1005, other.Span.End)
         let outer = BinaryExpressionSyntax(tree, parent, binary.OperatorToken, binary.Right)
         Assert.Equal(1005, outer.Span.End)
+    }
+
+    /// A graph that a caller builds by sharing one child twice has few distinct nodes but
+    /// exponentially many paths. The deep span walk plans each node once (review of #5275).
+    @Fact
+    func SharedSubtreeGraph_IsPlannedOncePerNode() {
+        let tree = SyntaxTree.Parse("package p\nfunc F() int32 { return 1 + 2 }\n")
+        let binary = Descendants(tree.Root).OfType[BinaryExpressionSyntax]().First()
+        var node ExpressionSyntax = binary
+        for var i = 0; i < 140; i++ {
+            node = BinaryExpressionSyntax(tree, node, binary.OperatorToken, node)
+        }
+        using let measurements = CompilationMeasurements.Start("issue5185")
+        let span = node.Span
+        Assert.Equal(binary.Span.Start, span.Start)
+        let planned = measurements.GetCounter("syntax.deep-span-nodes")
+        Assert.True(planned > 0 && planned <= 20, "planned $planned nodes")
+    }
+
+    /// A synthesized `return` can extend the span of the operand through a postfix `!!`. The
+    /// postfix operator is still the last token (review of #5275).
+    @Fact
+    func PostfixAfterSynthesizedReturn_EndsInTheOperator() {
+        for source in[]string{
+            "package p\nlet x = object{func F()int32->1}!!\n",
+            "package p\nlet x = object{func F() int32 -> 1}!!\n",
+            "package p\nlet x = object{func F() int32 -> 1 }!!\n",
+            "package p\nlet x = object{func F() int32 -> 1\n}!!\n"
+        } {
+            let tree = SyntaxTree.Parse(source)
+            let unary = Descendants(tree.Root).OfType[UnaryExpressionSyntax]().First()
+            Assert.Equal("!!", unary.GetLastToken().Text)
+            Assert.Equal("object", unary.GetFirstToken().Text)
+        }
+    }
+
+    /// The rules of the whole feature, checked on the corpus and on edge shapes:
+    /// 1. child starts never go backward;
+    /// 2. a node that uses the base span has the bounds of its children (no children: 0..0);
+    /// 3. the first token is the first token of the first child;
+    /// 4. the last token is the last token of the last child, except the `!` of `!is`.
+    /// The edge shapes cover missing tokens, empty input, unfinished input and comments.
+    @Fact
+    func OrderSpanAndEdgeTokens_FollowTheInvariants() {
+        let sources = List[string]()
+        for tree in Issue1675SyntaxNodeChildEnumerationTests.ParseCorpus() {
+            sources.Add(tree.Text.ToString())
+        }
+        for edge in[]string{
+            "",
+            "// only a comment\n",
+            "1 !is",
+            "a !is Dog",
+            "x!!",
+            "class C {",
+            "class C { func F() int32 -> 1",
+            "func F(",
+            "package",
+            "import",
+            "let s = \"$",
+            "let s = \"$" + "{x}\"",
+            "enum E { A, B",
+            "struct S { var a int32 /* c */ func F() { } // t\n var b int32 }",
+            "@A\n@B func F() { }",
+            "func F() { return -- }"
+        } {
+            sources.Add(edge)
+        }
+        var checkedNodes = 0
+        for source in sources {
+            let tree = SyntaxTree.Parse(source)
+            for node in Descendants(tree.Root) {
+                checkedNodes++
+                let count = node.ChildCount
+                for var i = 1; i < count; i++ {
+                    if node.GetChild(i).Span.Start < node.GetChild(i - 1).Span.Start {
+                        let shape = string.Join(
+                            ", ",
+                            node.GetChildren().Select((c SyntaxNode) -> c.Kind.ToString() + " " + c.Span.ToString())
+                        )
+                        Assert.Fail(
+                            "${node.GetType().Name}: child $i starts before child ${i - 1} in [${source}]: ${shape}"
+                        )
+                    }
+                }
+                if node is SyntaxToken {
+                    continue
+                }
+                if SyntaxNode.HasBaseSpan(node.GetType()) {
+                    var start = int32.MaxValue
+                    var end = int32.MinValue
+                    for var i = 0; i < count; i++ {
+                        start = Math.Min(start, node.GetChild(i).Span.Start)
+                        end = Math.Max(end, node.GetChild(i).Span.End)
+                    }
+                    if count == 0 {
+                        start = 0
+                        end = 0
+                    }
+                    Assert.True(
+                        node.Span.Start == start && node.Span.End == end,
+                        "${node.GetType().Name}: span ${node.Span} is not the bounds ${start}..${end}"
+                    )
+                }
+                if count > 0 {
+                    Assert.Same(node.GetChild(0).GetFirstToken(), node.GetFirstToken())
+                    let isNegatedIs = node is UnaryExpressionSyntax unary &&
+                        unary
+                        .OperatorToken
+                        .Kind == SyntaxKind.BangToken &&
+                        unary.Operand is IsExpressionSyntax &&
+                        unary
+                        .Operand
+                        .Span
+                        .Start < unary
+                        .OperatorToken
+                        .Span
+                        .Start
+                    if !isNegatedIs {
+                        Assert.Same(node.GetChild(count - 1).GetLastToken(), node.GetLastToken())
+                    }
+                }
+            }
+        }
+        Assert.True(checkedNodes > 10_000, "only $checkedNodes nodes")
     }
 
     /// Reflection and the generated accessors order the children the same way.

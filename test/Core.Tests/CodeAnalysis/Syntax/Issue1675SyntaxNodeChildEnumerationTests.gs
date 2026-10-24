@@ -403,8 +403,9 @@ func F() int32 {
             throw InvalidOperationException("repository root not found from " + AppContext.BaseDirectory)
         }
 
-        /// Snippets for the shapes of issue #5185: fixed buffers and explicit interface members.
+        /// Snippets for the shapes of issue #5185: prefix increments, fixed buffers and explicit interface members.
         private let SourceOrderForms IReadOnlyList[string] = []string{
+            "class O { var f int32 }\nfunc F(a []int32, p *int32, o O) {\n var x int32 = 0\n ++x\n --x\n ++a[0]\n --a[0]\n ++*p\n --*p\n ++o.f\n --o.f\n x++\n x--\n a[0]++\n *p++\n o.f++\n o.f--\n}\n",
             "package p\ninterface IA { prop V int32 { get; } event Changed Action }\nunsafe struct Buf {\n    fixed data [4]int32\n}\nclass C : IA {\n    private prop (IA) V int32 -> 1\n    private event (IA) Changed Action {\n        add { }\n        remove { }\n    }\n}\n"
         }
 
