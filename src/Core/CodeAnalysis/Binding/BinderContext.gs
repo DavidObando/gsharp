@@ -893,12 +893,7 @@ internal class BinderContext {
     }
 
     func TrackBackwardGotoNarrowingRead(variable VariableSymbol, location TextLocation) {
-        var narrowedType TypeSymbol? = nil
-        for var i = NarrowedVariables.Count - 1; i >= 0; i-- {
-            if NarrowedVariables[i].TryGetValue(variable, out narrowedType) {
-                break
-            }
-        }
+        let narrowedType = NarrowedVariables.Query(AccessPath.ForVariable(variable))
         if narrowedType == nil || !NarrowedReadChangesRuntimeType(variable.Type, narrowedType) {
             return
         }
@@ -984,13 +979,8 @@ internal class BinderContext {
             narrowedType = nil
             return false
         }
-        for var i = NarrowedVariables.Count - 1; i >= 0; i-- {
-            if NarrowedVariables[i].TryGetValue(path, out narrowedType) {
-                return true
-            }
-        }
-        narrowedType = nil
-        return false
+        narrowedType = NarrowedVariables.Query(path)
+        return narrowedType != nil
     }
 
     /// Records a narrowed variable consumed at a non-null boundary, then

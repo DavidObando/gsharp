@@ -10,7 +10,9 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Tests
 import System
 import System.Collections.Generic
+import System.IO
 import System.Linq
+import System.Text.RegularExpressions
 import Xunit
 
 /// ADR-0208 section 19, PR 2 slice 1: the frame stack threads a (cref:NarrowingState)
@@ -158,6 +160,41 @@ open class Adr0208NarrowingFrameStackTests {
         raw[AccessPath.ForVariable(y)] = TypeSymbol.String
         Assert.Throws[InvalidOperationException](
             () -> NarrowingParity.Check(stack, AccessPath.ForVariable(x), TypeSymbol.String)
+        )
+    }
+
+    @Fact
+    func TheOneFrameWalk_AssertsParityOnEveryQuery() {
+        let x = Local("x")
+        let raw = Dictionary[AccessPath, TypeSymbol]()
+        let stack = NarrowingFrameStack()
+        stack.Push(raw)
+        raw[AccessPath.ForVariable(x)] = TypeSymbol.String
+        NarrowingParity.Begin()
+        try {
+            Assert.Throws[InvalidOperationException](() -> stack.Query(AccessPath.ForVariable(x)))
+        } finally {
+            NarrowingParity.End()
+        }
+    }
+
+    @Fact
+    func NoBinderCodeWalksTheFramesOutsideTheOneFrameWalk() {
+        // Every narrowed-type lookup goes through NarrowingFrameStack.Query, so the
+        // parity assertion sees it (a direct walk skipped it once, in the call resolver).
+        let offenders = List[string]()
+        for path in TestSource.SourceFiles(SearchOption.AllDirectories, "src/Core/CodeAnalysis/Binding") {
+            if Path.GetFileNameWithoutExtension(path).StartsWith("NarrowingFrame", StringComparison.Ordinal) {
+                continue
+            }
+            let text = File.ReadAllText(path)
+            if Regex.IsMatch(text, `NarrowedVariables\[[^\]]+\]\s*\.\s*TryGetValue\(`) {
+                offenders.Add(Path.GetFileName(path))
+            }
+        }
+        Assert.True(
+            offenders.Count == 0,
+            "Walk the frames with NarrowedVariables.Query: " + string.Join(", ", offenders)
         )
     }
 

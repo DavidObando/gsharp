@@ -886,9 +886,6 @@ internal partial class ExpressionBinder {
 
     private func TryGetNarrowedType(variable VariableSymbol, location TextLocation? = nil) TypeSymbol? {
         let answer = LookUpNarrowedType(variable)
-        if NarrowingParity.Enabled {
-            NarrowingParity.Check(binderCtx.NarrowedVariables, AccessPath.ForVariable(variable), answer)
-        }
         if NarrowingComparison.Enabled {
             ReportShadowRead(AccessPath.ForVariable(variable), answer, variable.Type, location)
         }
@@ -911,14 +908,8 @@ internal partial class ExpressionBinder {
     }
 
     private func LookUpNarrowedType(variable VariableSymbol) TypeSymbol? {
-        // Phase 3.C.4: smart-cast narrowing map. Walk the active stack from
-        // innermost frame outward — the topmost narrowing wins.
-        for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {
-            if binderCtx.NarrowedVariables[i].TryGetValue(variable, out var narrowed) {
-                return Invariant.Required(narrowed, "a variable narrowing map entry has a type", expression: "narrowed")
-            }
-        }
-        return nil
+        // Phase 3.C.4: smart-cast narrowing map. The topmost narrowing wins.
+        return binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(variable))
     }
 
     /// ADR-0069 addendum / issue #1180: smart-cast narrowing lookup keyed by an
@@ -928,35 +919,15 @@ internal partial class ExpressionBinder {
     /// @returns The narrowed type, or `null` when the path is not narrowed.
     private func TryGetNarrowedType(path AccessPath, declaredType TypeSymbol, location TextLocation?) TypeSymbol? {
         let answer = LookUpNarrowedType(path)
-        if NarrowingParity.Enabled {
-            NarrowingParity.Check(binderCtx.NarrowedVariables, path, answer)
-        }
         if NarrowingComparison.Enabled {
             ReportShadowRead(path, answer, declaredType, location)
         }
         return answer
     }
 
-    private func TryGetNarrowedType(path AccessPath) TypeSymbol? {
-        let answer = LookUpNarrowedType(path)
-        if NarrowingParity.Enabled {
-            NarrowingParity.Check(binderCtx.NarrowedVariables, path, answer)
-        }
-        return answer
-    }
+    private func TryGetNarrowedType(path AccessPath) TypeSymbol? -> LookUpNarrowedType(path)
 
-    private func LookUpNarrowedType(path AccessPath) TypeSymbol? {
-        for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {
-            if binderCtx.NarrowedVariables[i].TryGetValue(path, out var narrowed) {
-                return Invariant.Required(
-                    narrowed,
-                    "a member-path narrowing map entry has a type",
-                    expression: "narrowed"
-                )
-            }
-        }
-        return nil
-    }
+    private func LookUpNarrowedType(path AccessPath) TypeSymbol? -> binderCtx.NarrowedVariables.Query(path)
 
     /// ADR-0069 addendum / issue #1180: if [`node`](paramref) reads a
     /// stable member-access path that an active smart-cast frame has narrowed,

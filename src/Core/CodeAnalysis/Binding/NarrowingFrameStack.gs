@@ -88,6 +88,23 @@ internal sealed class NarrowingFrameStack : IReadOnlyList[NarrowingFrame] {
         Recompute(path)
     }
 
+    /// The one frame walk: returns the type of the innermost frame that has
+    /// [`path`](paramref), or `nil`. Every narrowed-type lookup in the binder
+    /// goes through it, so the parity assertion sees every query.
+    func Query(path AccessPath) TypeSymbol? {
+        var answer TypeSymbol? = nil
+        for var i = frames.Count - 1; i >= 0; i-- {
+            if frames[i].TryGetValue(path, out var narrowedType) {
+                answer = narrowedType
+                break
+            }
+        }
+        if NarrowingParity.Enabled {
+            NarrowingParity.Check(this, path, answer)
+        }
+        return answer
+    }
+
     /// Compares the threaded state with a fresh projection of the frames, and
     /// throws when they differ: a write reached a frame without being seen.
     func AssertParity() {
