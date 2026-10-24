@@ -56,7 +56,7 @@ internal partial class StatementBinder {
         assignmentPreservesNarrowing,
         externalFunctionValues,
         (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second),
-        (operand TypeSymbol?, stored TypeSymbol?) -> OperandMayReachStorage(operand, stored)
+        (operand TypeSymbol?, stored TypeSymbol?, slotsOnly bool) -> OperandMayReachStorage(operand, stored, slotsOnly)
     )
 
     /// ADR-0208 R12 (#5171): removes the callable aliases that [`collector`](paramref) assigns, and
@@ -98,21 +98,14 @@ internal partial class StatementBinder {
     // instance field and no array or by-reference property that a caller could alias. This is the only
     // list; every other imported class is reached by default. Core's `NarrowedVariables[i].TryGetValue(path,
     // out found)` reads a Dictionary; the others are the BCL containers a program uses the same way.
-    private let inertImportedContainers HashSet[string] = HashSet[string]{
-        "System.Collections.Generic.List`1",
-        "System.Collections.Generic.Dictionary`2",
-        "System.Collections.Generic.HashSet`1",
-        "System.Collections.Generic.Queue`1",
-        "System.Collections.Generic.Stack`1",
-        "System.Collections.Generic.SortedDictionary`2",
-        "System.Collections.Generic.SortedSet`1",
-        "System.Collections.Generic.LinkedList`1",
-        "System.Collections.Generic.KeyValuePair`2",
-        "System.Collections.Immutable.ImmutableArray`1",
-        "System.Collections.Immutable.ImmutableList`1",
-        "System.Collections.Immutable.ImmutableDictionary`2",
-        "System.Collections.Immutable.ImmutableHashSet`1"
-    }
+    // Type-argument positions whose values a caller can alias by reference through the BCL
+    // (`CollectionsMarshal.AsSpan(list)`, `GetValueRefOrNullRef(dictionary)`, `ImmutableCollectionsMarshal`).
+    // A Dictionary key is not aliasable.
+    private func IsAliasableSlotArgument(definitionName string, position int32) bool -> (
+        definitionName == "System.Collections.Generic.List`1" && position == 0
+    ) ||
+        (definitionName == "System.Collections.Generic.Dictionary`2" && position == 1) ||
+        (definitionName == "System.Collections.Immutable.ImmutableArray`1" && position == 0)
 
     /// ADR-0208 R12 (#5292): whether a callee that receives a value of [`operand`](paramref) can reach a
     /// container of a storage of type [`stored`](paramref). A type is inert only when it is provably so:
@@ -121,12 +114,41 @@ internal partial class StatementBinder {
     /// class) known subclasses are all inert. Everything else reaches: interfaces, `object`, type
     /// parameters, delegates, structural types, unlisted imported classes and any type with a field of the
     /// stored type.
-    private func OperandMayReachStorage(operand TypeSymbol?, stored TypeSymbol?) bool {
+    /// A receiver of a method declared on a listed container (`slotsOnly`) is reached only through the
+    /// container's aliasable slots: the BCL method reads or hashes its arguments and does not write into
+    /// the caller's data, but `list.Clear()` clears the slots a `CollectionsMarshal` span aliases.
+    private func OperandMayReachStorage(operand TypeSymbol?, stored TypeSymbol?, slotsOnly bool) bool {
         let target = StripNullability(stored)
         if operand == nil || target == nil {
             return true
         }
+        if slotsOnly {
+            return ListedContainerSlotsHold(StripNullability(operand), target)
+        }
         return TypeReaches(StripNullability(operand), target, HashSet[TypeSymbol](), 0)
+    }
+
+    private func ListedContainerSlotsHold(operand TypeSymbol?, target TypeSymbol) bool {
+        if operand == nil || operand.ClrType == nil {
+            return true
+        }
+        let clr = operand.ClrType
+        let definition = if clr.IsGenericType && !clr.IsGenericTypeDefinition {
+            clr.GetGenericTypeDefinition()
+        } else {
+            clr
+        }
+        let arguments = if operand is ImportedTypeSymbol imported && !imported.TypeArguments.IsDefaultOrEmpty {
+            imported.TypeArguments
+        } else {
+            operand.ConstructedTypeArguments
+        }
+        for var i = 0; i < arguments.Length; i++ {
+            if IsAliasableSlotArgument(definition.FullName ?? "", i) && IsStoredType(arguments[i], target) {
+                return true
+            }
+        }
+        return false
     }
 
     private func IsStoredType(candidate TypeSymbol?, target TypeSymbol) bool {
@@ -162,7 +184,9 @@ internal partial class StatementBinder {
             return false
         }
         if type is TypeParameterSymbol or InterfaceSymbol or DelegateTypeSymbol or FunctionTypeSymbol {
-            return true
+            // An open-world type: the operand itself reaches. Behind a field of the operand's graph it does
+            // not (see OperandMayReachStorage), or no object graph of the compiler's own symbols would be inert.
+            return depth == 0
         }
         if type is ArrayTypeSymbol array {
             return MemberTypeReaches(array.ElementType, target, visited, depth)
@@ -237,12 +261,10 @@ internal partial class StatementBinder {
         if clr.IsPrimitive || clr.IsEnum || ClrTypeInspector.IsSameAs(clr, typeof(string)) {
             return false
         }
-        if clr.IsInterface ||
-            clr.IsGenericParameter ||
-            clr.IsByRef ||
-            clr.IsPointer ||
-            clr.IsByRefLike ||
-            ClrTypeInspector.IsSameAs(clr, typeof(object)) {
+        if clr.IsInterface || clr.IsGenericParameter || ClrTypeInspector.IsSameAs(clr, typeof(object)) {
+            return depth == 0
+        }
+        if clr.IsByRef || clr.IsPointer || clr.IsByRefLike {
             return true
         }
         if clr.IsArray {
@@ -256,34 +278,60 @@ internal partial class StatementBinder {
         } else {
             clr
         }
-        let listed = definition.FullName != nil && inertImportedContainers.Contains(definition.FullName)
-        if listed {
-            // The container is inert, but its elements are reachable through it.
-            let arguments = if type is ImportedTypeSymbol imported && !imported.TypeArguments.IsDefaultOrEmpty {
-                imported.TypeArguments
-            } else {
-                type.ConstructedTypeArguments
-            }
-            for argument in arguments {
-                if TypeReaches(StripNullability(argument), target, visited, depth + 1) {
-                    return true
-                }
-            }
-            return false
-        }
-        // An unlisted class that is not sealed may be a subclass with storage; a sealed class or a value
-        // type is scanned for what a caller can alias.
-        if !clr.IsValueType && !clr.IsSealed {
+        let listed = definition.FullName != nil && InertImportedTypes.Contains(definition.FullName)
+        // A source class can derive from an imported class (listed or not) and add storage: visit them.
+        if !clr.IsValueType && !clr.IsSealed && ImportedSubclassReaches(definition, target, visited, depth) {
             return true
         }
-        for property in clr.GetProperties(BindingFlags.Instance | BindingFlags.Public) {
-            if property.PropertyType.IsArray || property.PropertyType.IsByRef {
+        if !listed {
+            // Opaque imported state (`Memory[T].Span`, `WeakReference[T].TryGetTarget`, ordinary property
+            // results and methods) can hand out storage that no public field shows.
+            return true
+        }
+        // The container is inert, but its values are reachable through it, and its aliasable slots hold
+        // the stored type itself.
+        let arguments = if type is ImportedTypeSymbol imported && !imported.TypeArguments.IsDefaultOrEmpty {
+            imported.TypeArguments
+        } else {
+            type.ConstructedTypeArguments
+        }
+        for var i = 0; i < arguments.Length; i++ {
+            if IsAliasableSlotArgument(definition.FullName ?? "", i) && IsStoredType(arguments[i], target) {
+                return true
+            }
+            if TypeReaches(StripNullability(arguments[i]), target, visited, depth + 1) {
                 return true
             }
         }
-        for field in clr.GetFields(BindingFlags.Instance | BindingFlags.Public) {
-            if MemberTypeReaches(ClrNullability.GetFieldTypeSymbol(field), target, visited, depth) {
-                return true
+        return false
+    }
+
+    // Whether a class of this compilation that derives from the imported class [`definition`](paramref)
+    // reaches [`target`](paramref).
+    private func ImportedSubclassReaches(
+        definition Type,
+        target TypeSymbol,
+        visited HashSet[TypeSymbol],
+        depth int32
+    ) bool {
+        for candidate in binderCtx.RootScope.GetDeclaredStructs() {
+            if !candidate.IsClass || candidate.ImportedBaseType is not{ClrType: not nil} importedBase {
+                continue
+            }
+            var current Type? = importedBase.ClrType
+            for var hops = 0; current != nil && hops < 64; hops++ {
+                let currentDefinition = if current.IsGenericType && !current.IsGenericTypeDefinition {
+                    current.GetGenericTypeDefinition()
+                } else {
+                    current
+                }
+                if ClrTypeInspector.IsSameAs(currentDefinition, definition) {
+                    if TypeReaches(candidate, target, visited, depth + 1) {
+                        return true
+                    }
+                    break
+                }
+                current = current.BaseType
             }
         }
         return false
@@ -875,7 +923,11 @@ internal partial class StatementBinder {
         let collector = LoopBackEdgeMutationCollector(
             AssignmentPreservesNarrowing,
             (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second),
-            (operand TypeSymbol?, stored TypeSymbol?) -> OperandMayReachStorage(operand, stored)
+            (operand TypeSymbol?, stored TypeSymbol?, slotsOnly bool) -> OperandMayReachStorage(
+                operand,
+                stored,
+                slotsOnly
+            )
         )
         if markerBlock == nil {
             return collector
@@ -1945,13 +1997,13 @@ internal partial class StatementBinder {
         private var globalMutationProtectedRoots HashSet[VariableSymbol]?
         private var tryAssignedVariables HashSet[VariableSymbol]?
         private let mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?
-        private let operandMayReach((TypeSymbol?, TypeSymbol?) -> bool)?
+        private let operandMayReach((TypeSymbol?, TypeSymbol?, bool) -> bool)?
 
         init(
             assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?,
             externalFunctionValues IEnumerable[VariableSymbol]? = nil,
             mayShareStorage((VariableSymbol, VariableSymbol) -> bool)? = nil,
-            operandMayReach((TypeSymbol?, TypeSymbol?) -> bool)? = nil
+            operandMayReach((TypeSymbol?, TypeSymbol?, bool) -> bool)? = nil
         ) {
             this.mayShareStorage = mayShareStorage
             this.operandMayReach = operandMayReach
@@ -1980,9 +2032,18 @@ internal partial class StatementBinder {
 
         // ADR-0208 R12 (#5292): the types of the operands (the receiver, implicit or written, and every
         // argument) of the calls whose callee is known.
-        private let callOperandTypes List[TypeSymbol?] = List[TypeSymbol?]()
+        private let callOperandTypes List[(Type TypeSymbol?, SlotsOnly bool)] = List[
+            (Type TypeSymbol?, SlotsOnly bool)
+        ]()
 
-        private func RecordCallOperands(call BoundExpression) {
+        private func RecordCallOperands(call BoundExpression, listedContainerMethod bool = false) {
+            if listedContainerMethod {
+                // Only the receiver can reach the caller's slots through a listed BCL container method.
+                if call is BoundImportedInstanceCallExpression importedCall {
+                    callOperandTypes.Add((importedCall.Receiver.Type, true))
+                }
+                return
+            }
             for child in call.ChildNodes {
                 if child is BoundExpression operand {
                     // A `ref`/`out` argument passes the storage; the callee reaches what its value reaches.
@@ -1990,7 +2051,7 @@ internal partial class StatementBinder {
                     while value is BoundAddressOfExpression address {
                         value = address.Operand
                     }
-                    callOperandTypes.Add(value.Type)
+                    callOperandTypes.Add((value.Type, false))
                 }
             }
         }
@@ -1998,8 +2059,8 @@ internal partial class StatementBinder {
         // ADR-0208 R12 (#5292): whether a call of this node may reach the storage that [`root`](paramref) names:
         // through an operand whose type graph holds the container of a storage of the type of the root.
         func CallMayReachStorageOf(root VariableSymbol) bool {
-            for type in callOperandTypes {
-                if operandMayReach == nil || operandMayReach(type, root.Type) {
+            for operand in callOperandTypes {
+                if operandMayReach == nil || operandMayReach(operand.Type, root.Type, operand.SlotsOnly) {
                     return true
                 }
             }
@@ -2152,7 +2213,14 @@ internal partial class StatementBinder {
             }
             if node is BoundCallOperationExpression call {
                 if call.CalledFunction is not FunctionSymbol {
-                    RecordCallOperands(node)
+                    // A method of a listed BCL container whose arguments are no callbacks cannot write the
+                    // caller's data through them (the receiver's aliasable slots still count).
+                    let listed = call.CalledFunction is ImportedFunctionSymbol imported &&
+                        IsListedContainerMethod(imported.Method) &&
+                        !call
+                        .Arguments
+                        .Any((argument BoundExpression) -> ArgumentMayRunUserCode(argument.Type))
+                    RecordCallOperands(node, listed)
                 }
                 AnalyzeCallableArguments(call.Arguments)
             }
@@ -3017,7 +3085,7 @@ internal partial class StatementBinder {
         init(
             assignmentPreservesNarrowing(BoundAssignmentExpression, TypeSymbol) -> bool,
             mayShareStorage(VariableSymbol, VariableSymbol) -> bool,
-            operandMayReach(TypeSymbol?, TypeSymbol?) -> bool
+            operandMayReach(TypeSymbol?, TypeSymbol?, bool) -> bool
         ) : base(assignmentPreservesNarrowing, nil, mayShareStorage, operandMayReach) { }
     }
 
@@ -4255,6 +4323,56 @@ internal partial class StatementBinder {
     }
 
     shared {
+        // The imported types that are inert for storage reach, by full name. The list is the only exception to
+        // "an imported type reaches": a type is listed only when no member hands out a mutable slot of the
+        // caller's data except the type arguments named in `aliasableSlotArguments`. A listed container is
+        // inert, but the values it holds are reached through it, and so are its known subclasses.
+        let InertImportedTypes HashSet[string] = HashSet[string]{
+            "System.Collections.Generic.List`1",
+            "System.Collections.Generic.Dictionary`2",
+            "System.Collections.Generic.HashSet`1",
+            "System.Collections.Generic.Queue`1",
+            "System.Collections.Generic.Stack`1",
+            "System.Collections.Generic.SortedDictionary`2",
+            "System.Collections.Generic.SortedSet`1",
+            "System.Collections.Generic.LinkedList`1",
+            "System.Collections.Generic.KeyValuePair`2",
+            "System.Collections.Immutable.ImmutableArray`1",
+            "System.Collections.Immutable.ImmutableList`1",
+            "System.Collections.Immutable.ImmutableDictionary`2",
+            "System.Collections.Immutable.ImmutableHashSet`1",
+            "System.Nullable`1",
+            "System.Type",
+            "System.Text.StringBuilder",
+            "System.Decimal",
+            "System.Guid",
+            "System.DateTime",
+            "System.DateTimeOffset",
+            "System.TimeSpan"
+        }
+
+        // Whether an argument of this type may run user code inside a BCL method (a callback, a comparer).
+        internal func ArgumentMayRunUserCode(type TypeSymbol?) bool -> type == nil ||
+            type is DelegateTypeSymbol or
+            FunctionTypeSymbol or
+            InterfaceSymbol or
+            TypeParameterSymbol ||
+            (type.ClrType != nil && (type.ClrType.IsInterface || typeof(Delegate).IsAssignableFrom(type.ClrType)))
+
+        // Whether [`method`](paramref) is declared on one of the listed imported types.
+        internal func IsListedContainerMethod(method MethodInfo?) bool {
+            let declaring = method?.DeclaringType
+            if declaring == nil {
+                return false
+            }
+            let definition = if declaring.IsGenericType && !declaring.IsGenericTypeDefinition {
+                declaring.GetGenericTypeDefinition()
+            } else {
+                declaring
+            }
+            return definition.FullName != nil && InertImportedTypes.Contains(definition.FullName)
+        }
+
         private func JoinExternalCallableAliases(
             joined HashSet[VariableSymbol]?,
             next IReadOnlyCollection[VariableSymbol]

@@ -163,6 +163,7 @@ open class Adr0208NarrowingCorpusTests {
                 "g3_switch_failed_guard",
                 "g4_overload_ambiguity_after_join",
                 "g5_yield_after_guard",
+                "h10_by_ref_param_call_with_memory_span",
                 "h1_by_ref_param_survives_calls",
                 "h2_by_ref_param_call_with_container",
                 "h3_by_ref_param_call_with_imported_holder",
@@ -170,6 +171,8 @@ open class Adr0208NarrowingCorpusTests {
                 "h5_by_ref_param_call_with_imported_interface",
                 "h6_by_ref_param_call_with_open_base",
                 "h7_by_ref_param_call_with_imported_base_holder",
+                "h8_by_ref_param_call_with_list_subclass",
+                "h9_by_ref_param_call_with_list_slot",
                 "out-alias_out_ref_alias"
             },
             names
@@ -1004,9 +1007,9 @@ class Holder : IDisposable {
     func Dispose() { Field = nil }
 }
 func Close(d IDisposable) { d.Dispose() }
-func Run(ref a C?, h Holder) int32 {
+func Run(ref a C?, d IDisposable) int32 {
     if a == nil { return 0 }
-    Close(h)
+    Close(d)
     return a.Value
 }
 func Main() {
@@ -1024,9 +1027,9 @@ class Holder : Base {
 func Clear(b Base) {
     if b is Holder h { h.Field = nil }
 }
-func Run(ref a C?, h Holder) int32 {
+func Run(ref a C?, b Base) int32 {
     if a == nil { return 0 }
-    Clear(h)
+    Clear(b)
     return a.Value
 }
 func Main() {
@@ -1050,6 +1053,52 @@ func Main() {
     h.Value = C{}
     Console.WriteLine(Run(ref h.Value, h))
 }`, "GS0158@11:14", "reject", "", ""}
+            yield[]object{"h8_by_ref_param_call_with_list_subclass", `import System.Collections.Generic
+class C {
+    var Value int32 = 1
+}
+class Holder : List[int32] {
+    var Field C? = C{}
+}
+func Clear(items List[int32]) { if items is Holder h { h.Field = nil } }
+func Run(ref a C?, items List[int32]) int32 {
+    if a == nil { return 0 }
+    Clear(items)
+    return a.Value
+}
+func Main() {
+    let h = Holder()
+    Console.WriteLine(Run(ref h.Field, h))
+}`, "GS0158@12:14", "reject", "", ""}
+            yield[]object{"h9_by_ref_param_call_with_list_slot", `import System.Collections.Generic
+import System.Runtime.InteropServices
+class C {
+    var Value int32 = 1
+}
+func Clear(items List[C?]) { items[0] = nil }
+func Run(ref a C?, items List[C?]) int32 {
+    if a == nil { return 0 }
+    Clear(items)
+    return a.Value
+}
+func Main() {
+    let items = List[C?]()
+    items.Add(C{})
+    Console.WriteLine(Run(ref CollectionsMarshal.AsSpan(items)[0], items))
+}`, "GS0158@10:14", "reject", "", ""}
+            yield[]object{"h10_by_ref_param_call_with_memory_span", `class C {
+    var Value int32 = 1
+}
+func Clear(memory Memory[C?]) { memory.Span[0] = nil }
+func Run(ref a C?, memory Memory[C?]) int32 {
+    if a == nil { return 0 }
+    Clear(memory)
+    return a.Value
+}
+func Main() {
+    var items = []C?{C{}}
+    Console.WriteLine(Run(ref items[0], Memory[C?](items)))
+}`, "GS0158@8:14", "reject", "", ""}
             yield[]object{"out-alias_out_ref_alias", `class C { func M() { } }
 func Run(out c C?, ref alias C?) {
     c = C()

@@ -279,22 +279,35 @@ when it can reach the storage: (a) one of its operands (the receiver, written
 or implicit, and every argument, the narrowed root itself included) has a
 type that is not provably inert. A type is inert only when it is a
 primitive, a string or an enum; an array or slice whose element is inert and
-is not the stored type; a struct or sealed class of this compilation, an
-imported value type or a sealed imported class whose fields, auto
-properties, base chain (source and imported) have no member of the stored
-type, no array or by-reference property and no reaching member type; an
+is not the stored type; a struct or sealed class of this compilation whose
+fields, auto properties and base chain (source and imported) are inert; an
 open or abstract class of this compilation whose known subclasses are all
-inert; or one of the allowlisted imported containers (`List`, `Dictionary`,
-`HashSet`, `Queue`, `Stack`, `SortedDictionary`, `SortedSet`, `LinkedList`,
-`KeyValuePair`, `ImmutableArray`, `ImmutableList`, `ImmutableDictionary`,
-`ImmutableHashSet`, listed in one place, `inertImportedContainers`) whose
-type arguments are inert. Everything else reaches by default: interfaces
-(source and imported), `object`, type parameters, delegates and function
-types, structural types, unlisted non-sealed imported classes
-(`StrongBox<T>`, `class Holder : StrongBox[C?]`) and any type with a
-member of the stored type (probes `ref-parameter-call`, the cyclic-object
-cases, `ref-parameter-base-interface-call` and the corpus rows h2 to h7).
-A subclass declared in another assembly is not known to the walk; this is
+inert; or one of the imported types on the single list
+`inertImportedTypes` (`List`, `Dictionary`, `HashSet`, `Queue`, `Stack`,
+`SortedDictionary`, `SortedSet`, `LinkedList`, `KeyValuePair`,
+`ImmutableArray`, `ImmutableList`, `ImmutableDictionary`,
+`ImmutableHashSet`, `Nullable`, `Type`, `StringBuilder`, `Decimal`, `Guid`,
+`DateTime`, `DateTimeOffset`, `TimeSpan`) whose type arguments are inert and
+whose aliasable slots do not hold the stored type (`List` element,
+`Dictionary` value and `ImmutableArray` element can be aliased through
+`CollectionsMarshal` and `ImmutableCollectionsMarshal`; a `Dictionary` key
+cannot) and whose known source subclasses are inert. A call to a method
+of a listed type whose arguments are no callbacks, interfaces or type
+parameters reaches only through the receiver's aliasable slots, because the
+BCL method reads or hashes its arguments and does not write the caller's
+data (`NarrowedVariables[i].TryGetValue(path, out found)`); `list.Clear()`
+still reaches a `List[C?]` slot that a `CollectionsMarshal` span aliases.
+Behind a field of an operand's type graph, an interface, `object`, type
+parameter or delegate is not followed (the operand's own type is): the
+object graph of any real program is open at some `object` field, and
+following it would make every operand with a user type reach. Everything else reaches
+by default: interfaces (source and imported), `object`, type parameters,
+delegates and function types, structural types, and every imported type not
+on the list, because opaque imported state (`Memory<T>.Span`,
+`WeakReference<T>.TryGetTarget`, `StrongBox<T>`, `ArraySegment<T>`) can hand
+out storage that no public field shows (probes `ref-parameter-call`, the
+cyclic-object cases, `ref-parameter-base-interface-call` and the corpus rows
+h2 to h10). A subclass declared in another assembly is not known to the walk; this is
 a limit of the closed compilation, not of the rule; (b) the call has a
 `ref`/`out` argument that may share storage with the root (below); (c) the
 callee is a delegate or function value of unknown origin, a computed
