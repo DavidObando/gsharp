@@ -1,8 +1,8 @@
-# ADR-0210: Array copy operations and the proposed fixed-array value contract
+# ADR-0210: Array copy operations and the fixed-array value contract
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-10-23
-- **Phase**: Production contract proposed for approval, with bounded fixture evidence.
+- **Phase**: Production design approved; F1-F4 implementation and certification pending.
   No shipped compiler, runtime, translator or SDK-pin change.
 - **Issue**: [#5208](https://github.com/DavidObando/gsharp/issues/5208),
   evaluation follow-up [#5221](https://github.com/DavidObando/gsharp/issues/5221),
@@ -19,17 +19,22 @@
   [ADR-0154](0154-test-oracle-strength.md),
   [Withdrawn ADR-0206](0206-explicit-snapshot-and-selected-location-receivers.md)
 
-**Recommendation for approval:** make existing `[N]T` genuine CLR values,
+**Accepted design:** make existing `[N]T` genuine CLR values,
 using SDK-owned compositional carriers for lengths 0-32. Section 9 selects
 one production proposal, including its breaking boundaries and implementation
 gates. Sections 1-7 preserve the earlier explicit-copy alternative; they are
 not simultaneous rules for value arrays. Section 8 preserves the investigation
 and its actual evidence.
 
-**Approval is pending.** No discussion or merged document to date accepts
-this contract. A design merge does not change the language. The maintainer
-must approve section 9 before a separate production implementation starts.
-Release and N-1 pin changes remain separate.
+The maintainer explicitly approved all four section 9 decisions on
+**October 23, 2026**, through the coordinator's `ask_user` interaction.
+The [approval record](https://github.com/DavidObando/gsharp/issues/5208#issuecomment-6377358337)
+states the accepted scope and boundaries. Acceptance covers section 9,
+not the historical explicit-copy alternatives in sections 1-7.
+
+**Approved design is not implemented or verified behavior.**
+Current `[N]T` lowering stays unchanged until the separate F1-F4 gates close.
+Release version/date, publication and N-1 pin changes remain separate.
 
 ## Context
 
@@ -204,13 +209,13 @@ arrays or promise an allocation count.
 
 ## Decision
 
-### 0. Selected recommendation, not semantic approval
+### 0. Accepted production direction, not implementation
 
 Prefer genuine CLR fixed-array values over an explicit `.copy()` feature.
 Ordinary copies inside unknown CLR generic bodies are the deciding advantage.
 The #5225 fixtures supply bounded mechanisms for identity and retained
-locations; they justify a concrete production proposal, not acceptance.
-Section 9 specifies that proposal and the exact approval questions.
+locations; they justify a concrete production design, not implementation claims.
+Section 9 specifies the approved contract and its certification gates.
 
 The initial length domain is deliberately **0-32**, not arbitrary `N`.
 The proposal broadens the fixture's element domain only as an implementation
@@ -220,9 +225,9 @@ empty-allocation inference. It does not introduce a second fixed-array category.
 
 Do not instrument copying over `T[]` as a substitute for a real value ABI.
 Unknown generic bodies and enclosing struct copies bypass those hooks.
-Sections 1-7 remain the compatible fallback if the maintainer rejects the
-breaking proposal. Their `.copy()` spelling is not the first implementation
-slice and is not added alongside value semantics by this proposal.
+Sections 1-7 remain the historical compatible alternative, not the selected
+direction. Their `.copy()` spelling is not the first implementation slice
+and is not added alongside the accepted value semantics.
 
 ### 1. Proposed semantic contract for a fresh same-type copy (CopyNew)
 
@@ -698,7 +703,7 @@ latency or throughput claim and measured none.
 
 This section records the evaluation, not language rules.
 Sections 1-7 describe the reference-array baseline and explicit operations.
-Section 9 resolves the production recommendation; approval remains pending.
+Section 9 resolves the accepted production design; implementation remains pending.
 
 #### Evidence and compatibility scope
 
@@ -1034,9 +1039,11 @@ aliases. Neither result selects a production ABI or accepts breaking semantics.
 The full copy/store/default/nullability/conversion matrix, broad element and
 size policy, public/ref import and tooling, deterministic production emission,
 strict verification, AOT, promotion/permission rules, migration and versioning
-still require implementation evidence and approval.
+still require production evidence. Section 9 records the subsequently approved
+design; approval does not extend the prototype evidence.
 Existing `[5]T` and `[5]T{}` inference remains `[]T`.
-ADR-0210 stays Proposed; #5208 and ADR-0191 admission gates remain open.
+ADR-0210 was Proposed at the prototype merge. The implementation work in
+#5208 and ADR-0191 admission gates remain open.
 
 #### Migration, bootstrap and acceptance
 
@@ -1078,11 +1085,11 @@ ADR-0210 stays Proposed; #5208 and ADR-0191 admission gates remain open.
    panic behavior and audio no-inner-array performance remain independent
    proof obligations. A document merge proves none of them.
 
-### 9. Production proposal for maintainer approval
+### 9. Accepted production contract
 
-This section is the selected recommendation. It supersedes conflicting
-recommendations in the historical alternatives **only if the maintainer
-approves it**. Nothing here is implemented by the research fixtures.
+The maintainer approved this section on October 23, 2026.
+It supersedes conflicting recommendations in the historical alternatives.
+Nothing here is implemented by the research fixtures.
 
 #### Decision matrix
 
@@ -1348,7 +1355,7 @@ retained aliases. Preserve cs2gs CLR-array
 output and audit embedded source as well as live `.gs` syntax.
 A source-count census cannot approve those migrations.
 
-After semantic approval, open a **separate implementation issue**, with these
+Semantic approval authorizes a **separate implementation issue**, with these
 bounded PR slices and closure gates:
 
 | Slice | Scope and required evidence |
@@ -1380,9 +1387,9 @@ are implementation acceptance tests, not facts a design edit can establish.
 Go-family admission and audio workload acceptance remain ADR-0191 gates;
 M0 still reports `migrationReady: false`.
 
-#### Exact maintainer approval gate
+#### Recorded maintainer decisions
 
-Ask the maintainer to approve or amend these concrete choices together:
+The maintainer answered **Approve** to each concrete choice below:
 
 1. **Breaking meaning and limit:** existing `[N]T` becomes values for lengths
    0-32; larger fixed types diagnose, while CLR numeric allocations keep
@@ -1399,16 +1406,15 @@ Ask the maintainer to approve or amend these concrete choices together:
    not Go equality. Keep direct fixed-array protocol slots/payloads blocked;
    approve F1-F4 as the implementation boundary, not Go admission.
 
-No approval has been received for those choices. Record the maintainer's
-explicit answers in #5208 before starting production work.
-Lack of a reply is not approval.
-Do not mark this ADR Accepted, enable changed semantics, create a release
-or move the SDK pin while this gate is open. The release number/date is
-also a maintainer choice, not assigned by this design.
+The coordinator relayed all four explicit approvals; the #5208 approval record
+preserves their scope. F1 may proceed separately from this design document.
+Acceptance does not enable changed default lowering, certify the fixtures,
+authorize a merge, publish a release or move the SDK pin.
+The release number/date remains a maintainer choice.
 
 ## Consequences
 
-For the selected production proposal (section 9), pending approval:
+For the accepted production design (section 9), pending implementation:
 
 - Ordinary CLR value copying works through unknown generic code without
   frontend copy hooks. Shared owner definitions preserve invariant identity.
