@@ -101,85 +101,6 @@ open class Issue5171RefAliasNarrowingTests {
         /// Gets the rejected programs: each is (name, source).
         /// @returns The case data.
         func RejectedCases() sequence[[]object] {
-            yield[]object{"ref-parameter-base-interface-call", `
-import System
-
-class C {
-    var Value int32 = 1
-}
-interface IClear {
-    func Reset() { }
-    func Clear() { Reset() }
-}
-class Holder : IClear {
-    var Field C? = C{}
-    func Reset() { Field = nil }
-    func Run(ref a C?) int32 {
-        if a == nil { return 0 }
-        base[IClear].Clear()
-        return a.Value
-    }
-}
-func Main() {
-    let h = Holder{}
-    Console.WriteLine(h.Run(ref h.Field))
-}
-`}
-            yield[]object{"ref-parameter-cyclic-object-argument", `
-import System
-
-class Node {
-    var Value int32 = 1
-    var Link Node? = nil
-}
-func Clear(n Node) { n.Link = nil }
-func Run(ref a Node?) int32 {
-    if a == nil { return 0 }
-    Clear(a)
-    return a.Value
-}
-func Main() {
-    let c = Node{}
-    c.Link = c
-    Console.WriteLine(Run(ref c.Link))
-}
-`}
-            yield[]object{"ref-parameter-cyclic-object-receiver", `
-import System
-
-class Node {
-    var Value int32 = 1
-    var Link Node? = nil
-    func Detach() { Link = nil }
-}
-func Run(ref a Node?) int32 {
-    if a == nil { return 0 }
-    a.Detach()
-    return a.Value
-}
-func Main() {
-    let c = Node{}
-    c.Link = c
-    Console.WriteLine(Run(ref c.Link))
-}
-`}
-            yield[]object{"ref-parameter-call-with-same-typed-ref-argument", `
-import System
-
-class C {
-    var Value int32 = 1
-}
-func Clear(ref b C?) { b = nil }
-func Run(ref a C?, ref b C?) int32 {
-    if a == nil { return 0 }
-    Clear(ref b)
-    return a.Value
-}
-func Main() {
-    var x C? = C{}
-    Console.WriteLine(Run(ref x, ref x))
-}
-`}
             yield[]object{"ref-local-root-write", `
 import System
 
@@ -287,23 +208,6 @@ class C {
 func Run(ref a C?, xs []C?) int32 {
     if a == nil { return 0 }
     xs[0] = nil
-    return a.Value
-}
-func Main() {
-    var xs = []C?{C{}}
-    Console.WriteLine(Run(ref xs[0], xs))
-}
-`}
-            yield[]object{"ref-parameter-call", `
-import System
-
-class C {
-    var Value int32 = 1
-}
-func Clear(xs []C?) { xs[0] = nil }
-func Run(ref a C?, xs []C?) int32 {
-    if a == nil { return 0 }
-    Clear(xs)
     return a.Value
 }
 func Main() {
@@ -770,6 +674,24 @@ Console.WriteLine(Run(ref box.Field, box))
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
         /// @returns The case data.
         func AcceptedCases() sequence[[]object] {
+            yield[]object{"ref-argument-to-another-variable-keeps-fact", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Reset(ref target C?) { target = nil }
+func Run(ref a C?, ref b C?) int32 {
+    if a == nil { return 0 }
+    Reset(ref b)
+    return a.Value
+}
+func Main() {
+    var x C? = C{}
+    var y C? = C{}
+    Console.WriteLine(Run(ref x, ref y))
+}
+`, []string{"1"}}
             yield[]object{"ref-parameter-survives-read-only-calls", `
 import System
 

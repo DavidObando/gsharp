@@ -269,82 +269,48 @@ local, and probe g2: the same through a `ref` parameter, both compile and
 throw today; bug #5171, second and fourth shapes). The rule does not try to
 tell which members of the class the write can reach.
 
-**The contract of the call rule (amendment A3, #5292).** A plain call
-keeps the narrowing of a by-reference parameter only when no statically
-typed operand of the call (the receiver, written or implicit, or an
-argument) can lead the callee to a container of a storage of the
-parameter's type, as decided by the walk below. The rule does not follow
-anything that is not a static operand type. It knowingly does not cover:
-(1) a mutable global or static that a callee assigns while the by-reference
-parameter aliases it, with no operand involved; (2) a subclass declared in
-another assembly; (3) the values behind an `object`, interface, type
-parameter or delegate typed member of an operand's type graph (the
-operand's own type is followed); (4) implicit user callbacks that a listed
-BCL method runs on its data (`Equals`, `GetHashCode`, `ToString`, a
-comparer reached through an argument whose type is a plain class); (5)
-BCL APIs that hand out a slot of a listed container other than the ones
-named (`CollectionsMarshal` over `List`, `Dictionary` values and
-`LinkedListNode<T>.ValueRef`); (6) aliases made with unsafe code or
-reflection. A finding in this list is a documented limitation; a finding
-that names a static operand type, a slot of a listed container, a member
-of a constructed generic, or a destination argument is a defect of the
-walk.
+**When a call kills by-reference facts (amendment A3, #5292).** A plain
+call does not kill the fact of a by-reference parameter, or of a `ref` local
+that aliases one, and neither does a read-only call, a call in a loop body,
+or a call that passes another variable by `ref`/`out` (`Use(path); Use(path)`,
+or `TryGetValue(path, out found)` in a loop, the shape of the translated
+compiler source). This is the behavior of 0.5.212 and of C# nullable
+analysis. The fact still dies on:
 
-**When a call kills by-reference facts (amendment A3, #5292).** A call does
-not kill the fact of a by-reference parameter, or of a `ref` local that
-aliases one, on its own: the callee has no name for the caller's storage,
-and `Use(path); Use(path)` or a call in a loop body is the commonest shape
-of the rule (the translated compiler source reads an `out` parameter after
-a `TryGetValue(path, out found)` in a loop). A call kills the fact only
-when it can reach the storage: (a) one of its operands (the receiver, written
-or implicit, and every argument, the narrowed root itself included) has a
-type that is not provably inert. A type is inert only when it is a
-primitive, a string or an enum; an array or slice whose element is inert and
-is not the stored type; a struct or sealed class of this compilation whose
-fields, auto properties and base chain (source and imported) are inert; an
-open or abstract class of this compilation whose known subclasses are all
-inert; or one of the imported types on the single list
-`inertImportedTypes` (`List`, `Dictionary`, `HashSet`, `Queue`, `Stack`,
-`SortedDictionary`, `SortedSet`, `LinkedList`, `KeyValuePair`,
-`ImmutableArray`, `ImmutableList`, `ImmutableDictionary`,
-`ImmutableHashSet`, `Nullable`, `Type`, `StringBuilder`, `Decimal`, `Guid`,
-`DateTime`, `DateTimeOffset`, `TimeSpan`) whose type arguments are inert and
-whose aliasable slots do not hold the stored type (`List` element,
-`Dictionary` value and `ImmutableArray` element can be aliased through
-`CollectionsMarshal` and `ImmutableCollectionsMarshal`; a `Dictionary` key
-cannot) and whose known source subclasses are inert. A call to a method
-of a listed type whose arguments are no callbacks, interfaces or type
-parameters reaches only through the receiver's aliasable slots, because the
-BCL method reads or hashes its arguments and does not write the caller's
-data (`NarrowedVariables[i].TryGetValue(path, out found)`); `list.Clear()`
-still reaches a `List[C?]` slot that a `CollectionsMarshal` span aliases.
-Behind a field of an operand's type graph, an interface, `object`, type
-parameter or delegate is not followed (the operand's own type is): the
-object graph of any real program is open at some `object` field, and
-following it would make every operand with a user type reach. Everything else reaches
-by default: interfaces (source and imported), `object`, type parameters,
-delegates and function types, structural types, and every imported type not
-on the list, because opaque imported state (`Memory<T>.Span`,
-`WeakReference<T>.TryGetTarget`, `StrongBox<T>`, `ArraySegment<T>`) can hand
-out storage that no public field shows (probes `ref-parameter-call`, the
-cyclic-object cases, `ref-parameter-base-interface-call` and the corpus rows
-h2 to h10). A subclass declared in another assembly is not known to the walk; this is
-a limit of the closed compilation, not of the rule; (b) the call has a
-`ref`/`out` argument that may share storage with the root (below); (c) the
-callee is a delegate or function value of unknown origin, a computed
-property accessor, a constructor or struct-literal initializer with user
-code, or any other user code the table lists (they keep the full class
-kill); (d) the root is a `ref` local of an element or member, or of a
-mutable global, which any call can reach. A by-reference parameter may alias a mutable global that a callee with no
-operand writes (`Run(ref g)` guarding `a`, then `Clear()` assigning `g`); the
-rule does not prove callee effects, so such a call keeps the fact, as C#
-nullable analysis does. This is the accepted cost of the maintainer's
-decision on #5292, and the write forms above still kill it. Two by-reference parameters may
-share a storage only when their types can overlap: equal types ignoring
-nullability, or a value-type aggregate, `object`, an interface or a type
-parameter on either side. A `ref` argument cannot change the type of its
-parameter, so `Run(ref a C?, ref b string?)` never shares storage, while
-`Run(ref x, ref x)` with two `C?` parameters still does.
+- a direct write to a member of the alias class (the assignment rules above);
+- a member, index or indirect write, and user code that the table lists
+  (computed getters, constructors with user code, callables of unknown
+  origin, loop headers), which keep the full class kill;
+- a call, for a `ref` local that does not alias a by-reference parameter (a
+  `ref` local of an element or member, or of a mutable global), as before;
+- a variable that one call passes more than once with at least one
+  `ref`/`out` (`Run(ref b, ref b)`, or `ref b` together with `b`): the
+  aliasing is visible at the call site, so the write is a write through
+  every by-reference parameter.
+
+A variable that a call passes by `ref`/`out` once does not kill the facts of
+the other by-reference parameters; only an overlapping `ref` alias chain
+does. Two by-reference parameters may share a storage in a direct write only
+when their types can overlap: equal types ignoring nullability, a type that
+mentions an unresolved type parameter (`Run[T](ref a Box[T]?, ref b
+Box[C]?)` with `T = C`), a value-type aggregate, `object` or an interface. A
+`ref` argument cannot change the type of its parameter, so `Run(ref a C?,
+ref b string?)` never shares storage, while `Run(ref x, ref x)` with two
+`C?` parameters still does.
+
+**Known limitations of the call rule.** Because a plain call does not kill
+the fact, the rule does not cover a callee that writes the storage by a path
+the call site does not show: (1) a mutable global or static that the
+by-reference parameter aliases (`Run(ref g)`, then `Clear()` assigns `g`);
+(2) an alias created elsewhere (the caller passed an element or member, and
+a callee reaches its container through an array, list, `StrongBox`, a
+cyclic object, a base class or a subclass, a generic holder, a
+`CollectionsMarshal` slot, `LinkedListNode<T>.ValueRef`, `Memory<T>.Span`);
+(3) a container reachable from an operand (`Clear(xs)` with the aliased
+element in `xs`). They are the same hole as in C# nullable analysis and are
+pinned as accepted programs by corpus rows h2 and h3 (they run and throw
+`NullReferenceException`). A sound call-effect model is tracked in the
+follow-up issue (effect summaries) tracked in #5326.
 
 **The conservative default.** The lists above and the proof rules of
 section 8 are closed. A fact survives a program point only when one of the
@@ -556,7 +522,7 @@ covers. The classes, with representative kinds:
 | `member-write` | `BoundFieldAssignmentExpression`, `BoundPropertyAssignmentExpression`, `BoundIndexAssignmentExpression`, `BoundClrIndexAssignmentExpression`, `BoundClrPropertyAssignmentExpression`, `BoundIndirectAssignmentExpression` through an address-of operand | removes every member-bearing path and every fact on the alias class (a `ref` local or a by-reference parameter may alias the written element or member: probes f2, g2); a property setter with user code is also `call` |
 | `pointer-write` | `BoundIndirectAssignmentExpression` through anything else, `BoundDereferenceExpression` as a target | removes every mutable root (`MayMutateAnyRootViaPointer`) |
 | `alias` | `BoundAddressOfExpression`, `BoundConditionalAddressExpression` (both operands, whichever the condition selects; its condition and operands flow like `?:`), `BoundManagedReferenceExpression`, `BoundFixedStatement`, `BoundStackAllocExpression`, a `ref` local declaration | puts the operand's root (every operand's root, for a conditional address) in the alias class; the write rules above then apply to the class |
-| `call` | `BoundCallOperationExpression`, `BoundIndirectCallExpression`, `BoundFunctionPointerInvocationExpression`, `BoundConstructorCallExpression`, `BoundClrConstructorCallExpression`, `BoundTypeParameterConstructionExpression`, `BoundStructLiteralExpression` (field initializers), `BoundBaseClassCallExpression`, `BoundConstructorChainingExpression`, `BoundClrConversionCallExpression`, `BoundConversionExpression` with a user-defined conversion, `BoundBinaryOperationExpression`/`BoundUnaryExpression`/`BoundClrUnaryOperatorExpression` on user-defined operators, `BoundEventSubscriptionExpression`, `BoundClrEventSubscriptionExpression`, `BoundInterpolatedStringExpression` (`ToString`), `BoundAwaitExpression` (awaiter calls), `BoundForRangeStatement`/`BoundAwaitForRangeStatement` (`GetEnumerator`, `MoveNext`, `Current`, disposal; probe f5), `using`/`await using`/`lock`/`defer` cleanup regions (disposal, `Monitor`), `BoundGoStatement`, `BoundYieldStatement` (the consumer runs arbitrary code before resumption), property reads with user code (a non-auto getter; in any position, a condition included: row R14 and amendment A2, #5215) and `BoundPropertyPattern`/`BoundListPattern`/`BoundSlicePattern`/`BoundConstantPattern`/`BoundRelationalPattern` that invoke user code, `BoundMethodReferenceOperationExpression`/`BoundPropertyReferenceOperationExpression` when invoked, **and every kind not in the table** | removes every member-bearing path and every fact on the indirect-write class (mutable globals, closure-assigned locals, the alias class), except that a plain `BoundCallOperationExpression` kills the fact of a by-reference parameter only when an operand can hold a reference to its storage or an `out`/`ref` argument may share it (amendment A3, #5292: `Use(path)` and `TryGetValue(path, out found)` keep the fact); in straight-line code with a bound callee, today's finer classification may keep closure-assigned locals when the callee has no captures, is not indirect through an unknown target and receives no unknown callable argument (`AnalyzeCallableArguments`, `:1930-1949`), and may keep mutable globals only when the callee is a declared function proven not to assign them, which this ADR does not define, so globals are always removed |
+| `call` | `BoundCallOperationExpression`, `BoundIndirectCallExpression`, `BoundFunctionPointerInvocationExpression`, `BoundConstructorCallExpression`, `BoundClrConstructorCallExpression`, `BoundTypeParameterConstructionExpression`, `BoundStructLiteralExpression` (field initializers), `BoundBaseClassCallExpression`, `BoundConstructorChainingExpression`, `BoundClrConversionCallExpression`, `BoundConversionExpression` with a user-defined conversion, `BoundBinaryOperationExpression`/`BoundUnaryExpression`/`BoundClrUnaryOperatorExpression` on user-defined operators, `BoundEventSubscriptionExpression`, `BoundClrEventSubscriptionExpression`, `BoundInterpolatedStringExpression` (`ToString`), `BoundAwaitExpression` (awaiter calls), `BoundForRangeStatement`/`BoundAwaitForRangeStatement` (`GetEnumerator`, `MoveNext`, `Current`, disposal; probe f5), `using`/`await using`/`lock`/`defer` cleanup regions (disposal, `Monitor`), `BoundGoStatement`, `BoundYieldStatement` (the consumer runs arbitrary code before resumption), property reads with user code (a non-auto getter; in any position, a condition included: row R14 and amendment A2, #5215) and `BoundPropertyPattern`/`BoundListPattern`/`BoundSlicePattern`/`BoundConstantPattern`/`BoundRelationalPattern` that invoke user code, `BoundMethodReferenceOperationExpression`/`BoundPropertyReferenceOperationExpression` when invoked, **and every kind not in the table** | removes every member-bearing path and every fact on the indirect-write class (mutable globals, closure-assigned locals, the alias class), except that a plain `BoundCallOperationExpression` does not kill the fact of a by-reference parameter unless the call passes one variable more than once with a `ref`/`out` (amendment A3, #5292: `Use(path)` and `TryGetValue(path, out found)` keep the fact); in straight-line code with a bound callee, today's finer classification may keep closure-assigned locals when the callee has no captures, is not indirect through an unknown target and receives no unknown callable argument (`AnalyzeCallableArguments`, `:1930-1949`), and may keep mutable globals only when the callee is a declared function proven not to assign them, which this ADR does not define, so globals are always removed |
 | `jump` | `BoundReturnStatement`, `BoundThrowStatement`, `BoundRethrowStatement`, `BoundThrowExpression`, `BoundGotoStatement`, `break`/`continue` | one successor: records the state on the target (through pending cleanup) and yields `Unreachable` |
 | `conditional-jump` | `BoundConditionalGotoStatement` (the binder emits it before the then-body of a multi-clause `if let`, `StatementBinder.Conditionals.gs:299-305`, and the CFG connects both successors, `ControlFlowGraph.gs:298-314`) | two successors: binds the condition and applies its effects (P1 classification plus the condition's own writes and calls); records `Assume(condition, JumpIfTrue)` on the target through pending cleanup; continues with `Assume(condition, !JumpIfTrue)` as the fall-through state. It never yields `Unreachable` by itself. The rule this row fixes: no kind with a live fall-through successor may use the `jump` class, whose transfer ends the current path. A kind that selects between two operands or branches gets its control flow from the join rules (P1 on the condition, each operand under its derived state, P5 on their exits), whatever effect class names its other effect: statement-level branching is `join` or `region`, and an expression such as `BoundConditionalAddressExpression` keeps its `alias` class for the operands it may select while its two operands are joined like those of `?:` |
 | `join` | `BoundIfStatement`, `BoundConditionalExpression`, `BoundSwitchExpression`, `BoundPatternSwitchStatement`, `BoundNullConditionalAccessExpression`, `&&`/`||`/`??`, `BoundTryStatement` exits, labels | P1 on the condition, children under the derived states, P5 on the exits |
