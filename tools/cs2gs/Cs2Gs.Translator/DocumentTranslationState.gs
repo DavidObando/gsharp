@@ -63,6 +63,9 @@ internal class DocumentTranslationState {
         DeconstructionTempNamesByBody = Dictionary[SyntaxNode, HashSet[string]]()
         SynthesizedLocalOccupiedNamesByBody = Dictionary[SyntaxNode, HashSet[string]]()
         GSharpNullablePatternReceivers = HashSet[GExpression](ReferenceEqualityComparer.Instance)
+        BareSlicePatternSlots = HashSet[GExpression](ReferenceEqualityComparer.Instance)
+        BareSliceElementReads = HashSet[GExpression](ReferenceEqualityComparer.Instance)
+        StablePatternMemberReads = HashSet[GExpression](ReferenceEqualityComparer.Instance)
         CollectionElementSlots = Dictionary[SyntaxNode, ITypeSymbol]()
         StoredPatternCaptures = HashSet[GExpression](ReferenceEqualityComparer.Instance)
         EmittedLocalGSharpNullability = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
@@ -359,6 +362,30 @@ internal class DocumentTranslationState {
     // `SyntaxToken?` in G#). Keyed by node identity: the lowering passes the
     // same GExpression instance down to the nested test it builds.
     prop GSharpNullablePatternReceivers HashSet[GExpression] {
+        get;
+    }
+
+    // Issue #4315: pattern-lowering reads of a declared G# slot of bare slice type
+    // (an unannotated C# array field/property the nullability funnel does not
+    // promote to `T?`), and the `let` locals such a read is bound to. gsc's
+    // empty-instance zero value makes them never nil, so NullGuardIsProvablyRedundant
+    // omits the dead `!= nil` guard (GS0523) for exactly these. Keyed by node identity.
+    prop BareSlicePatternSlots HashSet[GExpression] {
+        get;
+    }
+
+    // Issue #4315: the `let` locals a list ELEMENT read is bound to once; an
+    // element of bare slice type can hold a CLR null, so its guard is kept and
+    // spelled `object(x) != nil` (BuildReceiverNullGuard).
+    prop BareSliceElementReads HashSet[GExpression] {
+        get;
+    }
+
+    // Issue #4315: pattern-lowering member reads that cannot run user code or
+    // change between reads (a field, or an auto-property that is not virtual), so
+    // a non-null member of this kind may be read by both the null guard and the
+    // member tests without being bound to a local first.
+    prop StablePatternMemberReads HashSet[GExpression] {
         get;
     }
 

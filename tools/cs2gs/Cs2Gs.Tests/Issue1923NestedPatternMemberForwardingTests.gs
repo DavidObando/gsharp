@@ -12,8 +12,8 @@ import System
 import Xunit
 
 /// Issue #1923 (regression, round 2): the `isNestedPatternMember` flag —
-/// which suppresses a redundant `!= nil` guard on a nested pattern member
-/// that is provably non-nullable — was threaded through the direct recursive
+/// which formerly suppressed the `!= nil` guard on a nested pattern member
+/// declared non-nullable (issue #4315 retired that suppression as unsound) — was threaded through the direct recursive
 /// member-access re-entry into `TranslatePatternTest`, but NOT through
 /// three other recursive re-entry points: the `not`-pattern dispatch, the
 /// list-element loop, and the slice-pattern subpattern. Reaching a nested
@@ -24,7 +24,7 @@ import Xunit
 /// proving the outer-nullable scenario still gets its own guard.
 open class Issue1923NestedPatternMemberForwardingTests {
     @Fact
-    func PropertySubpattern_NotPattern_SkipsRedundantNilCheckOnNonNullableMember() {
+    func PropertySubpattern_NotPattern_KeepsNilCheckOnNonNullableMember() {
         let rendered = Render(`
 namespace Corpus.Issue1923
 {
@@ -47,15 +47,16 @@ namespace Corpus.Issue1923
     }
 }
 `)
-        // `Friend` is declared non-nullable, so the nested `not { Age: 0 }`
-        // re-entry must NOT re-emit `person.Friend != nil`.
-        Assert.DoesNotContain("person.Friend != nil", rendered, StringComparison.Ordinal)
-        Assert.Contains("person.Friend.Age", rendered, StringComparison.Ordinal)
+        // Issue #4315: a declared-non-null `Friend` can still be null at run
+        // time, and C# yields false for it, so the nested `not { Age: 0 }`
+        // re-entry keeps the `person.Friend != nil` guard.
+        Assert.True(rendered.Contains("person.Friend != nil", StringComparison.Ordinal), rendered)
+        Assert.True(rendered.Contains("Age == 0", StringComparison.Ordinal), rendered)
         AssertRoundTripParses(rendered)
     }
 
     @Fact
-    func PropertySubpattern_ListElementPattern_SkipsRedundantNilCheckOnNonNullableMember() {
+    func PropertySubpattern_ListElementPattern_NeedsNoNilCheckOnGSharpSlice() {
         let rendered = Render(`
 namespace Corpus.Issue1923
 {
@@ -78,8 +79,9 @@ namespace Corpus.Issue1923
     }
 }
 `)
-        // `Friends` is declared non-nullable, so the nested element subpattern
-        // re-entry must NOT re-emit `person.Friends != nil`.
+        // A G# slice member is never nil (ADR-0159's empty-instance zero value),
+        // so a list pattern over it needs no guard; this is the list-pattern
+        // rule, not the recursive-pattern null sub-test of issue #4315.
         Assert.DoesNotContain("person.Friends != nil", rendered, StringComparison.Ordinal)
         Assert.Contains("Age", rendered, StringComparison.Ordinal)
         AssertRoundTripParses(rendered)
