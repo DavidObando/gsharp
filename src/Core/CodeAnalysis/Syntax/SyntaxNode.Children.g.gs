@@ -7068,26 +7068,19 @@ partial class ImportSyntax {
             }
             last = start2
         }
-        for item3 in Identifiers {
+        for item3 in IdentifiersWithDots {
             let start3 = item3.Span.Start
             if start3 < last {
                 return false
             }
             last = start3
         }
-        for item4 in IdentifiersWithDots {
+        for item4 in Annotations {
             let start4 = item4.Span.Start
             if start4 < last {
                 return false
             }
             last = start4
-        }
-        for item5 in Annotations {
-            let start5 = item5.Span.Start
-            if start5 < last {
-                return false
-            }
-            last = start5
         }
         return true
     }
@@ -7107,7 +7100,6 @@ partial class ImportSyntax {
             if IsPresent(EqualsToken) {
                 count++
             }
-            count += Identifiers.Length
             count += IdentifiersWithDots.Length
             count += Annotations.Length
             return count
@@ -7141,21 +7133,16 @@ partial class ImportSyntax {
                 }
                 remaining--
             }
-            let child3 = Identifiers
+            let child3 = IdentifiersWithDots
             if remaining < child3.Length {
                 return child3[remaining]
             }
             remaining -= child3.Length
-            let child4 = IdentifiersWithDots
+            let child4 = Annotations
             if remaining < child4.Length {
                 return child4[remaining]
             }
             remaining -= child4.Length
-            let child5 = Annotations
-            if remaining < child5.Length {
-                return child5[remaining]
-            }
-            remaining -= child5.Length
         }
         throw ArgumentOutOfRangeException(nameof(index))
     }
@@ -9442,26 +9429,19 @@ partial class PackageSyntax {
             }
             last = start0
         }
-        for item1 in Identifiers {
+        for item1 in IdentifiersWithDots {
             let start1 = item1.Span.Start
             if start1 < last {
                 return false
             }
             last = start1
         }
-        for item2 in IdentifiersWithDots {
+        for item2 in Annotations {
             let start2 = item2.Span.Start
             if start2 < last {
                 return false
             }
             last = start2
-        }
-        for item3 in Annotations {
-            let start3 = item3.Span.Start
-            if start3 < last {
-                return false
-            }
-            last = start3
         }
         return true
     }
@@ -9475,7 +9455,6 @@ partial class PackageSyntax {
             if IsPresent(PackageKeyword) {
                 count++
             }
-            count += Identifiers.Length
             count += IdentifiersWithDots.Length
             count += Annotations.Length
             return count
@@ -9495,21 +9474,16 @@ partial class PackageSyntax {
                 }
                 remaining--
             }
-            let child1 = Identifiers
+            let child1 = IdentifiersWithDots
             if remaining < child1.Length {
                 return child1[remaining]
             }
             remaining -= child1.Length
-            let child2 = IdentifiersWithDots
+            let child2 = Annotations
             if remaining < child2.Length {
                 return child2[remaining]
             }
             remaining -= child2.Length
-            let child3 = Annotations
-            if remaining < child3.Length {
-                return child3[remaining]
-            }
-            remaining -= child3.Length
         }
         throw ArgumentOutOfRangeException(nameof(index))
     }
@@ -10150,7 +10124,7 @@ partial class PropertyDeclarationSyntax {
             }
             last = start9
         }
-        let node10 = ThisKeyword
+        let node10 = OpenBracketToken
         if IsPresent(node10) {
             let start10 = node10!!.Span.Start
             if start10 < last {
@@ -10158,22 +10132,22 @@ partial class PropertyDeclarationSyntax {
             }
             last = start10
         }
-        let node11 = OpenBracketToken
-        if IsPresent(node11) {
-            let start11 = node11!!.Span.Start
+        for item11 in SeparatedItems(Parameters) {
+            let start11 = item11.Span.Start
             if start11 < last {
                 return false
             }
             last = start11
         }
-        for item12 in SeparatedItems(Parameters) {
-            let start12 = item12.Span.Start
+        let node12 = CloseBracketToken
+        if IsPresent(node12) {
+            let start12 = node12!!.Span.Start
             if start12 < last {
                 return false
             }
             last = start12
         }
-        let node13 = CloseBracketToken
+        let node13 = ReturnRefModifier
         if IsPresent(node13) {
             let start13 = node13!!.Span.Start
             if start13 < last {
@@ -10181,7 +10155,7 @@ partial class PropertyDeclarationSyntax {
             }
             last = start13
         }
-        let node14 = ReturnRefModifier
+        let node14 = ReturnReadOnlyModifier
         if IsPresent(node14) {
             let start14 = node14!!.Span.Start
             if start14 < last {
@@ -10189,7 +10163,7 @@ partial class PropertyDeclarationSyntax {
             }
             last = start14
         }
-        let node15 = ReturnReadOnlyModifier
+        let node15 = Type
         if IsPresent(node15) {
             let start15 = node15!!.Span.Start
             if start15 < last {
@@ -10197,7 +10171,7 @@ partial class PropertyDeclarationSyntax {
             }
             last = start15
         }
-        let node16 = Type
+        let node16 = OpenBraceToken
         if IsPresent(node16) {
             let start16 = node16!!.Span.Start
             if start16 < last {
@@ -10205,28 +10179,20 @@ partial class PropertyDeclarationSyntax {
             }
             last = start16
         }
-        let node17 = OpenBraceToken
-        if IsPresent(node17) {
-            let start17 = node17!!.Span.Start
+        for item17 in Accessors {
+            let start17 = item17.Span.Start
             if start17 < last {
                 return false
             }
             last = start17
         }
-        for item18 in Accessors {
-            let start18 = item18.Span.Start
+        let node18 = CloseBraceToken
+        if IsPresent(node18) {
+            let start18 = node18!!.Span.Start
             if start18 < last {
                 return false
             }
             last = start18
-        }
-        let node19 = CloseBraceToken
-        if IsPresent(node19) {
-            let start19 = node19!!.Span.Start
-            if start19 < last {
-                return false
-            }
-            last = start19
         }
         return true
     }
@@ -10263,9 +10229,6 @@ partial class PropertyDeclarationSyntax {
                 count++
             }
             if IsPresent(Identifier) {
-                count++
-            }
-            if IsPresent(ThisKeyword) {
                 count++
             }
             if IsPresent(OpenBracketToken) {
@@ -10369,69 +10332,62 @@ partial class PropertyDeclarationSyntax {
                 }
                 remaining--
             }
-            let child10 = ThisKeyword
+            let child10 = OpenBracketToken
             if IsPresent(child10) {
                 if remaining == 0 {
                     return child10!!
                 }
                 remaining--
             }
-            let child11 = OpenBracketToken
-            if IsPresent(child11) {
+            let child11 = SeparatedItems(Parameters)
+            if remaining < child11.Length {
+                return child11[remaining]
+            }
+            remaining -= child11.Length
+            let child12 = CloseBracketToken
+            if IsPresent(child12) {
                 if remaining == 0 {
-                    return child11!!
+                    return child12!!
                 }
                 remaining--
             }
-            let child12 = SeparatedItems(Parameters)
-            if remaining < child12.Length {
-                return child12[remaining]
-            }
-            remaining -= child12.Length
-            let child13 = CloseBracketToken
+            let child13 = ReturnRefModifier
             if IsPresent(child13) {
                 if remaining == 0 {
                     return child13!!
                 }
                 remaining--
             }
-            let child14 = ReturnRefModifier
+            let child14 = ReturnReadOnlyModifier
             if IsPresent(child14) {
                 if remaining == 0 {
                     return child14!!
                 }
                 remaining--
             }
-            let child15 = ReturnReadOnlyModifier
+            let child15 = Type
             if IsPresent(child15) {
                 if remaining == 0 {
                     return child15!!
                 }
                 remaining--
             }
-            let child16 = Type
+            let child16 = OpenBraceToken
             if IsPresent(child16) {
                 if remaining == 0 {
                     return child16!!
                 }
                 remaining--
             }
-            let child17 = OpenBraceToken
-            if IsPresent(child17) {
-                if remaining == 0 {
-                    return child17!!
-                }
-                remaining--
+            let child17 = Accessors
+            if remaining < child17.Length {
+                return child17[remaining]
             }
-            let child18 = Accessors
-            if remaining < child18.Length {
-                return child18[remaining]
-            }
-            remaining -= child18.Length
-            let child19 = CloseBraceToken
-            if IsPresent(child19) {
+            remaining -= child17.Length
+            let child18 = CloseBraceToken
+            if IsPresent(child18) {
                 if remaining == 0 {
-                    return child19!!
+                    return child18!!
                 }
                 remaining--
             }
