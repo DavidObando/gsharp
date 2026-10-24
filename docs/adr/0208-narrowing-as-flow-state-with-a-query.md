@@ -1084,6 +1084,7 @@ each predicted change listed in the PR body; the benchmark table of section
 
 The pin-move PR after the release that carries PR 2 removes the `!!` that
 `GS0536` newly reports (section 15).
+Slice 2a rewrote the first two such sites with a local copy, so the pin-move PR no longer needs them: `DeclarationBinder.Functions.gs` (`typeArguments`) and `MethodBodyEmitter.MemberAccess.gs` (`TryLoadFromEnclosingClosure`).
 
 ### 19a. Findings of PR 1 and the amendments they led to
 
