@@ -22,6 +22,15 @@ Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severi
 | GS0605 | Error | A rich anonymous field with an omitted type has no unambiguous heap-storable inferred type. | Add an explicit field type; `nil`, untyped lambdas/method groups, cycles, and ref-like values are not widened to `object`. |
 | GS0606 | Error | `adapt[I](source)` cannot produce a complete exact forwarding plan. | Supply an interface target and a non-null admitted source whose accessible public instance members exactly match every required slot. Static abstract/virtual members and operators require a separate design. |
 
+## Fixed-array ABI imports (Next, ADR-0210 F1)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0630 | Error | A marked fixed-array contract has an unsupported revision/inheritance/constraint position, missing/incompatible canonical owner, malformed shape or contradictory repeated element nullability. | Reference the matching SDK-owned V1 definitions and correct producer metadata. Lengths must be 0-32 with canonical balanced children and identical element positions. Marked fixed-bearing interface inheritance and generic constraints are not yet admitted; do not substitute arrays or lookalike carriers. |
+
+This validates explicitly marked CLR contracts; it does not enable the planned
+value lowering of ordinary source `[N]T`.
+
 ## Native protocols (Next, ADR-0205)
 
 | Code | Severity | Meaning | Remedy |

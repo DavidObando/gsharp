@@ -6703,6 +6703,7 @@ partial class Binder {
             let binder = Binder(parentScope, function: nil)
             binder.$scope.GetStructuralAdapterRegistry().ProtocolCoverage = nativeCoverage
             binder.ImportNativeProtocols(syntaxTrees.FirstOrDefault()?.Root.Location ?? default(TextLocation))
+            binder.ValidateFixedArrayImports(syntaxTrees.FirstOrDefault()?.Root.Location ?? default(TextLocation))
             // Issues #4089/#4090: the declaration phase binds type clauses before
             // every same-compilation declaration's type-parameter constraints are
             // resolved, so the G#-declared generic constraint checks are queued
