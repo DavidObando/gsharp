@@ -4255,7 +4255,6 @@ type sealed class GSharp.Core.CodeAnalysis.SemanticModel : System.Object
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree get_SyntaxTree()
   method public GSharp.Core.CodeAnalysis.TypeInfo GetReceiverTypeInfo(GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax expression, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.TypeInfo GetTypeInfo(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)
-  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.Symbol> GetMemberGroup(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)
   method public static System.Collections.Immutable.ImmutableArray`1<System.ValueTuple`2<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol>> GetTypeClauseSymbols(GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax typeClause, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type)
   property public GSharp.Core.CodeAnalysis.Compilation.Compilation Compilation { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree SyntaxTree { get; }

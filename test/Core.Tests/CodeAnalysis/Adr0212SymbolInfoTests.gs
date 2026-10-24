@@ -15,7 +15,7 @@ import System.Threading
 import Xunit
 
 /// ADR-0212 slice S2: (cref:SemanticModel.GetSymbolInfo) answers what a bound node means,
-/// and (cref:SemanticModel.GetMemberGroup), (cref:SemanticModel.GetReceiverTypeInfo) and
+/// and (cref:SemanticModel.GetReceiverTypeInfo) and
 /// (cref:SemanticModel.GetTypeClauseSymbols) answer the questions the language server asked
 /// of internal bound-node members.
 open class Adr0212SymbolInfoTests {
@@ -67,79 +67,11 @@ open class Adr0212SymbolInfoTests {
     }
 
     @Fact
-    func MemberGroup_ListsTheOverloadsOfTheResolvedFunctionInDeclarationOrder() {
-        let (model, tree) = CreateModel(Source)
-        let call = tree
-            .Root
-            .DescendantNodes()
-            .OfType[CallExpressionSyntax]()
-            .First((c CallExpressionSyntax) -> c.Identifier.Text == "Pick")
-        let group = model.GetMemberGroup(call)
-        Assert.Equal(2, group.Length)
-        Assert.All(group, (s Symbol) -> Assert.Equal("Pick", s.Name))
-        Assert.Equal(
-            "int32,string",
-            string.Join(",", group.Select((s Symbol) -> cast[FunctionSymbol](s).Parameters[0].Type.Name))
-        )
-        Assert.Contains(group, (s Symbol) -> object.ReferenceEquals(s, model.GetSymbolInfo(call).Symbol))
-    }
-
-    @Fact
-    func MemberGroup_OnAConstructedGenericInterface_ListsItsOverloads() {
-        let (model, tree) = CreateModel(Source)
-        let call = tree
-            .Root
-            .DescendantNodes()
-            .OfType[CallExpressionSyntax]()
-            .First((c CallExpressionSyntax) -> c.Identifier.Text == "Area")
-        let group = model.GetMemberGroup(call)
-        Assert.Equal(2, group.Length)
-        Assert.All(group, (s Symbol) -> Assert.Equal("Area", s.Name))
-    }
-
-    @Fact
-    func MemberGroup_PrivateInterfaceHelpers_AreVisibleOnlyInsideAndKeepDeclarationOrder() {
-        let (model, tree) = CreateModel(Source)
-        let inside = tree
-            .Root
-            .DescendantNodes()
-            .OfType[CallExpressionSyntax]()
-            .Single((c CallExpressionSyntax) -> c.Identifier.Text == "Help" && c.Parent is not AccessorExpressionSyntax)
-        let outside = tree
-            .Root
-            .DescendantNodes()
-            .OfType[CallExpressionSyntax]()
-            .Single((c CallExpressionSyntax) -> c.Identifier.Text == "Help" && c.Parent is AccessorExpressionSyntax)
-        Assert.Equal(
-            "string,int32",
-            string.Join(
-                ",",
-                model.GetMemberGroup(inside).Select((s Symbol) -> cast[FunctionSymbol](s).Parameters[0].Type.Name)
-            )
-        )
-        Assert.Equal(
-            "int32",
-            string.Join(
-                ",",
-                model.GetMemberGroup(outside).Select((s Symbol) -> cast[FunctionSymbol](s).Parameters[0].Type.Name)
-            )
-        )
-    }
-
-    @Fact
     func Queries_HonourACancelledToken() {
         let (model, tree) = CreateModel(Source)
         let token = NameToken(tree, "Value", "Fold", 0)
         let cancelled = CancellationToken(true)
         Assert.Throws[OperationCanceledException](() -> model.GetSymbolInfo(token, cancelled))
-        Assert.Throws[OperationCanceledException](() -> model.GetMemberGroup(token, cancelled))
-    }
-
-    @Fact
-    func MemberGroup_OfANonFunction_IsEmpty() {
-        let (model, tree) = CreateModel(Source)
-        let token = NameToken(tree, "Value", "Fold", 0)
-        Assert.True(model.GetMemberGroup(token).IsEmpty)
     }
 
     @Fact
