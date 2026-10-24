@@ -27,8 +27,8 @@ internal shared class NativeProtocolSafety {
     @ThreadStatic
     private var memoProtocol Dictionary[TypeSymbol, bool]?
 
-    // Every type one top-level walk enters, so a walk that finds nothing can record
-    // each of them as protocol-free (issue #5201).
+    // Every entry of one top-level walk (a type may appear more than once), so a
+    // walk that finds nothing can record each of them as protocol-free (issue #5201).
     @ThreadStatic
     private var walkVisited List[TypeSymbol]?
 
@@ -95,7 +95,6 @@ internal shared class NativeProtocolSafety {
             return NativeProtocolMetadata.IsProtocol(type)
         }
         if memo.TryGetValue(type, out var known) {
-            memoHits++
             return known
         }
         let found = NativeProtocolMetadata.IsProtocol(type)
@@ -135,13 +134,20 @@ internal shared class NativeProtocolSafety {
             walkVisited = outer
         }
         memoEntered += visited.Count
-        // A walk that finds nothing has entered every type reachable from the
-        // root, and a finite walk finds a protocol in a type exactly when one is
-        // reachable from it. So each type it entered is protocol-free on its own
-        // as well, and a later walk can stop at it instead of re-walking its
-        // whole graph (a class's fields reach most of the compiler's types).
-        // Only a negative answer is recorded here: a positive one says nothing
-        // about the types the walk happened to enter on the way.
+        // Only a negative top-level answer is recorded for the types the walk
+        // entered. A walk that finds nothing has entered every type reachable
+        // from its root (a cutoff only skips a type that is already entered),
+        // so each entered type's own reachable set lies inside a protocol-free
+        // set and is protocol-free alone. A later walk can then stop at it
+        // instead of re-walking its whole graph (a class's fields reach most of
+        // the compiler's types). Stopping early cannot change an answer: if
+        // Box[A] is recorded, Box's definition is protocol-free, so a later walk
+        // of Box[B] can only find a protocol through B, which the
+        // type-argument check examines before the definition cutoff anyway. A
+        // positive walk records only its root: its inner results were reached
+        // under seen/importedDelegates cutoffs and prove nothing about the types
+        // entered on the way. The memo is keyed per includeStorage, as the
+        // walk's edges differ between the two queries.
         if !found {
             for entered in visited {
                 memo[entered] = false

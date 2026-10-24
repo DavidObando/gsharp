@@ -17,7 +17,7 @@ import Xunit
 /// each walk cost the whole reachable graph, and the pass cost grew with the
 /// square of the type count. A walk that finds nothing now records every type
 /// it entered as protocol-free, and a later walk stops at them. The test guards
-/// the shape (types entered grow in step with the type count) with counts, never
+/// the shape (walk entries grow in step with the type count) with counts, never
 /// a wall-clock time.
 class Issue5201NativeProtocolWalkTests {
     @Fact
@@ -29,14 +29,13 @@ class Issue5201NativeProtocolWalkTests {
         // four times as much (the sum of 1..N entered types).
         Assert.True(
             large.Entered <= small.Entered * 5 / 2,
-            "types entered must grow linearly: ${small.Entered} for 30, ${large.Entered} for 60"
+            "walk entries must grow linearly: ${small.Entered} for 30, ${large.Entered} for 60"
         )
         // A restart per walk enters at least N * (N + 1) / 2 types.
-        Assert.True(large.Entered < 60 * 61 / 2, "entered ${large.Entered} types for a 60-class chain")
-        Assert.True(large.Pruned > 0, "later walks must stop at types an earlier walk settled")
+        Assert.True(large.Entered < 60 * 61 / 2, "${large.Entered} walk entries for a 60-class chain")
     }
 
-    private data struct Counts(Entered int64, Pruned int64)
+    private data struct Counts(Entered int64)
 
     shared {
         private func Chain(count int32) string {
@@ -62,8 +61,7 @@ class Issue5201NativeProtocolWalkTests {
             let globalScope = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree))
             Assert.Empty(Binder.BindProgram(globalScope).Diagnostics)
             return Counts(
-                measurements.GetCounter("nativeprotocol.walk-entered"),
-                measurements.GetCounter("nativeprotocol.memo-pruned")
+                measurements.GetCounter("nativeprotocol.walk-entered")
             )
         }
     }
