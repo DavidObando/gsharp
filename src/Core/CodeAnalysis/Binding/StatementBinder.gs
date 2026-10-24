@@ -739,7 +739,7 @@ internal partial class StatementBinder {
                 // assignment narrowing above.
                 ApplyIfJoinNarrowings(statement, memberNotNullFrame)
                 ApplyTryFinallyFallthroughNarrowings(statement, memberNotNullFrame)
-                ApplyEnclosingFilterEffects(statementSyntax, statement)
+                ApplyEnclosingFilterEffects(statementSyntax, statement, memberNotNullFrame)
                 ShadowAfterStatement(statement)
                 let hasInternallyReachableFallthrough = HasInternallyReachableFallthrough(statement)
                 let canCompleteNormally = CanCompleteNormally(statement)

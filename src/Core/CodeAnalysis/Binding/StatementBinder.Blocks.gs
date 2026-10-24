@@ -501,7 +501,11 @@ internal partial class StatementBinder {
     /// ADR-0208 R10 (#5168): after a statement that can run user code or catch a replacement
     /// exception, a filter of an enclosing try may have run. Runs after the joins of the statement,
     /// which would otherwise restore the facts that the filter writes.
-    private func ApplyEnclosingFilterEffects(syntax SyntaxNode, statement BoundStatement) {
+    private func ApplyEnclosingFilterEffects(
+        syntax SyntaxNode,
+        statement BoundStatement,
+        persistentFrame Dictionary[AccessPath, TypeSymbol]
+    ) {
         let filters = CollectCatchFiltersAbove(syntax)
         if filters.Count == 0 || !HasAnyActiveNarrowings() {
             return
@@ -509,6 +513,9 @@ internal partial class StatementBinder {
         let effects = GetStatementEffects(statement, externalCallableAliases)
         if effects.MayMutateMemberPaths || effects.ContainsTry {
             InvalidateNarrowingsForEnclosingFilters(filters)
+            // A filter that ran while the statement evaluated its right side ran before the store, so
+            // the store establishes a fresh fact.
+            ApplyAssignmentNarrowing(statement, persistentFrame)
         }
     }
 
@@ -537,8 +544,8 @@ internal partial class StatementBinder {
             } else {
                 CollectAllNames(node, names)
             }
-            return
         }
+        // An operand can contain nested writes, such as `ref items[Next(ref index)]`.
         for child in node.GetChildren() {
             CollectWritableRefArgumentNames(child, names)
         }

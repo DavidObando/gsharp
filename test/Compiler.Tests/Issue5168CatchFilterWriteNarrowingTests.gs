@@ -483,6 +483,33 @@ func Run(callback () -> void) int32 {
 }
 func Main() { Console.WriteLine(Run(() -> { })) }
 `}
+            // A write nested in the index of a ref operand still runs.
+            yield[]object{"enclosing-filter-nested-ref-in-index", `
+package P
+import System
+
+func IndexAndClear(ref s string?) int32 {
+    s = nil
+    return 0
+}
+func Touch(ref slot int32) bool { return true }
+func Run() int32 {
+    var s string? = "abc"
+    var items = []int32{0, 0}
+    if s == nil { return 0 }
+    try {
+        try {
+            throw Exception("x")
+        } finally {
+            Console.WriteLine(s.Length)
+        }
+    } catch when Touch(ref items[IndexAndClear(ref s)]) {
+        return 1
+    }
+    return 2
+}
+func Main() { Console.WriteLine(Run()) }
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
@@ -639,6 +666,27 @@ func Run() int32 {
         return 1
     } catch {
         return s.Length
+    }
+}
+func Main() { Console.WriteLine(Run()) }
+`, []string{"3"}}
+            // The store of an assignment happens after a filter that ran during its right side.
+            yield[]object{"assignment-from-call-under-filter", `
+package P
+import System
+
+func Make() string { return "abc" }
+func Clear(ref s string?) bool {
+    s = nil
+    return false
+}
+func Run() int32 {
+    var s string? = nil
+    try {
+        s = Make()
+        return s.Length
+    } catch (FormatException) when Clear(ref s) {
+        return 0
     }
 }
 func Main() { Console.WriteLine(Run()) }
