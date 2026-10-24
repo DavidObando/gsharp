@@ -13,6 +13,8 @@ import System.IO
 import System.Linq
 import System.Reflection
 import System.Reflection.Metadata
+import System.Reflection.Metadata.Ecma335
+import System.Reflection.PortableExecutable
 import System.Threading.Tasks
 import Xunit
 
@@ -110,7 +112,10 @@ open class Issue5144MemberSymbolTests {
         Assert.EndsWith("|System.Int32", MetadataMemberComparison.DescribeField(holder.Fields[1]))
         // The context reaches the same descriptions, member by member.
         let type = resolver.FindTypeForComparison("Holder5144Y", "Holder5144Y")!!
-        Assert.Equal(MetadataMemberComparison.TypeMembers(type)!!, MetadataMemberComparison.SymbolMembers(holder))
+        Assert.Equal(
+            MetadataMemberComparison.TypeMembers(type, module)!!,
+            MetadataMemberComparison.SymbolMembers(holder)
+        )
         Assert.Empty(MetadataModelComparison.Compare(resolver, set))
     }
 
@@ -130,7 +135,92 @@ open class Issue5144MemberSymbolTests {
         let described = MetadataMemberComparison.DescribeProperty(isNone)
         Assert.EndsWith("|System.Boolean()", described)
         let type = resolver.FindTypeForComparison("FSharp.Core", "Microsoft.FSharp.Core.FSharpOption`1")!!
-        Assert.Equal(MetadataMemberComparison.TypeMembers(type)!!, MetadataMemberComparison.SymbolMembers(option))
+        Assert.Equal(
+            MetadataMemberComparison.TypeMembers(type, module)!!,
+            MetadataMemberComparison.SymbolMembers(option)
+        )
+    }
+
+    @Fact
+    func AStaticIndexedProperty_KeepsItsDeclaredParameter_AndAnEventKeepsItsRaiser() {
+        // A static property that declares one parameter in its signature and in its getter, and an event with a raise method.
+        let path = Path.Combine(AppContext.BaseDirectory, "csharp-fixtures", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(path)
+        let file = Path.Combine(path, "Shapes5144S.dll")
+        File.WriteAllBytes(file, BuildShapes())
+        using let resolver = HandleResolver([]string{file})
+        let set = resolver.ImageSet!!
+        let module = set.FindModule("Shapes5144S")!!
+        module.TryGetDefinition("N5144S.S", out var handle)
+        let shapes = module.GetTypeSymbol(handle)
+        let indexer = shapes.Properties[0]
+        Assert.Equal(1, indexer.Signature.Parameters.Length)
+        let described = MetadataMemberComparison.DescribeProperty(indexer)
+        Assert.EndsWith("|System.Int32(System.Int32)", described)
+        let type = resolver.FindTypeForComparison("Shapes5144S", "N5144S.S")!!
+        // Reflection reports the same single index parameter, so nothing is dropped from either side.
+        Assert.Equal(
+            MetadataMemberComparison.TypeMembers(type, module)!!,
+            MetadataMemberComparison.SymbolMembers(shapes)
+        )
+        let changed = shapes.Events[0]
+        Assert.False(changed.Raiser.IsNil)
+        Assert.EndsWith("|2/3/4|System.Object", MetadataMemberComparison.DescribeEvent(changed))
+        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+    }
+
+    @Fact
+    func AVarArgMethod_KeepsItsHeader_OnBothSides() {
+        using let fixture = CSharpFixture(
+            "public class Logger5144V { public static void Log(int value, __arglist) {} public void Plain(int value) {} }",
+            assemblyName: "VarArg5144V"
+        )
+        using let resolver = HandleResolver([]string{fixture.AssemblyPath})
+        let set = resolver.ImageSet!!
+        let module = set.FindModule("VarArg5144V")!!
+        module.TryGetDefinition("Logger5144V", out var handle)
+        let logger = module.GetTypeSymbol(handle)
+        let log = logger.Methods.First((m MetadataMethodSymbol) -> m.Name == "Log")
+        let plain = logger.Methods.First((m MetadataMethodSymbol) -> m.Name == "Plain")
+        Assert.True(log.Signature.IsVarArg)
+        Assert.False(log.Signature.HasThis)
+        Assert.Equal(1, log.Signature.RequiredParameterCount)
+        Assert.False(plain.Signature.IsVarArg)
+        Assert.True(plain.Signature.HasThis)
+        Assert.Contains("this:False/False/vararg:True", MetadataMemberComparison.DescribeMethod(log))
+        Assert.Contains("this:True/False/vararg:False", MetadataMemberComparison.DescribeMethod(plain))
+        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+    }
+
+    @Fact
+    func FunctionPointersThatDifferOnlyInTheHeader_AreDifferentSymbols() {
+        using let resolver = HandleResolver([]string{typeof(ReferenceResolver).Assembly.Location})
+        let module = resolver.ImageSet!!.FindModule("System.Private.CoreLib")!!
+        let plain = SignatureHeader(SignatureKind.Method, SignatureCallingConvention.Default, SignatureAttributes.None)
+        let instance = SignatureHeader(
+            SignatureKind.Method,
+            SignatureCallingConvention.Default,
+            SignatureAttributes.Instance
+        )
+        let explicitThis = SignatureHeader(
+            SignatureKind.Method,
+            SignatureCallingConvention.Default,
+            SignatureAttributes.Instance | SignatureAttributes.ExplicitThis
+        )
+        let varArgs = SignatureHeader(
+            SignatureKind.Method,
+            SignatureCallingConvention.VarArgs,
+            SignatureAttributes.None
+        )
+        let parameters = ImmutableArray.Create[TypeSymbol](TypeSymbol.Int32, TypeSymbol.Int32)
+        let set = module.Set
+        let baseline = set.GetFunctionPointer(plain, 2, TypeSymbol.Void, parameters)
+        Assert.Same(baseline, set.GetFunctionPointer(plain, 2, TypeSymbol.Void, parameters))
+        Assert.NotSame(baseline, set.GetFunctionPointer(instance, 2, TypeSymbol.Void, parameters))
+        Assert.NotSame(baseline, set.GetFunctionPointer(explicitThis, 2, TypeSymbol.Void, parameters))
+        Assert.NotSame(baseline, set.GetFunctionPointer(varArgs, 2, TypeSymbol.Void, parameters))
+        // The vararg boundary: the same parameter list, a different sentinel position.
+        Assert.NotSame(baseline, set.GetFunctionPointer(plain, 1, TypeSymbol.Void, parameters))
     }
 
     @Fact
@@ -200,6 +290,137 @@ open class Issue5144MemberSymbolTests {
         private func HandleResolver(paths[]string) ReferenceResolver {
             using let override_ = MetadataModel.Override(MetadataModelMode.Handles)
             return ReferenceResolver.WithReferences(paths)
+        }
+
+        // Writes an assembly with one type: a static property with one declared parameter and a static getter with the same
+        // parameter, and an event with add, remove and raise methods. Method rows: 1 get_Item, 2 add, 3 remove, 4 fire.
+        private func BuildShapes()[]uint8 {
+            let metadata = MetadataBuilder()
+            metadata.AddModule(
+                0,
+                metadata.GetOrAddString("Shapes5144S.dll"),
+                metadata.GetOrAddGuid(Guid.NewGuid()),
+                GuidHandle(),
+                GuidHandle()
+            )
+            metadata.AddAssembly(
+                metadata.GetOrAddString("Shapes5144S"),
+                Version(1, 0, 0, 0),
+                StringHandle(),
+                BlobHandle(),
+                cast[AssemblyFlags](0),
+                AssemblyHashAlgorithm.None
+            )
+            let runtime = metadata.AddAssemblyReference(
+                metadata.GetOrAddString("System.Runtime"),
+                Version(10, 0, 0, 0),
+                StringHandle(),
+                BlobHandle(),
+                cast[AssemblyFlags](0),
+                BlobHandle()
+            )
+            let objectType = metadata.AddTypeReference(
+                runtime,
+                metadata.GetOrAddString("System"),
+                metadata.GetOrAddString("Object")
+            )
+            metadata.AddTypeDefinition(
+                cast[TypeAttributes](0),
+                StringHandle(),
+                metadata.GetOrAddString("<Module>"),
+                EntityHandle(),
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(1)
+            )
+            let typeHandle = metadata.AddTypeDefinition(
+                TypeAttributes.Public,
+                metadata.GetOrAddString("N5144S"),
+                metadata.GetOrAddString("S"),
+                EntityHandle(),
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(1)
+            )
+            let getterSignature = BlobBuilder()
+            var getterReturn ReturnTypeEncoder = default(ReturnTypeEncoder)
+            var getterParameters ParametersEncoder = default(ParametersEncoder)
+            BlobEncoder(getterSignature).MethodSignature(SignatureCallingConvention.Default, 0, false).Parameters(
+                1,
+                out getterReturn,
+                out getterParameters
+            )
+            getterReturn.Type().Int32()
+            getterParameters.AddParameter().Type().Int32()
+            let accessorSignature = BlobBuilder()
+            var accessorReturn ReturnTypeEncoder = default(ReturnTypeEncoder)
+            var accessorParameters ParametersEncoder = default(ParametersEncoder)
+            BlobEncoder(accessorSignature).MethodSignature(SignatureCallingConvention.Default, 0, true).Parameters(
+                1,
+                out accessorReturn,
+                out accessorParameters
+            )
+            accessorReturn.Void()
+            accessorParameters.AddParameter().Type().Object()
+            let getter = metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.SpecialName,
+                cast[MethodImplAttributes](0),
+                metadata.GetOrAddString("get_Item"),
+                metadata.GetOrAddBlob(getterSignature),
+                -1,
+                MetadataTokens.ParameterHandle(1)
+            )
+            let adder = metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.SpecialName,
+                cast[MethodImplAttributes](0),
+                metadata.GetOrAddString("add_E"),
+                metadata.GetOrAddBlob(accessorSignature),
+                -1,
+                MetadataTokens.ParameterHandle(1)
+            )
+            let remover = metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.SpecialName,
+                cast[MethodImplAttributes](0),
+                metadata.GetOrAddString("remove_E"),
+                metadata.GetOrAddBlob(accessorSignature),
+                -1,
+                MetadataTokens.ParameterHandle(1)
+            )
+            let raiser = metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.SpecialName,
+                cast[MethodImplAttributes](0),
+                metadata.GetOrAddString("fire_E"),
+                metadata.GetOrAddBlob(accessorSignature),
+                -1,
+                MetadataTokens.ParameterHandle(1)
+            )
+            let propertySignature = BlobBuilder()
+            var propertyReturn ReturnTypeEncoder = default(ReturnTypeEncoder)
+            var propertyParameters ParametersEncoder = default(ParametersEncoder)
+            BlobEncoder(propertySignature).PropertySignature(false).Parameters(
+                1,
+                out propertyReturn,
+                out propertyParameters
+            )
+            propertyReturn.Type().Int32()
+            propertyParameters.AddParameter().Type().Int32()
+            let property = metadata.AddProperty(
+                cast[PropertyAttributes](0),
+                metadata.GetOrAddString("Item"),
+                metadata.GetOrAddBlob(propertySignature)
+            )
+            metadata.AddPropertyMap(typeHandle, property)
+            let event_ = metadata.AddEvent(cast[EventAttributes](0), metadata.GetOrAddString("E"), objectType)
+            metadata.AddEventMap(typeHandle, event_)
+            metadata.AddMethodSemantics(property, MethodSemanticsAttributes.Getter, getter)
+            metadata.AddMethodSemantics(event_, MethodSemanticsAttributes.Adder, adder)
+            metadata.AddMethodSemantics(event_, MethodSemanticsAttributes.Remover, remover)
+            metadata.AddMethodSemantics(event_, MethodSemanticsAttributes.Raiser, raiser)
+            let image = BlobBuilder()
+            ManagedPEBuilder(
+                PEHeaderBuilder.CreateLibraryHeader(),
+                MetadataRootBuilder(metadata),
+                BlobBuilder()
+            ).Serialize(image)
+            return image.ToArray()
         }
 
         // The signature part of the description, from the shared spelling.

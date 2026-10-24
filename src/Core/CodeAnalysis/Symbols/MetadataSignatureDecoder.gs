@@ -31,7 +31,8 @@ internal class MetadataSignatureDecoder : ISignatureTypeProvider[TypeSymbol, Met
     func GetByReferenceType(elementType TypeSymbol) TypeSymbol -> ByRefTypeSymbol.Get(elementType)
 
     func GetFunctionPointerType(signature MethodSignature[TypeSymbol]) TypeSymbol -> module.Set.GetFunctionPointer(
-        signature.Header.CallingConvention,
+        signature.Header,
+        signature.RequiredParameterCount,
         signature.ReturnType,
         signature.ParameterTypes
     )

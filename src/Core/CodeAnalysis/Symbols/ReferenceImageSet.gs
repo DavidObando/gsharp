@@ -44,10 +44,11 @@ internal class ReferenceImageSet {
     // imported signatures only.
     private let constructions ConcurrentDictionary[(MetadataTypeSymbol, TypeArgsKey), ConstructedMetadataTypeSymbol] =
     ConcurrentDictionary[(MetadataTypeSymbol, TypeArgsKey), ConstructedMetadataTypeSymbol]()
+    // The key holds the raw header byte and the required count, so signatures that differ only there stay apart.
     private let functionPointers ConcurrentDictionary[
-        (SignatureCallingConvention, TypeArgsKey),
+        (uint8, int32, TypeArgsKey),
         MetadataFunctionPointerTypeSymbol
-    ] = ConcurrentDictionary[(SignatureCallingConvention, TypeArgsKey), MetadataFunctionPointerTypeSymbol]()
+    ] = ConcurrentDictionary[(uint8, int32, TypeArgsKey), MetadataFunctionPointerTypeSymbol]()
     private let arrays ConcurrentDictionary[TypeSymbol, MetadataArrayTypeSymbol] = ConcurrentDictionary[
         TypeSymbol,
         MetadataArrayTypeSymbol
@@ -240,9 +241,10 @@ internal class ReferenceImageSet {
         (key(MetadataTypeSymbol, TypeArgsKey)) -> ConstructedMetadataTypeSymbol(definition, typeArguments)
     )
 
-    /// Gets the interned function pointer type of a header, a return type and parameter types.
+    /// Gets the interned function pointer type of a full header, a required count, a return type and parameter types.
     internal func GetFunctionPointer(
-        callingConvention SignatureCallingConvention,
+        header SignatureHeader,
+        requiredParameterCount int32,
         returnType TypeSymbol,
         parameterTypes ImmutableArray[TypeSymbol]
     ) MetadataFunctionPointerTypeSymbol {
@@ -251,9 +253,10 @@ internal class ReferenceImageSet {
         parts.Add(returnType)
         parts.AddRange(parameterTypes)
         return functionPointers.GetOrAdd(
-            (callingConvention, TypeArgsKey(parts.ToImmutable())),
-            (key(SignatureCallingConvention, TypeArgsKey)) -> MetadataFunctionPointerTypeSymbol(
-                callingConvention,
+            (header.RawValue, requiredParameterCount, TypeArgsKey(parts.ToImmutable())),
+            (key(uint8, int32, TypeArgsKey)) -> MetadataFunctionPointerTypeSymbol(
+                header,
+                requiredParameterCount,
                 returnType,
                 parameterTypes
             )

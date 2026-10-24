@@ -35,7 +35,7 @@ internal shared class MetadataMemberComparison {
                 if type == nil {
                     continue
                 }
-                Add(result, module, fullName, TypeMembers(type), SymbolMembers(symbol))
+                Add(result, module, fullName, TypeMembers(type, module), SymbolMembers(symbol))
             }
         }
     }
@@ -88,7 +88,7 @@ internal shared class MetadataMemberComparison {
         return lines
     }
 
-    internal func TypeMembers(type Type) List[string]? {
+    internal func TypeMembers(type Type, module MetadataModule) List[string]? {
         let lines = List[string]()
         try {
             let methods = List[MethodBase]()
@@ -101,7 +101,15 @@ internal shared class MetadataMemberComparison {
                 lines.Add(DescribeField(field))
             }
             for property in type.GetProperties(AllDeclared).OrderBy((p PropertyInfo) -> p.MetadataToken) {
-                lines.Add(DescribeProperty(property))
+                lines.Add(
+                    DescribeProperty(
+                        property,
+                        MetadataMembers.DeclaredParameterCount(
+                            module.Reader,
+                            MetadataTokens.PropertyDefinitionHandle(Row(property.MetadataToken))
+                        )
+                    )
+                )
             }
             for event_ in type.GetEvents(AllDeclared).OrderBy((e EventInfo) -> e.MetadataToken) {
                 lines.Add(DescribeEvent(event_))
@@ -150,6 +158,11 @@ internal shared class MetadataMemberComparison {
         ((attributes & GenericParameterAttributes.DefaultConstructorConstraint) != 0).ToString()
     )
 
+    // The one spelling of the signature header fields that the table keeps beyond the flags.
+    private func HeaderText(hasThis bool, explicitThis bool, isVarArg bool) string -> "this:" + hasThis.ToString() +
+        "/" +
+        explicitThis.ToString() + "/vararg:" + isVarArg.ToString()
+
     private func MethodSignature(returnType string, parameters IEnumerable[string]) string -> returnType +
         "(" +
         string.Join(";", parameters) + ")"
@@ -165,7 +178,8 @@ internal shared class MetadataMemberComparison {
                 ",",
                 generics.Parameters.Select((p TypeParameterSymbol) -> GenericShape(p.Name, p.Ordinal, ToAttributes(p)))
             ),
-            MetadataModelComparison.ConstraintsOf(generics.Constraints)
+            MetadataModelComparison.ConstraintsOf(generics.Constraints),
+            HeaderText(method.Signature.HasThis, method.Signature.Header.HasExplicitThis, method.Signature.IsVarArg)
         )
         let signature = method.Signature
         let text = if signature.ContainsMissing {
@@ -210,7 +224,9 @@ internal shared class MetadataMemberComparison {
         } else {
             MetadataTypeKeys.Of(event_.HandlerType)
         }
-        let accessors = Row(event_.Adder).ToString() + "/" + Row(event_.Remover).ToString()
+        let accessors = Row(event_.Adder).ToString() + "/" + Row(event_.Remover).ToString() + "/" + Row(
+            event_.Raiser
+        ).ToString()
         return Line("event", Row(event_.Handle), event_.Name, cast[int32](event_.Flags), accessors, text)
     }
 
@@ -252,7 +268,12 @@ internal shared class MetadataMemberComparison {
                     (a Type) -> GenericShape(a.Name, a.GenericParameterPosition, a.GenericParameterAttributes)
                 )
             ),
-            MetadataModelComparison.ConstraintsOf(arguments)
+            MetadataModelComparison.ConstraintsOf(arguments),
+            HeaderText(
+                (method.CallingConvention & CallingConventions.HasThis) != 0,
+                (method.CallingConvention & CallingConventions.ExplicitThis) != 0,
+                (method.CallingConvention & CallingConventions.VarArgs) != 0
+            )
         )
         var text = ""
         try {
@@ -290,12 +311,15 @@ internal shared class MetadataMemberComparison {
         return Line("field", Row(field.MetadataToken), field.Name, cast[int32](field.Attributes), "", text)
     }
 
-    internal func DescribeProperty(property PropertyInfo) string {
+    internal func DescribeProperty(property PropertyInfo, declaredParameterCount int32) string {
         var text = ""
         try {
             text = MethodSignature(
                 MetadataTypeKeys.Of(property.PropertyType),
-                IndexParameters(property).Select((p ParameterInfo) -> MetadataTypeKeys.Of(p.ParameterType)).ToList()
+                IndexParameters(property, declaredParameterCount).Select(
+                    (p ParameterInfo) -> MetadataTypeKeys.Of(p.ParameterType)
+                )
+                    .ToList()
             )
         } catch (ex Exception) when IsLoadFailure(ex) {
             text = "signature-missing"
@@ -320,20 +344,22 @@ internal shared class MetadataMemberComparison {
         } catch (ex Exception) when IsLoadFailure(ex) {
             text = "signature-missing"
         }
-        let accessors = AccessorRow(event_.GetAddMethod(true)) + "/" + AccessorRow(event_.GetRemoveMethod(true))
+        let accessors = AccessorRow(event_.GetAddMethod(true)) +
+            "/" +
+            AccessorRow(event_.GetRemoveMethod(true)) +
+            "/" +
+            AccessorRow(event_.GetRaiseMethod(true))
         return Line("event", Row(event_.MetadataToken), event_.Name, cast[int32](event_.Attributes), accessors, text)
     }
 
-    // Reflection takes the index parameters of a property from its accessor. A static accessor such as F#'s
-    // `static member get_IsNone(option)` then reports its own argument as an index parameter, while the property
-    // signature in the table has none. The table is the truth, so a static accessor contributes no index parameters.
-    private func IndexParameters(property PropertyInfo)[]ParameterInfo {
-        let accessor = property.GetGetMethod(true) ?? property.GetSetMethod(true)
-        if accessor != nil && accessor.IsStatic {
-            return Array.Empty[ParameterInfo]()
-        }
-        return property.GetIndexParameters()
-    }
+    // Reflection takes the index parameters of a property from its accessor. F#'s `static member get_IsNone(option)`
+    // then reports the accessor's argument as an index parameter, while the property signature in the table declares
+    // none. The table is the truth: only as many index parameters as the row declares are kept. A genuine static
+    // indexed property declares its parameter in both places and keeps it.
+    private func IndexParameters(property PropertyInfo, declaredParameterCount int32)[]ParameterInfo -> property
+        .GetIndexParameters()
+        .Take(declaredParameterCount)
+        .ToArray()
 
     private func AccessorRow(method MethodInfo?) string -> if method == nil {
         "0"

@@ -29,19 +29,34 @@ internal class MetadataParameter {
     internal prop Attributes ParameterAttributes
 }
 
-/// A decoded method signature: return type, parameters and whether the method has a `this` argument.
+/// A decoded method signature: return type, parameters and the full signature header.
+/// @remarks The header keeps `this`, explicit `this`, the calling convention and the vararg boundary
+/// (cref:RequiredParameterCount). Nothing about the header is reduced to one flag.
 internal class MetadataMethodSignature {
-    internal init(returnType TypeSymbol, parameters ImmutableArray[MetadataParameter], hasThis bool) {
+    internal init(
+        returnType TypeSymbol,
+        parameters ImmutableArray[MetadataParameter],
+        header SignatureHeader,
+        requiredParameterCount int32
+    ) {
         ReturnType = returnType
         Parameters = parameters
-        HasThis = hasThis
+        Header = header
+        RequiredParameterCount = requiredParameterCount
     }
 
     internal prop ReturnType TypeSymbol
 
     internal prop Parameters ImmutableArray[MetadataParameter]
 
-    internal prop HasThis bool
+    internal prop Header SignatureHeader
+
+    /// Gets the number of parameters before the vararg sentinel, or all of them when the method has no sentinel.
+    internal prop RequiredParameterCount int32
+
+    internal prop HasThis bool -> Header.IsInstance
+
+    internal prop IsVarArg bool -> Header.CallingConvention == SignatureCallingConvention.VarArgs
 
     /// Tells whether any type of the signature is, or contains, a missing type.
     internal prop ContainsMissing bool {
@@ -112,7 +127,8 @@ internal class MetadataMethodSymbol : Symbol {
         return MetadataMethodSignature(
             decoded.ReturnType,
             MetadataMembers.ReadParameters(module.Reader, definition.GetParameters(), decoded.ParameterTypes),
-            decoded.Header.IsInstance
+            decoded.Header,
+            decoded.RequiredParameterCount
         )
     }
 }
@@ -206,7 +222,12 @@ internal class MetadataPropertySymbol : Symbol {
         for var i = 0; i < decoded.ParameterTypes.Length; i++ {
             parameters.Add(MetadataParameter("", i, decoded.ParameterTypes[i], ParameterAttributes.None))
         }
-        return MetadataMethodSignature(decoded.ReturnType, parameters.MoveToImmutable(), decoded.Header.IsInstance)
+        return MetadataMethodSignature(
+            decoded.ReturnType,
+            parameters.MoveToImmutable(),
+            decoded.Header,
+            decoded.RequiredParameterCount
+        )
     }
 }
 
@@ -233,6 +254,9 @@ internal class MetadataEventSymbol : Symbol {
     /// Gets the handler type.
     internal prop HandlerType TypeSymbol -> type.Value
 
+    /// Gets the raise method, or `null`.
+    internal prop Raiser MethodDefinitionHandle -> Owner.Module.Reader.GetEventDefinition(Handle).GetAccessors().Raiser
+
     internal prop Adder MethodDefinitionHandle -> Owner.Module.Reader.GetEventDefinition(Handle).GetAccessors().Adder
 
     internal prop Remover MethodDefinitionHandle -> Owner
@@ -253,6 +277,14 @@ internal class MetadataEventSymbol : Symbol {
 
 /// The rules shared by the member symbols.
 internal shared class MetadataMembers {
+    /// Reads how many parameters a property row declares in its own signature blob.
+    /// The accessor may declare more or fewer: the table is the truth.
+    internal func DeclaredParameterCount(reader MetadataReader, handle PropertyDefinitionHandle) int32 {
+        var blob = reader.GetBlobReader(reader.GetPropertyDefinition(handle).Signature)
+        blob.ReadByte()
+        return blob.ReadCompressedInteger()
+    }
+
     /// Joins the types of a signature with the `Param` rows of the method.
     /// A `Param` row with sequence 0 describes the return value. A parameter without a row has an empty name.
     internal func ReadParameters(
