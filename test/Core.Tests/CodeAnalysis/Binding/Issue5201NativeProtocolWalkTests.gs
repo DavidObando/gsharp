@@ -60,9 +60,7 @@ class Issue5201NativeProtocolWalkTests {
             Assert.Empty(tree.Diagnostics)
             let globalScope = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree))
             Assert.Empty(Binder.BindProgram(globalScope).Diagnostics)
-            return Counts(
-                measurements.GetCounter("nativeprotocol.walk-entered")
-            )
+            return Counts(measurements.GetCounter("nativeprotocol.walk-entered"))
         }
     }
 }
