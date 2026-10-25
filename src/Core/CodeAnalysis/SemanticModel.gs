@@ -11,6 +11,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Concurrent
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
 import System.Reflection
 import System.Threading
@@ -23,15 +24,12 @@ import System.Threading
 partial class SemanticModel {
     private let compilation Compilation
     private let syntaxTree SyntaxTree
-    private let index Lazy[SemanticModel.Index]
+    private let index IndexCell
 
     internal init(compilation Compilation, syntaxTree SyntaxTree) {
         this.compilation = compilation
         this.syntaxTree = syntaxTree
-        index = Lazy[SemanticModel.Index](
-            () -> BuildIndex(compilation, syntaxTree),
-            LazyThreadSafetyMode.ExecutionAndPublication
-        )
+        index = IndexCell((token CancellationToken) -> BuildIndex(compilation, syntaxTree, token))
     }
 
     /// Gets the compilation this model answers queries against.
@@ -39,6 +37,22 @@ partial class SemanticModel {
 
     /// Gets the syntax tree this model covers.
     prop SyntaxTree SyntaxTree -> syntaxTree
+
+    /// Returns the diagnostics of (cref:Compilation.Compilation.GetDiagnostics) whose location is in
+    /// this tree, in the order that query returns them (ADR-0212 §7b). It adds nothing: a parse
+    /// diagnostic of this tree appears once, already filtered by source suppressions.
+    /// @param cancellationToken Cancels this caller's wait for a build in flight, never the build.
+    /// @returns The diagnostics, or an empty array.
+    func GetDiagnostics(cancellationToken CancellationToken = default(CancellationToken)) ImmutableArray[Diagnostic] {
+        let all = compilation.GetDiagnostics(cancellationToken)
+        let builder = ImmutableArray.CreateBuilder[Diagnostic]()
+        for diagnostic in all {
+            if object.ReferenceEquals(diagnostic.Location.Text, syntaxTree.Text) {
+                builder.Add(diagnostic)
+            }
+        }
+        return builder.ToImmutable()
+    }
 
     /// Returns the outermost bound node produced from [`node`](paramref),
     /// or `null` when the node has no bound counterpart —
@@ -51,6 +65,7 @@ partial class SemanticModel {
     /// @returns The bound node, or null.
     func GetBoundNode(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) BoundNode? {
         cancellationToken.ThrowIfCancellationRequested()
+        index.Get(cancellationToken)
         if index.Value.BoundBySyntax.TryGetValue(node, out var bound) {
             return PublicCompletionView(bound)
         }
@@ -111,6 +126,7 @@ partial class SemanticModel {
     /// @returns The declared symbol, or null when the node declares nothing.
     func GetDeclaredSymbol(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) Symbol? {
         cancellationToken.ThrowIfCancellationRequested()
+        index.Get(cancellationToken)
         return if index.Value.DeclaredBySyntax.TryGetValue(node, out var symbol) {
             symbol
         } else {
@@ -136,6 +152,7 @@ partial class SemanticModel {
     /// @returns The resolution result; (cref:SymbolInfo.Symbol) is null when nothing is referenced.
     func GetSymbolInfo(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) SymbolInfo {
         cancellationToken.ThrowIfCancellationRequested()
+        index.Get(cancellationToken)
         if node is SyntaxToken{Kind: SyntaxKind.IdentifierToken} token {
             return SymbolInfo(GetTokenSymbol(token))
         }
@@ -262,6 +279,39 @@ partial class SemanticModel {
         BoundNodeProperties[](BoundNode) -> object?
     ) : IEquatable[BoundNodeAccessors] { }
 
+    /// Builds the index once. Concurrent first readers wait for that one build (ADR-0212 §8).
+    /// A reader's token cancels only its wait; the build runs under the compilation's lifetime token.
+    /// A cancelled build publishes nothing, so a failed attempt is never cached.
+    private class IndexCell {
+        private let gate SemaphoreSlim = SemaphoreSlim(1, 1)
+        private let build Func[CancellationToken, SemanticModel.Index]
+        private var value SemanticModel.Index?
+
+        internal init(build Func[CancellationToken, SemanticModel.Index]) {
+            this.build = build
+        }
+
+        internal prop Value SemanticModel.Index -> Get(default(CancellationToken))
+
+        internal func Get(cancellationToken CancellationToken) SemanticModel.Index {
+            let published = Volatile.Read[SemanticModel.Index?](&this.value)
+            if published != nil {
+                return published
+            }
+            gate.Wait(cancellationToken)
+            try {
+                if value != nil {
+                    return value!!
+                }
+                let built = build(cancellationToken)
+                Volatile.Write[SemanticModel.Index?](&this.value, built)
+                return built
+            } finally {
+                gate.Release()
+            }
+        }
+    }
+
     private data class Index(
         BoundBySyntax Dictionary[SyntaxNode, BoundNode],
         DeclaredBySyntax Dictionary[SyntaxNode, Symbol],
@@ -373,14 +423,51 @@ partial class SemanticModel {
             BoundNodeAccessors
         ]()
 
-        private func BuildIndex(compilation Compilation, tree SyntaxTree) SemanticModel.Index {
+        private func BuildIndex(
+            compilation Compilation,
+            tree SyntaxTree,
+            cancellationToken CancellationToken
+        ) SemanticModel
+            .Index {
             let boundBySyntax = Dictionary[SyntaxNode, BoundNode](ReferenceEqualityComparer.Instance)
             let declaredBySyntax = Dictionary[SyntaxNode, Symbol](ReferenceEqualityComparer.Instance)
             let staticQualifierReads = Dictionary[SyntaxNode, BoundExpression?](ReferenceEqualityComparer.Instance)
             let logicalCompletions = Dictionary[BoundExpression, BoundExpression?](ReferenceEqualityComparer.Instance)
             let staticQualifierTypes = Dictionary[SyntaxNode, TypeSymbol?](ReferenceEqualityComparer.Instance)
-            let program = compilation.BoundProgram
-            let globalScope = compilation.GlobalScope
+            // The binds take the compilation's build gate themselves, so they finish before this thread holds it.
+            let program = compilation.GetBoundProgram(cancellationToken)
+            let globalScope = compilation.GetGlobalScope(cancellationToken)
+            // The walk reads symbols that ReplaceSyntaxTree re-points, so it holds the gate (ADR-0212 §8).
+            compilation.EnterBuildGate(cancellationToken)
+            try {
+                return BuildIndex_Locked(
+                    compilation,
+                    tree,
+                    program,
+                    globalScope,
+                    boundBySyntax,
+                    declaredBySyntax,
+                    staticQualifierReads,
+                    logicalCompletions,
+                    staticQualifierTypes
+                )
+            } finally {
+                compilation.ExitBuildGate()
+            }
+        }
+
+        private func BuildIndex_Locked(
+            compilation Compilation,
+            tree SyntaxTree,
+            program BoundProgram,
+            globalScope BoundGlobalScope,
+            boundBySyntax Dictionary[SyntaxNode, BoundNode],
+            declaredBySyntax Dictionary[SyntaxNode, Symbol],
+            staticQualifierReads Dictionary[SyntaxNode, BoundExpression?],
+            logicalCompletions Dictionary[BoundExpression, BoundExpression?],
+            staticQualifierTypes Dictionary[SyntaxNode, TypeSymbol?]
+        ) SemanticModel
+            .Index {
             for symbol in EnumerateDeclaredSymbols(program, globalScope) {
                 RecordDeclarations(symbol, tree, declaredBySyntax)
             }
@@ -399,6 +486,7 @@ partial class SemanticModel {
                 walker.Visit(body)
             }
             walker.Visit(program.Statement)
+            compilation.WorkBudget.CancellationToken.ThrowIfCancellationRequested()
             return SemanticModel.Index(
                 boundBySyntax,
                 declaredBySyntax,
