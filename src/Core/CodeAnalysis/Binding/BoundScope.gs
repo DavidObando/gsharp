@@ -823,7 +823,7 @@ class BoundScope {
     /// @param segmentTexts The dotted name segments.
     /// @param length The number of segments to join.
     /// @returns The complete name after import expansion.
-    func ExpandQualifiedTypeName(segmentTexts[]string, length int32) string {
+    internal func ExpandQualifiedTypeName(segmentTexts[]string, length int32) string {
         if TryLookupImport(segmentTexts[0], out var import_) {
             return import_!!.Target + "." + string.Join(".", segmentTexts, 1, length - 1)
         }
