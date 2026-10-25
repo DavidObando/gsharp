@@ -9,10 +9,15 @@ import GSharp.Compiler.Tests
 import GSharp.Core.Tests
 import GSharp.Tests
 import System
+import System.Collections.Generic
+import System.ComponentModel
 import System.Diagnostics
 import System.IO
+import System.IO.Pipes
 import System.Reflection.Emit
 import System.Text
+import System.Threading
+import System.Threading.Tasks
 import Xunit
 
 /// Issue #1026 / ADR-0125: end-to-end emit + execution tests for the
@@ -30,6 +35,124 @@ import Xunit
 /// catches NEW unrelated verification regressions while tolerating the
 /// inherent unsafety, rather than skipping ilverify globally.
 open class Issue1026FixedEmitTests {
+    @Fact
+    func ByteCapture_TimeoutReapsChildAndPreservesBothRawPipes() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let assembly = fixture.Compile(`import System
+Console.OpenStandardOutput().WriteByte(uint8(0))
+Console.OpenStandardOutput().WriteByte(uint8(255))
+Console.OpenStandardError().WriteByte(uint8(254))
+Console.OpenStandardError().WriteByte(uint8(1))
+System.Threading.Thread.Sleep(30000)`, "stalled", true)
+        let start = ProcessStartInfo("dotnet"){
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = fixture.Directory
+        }
+        start.ArgumentList.Add(assembly)
+        using let process = Process.Start(start) ?? throw InvalidOperationException("Failed to start witness")
+        let elapsed = Stopwatch.StartNew()
+        let failure = Assert.Throws[TimeoutException](
+            () -> CaptureBytes(process, process.StandardOutput.BaseStream, process.StandardError.BaseStream, 2_000)
+        )
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(15), "Capture exceeded its bounded cleanup budget")
+        Assert.True(process.HasExited)
+        Assert.Equal([]uint8{0, 255}, Assert.IsType[[]uint8](failure.Data["Stdout"]))
+        Assert.Equal([]uint8{254, 1}, Assert.IsType[[]uint8](failure.Data["Stderr"]))
+        Assert.Equal("RanToCompletion", failure.Data["StdoutStatus"])
+        Assert.Equal("RanToCompletion", failure.Data["StderrStatus"])
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ByteCapture_RealPipeFaultsOrCancellationDoNotMaskChildFailure(closed bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let assembly = fixture.Compile("System.Environment.Exit(17)", "failed", true)
+        let start = ProcessStartInfo("dotnet"){
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = fixture.Directory
+        }
+        start.ArgumentList.Add(assembly)
+        using let stdoutWriter = AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.None)
+        using let stderrWriter = AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.None)
+        using let stdout = AnonymousPipeClientStream(PipeDirection.In, stdoutWriter.ClientSafePipeHandle)
+        using let stderr = AnonymousPipeClientStream(PipeDirection.In, stderrWriter.ClientSafePipeHandle)
+        if closed {
+            stdoutWriter.DisposeLocalCopyOfClientHandle()
+            stderrWriter.DisposeLocalCopyOfClientHandle()
+        } else {
+            stdoutWriter.WriteByte(uint8(255))
+            stderrWriter.WriteByte(uint8(254))
+        }
+        using let process = Process.Start(start) ?? throw InvalidOperationException("Failed to start witness")
+        let elapsed = Stopwatch.StartNew()
+        let capture = Task.Run[[]uint8](() -> CaptureBytes(process, stdout, stderr, 2_000))
+        try {
+            Assert.Same(capture, Task.WhenAny(capture, Task.Delay(12_000)).GetAwaiter().GetResult())
+            let failure = Assert.Throws[InvalidOperationException](() -> capture.GetAwaiter().GetResult())
+            Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(15), "Capture exceeded its bounded cleanup budget")
+            Assert.True(process.HasExited)
+            Assert.Contains("exited with code 17", failure.Message, StringComparison.Ordinal)
+            Assert.Equal(
+                if closed {
+                    Array.Empty[uint8]()
+                } else {
+                    []uint8{255}
+                },
+                Assert.IsType[[]uint8](failure.Data["Stdout"])
+            )
+            Assert.Equal(
+                if closed {
+                    Array.Empty[uint8]()
+                } else {
+                    []uint8{254}
+                },
+                Assert.IsType[[]uint8](failure.Data["Stderr"])
+            )
+            Assert.Equal(
+                if closed {
+                    "Faulted"
+                } else {
+                    "Canceled"
+                },
+                failure.Data["StdoutStatus"]
+            )
+            Assert.Equal(
+                if closed {
+                    "Faulted"
+                } else {
+                    "Canceled"
+                },
+                failure.Data["StderrStatus"]
+            )
+            Assert.Equal(!closed, failure.Data["CaptureCancellationRequested"])
+            let faults = Assert.IsType[AggregateException](failure.InnerException).InnerExceptions
+            Assert.Equal(2, faults.Count)
+            Assert.Contains("stdout", faults[0].Message, StringComparison.Ordinal)
+            Assert.Contains("stderr", faults[1].Message, StringComparison.Ordinal)
+            for fault in faults {
+                if closed {
+                    let errors = Assert.IsType[AggregateException](fault.InnerException).InnerExceptions
+                    Assert.IsType[ObjectDisposedException](Assert.Single(errors))
+                } else {
+                    Assert.IsType[TaskCanceledException](fault.InnerException)
+                }
+            }
+        } finally {
+            stdoutWriter.Dispose()
+            stderrWriter.Dispose()
+            let _ = Task.WhenAny(capture, Task.Delay(1_000)).GetAwaiter().GetResult()
+            let _ = capture.ContinueWith(
+                (finished Task[[]uint8]) -> finished.Exception,
+                TaskContinuationOptions.OnlyOnFaulted
+            )
+        }
+    }
+
     @Fact
     func InferredImportedByteArray_ExactIssue5266_ReachesArrayPinLowering() {
         using let fixture = NativeSliceLanguageTests.Fixture()
@@ -215,17 +338,100 @@ run()`
             }
             start.ArgumentList.Add(assembly)
             using let process = Process.Start(start) ?? throw InvalidOperationException("Failed to start dotnet")
-            using let stdout = MemoryStream()
-            let output = process.StandardOutput.BaseStream.CopyToAsync(stdout)
-            let error = process.StandardError.ReadToEndAsync()
-            if !process.WaitForExit(30_000) {
-                process.Kill(entireProcessTree: true)
-                throw TimeoutException("Pinned array witness timed out")
+            return CaptureBytes(process, process.StandardOutput.BaseStream, process.StandardError.BaseStream, 30_000)
+        }
+
+        private func CaptureBytes(process Process, stdout Stream, stderr Stream, timeoutMilliseconds int32)[]uint8 {
+            using let capturedOut = MemoryStream()
+            using let capturedError = MemoryStream()
+            using let cancelCapture = CancellationTokenSource()
+            let output = stdout.CopyToAsync(capturedOut, cancelCapture.Token)
+            let error = stderr.CopyToAsync(capturedError, cancelCapture.Token)
+            // Observe both faults, including tasks that finish after the cleanup deadline.
+            let observed = Task.WhenAll(
+                []Task{
+                    output.ContinueWith(
+                        (finished Task) -> finished.Exception,
+                        TaskContinuationOptions.ExecuteSynchronously
+                    ),
+                    error.ContinueWith(
+                        (finished Task) -> finished.Exception,
+                        TaskContinuationOptions.ExecuteSynchronously
+                    )
+                }
+            )
+            let failures = List[Exception]()
+            var exited = process.WaitForExit(timeoutMilliseconds)
+            let timedOut = !exited
+            if timedOut {
+                try {
+                    process.Kill(entireProcessTree: true)
+                } catch (failure Win32Exception) {
+                    failures.Add(failure)
+                } catch (failure InvalidOperationException) {
+                    failures.Add(failure)
+                }
+                try {
+                    exited = process.WaitForExit(5_000)
+                } catch (failure Win32Exception) {
+                    failures.Add(failure)
+                } catch (failure InvalidOperationException) {
+                    failures.Add(failure)
+                }
+                if !exited {
+                    failures.Add(TimeoutException("Child did not exit within the post-kill deadline"))
+                }
             }
-            output.GetAwaiter().GetResult()
-            Assert.Equal("", error.GetAwaiter().GetResult())
-            Assert.Equal(0, process.ExitCode)
-            return stdout.ToArray()
+            if Task.WhenAny(observed, Task.Delay(5_000)).GetAwaiter().GetResult() != observed {
+                try {
+                    cancelCapture.Cancel()
+                } catch (failure AggregateException) {
+                    failures.Add(failure)
+                }
+                let _ = Task.WhenAny(observed, Task.Delay(1_000)).GetAwaiter().GetResult()
+            }
+            let Record = func (name string, task Task) {
+                if task.IsFaulted {
+                    failures.Add(InvalidOperationException("$name capture faulted", task.Exception))
+                } else if task.IsCanceled {
+                    failures.Add(InvalidOperationException("$name capture canceled", TaskCanceledException(task)))
+                } else if !task.IsCompleted {
+                    failures.Add(TimeoutException("$name capture remains ${task.Status} after cancellation"))
+                }
+            }
+            Record("stdout", output)
+            Record("stderr", error)
+            let stdoutBytes = capturedOut.ToArray()
+            let stderrBytes = capturedError.ToArray()
+            let primary = if timedOut {
+                "Pinned array witness timed out after $timeoutMilliseconds ms"
+            } else if process.ExitCode != 0 {
+                "Pinned array witness exited with code ${process.ExitCode}"
+            } else if failures.Count != 0 {
+                "Pinned array witness capture failed"
+            } else if stderrBytes.Length != 0 {
+                "Pinned array witness wrote unexpected stderr"
+            } else {
+                default(string?)
+            }
+            if primary != nil {
+                let message = "$primary; stdout (${output.Status}): ${BitConverter.ToString(stdoutBytes)}; " +
+                    "stderr (${error.Status}): ${BitConverter.ToString(stderrBytes)}; " +
+                    "capture cancellation requested: ${cancelCapture.IsCancellationRequested}"
+                let context = AggregateException(failures)
+                let failure Exception = if timedOut {
+                    TimeoutException(message, context)
+                } else {
+                    InvalidOperationException(message, context)
+                }
+                failure.Data["Stdout"] = stdoutBytes
+                failure.Data["Stderr"] = stderrBytes
+                failure.Data["StdoutStatus"] = output.Status.ToString()
+                failure.Data["StderrStatus"] = error.Status.ToString()
+                failure.Data["CaptureCancellationRequested"] = cancelCapture.IsCancellationRequested
+                throw failure
+            }
+            return stdoutBytes
         }
 
         private let FixedIlVerifyIgnored[]string = []string{
