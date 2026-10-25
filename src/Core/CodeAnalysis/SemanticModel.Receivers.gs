@@ -85,12 +85,11 @@ partial class SemanticModel {
     shared {
         /// Pairs each identifier token of [`typeClause`](paramref) with the type it names, given the
         /// type the clause denotes. Wrapper types (`T?`, `[]T`, `map[K]V`, ...) pair their inner
-        /// clauses with their inner types. The server uses this until it maps type clauses through
-        /// the semantic model (ADR-0212 slice S3).
+        /// clauses with their inner types.
         /// @param typeClause The type clause syntax.
         /// @param type The type the clause denotes.
         /// @returns The token and type pairs, outer clause first.
-        func GetTypeClauseSymbols(typeClause TypeClauseSyntax?, type TypeSymbol?) ImmutableArray[
+        internal func GetTypeClauseSymbols(typeClause TypeClauseSyntax?, type TypeSymbol?) ImmutableArray[
             (Token SyntaxToken, Symbol TypeSymbol)
         ] {
             let builder = ImmutableArray.CreateBuilder[(Token SyntaxToken, Symbol TypeSymbol)]()
@@ -839,8 +838,22 @@ partial class SemanticModel {
         ) {
             return nil
         }
-        if GetDeclaredSymbol(token) is {} declared && declared.Name == token.Text {
+        if GetDeclaredSymbol(token) is {} declared && declared.Name == token.ValueText {
             return declared
+        }
+        // A local function is declared by its `let` declaration, not by the identifier.
+        if token.Parent is VariableDeclarationSyntax localDeclaration && object.ReferenceEquals(
+            localDeclaration.Identifier,
+            token
+        ) &&
+            GetDeclaredSymbol(localDeclaration) is FunctionSymbol localFunction &&
+            localFunction.Name == token.ValueText {
+            return localFunction
+        }
+        // A type-clause identifier answers the type the clause denotes, whatever the
+        // identifier's text (an alias answers its target).
+        if index.Value.TypeClauseTokens.TryGetValue(token, out var clauseType) {
+            return clauseType
         }
         let node = Unwrap(FindReferencedNode(token))
         let symbol = if node == nil {
@@ -853,7 +866,7 @@ partial class SemanticModel {
         if symbol is FieldSymbol{IsEventBackingField: true} {
             return nil
         }
-        return if symbol != nil && symbol.Name == token.Text {
+        return if symbol != nil && symbol.Name == token.ValueText {
             symbol
         } else {
             default(Symbol?)

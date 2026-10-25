@@ -36,29 +36,9 @@ shared class SemanticLookup {
     /// edit only recollects the changed file's nodes (see `GetNodeBuckets`).
     internal class NodeBuckets {
         init() {
-            Functions = List[FunctionDeclarationSyntax]()
-            Constructors = List[ConstructorDeclarationSyntax]()
-            Structs = List[StructDeclarationSyntax]()
             Accessors = List[AccessorExpressionSyntax]()
             FieldAssignments = List[FieldAssignmentExpressionSyntax]()
-            ForRanges = List[ForRangeStatementSyntax]()
-            AwaitForRanges = List[AwaitForRangeStatementSyntax]()
-            WhileLets = List[WhileLetStatementSyntax]()
-            IfLets = List[SyntaxNode]()
-            VariableDeclarations = List[VariableDeclarationSyntax]()
             TypeAliasDeclarations = List[TypeAliasDeclarationSyntax]()
-        }
-
-        prop Functions List[FunctionDeclarationSyntax] {
-            get;
-        }
-
-        prop Constructors List[ConstructorDeclarationSyntax] {
-            get;
-        }
-
-        prop Structs List[StructDeclarationSyntax] {
-            get;
         }
 
         prop Accessors List[AccessorExpressionSyntax] {
@@ -66,28 +46,6 @@ shared class SemanticLookup {
         }
 
         prop FieldAssignments List[FieldAssignmentExpressionSyntax] {
-            get;
-        }
-
-        prop ForRanges List[ForRangeStatementSyntax] {
-            get;
-        }
-
-        prop AwaitForRanges List[AwaitForRangeStatementSyntax] {
-            get;
-        }
-
-        prop WhileLets List[WhileLetStatementSyntax] {
-            get;
-        }
-
-        /// Issue #4961 / ADR-0201: the `if let` statements and expressions
-        /// ((cref:IfLetStatementSyntax) / (cref:IfLetExpressionSyntax)).
-        prop IfLets List[SyntaxNode] {
-            get;
-        }
-
-        prop VariableDeclarations List[VariableDeclarationSyntax] {
             get;
         }
 
@@ -101,7 +59,6 @@ shared class SemanticLookup {
         private let declarations Dictionary[SyntaxToken, Symbol]
         private let declarationsBySpan Dictionary[(FileName string, SpanStart int32, SpanEnd int32), Symbol]
         private let globals Dictionary[string, Symbol]
-        private let localDeclarations Dictionary[SyntaxNode, Dictionary[string, Symbol]]
         private let referencesLock object = SystemObject()
         private var referencesIndex Dictionary[Symbol, List[SyntaxToken]]?
         private let canonicalMembers ConcurrentDictionary[SyntaxNode, Symbol] = ConcurrentDictionary[
@@ -109,33 +66,12 @@ shared class SemanticLookup {
             Symbol
         ](ReferenceEqualityComparer.Instance)
 
-        // Cached tree-walk results. Resolve's fallback path used to call
-        // FindNodes<FunctionDeclarationSyntax> and FindNodes<StructDeclarationSyntax>
-        // for *every* unresolved token, re-walking every tree on each call. With
-        // many tokens (and FindReferences calling Resolve per token, per member,
-        // per CodeLens request) this dominated request latency. Precomputing the
-        // per-tree node lists in BuildModelUncached makes those fallback paths
-        // O(number of decls), not O(number of nodes across the workspace).
-        // Per-file views keyed by file name. The Resolve fallback runs FindContainingFunction /
-        // ResolveImplicitThisMember for *every* identifier token in *every* tree when the reference
-        // index is built (CodeLens / FindReferences). Iterating a whole-workspace flat list per
-        // token is O(tokens x decls) and took ~145s to build the index on a 54-file project.
-        // Bucketing by file makes each token scan only its own file's declarations. Keyed by file
-        // name (not tree instance) so interpolation-hole tokens — whose re-parsed sub-tree shares
-        // the file name and uses absolute spans — land in the right bucket.
-        private var cachedFunctionsByFile Dictionary[string, []FunctionDeclarationSyntax]
-
-        private var cachedConstructorsByFile Dictionary[string, []ConstructorDeclarationSyntax]
-        private var cachedStructsByFile Dictionary[string, []StructDeclarationSyntax]
-        private var cachedWhileLetsByFile Dictionary[string, []WhileLetStatementSyntax]
-        private var cachedIfLetsByFile Dictionary[string, []SyntaxNode]
-        // (file, identifier text) → that file's same-named local declarations,
-        // for the region-scoped shadowing check.
-        private var cachedVariableDeclarationsByName Dictionary[(string, string), []VariableDeclarationSyntax]
+        // Cached tree-walk results for the member-access fallback. Precomputing the per-tree
+        // node lists in BuildModelUncached makes those fallback paths O(number of decls), not
+        // O(number of nodes across the workspace).
         private var cachedAccessorsByTree Dictionary[SyntaxTree, []AccessorExpressionSyntax]
+
         private var cachedFieldAssignmentsByTree Dictionary[SyntaxTree, []FieldAssignmentExpressionSyntax]
-        private var cachedForRangesByTree Dictionary[SyntaxTree, []ForRangeStatementSyntax]
-        private var cachedAwaitForRangesByTree Dictionary[SyntaxTree, []AwaitForRangeStatementSyntax]
 
         // (file, span) of every member-access identifier and field-assignment identifier. Resolve
         // runs ResolveAsMemberAccess + IsRightOfMemberAccess for *every* token; without this set
@@ -150,13 +86,11 @@ shared class SemanticLookup {
             compilation Compilation,
             declarations Dictionary[SyntaxToken, Symbol],
             globals Dictionary[string, Symbol],
-            localDeclarations Dictionary[SyntaxNode, Dictionary[string, Symbol]],
             bucketsByTree IReadOnlyDictionary[SyntaxTree, NodeBuckets]
         ) {
             this.compilation = compilation
             this.declarations = declarations
             this.globals = globals
-            this.localDeclarations = localDeclarations
             // Build a (file, span) → Symbol index in parallel with the reference-equality map.
             // When a caller passes a SyntaxToken from a tree the compilation no longer holds
             // (e.g. the project has since been reparsed by a diagnostic pull while a cached
@@ -170,91 +104,25 @@ shared class SemanticLookup {
                     this.declarationsBySpan[key] = pair.Value
                 }
             }
-            // Per-tree node lists. Resolve's fallback chain and the reference index need
-            // function/struct/accessor/field-assignment/for-range nodes. ADR-0106: these are
-            // computed once per SyntaxTree instance and memoized (see GetNodeBuckets), so an
-            // edit only re-walks the changed file's tree; here we just project the supplied
-            // (already-cached) per-tree buckets into the lookup tables.
+            // ADR-0106: the per-tree node lists are computed once per SyntaxTree instance and
+            // memoized (see GetNodeBuckets), so an edit only re-walks the changed file's tree;
+            // here we just project the supplied (already-cached) per-tree buckets.
             let treeArray = this.compilation.SyntaxTrees.ToArray()
-            let buckets = [treeArray.Length]NodeBuckets
-            for var i = 0; i < treeArray.Length; i++ {
-                buckets[i] = if bucketsByTree.TryGetValue(treeArray[i], out var b) {
-                    b
-                } else {
-                    SemanticLookup.GetNodeBuckets(treeArray[i], useCache: false)
-                }
-            }
             this.cachedAccessorsByTree = Dictionary[SyntaxTree, []AccessorExpressionSyntax](treeArray.Length)
             this.cachedFieldAssignmentsByTree = Dictionary[SyntaxTree, []FieldAssignmentExpressionSyntax](
                 treeArray.Length
             )
-            this.cachedForRangesByTree = Dictionary[SyntaxTree, []ForRangeStatementSyntax](treeArray.Length)
-            this.cachedAwaitForRangesByTree = Dictionary[SyntaxTree, []AwaitForRangeStatementSyntax](treeArray.Length)
-            let functionsByFile = Dictionary[string, List[FunctionDeclarationSyntax]]()
-            let constructorsByFile = Dictionary[string, List[ConstructorDeclarationSyntax]]()
-            let structsByFile = Dictionary[string, List[StructDeclarationSyntax]]()
-            let whileLetsByFile = Dictionary[string, List[WhileLetStatementSyntax]]()
-            let ifLetsByFile = Dictionary[string, List[SyntaxNode]]()
-            let variableDeclarationsByName = Dictionary[(string, string), List[VariableDeclarationSyntax]]()
             this.memberAccessTokenSpans = HashSet[(string, int32, int32)]()
             this.fieldAssignmentTokenSpans = HashSet[(string, int32, int32)]()
             for var i = 0; i < treeArray.Length; i++ {
                 let tree = treeArray[i]
-                let bucket = buckets[i]
+                let bucket = if bucketsByTree.TryGetValue(tree, out var b) {
+                    b
+                } else {
+                    SemanticLookup.GetNodeBuckets(tree, useCache: false)
+                }
                 this.cachedAccessorsByTree[tree] = bucket.Accessors.ToArray()
                 this.cachedFieldAssignmentsByTree[tree] = bucket.FieldAssignments.ToArray()
-                this.cachedForRangesByTree[tree] = bucket.ForRanges.ToArray()
-                this.cachedAwaitForRangesByTree[tree] = bucket.AwaitForRanges.ToArray()
-                let fileName = tree.Text?.FileName ?? string.Empty
-                if bucket.Functions.Count > 0 {
-                    if !functionsByFile.TryGetValue(fileName, out var fns) {
-                        fns = List[FunctionDeclarationSyntax]()
-                        functionsByFile[fileName] = fns
-                    }
-                    fns.AddRange(bucket.Functions)
-                }
-                if bucket.Constructors.Count > 0 {
-                    if !constructorsByFile.TryGetValue(fileName, out var ctors) {
-                        ctors = List[ConstructorDeclarationSyntax]()
-                        constructorsByFile[fileName] = ctors
-                    }
-                    ctors.AddRange(bucket.Constructors)
-                }
-                if bucket.Structs.Count > 0 {
-                    if !structsByFile.TryGetValue(fileName, out var sts) {
-                        sts = List[StructDeclarationSyntax]()
-                        structsByFile[fileName] = sts
-                    }
-                    sts.AddRange(bucket.Structs)
-                }
-                if bucket.WhileLets.Count > 0 {
-                    if !whileLetsByFile.TryGetValue(fileName, out var whileLets) {
-                        whileLets = List[WhileLetStatementSyntax]()
-                        whileLetsByFile[fileName] = whileLets
-                    }
-                    whileLets.AddRange(bucket.WhileLets)
-                }
-                // Only files with region-scoped bindings need the shadowing check.
-                if bucket.IfLets.Count > 0 || bucket.WhileLets.Count > 0 {
-                    for declaration in bucket.VariableDeclarations {
-                        if declaration.Identifier == nil {
-                            continue
-                        }
-                        let nameKey = (fileName, declaration.Identifier.Text)
-                        if !variableDeclarationsByName.TryGetValue(nameKey, out var sameNamed) {
-                            sameNamed = List[VariableDeclarationSyntax]()
-                            variableDeclarationsByName[nameKey] = sameNamed
-                        }
-                        sameNamed.Add(declaration)
-                    }
-                }
-                if bucket.IfLets.Count > 0 {
-                    if !ifLetsByFile.TryGetValue(fileName, out var ifLets) {
-                        ifLets = List[SyntaxNode]()
-                        ifLetsByFile[fileName] = ifLets
-                    }
-                    ifLets.AddRange(bucket.IfLets)
-                }
                 for accessor in bucket.Accessors {
                     for memberToken in EnumerateAccessorMemberTokens(accessor.RightPart) {
                         let key = SpanKey(memberToken)
@@ -270,30 +138,6 @@ shared class SemanticLookup {
                     }
                 }
             }
-            this.cachedFunctionsByFile = functionsByFile.ToDictionary(
-                (kvp KeyValuePair[string, List[FunctionDeclarationSyntax]]) -> kvp.Key,
-                (kvp KeyValuePair[string, List[FunctionDeclarationSyntax]]) -> kvp.Value.ToArray()
-            )
-            this.cachedConstructorsByFile = constructorsByFile.ToDictionary(
-                (kvp KeyValuePair[string, List[ConstructorDeclarationSyntax]]) -> kvp.Key,
-                (kvp KeyValuePair[string, List[ConstructorDeclarationSyntax]]) -> kvp.Value.ToArray()
-            )
-            this.cachedStructsByFile = structsByFile.ToDictionary(
-                (kvp KeyValuePair[string, List[StructDeclarationSyntax]]) -> kvp.Key,
-                (kvp KeyValuePair[string, List[StructDeclarationSyntax]]) -> kvp.Value.ToArray()
-            )
-            this.cachedWhileLetsByFile = whileLetsByFile.ToDictionary(
-                (kvp KeyValuePair[string, List[WhileLetStatementSyntax]]) -> kvp.Key,
-                (kvp KeyValuePair[string, List[WhileLetStatementSyntax]]) -> kvp.Value.ToArray()
-            )
-            this.cachedVariableDeclarationsByName = variableDeclarationsByName.ToDictionary(
-                (kvp KeyValuePair[(string, string), List[VariableDeclarationSyntax]]) -> kvp.Key,
-                (kvp KeyValuePair[(string, string), List[VariableDeclarationSyntax]]) -> kvp.Value.ToArray()
-            )
-            this.cachedIfLetsByFile = ifLetsByFile.ToDictionary(
-                (kvp KeyValuePair[string, List[SyntaxNode]]) -> kvp.Key,
-                (kvp KeyValuePair[string, List[SyntaxNode]]) -> kvp.Value.ToArray()
-            )
         }
 
         /// Gets a snapshot of the global name → symbol map. ADR-0106 test hook.
@@ -321,8 +165,8 @@ shared class SemanticLookup {
             // Instance/static member access: when the token is the member identifier on the right
             // side of `receiver.Member` (AccessorExpressionSyntax) or the field identifier of
             // `receiver.Field = value` (FieldAssignmentExpressionSyntax), resolve the receiver's
-            // type and look the member up on it. This runs *before* the by-name local/global
-            // fallbacks so a member access never accidentally binds to a same-named local or
+            // type and look the member up on it. This runs *before* the by-name fallbacks
+            // so a member access never accidentally binds to a same-named local or
             // global (e.g. `person.Name` must never resolve to a top-level `Name`).
             let asMember Symbol? = this.ResolveAsMemberAccess(token)
             if asMember != nil {
@@ -332,37 +176,12 @@ shared class SemanticLookup {
                 // Token is clearly a member name; do not fall through to by-name lookups.
                 return nil
             }
-            let scopedLocal Symbol? = this.ResolveRegionScopedLocal(token)
-            if scopedLocal != nil {
-                return scopedLocal
-            }
-            let function FunctionDeclarationSyntax? = this.FindContainingFunction(token)
-            if function != nil && this.localDeclarations.TryGetValue(function, out var locals) && locals.TryGetValue(
-                token.Text,
-                out var local
-            ) {
-                return local
-            }
-            // Issue #894: a token inside an `init(...)` constructor body resolves
-            // its parameters and body locals against the constructor's local
-            // scope, mirroring the method-body path above.
-            let constructor ConstructorDeclarationSyntax? = this.FindContainingConstructor(token)
-            if constructor != nil && this.localDeclarations.TryGetValue(constructor, out var ctorLocals) &&
-                ctorLocals.TryGetValue(token.Text, out var ctorLocal) {
-                return ctorLocal
-            }
-            let loopLocal Symbol? = this.ResolveForRangeLoopLocal(token)
-            if loopLocal != nil {
-                return loopLocal
-            }
-            // Implicit-this member access: inside a class/struct method body, a bare identifier
-            // like `Name` is bound by the binder as `this.Name` (see Binder + ImplicitProperty/
-            // FieldVariableSymbol). Mirror that here so FindReferences, go-to-definition, rename,
-            // and the CodeLens reference count include the implicit-this use sites — not just
-            // explicit `this.Name` accesses.
-            let implicitThis Symbol? = this.ResolveImplicitThisMember(token)
-            if implicitThis != nil {
-                return implicitThis
+            // A simple name the binder left no answer for (an assignment target, a name in
+            // code that did not bind): the name resolves where the scope rules of the
+            // semantic model say it does at the token's position (ADR-0212 slice S3).
+            let named Symbol? = BoundSemantics.LookupName(this.compilation, token)
+            if named != nil {
+                return named
             }
             return if this.globals.TryGetValue(token.Text, out var global) {
                 global
@@ -385,13 +204,6 @@ shared class SemanticLookup {
             } else {
                 this.canonicalMembers.GetOrAdd(declarations[0], member)
             }
-        }
-
-        func GetLocals(declaration FunctionDeclarationSyntax?) IReadOnlyList[VariableSymbol] {
-            if declaration != nil && this.localDeclarations.TryGetValue(declaration, out var locals) {
-                return locals.Values.OfType[VariableSymbol]().ToList()
-            }
-            return Array.Empty[VariableSymbol]()
         }
 
         func GetReferences(target Symbol?, ct CancellationToken = default(CancellationToken)) IReadOnlyList[
@@ -474,84 +286,6 @@ shared class SemanticLookup {
                 }
             }
             return index
-        }
-
-        private func ResolveImplicitThisMember(token SyntaxToken) Symbol? {
-            // Find the innermost struct method body that contains the token. We deliberately do
-            // NOT pre-filter by StructDeclarationSyntax.Span: the parser sometimes reports a
-            // struct's span as ending at an internal closing brace (e.g. the `}` of a `shared {}`
-            // block) rather than the type's own `}`, so a span-containment check would wrongly
-            // skip methods that live below that point. The method body span is what actually
-            // matters for "is this token inside an instance method of a class".
-            //
-            // Shared-block methods are intentionally excluded — they're static and have no
-            // implicit `this` receiver.
-            var enclosing StructDeclarationSyntax? = nil
-            var enclosingBodyLength = int32.MaxValue
-            let fileName = token.SyntaxTree?.Text?.FileName ?? string.Empty
-            if !this.cachedStructsByFile.TryGetValue(fileName, out var structs) {
-                return nil
-            }
-            for decl in structs {
-                for method in decl.Methods {
-                    if method.Body == nil {
-                        continue
-                    }
-                    if method.Body!!
-                        .Span
-                        .Start <= token
-                        .Span
-                        .Start &&
-                        token
-                        .Span
-                        .End <= method.Body!!
-                        .Span
-                        .End &&
-                        method.Body!!
-                        .Span
-                        .Length < enclosingBodyLength {
-                        enclosing = decl
-                        enclosingBodyLength = method.Body!!.Span.Length
-                    }
-                }
-                // Issue #894: `init(...)` constructor bodies also have an implicit
-                // `this` receiver, so a bare member reference (e.g. `Area = ...`)
-                // inside a constructor must resolve to the class member just like
-                // it does inside a method body.
-                for constructor in decl.Constructors {
-                    if constructor.Body == nil {
-                        continue
-                    }
-                    if constructor
-                        .Body
-                        .Span
-                        .Start <= token
-                        .Span
-                        .Start &&
-                        token
-                        .Span
-                        .End <= constructor
-                        .Body
-                        .Span
-                        .End &&
-                        constructor
-                        .Body
-                        .Span
-                        .Length < enclosingBodyLength {
-                        enclosing = decl
-                        enclosingBodyLength = constructor.Body.Span.Length
-                    }
-                }
-            }
-            if enclosing == nil {
-                return nil
-            }
-            // Resolve the struct declaration to its symbol (this goes through the same
-            // declarations/declarationsBySpan/globals chain, so it survives tree-reparse desyncs).
-            if !(this.Resolve(enclosing.Identifier) is StructSymbol structSymbol) {
-                return nil
-            }
-            return LookupMember(structSymbol, token.Text)
         }
 
         private func IsRightOfMemberAccess(token SyntaxToken) bool {
@@ -686,357 +420,6 @@ shared class SemanticLookup {
                 default {
                     return nil
                 }
-            }
-        }
-
-        private func FindContainingFunction(token SyntaxToken) FunctionDeclarationSyntax? {
-            var best FunctionDeclarationSyntax? = nil
-            var bestLength = int32.MaxValue
-            let fileName = token.SyntaxTree?.Text?.FileName ?? string.Empty
-            if !this.cachedFunctionsByFile.TryGetValue(fileName, out var functions) {
-                return nil
-            }
-            for f in functions {
-                if f.Span.Start <= token.Span.Start && token.Span.End <= f.Span.End && f.Span.Length < bestLength {
-                    best = f
-                    bestLength = f.Span.Length
-                }
-            }
-            return best
-        }
-
-        private func FindContainingConstructor(token SyntaxToken) ConstructorDeclarationSyntax? {
-            var best ConstructorDeclarationSyntax? = nil
-            var bestLength = int32.MaxValue
-            let fileName = token.SyntaxTree?.Text?.FileName ?? string.Empty
-            if !this.cachedConstructorsByFile.TryGetValue(fileName, out var constructors) {
-                return nil
-            }
-            for c in constructors {
-                if c.Span.Start <= token.Span.Start && token.Span.End <= c.Span.End && c.Span.Length < bestLength {
-                    best = c
-                    bestLength = c.Span.Length
-                }
-            }
-            return best
-        }
-
-        /// Issue #4961 / ADR-0201: resolves a use of an `if let` binding (either
-        /// form). A binding is in scope from the end of its own clause — so in
-        /// later initializers and the guard — through the end of the
-        /// then-region, never in the else branch. The innermost such region
-        /// wins, which also makes a later same-named binding shadow an earlier
-        /// one.
-        private func ResolveIfLetLocal(token SyntaxToken)(Symbol Symbol?, RegionStart int32, RegionLength int32) {
-            var best Symbol? = nil
-            var bestRegionStart = 0
-            var bestRegionLength = int32.MaxValue
-            if token?.SyntaxTree == nil {
-                return (nil, 0, bestRegionLength)
-            }
-            let fileName = token.SyntaxTree.Text?.FileName ?? string.Empty
-            if !this.cachedIfLetsByFile.TryGetValue(fileName, out var ifLets) {
-                return (nil, 0, bestRegionLength)
-            }
-            for node in ifLets {
-                var thenEnd = 0
-                if node is IfLetStatementSyntax statement {
-                    thenEnd = statement.ThenStatement.Span.End
-                } else if node is IfLetExpressionSyntax expression {
-                    thenEnd = expression.ThenBlock.Span.End
-                } else {
-                    continue
-                }
-                for binding in GetIfLetBindings(node) {
-                    let regionStart = binding.Span.End
-                    if token
-                        .Span
-                        .Start < regionStart ||
-                        thenEnd < token
-                        .Span
-                        .End ||
-                        thenEnd - regionStart >= bestRegionLength {
-                        continue
-                    }
-                    if binding.Identifier == nil || !string.Equals(
-                        binding.Identifier.Text,
-                        token.Text,
-                        StringComparison.Ordinal
-                    ) {
-                        continue
-                    }
-                    let symbol Symbol? = this.Resolve(binding.Identifier)
-                    if symbol != nil {
-                        best = symbol
-                        bestRegionStart = regionStart
-                        bestRegionLength = thenEnd - regionStart
-                    }
-                }
-            }
-            return (best, bestRegionStart, bestRegionLength)
-        }
-
-        /// Issue #4961 / ADR-0201: resolves a use of a region-scoped binding
-        /// (`if let` in either form, or `while let`), choosing the innermost
-        /// region across both kinds so `if let v … { while let v … { v } }`
-        /// and the opposite nesting both pick the inner binding. An ordinary
-        /// local of the same name declared inside that region, earlier, in a
-        /// block that encloses the use shadows the binding; the lookup then
-        /// defers to the by-name local path, which resolves that local.
-        private func ResolveRegionScopedLocal(token SyntaxToken) Symbol? {
-            let ifLet = this.ResolveIfLetLocal(token)
-            let whileLet = this.ResolveWhileLetLoopLocal(token)
-            let (symbol, regionStart, regionLength) = if whileLet.Symbol != nil &&
-                (ifLet.Symbol == nil || whileLet.RegionLength < ifLet.RegionLength) {
-                (whileLet.Symbol, whileLet.RegionStart, whileLet.RegionLength)
-            } else {
-                (ifLet.Symbol, ifLet.RegionStart, ifLet.RegionLength)
-            }
-            if symbol == nil {
-                return nil
-            }
-            // A `for … in` / `await for` loop variable of the same name in a
-            // narrower region is the binding in effect; defer to the existing
-            // lookup path, which resolves loop variables.
-            let forRange = this.ResolveForRangeLoopLocalRegion(token)
-            if forRange.Symbol != nil && forRange.RegionLength < regionLength {
-                return nil
-            }
-            if this.IsShadowedByNestedLocal(token, regionStart) {
-                return nil
-            }
-            return symbol
-        }
-
-        /// The node whose span is the lexical scope of a local declaration: an
-        /// `if` / `for` header initializer is scoped to its whole statement
-        /// (or if-expression), and any other declaration to its nearest
-        /// enclosing statement block or block expression.
-        private func DeclarationScope(declaration VariableDeclarationSyntax) SyntaxNode? {
-            var child SyntaxNode = declaration
-            var node SyntaxNode? = declaration.Parent
-            while node is SyntaxNode current {
-                switch current {
-                    case block is BlockStatementSyntax {
-                        return block
-                    }
-                    case blockExpression is BlockExpressionSyntax {
-                        return blockExpression
-                    }
-                    case ifStatement is IfStatementSyntax when object.ReferenceEquals(ifStatement.Initializer, child) {
-                        return ifStatement
-                    }
-                    case ifExpression is IfExpressionSyntax when object.ReferenceEquals(
-                        ifExpression.Initializer,
-                        child
-                    ) {
-                        return ifExpression
-                    }
-                    case forClause is ForClauseStatementSyntax when object.ReferenceEquals(
-                        forClause.Initializer,
-                        child
-                    ) {
-                        return forClause
-                    }
-                    default { }
-                }
-                child = current
-                node = current.Parent
-            }
-            return nil
-        }
-
-        private func IsShadowedByNestedLocal(token SyntaxToken, regionStart int32) bool {
-            let fileName = token.SyntaxTree?.Text?.FileName ?? string.Empty
-            if !this.cachedVariableDeclarationsByName.TryGetValue((fileName, token.Text), out var declarations) {
-                return false
-            }
-            for declaration in declarations {
-                if declaration.Span.Start < regionStart || token.Span.Start < declaration.Span.End {
-                    continue
-                }
-                let declarationScope SyntaxNode? = DeclarationScope(declaration)
-                if declarationScope != nil &&
-                    declarationScope
-                    .Span
-                    .Start <= token
-                    .Span
-                    .Start &&
-                    token
-                    .Span
-                    .End <= declarationScope
-                    .Span
-                    .End {
-                    return true
-                }
-            }
-            return false
-        }
-
-        private func ResolveWhileLetLoopLocal(token SyntaxToken)(
-            Symbol Symbol?,
-            RegionStart int32,
-            RegionLength int32
-        ) {
-            var best Symbol? = nil
-            var bestRegionStart = 0
-            var bestSpanLength = int32.MaxValue
-            if token?.SyntaxTree == nil {
-                return (nil, 0, bestSpanLength)
-            }
-            for statement in this.GetWhileLetsForToken(token) {
-                if statement.Body == nil ||
-                    token
-                    .Span
-                    .Start < statement
-                    .Body
-                    .Span
-                    .Start ||
-                    statement
-                    .Body
-                    .Span
-                    .End < token
-                    .Span
-                    .End ||
-                    statement
-                    .Body
-                    .Span
-                    .Length >= bestSpanLength {
-                    continue
-                }
-                for binding in statement.Bindings {
-                    if !string.Equals(binding.Identifier?.Text, token.Text, StringComparison.Ordinal) {
-                        continue
-                    }
-                    let symbol Symbol? = if binding.Identifier == nil {
-                        default(Symbol?)
-                    } else {
-                        this.Resolve(binding.Identifier)
-                    }
-                    if symbol != nil {
-                        best = symbol
-                        bestRegionStart = statement.Body.Span.Start
-                        bestSpanLength = statement.Body.Span.Length
-                    }
-                }
-            }
-            return (best, bestRegionStart, bestSpanLength)
-        }
-
-        private func ResolveForRangeLoopLocal(token SyntaxToken) Symbol? -> this.ResolveForRangeLoopLocalRegion(token)
-            .Symbol
-
-        private func ResolveForRangeLoopLocalRegion(token SyntaxToken)(
-            Symbol Symbol?,
-            RegionStart int32,
-            RegionLength int32
-        ) {
-            var best Symbol? = nil
-            var bestRegionStart = 0
-            var bestSpanLength = int32.MaxValue
-            if token?.SyntaxTree == nil {
-                return (nil, 0, bestSpanLength)
-            }
-            for statement in this.GetForRangesForTree(token.SyntaxTree) {
-                if statement.Body == nil ||
-                    token
-                    .Span
-                    .Start < statement
-                    .Body
-                    .Span
-                    .Start ||
-                    statement
-                    .Body
-                    .Span
-                    .End < token
-                    .Span
-                    .End {
-                    continue
-                }
-                if statement.SecondIdentifier != nil && string.Equals(
-                    statement.FirstIdentifier?.Text,
-                    token.Text,
-                    StringComparison.Ordinal
-                ) {
-                    let keySymbol Symbol? = if statement.FirstIdentifier == nil {
-                        default(Symbol?)
-                    } else {
-                        this.Resolve(statement.FirstIdentifier)
-                    }
-                    if keySymbol != nil && statement.Body.Span.Length < bestSpanLength {
-                        best = keySymbol
-                        bestRegionStart = statement.Body.Span.Start
-                        bestSpanLength = statement.Body.Span.Length
-                    }
-                }
-                let valueIdentifier SyntaxToken? = statement.SecondIdentifier ?? statement.FirstIdentifier
-                if !string.Equals(valueIdentifier?.Text, token.Text, StringComparison.Ordinal) {
-                    continue
-                }
-                let valueSymbol Symbol? = if valueIdentifier == nil {
-                    default(Symbol?)
-                } else {
-                    this.Resolve(valueIdentifier)
-                }
-                if valueSymbol != nil && statement.Body.Span.Length < bestSpanLength {
-                    best = valueSymbol
-                    bestRegionStart = statement.Body.Span.Start
-                    bestSpanLength = statement.Body.Span.Length
-                }
-            }
-            for statement in this.GetAwaitForRangesForTree(token.SyntaxTree) {
-                if statement.Body == nil ||
-                    token
-                    .Span
-                    .Start < statement
-                    .Body
-                    .Span
-                    .Start ||
-                    statement
-                    .Body
-                    .Span
-                    .End < token
-                    .Span
-                    .End ||
-                    !string.Equals(statement.Identifier?.Text, token.Text, StringComparison.Ordinal) {
-                    continue
-                }
-                let valueSymbol Symbol? = if statement.Identifier == nil {
-                    default(Symbol?)
-                } else {
-                    this.Resolve(statement.Identifier)
-                }
-                if valueSymbol != nil && statement.Body.Span.Length < bestSpanLength {
-                    best = valueSymbol
-                    bestRegionStart = statement.Body.Span.Start
-                    bestSpanLength = statement.Body.Span.Length
-                }
-            }
-            return (best, bestRegionStart, bestSpanLength)
-        }
-
-        private func GetForRangesForTree(tree SyntaxTree)[]ForRangeStatementSyntax {
-            return if this.cachedForRangesByTree.TryGetValue(tree, out var cached) {
-                cached
-            } else {
-                FindNodes[ForRangeStatementSyntax](tree.Root).ToArray()
-            }
-        }
-
-        private func GetAwaitForRangesForTree(tree SyntaxTree)[]AwaitForRangeStatementSyntax {
-            return if this.cachedAwaitForRangesByTree.TryGetValue(tree, out var cached) {
-                cached
-            } else {
-                FindNodes[AwaitForRangeStatementSyntax](tree.Root).ToArray()
-            }
-        }
-
-        private func GetWhileLetsForToken(token SyntaxToken)[]WhileLetStatementSyntax {
-            let fileName = token.SyntaxTree?.Text?.FileName ?? string.Empty
-            return if this.cachedWhileLetsByFile.TryGetValue(fileName, out var cached) {
-                cached
-            } else {
-                Array.Empty[WhileLetStatementSyntax]()
             }
         }
 
@@ -1231,11 +614,8 @@ shared class SemanticLookup {
 
     // ADR-0106 — incremental SemanticModel build. The per-edit cost of building
     // the model was dominated by two whole-project walks: collecting syntax
-    // nodes from every tree (SemanticModel constructor) and matching bound
-    // locals to syntax identifiers for every body (MapLocalVariables, a
-    // reflection-based FindBoundNodes walk). Both are pure functions of an
-    // instance-stable input — a SyntaxTree for the former, a lowered
-    // BoundBlockStatement for the latter — so memoize them by that instance.
+    // nodes from every tree (SemanticModel constructor), a pure function of an
+    // instance-stable input (a SyntaxTree), so memoize it by that instance.
     //
     // On a single-file edit, ProjectState.UpdateFile replaces only the edited
     // file's SyntaxTree (every other tree keeps its instance), and ADR-0105's
@@ -1250,31 +630,15 @@ shared class SemanticLookup {
         NodeBuckets
     ]()
 
-    private let FunctionLocalsCache ConditionalWeakTable[
-        BoundBlockStatement,
-        IReadOnlyList[(Identifier SyntaxToken, Variable Symbol)]
-    ] = ConditionalWeakTable[BoundBlockStatement, IReadOnlyList[(Identifier SyntaxToken, Variable Symbol)]]()
-    private let LocalFunctionReferencesCache ConditionalWeakTable[
-        BoundNode,
-        IReadOnlyList[(Identifier SyntaxToken, Function Symbol)]
-    ] = ConditionalWeakTable[BoundNode, IReadOnlyList[(Identifier SyntaxToken, Function Symbol)]]()
-
     // Diagnostics counters (used by tests to assert the incremental path reuses
     // unchanged files rather than re-walking them).
     private var nodeBucketCacheHits int64
 
     private var nodeBucketCacheMisses int64
-    private var functionLocalsCacheHits int64
-    private var functionLocalsCacheMisses int64
 
     /// Gets the node-bucket memo (hit, miss) counts. Test hook for ADR-0106.
     internal prop NodeBucketCacheStats(Hits int64, Misses int64) {
         get -> (Interlocked.Read(&nodeBucketCacheHits), Interlocked.Read(&nodeBucketCacheMisses))
-    }
-
-    /// Gets the per-body local memo (hit, miss) counts. Test hook for ADR-0106.
-    internal prop FunctionLocalsCacheStats(Hits int64, Misses int64) {
-        get -> (Interlocked.Read(&functionLocalsCacheHits), Interlocked.Read(&functionLocalsCacheMisses))
     }
 
     func FindTokenAt(tree SyntaxTree, position int32) SyntaxToken? {
@@ -1463,23 +827,25 @@ shared class SemanticLookup {
         Function FunctionSymbol?,
         Locals IReadOnlyList[VariableSymbol]
     ) {
-        // Spans are per-file offsets; restrict the search to the supplied tree so a function
-        // in another file can't be chosen by offset overlap in a multi-file compilation.
-        let roots = if tree != nil {
-            cast[IEnumerable[CompilationUnitSyntax]]([]CompilationUnitSyntax{tree.Root})
-        } else {
-            compilation.SyntaxTrees.Select((t SyntaxTree) -> t.Root)
+        // Spans are per-file offsets; the supplied tree scopes the query so a function in
+        // another file can't be chosen by offset overlap in a multi-file compilation.
+        if tree == nil {
+            return (nil, Array.Empty[VariableSymbol]())
         }
-        let funcDecl FunctionDeclarationSyntax? = FindNodes[FunctionDeclarationSyntax](roots)
-            .Where((f FunctionDeclarationSyntax) -> f.Span.Start <= offset && offset <= f.Span.End)
-            .OrderBy((f FunctionDeclarationSyntax) -> f.Span.Length)
-            .FirstOrDefault()
-        if funcDecl == nil {
+        let model = BoundSemantics.GetPositionModel(compilation, tree)
+        if model == nil {
+            return (nil, Array.Empty[VariableSymbol]())
+        }
+        // Constructors and accessors have no declaring function syntax; only a declared
+        // function (or method) is a context, as before.
+        if model.GetEnclosingSymbol(offset) is not FunctionSymbol{Declaration: not nil} function {
             // Top-level statements: globals are reachable through the parent scope.
             return (nil, Array.Empty[VariableSymbol]())
         }
-        let function = FindFunctionSymbol(compilation, funcDecl)
-        let locals = BuildModel(compilation).GetLocals(funcDecl)
+        let locals = List[VariableSymbol](model.LookupSymbols(offset).OfType[VariableSymbol]())
+        if function.ThisParameter != nil && !locals.Contains(function.ThisParameter) {
+            locals.Add(function.ThisParameter)
+        }
         return (function, locals)
     }
 
@@ -1612,8 +978,6 @@ shared class SemanticLookup {
     internal func ResetIncrementalCacheCounters() {
         Interlocked.Exchange(&nodeBucketCacheHits, 0)
         Interlocked.Exchange(&nodeBucketCacheMisses, 0)
-        Interlocked.Exchange(&functionLocalsCacheHits, 0)
-        Interlocked.Exchange(&functionLocalsCacheMisses, 0)
     }
 
     internal func GetInitializerTarget(initializer CollectionInitializerExpressionSyntax) ExpressionSyntax? {
@@ -1643,27 +1007,6 @@ shared class SemanticLookup {
             current = accessor
         }
         return target!!
-    }
-
-    private func FindFunctionSymbol(compilation Compilation, declaration FunctionDeclarationSyntax) FunctionSymbol? {
-        for function in compilation.GlobalScope.Functions {
-            if object.ReferenceEquals(function.Declaration, declaration) {
-                return function
-            }
-        }
-        for structSym in compilation.GlobalScope.Structs {
-            for method in structSym.Methods {
-                if object.ReferenceEquals(method.Declaration, declaration) {
-                    return method
-                }
-            }
-            for method in structSym.StaticMethods {
-                if object.ReferenceEquals(method.Declaration, declaration) {
-                    return method
-                }
-            }
-        }
-        return nil
     }
 
     private func GetCandidateTypeNames(tree SyntaxTree, name string) sequence[string] {
@@ -1731,7 +1074,6 @@ shared class SemanticLookup {
         }
         let declarations = Dictionary[SyntaxToken, Symbol]()
         let globals = Dictionary[string, Symbol](StringComparer.Ordinal)
-        let localDeclarations = Dictionary[SyntaxNode, Dictionary[string, Symbol]]()
         for variable in compilation.GlobalScope.Variables {
             globals[variable.Name] = variable
         }
@@ -1739,8 +1081,7 @@ shared class SemanticLookup {
             globals[function.Name] = function
             if function.Declaration != nil {
                 declarations[function.Declaration!!.Identifier] = function
-                MapParameters(function.Declaration!!, function.Parameters, declarations, localDeclarations)
-                MapTypeClauseReference(function.Declaration!!.Type, function.Type, declarations)
+                MapParameters(function.Declaration!!.Parameters.ToArray(), function.Parameters, declarations)
                 // ADR-0182: an extension function's receiver clause is
                 // source-visible too, but ExplicitReceiverParameter is only
                 // populated for a true instance method (it also drives the
@@ -1760,20 +1101,14 @@ shared class SemanticLookup {
                     // ADR-0185: a receiver clause never comes from the
                     // destructured arrow-lambda path.
                     declarations[function.Declaration!!.Receiver!!.Identifier!!] = receiverParameter
-                    GetLocals(localDeclarations, function.Declaration!!)[receiverParameter.Name] = receiverParameter
                 }
             }
         }
         for variable in compilation.GlobalScope.Variables {
-            for declaration in bucketsByTree
-                .Values
-                .SelectMany(
-                func (b NodeBuckets) IEnumerable[VariableDeclarationSyntax] {
-                    return b.VariableDeclarations
+            for declaringSyntax in variable.DeclaringSyntaxNodes {
+                if declaringSyntax is SyntaxToken identifier {
+                    declarations[identifier] = variable
                 }
-            )
-                .Where((v VariableDeclarationSyntax) -> v.Identifier.Text == variable.Name) {
-                declarations[declaration.Identifier] = variable
             }
         }
         for aggregate in compilation.GlobalScope.Structs {
@@ -1785,11 +1120,6 @@ shared class SemanticLookup {
                 declarations[aggregate.Declaration!!.Identifier] = aggregate
                 for var i = 0; i < aggregate.Declaration!!.Fields.Length && i < aggregate.Fields.Length; i++ {
                     declarations[aggregate.Declaration!!.Fields[i].Identifier] = aggregate.Fields[i]
-                    MapTypeClauseReference(
-                        aggregate.Declaration!!.Fields[i].Type,
-                        aggregate.Fields[i].Type,
-                        declarations
-                    )
                 }
                 var allPropertyIdentifiers = aggregate.Declaration!!.Properties.Select(
                     (p PropertyDeclarationSyntax) -> p.Identifier
@@ -1837,39 +1167,21 @@ shared class SemanticLookup {
                 )
                 MapMembersByName(declarations, allEventIdentifiers, aggregate.Events.Concat(aggregate.StaticEvents))
                 MapMembersByName(declarations, allMethodIdentifiers, aggregate.Methods.Concat(aggregate.StaticMethods))
-                // Register parameters and implicit 'this' for struct/class methods
-                // so that hover, go-to-definition, etc. work inside method bodies.
+                // Register the parameter declarations of struct/class methods so that hover,
+                // go-to-definition, etc. work on them.
                 for method in aggregate.Methods.Concat(aggregate.StaticMethods) {
                     if method.Declaration != nil {
-                        MapParameters(method.Declaration!!, method.Parameters, declarations, localDeclarations)
-                        MapTypeClauseReference(method.Declaration!!.Type, method.Type, declarations)
-                        if method.ThisParameter != nil {
-                            GetLocals(localDeclarations, method.Declaration!!)[
-                                method.ThisParameter!!.Name
-                            ] = method.ThisParameter!!
-                        }
+                        MapParameters(method.Declaration!!.Parameters.ToArray(), method.Parameters, declarations)
                     }
                 }
-                // Issue #894: register parameters and implicit 'this' for
-                // user-defined `init(...)` constructors so that hover,
-                // go-to-definition, etc. work inside constructor bodies exactly
-                // as they do inside method bodies. The constructor body locals
-                // themselves are matched in MapLocalVariables.
+                // Issue #894: the same for user-defined `init(...)` constructors.
                 for constructor in aggregate.ExplicitConstructors {
                     if constructor.Declaration != nil {
                         MapParameters(
-                            constructor.Declaration!!,
+                            constructor.Declaration!!.Parameters.ToArray(),
                             constructor.Parameters,
-                            declarations,
-                            localDeclarations
+                            declarations
                         )
-                        if constructor.Function.ThisParameter != nil {
-                            GetLocals(localDeclarations, constructor.Declaration!!)[
-                                constructor.Function.ThisParameter!!.Name
-                            ] = constructor
-                                .Function
-                                .ThisParameter!!
-                        }
                     }
                 }
             }
@@ -1935,8 +1247,26 @@ shared class SemanticLookup {
                 declarations[aliasId] = aliasedType
             }
         }
-        MapLocalVariables(compilation, declarations, localDeclarations, bucketsByTree, useIncrementalCaches)
-        return SemanticModel(compilation, declarations, globals, localDeclarations, bucketsByTree)
+        // Hover on a declaration reads facts the body binder infers (a suspending function), so the
+        // bodies are bound before the model answers its first query, as every request expects.
+        try {
+            let _ = compilation.BoundProgram
+        } catch (InvalidOperationException) { }
+        return SemanticModel(compilation, declarations, globals, bucketsByTree)
+    }
+
+    private func MapParameters(
+        syntaxParameters[]ParameterSyntax,
+        parameters ImmutableArray[ParameterSymbol],
+        declarations Dictionary[SyntaxToken, Symbol]
+    ) {
+        let symbolIndex = parameters.Length - syntaxParameters.Length
+        for var i = 0; i < syntaxParameters.Length && symbolIndex + i < parameters.Length; i++ {
+            // ADR-0185: every MapParameters caller passes a named function's,
+            // method's, or constructor's syntax parameters, never a
+            // (possibly destructured) arrow-lambda's.
+            declarations[syntaxParameters[i].Identifier!!] = parameters[symbolIndex + i]
+        }
     }
 
     private func MapMembersByName(
@@ -1955,410 +1285,6 @@ shared class SemanticLookup {
                 declarations[identifier] = symbol
             }
         }
-    }
-
-    private func MapParameters(
-        declaration FunctionDeclarationSyntax,
-        parameters ImmutableArray[ParameterSymbol],
-        declarations Dictionary[SyntaxToken, Symbol],
-        localDeclarations Dictionary[SyntaxNode, Dictionary[string, Symbol]]
-    ) {
-        MapParametersCore(declaration, declaration.Parameters.ToArray(), parameters, declarations, localDeclarations)
-    }
-
-    private func MapParameters(
-        declaration ConstructorDeclarationSyntax,
-        parameters ImmutableArray[ParameterSymbol],
-        declarations Dictionary[SyntaxToken, Symbol],
-        localDeclarations Dictionary[SyntaxNode, Dictionary[string, Symbol]]
-    ) {
-        MapParametersCore(declaration, declaration.Parameters.ToArray(), parameters, declarations, localDeclarations)
-    }
-
-    private func MapParametersCore(
-        $scope SyntaxNode,
-        syntaxParameters[]ParameterSyntax,
-        parameters ImmutableArray[ParameterSymbol],
-        declarations Dictionary[SyntaxToken, Symbol],
-        localDeclarations Dictionary[SyntaxNode, Dictionary[string, Symbol]]
-    ) {
-        let symbolIndex = parameters.Length - syntaxParameters.Length
-        for var i = 0; i < syntaxParameters.Length && symbolIndex + i < parameters.Length; i++ {
-            let symbol = parameters[symbolIndex + i]
-            // ADR-0185: every MapParameters caller passes a named function's,
-            // method's, or constructor's syntax parameters, never a
-            // (possibly destructured) arrow-lambda's.
-            declarations[syntaxParameters[i].Identifier!!] = symbol
-            MapTypeClauseReference(syntaxParameters[i].Type, symbol.Type, declarations)
-            GetLocals(localDeclarations, $scope)[symbol.Name] = symbol
-        }
-    }
-
-    private func MapTypeClauseReference(
-        typeClause TypeClauseSyntax?,
-        type TypeSymbol?,
-        declarations Dictionary[SyntaxToken, Symbol]
-    ) {
-        for (identifier, named) in GSharp.Core.CodeAnalysis.SemanticModel.GetTypeClauseSymbols(typeClause, type) {
-            declarations[identifier] = named
-        }
-    }
-
-    private func MapLocalVariables(
-        compilation Compilation,
-        declarations Dictionary[SyntaxToken, Symbol],
-        localDeclarations Dictionary[SyntaxNode, Dictionary[string, Symbol]],
-        bucketsByTree Dictionary[SyntaxTree, NodeBuckets],
-        useIncrementalCaches bool
-    ) {
-        // Region-scoped bindings (`while let`, and since issue #4961 both
-        // `if let` forms) resolve through their own region lookups, so they
-        // must not enter the function-wide by-name local map.
-        let whileLetIdentifiers = HashSet[SyntaxToken](
-            bucketsByTree
-                .Values
-                .SelectMany(
-                func (bucket NodeBuckets) IEnumerable[WhileLetStatementSyntax] {
-                    return bucket.WhileLets
-                }
-            )
-                .SelectMany(
-                func (statement WhileLetStatementSyntax) IEnumerable[IfLetBindingClauseSyntax] {
-                    return statement.Bindings
-                }
-            )
-                .Concat(
-                bucketsByTree.Values.SelectMany((bucket NodeBuckets) -> bucket.IfLets.SelectMany(GetIfLetBindings))
-            )
-                .Select((binding IfLetBindingClauseSyntax) -> binding.Identifier)
-        )
-        var program BoundProgram
-        try {
-            program = compilation.BoundProgram
-        } catch (InvalidOperationException) {
-            return
-        }
-        for root in EnumerateBoundRoots(program) {
-            let references = if useIncrementalCaches {
-                LocalFunctionReferencesCache.GetValue(root, MatchBoundLocalFunctions)
-            } else {
-                MatchBoundLocalFunctions(root)
-            }
-            for (identifier, function) in references {
-                declarations[identifier] = function
-            }
-        }
-        // Issue #894: constructor (`init`) bodies are keyed in
-        // BoundProgram.Functions by a synthesized instance-method-shaped
-        // FunctionSymbol whose Declaration is null (the declaring syntax is a
-        // ConstructorDeclarationSyntax). Build a reverse map so we can resolve
-        // constructor body locals against the constructor's body syntax exactly
-        // like a method body.
-        let constructorByFunction = Dictionary[FunctionSymbol, ConstructorDeclarationSyntax]()
-        for aggregate in compilation.GlobalScope.Structs {
-            for constructor in aggregate.ExplicitConstructors {
-                if constructor.Declaration != nil && constructor.Function != nil {
-                    constructorByFunction[constructor.Function] = constructor.Declaration!!
-                }
-            }
-        }
-        for pair in program.Functions {
-            var scope_ SyntaxNode? = pair.Key.Declaration
-            var bodySyntax BlockStatementSyntax? = pair.Key.Declaration?.Body
-            if scope_ == nil && constructorByFunction.TryGetValue(pair.Key, out var constructorDeclaration) {
-                scope_ = constructorDeclaration
-                bodySyntax = constructorDeclaration.Body
-            }
-            if scope_ == nil || bodySyntax == nil {
-                continue
-            }
-            // ADR-0106: matching bound locals to syntax identifiers walks the
-            // lowered body (FindBoundNodes, reflection-based) and the body
-            // syntax — the dominant per-edit cost across a whole project. The
-            // result is a pure function of the lowered body instance (and its
-            // backing syntax), which the BoundBodyCache reuses by reference for
-            // unchanged files, so memoize it by that instance.
-            let entries = GetFunctionLocals(bodySyntax, pair.Value, useIncrementalCaches)
-            for (identifier, variable) in entries {
-                declarations[identifier] = variable
-                if !whileLetIdentifiers.Contains(identifier) {
-                    GetLocals(localDeclarations, scope_)[variable.Name] = variable
-                }
-            }
-        }
-        if program.Statement != nil {
-            // Top-level statements have no containing function entry in localDeclarations.
-            // We still need loop-variable declaration mappings for for-range hover/reference
-            // support in scripts. There is a single synthesized top-level body per
-            // compilation; recompute it directly (the for-range syntax comes from the
-            // cached per-tree buckets, so this stays cheap on large workspaces).
-            let topLevelLoopIdentifiers = bucketsByTree
-                .Values
-                .SelectMany(
-                func (b NodeBuckets) IEnumerable[ForRangeStatementSyntax] {
-                    return b.ForRanges
-                }
-            )
-                .SelectMany((f ForRangeStatementSyntax) -> EnumerateForRangeIdentifiers(f))
-                .Concat(
-                bucketsByTree
-                    .Values
-                    .SelectMany(
-                    func (b NodeBuckets) IEnumerable[AwaitForRangeStatementSyntax] {
-                        return b.AwaitForRanges
-                    }
-                )
-                    .Select((f AwaitForRangeStatementSyntax) -> f.Identifier)
-            )
-                .Concat(
-                bucketsByTree
-                    .Values
-                    .SelectMany(
-                    func (b NodeBuckets) IEnumerable[WhileLetStatementSyntax] {
-                        return b.WhileLets
-                    }
-                )
-                    .SelectMany(
-                    (statement WhileLetStatementSyntax) -> statement.Bindings.Select(
-                        (binding IfLetBindingClauseSyntax) -> binding.Identifier
-                    )
-                )
-            )
-                .Concat(
-                bucketsByTree
-                    .Values
-                    .SelectMany((b NodeBuckets) -> b.IfLets.SelectMany(GetIfLetBindings))
-                    .Select((binding IfLetBindingClauseSyntax) -> binding.Identifier)
-            )
-            // Function-body identifiers must not consume a script local through
-            // the matcher's by-name fallback, or replace their own exact mapping.
-            for (identifier, variable) in MatchBoundLocals(
-                program.Statement,
-                topLevelLoopIdentifiers.Where((identifier SyntaxToken) -> !declarations.ContainsKey(identifier))
-            ) {
-                declarations[identifier] = variable
-            }
-        }
-    }
-
-    private func MatchBoundLocalFunctions(root BoundNode) IReadOnlyList[(Identifier SyntaxToken, Function Symbol)] {
-        let result = List[(Identifier SyntaxToken, Function Symbol)]()
-        // Use the binder's selected symbol, not a by-name approximation:
-        // nested regions, overloads and calls before a region must agree.
-        for node in FindBoundNodes[BoundNode](root) {
-            if node is BoundLocalFunctionDeclaration local &&
-                local
-                .Literal
-                .Function
-                .LocalDeclaration is {} declaration {
-                result.Add((declaration.Identifier, local.Literal.Function))
-            } else if node is BoundCallExpression call &&
-                call
-                .Function
-                .LocalDeclaration != nil &&
-                call.Syntax is CallExpressionSyntax syntax {
-                result.Add((syntax.Identifier, call.Function))
-            }
-        }
-        return result
-    }
-
-    /// ADR-0106: returns the (syntax identifier → local variable symbol) pairs
-    /// for a single member body, memoized by the lowered-body instance when
-    /// [`useIncrementalCaches`](paramref) is set. Unchanged files reuse the
-    /// same lowered body (served from the `BoundBodyCache`), so this is a
-    /// memo hit; the edited file's body is a fresh instance, so it recomputes.
-    private func GetFunctionLocals(
-        bodySyntax BlockStatementSyntax,
-        body BoundBlockStatement,
-        useIncrementalCaches bool
-    ) IReadOnlyList[(Identifier SyntaxToken, Variable Symbol)] {
-        if !useIncrementalCaches {
-            return ComputeFunctionLocals(bodySyntax, body)
-        }
-        if FunctionLocalsCache.TryGetValue(body, out var cached) {
-            Interlocked.Increment(&functionLocalsCacheHits)
-            return cached
-        }
-        Interlocked.Increment(&functionLocalsCacheMisses)
-        return FunctionLocalsCache.GetValue(body, (_ BoundBlockStatement) -> ComputeFunctionLocals(bodySyntax, body))
-    }
-
-    private func ComputeFunctionLocals(bodySyntax BlockStatementSyntax, body BoundBlockStatement) IReadOnlyList[
-        (Identifier SyntaxToken, Variable Symbol)
-    ] {
-        let syntaxLocalIdentifiers = FindNodes[VariableDeclarationSyntax]([]BlockStatementSyntax{bodySyntax})
-            .Where((v VariableDeclarationSyntax) -> v.TypeParameterList == nil)
-            .Select((v VariableDeclarationSyntax) -> v.Identifier)
-            .Concat(
-            FindNodes[ForRangeStatementSyntax]([]BlockStatementSyntax{bodySyntax}).SelectMany(
-                (f ForRangeStatementSyntax) -> EnumerateForRangeIdentifiers(f)
-            )
-        )
-            .Concat(
-            FindNodes[AwaitForRangeStatementSyntax]([]BlockStatementSyntax{bodySyntax}).Select(
-                (f AwaitForRangeStatementSyntax) -> f.Identifier
-            )
-        )
-            .Concat(
-            FindNodes[WhileLetStatementSyntax]([]BlockStatementSyntax{bodySyntax}).SelectMany(
-                (statement WhileLetStatementSyntax) -> statement.Bindings.Select(
-                    (binding IfLetBindingClauseSyntax) -> binding.Identifier
-                )
-            )
-        )
-            .Concat(
-            FindNodes[IfLetStatementSyntax]([]BlockStatementSyntax{bodySyntax})
-                .SelectMany(GetIfLetBindings)
-                .Concat(
-                FindNodes[IfLetExpressionSyntax]([]BlockStatementSyntax{bodySyntax}).SelectMany(GetIfLetBindings)
-            )
-                .Select((binding IfLetBindingClauseSyntax) -> binding.Identifier)
-        )
-            .Concat(
-            FindNodes[TypePatternSyntax]([]BlockStatementSyntax{bodySyntax}).Select(
-                (pattern TypePatternSyntax) -> pattern.BindingIdentifier
-            )
-        )
-            .Concat(
-            FindNodes[PropertyPatternSyntax]([]BlockStatementSyntax{bodySyntax}).Select(
-                (pattern PropertyPatternSyntax) -> pattern.Designation
-            )
-        )
-            .Concat(
-            FindNodes[VarPatternSyntax]([]BlockStatementSyntax{bodySyntax}).Select(
-                (pattern VarPatternSyntax) -> pattern.Designation
-            )
-        )
-            .Concat(
-            FindNodes[SlicePatternSyntax]([]BlockStatementSyntax{bodySyntax}).Select(
-                (pattern SlicePatternSyntax) -> pattern.CaptureIdentifier
-            )
-        )
-            .Concat(
-            FindNodes[ForTupleRangeStatementSyntax]([]BlockStatementSyntax{bodySyntax}).SelectMany(
-                func (f ForTupleRangeStatementSyntax) IEnumerable[SyntaxToken] {
-                    return f.Identifiers
-                }
-            )
-        )
-            .Concat(
-            FindNodes[LambdaExpressionSyntax]([]BlockStatementSyntax{bodySyntax}).SelectMany(
-                EnumerateDestructuredLambdaParameterIdentifiers
-            )
-        )
-            .OfType[SyntaxToken]()
-        return MatchBoundLocals(body, syntaxLocalIdentifiers)
-    }
-
-    /// Issue #4961: the binding clauses of an `if let` statement or expression.
-    private func GetIfLetBindings(node SyntaxNode) IEnumerable[IfLetBindingClauseSyntax] {
-        return switch node {
-            case statement is IfLetStatementSyntax: statement.Bindings
-            case expression is IfLetExpressionSyntax: expression.Bindings
-            default: Enumerable.Empty[IfLetBindingClauseSyntax]()
-        }
-    }
-
-    private func EnumerateDestructuredLambdaParameterIdentifiers(lambda LambdaExpressionSyntax) sequence[SyntaxToken] {
-        for parameter in lambda.Parameters {
-            if parameter.DeconstructionPattern is not{} pattern {
-                continue
-            }
-            for element in pattern.Elements {
-                if element.Identifier is {} identifier {
-                    yield identifier
-                }
-            }
-        }
-    }
-
-    private func EnumerateForRangeIdentifiers(syntax ForRangeStatementSyntax) sequence[SyntaxToken] {
-        if syntax.FirstIdentifier != nil {
-            yield syntax.FirstIdentifier
-        }
-        if syntax.SecondIdentifier != nil {
-            yield syntax.SecondIdentifier!!
-        }
-    }
-
-    private func MatchBoundLocals(boundRoot BoundNode, syntaxLocalIdentifiers IEnumerable[SyntaxToken]) IReadOnlyList[
-        (Identifier SyntaxToken, Variable Symbol)
-    ] {
-        let boundDeclarations = FindBoundNodes[BoundVariableDeclaration](boundRoot)
-            .Where((d BoundVariableDeclaration) -> !d.Variable.Name.StartsWith("<", StringComparison.Ordinal))
-            .Select(
-            (declaration BoundVariableDeclaration) -> (
-                Variable: cast[Symbol](declaration.Variable),
-                Syntax: cast[SyntaxNode?](declaration.Syntax)
-            )
-        )
-            .Concat(FindBoundNodes[BoundPattern](boundRoot).SelectMany(GetPatternBindings))
-            .ToList()
-        let result = List[(Identifier SyntaxToken, Variable Symbol)]()
-        let used = HashSet[int32]()
-        for syntaxIdentifier in syntaxLocalIdentifiers.Where((id SyntaxToken) -> id != nil).OrderBy(
-            (id SyntaxToken) -> id.Span.Start
-        ) {
-            let exactBindingIndex = boundDeclarations.FindIndex(
-                (declaration(Variable Symbol, Syntax SyntaxNode?)) -> object.ReferenceEquals(
-                    declaration.Item2,
-                    syntaxIdentifier
-                ) ||
-                    (
-                    declaration.Item2 is IfLetBindingClauseSyntax binding && object.ReferenceEquals(
-                        binding.Identifier,
-                        syntaxIdentifier
-                    )
-                )
-            )
-            if exactBindingIndex >= 0 && !used.Contains(exactBindingIndex) {
-                used.Add(exactBindingIndex)
-                result.Add((syntaxIdentifier, boundDeclarations[exactBindingIndex].Item1))
-                continue
-            }
-            if syntaxIdentifier.Parent is IfLetBindingClauseSyntax {
-                // A binding's name does not identify its region.
-                continue
-            }
-            for var i = 0; i < boundDeclarations.Count; i++ {
-                if used.Contains(i) || boundDeclarations[i].Item1.Name != syntaxIdentifier.Text {
-                    continue
-                }
-                used.Add(i)
-                result.Add((syntaxIdentifier, boundDeclarations[i].Item1))
-                break
-            }
-        }
-        return result
-    }
-
-    private func GetPatternBindings(pattern BoundPattern) sequence[(Variable Symbol, Syntax SyntaxNode?)] {
-        switch pattern {
-            case BoundDiscardPattern{Variable: not nil} varPattern {
-                yield(varPattern.Variable!!, varPattern.Variable!!.DeclaringSyntax)
-            }
-            case BoundTypePattern{HasBinding: true} typePattern {
-                yield(typePattern.Variable, typePattern.Variable.DeclaringSyntax)
-            }
-            case BoundSlicePattern{
-                Variable: not nil,
-                Syntax: SlicePatternSyntax{CaptureIdentifier: not nil}
-            } slicePattern {
-                yield(slicePattern.Variable!!, slicePattern.Variable!!.DeclaringSyntax)
-            }
-        }
-    }
-
-    private func GetLocals(
-        locals Dictionary[SyntaxNode, Dictionary[string, Symbol]],
-        declaration SyntaxNode
-    ) Dictionary[string, Symbol] {
-        if !locals.TryGetValue(declaration, out var functionLocals) {
-            functionLocals = Dictionary[string, Symbol](StringComparer.Ordinal)
-            locals[declaration] = functionLocals
-        }
-        return functionLocals
     }
 
     /// ADR-0106: returns the collected syntax-node buckets for
@@ -2390,38 +1316,11 @@ shared class SemanticLookup {
 
     private func CollectNodes(node SyntaxNode, buckets NodeBuckets) {
         switch node {
-            case f is FunctionDeclarationSyntax {
-                buckets.Functions.Add(f)
-            }
-            case c is ConstructorDeclarationSyntax {
-                buckets.Constructors.Add(c)
-            }
-            case s is StructDeclarationSyntax {
-                buckets.Structs.Add(s)
-            }
             case a is AccessorExpressionSyntax {
                 buckets.Accessors.Add(a)
             }
             case fa is FieldAssignmentExpressionSyntax {
                 buckets.FieldAssignments.Add(fa)
-            }
-            case fr is ForRangeStatementSyntax {
-                buckets.ForRanges.Add(fr)
-            }
-            case afr is AwaitForRangeStatementSyntax {
-                buckets.AwaitForRanges.Add(afr)
-            }
-            case whileLet is WhileLetStatementSyntax {
-                buckets.WhileLets.Add(whileLet)
-            }
-            case ifLetStatement is IfLetStatementSyntax {
-                buckets.IfLets.Add(ifLetStatement)
-            }
-            case ifLetExpression is IfLetExpressionSyntax {
-                buckets.IfLets.Add(ifLetExpression)
-            }
-            case vd is VariableDeclarationSyntax {
-                buckets.VariableDeclarations.Add(vd)
             }
             case ta is TypeAliasDeclarationSyntax {
                 buckets.TypeAliasDeclarations.Add(ta)
@@ -2444,14 +1343,6 @@ shared class SemanticLookup {
         }
     }
 
-    private func FindNodes[T SyntaxNode](roots IEnumerable[SyntaxNode]) sequence[T] {
-        for root in roots {
-            for node in FindNodes[T](root) {
-                yield node
-            }
-        }
-    }
-
     private func FindNodes[T SyntaxNode](root SyntaxNode) sequence[T] {
         if root is T matched {
             yield matched
@@ -2459,60 +1350,6 @@ shared class SemanticLookup {
         for child in root.GetChildren() {
             for descendant in FindNodes[T](child) {
                 yield descendant
-            }
-        }
-    }
-
-    private func FindBoundNodes[T BoundNode](root BoundNode) sequence[T] {
-        if root is T matched {
-            yield matched
-        }
-        for property in root.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance) {
-            let value = property.GetValue(root)
-            if value is BoundNode child {
-                for descendant in FindBoundNodes[T](child) {
-                    yield descendant
-                }
-            } else if (value is IEnumerable sequence_ and not string) {
-                if IsDefaultImmutableArray(value) {
-                    continue
-                }
-                for item in sequence_ {
-                    if item is BoundNode sequenceChild {
-                        for descendant in FindBoundNodes[T](sequenceChild) {
-                            yield descendant
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func IsDefaultImmutableArray(value object) bool {
-        let type = value.GetType()
-        if type.IsGenericType && type.GetGenericTypeDefinition().IsSameAs(
-            typeof(System.Collections.Immutable.ImmutableArray[_])
-        ) {
-            let isDefault PropertyInfo? = type.GetProperty("IsDefault")
-            return isDefault != nil && bool(isDefault.GetValue(value)!!)
-        }
-        return false
-    }
-
-    private func IsIdentifierStart(c char) bool {
-        return c == '_' || char.IsLetter(c)
-    }
-
-    private func EnumerateBoundRoots(program BoundProgram?) sequence[BoundNode] {
-        if program == nil {
-            yield break
-        }
-        if program.Statement != nil {
-            yield program.Statement
-        }
-        for body in program.Functions.Values {
-            if body != nil {
-                yield body
             }
         }
     }
@@ -2573,6 +1410,60 @@ shared class SemanticLookup {
         } else {
             1
         }
+    }
+
+    private func FindBoundNodes[T BoundNode](root BoundNode) sequence[T] {
+        if root is T matched {
+            yield matched
+        }
+        for property in root.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance) {
+            let value = property.GetValue(root)
+            if value is BoundNode child {
+                for descendant in FindBoundNodes[T](child) {
+                    yield descendant
+                }
+            } else if (value is IEnumerable sequence_ and not string) {
+                if IsDefaultImmutableArray(value) {
+                    continue
+                }
+                for item in sequence_ {
+                    if item is BoundNode sequenceChild {
+                        for descendant in FindBoundNodes[T](sequenceChild) {
+                            yield descendant
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func IsDefaultImmutableArray(value object) bool {
+        let type = value.GetType()
+        if type.IsGenericType && type.GetGenericTypeDefinition().IsSameAs(
+            typeof(System.Collections.Immutable.ImmutableArray[_])
+        ) {
+            let isDefault PropertyInfo? = type.GetProperty("IsDefault")
+            return isDefault != nil && bool(isDefault.GetValue(value)!!)
+        }
+        return false
+    }
+
+    private func EnumerateBoundRoots(program BoundProgram?) sequence[BoundNode] {
+        if program == nil {
+            yield break
+        }
+        if program.Statement != nil {
+            yield program.Statement
+        }
+        for body in program.Functions.Values {
+            if body != nil {
+                yield body
+            }
+        }
+    }
+
+    private func IsIdentifierStart(c char) bool {
+        return c == '_' || char.IsLetter(c)
     }
 
     private func IsIdentifierPart(c char) bool {
