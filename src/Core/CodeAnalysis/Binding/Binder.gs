@@ -675,13 +675,14 @@ partial class Binder {
             //   parameter > instance member > static member.
             let lexicalOwner StructSymbol? = (function.StaticOwnerType as StructSymbol) ??
                 (function.ReceiverType as StructSymbol)
+            // Reserve hidden names too. A nearer member hides every farther lexical candidate.
             for var ownerStruct = lexicalOwner;
                 ownerStruct != nil;
                 ownerStruct = ownerStruct!!.ContainingType as StructSymbol {
                 let isOuterOwner = !object.ReferenceEquals(ownerStruct, lexicalOwner)
                 if !ownerStruct.StaticFields.IsDefaultOrEmpty {
                     for fld in ownerStruct.StaticFields {
-                        if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) ||
+                        if paramNames.Contains(fld.Name) || !seenMembers.Add(fld.Name) ||
                             (
                             isOuterOwner && !object.ReferenceEquals(
                                 memberLookup.FindLexicalMemberOwner(lexicalOwner!!, fld.Name),
@@ -690,9 +691,7 @@ partial class Binder {
                         ) {
                             continue
                         }
-                        if seenMembers.Add(fld.Name) {
-                            $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
-                        }
+                        $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
                     }
                 }
                 // Issue #948: const fields are static for bare-name resolution
@@ -700,7 +699,7 @@ partial class Binder {
                 // as the compile-time constant value by the emitter/interpreter.
                 if !ownerStruct.ConstFields.IsDefaultOrEmpty {
                     for fld in ownerStruct.ConstFields {
-                        if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) ||
+                        if paramNames.Contains(fld.Name) || !seenMembers.Add(fld.Name) ||
                             (
                             isOuterOwner && !object.ReferenceEquals(
                                 memberLookup.FindLexicalMemberOwner(lexicalOwner!!, fld.Name),
@@ -709,14 +708,12 @@ partial class Binder {
                         ) {
                             continue
                         }
-                        if seenMembers.Add(fld.Name) {
-                            $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
-                        }
+                        $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
                     }
                 }
                 if !ownerStruct.StaticProperties.IsDefaultOrEmpty {
                     for prop in ownerStruct.StaticProperties {
-                        if paramNames.Contains(prop.Name) || seenMembers.Contains(prop.Name) ||
+                        if paramNames.Contains(prop.Name) || !seenMembers.Add(prop.Name) ||
                             (
                             isOuterOwner && !object.ReferenceEquals(
                                 memberLookup.FindLexicalMemberOwner(lexicalOwner!!, prop.Name),
@@ -725,9 +722,7 @@ partial class Binder {
                         ) {
                             continue
                         }
-                        if seenMembers.Add(prop.Name) {
-                            $scope.TryDeclareVariable(ImplicitStaticPropertyVariableSymbol(ownerStruct, prop))
-                        }
+                        $scope.TryDeclareVariable(ImplicitStaticPropertyVariableSymbol(ownerStruct, prop))
                     }
                 }
                 // Issue #3907 / #3911: expose a field-like STATIC event of the
@@ -758,7 +753,7 @@ partial class Binder {
                 if !ownerStruct.StaticEvents.IsDefaultOrEmpty {
                     for evt in ownerStruct.StaticEvents {
                         if !evt.IsFieldLike || evt.BackingField == nil || paramNames.Contains(evt.Name) ||
-                            seenMembers.Contains(evt.Name) ||
+                            !seenMembers.Add(evt.Name) ||
                             (
                             isOuterOwner && !object.ReferenceEquals(
                                 memberLookup.FindLexicalMemberOwner(lexicalOwner!!, evt.Name),
@@ -767,11 +762,7 @@ partial class Binder {
                         ) {
                             continue
                         }
-                        if seenMembers.Add(evt.Name) {
-                            $scope.TryDeclareVariable(
-                                ImplicitStaticFieldVariableSymbol(ownerStruct, evt.BackingField!!)
-                            )
-                        }
+                        $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, evt.BackingField!!))
                     }
                 }
             }

@@ -66,11 +66,13 @@ internal class MemberLookup {
     /// @param name The source member name.
     /// @returns The lexical lookup owner, or null when no member exists.
     internal func FindLexicalMemberOwner(type StructSymbol, name string) StructSymbol? {
+        CompilationMeasurements.Count("binding.lexical-member-owner.queries")
         for var current StructSymbol? = type; current != nil; current = current!!.ContainingType as StructSymbol {
-            if TypeMemberModel.EnumerateMembers(current, MemberQuery.All).Any(
-                (member Symbol) -> member.Name == name && member is not PropertySymbol{IsIndexer: true}
-            ) ||
-                TypeMemberModel.TryGetStaticFieldIncludingInherited(current, name, out _, out _) {
+            if TypeMemberModel
+                .EnumerateMembers(current, MemberQuery.Instance())
+                .Concat(TypeMemberModel.EnumerateMembers(current, MemberQuery.Static()))
+                .Any((member Symbol) -> member.Name == name && member is not PropertySymbol{IsIndexer: true}) ||
+                TypeMemberModel.TryGetStaticField(current, name, out _) {
                 return current
             }
             if ExpressionBinder.GetInheritedClrBaseType(current) is not{} clrBase {
@@ -81,13 +83,10 @@ internal class MemberLookup {
                 ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, name, canAccessInternals) != nil {
                 return current
             }
-            const flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance |
-            BindingFlags.Static | BindingFlags.FlattenHierarchy
+            const flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
             if ClrTypeUtilities.SafeGetMethods(clrBase, flags).Any(
-                (method MethodInfo) -> method.Name == name && ClrMemberVisibility.IsVisibleFromDerived(
-                    method,
-                    canAccessInternals(method.DeclaringType)
-                )
+                (method MethodInfo) -> ClrTypeUtilities.EmittedMemberNameMatches(method, name) &&
+                    ClrMemberVisibility.IsVisibleFromDerived(method, canAccessInternals(method.DeclaringType))
             ) {
                 return current
             }

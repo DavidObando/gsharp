@@ -1,13 +1,69 @@
 package GSharp.Compiler.Tests
 
 import GSharp.Compiler
+import GSharp.Tests
 import System
 import System.IO
 import System.Linq
+import System.Text
 import System.Text.Json
 import Xunit
 
 class Issue5040PhaseMeasurementTests {
+    @Fact
+    func LexicalOwnerQueriesDoNotRepeatForHiddenOuterState() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace LookupCost5262;
+public class Base { public int Value => 9; }`, "ForeignLookupCost5262")
+        let source = StringBuilder("package LookupCostConsumer5262\nimport LookupCost5262\n")
+        for var level = 0; level < 4; level++ {
+            source
+                .Append("class Level")
+                .Append(level)
+                .Append(" { shared { let Value int32 = ")
+                .Append(level)
+                .Append(" }\n")
+        }
+        source.Append("class Leaf : Base { func Read() int32 -> Value }\n")
+        for var level = 0; level < 4; level++ {
+            source.Append("}\n")
+        }
+        source.Append("System.Console.Write(Level0.Level1.Level2.Level3.Leaf().Read())")
+        let report = Path.Combine(fixture.Directory, "lookup.json")
+        let previous = Environment.GetEnvironmentVariable("GSHARP_MEASURE_PHASES")
+        try {
+            Environment.SetEnvironmentVariable("GSHARP_MEASURE_PHASES", report)
+            let executable = fixture.Compile(
+                source.ToString(),
+                "LookupCost5262",
+                true,
+                "/r:" + contract,
+                "/deterministic+",
+                "/debug:none"
+            )
+            using let json = JsonDocument.Parse(File.ReadAllText(report))
+            Assert.Equal(
+                int64(1),
+                json.RootElement.GetProperty("Counters").GetProperty("binding.lexical-member-owner.queries").GetInt64()
+            )
+            IlVerifier.Verify(executable, []string{contract})
+            Assert.Equal(Encoding.UTF8.GetBytes("9"), Encoding.UTF8.GetBytes(fixture.Run(executable)))
+            let measured = File.ReadAllBytes(executable)
+            Environment.SetEnvironmentVariable("GSHARP_MEASURE_PHASES", nil)
+            fixture.Compile(
+                source.ToString(),
+                "LookupCost5262",
+                true,
+                "/r:" + contract,
+                "/deterministic+",
+                "/debug:none"
+            )
+            Assert.Equal(measured, File.ReadAllBytes(executable))
+        } finally {
+            Environment.SetEnvironmentVariable("GSHARP_MEASURE_PHASES", previous)
+        }
+    }
+
     @Fact
     func RealDriver_OptInMeasurements_PreserveDeterministicOutputAndDiagnostics() {
         let directory = Path.Combine(AppContext.BaseDirectory, "phase-measurement-" + Guid.NewGuid().ToString("N"))

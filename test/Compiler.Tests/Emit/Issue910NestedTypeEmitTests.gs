@@ -267,6 +267,74 @@ Outer().Run()`, "Methods5262", true)
     }
 
     @Fact
+    func InheritedStaticsDoNotHideLexicalStateButDeclaredStaticsDo() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace ForeignStatics5262;
+public class Base {
+    public static int Read() => 90;
+    public int func() => 80;
+}`, "ForeignStatics5262")
+        let executable = fixture.Compile(`package StaticVisibility5262
+import System
+import ForeignStatics5262
+open class SourceBase {
+    shared {
+        let Value int32 = 70
+        const Code int32 = 72
+    }
+}
+class Outer {
+    shared {
+        let Value int32 = 10
+        let Code int32 = 12
+        let Read () -> int32 = func() int32 { return 11 }
+        let func_ () -> int32 = func() int32 { return 81 }
+    }
+    class FromSource : SourceBase {
+        func Pick() int32 -> Value + Code
+    }
+    class FromClr : Base {
+        func Pick() int32 {
+            let f () -> int32 = Read
+            return f()
+        }
+        func Call() int32 -> func_()
+    }
+    class Declared : SourceBase {
+        shared {
+            let Value int32 = 20
+            func Read() int32 -> 21
+        }
+        func Pick() int32 -> Value
+        func Call() int32 {
+            let f () -> int32 = Read
+            return f()
+        }
+    }
+    func Run() {
+        Console.Write(FromSource().Pick())
+        Console.Write("|")
+        Console.Write(FromClr().Pick())
+        Console.Write("|")
+        Console.Write(Declared().Pick())
+        Console.Write("|")
+        Console.Write(Declared().Call())
+        Console.Write("|")
+        Console.Write(SourceBase.Value)
+        Console.Write("|")
+        Console.Write(SourceBase.Code)
+        Console.Write("|")
+        Console.Write(Base.Read())
+        Console.Write("|")
+        Console.Write(FromClr().Call())
+    }
+}
+Outer().Run()`, "StaticVisibility5262", true, "/r:" + contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal(Encoding.UTF8.GetBytes("22|11|20|21|70|72|90|80"), Encoding.UTF8.GetBytes(fixture.Run(executable)))
+    }
+
+    @Fact
     func IssueExample_NestedClassInClass_ConstructedFromEnclosingMethod_Runs() {
         let output = CompileAndRun(`package Oahu.Cli.Tests
 
