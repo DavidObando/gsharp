@@ -31,6 +31,62 @@ open class Issue3329CrossAssemblyStructLiteralEmitTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func ImportedDataStruct_NestedReadonlyCollectionDiagnosticsRetainConsumerAnchors(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(`package i5296anchors
+public data struct ReadonlyItems {
+    public let Items []int32
+    private var Marker int32 = 0
+    public func Count() int32 -> Marker + Items.Length
+}
+public data struct Outer {
+    public var Child ReadonlyItems
+}
+public data struct MutableItems {
+    public var Items []int32
+}
+public data struct MutableOuter {
+    public var Child MutableItems
+}`, "i5296anchors", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let rejectedReference = Path.Combine(fixture.Directory, "rejected.ref.dll")
+        let (code, output) = fixture.TryCompile(`import i5296anchors
+class Holder {
+    public var Value Outer = Outer{}
+}
+let first = Holder{}
+let second = Holder{}`, "rejected", executable: true, "/r:" + selected, "/refout:" + rejectedReference)
+        Assert.True(code != 0, output)
+        for location in[]string{"(3,30,3,35)", "(5,13,5,19)", "(6,14,6,20)"} {
+            Assert.True(output.Contains("rejected.gs" + location + ": error GS0127:", StringComparison.Ordinal), output)
+        }
+        Assert.Equal(3, output.Split("error GS0127:", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        let consumer = fixture.Compile(`import i5296anchors
+class Holder {
+    public var Value MutableOuter = MutableOuter{}
+}
+let omitted = Holder{}
+System.Console.WriteLine(omitted.Value.Child.Items.Length)
+let supplied = Holder{Value: MutableOuter{Child: MutableItems{Items: []int32{1, 2}}}}
+System.Console.WriteLine(supplied.Value.Child.Items.Length)`, "control", executable: true, "/r:" + selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes("0\n2\n"),
+            System.Text.Encoding.UTF8.GetBytes(fixture.Run(consumer))
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func ImportedDataStruct_ReadonlyProjectionRejectsExternalWrites(useReferenceAssembly bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let reference = Path.Combine(fixture.Directory, "producer.ref.dll")

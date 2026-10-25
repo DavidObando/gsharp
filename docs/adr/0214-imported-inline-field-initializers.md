@@ -58,6 +58,11 @@ stores into CLR `InitOnly` storage. Supporting readonly literal initialization
 requires a separate legal constructor protocol; this correction does not
 introduce one.
 
+Synthesized nested collection zeros inherit the enclosing consumer expression's
+source anchor during validation. Existing constructor-initializer anchors retain
+precedence. Keep inherited anchors local to the traversal; do not stamp shared
+imported initializer trees with one consumer site's syntax.
+
 ## Consequences
 
 Separate producer and consumer assemblies preserve source-local literal behavior.
@@ -79,6 +84,8 @@ consumer without verifier suppressions, and checks literal and projection
 rejection diagnostics with no output image. Independent friend consumers exercise
 internal collection metadata, source-local parity, ordered explicit overrides,
 and rejection of the same member from a non-friend assembly.
+Nested readonly collection diagnostics also retain the consumer filename and
+span at field initializers and separate constructor sites.
 
 ## Alternatives considered
 

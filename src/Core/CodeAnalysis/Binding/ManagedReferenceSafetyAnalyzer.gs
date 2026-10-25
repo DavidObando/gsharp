@@ -45,6 +45,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
     ]()
     private var initializerOwner StructSymbol?
     private var initializerAnchor SyntaxNode?
+    private var expressionAnchor SyntaxNode?
     private var overwrittenInitializerResult BoundExpression?
     private var analyzingStateMachine bool
     private var analyzingNativeSupport bool
@@ -59,6 +60,17 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
     }
 
     override func VisitExpression(node BoundExpression?) {
+        // Imported initializer trees are shared; do not stamp a consumer's anchor on them.
+        let previousAnchor = this.expressionAnchor
+        this.expressionAnchor = node?.Syntax ?? previousAnchor
+        try {
+            this.AnalyzeExpression(node)
+        } finally {
+            this.expressionAnchor = previousAnchor
+        }
+    }
+
+    private func AnalyzeExpression(node BoundExpression?) {
         if node != nil && !this.analyzingNativeSupport {
             NativeProtocolSafety.ValidateExpression(node, this.diagnostics, this.initializerAnchor)
         }
@@ -75,7 +87,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                 )
             }
             case literal is BoundStructLiteralExpression {
-                literal.ValidateInitializerWrites(this.diagnostics, this.initializerAnchor)
+                literal.ValidateInitializerWrites(this.diagnostics, this.initializerAnchor ?? this.expressionAnchor)
                 if literal.CopySource == nil {
                     this.CheckConstruction(
                         literal.StructType,
