@@ -67,12 +67,16 @@ internal class MemberLookup {
     /// @returns The lexical lookup owner, or null when no member exists.
     internal func FindLexicalMemberOwner(type StructSymbol, name string) StructSymbol? {
         CompilationMeasurements.Count("binding.lexical-member-owner.queries")
+        let matches Func[Symbol, bool] = (member Symbol) -> member.Name == name &&
+            member is not PropertySymbol{IsIndexer: true}
         for var current StructSymbol? = type; current != nil; current = current!!.ContainingType as StructSymbol {
-            if TypeMemberModel
-                .EnumerateMembers(current, MemberQuery.Instance())
-                .Concat(TypeMemberModel.EnumerateMembers(current, MemberQuery.Static()))
-                .Any((member Symbol) -> member.Name == name && member is not PropertySymbol{IsIndexer: true}) ||
-                TypeMemberModel.TryGetStaticField(current, name, out _) {
+            if TypeMemberModel.EnumerateMembers(current, MemberQuery.Instance()).Any(matches) ||
+                TypeMemberModel
+                .EnumerateMembers(current, MemberQuery.Static()).Any(matches) || TypeMemberModel.TryGetStaticField(
+                current,
+                name,
+                out _
+            ) {
                 return current
             }
             if ExpressionBinder.GetInheritedClrBaseType(current) is not{} clrBase {

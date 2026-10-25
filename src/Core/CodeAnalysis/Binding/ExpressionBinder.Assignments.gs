@@ -1680,33 +1680,34 @@ internal partial class ExpressionBinder {
         // instance and `Type.Event += handler` paths use, which is what keeps
         // issue #3775's nil-tolerance (`e += nil` is a silent no-op in C#, not
         // a conversion error) identical on the static path.
-        let staticOwner = if $scope.TryLookupSymbol(name) is ImplicitStaticFieldVariableSymbol eventField &&
-            eventField
-            .Field
-            .IsEventBackingField {
-            eventField.StructType
-        } else {
-            function?.StaticOwnerType as StructSymbol ?? function?.ReceiverType as StructSymbol
-        }
-        if isEventOperator &&
-            staticOwner != nil &&
-            !SourceStaticValueMemberPrecedesInheritedEvent(staticOwner, name) &&
-            TypeMemberModel
-            .TryGetStaticEventIncludingInherited(staticOwner, name, out var staticEv, out var staticEventOwner) {
-            if ReportInaccessibleSourceEvent(staticEv!!, staticEventOwner!!, bareName, syntax.Value) {
-                return BoundErrorExpression(nil)
+        if isEventOperator {
+            let staticOwner = if $scope.TryLookupSymbol(name) is ImplicitStaticFieldVariableSymbol eventField &&
+                eventField
+                .Field
+                .IsEventBackingField {
+                eventField.StructType
+            } else {
+                function?.StaticOwnerType as StructSymbol ?? function?.ReceiverType as StructSymbol
             }
-            let staticEventType = staticEventOwner!!.SubstituteMemberType(staticEv!!.Type)
-            let staticHandler = BindEventSubscriptionHandler(syntax.Value, staticEventType!!)
-            return BoundEventSubscriptionExpression(
-                nil,
-                receiver: nil,
-                staticEventOwner!!,
-                staticEv!!,
-                staticHandler,
-                isAdd,
-                staticEventType
-            )
+            if staticOwner != nil &&
+                !SourceStaticValueMemberPrecedesInheritedEvent(staticOwner, name) &&
+                TypeMemberModel
+                .TryGetStaticEventIncludingInherited(staticOwner, name, out var staticEv, out var staticEventOwner) {
+                if ReportInaccessibleSourceEvent(staticEv!!, staticEventOwner!!, bareName, syntax.Value) {
+                    return BoundErrorExpression(nil)
+                }
+                let staticEventType = staticEventOwner!!.SubstituteMemberType(staticEv!!.Type)
+                let staticHandler = BindEventSubscriptionHandler(syntax.Value, staticEventType!!)
+                return BoundEventSubscriptionExpression(
+                    nil,
+                    receiver: nil,
+                    staticEventOwner!!,
+                    staticEv!!,
+                    staticHandler,
+                    isAdd,
+                    staticEventType
+                )
+            }
         }
         // Not an event: fall back to compound assignment semantics.
         // Reconstruct `name = name +/- rhs` as the parser used to do.
