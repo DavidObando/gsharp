@@ -661,7 +661,11 @@ internal partial class OverloadResolver {
         return nil
     }
 
-    func BindCallExpression(syntax CallExpressionSyntax) BoundExpression {
+    /// Binds calls with the same conversion and construction rules for simple and qualified targets.
+    /// @param syntax The call syntax.
+    /// @param resolvedType The exact qualified target, or null for ordinary lookup.
+    /// @returns The bound call or conversion.
+    func BindCallExpression(syntax CallExpressionSyntax, resolvedType TypeSymbol? = nil) BoundExpression {
         if syntax.ConversionTypeClause != nil {
             let compositeConversionType TypeSymbol? = bindTypeClause(syntax.ConversionTypeClause)
             if compositeConversionType == nil {
@@ -694,7 +698,11 @@ internal partial class OverloadResolver {
         // Issue #3421 review: `cast[T](value)` is the unambiguous,
         // constructor-independent explicit-conversion form. Bind it before
         // callable/type lookup so no symbol named `cast` can redirect it.
-        if syntax.Identifier.ValueText == "cast" && tryBindIntrinsicCall(syntax, out var checkedCast) {
+        if resolvedType == nil &&
+            syntax
+            .Identifier
+            .ValueText == "cast" &&
+            tryBindIntrinsicCall(syntax, out var checkedCast) {
             return checkedCast!!
         }
         // ADR-0065 §2: a bare `init(args)` call inside a constructor body is
@@ -703,7 +711,8 @@ internal partial class OverloadResolver {
         // it before any other call-binding path so the generic identifier
         // fallback at the bottom doesn't surface a misleading "unknown
         // function" diagnostic.
-        if syntax.TypeArgumentList == nil &&
+        if resolvedType == nil &&
+            syntax.TypeArgumentList == nil &&
             syntax
             .Identifier
             .Kind == SyntaxKind.IdentifierToken &&
@@ -730,7 +739,7 @@ internal partial class OverloadResolver {
         // once and reused by all three gates; see HasNonConstructorCallableCandidate's
         // remarks for why only existence (not full overload applicability) is
         // checked here.
-        var hasNonConstructorCallable = HasNonConstructorCallableCandidate(syntax)
+        var hasNonConstructorCallable = resolvedType == nil && HasNonConstructorCallableCandidate(syntax)
         // Issue #1263: when the construction carries an explicit type-argument
         // list (`Op[int32](5)`), resolve the constructed type by (name, arity)
         // so a non-generic `Op` and a generic `Op[T]` can coexist. With no type
@@ -764,19 +773,22 @@ internal partial class OverloadResolver {
         // Issue #3466: a nested source type keeps that precedence only inside
         // its containing lexical scope; outside it, an explicit alias or
         // same-named top-level import remains the visible constructor target.
-        let hasImportedType = Scope.TryLookupImportedClassByArity(
+        let hasImportedType = resolvedType == nil && Scope.TryLookupImportedClassByArity(
             syntax.Identifier.ValueText,
             ctorPreferredArity,
             declaration: nil,
             out var importedCtorCandidate
         )
-        let hasSourceConstructibleType = binderCtx.TryLookupSourceType(
-            Scope,
-            syntax.Identifier.ValueText,
-            ctorPreferredArity,
-            getCurrentFunction(),
-            out var sourceCtorCandidate,
-            out _
+        var sourceCtorCandidate TypeSymbol? = resolvedType
+        let hasSourceConstructibleType = (
+            resolvedType != nil || binderCtx.TryLookupSourceType(
+                Scope,
+                syntax.Identifier.ValueText,
+                ctorPreferredArity,
+                getCurrentFunction(),
+                out sourceCtorCandidate,
+                out _
+            )
         ) &&
             sourceCtorCandidate is StructSymbol sourceCtorStruct &&
             !(
@@ -826,7 +838,8 @@ internal partial class OverloadResolver {
         // Also handles closed-generic imports (`List[int]()`,
         // `Dictionary[string, int]()`). Interpreter-only — resolves a
         // ConstructorInfo and emits BoundClrConstructorCallExpression.
-        if !hasNonConstructorCallable &&
+        if resolvedType == nil &&
+            !hasNonConstructorCallable &&
             !hasSourceConstructibleType &&
             tryBindClrConstructorCall(syntax, out var clrCtorCall) {
             return clrCtorCall!!
@@ -834,7 +847,7 @@ internal partial class OverloadResolver {
         let conversionType = if hasNonConstructorCallable {
             nil
         } else {
-            lookupTypeWithArity(syntax.Identifier, ctorPreferredArity)
+            resolvedType ?? lookupTypeWithArity(syntax.Identifier, ctorPreferredArity)
         }
         let hasSingleInlineOutArgument = syntax
             .Arguments
@@ -921,7 +934,7 @@ internal partial class OverloadResolver {
         // primary constructor is also positionally constructible —
         // `Entry(1, 2)` lowers to a struct literal initializing its fields.
         if !hasNonConstructorCallable &&
-            lookupTypeWithArity(syntax.Identifier, ctorPreferredArity) is StructSymbol classType &&
+            conversionType is StructSymbol classType &&
             (
             classType.IsClass ||
                 classType.IsInline ||
@@ -949,6 +962,10 @@ internal partial class OverloadResolver {
             }
             Diagnostics.ReportConstructedTypeParameterRequiresNewConstraint(syntax.Identifier.Location, typeParam.Name)
             return BoundErrorExpression(nil)
+        }
+        if resolvedType != nil {
+            Diagnostics.ReportNotAFunction(syntax.Identifier.Location, resolvedType.Name)
+            return BoundErrorExpression(syntax)
         }
         if tryBindIntrinsicCall(syntax, out var intrinsic) {
             return intrinsic!!

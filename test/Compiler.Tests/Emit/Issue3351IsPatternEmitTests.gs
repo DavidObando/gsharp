@@ -14,6 +14,196 @@ import Xunit
 
 /// Runtime and IL verification for boolean pattern `is` expressions.
 class Issue3351IsPatternEmitTests {
+    @Theory
+    @InlineData("Demo.Derived(baseValue)", "Object.ReferenceEquals(baseValue, value)", "True\n")
+    @InlineData("Demo.Wrapper?(nil)", "value == nil", "True\n0\n")
+    @InlineData("Demo.Outer.Derived(nestedBaseValue)", "Object.ReferenceEquals(nestedBaseValue, value)", "True\n")
+    @InlineData("Demo.Outer.Wrapper?(nil)", "value == nil", "True\n0\n")
+    @InlineData("Demo.Marker(markerValue)", "Object.ReferenceEquals(markerValue, value)", "True\n")
+    @InlineData(
+        "Demo.GenericDerived[int32](genericBaseValue)",
+        "Object.ReferenceEquals(genericBaseValue, value)",
+        "True\n"
+    )
+    @InlineData(
+        "Demo.GenericMarker[int32](genericMarkerValue)",
+        "Object.ReferenceEquals(genericMarkerValue, value)",
+        "True\n"
+    )
+    func QualifiedTypeCall_UsesCanonicalConversionAndConstruction(call string, comparison string, expected string) {
+        const Source = `package Demo
+import System
+open class Base {}
+class Derived : Base {}
+open class GenericBase[T] {}
+class GenericDerived[T] : GenericBase[T] {}
+interface Marker {}
+class Implementation : Marker {}
+interface GenericMarker[T] {}
+class GenericImplementation[T] : GenericMarker[T] {}
+class Wrapper {
+    shared { var Calls int32 }
+    init(value object?) { Calls += 1 }
+}
+class Outer {
+    open class Base {}
+    class Derived : Base {}
+    class Wrapper {
+        shared { var Calls int32 }
+        init(value object?) { Calls += 1 }
+    }
+}
+enum Role { Zero, One }
+let baseValue Base = Derived()
+let nestedBaseValue Outer.Base = Outer.Derived()
+let genericBaseValue GenericBase[int32] = GenericDerived[int32]()
+let markerValue object = Implementation()
+let genericMarkerValue object = GenericImplementation[int32]()
+let value = CALL
+Console.WriteLine(COMPARISON)
+EXTRA
+Console.WriteLine(Demo.Role(1) == Role.One)`
+        let source = Source
+            .Replace("CALL", call)
+            .Replace("COMPARISON", comparison)
+            .Replace(
+            "EXTRA",
+            if call.Contains("Outer.Wrapper", StringComparison.Ordinal) {
+                "Console.WriteLine(Outer.Wrapper.Calls)"
+            } else if call.Contains("Wrapper", StringComparison.Ordinal) {
+                "Console.WriteLine(Wrapper.Calls)"
+            } else {
+                ""
+            }
+        )
+        let result = CompileAndRun(source)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes((expected + "True\n").Replace("\n", Environment.NewLine)),
+            Encoding.UTF8.GetBytes(result.Stdout)
+        )
+    }
+
+    @Theory
+    @InlineData("Demo.Box(5)")
+    @InlineData("Demo.Box{Value: 5}")
+    @InlineData("NamespaceAlias.Box(5)")
+    @InlineData("NamespaceAlias.Box{Value: 5}")
+    func QualifiedConstruction_InfersOmittedArityAndPrefersNongeneric(construction string) {
+        const Source = `package Demo
+import System
+import NamespaceAlias = Demo
+class Box[T](Value T) { func Kind() string -> "top" }
+class Choice { var Value int32 = 9 }
+class Choice[T](Value T) {}
+class Holder {
+    class Box[T](Value T) { func Kind() string -> "nested" }
+    func Make() Demo.Box[int32] { return CONSTRUCTION }
+}
+let value = Holder().Make()
+Console.WriteLine(value.Value)
+Console.WriteLine(value.Kind())
+Console.WriteLine(Demo.Choice{}.Value)
+Console.WriteLine(Demo.Choice().Value)`
+        let result = CompileAndRun(Source.Replace("CONSTRUCTION", construction))
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("5\ntop\n9\n9\n".Replace("\n", Environment.NewLine)),
+            Encoding.UTF8.GetBytes(result.Stdout)
+        )
+    }
+
+    @Theory
+    @InlineData("Demo.Target[int32]", "Field")
+    @InlineData("Demo.Target[int32?]", "Field")
+    @InlineData("NamespaceAlias.Target[int32]", "Field")
+    @InlineData("NamespaceAlias.Target[int32?]", "Field")
+    @InlineData("Demo.Target[int32]", "Property")
+    @InlineData("Demo.Target[int32?]", "Property")
+    @InlineData("NamespaceAlias.Target[int32]", "Property")
+    @InlineData("NamespaceAlias.Target[int32?]", "Property")
+    @InlineData("Demo.Deep.Target[int32]", "Field")
+    @InlineData("Demo.Deep.Target[int32?]", "Property")
+    func QualifiedGenericStaticMutation_SharesReadIdentityAndEvaluatesOnce(receiver string, member string) {
+        const Source = `package Demo
+import System
+import NamespaceAlias = Demo
+class Target[T] {
+    shared {
+        var Field int32
+        prop Property int32 { get; set; }
+    }
+}
+class Holder {
+    class Target[T] {
+        shared {
+            var Field int32
+            prop Property int32 { get; set; }
+        }
+    }
+    shared {
+        var Calls int32
+        func Next() int32 {
+            Calls += 1
+            return Calls
+        }
+    }
+    func Run() {
+        RECEIVER.MEMBER = Next()
+        Console.WriteLine(RECEIVER.MEMBER)
+        RECEIVER.MEMBER += Next()
+        Console.WriteLine(RECEIVER.MEMBER)
+        RECEIVER.MEMBER++
+        Console.WriteLine(RECEIVER.MEMBER)
+        Console.WriteLine(Target[ARGUMENT].MEMBER)
+        Console.WriteLine(Calls)
+    }
+}
+Holder().Run()`
+        let argument = if receiver.Contains("?", StringComparison.Ordinal) {
+            "int32?"
+        } else {
+            "int32"
+        }
+        let packageName = if receiver.StartsWith("Demo.Deep.", StringComparison.Ordinal) {
+            "Demo.Deep"
+        } else {
+            "Demo"
+        }
+        let result = CompileAndRun(
+            Source
+                .Replace("package Demo", "package " + packageName)
+                .Replace("import NamespaceAlias = Demo", "import NamespaceAlias = " + packageName)
+                .Replace("RECEIVER", receiver)
+                .Replace("MEMBER", member)
+                .Replace("ARGUMENT", argument)
+        )
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("1\n3\n4\n0\n2\n".Replace("\n", Environment.NewLine)),
+            Encoding.UTF8.GetBytes(result.Stdout)
+        )
+    }
+
+    @Theory
+    @InlineData("Missing", "Missing", false)
+    @InlineData("Missing?", "Missing", false)
+    @InlineData("5", "5", false)
+    @InlineData("1 + 2", "1 + 2", false)
+    @InlineData("Missing", "Missing", true)
+    @InlineData("Missing?", "Missing", true)
+    @InlineData("5", "5", true)
+    func QualifiedGenericStaticAccess_RetainsLocatedTypeArgumentErrors(argument string, errorText string, write bool) {
+        let source = `package Demo
+import System
+class Target[T] { shared { var Value int32 } }
+` + if write {
+            "Demo.Target[" + argument + "].Value = 1"
+        } else {
+            "Console.WriteLine(Demo.Target[" + argument + "].Value)"
+        }
+        let lineStart = source.LastIndexOf('\n') + 1
+        let column = source.LastIndexOf(argument, StringComparison.Ordinal) - lineStart + 1
+        CompileAndRun(source, "(4,$column,4,${column + errorText.Length}): error GS0113:")
+    }
+
     @Fact
     func QualifiedDeclaredAliases_PreserveTheirOwnNamesAndTargetIdentity() {
         const Source = `package Repro
@@ -365,7 +555,7 @@ Console.WriteLine(5 is == string)`
     }
 
     shared {
-        private func CompileAndRun(source string)(ExitCode int32, Stdout string) {
+        private func CompileAndRun(source string, expectedError string? = nil)(ExitCode int32, Stdout string) {
             let directory = Path.Combine(
                 AppContext.BaseDirectory,
                 "Issue3351IsPatternEmitTests",
@@ -396,6 +586,15 @@ Console.WriteLine(5 is == string)`
                 } finally {
                     Console.SetOut(previousOut)
                     Console.SetError(previousErr)
+                }
+                if expectedError != nil {
+                    let output = compileOut.ToString() + compileErr.ToString()
+                    Assert.Equal(1, compileExitCode)
+                    Assert.Equal(1, output.Split("error GS", StringSplitOptions.None).Length - 1)
+                    Assert.Contains(expectedError, output, StringComparison.Ordinal)
+                    Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+                    Assert.False(File.Exists(outputPath))
+                    return (compileExitCode, output)
                 }
                 Assert.True(compileExitCode == 0, (`gsc failed (exit ` + "$compileExitCode" + `):
 stdout:

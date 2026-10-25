@@ -803,7 +803,7 @@ class BoundScope {
     /// untouched.
     /// @param packageName The qualifier segments, dot-joined.
     /// @param name The final segment.
-    /// @param preferredArity The requested generic arity, or -1/0 for none.
+    /// @param preferredArity The requested generic arity, or -1 to infer with nongeneric preference.
     /// @param type The matching source type, when unambiguous.
     /// @returns Whether exactly one source type matches.
     func TryLookupSourceTypeInPackage(
@@ -833,7 +833,7 @@ class BoundScope {
     /// Resolves a dotted source type name by its exact package and possibly
     /// nested type identity.
     /// @param qualifiedName The package-qualified source type name.
-    /// @param preferredArity The requested generic arity, or -1/0 for none.
+    /// @param preferredArity The requested generic arity, or -1 to infer with nongeneric preference.
     /// @param type The matching source type, when unambiguous.
     /// @returns Whether the qualified name resolves to exactly one source type.
     func TryLookupQualifiedSourceType(
@@ -845,50 +845,57 @@ class BoundScope {
         if string.IsNullOrEmpty(qualifiedName) {
             return false
         }
-        let wantedArity = if preferredArity > 0 {
-            preferredArity
-        } else {
-            0
-        }
         var match TypeSymbol? = nil
+        var matchArity = -1
+        var ambiguous = false
         let seen = HashSet[TypeSymbol]()
         for pair in EnumerateTypeAliasesInChain() {
+            var candidate TypeSymbol
+            var arity int32
             if TryGetAliasDeclaringPackageInChain(pair.Key, out var aliasPackage) {
+                candidate = pair.Value
+                arity = GetTypeAliasArity(candidate)
                 let aliasName = pair.Key.Substring(pair.Key.IndexOf('#') + 1)
-                if GetTypeAliasArity(pair.Value) != wantedArity || !string.Equals(
+                if !string.Equals(
                     aliasPackage + "." + aliasName,
-                    MangleArity(qualifiedName, wantedArity),
+                    MangleArity(qualifiedName, arity),
                     StringComparison.Ordinal
                 ) {
                     continue
                 }
-                if match != nil && !object.ReferenceEquals(match, pair.Value) {
-                    return false
+            } else {
+                candidate = TypeDefinition(pair.Value)
+                arity = GetTypeAliasArity(candidate)
+                if !seen.Add(candidate) || IsDeclaredInImplicitPackage(candidate) {
+                    continue
                 }
-                match = pair.Value
+                let package_ = TypePackageName(candidate)
+                if string.IsNullOrEmpty(package_) || !string.Equals(
+                    package_ + "." + QualifiedTypeName(candidate),
+                    qualifiedName,
+                    StringComparison.Ordinal
+                ) {
+                    continue
+                }
+            }
+            if (preferredArity >= 0 && arity != preferredArity) ||
+                (preferredArity < 0 && matchArity == 0 && arity != 0) {
                 continue
             }
-            let candidate = TypeDefinition(pair.Value)
-            if !seen.Add(candidate) ||
-                GetTypeAliasArity(candidate) != wantedArity ||
-                IsDeclaredInImplicitPackage(candidate) {
-                continue
+            if match == nil || (preferredArity < 0 && arity == 0 && matchArity != 0) {
+                match = candidate
+                matchArity = arity
+                ambiguous = false
+            } else if !object.ReferenceEquals(match, candidate) {
+                ambiguous = true
             }
-            let package_ = TypePackageName(candidate)
-            if string.IsNullOrEmpty(package_) || !string.Equals(
-                package_ + "." + QualifiedTypeName(candidate),
-                qualifiedName,
-                StringComparison.Ordinal
-            ) {
-                continue
-            }
-            if match != nil && !object.ReferenceEquals(match, candidate) {
-                return false
-            }
-            match = candidate
         }
-        type = match
-        return match != nil
+        type = if ambiguous {
+            nil
+        } else {
+            match
+        }
+        return type != nil
     }
 
     /// Resolves an explicit import alias whose target is a same-compilation

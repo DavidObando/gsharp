@@ -414,6 +414,20 @@ internal partial class ExpressionBinder {
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
+        if !TryResolveQualifiedSourceType(syntax, out var remainder, out var sourceType) {
+            return false
+        }
+        result = BindQualifiedSourceTypeRemainder(remainder, sourceType!!)
+        return true
+    }
+
+    private func TryResolveQualifiedSourceType(
+        syntax AccessorExpressionSyntax,
+        out remainder ExpressionSyntax,
+        @NotNullWhen(true) out sourceType TypeSymbol?
+    ) bool {
+        remainder = syntax
+        sourceType = nil
         if syntax.IsNullConditional {
             return false
         }
@@ -426,6 +440,14 @@ internal partial class ExpressionBinder {
         // in-scope value (e.g. a field on the enclosing type) is not a genuine
         // alternate interpretation and must not stop peeling (issue #2419).
         var current ExpressionSyntax = syntax
+        while current is AccessorExpressionSyntax step &&
+            !step.IsNullConditional &&
+            step.LeftPart is AccessorExpressionSyntax left &&
+            !left
+            .IsNullConditional {
+            let right = AccessorExpressionSyntax(step.SyntaxTree, left.RightPart, step.DotToken, step.RightPart)
+            current = AccessorExpressionSyntax(step.SyntaxTree, left.LeftPart, left.DotToken, right)
+        }
         var peeledAny = false
         let peeledSegments = List[string]()
         while current is AccessorExpressionSyntax accessor &&
@@ -448,11 +470,8 @@ internal partial class ExpressionBinder {
         if !peeledAny {
             return false
         }
-        if !TryResolveQualifiedSourceTypeHead(current, peeledSegments, out var sourceType) {
-            return false
-        }
-        result = BindQualifiedSourceTypeRemainder(current, sourceType!!)
-        return true
+        remainder = current
+        return TryResolveQualifiedSourceTypeHead(current, peeledSegments, out sourceType)
     }
 
     /// Resolves the qualified source identity of a construction or static receiver.
@@ -472,45 +491,29 @@ internal partial class ExpressionBinder {
             case CollectionInitializerExpressionSyntax{Target: {} target} {
                 return TryResolveQualifiedSourceTypeHead(target, packageSegments, out sourceType)
             }
-            case AccessorExpressionSyntax{LeftPart: CollectionInitializerExpressionSyntax collection} {
-                return TryResolveQualifiedSourceTypeHead(collection, packageSegments, out sourceType)
-            }
             case ObjectCreationExpressionSyntax{Target: {} target} {
                 return TryResolveQualifiedSourceTypeHead(target, packageSegments, out sourceType)
             }
-            case AccessorExpressionSyntax{LeftPart: ObjectCreationExpressionSyntax creation} {
-                return TryResolveQualifiedSourceTypeHead(creation, packageSegments, out sourceType)
-            }
-            case AccessorExpressionSyntax{LeftPart: CallExpressionSyntax call} {
-                return TryResolveQualifiedSourceTypeHead(call, packageSegments, out sourceType)
-            }
-            case AccessorExpressionSyntax{LeftPart: StructLiteralExpressionSyntax literal} {
-                return TryResolveQualifiedSourceTypeHead(literal, packageSegments, out sourceType)
+            case accessor is AccessorExpressionSyntax {
+                return TryResolveQualifiedSourceTypeHead(accessor.LeftPart, packageSegments, out sourceType)
             }
             case call is CallExpressionSyntax when !call.Identifier.IsMissing {
                 simpleName = call.Identifier.ValueText
-                arity = call.TypeArgumentList?.Arguments.Count ?? 0
+                arity = call.TypeArgumentList?.Arguments.Count ?? -1
             }
             case literal is StructLiteralExpressionSyntax when !literal.TypeIdentifier.IsMissing {
                 simpleName = literal.TypeIdentifier.ValueText
-                arity = literal.TypeArgumentList?.Arguments.Count ?? 0
+                arity = literal.TypeArgumentList?.Arguments.Count ?? -1
             }
-            case AccessorExpressionSyntax{LeftPart: GenericNameExpressionSyntax genericHead} {
+            case genericHead is GenericNameExpressionSyntax {
                 simpleName = genericHead.Identifier.ValueText
                 arity = genericHead.TypeArgumentList?.Arguments.Count ?? 0
             }
-            case AccessorExpressionSyntax{LeftPart: NameExpressionSyntax nameHead} {
+            case nameHead is NameExpressionSyntax {
                 simpleName = nameHead.IdentifierToken.ValueText
                 arity = 0
             }
-            case accessor is AccessorExpressionSyntax {
-                // `Type[Args].Member`: a generic type receiver parses as an index
-                // expression (`Mp4Operation[int32]`), not a GenericName, when it
-                // appears as the left part of a member access.
-                if accessor.LeftPart is not IndexExpressionSyntax index ||
-                    index.Target is not NameExpressionSyntax indexNameHead {
-                    return false
-                }
+            case index is IndexExpressionSyntax when index.Target is NameExpressionSyntax indexNameHead {
                 simpleName = indexNameHead.IdentifierToken.ValueText
                 arity = index.Indices.Count
             }
@@ -529,20 +532,8 @@ internal partial class ExpressionBinder {
 
     private func BindQualifiedSourceTypeRemainder(remainder ExpressionSyntax, sourceType TypeSymbol) BoundExpression {
         switch remainder {
-            case call is CallExpressionSyntax when sourceType is StructSymbol structure {
-                return overloads.BindConstructorCallExpression(call, structure)
-            }
-            case call is CallExpressionSyntax when sourceType is EnumSymbol {
-                if call.Arguments.Count != 1 {
-                    Diagnostics.ReportWrongArgumentCount(call.Location, sourceType.Name, 1, call.Arguments.Count)
-                    return BoundErrorExpression(call)
-                }
-                let conversionTarget = if call.NullableQuestionToken != nil {
-                    cast[TypeSymbol](NullableTypeSymbol.Get(sourceType))
-                } else {
-                    sourceType
-                }
-                return conversions.BindConversion(call.Arguments[0], conversionTarget, allowExplicit: true)
+            case call is CallExpressionSyntax {
+                return overloads.BindCallExpression(call, sourceType)
             }
             case literal is StructLiteralExpressionSyntax when sourceType is StructSymbol structure {
                 return BindStructLiteralExpression(literal, structure)
@@ -561,37 +552,26 @@ internal partial class ExpressionBinder {
                     let receiver = BindQualifiedSourceTypeRemainder(accessor.LeftPart, sourceType)
                     return BindAccessorStep(receiver, classSymbol: nil, accessor.RightPart)
                 }
-                let segments = List[(Name string, Args ImmutableArray[TypeSymbol])]()
-                if !TryFlattenUserTypeExpressionSegments(accessor.LeftPart, segments) || segments.Count != 1 {
-                    return BoundErrorExpression(remainder)
-                }
-                let typeArguments = segments[0].Args
-                var receiverType TypeSymbol? = sourceType
-                if !typeArguments.IsDefaultOrEmpty {
-                    receiverType = switch sourceType {
-                        case structure is StructSymbol: cast[TypeSymbol?](
-                            StructSymbol.Construct(structure, typeArguments, $scope.References!!.MapClrTypeToReferences)
-                        )
-                        case interface_ is InterfaceSymbol: cast[TypeSymbol?](
-                            InterfaceSymbol.Construct(
-                                interface_,
-                                typeArguments,
-                                $scope.References!!.MapClrTypeToReferences
-                            )
-                        )
-                        default: default(TypeSymbol?)
-                    }
-                    if receiverType == nil {
-                        Diagnostics.ReportTypeNotGeneric(accessor.LeftPart.Location, sourceType.Name)
+                var structure StructSymbol? = sourceType as StructSymbol
+                var interface_ InterfaceSymbol? = sourceType as InterfaceSymbol
+                if accessor.LeftPart is IndexExpressionSyntax or GenericNameExpressionSyntax {
+                    if !TryResolveConstructedGenericTypeReceiver(
+                        accessor.LeftPart,
+                        out structure,
+                        out interface_,
+                        out _,
+                        out _,
+                        sourceType
+                    ) {
                         return BoundErrorExpression(remainder)
                     }
                 }
-                if receiverType is EnumSymbol enumeration {
+                if sourceType is EnumSymbol enumeration {
                     return BindEnumAccessorStep(enumeration, accessor.RightPart)
                 }
                 return BindConstructedGenericTypeAccessorStep(
-                    receiverType as StructSymbol,
-                    receiverType as InterfaceSymbol,
+                    structure,
+                    interface_,
                     constructedImported: nil,
                     accessor.RightPart,
                     accessor.LeftPart
