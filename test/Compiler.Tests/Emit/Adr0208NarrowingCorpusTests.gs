@@ -169,6 +169,8 @@ open class Adr0208NarrowingCorpusTests {
                 "h13_indexer_setter_clears_aliased_member",
                 "h14_null_conditional_receiver_repeats_ref_argument",
                 "h15_ref_local_alias_repeats_ref_argument",
+                "h16_ref_local_alias_passed_twice",
+                "h17_conditional_ref_argument_of_imported_call",
                 "h1_by_ref_param_survives_calls",
                 "h2_limitation_call_with_container_operand",
                 "h3_limitation_call_writes_global",
@@ -1156,6 +1158,33 @@ func Main() {
     var v C? = C{}
     Console.WriteLine(Run(ref v, ref v))
 }`, "GS0158@9:14", "reject", "", ""}
+            yield[]object{"h16_ref_local_alias_passed_twice", `class C {
+    var Value int32 = 1
+}
+func Clear2(ref x C?, ref y C?) { x = nil }
+func Run(ref a C?, ref b C?) int32 {
+    if a == nil { return 0 }
+    let ref c C? = b
+    Clear2(ref c, ref c)
+    return a.Value
+}
+func Main() {
+    var v C? = C{}
+    Console.WriteLine(Run(ref v, ref v))
+}`, "GS0158@9:14", "reject", "", ""}
+            yield[]object{"h17_conditional_ref_argument_of_imported_call", `import System.Threading
+class C {
+    var Value int32 = 1
+}
+func Run(ref a C?, flag bool) int32 {
+    if a == nil { return 0 }
+    Interlocked.Exchange[C?](ref flag ? a : a, nil)
+    return a.Value
+}
+func Main() {
+    var x C? = C{}
+    Console.WriteLine(Run(ref x, true))
+}`, "GS0158@8:14", "reject", "", ""}
             yield[]object{"out-alias_out_ref_alias", `class C { func M() { } }
 func Run(out c C?, ref alias C?) {
     c = C()

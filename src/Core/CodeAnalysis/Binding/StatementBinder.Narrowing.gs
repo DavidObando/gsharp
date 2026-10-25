@@ -1935,11 +1935,10 @@ internal partial class StatementBinder {
                     while argument is BoundConversionExpression conversion {
                         argument = conversion.Expression
                     }
-                    if argument is BoundConditionalAddressExpression &&
+                    if argument is BoundConditionalAddressExpression && RefCapabilities.GetParameterRefKind(
                         parameters[i]
-                        .ParameterType
-                        .IsByRef &&
-                        !parameters[i].IsIn {
+                    ) is RefKind.Ref or
+                        RefKind.Out {
                         RecordWritableReference(argument)
                     }
                 }
@@ -1987,7 +1986,14 @@ internal partial class StatementBinder {
         ]()
 
         private func IsCallArgumentOnly(assigned VariableSymbol) bool -> !assignments.ContainsKey(assigned) &&
-            !callAliasedRoots.Contains(assigned)
+            !callAliasedRoots.Contains(ResolveStorage(assigned))
+
+        // ADR-0208 R12 (#5292): the storage a variable names, through `let ref` alias chains. Every place that
+        // records or looks up an occurrence of a variable resolves it here.
+        private func ResolveStorage(variable VariableSymbol) VariableSymbol {
+            let chain = StatementBinder.AliasChain(variable)
+            return chain[chain.Count - 1]
+        }
 
         // ADR-0208 R12 (#5292, amendment A3): records the variables that this call passes more than once, at least
         // once by `ref`/`out`.
@@ -2055,8 +2061,7 @@ internal partial class StatementBinder {
                         CollectOccurrences(original, isReference, byReference, byValue)
                     } else {
                         // Resolve the variable to the storage it names, through `let ref` alias chains.
-                        let chain = StatementBinder.AliasChain(variable.Variable)
-                        let root = chain[chain.Count - 1]
+                        let root = ResolveStorage(variable.Variable)
                         if isReference {
                             byReference.Add(root)
                         } else {
