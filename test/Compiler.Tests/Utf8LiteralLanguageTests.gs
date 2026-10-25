@@ -13,6 +13,68 @@ import Xunit
 
 class Utf8LiteralLanguageTests {
     @Theory
+    @InlineData(`return Consume(u8"AB".Slice(0, 1), <-ch)`, "GS0219")
+    @InlineData(`return Consume(ReadOnlySpan[byte]([]byte{65}), <-ch)`, "GS0219")
+    @InlineData(`let value = u8"A"
+return Consume(value, <-ch)`, "GS0219")
+    @InlineData(`let ref readonly value = u8"A"[0]
+let received = <-ch
+return int32(value) + received`, "GS0258")
+    func ImplicitChannelSuspensionChecksSourceLocalsAndOperandTemporaries(body string, diagnostic string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`package Utf8ChannelTemporary
+import System
+func Consume(value readonly span[byte], extra int32) int32 -> value.Length + extra
+async func Read(ch chan[int32]) int32 {
+BODY
+}
+`.Replace("BODY", body), "Utf8ChannelTemporary", false)
+        Assert.NotEqual(0, code)
+        Assert.Contains(diagnostic, output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Utf8ChannelTemporary.dll")))
+    }
+
+    @Fact
+    func AsyncLambdaChannelSuspensionCannotLoseSpanOperands() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`package Utf8ChannelLambda
+func Consume(value readonly span[byte], extra int32) int32 -> value.Length + extra
+func Create() {
+    let read = async func(ch chan[int32]) int32 {
+        return Consume(u8"AB".Slice(0, 1), <-ch)
+    }
+}
+`, "Utf8ChannelLambda", false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0219", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ImplicitChannelSuspensionPreservesPureLiteralsAndAfterAwaitConstruction() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let assembly = fixture.Compile(`package Utf8ChannelSafe
+import System
+func Consume(value readonly span[byte], extra int32) int32 -> int32(value[0]) + extra
+func ConsumeAfter(extra int32, value readonly span[byte]) int32 -> value.Length * 100 + extra
+async func Literal(ch chan[int32]) int32 -> Consume(u8"A" + u8"", <-ch)
+async func After(ch chan[int32]) int32 -> ConsumeAfter(<-ch, u8"AB".Slice(0, 1))
+func Main() {
+    let first = chan[int32]()
+    let literal = Literal(first)
+    first <- 1
+    Console.WriteLine(literal.Result)
+    let second = chan[int32]()
+    let after = After(second)
+    second <- 1
+    Console.WriteLine(after.Result)
+}`, "Utf8ChannelSafe", true)
+        IlVerifier.Verify(assembly)
+        Assert.Equal("66\n101\n", fixture.Run(assembly))
+    }
+
+    @Theory
     @InlineData("u8\"AB\".Slice(0, 1)")
     @InlineData("View()")
     @InlineData("ReadOnlySpan[byte]([]byte{65})")
