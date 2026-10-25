@@ -96,9 +96,12 @@ func TestProcessGroupRejectsIncompleteProcView(t *testing.T) {
 		"proc /hidden proc rw 0 0\n",
 		"broken\n",
 	} {
-		if err := validateProcessGroupProcView([]byte(mounts)); err == nil {
+		if err := validateProcessGroupProcView([]byte(mounts), strconv.Itoa(os.Getpid())); err == nil {
 			t.Fatalf("incomplete process visibility was accepted: %q", mounts)
 		}
+	}
+	if err := validateProcessGroupProcView([]byte("proc /proc proc rw 0 0\n"), "0"); err == nil {
+		t.Fatal("a different PID namespace was accepted")
 	}
 }
 

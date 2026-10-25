@@ -30,13 +30,20 @@ func processGroupMembersExited(group int) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err := validateProcessGroupProcView(mounts); err != nil {
+	self, err := os.Readlink("/proc/self")
+	if err != nil {
+		return false, err
+	}
+	if err := validateProcessGroupProcView(mounts, self); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func validateProcessGroupProcView(mounts []byte) error {
+func validateProcessGroupProcView(mounts []byte, self string) error {
+	if self != strconv.Itoa(os.Getpid()) {
+		return errors.New("/proc uses a different PID namespace")
+	}
 	found := false
 	for _, line := range strings.Split(string(mounts), "\n") {
 		fields := strings.Fields(line)
