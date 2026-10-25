@@ -8,7 +8,8 @@
   "runtime": {
     "owner": "Gsharp.Runtime.Values, Version=0.5.0.0, Culture=neutral, PublicKeyToken=null",
     "compiler": "published Gsharp.NET.Sdk 0.5.212",
-    "certificate_sha256": "556C811C449A4F74904C377F2B318C228DD91636A89D88554AC82DD485BD60E9",
+    "certificate_sha256": "A5AB56A01AD8B7616B8ACB4A28E8C16042F95FB54F4AD51C5C43FC6994075814",
+    "renewal": "F2a adds ClrArrayCopies declarations/references. Independently resolved old/new complete return closures are identical, including by-value signatures, locals, EH, offsets and signed CoreLib10 targets. V1 carrier definitions and slice sources are unchanged. No new method or diagnostic is admitted.",
     "serialization": "IlVerifyFalsePositives.RuntimeReturnProof",
     "closure": [
       "Gsharp.Values.Slice`1::get_Owner(): T[] = owner ?? Array.Empty<T>()",
