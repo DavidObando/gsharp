@@ -53,8 +53,8 @@ import System.Reflection.Metadata.Ecma335
 /// per-emit (cref:StandaloneSignatureHandle) they cache:
 ///
 /// - `FinishInlineBody`
-/// - `GetHashCodeCombineObjectSpec`
-/// - `GetHashCodeAddObjectSpec`
+/// - `GetHashCodeCombineSpec`
+/// - `GetHashCodeAddSpec`
 /// - `GetHashCodeLocalSignature` (with its `hashCodeLocalSig` cache)
 ///
 /// Like every other PR-E-* component, `DataStructSynthesizer` is
@@ -1070,9 +1070,8 @@ internal class DataStructSynthesizer {
 
     /// Issue #410 / ADR-0029: emits
     /// `public bool Equals(Name other)` that compares fields in source
-    /// declaration order via `Object.Equals(object, object)`, short
-    /// circuiting on first inequality. Value-type fields are boxed; type
-    /// parameters and reference-type fields are passed as objects directly.
+    /// declaration order via `EqualityComparer<T>.Default.Equals`,
+    /// short-circuiting on the first inequality without boxing field operands.
     /// @returns The MethodDef handle of the emitted method, so callers can
     /// reference it from other synthesized members.
     private func EmitDataStructEqualsTyped(structSym StructSymbol) MethodDefinitionHandle {
@@ -1101,12 +1100,26 @@ internal class DataStructSynthesizer {
                     il.Branch(ILOpCode.Brfalse, retFalse)
                 }
             }
+            let comparerDefault = Invariant.Required(
+                typeof(EqualityComparer[object]).GetProperty("Default")?.GetMethod,
+                "EqualityComparer<T> declares the Default getter"
+            )
+            let comparerEquals = Invariant.Required(
+                typeof(EqualityComparer[object]).GetMethod("Equals", []Type{typeof(object), typeof(object)}),
+                "EqualityComparer<T> declares Equals(T, T)"
+            )
             for field in GetSynthesisFields(structSym) {
+                let comparer = ImportedTypeSymbol.GetConstructed(
+                    typeof(EqualityComparer[object]),
+                    typeof(EqualityComparer[_]),
+                    ImmutableArray.Create(field.Type)
+                )
                 let fieldHandle = this.resolveUserFieldToken(structSym, field)
+                il.OpCode(ILOpCode.Call)
+                il.Token(this.resolveImportedMethodRef(comparerDefault, comparer))
                 il.LoadArgument(0)
                 il.OpCode(ILOpCode.Ldfld)
                 il.Token(fieldHandle)
-                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
                 // Issue #2228: `other` is already a reference for a data
                 // class — `ldfld` reads straight off it. A data struct's
                 // `other` is passed by value, so its field is read off the
@@ -1118,8 +1131,8 @@ internal class DataStructSynthesizer {
                 }
                 il.OpCode(ILOpCode.Ldfld)
                 il.Token(fieldHandle)
-                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
-                il.Call(this.wellKnown.GetObjectStaticEqualsReference())
+                il.OpCode(ILOpCode.Callvirt)
+                il.Token(this.resolveImportedMethodRef(comparerEquals, comparer))
                 il.Branch(ILOpCode.Brfalse, retFalse)
             }
             il.LoadConstantI4(1)
@@ -1236,9 +1249,9 @@ internal class DataStructSynthesizer {
 
     /// Issue #410 / ADR-0029: emits
     /// `public override int GetHashCode()`. For up to 8 fields the
-    /// implementation calls `HashCode.Combine<object,...,object>`
-    /// after boxing each field; for >8 fields it folds via a stack-allocated
-    /// `HashCode` local using `HashCode.Add<object>` per field
+    /// implementation calls field-typed `HashCode.Combine`;
+    /// for >8 fields it folds via a stack-allocated
+    /// `HashCode` local using field-typed `HashCode.Add` per field
     /// and finishes with `ToHashCode()`.
     private func EmitDataStructGetHashCode(structSym StructSymbol) {
         let fields = GetSynthesisFields(structSym)
@@ -1265,26 +1278,23 @@ internal class DataStructSynthesizer {
                     il.LoadArgument(0)
                     il.OpCode(ILOpCode.Ldfld)
                     il.Token(fieldHandle)
-                    this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
                 }
                 il.OpCode(ILOpCode.Call)
-                il.Token(this.GetHashCodeCombineObjectSpec(fields.Length))
+                il.Token(this.GetHashCodeCombineSpec(fields))
                 il.OpCode(ILOpCode.Ret)
             } else {
                 // ldloca.s 0; initobj HashCode
                 il.LoadLocalAddress(0)
                 il.OpCode(ILOpCode.Initobj)
                 il.Token(this.wellKnown.GetHashCodeTypeReference())
-                let addSpec = this.GetHashCodeAddObjectSpec()
                 for field in fields {
                     let fieldHandle = this.resolveUserFieldToken(structSym, field)
                     il.LoadLocalAddress(0)
                     il.LoadArgument(0)
                     il.OpCode(ILOpCode.Ldfld)
                     il.Token(fieldHandle)
-                    this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
                     il.OpCode(ILOpCode.Call)
-                    il.Token(addSpec)
+                    il.Token(this.GetHashCodeAddSpec(field.Type))
                 }
                 il.LoadLocalAddress(0)
                 il.Call(this.wellKnown.GetHashCodeToHashCodeReference())
@@ -1966,25 +1976,24 @@ internal class DataStructSynthesizer {
     }
 
     /// Issue #410 / ADR-0029: produces a MethodSpec for
-    /// `HashCode.Combine<object,...,object>` with
-    /// [`arity`](paramref) type arguments (1..8).
-    private func GetHashCodeCombineObjectSpec(arity int32) EntityHandle {
-        let openRef = this.wellKnown.GetHashCodeCombineOpenReference(arity)
+    /// `HashCode.Combine<T1,...,Tn>` with field types in declaration order.
+    private func GetHashCodeCombineSpec(fields ImmutableArray[FieldSymbol]) EntityHandle {
+        let openRef = this.wellKnown.GetHashCodeCombineOpenReference(fields.Length)
         let sigBlob = BlobBuilder()
-        let argsEncoder = BlobEncoder(sigBlob).MethodSpecificationSignature(arity)
-        for var i = 0; i < arity; i++ {
-            argsEncoder.AddArgument().Object()
+        let argsEncoder = BlobEncoder(sigBlob).MethodSpecificationSignature(fields.Length)
+        for field in fields {
+            this.encodeTypeSymbol(argsEncoder.AddArgument(), field.Type)
         }
         return this.emitCtx.MetadataRows.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
     }
 
     /// Issue #410 / ADR-0029: produces a MethodSpec for
-    /// `HashCode.Add<object>(object)`.
-    private func GetHashCodeAddObjectSpec() EntityHandle {
+    /// `HashCode.Add<T>(T)` with the field's type.
+    private func GetHashCodeAddSpec(fieldType TypeSymbol) EntityHandle {
         let openRef = this.wellKnown.GetHashCodeAddOpenReference()
         let sigBlob = BlobBuilder()
         let argsEncoder = BlobEncoder(sigBlob).MethodSpecificationSignature(1)
-        argsEncoder.AddArgument().Object()
+        this.encodeTypeSymbol(argsEncoder.AddArgument(), fieldType)
         return this.emitCtx.MetadataRows.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
     }
 

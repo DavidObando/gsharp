@@ -1513,7 +1513,7 @@ internal class WellKnownReferences {
     /// `System.HashCode.Combine<T1, ..., Tn>` overload with the
     /// given arity (1 ≤ [`arity`](paramref) ≤ 8). Each open parameter
     /// is encoded as a generic method parameter (`!!i`) and instantiated
-    /// to (cref:object) via a MethodSpec at the call site.
+    /// to the field type via a MethodSpec at the call site.
     /// @param arity The number of generic parameters (1–8) on the desired `HashCode.Combine` overload.
     /// @returns The cached (cref:MemberReferenceHandle).
     func GetHashCodeCombineOpenReference(arity int32) MemberReferenceHandle {
