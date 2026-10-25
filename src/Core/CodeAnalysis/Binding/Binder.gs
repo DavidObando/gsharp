@@ -12777,6 +12777,15 @@ partial class Binder {
             argumentType TypeSymbol,
             substitution Dictionary[TypeParameterSymbol, TypeSymbol]
         ) {
+            // A lambda's CLR delegate can be unavailable across reflection contexts.
+            // Infer from its symbolic signature instead of its CLR projection.
+            if argumentType is FunctionTypeSymbol && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
+                parameterType,
+                out var parameterFunction
+            ) {
+                InferTypeArgumentsCore(parameterFunction!!, argumentType, substitution)
+                return
+            }
             var foundProjection = false
             if parameterType.OpenDefinition != nil &&
                 TryFindUniqueGenericProjection(
