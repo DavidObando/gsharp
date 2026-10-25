@@ -87,6 +87,20 @@ Anything else makes the struct **non-blittable**. In particular, the following m
 
 The recursion is performed by `BlittableDetector.IsBlittable` (cached per symbol). Cyclic value layouts are rejected; recursion through pointer fields is valid because pointers are classified as address-sized leaves.
 
+Issue #5264 clarifies that the same query applies to source and imported structs
+in by-value, return, `ref`, `out`, and `in` positions. Imported fields use
+`MemberLookup.GetClrFieldTypeSymbol` with the symbolic receiver. The query must
+not classify an erased generic argument instead of its actual source argument.
+Private instance fields count; static fields do not. A formatted class field
+and a managed by-reference field remain managed fields.
+
+Blittability does not imply that every ABI shape supports aggregate marshalling.
+Direct generic aggregate parameters and returns remain unsupported: GS0323 for
+by-value slots and GS0352 for by-reference slots. A raw pointer to a closed
+blittable generic value struct remains a pointer, not aggregate marshalling.
+`IsUnmanaged` remains a separate query: `bool`, `char`, `decimal`, and
+Auto-layout value structs can be unmanaged without being blittable.
+
 This is a deliberately **conservative** definition: it matches the subset of C#'s blittability rules that does not require synthesizing per-field `MarshalAs` data. Once `@MarshalAs` is supported (issue #762), the definition will be extended to cover fields with explicit `MarshalAs` directives.
 
 ### 3. Marshalling-table extension (ADR-0086 §2)
