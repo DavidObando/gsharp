@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Lowering
+import GSharp.Core.CodeAnalysis.Lowering.Async
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Text
 import System.Collections.Generic
@@ -657,6 +658,14 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         if diagnostics == nil {
             return
         }
+        // Synthetic statements stay hidden to stepping; their await retains the diagnostic source.
+        let suspensionLocation = if owningStatement is BoundVariableDeclaration declaration {
+            AsyncBoundTreeQueries.FindFirstAwaitSyntax(declaration.Initializer)?.Location ?? default(TextLocation)
+        } else if owningStatement is BoundExpressionStatement expression {
+            AsyncBoundTreeQueries.FindFirstAwaitSyntax(expression.Expression)?.Location ?? default(TextLocation)
+        } else {
+            default(TextLocation)
+        }
         for v in live {
             if object.ReferenceEquals(v, excludedSelfKill) {
                 continue
@@ -666,7 +675,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             if bag == nil {
                 continue
             }
-            let location = v.DeclaringSyntax?.Location ?? owningStatement?.Syntax?.Location ?? default(TextLocation)
+            let location = v.DeclaringSyntax?.Location ?? owningStatement?.Syntax?.Location ?? suspensionLocation
             let suspensionContext = if suspensionKeyword == "yield" {
                 "an iterator"
             } else {

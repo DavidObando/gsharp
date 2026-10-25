@@ -1150,7 +1150,7 @@ shared class SpillSequenceSpiller {
                 }
             }
             if awaitExpr.Type == TypeSymbol.Void {
-                sideEffects.Add(BoundExpressionStatement(awaitExpr.Syntax, awaitNode))
+                sideEffects.Add(BoundExpressionStatement(nil, awaitNode))
                 return BoundSpillSequenceExpression(
                     nil,
                     locals.ToImmutable(),
@@ -1161,7 +1161,7 @@ shared class SpillSequenceSpiller {
             // Create a spill temp for a value-producing await result.
             let spillLocal = MakeSpillTemp(awaitExpr.Type)
             locals.Add(spillLocal)
-            sideEffects.Add(BoundVariableDeclaration(awaitExpr.Syntax, spillLocal, awaitNode))
+            sideEffects.Add(BoundVariableDeclaration(nil, spillLocal, awaitNode))
             return BoundSpillSequenceExpression(
                 nil,
                 locals.ToImmutable(),
