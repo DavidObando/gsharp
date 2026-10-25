@@ -11,6 +11,12 @@ Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severi
 This validates explicitly marked CLR contracts; it does not enable the planned
 value lowering of ordinary source `[N]T`.
 
+## Native CLR span aliases (ADR-0211)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0631 | Error | Invalid native CLR span alias: wrong arity or element type, a shadowed readonly form, unavailable core-library span types, a nullable constructor target, or an unsupported allocation literal. | Use one heap-storable element type and a target core library providing CLR spans. If `span` is shadowed, use `System.ReadOnlySpan[T]` explicitly. Construct a non-nullable CLR span; use existing CLR span constructors, not native collection allocation syntax. |
+
 ## Native protocols (ADR-0205)
 
 | Code | Severity | Meaning | Remedy |

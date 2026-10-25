@@ -44,6 +44,8 @@ jobs:
           fetch-depth: 0
       - name: Test CI routing contracts
         run: python3 build/test-ci-selection.py
+      - name: Test fixed-array artifact workspace guard
+        run: python3 build/test-fixed-array-aot-workspace.py
       - name: Select affected components
         id: select
         run: python3 build/ci-selection.py

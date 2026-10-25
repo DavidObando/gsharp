@@ -12,13 +12,15 @@ import Xunit
 class CompilationMeasurementsTests {
     @Fact
     func ReusedDeclarations_AreCountedButDoNotProduceDeclarationSpans() {
-        let tree = SyntaxTree.Parse("package P\nfunc Value() int32 -> 42")
+        let tree = SyntaxTree.Parse("package P\nfunc Value() int32 {\n    return 42\n}\n")
         let original = Compilation(tree){IsLibrary = true}
         let globals = original.GlobalScope
         let path = Path.Combine(AppContext.BaseDirectory, "reuse-" + Guid.NewGuid().ToString("N") + ".json")
         try {
             using let measurements = CompilationMeasurements.Start("reuse")
-            let updated = Compilation(tree){IsLibrary = true, ReusedGlobalScope = globals}
+            let edited = SyntaxTree.Parse("package P\nfunc Value() int32 {\n    return 43\n}\n")
+            let updated = original.ReplaceSyntaxTree(tree, edited)
+            Assert.Same(globals, updated.GlobalScope)
             Assert.Empty(updated.BoundProgram.Diagnostics)
             measurements.WriteJson(path)
             using let json = JsonDocument.Parse(File.ReadAllText(path))
