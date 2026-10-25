@@ -5,10 +5,12 @@
 package GSharp.Compiler.Tests.Emit
 
 import System
+import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Linq.Expressions
 import System.Reflection
+import System.Text
 import GSharp.Tests
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
@@ -18,6 +20,110 @@ import GSharp.Compiler
 import GSharp.Compiler.Tests
 
 class Issue4755GenericStructInitializerEmitTests {
+    @Fact
+    func Issue5361_InferredClassLiteralRunsDeclarationInitializerThroughDriver() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        const source = `package Repro
+import System
+class Box[T](Value T) { var Kind string = "top" }
+Console.WriteLine(Box{Value: 5}.Kind == "top")
+`
+        let image = fixture.Compile(source, "issue5361", true, "/deterministic+")
+        IlVerifier.Verify(image)
+        Assert.Equal(Encoding.UTF8.GetBytes("True\n"), RunDriverBytes(image, fixture.Directory))
+        let first = File.ReadAllBytes(image)
+        fixture.Compile(source, "issue5361", true, "/deterministic+")
+        Assert.Equal(first, File.ReadAllBytes(image))
+    }
+
+    @Theory
+    @InlineData("Box")
+    @InlineData("Box[int32]")
+    @InlineData("Scalar")
+    func Issue5361_ClassLiteralPreservesPrimaryScopeEffectsAndOverrides(literalType string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package PrimaryClass5361
+import System
+class Effects {
+    shared {
+        var Log string = ""
+        var Fail bool = false
+        func Mark(tag string, value int32) int32 {
+            Log += tag
+            if Fail && tag == "I" { throw InvalidOperationException("initializer") }
+            return value
+        }
+    }
+}
+open class Parent {
+    var BaseValue int32 = Effects.Mark("B", 3)
+}
+class Box[T](Value T) : Parent {
+    private let Snapshot T = Value
+    var Kind int32 = Effects.Mark("I", 7)
+    func Read() T -> Snapshot
+}
+class Scalar(Value int32) : Parent {
+    private let Snapshot int32 = Value
+    var Kind int32 = Effects.Mark("I", 7)
+    func Read() int32 -> Snapshot
+}
+func Main() {
+    let omitted = ` + literalType + `{Value: Effects.Mark("A", 5)}
+    Console.WriteLine(Effects.Log)
+    Console.WriteLine(omitted.Value == 5 && omitted.Read() == 5 && omitted.Kind == 7 && omitted.BaseValue == 3)
+    Effects.Log = ""
+    let overridden = ` + literalType + `{Kind: Effects.Mark("O", 9), Value: Effects.Mark("V", 6)}
+    Console.WriteLine(Effects.Log)
+    Console.WriteLine(overridden.Value == 6 && overridden.Read() == 6 && overridden.Kind == 9)
+    Effects.Log = ""
+    let positional = Box[int32](Effects.Mark("P", 8))
+    Console.WriteLine(Effects.Log)
+    Console.WriteLine(positional.Read() == 8 && positional.Kind == 7)
+    Effects.Log = ""
+    let defaulted = Box[int32]{}
+    Console.WriteLine(Effects.Log)
+    Console.WriteLine(defaulted.Read() == 0 && defaulted.Kind == 7)
+    Effects.Log = ""
+    Effects.Fail = true
+    try {
+        let rejected = ` + literalType + `{Value: Effects.Mark("T", 10), Kind: Effects.Mark("X", 11)}
+        Console.WriteLine("initializer did not throw")
+    } catch (error InvalidOperationException) {
+        Console.WriteLine(Effects.Log)
+        Console.WriteLine(error.Message)
+    }
+}
+`
+        let image = fixture.Compile(source, "primary-class", true)
+        IlVerifier.Verify(image)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("ABI\nTrue\nOVBI\nTrue\nPBI\nTrue\nBI\nTrue\nTXBI\ninitializer\n"),
+            RunDriverBytes(image, fixture.Directory)
+        )
+    }
+
+    @Fact
+    func Issue5361_ClassLiteralExpressionTreeUsesPrimaryConstructor() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let image = fixture.Compile(`package ClassTree5361
+import System
+import System.Linq.Expressions
+class Box[T](Value T) {
+    private let Snapshot T = Value
+    var Kind string = "top"
+    func Read() T -> Snapshot
+}
+func Main() {
+    let tree Expression[Func[Box[int32]]] = () -> Box{Value: 5, Kind: "override"}
+    let item = tree.Compile()()
+    Console.WriteLine(item.Read() == 5 && item.Kind == "override")
+}
+`, "class-tree", true)
+        IlVerifier.Verify(image)
+        Assert.Equal(Encoding.UTF8.GetBytes("True\n"), RunDriverBytes(image, fixture.Directory))
+    }
+
     @Theory
     @InlineData(int32(0), false)
     @InlineData(int32(0), true)
@@ -2016,6 +2122,27 @@ class Api {
     }
 
     shared {
+        private func RunDriverBytes(image string, directory string)[]uint8 {
+            let start = ProcessStartInfo("dotnet"){
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = directory
+            }
+            start.ArgumentList.Add(image)
+            using let process = Process.Start(start)!!
+            using let stdout = MemoryStream()
+            let output = process.StandardOutput.BaseStream.CopyToAsync(stdout)
+            let error = process.StandardError.ReadToEndAsync()
+            if !process.WaitForExit(30_000) {
+                process.Kill(entireProcessTree: true)
+                Assert.Fail("class literal driver witness timed out")
+            }
+            output.GetAwaiter().GetResult()
+            Assert.True(process.ExitCode == 0, error.GetAwaiter().GetResult())
+            return stdout.ToArray()
+        }
+
         private func AssertNativeConsumer(
             directory string,
             emitted string,
