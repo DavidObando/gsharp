@@ -215,8 +215,15 @@
       </_GsharpSdkPackagePayload>
       <_GsharpSdkPackagePayload Update="@(_GsharpSdkPackagePayload)">
         <GsharpSdkRelativeDirectory>$([System.IO.Path]::GetDirectoryName('%(GsharpSdkRelativePath)'))</GsharpSdkRelativeDirectory>
+        <GsharpSdkPackSource>%(FullPath)</GsharpSdkPackSource>
+        <!-- ADR-0210: all tool copies use the SDK-owned ABI, not the bootstrap runtime. -->
+        <GsharpSdkPackSource Condition="'%(Filename)' == 'Gsharp.Runtime.Values'">$(BaseOutputPath)Gsharp.Runtime.Values/%(Filename)%(Extension)</GsharpSdkPackSource>
       </_GsharpSdkPackagePayload>
-      <None Include="%(_GsharpSdkPackagePayload.FullPath)" Pack="true" Visible="false">
+    </ItemGroup>
+    <Error Condition="!Exists('%(_GsharpSdkPackagePayload.GsharpSdkPackSource)')"
+           Text="SDK payload source '%(_GsharpSdkPackagePayload.GsharpSdkPackSource)' is missing." />
+    <ItemGroup>
+      <None Include="%(_GsharpSdkPackagePayload.GsharpSdkPackSource)" Pack="true" Visible="false">
         <PackagePath>%(_GsharpSdkPackagePayload.GsharpSdkPackagePrefix)%(_GsharpSdkPackagePayload.GsharpSdkRelativeDirectory)/</PackagePath>
       </None>
     </ItemGroup>
