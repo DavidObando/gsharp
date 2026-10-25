@@ -145,6 +145,96 @@ func Main() {
     }
 
     @Theory
+    @InlineData("Host[Base].Accept(List[Derived](), 0)", "16,23,16,38")
+    @InlineData("Host[Base]().AcceptInstance(List[Derived](), 0)", "16,33,16,48")
+    @InlineData("Host[Derived].AcceptValue(Base(), 0)", "16,31,16,37")
+    @InlineData("Host[Derived]().AcceptValueInstance(Base(), 0)", "16,41,16,47")
+    func MethodInferenceCannotReplaceFixedOwnerArguments(invocation string, location string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let references = ReferenceClosure.RefPackAssemblies().Select((path string) -> "/r:" + path).ToArray()
+        let declarations = `package FixedOwner5273
+import System
+import System.Collections.Generic
+open class Base { }
+class Derived : Base { }
+class Host[T] {
+    shared {
+        public func Accept[U](items List[T], marker U) U -> marker
+        public func AcceptValue[U](value T, marker U) U -> marker
+        public func Shadow[T](value T) T -> value
+    }
+    public func AcceptInstance[U](items List[T], marker U) U -> marker
+    public func AcceptValueInstance[U](value T, marker U) U -> marker
+}`
+        let source = declarations + "\nfunc Main() {\n    " + invocation + "\n}"
+        let (code, output) = fixture.TryCompile(source, "FixedOwner5273", true, references)
+        Assert.NotEqual(0, code)
+        Assert.True(
+            output.Contains("FixedOwner5273.gs(" + location + "): error GS0154:", StringComparison.Ordinal),
+            output
+        )
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "FixedOwner5273.dll")))
+        let dll = fixture.Compile(declarations + `
+func Main() {
+    let first string = Host[Base].Accept(List[Base](), "static")
+    let second int32 = Host[Derived]().AcceptInstance(List[Derived](), 17)
+    let third string = Host[Base].Shadow("distinct")
+    let fourth string = Host[Base]().AcceptValueInstance(Derived(), "derived")
+    Console.WriteLine(first)
+    Console.WriteLine(second)
+    Console.WriteLine(third)
+    Console.WriteLine(fourth)
+}`, "FixedOwnerControls5273", true, references)
+        IlVerifier.Verify(dll)
+        Assert.Equal("static\n17\ndistinct\nderived\n", fixture.Run(dll))
+    }
+
+    @Theory
+    @InlineData("[]T", false)
+    @InlineData("[]T", true)
+    @InlineData("[1]T", false)
+    @InlineData("[1]T", true)
+    @InlineData("chan[T]", false)
+    @InlineData("chan[T]", true)
+    @InlineData("[,]T", false)
+    @InlineData("[,]T", true)
+    func InvariantCallbackElementsSupplyExactBounds(container string, callbackFirst bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let references = ReferenceClosure.RefPackAssemblies().Select((path string) -> "/r:" + path).ToArray()
+        let concrete = container.Replace("T", "Base", StringComparison.Ordinal)
+        let callback = "predicate (" + container + ") -> bool"
+        let parameters = if callbackFirst {
+            callback + ", value T"
+        } else {
+            "value T, " + callback
+        }
+        let arguments = if callbackFirst {
+            "predicate, Derived()"
+        } else {
+            "Derived(), predicate"
+        }
+        let source = (`package InvariantCallback5273
+import System
+open class Base { }
+class Derived : Base { }
+func Keep[T](` + parameters + `) T {
+    Console.WriteLine(typeof(T).Name)
+    return value
+}
+func FromInput[T](` + callback + `) string -> typeof(T).Name
+func Main() {
+    let predicate (` + concrete + `) -> bool = (items ` + concrete + `) -> true
+    let result = Keep(` + arguments + `)
+    Console.WriteLine(result.GetType().Name)
+    Console.WriteLine(FromInput(predicate))
+}`)
+        let dll = fixture.Compile(source, "InvariantCallback5273", true, references)
+        IlVerifier.Verify(dll)
+        Assert.Equal("Base\nDerived\nBase\n", fixture.Run(dll))
+    }
+
+    @Theory
     @InlineData("Func[T]")
     @InlineData("() -> T")
     func ThrowOnlyCallbackWithoutTypeEvidenceReportsInferenceFailure(callbackType string) {

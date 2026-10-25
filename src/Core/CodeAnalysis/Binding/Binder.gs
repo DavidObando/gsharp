@@ -12652,7 +12652,12 @@ partial class Binder {
                     boundKind
                 )
             } else if parameterType is SliceTypeSymbol ps && argumentType is SliceTypeSymbol asym {
-                InferTypeArgumentsCore(ps.ElementType, asym.ElementType, substitution, boundKind)
+                InferTypeArgumentsCore(
+                    ps.ElementType,
+                    asym.ElementType,
+                    substitution,
+                    MemberLookup.SymbolicInferenceBoundKind.Exact
+                )
             } else if parameterType is ChannelTypeSymbol pc && ChannelTypeSymbol.TryGetChannelShape(
                 argumentType,
                 out var argumentElement,
@@ -12665,9 +12670,19 @@ partial class Binder {
                 // inferred either way. Without this, `merge(a, b)` cannot infer its
                 // element and every generic channel function has to be called with
                 // an explicit type argument.
-                InferTypeArgumentsCore(pc.ElementType, argumentElement!!, substitution, boundKind)
+                InferTypeArgumentsCore(
+                    pc.ElementType,
+                    argumentElement!!,
+                    substitution,
+                    MemberLookup.SymbolicInferenceBoundKind.Exact
+                )
             } else if parameterType is ArrayTypeSymbol pa && argumentType is ArrayTypeSymbol aa {
-                InferTypeArgumentsCore(pa.ElementType, aa.ElementType, substitution, boundKind)
+                InferTypeArgumentsCore(
+                    pa.ElementType,
+                    aa.ElementType,
+                    substitution,
+                    MemberLookup.SymbolicInferenceBoundKind.Exact
+                )
                 // #611 intentional asymmetry: a fixed-array `[N]T` does NOT unify
                 // against a slice parameter `[]T` (or vice versa). In Go, explicit
                 // slicing is required to produce a slice from a fixed-length array.
@@ -12677,8 +12692,14 @@ partial class Binder {
 
             } else if parameterType is RectangularArrayTypeSymbol pr &&
                 argumentType is RectangularArrayTypeSymbol ar &&
-                pr.Rank == ar.Rank {
-                InferTypeArgumentsCore(pr.ElementType, ar.ElementType, substitution, boundKind)
+                pr.Rank == ar
+                .Rank {
+                InferTypeArgumentsCore(
+                    pr.ElementType,
+                    ar.ElementType,
+                    substitution,
+                    MemberLookup.SymbolicInferenceBoundKind.Exact
+                )
             } else if parameterType is TupleTypeSymbol parameterTuple &&
                 argumentType is TupleTypeSymbol argumentTuple &&
                 parameterTuple.Arity == argumentTuple

@@ -742,16 +742,28 @@ internal class MemberLookup {
 
     private class SymbolicInferenceConflictMarker { }
 
+    private class SourceInferenceState {
+        init(substitution Dictionary[TypeParameterSymbol, TypeSymbol]) {
+            this.FixedParameters = HashSet[TypeParameterSymbol](substitution.Keys)
+            this.Bounds = Dictionary[TypeParameterSymbol, SymbolicInferenceBounds]()
+        }
+
+        prop FixedParameters HashSet[TypeParameterSymbol] {
+            get;
+        }
+
+        prop Bounds Dictionary[TypeParameterSymbol, SymbolicInferenceBounds] {
+            get;
+        }
+    }
+
     shared {
         // Preserve the kind of provisional evidence across argument sites without
         // extending the substitution's lifetime or changing its dictionary API.
         private let sourceInferenceBounds ConditionalWeakTable[
             Dictionary[TypeParameterSymbol, TypeSymbol],
-            Dictionary[TypeParameterSymbol, SymbolicInferenceBounds]
-        ] = ConditionalWeakTable[
-            Dictionary[TypeParameterSymbol, TypeSymbol],
-            Dictionary[TypeParameterSymbol, SymbolicInferenceBounds]
-        ]()
+            SourceInferenceState
+        ] = ConditionalWeakTable[Dictionary[TypeParameterSymbol, TypeSymbol], SourceInferenceState]()
 
         private let importedExtensionIndexes ConditionalWeakTable[Type, ImportedExtensionIndex] =
         ConditionalWeakTable[Type, ImportedExtensionIndex]()
@@ -6407,26 +6419,18 @@ internal class MemberLookup {
             argument TypeSymbol,
             kind SymbolicInferenceBoundKind
         ) {
-            if kind == SymbolicInferenceBoundKind.Lower && !sourceInferenceBounds.TryGetValue(substitution, out _) {
-                substitution[parameter] = if substitution.TryGetValue(parameter, out var existing) {
-                    MergeRecoveredTypeArgument(existing, argument) ?? existing
-                } else {
-                    argument
-                }
+            let state = sourceInferenceBounds.GetValue(
+                substitution,
+                (seed Dictionary[TypeParameterSymbol, TypeSymbol]) -> SourceInferenceState(seed)
+            )
+            // Owner and receiver bindings precede inference. Only newly inferred
+            // parameters may receive bounds, keyed by symbol identity.
+            if state.FixedParameters.Contains(parameter) {
                 return
             }
-            let byParameter = sourceInferenceBounds.GetValue(
-                substitution,
-                (_ Dictionary[TypeParameterSymbol, TypeSymbol]) -> Dictionary[
-                    TypeParameterSymbol,
-                    SymbolicInferenceBounds
-                ]()
-            )
+            let byParameter = state.Bounds
             if !byParameter.TryGetValue(parameter, out var bounds) {
                 bounds = SymbolicInferenceBounds(1)
-                if substitution.TryGetValue(parameter, out var existing) {
-                    bounds.Add(0, existing, SymbolicInferenceBoundKind.Lower)
-                }
                 byParameter[parameter] = bounds
             }
             bounds.Add(0, argument, kind)
