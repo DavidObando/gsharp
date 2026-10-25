@@ -1425,7 +1425,8 @@ class Lowerer : BoundTreeRewriter {
             if clrType != nil {
                 let getEnumerator MethodInfo? = MemberLookup.ResolveGetEnumerator(clrType, out _)
                 if getEnumerator != nil {
-                    enumeratorType = ClrNullability.GetReturnTypeSymbol(getEnumerator).StripToBareShape()
+                    enumeratorType = MemberLookup.GetClrMethodReturnTypeSymbol(collection.Type, getEnumerator)
+                        .StripToBareShape()
                     getEnumeratorCall = BoundImportedInstanceCallExpression(
                         nil,
                         collection,
