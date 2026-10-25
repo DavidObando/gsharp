@@ -11,6 +11,7 @@ import System.Collections.Generic
 import System.ComponentModel
 import System.Diagnostics
 import System.IO
+import System.IO.Pipes
 import System.Linq
 import System.Text
 import System.Threading
@@ -23,6 +24,28 @@ import Xunit.Sdk
 /// mixed IDisposable + IAsyncDisposable, exception safety, return semantics,
 /// and negative diagnostics (outside async, async-only with sync using).
 open class Issue605AwaitUsingLetEmitTests {
+    @Fact
+    func ObserveCaptures_FaultedCopiesPreservePrimaryAndBothErrors() {
+        using let outputPipe = AnonymousPipeServerStream(PipeDirection.Out)
+        using let errorPipe = AnonymousPipeServerStream(PipeDirection.Out)
+        outputPipe.DisposeLocalCopyOfClientHandle()
+        errorPipe.DisposeLocalCopyOfClientHandle()
+        using let outputSource = MemoryStream([]uint8{1})
+        using let errorSource = MemoryStream([]uint8{2})
+        let outputCopy = outputSource.CopyToAsync(outputPipe)
+        let errorCopy = errorSource.CopyToAsync(errorPipe)
+        let captures = Task.WhenAll([]Task{outputCopy, errorCopy})
+        using let cancellation = CancellationTokenSource()
+        let primary = "timed out after 2000 ms"
+        let failure = ObserveCaptures(captures, cancellation, primary)
+        Assert.True(outputCopy.IsFaulted)
+        Assert.True(errorCopy.IsFaulted)
+        let errors = Assert.IsType[AggregateException](captures.Exception)
+        Assert.Equal(2, errors.InnerExceptions.Count)
+        Assert.Equal(primary + "; output capture failed: $errors", failure)
+        Assert.True(cancellation.IsCancellationRequested)
+    }
+
     @Fact
     func CompileAndRunBytes_TimeoutReportsBothStreamsAndStopsChild() {
         let exception = Assert.ThrowsAny[XunitException](
@@ -348,6 +371,40 @@ test()`
     }
 
     shared {
+        private func ObserveCaptures(
+            captures Task,
+            captureCancellation CancellationTokenSource,
+            failure string
+        ) string {
+            let failures = List[string]()
+            if failure.Length > 0 {
+                failures.Add(failure)
+            }
+            let cleanupTimeout = TimeSpan.FromSeconds(5)
+            try {
+                if Task.WhenAny(captures, Task.Delay(cleanupTimeout)).GetAwaiter().GetResult() != captures {
+                    failures.Add("output streams did not close within 5000 ms")
+                    captureCancellation.Cancel()
+                    if Task.WhenAny(captures, Task.Delay(cleanupTimeout)).GetAwaiter().GetResult() != captures {
+                        let _ = captures.ContinueWith(
+                            (task Task) -> task.Exception,
+                            TaskContinuationOptions.OnlyOnFaulted
+                        )
+                        failures.Add("output capture did not stop after cancellation")
+                        return string.Join("; ", failures)
+                    }
+                }
+                if captures.IsFaulted {
+                    failures.Add("output capture failed: ${captures.Exception}")
+                } else if captures.IsCanceled {
+                    failures.Add("output capture cancelled")
+                }
+                return string.Join("; ", failures)
+            } finally {
+                captureCancellation.Cancel()
+            }
+        }
+
         private func CompileAndRun(source string) string -> Encoding
             .UTF8
             .GetString(CompileAndRunBytes(source))
@@ -396,7 +453,6 @@ stderr:
                 let outputCopy = proc.StandardOutput.BaseStream.CopyToAsync(stdout, captureCancellation.Token)
                 let errorCopy = proc.StandardError.BaseStream.CopyToAsync(stderr, captureCancellation.Token)
                 let captures = Task.WhenAll([]Task{outputCopy, errorCopy})
-                let cleanupTimeout = TimeSpan.FromSeconds(5)
                 var failure = string.Empty
                 try {
                     if !proc.WaitForExit(timeoutMilliseconds) {
@@ -415,33 +471,24 @@ stderr:
                             }
                             failure += "; exited=${proc.WaitForExit(5_000)}"
                         }
-                        try {
-                            captures.WaitAsync(cleanupTimeout).GetAwaiter().GetResult()
-                        } catch (TimeoutException) {
-                            failure += "; output streams did not close within 5000 ms"
-                        }
                     } finally {
-                        captureCancellation.Cancel()
-                        try {
-                            captures.WaitAsync(cleanupTimeout).GetAwaiter().GetResult()
-                        } catch (OperationCanceledException) when captureCancellation.IsCancellationRequested {
-                            failure += "; output capture cancelled"
-                        } catch (TimeoutException) {
-                            let _ = captures.ContinueWith(
-                                (task Task) -> task.Exception,
-                                TaskContinuationOptions.OnlyOnFaulted
-                            )
-                            throw XunitException(
-                                "dotnet exec $failure; pid=${proc.Id}; output capture did not stop after cancellation; " +
-                                    "stdout capture=${outputCopy.Status}; stderr capture=${errorCopy.Status}"
-                            )
-                        }
+                        failure = ObserveCaptures(captures, captureCancellation, failure)
                     }
                 }
                 let exit = if proc.HasExited {
                     proc.ExitCode.ToString()
                 } else {
                     "<still-running>"
+                }
+                let output = if outputCopy.IsCompleted {
+                    Encoding.UTF8.GetString(stdout.ToArray())
+                } else {
+                    "<unavailable: output capture did not stop>"
+                }
+                let error = if errorCopy.IsCompleted {
+                    Encoding.UTF8.GetString(stderr.ToArray())
+                } else {
+                    "<unavailable: error capture did not stop>"
                 }
                 Assert.True(
                     failure.Length == 0 && proc.ExitCode == 0,
@@ -451,11 +498,11 @@ stderr:
                             `
 stdout:
 ` +
-                            Encoding
-                            .UTF8
-                            .GetString(stdout.ToArray()) + `
+                            output +
+                            `
 stderr:
-` + Encoding.UTF8.GetString(stderr.ToArray())
+` +
+                            error
                     )
                 )
                 return stdout.ToArray()
