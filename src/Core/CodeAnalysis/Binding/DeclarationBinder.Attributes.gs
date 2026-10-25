@@ -1107,7 +1107,11 @@ internal partial class DeclarationBinder {
             type = constantType
             return true
         }
-        if bound is BoundLiteralExpression lit && lit.Value != nil && IsEnumLikeType(lit.Type) {
+        // CLR literal fields already bind through ordinary qualified member lookup.
+        // Accept their serialisable types, including string and its null constant.
+        if bound is BoundLiteralExpression lit &&
+            IsValidAttributeParameterType(lit.Type) &&
+            (syntax is AccessorExpressionSyntax || IsEnumLikeType(lit.Type)) {
             value = lit.Value
             type = lit.Type
             return true
