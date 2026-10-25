@@ -1670,66 +1670,57 @@ shared class CompletionComputer {
                 items.Add(CompletionItem{Label: keyword, Kind: CompletionItemKind.Keyword})
             }
         }
-        // Add global symbols (functions, variables, types)
-        for function in compilation.GlobalScope.Functions {
-            ct.ThrowIfCancellationRequested()
-            if seen.Add(function.Name) {
-                items.Add(
-                    CompletionItem{
-                        Label: function.Name,
-                        Kind: CompletionItemKind.Function,
-                        Detail: HoverComputer.FormatSymbol(function)
-                    }
-                )
+        let keywordNames = HashSet[string](seen, StringComparer.Ordinal)
+        // Add the names visible at the caret: locals and parameters, the enclosing type's
+        // members, then the compilation's functions, variables and types (ADR-0212 slice S3).
+        let model = BoundSemantics.GetPositionModel(compilation, content.SyntaxTree)
+        if model != nil {
+            for symbol in model.LookupSymbols(offset, nil, ct) {
+                ct.ThrowIfCancellationRequested()
+                // A name that is a keyword is written with its `$` escape (ADR-0170).
+                let written = if keywordNames.Contains(symbol.Name) || SyntaxFacts.IsReservedIdentifier(symbol.Name) {
+                    "$" + symbol.Name
+                } else {
+                    symbol.Name
+                }
+                if seen.Add(written) {
+                    items.Add(
+                        CompletionItem{
+                            Label: written,
+                            Kind: GetCompletionKind(symbol),
+                            Detail: HoverComputer.FormatSymbol(symbol)
+                        }
+                    )
+                }
             }
         }
-        for variable in compilation.GlobalScope.Variables {
-            ct.ThrowIfCancellationRequested()
-            if seen.Add(variable.Name) {
-                items.Add(
-                    CompletionItem{
-                        Label: variable.Name,
-                        Kind: CompletionItemKind.Variable,
-                        Detail: HoverComputer.FormatSymbol(variable)
+        // Type aliases (`type A = T`): LookupSymbols answers an alias by name with the type it names but
+        // cannot list it, as that symbol carries the target's name. The names come from the trees'
+        // declarations until an alias symbol exists (follow-up of ADR-0212 slice S3).
+        if model != nil {
+            for tree in compilation.SyntaxTrees {
+                for aliasDeclaration in tree.Root.Members.OfType[TypeAliasDeclarationSyntax]() {
+                    ct.ThrowIfCancellationRequested()
+                    if aliasDeclaration.Identifier is not{} aliasIdentifier || aliasIdentifier.IsMissing {
+                        continue
                     }
-                )
-            }
-        }
-        for structSymbol in compilation.GlobalScope.Structs {
-            ct.ThrowIfCancellationRequested()
-            if seen.Add(structSymbol.Name) {
-                items.Add(
-                    CompletionItem{
-                        Label: structSymbol.Name,
-                        Kind: CompletionItemKind.Struct,
-                        Detail: HoverComputer.FormatSymbol(structSymbol)
+                    // The semantic name finds the alias; a keyword-named alias is written with its escape.
+                    let aliasName = aliasIdentifier.ValueText
+                    let written = if keywordNames.Contains(aliasName) || SyntaxFacts.IsReservedIdentifier(aliasName) {
+                        "$" + aliasName
+                    } else {
+                        aliasName
                     }
-                )
-            }
-        }
-        for pair in compilation.GlobalScope.TypeAliases {
-            if seen.Add(pair.Key) {
-                items.Add(
-                    CompletionItem{
-                        Label: pair.Key,
-                        Kind: if pair.Value is EnumSymbol {
-                            CompletionItemKind.Enum
-                        } else {
-                            CompletionItemKind.Class
-                        },
-                        Detail: HoverComputer.FormatSymbol(pair.Value)
+                    if !seen.Add(written) {
+                        continue
                     }
-                )
-            }
-        }
-        // Add local symbols from the containing function
-        let containingFunction FunctionDeclarationSyntax? = FindContainingFunction(content.SyntaxTree, offset)
-        if containingFunction != nil {
-            for param in containingFunction.Parameters {
-                // ADR-0185: a named function's parameters never come from the
-                // destructured arrow-lambda path.
-                if seen.Add(param.Identifier!!.Text) {
-                    items.Add(CompletionItem{Label: param.Identifier!!.Text, Kind: CompletionItemKind.Variable})
+                    let target = model.LookupSymbols(offset, aliasName, ct)
+                    let item = CompletionItem{Label: written, Kind: CompletionItemKind.Class}
+                    if !target.IsDefaultOrEmpty {
+                        item.Kind = GetCompletionKind(target[0])
+                        item.Detail = HoverComputer.FormatSymbol(target[0])
+                    }
+                    items.Add(item)
                 }
             }
         }
@@ -1740,6 +1731,19 @@ shared class CompletionComputer {
             }
         }
         return ApplyReplacementRange(items, replacementRange)
+    }
+
+    private func GetCompletionKind(symbol Symbol) CompletionItemKind {
+        return switch symbol {
+            case FunctionSymbol: CompletionItemKind.Function
+            case VariableSymbol: CompletionItemKind.Variable
+            case StructSymbol: CompletionItemKind.Struct
+            case EnumSymbol: CompletionItemKind.Enum
+            case FieldSymbol: CompletionItemKind.Field
+            case PropertySymbol: CompletionItemKind.Property
+            case EventSymbol: CompletionItemKind.Event
+            default: CompletionItemKind.Class
+        }
     }
 
     /// Issue #917: computes the source span of the partial identifier immediately
@@ -1996,18 +2000,6 @@ shared class CompletionComputer {
                 AddItem(items, seen, field.Name, CompletionItemKind.Field, "${field.Name}: ${field.FieldType.Name}")
             }
         }
-    }
-
-    private func FindContainingFunction(tree SyntaxTree, offset int32) FunctionDeclarationSyntax? {
-        var best FunctionDeclarationSyntax? = nil
-        for func_ in tree.Root.Members.OfType[FunctionDeclarationSyntax]() {
-            if func_.Span.Start <= offset && offset <= func_.Span.End {
-                if best == nil || func_.Span.Length < best.Span.Length {
-                    best = func_
-                }
-            }
-        }
-        return best
     }
 
     private func TryComputeMemberCompletions(
