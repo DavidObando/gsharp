@@ -3053,8 +3053,8 @@ internal partial class ExpressionBinder {
     }
 
     /// Whether [`segment`](paramref) is a pure namespace/package prefix
-    /// component — it does not name a known type/alias, an import alias, or an
-    /// imported class, and (only for the leading segment of a chain, per
+    /// component — it does not name a type, including predefined aliases and
+    /// type parameters, or an import alias, and (only for the leading segment, per
     /// [`isLeadingSegment`](paramref)) does not name an in-scope value.
     /// cs2gs fully-qualifies type references, so a leading run of such segments
     /// in front of a same-compilation source type is redundant and must be
@@ -3078,9 +3078,8 @@ internal partial class ExpressionBinder {
     private func IsNamespacePrefixSegment(segment string, isLeadingSegment bool = true) bool -> (
         !isLeadingSegment || !($scope.TryLookupSymbol(segment) is VariableSymbol)
     ) &&
-        !binderCtx.TryLookupSourceType($scope, segment, preferredArity: -1, getCurrentFunction(), out _, out _) &&
-        !($scope.TryLookupImport(segment, out var import_) && import_!!.IsAlias) &&
-        !$scope.TryLookupImportedClass(segment, declaration: nil, out _)
+        lookupType(segment) == nil &&
+        !($scope.TryLookupImport(segment, out var import_) && import_!!.IsAlias)
 
     private func IsQualifiedSourceTypeBoundary(
         peeledSegments List[string],
