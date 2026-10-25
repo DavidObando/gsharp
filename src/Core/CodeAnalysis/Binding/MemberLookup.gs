@@ -61,7 +61,7 @@ internal class MemberLookup {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
     }
 
-    private enum SymbolicInferenceBoundKind {
+    internal enum SymbolicInferenceBoundKind {
         Exact,
         Lower,
         Upper,
@@ -743,6 +743,16 @@ internal class MemberLookup {
     private class SymbolicInferenceConflictMarker { }
 
     shared {
+        // Preserve the kind of provisional evidence across argument sites without
+        // extending the substitution's lifetime or changing its dictionary API.
+        private let sourceInferenceBounds ConditionalWeakTable[
+            Dictionary[TypeParameterSymbol, TypeSymbol],
+            Dictionary[TypeParameterSymbol, SymbolicInferenceBounds]
+        ] = ConditionalWeakTable[
+            Dictionary[TypeParameterSymbol, TypeSymbol],
+            Dictionary[TypeParameterSymbol, SymbolicInferenceBounds]
+        ]()
+
         private let importedExtensionIndexes ConditionalWeakTable[Type, ImportedExtensionIndex] =
         ConditionalWeakTable[Type, ImportedExtensionIndex]()
 
@@ -6391,6 +6401,57 @@ internal class MemberLookup {
             incoming TypeSymbol?
         ) TypeSymbol? -> MergeRecoveredTypeArgument(existing, incoming)
 
+        internal func InferSourceTypeArgument(
+            substitution Dictionary[TypeParameterSymbol, TypeSymbol],
+            parameter TypeParameterSymbol,
+            argument TypeSymbol,
+            kind SymbolicInferenceBoundKind
+        ) {
+            if kind == SymbolicInferenceBoundKind.Lower && !sourceInferenceBounds.TryGetValue(substitution, out _) {
+                substitution[parameter] = if substitution.TryGetValue(parameter, out var existing) {
+                    MergeRecoveredTypeArgument(existing, argument) ?? existing
+                } else {
+                    argument
+                }
+                return
+            }
+            let byParameter = sourceInferenceBounds.GetValue(
+                substitution,
+                (_ Dictionary[TypeParameterSymbol, TypeSymbol]) -> Dictionary[
+                    TypeParameterSymbol,
+                    SymbolicInferenceBounds
+                ]()
+            )
+            if !byParameter.TryGetValue(parameter, out var bounds) {
+                bounds = SymbolicInferenceBounds(1)
+                if substitution.TryGetValue(parameter, out var existing) {
+                    bounds.Add(0, existing, SymbolicInferenceBoundKind.Lower)
+                }
+                byParameter[parameter] = bounds
+            }
+            bounds.Add(0, argument, kind)
+            let exact = bounds.Exact[0]
+            let lower = bounds.Lower[0]
+            let upper = bounds.Upper[0]
+            var fixedType TypeSymbol? = nil
+            if exact != nil && exact.Count > 0 {
+                for bound in exact {
+                    fixedType = MergeRecoveredTypeArgument(fixedType, bound, allowBaseWidening: false)
+                }
+            } else if lower != nil && lower.Count > 0 {
+                // A callback input is an upper bound, not a value that can widen
+                // lower evidence. A later value also replaces an input-only guess.
+                for bound in lower {
+                    fixedType = MergeRecoveredTypeArgument(fixedType, bound)
+                }
+            } else if upper != nil && upper.Count > 0 {
+                fixedType = FindSymbolicInferenceCandidate(nil, upper) ?? upper[0]
+            }
+            if fixedType != nil {
+                substitution[parameter] = fixedType
+            }
+        }
+
         internal func IsSymbolicInferenceConflict(type TypeSymbol?) bool -> object.ReferenceEquals(
             type,
             SymbolicInferenceConflict
@@ -8246,7 +8307,7 @@ internal class MemberLookup {
             return Conversion.ClassifyNonStructural(source, target).IsImplicit
         }
 
-        private func GetNestedInferenceBoundKind(
+        internal func GetNestedInferenceBoundKind(
             openDefinition Type,
             typeArgumentIndex int32,
             outerKind SymbolicInferenceBoundKind
@@ -8255,13 +8316,23 @@ internal class MemberLookup {
             if uint32(typeArgumentIndex) >= uint32(typeParameters.Length) {
                 return SymbolicInferenceBoundKind.Exact
             }
-            return switch (
+            let variance = switch (
                 typeParameters[typeArgumentIndex].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
             ) {
-                case GenericParameterAttributes.Covariant: outerKind
-                case GenericParameterAttributes.Contravariant: ReverseInferenceBoundKind(outerKind)
-                default: SymbolicInferenceBoundKind.Exact
+                case GenericParameterAttributes.Covariant: TypeParameterVariance.Out
+                case GenericParameterAttributes.Contravariant: TypeParameterVariance.In
+                default: TypeParameterVariance.None
             }
+            return GetNestedInferenceBoundKind(variance, outerKind)
+        }
+
+        internal func GetNestedInferenceBoundKind(
+            variance TypeParameterVariance,
+            outerKind SymbolicInferenceBoundKind
+        ) SymbolicInferenceBoundKind -> switch variance {
+            case TypeParameterVariance.Out: outerKind
+            case TypeParameterVariance.In: ReverseInferenceBoundKind(outerKind)
+            default: SymbolicInferenceBoundKind.Exact
         }
 
         /// Issue #4133 (Copilot review finding, hot-core translation guard PR):
@@ -8289,7 +8360,7 @@ internal class MemberLookup {
         /// once, directly by the top-level argument's own bound kind — never by
         /// a reversal — so staying sticky here cannot affect the group's own
         /// legitimate top-level OUTPUT (return-type) contribution.
-        private func ReverseInferenceBoundKind(
+        internal func ReverseInferenceBoundKind(
             kind SymbolicInferenceBoundKind
         ) SymbolicInferenceBoundKind -> switch kind {
             case SymbolicInferenceBoundKind.Lower: SymbolicInferenceBoundKind.Upper

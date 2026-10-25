@@ -86,6 +86,65 @@ func Main() {
     }
 
     @Theory
+    @InlineData("Func[T, bool]", false)
+    @InlineData("Func[T, bool]", true)
+    @InlineData("(T) -> bool", false)
+    @InlineData("(T) -> bool", true)
+    func CallbackInputsDoNotWidenValueOrOutputEvidence(callbackType string, callbackFirst bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let references = ReferenceClosure.RefPackAssemblies().Select((path string) -> "/r:" + path).ToArray()
+        let parameters = if callbackFirst {
+            "predicate " + callbackType + ", value T"
+        } else {
+            "value T, predicate " + callbackType
+        }
+        let arguments = if callbackFirst {
+            "(value Base) -> Probe.Accept(value), Derived()"
+        } else {
+            "Derived(), (value Base) -> Probe.Accept(value)"
+        }
+        let source = (`package CallbackBounds5273
+import System
+open class Base { }
+class Derived : Base {
+    public func Tag() string -> "derived"
+}
+class Probe {
+    shared {
+        public var Calls int32 = 0
+        public func Accept(value Base) bool {
+            Calls += 1
+            return true
+        }
+    }
+}
+func Keep[T](` + parameters + `) T {
+    if !predicate(value) { throw Exception("rejected") }
+    return value
+}
+func FromOutput[T](predicate ` + callbackType + `, factory Func[T]) T -> factory()
+func FromInput[T](predicate ` + callbackType + `) string -> typeof(T).Name
+func FromInputs[T](first ` + callbackType + `, second ` + callbackType + `) string -> typeof(T).Name
+func FromNestedInput[T](value T, predicate Func[Func[T, bool], bool]) string -> typeof(T).Name
+func Join[T](first T, second T) T -> second
+func Main() {
+    let derived Derived = Keep(` + arguments + `)
+    Console.WriteLine(derived.Tag())
+    Console.WriteLine(Probe.Calls)
+    let output Derived = FromOutput((value Base) -> true, () -> Derived())
+    Console.WriteLine(output.Tag())
+    Console.WriteLine(FromInput((value Base) -> true))
+    Console.WriteLine(FromInputs((value Base) -> true, (value Derived) -> true))
+    Console.WriteLine(FromNestedInput(Derived(), (predicate Func[Base, bool]) -> true))
+    let joined Base = Join(Derived(), Base())
+    Console.WriteLine(joined.GetType().Name)
+}`)
+        let dll = fixture.Compile(source, "CallbackBounds5273", true, references)
+        IlVerifier.Verify(dll)
+        Assert.Equal("derived\n1\nderived\nBase\nDerived\nBase\nBase\n", fixture.Run(dll))
+    }
+
+    @Theory
     @InlineData("Func[T]")
     @InlineData("() -> T")
     func ThrowOnlyCallbackWithoutTypeEvidenceReportsInferenceFailure(callbackType string) {
