@@ -69,8 +69,10 @@ internal partial class DeclarationBinder {
         // Issue #1085: defer the actual argument binding and base-constructor
         // resolution until all declared types' explicit constructors exist.
         let capturedScope = $scope
+        let capturedUnsafeContext = binderCtx.InUnsafeContext
         pendingBaseInitializerBindings.Add(
             () -> {
+                using let unsafeContext = binderCtx.PushUnsafeContext(capturedUnsafeContext)
                 let outerScope = $scope
                 $scope = capturedScope
                 // Issue #2342: re-establish this type's OWN owning package as the
@@ -1244,8 +1246,10 @@ internal partial class DeclarationBinder {
             )
         ) {
             let capturedScope = $scope
+            let capturedUnsafeContext = binderCtx.InUnsafeContext
             pendingBaseInitializerBindings.Add(
                 () -> {
+                    using let unsafeContext = binderCtx.PushUnsafeContext(capturedUnsafeContext)
                     let outerScope = $scope
                     $scope = capturedScope
                     // Issue #2342: re-establish this type's OWN owning package as

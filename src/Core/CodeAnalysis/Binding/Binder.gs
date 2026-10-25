@@ -135,6 +135,20 @@ partial class Binder {
             return Statements.OutsideExceptionHandlers(() -> Expressions.BindLambdaBodyExpression(syntax, targetType))
         }
         binderCtx = BinderContext(parent)
+        // Member bodies bind after declaration scopes unwind. Restore the function and lexical type contexts at the binder root.
+        binderCtx.UnsafeDepth = if function?.IsUnsafe == true {
+            1
+        } else {
+            0
+        }
+        var containingType = function?.ContainingType
+        while containingType is {} owner {
+            if owner is StructSymbol structOwner && structOwner.Declaration?.IsUnsafe == true {
+                binderCtx.UnsafeDepth++
+                break
+            }
+            containingType = owner.ContainingType
+        }
         memberLookup = MemberLookup(binderCtx)
         conversions = ConversionClassifier(
             binderCtx,

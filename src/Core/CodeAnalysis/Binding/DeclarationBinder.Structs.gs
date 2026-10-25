@@ -3292,6 +3292,7 @@ internal partial class DeclarationBinder {
         // members remain out of scope (a field initializer has no `this`), so
         // genuine instance-member references are still rejected below (GS0377).
         let fieldInitScope = $scope
+        let fieldInitUnsafeContext = binderCtx.InUnsafeContext
         let fieldInitConstInitializers = pendingConstInitializers
         let fieldInitSharedConstInitializers = pendingSharedConstInitializers
         let fieldInitStaticInitializers = pendingStaticFieldInitializers
@@ -3303,6 +3304,7 @@ internal partial class DeclarationBinder {
         let fieldInitPackageName = $package.Name
         pendingFieldInitializerBindings.Add(
             () -> {
+                using let unsafeContext = binderCtx.PushUnsafeContext(fieldInitUnsafeContext)
                 let savedFieldInitScope = $scope
                 let savedFieldInitTypeParameters = binderCtx.CurrentTypeParameters
                 let savedFieldInitFunction = getCurrentFunction()
