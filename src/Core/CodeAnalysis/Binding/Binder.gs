@@ -8588,8 +8588,9 @@ partial class Binder {
                     parentScope.References
                 )
             }
+            let reportedDiagnostics = HashSet[Diagnostic](diagnostics, DiagnosticBag.EquivalenceComparer)
             for diagnostic in lifetimeDiagnostics {
-                if !diagnostics.Any((existing Diagnostic) -> DiagnosticBag.AreEquivalent(existing, diagnostic)) {
+                if reportedDiagnostics.Add(diagnostic) {
                     diagnostics.Add(diagnostic)
                 }
             }

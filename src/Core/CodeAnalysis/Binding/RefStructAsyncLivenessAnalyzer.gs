@@ -287,8 +287,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             return
         }
         // Preserve source-local rules and prove the actual explicit and implicit suspension representation.
-        let handlerLowered = InterpolatedStringHandlerLowerer.LowerBody(body, references ?? ReferenceResolver.Default())
-        let spilledBody = AsyncStateMachineRewriter.PrepareBody(handlerLowered, references)
+        let preparationReferences = references ?? ReferenceResolver.Default()
+        let handlerLowered = InterpolatedStringHandlerLowerer.LowerBody(body, preparationReferences)
+        let spilledBody = AsyncStateMachineRewriter.PrepareBody(handlerLowered, preparationReferences)
         let spilledCollector = InterestingLocalCollector(collectByRefLikeLocals: true)
         spilledCollector.VisitStatement(spilledBody)
         spilledCollector.Locals.ExceptWith(reporting.Crossing)

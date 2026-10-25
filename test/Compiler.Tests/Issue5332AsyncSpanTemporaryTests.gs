@@ -1,4 +1,4 @@
-// <copyright file="Issue5332AsyncSpanTemporaryTests.cs" company="GSharp">
+// <copyright file="Issue5332AsyncSpanTemporaryTests.gs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
