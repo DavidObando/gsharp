@@ -111,7 +111,8 @@ internal shared class IlVerifier {
         assemblyPath string,
         additionalReferences IEnumerable[string]? = nil,
         ignoredErrorCodes IEnumerable[string]? = nil,
-        ignoredErrorScope string? = nil
+        ignoredErrorScope string? = nil,
+        report Action[string]? = nil
     ) {
         if Environment.GetEnvironmentVariable(SkipEnvVar) == "1" {
             return
@@ -129,7 +130,8 @@ internal shared class IlVerifier {
                 references,
                 ignoredErrorCodes: nil,
                 includedScope: nil,
-                excludedScope: ignoredErrorScope
+                excludedScope: ignoredErrorScope,
+                report
             )
             // ponytail: -g remains category-wide inside the matched method;
             // parse exact verifier instances only if method scope proves too broad.
@@ -140,7 +142,8 @@ internal shared class IlVerifier {
                 references,
                 ignoredErrorCodes,
                 includedScope: ignoredErrorScope,
-                excludedScope: nil
+                excludedScope: nil,
+                report
             )
             return
         }
@@ -151,7 +154,8 @@ internal shared class IlVerifier {
             references,
             ignoredErrorCodes,
             includedScope: nil,
-            excludedScope: nil
+            excludedScope: nil,
+            report
         )
     }
 
@@ -162,7 +166,8 @@ internal shared class IlVerifier {
         references IReadOnlyList[string],
         ignoredErrorCodes IEnumerable[string]?,
         includedScope string?,
-        excludedScope string?
+        excludedScope string?,
+        report Action[string]? = nil
     ) {
         let args = List[string](leadingArgs){assemblyPath, "-s", "System.Private.CoreLib"}
         for reference in references {
@@ -201,14 +206,34 @@ internal shared class IlVerifier {
             psi.ArgumentList.Add(a)
         }
         let (exitCode, stdout, stderr) = RunProcess(psi, assemblyPath, VerifyTimeoutMilliseconds)
-        if exitCode == 2 && string.IsNullOrWhiteSpace(stderr) && IlVerifyFalsePositives.OnlyKnown(
+        let upstreamReturn = stdout.Contains("[ReturnPtrToStack]", StringComparison.Ordinal)
+        if report != nil || upstreamReturn {
+            let policy = if exitCode == 2 && stderr.Length == 0 {
+                IlVerifyFalsePositives.Report(assemblyPath, stdout, allowFilterInFinally: true)
+            } else {
+                "ILVerify policy: no diagnostic exception applies to this raw process outcome."
+            }
+            let details = "ilverify invocation: " + command + " " + string.Join(" ", args) +
+                "${Environment.NewLine}raw exit: $exitCode${Environment.NewLine}raw stdout:${Environment.NewLine}" +
+                stdout +
+                "${Environment.NewLine}raw stderr:${Environment.NewLine}" +
+                stderr +
+                Environment.NewLine +
+                policy
+            if report != nil {
+                report(details)
+            } else {
+                Console.WriteLine(details)
+            }
+        }
+        if exitCode == 2 && stderr.Length == 0 && IlVerifyFalsePositives.OnlyKnown(
             assemblyPath,
             stdout,
             allowFilterInFinally: true
         ) {
             return
         }
-        if exitCode != 0 {
+        if exitCode != 0 || stderr.Length != 0 {
             // ilverify writes one line per IL error. Surface its full output so
             // a CI failure points directly at the offending opcode/method.
             let message = StringBuilder()
@@ -223,7 +248,7 @@ internal shared class IlVerifier {
             throw XunitException(message)
         }
         let successMarker = "All Classes and Methods in ${Path.GetFullPath(assemblyPath, psi.WorkingDirectory)} Verified."
-        if !stdout.Contains(successMarker, StringComparison.Ordinal) {
+        if stdout.Trim() != successMarker {
             throw XunitException(
                 "ilverify exited successfully without confirming verification of '$assemblyPath'.${Environment.NewLine}" +
                     stdout.TrimEnd() + Environment.NewLine + stderr.TrimEnd()
