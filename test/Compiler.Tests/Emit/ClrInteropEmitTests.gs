@@ -271,6 +271,52 @@ func Main() {
     }
 
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func NamespaceAliases_CrossedNamespaceTails_CompileAndRunWithoutRecursion(reverseAliases bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let aliases = if reverseAliases {
+            "import IO = System.Text\nimport Text = System.IO\n"
+        } else {
+            "import Text = System.IO\nimport IO = System.Text\n"
+        }
+        let source = Path.Combine(fixture.Directory, "crossed5267.gs")
+        let assembly = Path.Combine(fixture.Directory, "crossed5267.dll")
+        File.WriteAllText(source, "package CrossedAliases5267\nimport System\n" + aliases + `func Main() {
+    Console.Write(Text.Directory.GetCurrentDirectory())
+    let builder = IO.StringBuilder()
+    builder.Append("|crossed")
+    Console.Write(builder.ToString())
+}`)
+        let start = ProcessStartInfo("dotnet"){
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = fixture.Directory
+        }
+        for argument in[]string{
+            typeof(Program).Assembly.Location,
+            "/target:exe",
+            "/targetframework:net10.0",
+            "/out:" + assembly,
+            source
+        } {
+            start.ArgumentList.Add(argument)
+        }
+        using let process = Process.Start(start)!!
+        let stdout = process.StandardOutput.ReadToEndAsync()
+        let stderr = process.StandardError.ReadToEndAsync()
+        if !process.WaitForExit(30_000) {
+            process.Kill(entireProcessTree: true)
+            process.WaitForExit()
+            Assert.Fail("crossed namespace alias compilation timed out")
+        }
+        let output = stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult()
+        Assert.True(process.ExitCode == 0, "gsc exit ${process.ExitCode}:\n" + output)
+        Assert.Equal(Encoding.UTF8.GetBytes(fixture.Directory + "|crossed"), VerifyAndRunBytes(assembly))
+    }
+
+    @Theory
     @InlineData("string")
     @InlineData("int32")
     @InlineData("int")
