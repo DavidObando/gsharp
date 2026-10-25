@@ -86,8 +86,10 @@ partial class SemanticModel {
     /// by its name and answers the type it names; the enumeration does not list it
     /// (the symbol would carry the target's name).</item>
     /// </list>
-    /// Order: scope depth innermost first, then declaration order, so the result
-    /// is deterministic. Imported (CLR) types are not listed.
+    /// Order: scope depth innermost first, then declaration order within a scope.
+    /// The globals are listed per kind (functions, variables, structs, interfaces,
+    /// enums, delegates), each kind in declaration order, and the members of a type
+    /// by their depth in its hierarchy, so the result is deterministic. Imported (CLR) types are not listed.
     /// @param position A character offset into this model's tree.
     /// @param name When given, only the symbol of this name.
     /// @param cancellationToken Cancels index construction on first use.
@@ -110,7 +112,7 @@ partial class SemanticModel {
         if name != nil && result.Count > 0 {
             return result.ToImmutable()
         }
-        AddReceiverlessMembers(innermost, name, result, seen)
+        AddReceiverlessMembers(innermost, name, result, seen, outerTypes: false)
         if name != nil && result.Count > 0 {
             return result.ToImmutable()
         }
@@ -122,6 +124,11 @@ partial class SemanticModel {
                 }
                 AddGlobals(reference.GlobalScope, name, result, seen)
             }
+        }
+        // The binder reaches the static members of the lexically enclosing types after the package's
+        // functions and variables (Issue #3660), so they come last.
+        if name == nil || result.Count == 0 {
+            AddReceiverlessMembers(innermost, name, result, seen, outerTypes: true)
         }
         return result.ToImmutable()
     }
@@ -210,14 +217,19 @@ partial class SemanticModel {
         innermost SyntaxNode,
         name string?,
         result ImmutableArray[Symbol].Builder,
-        seen HashSet[string]
+        seen HashSet[string],
+        outerTypes bool
     ) {
         // Walk the lexically enclosing types, innermost first. The innermost type, when the position is in
         // one of its members, offers its instance and static members (static only inside a `shared` member).
         // Every type further out offers its static members, as a nested type sees them without qualification.
         var node SyntaxNode? = innermost
         var insideMember = false
-        var isShared = false
+        // A member without a receiver is a static context, also where the syntax has no `shared` block
+        // (an interface flattens its `shared` members).
+        var isShared = EnclosingSymbolOf(innermost, default(CancellationToken)) is FunctionSymbol{
+            IsInstanceMethod: false
+        }
         var sawType = false
         while node is {} current {
             if current is FunctionDeclarationSyntax or
@@ -228,7 +240,7 @@ partial class SemanticModel {
             } else if current is SharedBlockSyntax {
                 isShared = true
             } else if current is StructDeclarationSyntax or InterfaceDeclarationSyntax {
-                if sawType || insideMember {
+                if sawType == outerTypes && (sawType || insideMember) {
                     let type TypeSymbol? = if current is StructDeclarationSyntax structDeclaration {
                         StructSymbolOf(structDeclaration)
                     } else {
@@ -272,12 +284,18 @@ partial class SemanticModel {
             if member != nil && !IsReceiverlessMember(member, type) {
                 member = nil
             }
-            // An interface's own private helpers are not part of its member surface.
+            // An explicit interface implementation is not callable by its bare name: the callable
+            // sibling of the same name is.
+            if member == nil {
+                member = TypeMemberModel.GetMethods(type, name, query).FirstOrDefault(
+                    (m FunctionSymbol) -> IsReceiverlessMember(m, type)
+                )
+            }
+            // An interface's own private and static members are outside the member model.
             if member == nil && type is InterfaceSymbol declaringInterface {
-                member = declaringInterface
-                    .Methods
-                    .Concat(declaringInterface.PrivateMethods)
-                    .FirstOrDefault((m FunctionSymbol) -> string.Equals(m.Name, name, StringComparison.Ordinal))
+                member = InterfaceOwnMembers(declaringInterface, includeInstance).FirstOrDefault(
+                    (m Symbol) -> string.Equals(m.Name, name, StringComparison.Ordinal)
+                )
             }
             // A constant is held apart from the other fields and is static; the nearest declaring type
             // wins over a member the hierarchy has further up.
@@ -297,9 +315,9 @@ partial class SemanticModel {
             }
         }
         if type is InterfaceSymbol ownInterface {
-            for method in ownInterface.Methods.Concat(ownInterface.PrivateMethods) {
-                if IsListable(method.Name) {
-                    candidates.Add((0, method))
+            for own in InterfaceOwnMembers(ownInterface, includeInstance) {
+                if IsListable(own.Name) {
+                    candidates.Add((0, own))
                 }
             }
         }
@@ -314,6 +332,22 @@ partial class SemanticModel {
             if seen.Add(candidate.Member.Name) {
                 result.Add(candidate.Member)
             }
+        }
+    }
+
+    /// The members of an interface the member model leaves out: private helpers (instance ones only
+    /// where an instance is reachable) and the `shared` methods, fields and constants.
+    private func InterfaceOwnMembers(declaredInterface InterfaceSymbol, includeInstance bool) sequence[Symbol] {
+        if includeInstance {
+            for method in declaredInterface.Methods.Concat(declaredInterface.PrivateMethods) {
+                yield method
+            }
+        }
+        for method in declaredInterface.StaticMethods.Concat(declaredInterface.StaticPrivateMethods) {
+            yield method
+        }
+        for field in declaredInterface.StaticFields.Concat(declaredInterface.ConstFields) {
+            yield field
         }
     }
 
@@ -334,7 +368,9 @@ partial class SemanticModel {
     /// Whether a bare name can bind to [`member`](paramref) inside [`current`](paramref): not an
     /// indexer, not a field-like event's backing field, and not a private member of a base type.
     private func IsReceiverlessMember(member Symbol, current TypeSymbol) bool {
-        if member is PropertySymbol{IsIndexer: true} || member is FieldSymbol{IsEventBackingField: true} {
+        if member is PropertySymbol{IsIndexer: true} ||
+            member is FieldSymbol{IsEventBackingField: true} ||
+            member is FunctionSymbol{HasExplicitInterfaceClause: true} {
             return false
         }
         let accessibility Accessibility? = switch member {
@@ -801,8 +837,28 @@ partial class SemanticModel {
             for function in globalScope.Functions {
                 RecordFunctionTypeClauses(function, tree, typeClauseTokens)
             }
+            for declaredDelegate in globalScope.Delegates {
+                if declaredDelegate.Declaration is {} delegateDeclaration {
+                    RecordTypeClause(
+                        delegateDeclaration.ReturnType,
+                        declaredDelegate.ReturnType,
+                        tree,
+                        typeClauseTokens
+                    )
+                    RecordParameterTypeClauses(
+                        delegateDeclaration.Parameters.ToArray(),
+                        declaredDelegate.Parameters,
+                        tree,
+                        typeClauseTokens
+                    )
+                }
+            }
             for declaredInterface in globalScope.Interfaces {
-                for method in declaredInterface.Methods {
+                for method in declaredInterface
+                    .Methods
+                    .Concat(declaredInterface.StaticMethods)
+                    .Concat(declaredInterface.PrivateMethods)
+                    .Concat(declaredInterface.StaticPrivateMethods) {
                     RecordFunctionTypeClauses(method, tree, typeClauseTokens)
                 }
             }
@@ -812,6 +868,14 @@ partial class SemanticModel {
                 }
                 // A field is matched to its symbol by the identifier that declares it: the symbol array also
                 // holds primary-constructor fields and leaves constants out, so the two do not line up.
+                if declaration.PrimaryConstructorParameters is {} primaryParameters {
+                    RecordParameterTypeClauses(
+                        primaryParameters.ToArray(),
+                        aggregate.PrimaryConstructorParameters,
+                        tree,
+                        typeClauseTokens
+                    )
+                }
                 let fieldSymbols = aggregate
                     .Fields
                     .Concat(aggregate.StaticFields)
@@ -895,7 +959,18 @@ partial class SemanticModel {
                 return
             }
             RecordTypeClause(declaration.Type, function.Type, tree, typeClauseTokens)
+            // `func (IFoo) M()` names the interface it implements.
+            RecordTypeClause(
+                declaration.ExplicitInterfaceType,
+                function.ExplicitInterfaceClauseTarget,
+                tree,
+                typeClauseTokens
+            )
             RecordParameterTypeClauses(declaration.Parameters.ToArray(), function.Parameters, tree, typeClauseTokens)
+            // The receiver of `func (value int32) Abs()` is a parameter too.
+            if declaration.Receiver is {} receiver {
+                RecordParameterTypeClauses([]ParameterSyntax{receiver}, function.Parameters, tree, typeClauseTokens)
+            }
         }
 
         private func RecordParameterTypeClauses(
@@ -906,14 +981,26 @@ partial class SemanticModel {
         ) {
             // A parameter is matched to its symbol by the identifier that declares it (the symbol array can
             // start with a receiver the syntax list does not have).
+            // Discards (`_`) share one name, so the nth discard pairs with the nth discard.
+            var discard = 0
             for syntaxParameter in syntaxParameters {
-                if syntaxParameter.Identifier is {} parameterIdentifier {
-                    for parameter in parameters {
-                        if string.Equals(parameter.Name, parameterIdentifier.ValueText, StringComparison.Ordinal) {
-                            RecordTypeClause(syntaxParameter.Type, parameter.Type, tree, typeClauseTokens)
-                            break
-                        }
+                if syntaxParameter.Identifier is not{} parameterIdentifier {
+                    continue
+                }
+                let isDiscard = parameterIdentifier.ValueText == "_"
+                var seenDiscards = 0
+                for parameter in parameters {
+                    if !string.Equals(parameter.Name, parameterIdentifier.ValueText, StringComparison.Ordinal) {
+                        continue
                     }
+                    if isDiscard && seenDiscards++ != discard {
+                        continue
+                    }
+                    RecordTypeClause(syntaxParameter.Type, parameter.Type, tree, typeClauseTokens)
+                    break
+                }
+                if isDiscard {
+                    discard++
                 }
             }
         }

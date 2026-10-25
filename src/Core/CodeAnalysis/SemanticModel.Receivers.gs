@@ -836,7 +836,7 @@ partial class SemanticModel {
         ) {
             return nil
         }
-        if GetDeclaredSymbol(token) is {} declared && declared.Name == token.Text {
+        if GetDeclaredSymbol(token) is {} declared && declared.Name == token.ValueText {
             return declared
         }
         // A local function is declared by its `let` declaration, not by the identifier.
@@ -845,7 +845,7 @@ partial class SemanticModel {
             token
         ) &&
             GetDeclaredSymbol(localDeclaration) is FunctionSymbol localFunction &&
-            localFunction.Name == token.Text {
+            localFunction.Name == token.ValueText {
             return localFunction
         }
         // A type-clause identifier answers the type the clause denotes, whatever the
@@ -864,7 +864,7 @@ partial class SemanticModel {
         if symbol is FieldSymbol{IsEventBackingField: true} {
             return nil
         }
-        return if symbol != nil && symbol.Name == token.Text {
+        return if symbol != nil && symbol.Name == token.ValueText {
             symbol
         } else {
             default(Symbol?)

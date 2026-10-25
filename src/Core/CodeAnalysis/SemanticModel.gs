@@ -494,31 +494,6 @@ partial class SemanticModel {
                     }
                 }
             }
-            // The same for an interface: the merged declaration of a partial interface lists its parts.
-            for declaredInterface in program.Interfaces {
-                if declaredInterface.Declaration is {} interfaceDeclaration && object.ReferenceEquals(
-                    interfaceDeclaration.Identifier.SyntaxTree,
-                    tree
-                ) {
-                    structsByIdentifier.TryAdd(interfaceDeclaration.Identifier, declaredInterface)
-                }
-                if declaredInterface.Declaration is {} merged && !merged.PartialPartLocations.IsDefaultOrEmpty {
-                    for part in tree.Root.Members.OfType[InterfaceDeclarationSyntax]() {
-                        if part.Identifier is {} partIdentifier && !partIdentifier.IsMissing {
-                            for location in merged.PartialPartLocations {
-                                if SourcePathIdentity.AreSame(location.FileName, tree.Text?.FileName) &&
-                                    location
-                                    .Span
-                                    .Start == partIdentifier
-                                    .Span
-                                    .Start {
-                                    structsByIdentifier.TryAdd(partIdentifier, declaredInterface)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
             let walker = IndexingWalker(
                 tree,
                 boundBySyntax,
@@ -567,6 +542,9 @@ partial class SemanticModel {
             }
             for declaredInterface in program.Interfaces {
                 yield declaredInterface
+                for property in declaredInterface.Properties {
+                    yield property
+                }
             }
             for declaredStruct in program.Structs {
                 // ADR-0169 / issue #3795: anchor member containment as the model's

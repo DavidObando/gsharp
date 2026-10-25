@@ -104,7 +104,64 @@ open class Adr0212ScopeConformanceTests {
 
     @Fact
     func NestedType_SeesTheStaticMembersOfEveryEnclosingType() {
-        Assert.Contains("Helper", Names("PNested"))
+        Assert.Contains("OnlyOuter", Names("PNested"))
+    }
+
+    @Fact
+    func InterfaceProperty_AccessorHasAnEnclosingSymbol() {
+        let enclosing = Compiled.GetEnclosingSymbol(Program.IndexOf("// PIfaceGet", StringComparison.Ordinal))
+        Assert.NotNull(enclosing)
+        Assert.IsNotType[InterfaceSymbol](enclosing)
+    }
+
+    @Fact
+    func InterfaceSharedMember_SeesStaticMembersOnly() {
+        let names = Names("PIfaceShared")
+        Assert.Contains("Hidden", names)
+        Assert.DoesNotContain("Inst", names)
+    }
+
+    @Fact
+    func ExplicitInterfaceImplementation_IsNotACallableName() {
+        let found = Assert.Single(
+            Compiled.LookupSymbols(Program.IndexOf("// PExplicit", StringComparison.Ordinal), "M")
+        )
+        Assert.False(Assert.IsType[FunctionSymbol](found).HasExplicitInterfaceClause)
+    }
+
+    @Fact
+    func RepeatedDiscardParameters_PairByPosition() {
+        let tree = SyntaxTree.Parse(SourceText.From(Program, "conformance.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        let second = tree
+            .Root
+            .DescendantNodes()
+            .OfType[FunctionDeclarationSyntax]()
+            .Single((f FunctionDeclarationSyntax) -> f.Identifier.Text == "D")
+            .Parameters[1]
+        Assert.Same(TypeSymbol.String, model.GetSymbolInfo(second.Type!!.Identifier!!).Symbol)
+    }
+
+    @Fact
+    func EscapedLocalFunction_DeclarationAnswersItsFunction() {
+        let tree = SyntaxTree.Parse(SourceText.From(Program, "conformance.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        let declaration = tree
+            .Root
+            .DescendantNodes()
+            .OfType[VariableDeclarationSyntax]()
+            .Single((d VariableDeclarationSyntax) -> d.Identifier.Text == "$$generic")
+        Assert.IsType[FunctionSymbol](model.GetSymbolInfo(declaration.Identifier).Symbol)
+    }
+
+    @Fact
+    func SameNamedFunctionsOfDifferentOwners_AreNotEquivalent() {
+        let outside = Assert.Single(
+            Compiled.LookupSymbols(Program.IndexOf("// PEscaped", StringComparison.Ordinal), "Helper")
+        )
+        let outer = Assert.IsType[StructSymbol](Assert.Single(Compiled.LookupSymbols(0, "Outer")))
+        let nested = outer.StaticMethods.Single((f FunctionSymbol) -> f.Name == "Helper")
+        Assert.False(Equivalent(outside, nested))
     }
 
     @Fact
@@ -244,6 +301,18 @@ open class Adr0212ScopeConformanceTests {
             return 1
         }
 
+        /// Two functions of one name are the same group only when one type (or none) owns both.
+        private func SameOwner(found Symbol, bound Symbol) bool {
+            let foundOwner = found.ContainingType
+            let boundOwner = bound.ContainingType
+            if object.ReferenceEquals(foundOwner, boundOwner) {
+                return true
+            }
+            let foundDefinition = (foundOwner as StructSymbol)?.Definition ?? foundOwner
+            let boundDefinition = (boundOwner as StructSymbol)?.Definition ?? boundOwner
+            return foundDefinition != nil && object.ReferenceEquals(foundDefinition, boundDefinition)
+        }
+
         private func Equivalent(found Symbol, bound Symbol) bool {
             if object.ReferenceEquals(found, bound) {
                 return true
@@ -253,7 +322,7 @@ open class Adr0212ScopeConformanceTests {
             }
             // One symbol per name: a call's overload and a constructed member are the name's symbol.
             if found is FunctionSymbol && bound is FunctionSymbol {
-                return true
+                return SameOwner(found, bound)
             }
             let foundSyntax = found.DeclaringSyntaxNodes
             let boundSyntax = bound.DeclaringSyntaxNodes
@@ -275,13 +344,19 @@ open class Adr0212ScopeConformanceTests {
                 !clause
                 .QualifierIdentifierTokens
                 .IsDefaultOrEmpty ||
-                !clause
+                clause
                 .GetChildren()
                 .OfType[TypeClauseSyntax]()
                 .Any() {
                 return
             }
             let owner = clause.Parent
+            // A lambda inside a call the binder could not bind (an unresolved import) has no bound parameter.
+            if owner is ParameterSyntax parameterOwner &&
+                parameterOwner.Identifier is {} parameterName &&
+                model.GetDeclaredSymbol(parameterName) == nil && owner.Parent is LambdaExpressionSyntax {
+                return
+            }
             // Only clauses of declarations: a parameter, a field (also `const` and `shared`), a function result.
             if owner is not(
                 ParameterSyntax or FieldDeclarationSyntax or FunctionDeclarationSyntax or VariableDeclarationSyntax
@@ -329,11 +404,12 @@ type Alias = int32
 class Outer {
     class Inner {
         func Caller() int32 {
-            return Helper() // PNested
+            return Helper() + OnlyOuter() // PNested
         }
     }
     shared {
         func Helper() int32 { return 1 }
+        func OnlyOuter() int32 { return 3 }
         var Counter int32 = 0
     }
 }
@@ -378,6 +454,49 @@ class Primary(id int64, extra int64) {
 func Discards(_ int32, _ int32, kept int32) int32 {
     let f = (_ int32, y int32) -> y
     return kept + f(1, 2) // PDiscards
+}
+
+func Helper() int32 {
+    return 0
+}
+
+interface IStat {
+    func Inst() int32 { return 1 }
+    shared {
+        private func Hidden() int32 { return 2 }
+        func Run() int32 {
+            return Hidden() // PIfaceShared
+        }
+    }
+}
+
+interface IProp {
+    prop P int32 {
+        get {
+            return 1 // PIfaceGet
+        }
+    }
+}
+
+interface IFoo {
+    func M() int32
+}
+
+class Explicit : IFoo {
+    private func (IFoo) M() int32 { return 1 }
+    func M() int32 { return 2 }
+    func Use() int32 {
+        return M() // PExplicit
+    }
+}
+
+interface IDiscard {
+    func D(_ int32, _ string) int32
+}
+
+func EscapedLocalFunction() int32 {
+    let $generic[T] = func(v T) T { return v }
+    return $generic(1)
 }
 
 func Escaped($params string) string {
