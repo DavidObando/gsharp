@@ -490,7 +490,14 @@ internal class BinderContext {
         (type StructSymbol) -> ImportedTypeExposesStaticMember(type, name)
     ) ||
         $scope
-        .EnumerateStaticImportClrTypes().Any((type Type) -> ClrTypeExposesStaticMember(type, name))
+        .EnumerateStaticImportClrTypes().Any((type Type) -> ClrTypeExposesStaticMember(type, name)) ||
+        (
+        $scope.SubmissionImports is {} submissions && submissions.TryFindMemberContainer(
+            $scope.References!!,
+            name,
+            out _
+        )
+    )
 
     /// Resolves a source type at the current binding site. Lexically visible
     /// nested types on the containing type or an accessible base type are

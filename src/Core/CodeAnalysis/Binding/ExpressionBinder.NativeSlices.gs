@@ -51,7 +51,7 @@ internal partial class ExpressionBinder {
                 syntax.Arguments,
                 syntax.CloseParenthesisToken
             )
-            let useAlias = binderCtx.CanUseSpanAlias($scope, spanIdentifier, getCurrentFunction(), expression: true) &&
+            let useAlias = CanUseSpanAlias(spanIdentifier, expression: true) &&
                 !overloads.HasNonConstructorCallableCandidate(ordinary)
             if !useAlias && spanType.ReadOnlySpanModifier == nil {
                 return overloads.BindCallExpression(ordinary)
@@ -403,14 +403,7 @@ internal partial class ExpressionBinder {
 
     private func BindNativeBufferLiteral(syntax CollectionInitializerExpressionSyntax) BoundExpression {
         if syntax.BufferType is {Identifier: {} spanName} spanType &&
-            (
-            spanType.ReadOnlySpanModifier != nil || binderCtx.CanUseSpanAlias(
-                $scope,
-                spanName,
-                getCurrentFunction(),
-                expression: true
-            )
-        ) {
+            (spanType.ReadOnlySpanModifier != nil || CanUseSpanAlias(spanName, expression: true)) {
             return RejectNativeSpanAllocation(syntax)
         }
 

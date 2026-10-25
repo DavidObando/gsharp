@@ -116,7 +116,7 @@ class Example {
                 Assert.True(documents.TryGet(uri.ToString(), out var current))
                 let currentCompilation = current.Project!!.GetCompilation()
                 if version > 2 {
-                    Assert.Same(compilation.GlobalScope, currentCompilation.ReusedGlobalScope)
+                    Assert.Same(compilation.GlobalScope, currentCompilation.GlobalScope)
                 }
                 let currentToken = SemanticLookup.FindTokenAt(
                     current.SyntaxTree,

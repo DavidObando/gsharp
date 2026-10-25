@@ -163,6 +163,23 @@ open class Adr0208NarrowingCorpusTests {
                 "g3_switch_failed_guard",
                 "g4_overload_ambiguity_after_join",
                 "g5_yield_after_guard",
+                "h10_tuple_by_ref_parameter_overlaps_element",
+                "h11_enclosing_type_argument_by_ref_parameters_overlap",
+                "h12_conditional_out_argument_of_imported_call",
+                "h13_indexer_setter_clears_aliased_member",
+                "h14_null_conditional_receiver_repeats_ref_argument",
+                "h15_ref_local_alias_repeats_ref_argument",
+                "h16_ref_local_alias_passed_twice",
+                "h17_conditional_ref_argument_of_imported_call",
+                "h1_by_ref_param_survives_calls",
+                "h2_limitation_call_with_container_operand",
+                "h3_limitation_call_writes_global",
+                "h4_same_variable_two_ref_arguments",
+                "h5_generic_by_ref_parameters_may_overlap",
+                "h6_null_assertion_repeats_ref_argument",
+                "h7_conditional_address_repeats_ref_argument",
+                "h8_nested_annotation_by_ref_parameters_overlap",
+                "h9_nested_type_parameter_by_ref_parameters_overlap",
                 "out-alias_out_ref_alias"
             },
             names
@@ -924,6 +941,250 @@ func Main() {
         Console.WriteLine(item)
     }
 }`, "", "run", "0|1", "R13 (GS0158 after)"}
+            yield[]object{"h1_by_ref_param_survives_calls", `import System.Collections.Generic
+class P { var Value int32 = 1 }
+func Touch(p P) int32 { return p.Value }
+func Find(frames List[Dictionary[P, string]], c P?, out path P?, out found string?) bool {
+    path = c
+    if path == nil {
+        found = nil
+        return false
+    }
+    for var i = 0; i < frames.Count; i++ {
+        if frames[i].TryGetValue(path, out found) {
+            return Touch(path) + path.Value == 2
+        }
+    }
+    found = nil
+    return false
+}
+func Main() {
+    let c = P{}
+    let frames = List[Dictionary[P, string]]()
+    frames.Add(Dictionary[P, string]{[c] = "x"})
+    var p P? = nil
+    var t string? = nil
+    Console.WriteLine(Find(frames, c, out p, out t))
+}`, "", "run", "True", "R12 amendment A3 (#5292)"}
+            yield[]object{"h2_limitation_call_with_container_operand", `class C {
+    var Value int32 = 1
+}
+func Clear(xs []C?) { xs[0] = nil }
+func Run(ref a C?, xs []C?) int32 {
+    if a == nil { return 0 }
+    Clear(xs)
+    return a.Value
+}
+func Main() {
+    var xs = []C?{C{}}
+    Console.WriteLine(Run(ref xs[0], xs))
+}`, "", "nre", "", "R12 amendment A3 (#5292): documented limitation, see the follow-up issue"}
+            yield[]object{"h3_limitation_call_writes_global", `class C {
+    var Value int32 = 1
+}
+var g C? = C{}
+func Clear() { g = nil }
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    Clear()
+    return a.Value
+}
+Console.WriteLine(Run(ref g))`, "GS0286@11:1", "nre", "", "R12 amendment A3 (#5292): documented limitation, see the follow-up issue"}
+            yield[]object{"h4_same_variable_two_ref_arguments", `class C {
+    var Value int32 = 1
+}
+func Clear2(ref x C?, ref y C?) { x = nil }
+func Run(ref a C?, ref b C?) int32 {
+    if a == nil { return 0 }
+    Clear2(ref b, ref b)
+    return a.Value
+}
+func Main() {
+    var v C? = C{}
+    Console.WriteLine(Run(ref v, ref v))
+}`, "GS0158@8:14", "reject", "", ""}
+            yield[]object{"h5_generic_by_ref_parameters_may_overlap", `class C {
+}
+class Box[T] {
+    var Item int32 = 1
+}
+func Run[T](ref a Box[T]?, ref b Box[C]?) int32 {
+    if a == nil { return 0 }
+    b = nil
+    return a.Item
+}
+func Main() {
+    var x Box[C]? = Box[C]()
+    Console.WriteLine(Run[C](ref x, ref x))
+}`, "GS0158@9:14", "reject", "", ""}
+            yield[]object{"h6_null_assertion_repeats_ref_argument", `class C {
+    var Value int32 = 1
+}
+func Clear(ref x C?, y C) { x = nil }
+func Run(ref a C?, ref b C?) int32 {
+    if a == nil { return 0 }
+    Clear(ref b, b!!)
+    return a.Value
+}
+func Main() {
+    var v C? = C{}
+    Console.WriteLine(Run(ref v, ref v))
+}`, "GS0158@8:14", "reject", "", ""}
+            yield[]object{"h7_conditional_address_repeats_ref_argument", `class C {
+    var Value int32 = 1
+}
+func Clear2(ref x C?, ref y C?) { x = nil }
+func Run(ref a C?, ref b C?, flag bool) int32 {
+    if a == nil { return 0 }
+    Clear2(ref flag ? b : b, ref b)
+    return a.Value
+}
+func Main() {
+    var v C? = C{}
+    Console.WriteLine(Run(ref v, ref v, true))
+}`, "GS0158@8:14", "reject", "", ""}
+            yield[]object{"h8_nested_annotation_by_ref_parameters_overlap", `class C {
+}
+class Box[T] {
+    var Item int32 = 1
+}
+func Run(ref a Box[C]?, ref b Box[C?]?) int32 {
+    if a == nil { return 0 }
+    b = nil
+    return a.Item
+}
+func Main() {
+    var x Box[C]? = Box[C]()
+    Console.WriteLine(Run(ref x, ref x))
+}`, "GS0158@9:14 GS0612@13:34", "reject", "", ""}
+            yield[]object{"h9_nested_type_parameter_by_ref_parameters_overlap", `class C {
+}
+class Box[T] {
+    var Item int32 = 1
+}
+func Run[T](ref a Box[(T, int32)]?, ref b Box[(C, int32)]?) int32 {
+    if a == nil { return 0 }
+    b = nil
+    return a.Item
+}
+func Main() {
+    var x Box[(C, int32)]? = Box[(C, int32)]()
+    Console.WriteLine(Run[C](ref x, ref x))
+}`, "GS0158@9:14", "reject", "", ""}
+            yield[]object{"h10_tuple_by_ref_parameter_overlaps_element", `class C {
+    var Value int32 = 1
+}
+func Run(ref a C?, ref whole (C?, int32)) int32 {
+    if a == nil { return 0 }
+    whole = (nil, 0)
+    return a.Value
+}
+func Main() {
+    var element C? = C{}
+    var t (C?, int32) = (C{}, 1)
+    Console.WriteLine(Run(ref element, ref t))
+}`, "GS0158@7:14", "reject", "", ""}
+            yield[]object{"h11_enclosing_type_argument_by_ref_parameters_overlap", `class Outer[T] {
+    class Inner {
+        var Item int32 = 1
+    }
+}
+func Run(ref a Outer[string].Inner?, ref b Outer[string?].Inner?) int32 {
+    if a == nil { return 0 }
+    b = nil
+    return a.Item
+}
+func Main() {
+    var x Outer[string].Inner? = Outer[string].Inner()
+    Console.WriteLine(Run(ref x, ref x))
+}`, "GS0158@9:14 GS0612@13:34", "reject", "", ""}
+            yield[]object{"h12_conditional_out_argument_of_imported_call", `import System.Collections.Generic
+class C {
+    var Value int32 = 1
+}
+func Run(ref a C?, flag bool) int32 {
+    if a == nil { return 0 }
+    let d = Dictionary[string, C?]()
+    d.TryGetValue("missing", out flag ? a : a)
+    return a.Value
+}
+func Main() {
+    var x C? = C{}
+    Console.WriteLine(Run(ref x, true))
+}`, "GS0158@9:14", "reject", "", ""}
+            yield[]object{"h13_indexer_setter_clears_aliased_member", `class C {
+    var Value int32 = 1
+}
+class Box {
+    var Field C? = C{}
+    prop this[i int32] int32 {
+        get -> 0
+        set { Field = nil }
+    }
+}
+func Run(ref a C?, box Box) int32 {
+    if a == nil { return 0 }
+    box[0] = 1
+    return a.Value
+}
+func Main() {
+    let box = Box()
+    Console.WriteLine(Run(ref box.Field, box))
+}`, "GS0158@14:14", "reject", "", ""}
+            yield[]object{"h14_null_conditional_receiver_repeats_ref_argument", `class C {
+    var Value int32 = 1
+    func Clear(ref target C?) { target = nil }
+}
+func Run(ref a C?, ref b C?) int32 {
+    if a == nil { return 0 }
+    b?.Clear(ref b)
+    return a.Value
+}
+func Main() {
+    var v C? = C{}
+    Console.WriteLine(Run(ref v, ref v))
+}`, "GS0158@8:14", "reject", "", ""}
+            yield[]object{"h15_ref_local_alias_repeats_ref_argument", `class C {
+    var Value int32 = 1
+}
+func Clear2(ref x C?, ref y C?) { x = nil }
+func Run(ref a C?, ref b C?) int32 {
+    if a == nil { return 0 }
+    let ref c C? = b
+    Clear2(ref b, ref c)
+    return a.Value
+}
+func Main() {
+    var v C? = C{}
+    Console.WriteLine(Run(ref v, ref v))
+}`, "GS0158@9:14", "reject", "", ""}
+            yield[]object{"h16_ref_local_alias_passed_twice", `class C {
+    var Value int32 = 1
+}
+func Clear2(ref x C?, ref y C?) { x = nil }
+func Run(ref a C?, ref b C?) int32 {
+    if a == nil { return 0 }
+    let ref c C? = b
+    Clear2(ref c, ref c)
+    return a.Value
+}
+func Main() {
+    var v C? = C{}
+    Console.WriteLine(Run(ref v, ref v))
+}`, "GS0158@9:14", "reject", "", ""}
+            yield[]object{"h17_conditional_ref_argument_of_imported_call", `import System.Threading
+class C {
+    var Value int32 = 1
+}
+func Run(ref a C?, flag bool) int32 {
+    if a == nil { return 0 }
+    Interlocked.Exchange[C?](ref flag ? a : a, nil)
+    return a.Value
+}
+func Main() {
+    var x C? = C{}
+    Console.WriteLine(Run(ref x, true))
+}`, "GS0158@8:14", "reject", "", ""}
             yield[]object{"out-alias_out_ref_alias", `class C { func M() { } }
 func Run(out c C?, ref alias C?) {
     c = C()

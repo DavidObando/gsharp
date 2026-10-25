@@ -17,7 +17,7 @@ import Xunit
 /// that building the model with the per-tree / per-body memo caches warm
 /// (the incremental path) produces results identical to a from-scratch build
 /// (the `useIncrementalCaches: false` oracle): `Resolve` over every
-/// token, `GetLocals` over every function, and the `globals` map all
+/// token and the `globals` map
 /// agree. They also prove the incremental path actually reuses unchanged files
 /// rather than re-walking them, and that non-body-only edits stay correct.
 @Collection("IncrementalSemanticModel")
@@ -34,7 +34,7 @@ open class IncrementalSemanticModelTests {
         // The ADR-0105 fast path engaged (single body-only edit), so the model
         // build runs over a reused global scope — exactly the scenario the
         // incremental build must keep identical.
-        Assert.Same(comp1.GlobalScope, comp2.ReusedGlobalScope)
+        Assert.Same(comp1.GlobalScope, comp2.GlobalScope)
         AssertModelsEquivalent(comp2)
     }
 
@@ -46,20 +46,15 @@ open class IncrementalSemanticModelTests {
         // Edit a method body in a.gs (the V + 0 keeps the signature identical).
         project.UpdateFile(FileA, SourceA.Replace("return local", "return local + 0"))
         let comp2 = project.GetCompilation()
-        Assert.Same(comp1.GlobalScope, comp2.ReusedGlobalScope)
+        Assert.Same(comp1.GlobalScope, comp2.GlobalScope)
         SemanticLookup.ResetIncrementalCacheCounters()
         let _ = SemanticLookup.BuildModelForTest(comp2, useIncrementalCaches: true)
         let nodeStats = SemanticLookup.NodeBucketCacheStats
-        let localStats = SemanticLookup.FunctionLocalsCacheStats
         // Four files; only a.gs changed. The three unchanged trees are served
         // from the per-tree memo (instance identity), and exactly one tree
         // (a.gs) misses and is re-collected.
         Assert.True(nodeStats.Hits >= int64(3), "expected >= 3 node-bucket hits, got ${nodeStats.Hits}")
         Assert.True(nodeStats.Misses >= int64(1), "expected >= 1 node-bucket miss, got ${nodeStats.Misses}")
-        // The unchanged files' bodies are served from the BoundBodyCache as the
-        // same instances, so their local maps are reused; the edited file's
-        // body is fresh and recomputes.
-        Assert.True(localStats.Hits >= int64(1), "expected >= 1 function-locals hit, got ${localStats.Hits}")
     }
 
     @Fact
@@ -71,7 +66,7 @@ open class IncrementalSemanticModelTests {
         // falls back to a full rebuild (no reused global scope).
         project.UpdateFile(FileC, SourceC.Replace("func Compute(x int32)", "func Compute(x int64)"))
         let comp2 = project.GetCompilation()
-        Assert.Null(comp2.ReusedGlobalScope)
+        Assert.NotSame(comp1.GlobalScope, comp2.GlobalScope)
         AssertModelsEquivalent(comp2)
     }
 
@@ -83,7 +78,7 @@ open class IncrementalSemanticModelTests {
         project.UpdateFile(FileA, SourceA.Replace("return local", "return local + 1"))
         project.UpdateFile(FileC, SourceC.Replace("return sum + x", "return sum + x + 1"))
         let comp2 = project.GetCompilation()
-        Assert.Null(comp2.ReusedGlobalScope)
+        Assert.NotSame(comp1.GlobalScope, comp2.GlobalScope)
         AssertModelsEquivalent(comp2)
     }
 
@@ -94,7 +89,7 @@ open class IncrementalSemanticModelTests {
         let _ = SemanticLookup.BuildModelForTest(comp1, useIncrementalCaches: true)
         project.UpdateFile(FileB, SourceB.Replace("Box(n)", "Box(n + 0)"))
         let comp2 = project.GetCompilation()
-        Assert.Same(comp1.GlobalScope, comp2.ReusedGlobalScope)
+        Assert.Same(comp1.GlobalScope, comp2.GlobalScope)
         // MakeBox is declared in b.gs and called in d.gs — references must
         // include both the declaration and the cross-file call site.
         let makeBox = comp2.GlobalScope.Functions.Single((f FunctionSymbol) -> f.Name == "MakeBox")
@@ -163,22 +158,7 @@ open class IncrementalSemanticModelTests {
                 }
             }
             Assert.True(tokenCount > 0)
-            // 2. GetLocals agrees for every function declaration.
-            for tree in compilation.SyntaxTrees {
-                for function in DescendantsOfType[FunctionDeclarationSyntax](tree.Root) {
-                    let incrementalLocals = incremental.GetLocals(function)
-                    let fullLocals = full.GetLocals(function)
-                    Assert.Equal(fullLocals.Count, incrementalLocals.Count)
-                    Assert.Equal(
-                        fullLocals.OrderBy((s VariableSymbol) -> s.Name).Select((s VariableSymbol) -> s.Name),
-                        incrementalLocals.OrderBy((s VariableSymbol) -> s.Name).Select((s VariableSymbol) -> s.Name)
-                    )
-                    for symbol in fullLocals {
-                        Assert.Contains(incrementalLocals, (s VariableSymbol) -> object.ReferenceEquals(s, symbol))
-                    }
-                }
-            }
-            // 3. The globals map agrees (same keys, same symbol instances).
+            // 2. The globals map agrees (same keys, same symbol instances).
             let incrementalGlobals = incremental.GlobalsSnapshot
             let fullGlobals = full.GlobalsSnapshot
             Assert.Equal(fullGlobals.Count, incrementalGlobals.Count)

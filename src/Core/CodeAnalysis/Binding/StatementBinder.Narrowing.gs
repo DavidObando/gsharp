@@ -396,7 +396,13 @@ internal partial class StatementBinder {
                         )
                     }
                 ) ||
-                    (DropsOnMemberMutation(key) && dropAllMemberPaths)
+                    (
+                    if statementCollector != nil {
+                        DropsOnMemberMutation(key, dropAllMemberPaths, statementCollector.MayMutateReferenceStorage)
+                    } else {
+                        DropsOnMemberMutation(key, dropAllMemberPaths, dropAllMemberPaths)
+                    }
+                )
                 if drop {
                     (
                         (
@@ -627,7 +633,7 @@ internal partial class StatementBinder {
                     frames[i][path]
                 ) ||
                     mutations.InvalidatesNarrowing(path.Root, frames[i][path]) ||
-                    (DropsOnMemberMutation(path) && mayMutateMemberPaths) {
+                    DropsOnMemberMutation(path, mutations) {
                     invalidations.Add((i, path))
                 }
             }
@@ -1130,7 +1136,7 @@ internal partial class StatementBinder {
                 entry.Key.Root,
                 entry.Value
             ) ||
-                (DropsOnMemberMutation(entry.Key) && mutations.MayMutateMemberPaths) ||
+                DropsOnMemberMutation(entry.Key, mutations) ||
                 mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value) {
                 state.Remove(entry.Key)
             }
@@ -1161,7 +1167,7 @@ internal partial class StatementBinder {
                     entry.Key.Root,
                     entry.Value
                 ) ||
-                    (DropsOnMemberMutation(entry.Key) && summary.Mutations.MayMutateMemberPaths) ||
+                    DropsOnMemberMutation(entry.Key, summary.Mutations) ||
                     summary
                     .Mutations
                     .InvalidatesNarrowing(entry.Key.Root, entry.Value) {
@@ -1182,7 +1188,7 @@ internal partial class StatementBinder {
                 entry.Key.Root,
                 entry.Value
             ) ||
-                (DropsOnMemberMutation(entry.Key) && summary.Mutations.MayMutateMemberPaths) ||
+                DropsOnMemberMutation(entry.Key, summary.Mutations) ||
                 summary
                 .Mutations
                 .InvalidatesNarrowing(entry.Key.Root, entry.Value) {
@@ -1771,6 +1777,13 @@ internal partial class StatementBinder {
             private set;
         }
 
+        // ADR-0208 R12 (#5292): a member, index or indirect write, or user code that may run one
+        // (a lambda, a loop header); unlike MayMutateMemberPaths, a plain call does not set it.
+        prop MayMutateReferenceStorage bool {
+            get;
+            private set;
+        }
+
         // A nested try can catch a replacement exception, after the filters of an enclosing try ran.
         prop ContainsTry bool {
             get;
@@ -1854,6 +1867,13 @@ internal partial class StatementBinder {
             if StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) {
                 MayMutateMemberPaths = true
             }
+            if StatementBinder.IsMemberStorageWriteExpression(node.Kind) ||
+                (
+                StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) &&
+                    node is not BoundCallOperationExpression
+            ) {
+                MayMutateReferenceStorage = true
+            }
             if node is BoundPropertyAccessExpression && node.Property.IsAutoProperty == false {
                 MayMutateMemberPaths = true
             }
@@ -1888,7 +1908,11 @@ internal partial class StatementBinder {
                 MarkMayMutateGlobalRoots()
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function, Arguments: var arguments} {
-                MarkMayMutateGlobalRoots()
+                // ADR-0208 R12 (#5292, amendment A3): a plain function call does not write by-reference storage;
+                // a property or indexer accessor can assign the members the storage names.
+                MarkMayMutateGlobalRoots(
+                    writesReferenceStorage: function.MethodKind is MethodKind.PropertyGet or MethodKind.PropertySet
+                )
                 if function.HasCaptures {
                     MayMutateAnyRoot = true
                 }
@@ -1899,7 +1923,28 @@ internal partial class StatementBinder {
                     }
                 }
             }
+            if node is BoundCallOperationExpression{
+                CalledFunction: ImportedFunctionSymbol importedFunction
+            } importedCall {
+                // ADR-0208 R12 (#5292): a conditional address handed to a `ref`/`out` parameter of an imported
+                // method is a write; one handed to an `in` parameter is a read.
+                let parameters = importedFunction.Method.GetParameters()
+                let count = Math.Min(importedCall.Arguments.Length, parameters.Length)
+                for var i = 0; i < count; i++ {
+                    var argument = importedCall.Arguments[i]
+                    while argument is BoundConversionExpression conversion {
+                        argument = conversion.Expression
+                    }
+                    if argument is BoundConditionalAddressExpression && RefCapabilities.GetParameterRefKind(
+                        parameters[i]
+                    ) is RefKind.Ref or
+                        RefKind.Out {
+                        RecordWritableReference(argument)
+                    }
+                }
+            }
             if node is BoundCallOperationExpression call {
+                RecordCallSiteAliasing(call)
                 AnalyzeCallableArguments(call.Arguments)
             }
             base.VisitExpression(node)
@@ -1912,6 +1957,15 @@ internal partial class StatementBinder {
                 if object.ReferenceEquals(assigned, root) {
                     continue
                 }
+                // ADR-0208 R12 (#5292, amendment A3): a variable that a call only passes by `ref`/`out`, once, is
+                // written through the callee and names no other by-reference parameter's storage that the call site
+                // shows. Only a shared variable or an overlapping alias chain still shares.
+                if IsCallArgumentOnly(assigned) {
+                    if StatementBinder.ChainsOverlap(assigned, root) {
+                        return true
+                    }
+                    continue
+                }
                 if mayShareStorage != nil {
                     if mayShareStorage!!(assigned, root) {
                         return true
@@ -1921,6 +1975,101 @@ internal partial class StatementBinder {
                 }
             }
             return false
+        }
+
+        // Variables that one call passes twice by reference, or by reference and by value: the aliasing is visible at
+        // the call site, so a write through the call is a write through every by-reference parameter.
+        private let callAliasedRoots HashSet[VariableSymbol] = HashSet[VariableSymbol]()
+        private let captureReceivers Dictionary[VariableSymbol, BoundExpression] = Dictionary[
+            VariableSymbol,
+            BoundExpression
+        ]()
+
+        private func IsCallArgumentOnly(assigned VariableSymbol) bool -> !assignments.ContainsKey(assigned) &&
+            !callAliasedRoots.Contains(ResolveStorage(assigned))
+
+        // ADR-0208 R12 (#5292): the storage a variable names, through `let ref` alias chains. Every place that
+        // records or looks up an occurrence of a variable resolves it here.
+        private func ResolveStorage(variable VariableSymbol) VariableSymbol {
+            let chain = StatementBinder.AliasChain(variable)
+            return chain[chain.Count - 1]
+        }
+
+        // ADR-0208 R12 (#5292, amendment A3): records the variables that this call passes more than once, at least
+        // once by `ref`/`out`.
+        func RecordCallSiteAliasing(call BoundCallOperationExpression) {
+            let byReference = Dictionary[VariableSymbol, int32]()
+            let byValue = Dictionary[VariableSymbol, int32]()
+            for child in call.ChildNodes {
+                if child is BoundExpression operand {
+                    // The branches of one conditional are mutually exclusive: an operand counts a variable once.
+                    let referenceUses = HashSet[VariableSymbol]()
+                    let valueUses = HashSet[VariableSymbol]()
+                    CollectOccurrences(operand, false, referenceUses, valueUses)
+                    for variable in referenceUses {
+                        byReference[variable] = CountOf(byReference, variable) + 1
+                    }
+                    for variable in valueUses {
+                        byValue[variable] = CountOf(byValue, variable) + 1
+                    }
+                }
+            }
+            for entry in byReference {
+                if entry.Value + CountOf(byValue, entry.Key) >= 2 {
+                    callAliasedRoots.Add(entry.Key)
+                }
+            }
+        }
+
+        private func CountOf(counts Dictionary[VariableSymbol, int32], variable VariableSymbol) int32 {
+            return if counts.TryGetValue(variable, out var seen) {
+                seen
+            } else {
+                0
+            }
+        }
+
+        // Every occurrence of a variable in one operand of the call (the receiver or an argument) is collected
+        // through conversions, null assertions, address-of operands and each branch of a conditional.
+        private func CollectOccurrences(
+            expression BoundExpression,
+            isReference bool,
+            byReference HashSet[VariableSymbol],
+            byValue HashSet[VariableSymbol]
+        ) {
+            switch expression {
+                case address is BoundAddressOfExpression {
+                    CollectOccurrences(address.Operand, true, byReference, byValue)
+                }
+                case conversion is BoundConversionExpression {
+                    CollectOccurrences(conversion.Expression, isReference, byReference, byValue)
+                }
+                case BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.NullAssertion}} assertion {
+                    CollectOccurrences(assertion.Operand, isReference, byReference, byValue)
+                }
+                case conditionalAddress is BoundConditionalAddressExpression {
+                    CollectOccurrences(conditionalAddress.WhenTrueOperand, true, byReference, byValue)
+                    CollectOccurrences(conditionalAddress.WhenFalseOperand, true, byReference, byValue)
+                }
+                case conditional is BoundConditionalExpression {
+                    CollectOccurrences(conditional.WhenTrue, isReference, byReference, byValue)
+                    CollectOccurrences(conditional.WhenFalse, isReference, byReference, byValue)
+                }
+                case variable is BoundVariableExpression {
+                    if captureReceivers.TryGetValue(variable.Variable, out var original) {
+                        // The receiver of a null-conditional access is bound on a synthetic capture.
+                        CollectOccurrences(original, isReference, byReference, byValue)
+                    } else {
+                        // Resolve the variable to the storage it names, through `let ref` alias chains.
+                        let root = ResolveStorage(variable.Variable)
+                        if isReference {
+                            byReference.Add(root)
+                        } else {
+                            byValue.Add(root)
+                        }
+                    }
+                }
+            }
         }
 
         func AssignsRoot(root VariableSymbol) bool {
@@ -2011,6 +2160,8 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitNullConditionalAccessExpression(node BoundNullConditionalAccessExpression) {
+            // The access is bound on a synthetic capture: remember the receiver behind it.
+            captureReceivers[node.Capture] = node.Receiver
             VisitExpression(node.Receiver)
             VisitPossiblySkipped(() -> VisitExpression(node.WhenNotNull))
         }
@@ -2418,6 +2569,7 @@ internal partial class StatementBinder {
             if variable is ParameterSymbol && variable.IsReadOnly == true || externalFunctionValues.Contains(variable) {
                 MarkMayMutateGlobalRoots()
                 MayMutateWritableReferenceRoots = true
+                MayMutateReferenceStorage = true
             }
         }
 
@@ -2426,9 +2578,12 @@ internal partial class StatementBinder {
             MarkMayMutateGlobalRoots()
         }
 
-        private func MarkMayMutateGlobalRoots() {
+        private func MarkMayMutateGlobalRoots(writesReferenceStorage bool = true) {
             // User code can also write members and the storage behind by-reference aliases.
             MayMutateMemberPaths = true
+            if writesReferenceStorage {
+                MayMutateReferenceStorage = true
+            }
             MayMutateGlobalRoots = true
             let protectedRoots = enclosingGlobalAssignments.ToHashSet()
             if globalMutationProtectedRoots == nil {
@@ -2581,6 +2736,7 @@ internal partial class StatementBinder {
             if !SmartCastStability.TryGetStableMemberPath(expression, out var path, out _) {
                 if expression is BoundIndexExpression || expression is BoundClrIndexExpression {
                     MayMutateMemberPaths = true
+                    MayMutateReferenceStorage = true
                 } else {
                     MayMutateAnyRoot = true
                     MayMutateAnyRootViaPointer = true
@@ -2589,6 +2745,7 @@ internal partial class StatementBinder {
             }
             if path.HasMembers {
                 MayMutateMemberPaths = true
+                MayMutateReferenceStorage = true
             } else {
                 Roots.Add(path.Root)
             }
@@ -4378,10 +4535,81 @@ internal partial class StatementBinder {
         /// ADR-0208 R12 (#5171): whether [`first`](paramref) and [`second`](paramref) may name one
         /// storage: the same variable, an overlapping alias chain, or two external-storage aliases.
         internal func SharesStorage(first VariableSymbol, second VariableSymbol) bool {
-            if object.ReferenceEquals(first, second) {
+            if IsExternalStorageAlias(first) &&
+                IsExternalStorageAlias(second) &&
+                ByReferenceTypesMayOverlap(first.Type, second.Type) {
                 return true
             }
-            if IsExternalStorageAlias(first) && IsExternalStorageAlias(second) {
+            return ChainsOverlap(first, second)
+        }
+
+        private func StripNullability(type TypeSymbol?) TypeSymbol? {
+            var current = type
+            while current is NullableTypeSymbol or PlatformTypeSymbol {
+                current = if current is NullableTypeSymbol nullable {
+                    nullable.UnderlyingType
+                } else {
+                    (current as PlatformTypeSymbol)!!.UnderlyingType
+                }
+            }
+            return current
+        }
+
+        /// ADR-0208 R12 (#5292, amendment A3): whether two by-reference storages of these types can be one
+        /// storage. The answer is "no" only when the types are provably disjoint: both are plain named class
+        /// types that are not generic and mention no type parameter (a source or imported class), or a
+        /// primitive or a string, after the outer nullability is stripped, and they are different types.
+        /// Everything else overlaps: the same type, any generic instantiation (annotations nested in a
+        /// construction are not told apart), a tuple, a struct or other value aggregate, an array, an
+        /// interface, `object`, a type parameter, and any type that cannot be classified.
+        internal func ByReferenceTypesMayOverlap(first TypeSymbol?, second TypeSymbol?) bool {
+            let left = StripNullability(first)
+            let right = StripNullability(second)
+            if left == nil || right == nil || object.Equals(left, right) {
+                return true
+            }
+            return !(IsPlainClassOrScalar(left) && IsPlainClassOrScalar(right))
+        }
+
+        private func IsPlainClassOrScalar(type TypeSymbol) bool {
+            if TypeSymbol.ContainsTypeParameter(type) {
+                return false
+            }
+            if type is StructSymbol structure {
+                return structure.IsClass &&
+                    structure
+                    .TypeParameters
+                    .IsDefaultOrEmpty &&
+                    structure
+                    .TypeArguments
+                    .IsDefaultOrEmpty &&
+                    !structure.IsConstructedNestedType &&
+                    !TypeSymbol.IsUnboundGenericDefinition(structure)
+            }
+            let clr = type.ClrType
+            if clr == nil || type is TypeParameterSymbol or InterfaceSymbol {
+                return false
+            }
+            if clr.IsPrimitive || ClrTypeInspector.IsSameAs(clr, typeof(string)) || ClrTypeInspector.IsSameAs(
+                clr,
+                typeof(object)
+            ) {
+                return true
+            }
+            // An imported non-generic class, interface or `object`: a by-reference argument has the exact type of
+            // its parameter, so a different reference type is a different storage.
+            return type is ImportedTypeSymbol &&
+                !clr.IsValueType &&
+                !clr.IsGenericType &&
+                !clr.IsArray &&
+                !clr.IsByRef &&
+                !clr.IsPointer
+        }
+
+        /// ADR-0208 R12 (#5292): whether [`first`](paramref) and [`second`](paramref) are one variable or have
+        /// overlapping `ref` alias chains. This is the sharing that a `ref`/`out` call argument can create.
+        internal func ChainsOverlap(first VariableSymbol, second VariableSymbol) bool {
+            if object.ReferenceEquals(first, second) {
                 return true
             }
             let secondChain = AliasChain(second)
@@ -4413,10 +4641,36 @@ internal partial class StatementBinder {
             return false
         }
 
-        /// ADR-0208 R12 (#5171): whether a member, index or indirect write, or a
-        /// call, invalidates the narrowing of [`path`](paramref).
-        internal func DropsOnMemberMutation(path AccessPath) bool -> path.HasMembers ||
-            IsExternalStorageAlias(path.Root)
+        /// ADR-0208 R12 (#5171, #5292, amendment A3): whether the effects of a node invalidate the narrowing of
+        /// [`path`](paramref). A member-bearing path drops when the node may run user code or write a member
+        /// (`mayMutateMemberPaths`). A root that may name storage no other root names drops when the node
+        /// writes through a member, index or indirect target (`mayMutateReferenceStorage`), and a `ref` local
+        /// that does not alias a by-reference parameter also drops on any call (see
+        /// (cref:CallsMayWriteAliasedStorage)). A plain call does not drop the narrowing of a by-reference
+        /// parameter, as in 0.5.212 and in C#.
+        internal func DropsOnMemberMutation(
+            path AccessPath,
+            mayMutateMemberPaths bool,
+            mayMutateReferenceStorage bool
+        ) bool -> (path.HasMembers && mayMutateMemberPaths) ||
+            (
+            IsExternalStorageAlias(path.Root) &&
+                (mayMutateReferenceStorage || (mayMutateMemberPaths && CallsMayWriteAliasedStorage(path.Root)))
+        )
+
+        internal func DropsOnMemberMutation(
+            path AccessPath,
+            mutations AssignedRootsCollector
+        ) bool -> DropsOnMemberMutation(path, mutations.MayMutateMemberPaths, mutations.MayMutateReferenceStorage)
+
+        /// ADR-0208 R12 (#5292): whether a call can write the storage that the external-storage alias
+        /// [`root`](paramref) names. A by-reference parameter (or a `ref` local that aliases one) names
+        /// storage that the caller owns and the callee cannot name; any other alias (a `ref` local of an
+        /// element or member, or of a mutable global) can be reached through the shared heap or global.
+        internal func CallsMayWriteAliasedStorage(root VariableSymbol) bool {
+            let chain = AliasChain(root)
+            return !(chain[chain.Count - 1] is ParameterSymbol)
+        }
 
         /// Returns whether an expression kind can invoke user code or assign
         /// through a member-bearing path.
@@ -4437,7 +4691,13 @@ internal partial class StatementBinder {
             kind == BoundNodeKind.ClrConstructorCallExpression ||
             kind == BoundNodeKind.ClrStaticCallExpression ||
             kind == BoundNodeKind.ClrConversionCallExpression ||
-            kind == BoundNodeKind.FieldAssignmentExpression ||
+            IsMemberStorageWriteExpression(kind)
+
+        /// ADR-0208 R12 (#5292): whether an expression kind writes through a member, index or indirect
+        /// target, which can change the storage that a by-reference parameter names.
+        internal func IsMemberStorageWriteExpression(
+            kind BoundNodeKind
+        ) bool -> kind == BoundNodeKind.FieldAssignmentExpression ||
             kind == BoundNodeKind.PropertyAssignmentExpression ||
             kind == BoundNodeKind.IndexAssignmentExpression ||
             kind == BoundNodeKind.ClrPropertyAssignmentExpression ||

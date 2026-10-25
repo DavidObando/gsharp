@@ -128,6 +128,82 @@ func Main() { Registry.Run() }`, "imported-inherited-span-callable", true, "/ref
     }
 
     @Theory
+    @InlineData("shared {", "}", "Outer.Inner.Run()")
+    @InlineData("", "", "Outer.Inner().Run()")
+    func LexicallyEnclosingSpanMethodsKeepTheirSideEffects(openShared string, closeShared string, invoke string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package NestedSpanCallable
+import System
+class Outer {
+    shared {
+        func span[T](value []T) []T {
+            Console.WriteLine("called")
+            return value
+        }
+    }
+    class Inner {
+        OPEN
+        public func Run() {
+            let data = []byte{65, 66}
+            Console.WriteLine(span[byte](data).Length)
+        }
+        CLOSE
+    }
+}
+func Main() { INVOKE }`.Replace("OPEN", openShared).Replace("CLOSE", closeShared).Replace("INVOKE", invoke)
+        let assembly = fixture.Compile(source, "nested-span-callable", true)
+        IlVerifier.Verify(assembly)
+        Assert.Equal("called\n2\n", fixture.Run(assembly))
+    }
+
+    @Theory
+    @InlineData("public string[] span = new[] { \"x\", \"hello\" };")
+    @InlineData("public string[] span => new[] { \"x\", \"hello\" };")
+    func InheritedClrSpanValuesKeepOrdinaryIndexing(member string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(
+            "namespace SpanValueContract; public class Parent { " + member + " }",
+            "SpanValueContract"
+        )
+        let assembly = fixture.Compile(`package InheritedSpanValue
+import System
+import SpanValueContract
+class Reader : Parent {
+    public func Read() int32 {
+        let i = 1
+        return span[i].Length
+    }
+}
+func Main() { Console.WriteLine(Reader().Read()) }`, "inherited-span-value", true, "/reference:" + contract)
+        IlVerifier.Verify(assembly, []string{contract})
+        Assert.Equal("5\n", fixture.Run(assembly))
+    }
+
+    @Fact
+    func DefaultInterfaceSpanValuesKeepOrdinaryIndexing() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let assembly = fixture.Compile(`package InterfaceSpanValue
+import System
+interface IReader {
+    prop span []string { get; set; }
+    func Read() int32 {
+        let i = 1
+        return span[i].Length
+    }
+}
+class Reader : IReader {
+    prop span []string { get; set; }
+}
+func Main() {
+    let value IReader = Reader()
+    value.span = []string{"x", "hello"}
+    Console.WriteLine(value.Read())
+}`, "interface-span-value", true)
+        IlVerifier.Verify(assembly)
+        Assert.Equal("5\n", fixture.Run(assembly))
+    }
+
+    @Theory
     @InlineData("span[byte]")
     @InlineData("readonly span[byte]")
     func AliasesUseExistingClrRangeConstructors(typeName string) {

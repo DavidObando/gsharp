@@ -13,7 +13,7 @@ import System
 /// never a symbol or (cref:Syntax.SyntaxNode) reference, so a key is
 /// identical across re-parses of byte-identical text and differs whenever the
 /// body changes.
-data struct BoundBodyCacheKey(StableMemberId string, BodyHash string) : IEquatable[BoundBodyCacheKey] {
+internal data struct BoundBodyCacheKey(StableMemberId string, BodyHash string) : IEquatable[BoundBodyCacheKey] {
     /// Gets the position-independent member identity (source file path, owning
     /// package, containing-type path and name + parameter-type signature).
     private var _stableMemberId string = StableMemberId ?? string.Empty

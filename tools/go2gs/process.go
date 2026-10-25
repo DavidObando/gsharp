@@ -95,10 +95,10 @@ func runProcessConfigured(
 		}
 	case <-ctx.Done():
 		killErr := terminateProcess(cmd.Process, groupMode)
-		waitErr = <-wait
 		if killErr != nil {
 			return processResult{}, fmt.Errorf("terminate process tree for %q: %w", executable, killErr)
 		}
+		waitErr = <-wait
 		return processResult{}, fmt.Errorf("process %q timed out or was cancelled: %w", executable, ctx.Err())
 	}
 	if groupMode == processGroupOwn {

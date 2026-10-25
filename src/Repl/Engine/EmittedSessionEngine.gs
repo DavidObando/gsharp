@@ -7,7 +7,6 @@ package GSharp.Repl.Engine
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
-import GSharp.Core.CodeAnalysis.Execution
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Symbols.Display
 import GSharp.Core.CodeAnalysis.Syntax
@@ -334,7 +333,7 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
                     default(TextLocation),
                     "GSI002",
                     GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error,
-                    "Unhandled exception. ${ex!!.GetType().Name}: ${ex!!.Message}"
+                    "Unhandled exception. ${ex.GetType().Name}: ${ex.Message}"
                 )
                 cancellationToken.ThrowIfCancellationRequested()
                 return Cell(

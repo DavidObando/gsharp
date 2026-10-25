@@ -15,11 +15,11 @@ import GSharp.Core.CodeAnalysis.Syntax
 import SystemObject = System.Object
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Analyzers
-import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Text
 import System.Collections.Immutable
 import System.Security.Cryptography
 import System.Text
+import System.Threading
 
 /// Represents the state of a single GSharp project, holding all source files
 /// and producing a unified (cref:Compilation) from them.
@@ -29,17 +29,10 @@ open class ProjectState {
         StringComparer.OrdinalIgnoreCase
     )
 
-    // ADR-0105 (Phase 1): the per-project bound-body cache. It is owned here —
-    // alongside the per-edit lifecycle (UpdateFile -> Invalidate ->
-    // GetCompilation) and the warm cachedResolver — and seeded into every
-    // Compilation this project produces so unchanged member bodies can be
-    // reused across edits when reuse is provably sound. Until ADR-0105 Phase 2
-    // gives symbols stable cross-compilation identity, the cache's soundness
-    // gate makes reuse a near-no-op (it never alters emitted IL or
-    // diagnostics); the infrastructure lands now without user-visible effect.
-    private let bodyCache BoundBodyCache = BoundBodyCache()
-
     private var compilation Compilation?
+    // ADR-0212 §8: the lifetime token of `compilation`. The project cancels it when a successor replaces the
+    // compilation, which releases every waiter on a build nobody wants.
+    private var compilationLifetime CancellationTokenSource?
     private var isDirty bool = true
     private var references IReadOnlyList[string] = Array.Empty[string]()
     private var referenceSourcePath string?
@@ -228,41 +221,24 @@ open class ProjectState {
             }
             let trees = syntaxTrees.Values.ToArray()
             let resolver ReferenceResolver? = GetOrBuildResolver_NoLock()
-            // ADR-0105 (Phase 2): attempt the incremental fast path — a single
-            // file changed and that change is a body-only edit, so we can reuse
-            // the previous compilation's BoundGlobalScope (and therefore every
-            // symbol instance) and let the BoundBodyCache serve every unchanged
-            // file's bodies, re-binding only the edited file. On any mismatch
-            // this returns null and we fall back to a full rebuild below
-            // (over-invalidation is always safe; under-invalidation would be a
-            // correctness bug).
-            let incremental Compilation? = TryBuildIncrementalCompilation_NoLock(trees, resolver)
+            // Cancel the superseded compilation first, so the successor factory never waits for its build.
+            RetireCompilation_NoLock()
+            // ADR-0105 (Phase 2): when a single file changed, ask the previous compilation for its
+            // successor. A body-only edit reuses the previous global scope and re-binds only the
+            // edited file; any other edit binds from scratch (ADR-0212 §7a).
+            let incremental Compilation? = TryBuildSuccessor_NoLock(trees, resolver)
             if incremental != nil {
-                compilation = incremental
-                this.compilation!!.BodyCache = bodyCache
+                compilation = AttachLifetime_NoLock(incremental)
                 isDirty = false
                 return compilation!!
             }
-            if trees.Length == 0 {
-                compilation = if resolver != nil {
-                    Compilation(resolver, SyntaxTree.Parse(string.Empty))
+            compilation = AttachLifetime_NoLock(
+                if trees.Length == 0 {
+                    NewCompilation_NoLock(resolver, true, SyntaxTree.Parse(string.Empty))
                 } else {
-                    Compilation(SyntaxTree.Parse(string.Empty))
+                    NewCompilation_NoLock(resolver, true, trees)
                 }
-            } else {
-                compilation = if resolver != nil {
-                    Compilation(resolver, trees)
-                } else {
-                    Compilation(trees)
-                }
-            }
-            // ADR-0105 (Phase 1): seed the project-owned body cache into the
-            // freshly constructed Compilation. The Compilation stays immutable
-            // per instance (the cache is external state set once at
-            // construction), so the language server's ConditionalWeakTable
-            // model/index caches keyed on the Compilation instance keep
-            // invalidating correctly.
-            this.compilation!!.BodyCache = bodyCache
+            )
             isDirty = false
             return compilation!!
         }
@@ -297,11 +273,7 @@ open class ProjectState {
             var replaced = false
             for var i = 0; i < trees.Length; i++ {
                 let treePath = trees[i].Text?.FileName
-                if !string.IsNullOrEmpty(treePath) && string.Equals(
-                    NormalizePath(treePath!!),
-                    key,
-                    StringComparison.Ordinal
-                ) {
+                if SourcePathIdentity.AreSame(treePath, key) {
                     trees[i] = snapshotTree
                     replaced = true
                     break
@@ -310,13 +282,17 @@ open class ProjectState {
             if !replaced {
                 trees = trees.Append(snapshotTree).ToArray()
             }
-            let snapshotCompilation = if resolver != nil {
-                Compilation(resolver, trees)
-            } else {
-                Compilation(trees)
+            // Never GetCompilation() here: that would re-point symbols off the write gate. A clean cached
+            // compilation answers through the one-shot factory; otherwise bind a throwaway one (ADR-0212 §8).
+            if !isDirty && compilation != nil {
+                for tree in compilation!!.SyntaxTrees {
+                    let treePath = tree.Text?.FileName
+                    if SourcePathIdentity.AreSame(treePath, key) {
+                        return compilation!!.WithReplacedSyntaxTree(tree, snapshotTree)
+                    }
+                }
             }
-            snapshotCompilation.BodyCache = bodyCache
-            return snapshotCompilation
+            return NewCompilation_NoLock(resolver, false, trees)
         }
     }
 
@@ -353,20 +329,47 @@ open class ProjectState {
         }
     }
 
-    /// ADR-0105 (Phase 2): attempts to construct the next (cref:Compilation)
-    /// incrementally when the only change since (cref:compilation) is a
-    /// body-only edit to a single file. On success returns a new compilation
-    /// that reuses the previous `BoundGlobalScope` (with the edited file's
-    /// symbols re-pointed at the new syntax) and marks the edited tree dirty so
-    /// only its bodies are re-bound; every other file's bodies are served from
-    /// the shared (cref:bodyCache). Returns `null` for
-    /// every other edit shape (signature edit, import/package/alias change,
-    /// multiple files changed, add/remove, or a reference change), forcing the
-    /// caller's full rebuild. Must be called under (cref:compilationLock).
+    // Cancels the lifetime token of the cached compilation. A dead compilation never builds again; readers that
+    // hold it see OperationCanceledException for state it has not built (ADR-0212 §8, Q7).
+    // The source is not disposed: it has no timer and no registration, and readers keep copies of its token.
+    private func RetireCompilation_NoLock() {
+        compilationLifetime?.Cancel()
+        compilationLifetime = nil
+    }
+
+    // Gives a compilation of the cached chain its own lifetime token. Snapshot compilations keep the default
+    // budget: they are one request and nothing cancels them.
+    private func AttachLifetime_NoLock(created Compilation) Compilation {
+        let source = CancellationTokenSource()
+        compilationLifetime = source
+        created.WorkBudget = CompilationWorkBudget(cancellationToken: source.Token)
+        return created
+    }
+
+    // The server keeps no body cache and no reused scope of its own: IncrementalBodyReuse makes the
+    // compilation chain own them (ADR-0212 §8).
+    private func NewCompilation_NoLock(
+        resolver ReferenceResolver?,
+        incrementalBodyReuse bool,
+        trees ...SyntaxTree
+    ) Compilation {
+        let created = if resolver != nil {
+            Compilation(resolver, trees)
+        } else {
+            Compilation(trees)
+        }
+        created.IncrementalBodyReuse = incrementalBodyReuse
+        return created
+    }
+
+    /// ADR-0105 (Phase 2): asks the previous (cref:Compilation) for its successor when the only change
+    /// since then is one replaced file. Returns `null` for every other edit shape (add or remove, several
+    /// files changed, or a reference change), which forces the caller's full rebuild. Must be called
+    /// under (cref:compilationLock).
     /// @param trees The current set of syntax trees.
     /// @param resolver The current reference resolver (may be null).
-    /// @returns An incrementally-built compilation, or `null` to fall back.
-    private func TryBuildIncrementalCompilation_NoLock(trees[]SyntaxTree, resolver ReferenceResolver?) Compilation? {
+    /// @returns The successor compilation, or `null` to fall back.
+    private func TryBuildSuccessor_NoLock(trees[]SyntaxTree, resolver ReferenceResolver?) Compilation? {
         let previous Compilation? = compilation
         if previous == nil || trees.Length == 0 {
             return nil
@@ -378,7 +381,7 @@ open class ProjectState {
             return nil
         }
         // Pair the previous and current trees by file path. Any added or removed
-        // file makes this not a single-file body edit.
+        // file makes this not a single-file edit.
         let previousTrees = previous.SyntaxTrees
         if previousTrees.Length != trees.Length {
             return nil
@@ -413,21 +416,10 @@ open class ProjectState {
             // there is nothing to rebind — let the caller reuse normally.
             return nil
         }
-        // Reuse the previous global scope and re-point the edited file's symbols
-        // at the new syntax. This both validates the edit is body-only and (on
-        // success) performs the only mutation. On failure nothing is mutated.
-        let reusedScope = previous.GlobalScope
-        if !IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(reusedScope, changedPrevious, changedUpdated) {
-            return nil
-        }
-        let incremental = if resolver != nil {
-            Compilation(resolver, trees)
-        } else {
-            Compilation(trees)
-        }
-        incremental.ReusedGlobalScope = reusedScope
-        incremental.DirtyBodyTrees = ImmutableHashSet.Create(changedUpdated)
-        return incremental
+        // Not every replaced file is a body-only edit: the factory binds from scratch when it is not,
+        // and the successor still shares the body cache. Order follows the previous compilation, which
+        // is the order of the project's trees because only one value changed.
+        return previous.ReplaceSyntaxTree(changedPrevious, changedUpdated)
     }
 
     private func RefreshReferencesFromSourceFile_NoLock() {
@@ -616,7 +608,7 @@ open class ProjectState {
         }
 
         private func NormalizePath(path string) string {
-            return Path.GetFullPath(path)
+            return SourcePathIdentity.Normalize(path)
         }
     }
 }
