@@ -1414,11 +1414,14 @@ bounded PR slices and closure gates:
 
 F2a (#5323/#5327) supplies callable typed CLR-copy services for all 33
 carrier lengths, without source fixed-value lowering.
-The separate #5325 correction preserves nested value-field storage through
-native-slice elements, including ordinary imported structs and canonical
-carriers. It corrects an existing source path, not a new fixed-array mode.
-Neither foundation completes F2 or grants retained fixed views.
-Integration must include #5331's complete-diagnostic-set correction;
+The independent #5325 correction preserves existing nested value-field storage
+through native-slice elements. Ref-returning storage remains a location through
+bound-block prefixes; source-field receivers use the canonical addressability
+query. This correction needs no F1 carriers, copy bridges or verifier-policy
+changes. It does not complete F2/F3 or enable fixed-array value defaults.
+Suspending stores remain a separate gate, including the existing #5012 defect.
+Neither foundation grants retained fixed views.
+F1/F2a integration must include #5331's complete-diagnostic-set correction;
 the earlier green F1/F2a heads predate that shared policy fix.
 
 Every behavioral test needs ADR-0154 RED/GREEN evidence through the actual

@@ -10,13 +10,16 @@ import Xunit
 
 class Issue5325NestedValueStoreTests {
     @Theory
-    @InlineData("source")
-    @InlineData("implementation")
-    @InlineData("reference")
-    @InlineData("canonical")
-    func NestedSliceStoresKeepTheSelectedElementAndValueSnapshots(mode string) {
+    @InlineData("source", false)
+    @InlineData("source", true)
+    @InlineData("implementation", false)
+    @InlineData("implementation", true)
+    @InlineData("reference", false)
+    @InlineData("reference", true)
+    @InlineData("canonical", true)
+    func NestedStoresKeepSelectedStorageAndValueSnapshots(mode string, generic bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
-        var declarations = Declarations()
+        var declarations = Declarations(generic)
         var imports = string.Empty
         var references = []string{}
         if mode == "canonical" {
@@ -44,10 +47,11 @@ class Issue5325NestedValueStoreTests {
             declarations = string.Empty
             imports = "import StoreForeign"
         }
-        let source = (`package NestedSliceStores
+        let source = (`package NestedStores
 import System
 IMPORTS
 DECLARATIONS
+class Holder { var Value PAIR }
 func Main() {
     var initial PAIR = default
     initial.Left.Item = 3
@@ -73,6 +77,25 @@ func Main() {
     Console.WriteLine(*held)
     Console.WriteLine(storage[1].Left.Item)
     Console.WriteLine(frames[1].Left.Item)
+    let arraySnapshot = storage[0]
+    storage[0].Left.Item = 20
+    storage[0].Right.Item += 2
+    let arrayPrevious = storage[0].Left.Item++
+    Console.WriteLine(arraySnapshot.Left.Item)
+    Console.WriteLine(arrayPrevious)
+    Console.WriteLine(storage[0].Left.Item)
+    Console.WriteLine(storage[0].Right.Item)
+    let owner = Holder{Value: initial}
+    let objectSnapshot = owner.Value
+    let objectHeld = managed(owner.Value.Left.Item)
+    owner.Value.Left.Item = 30
+    owner.Value.Right.Item += 3
+    let objectPrevious = owner.Value.Left.Item++
+    Console.WriteLine(objectSnapshot.Left.Item)
+    Console.WriteLine(objectPrevious)
+    Console.WriteLine(owner.Value.Left.Item)
+    Console.WriteLine(owner.Value.Right.Item)
+    Console.WriteLine(*objectHeld)
 }`).Replace(
             "IMPORTS",
             imports,
@@ -85,8 +108,10 @@ func Main() {
             "PAIR",
             if mode == "canonical" {
                 "Branch[int32, Leaf[int32], Leaf[int32]]"
-            } else {
+            } else if generic {
                 "Pair[int32]"
+            } else {
+                "Pair"
             },
             StringComparison.Ordinal
         )
@@ -98,7 +123,7 @@ func Main() {
         )
         VerifyStrict(dll, references)
         Assert.Equal(
-            Encoding.UTF8.GetBytes("3\n4\n50\n3\n51\n10\n51\n51\n99\n"),
+            Encoding.UTF8.GetBytes("3\n4\n50\n3\n51\n10\n51\n51\n99\n3\n20\n21\n6\n3\n30\n31\n7\n31\n"),
             Encoding.UTF8.GetBytes(fixture.Run(dll))
         )
     }
@@ -178,24 +203,34 @@ Console.WriteLine(frames[0].Left.Item)`).Replace(
     }
 
     @Theory
-    @InlineData("let frames = readonly slice[Pair[int32]]{Pair[int32]{}}\nframes[0].Left.Item = 1", "GS0499", int32(8))
-    @InlineData("func Make() Pair[int32] -> default\nMake().Left.Item = 1", "GS0499", int32(8))
-    @InlineData("let items = List[Pair[int32]]{Pair[int32]{}}\nitems[0].Left.Item = 1", "GS0499", int32(8))
+    @InlineData(
+        "let frames = readonly slice[Pair[int32]]{Pair[int32]{}}\nframes[0].Left.Item = 1",
+        "GS0499",
+        "(8,21,8,22)"
+    )
+    @InlineData("func Make() Pair[int32] -> default\nMake().Left.Item = 1", "GS0499", "(8,18,8,19)")
+    @InlineData("let items = List[Pair[int32]]{Pair[int32]{}}\nitems[0].Left.Item = 1", "GS0499", "(8,20,8,21)")
     @InlineData(
         "let frames = slice[Pair[int32]]{Pair[int32]{}}\nasync func Run() { frames[0].Left.Item = await Task.FromResult(1) }",
         "GS0602",
-        int32(8)
+        "(8,42,8,66)"
     )
-    func NonwritableAndSuspendingNeighborsRemainRejected(statement string, diagnostic string, line int32) {
+    @InlineData(
+        "struct Receiver { var Value int32\nfunc Update(value int32) { Value = value } }\nlet frames = slice[Receiver]{Receiver{}}\nasync func Run() { frames[0].Update(await Task.FromResult(1)) }",
+        "GS0604",
+        "(10,37,10,61)"
+    )
+    func NonwritableAndSuspendingNeighborsRemainRejected(statement string, diagnostic string, location string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let source = `package StoreRejected
 import System.Collections.Generic
 import System.Threading.Tasks
-` + Declarations() + "\n" + statement
-        let (code, output) = fixture.TryCompile(source, "rejected", false)
+` + Declarations(true) + "\n" + statement
+        let (code, output) = fixture.TryCompile(source, "rejected", true)
         Assert.NotEqual(0, code)
-        Assert.Contains("error " + diagnostic + ":", output, StringComparison.Ordinal)
-        Assert.Contains(".gs(" + line.ToString() + ",", output, StringComparison.Ordinal)
+        Assert.Contains(".gs" + location + ": error " + diagnostic + ":", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS0285", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
     }
 
@@ -213,8 +248,14 @@ import System.Threading.Tasks
             Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
         }
 
-        private func Declarations() string -> `struct Cell[T] { var Item T }
+        private func Declarations(generic bool) string -> if generic {
+            `struct Cell[T] { var Item T }
 struct Pair[T] { var Left Cell[T]
 var Right Cell[T] }`
+        } else {
+            `struct Cell { var Item int32 }
+struct Pair { var Left Cell
+var Right Cell }`
+        }
     }
 }

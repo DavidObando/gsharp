@@ -94,7 +94,7 @@ The #5325 storage repair intentionally changes six samples: `AllowsRefStruct`,
 Their eight async `MoveNext` methods remove eleven unused trailing receiver locals.
 The canonical source-field addressability query aligns scratch-local planning with actual receiver emission.
 Executable IL bytes, exception regions, maximum stacks, and retained local slots are unchanged.
-Both genuine compiler images produce the independently expected stdout for all six samples.
+Both genuine compiler images produce the independently expected stdout for all six samples and pass unsuppressed ILVerify.
 Only the paired sample hashes and `MethodBodies` digests change; inventory and hashing rules remain unchanged.
 
 The #5037 cleanup fix changes exactly `TupleSequenceIterators` and
