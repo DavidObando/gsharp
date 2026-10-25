@@ -377,20 +377,27 @@ internal partial class OverloadResolver {
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
-        if bindImportedClrStaticCall == nil || !derived.IsClass || ExpressionBinder.GetInheritedClrBaseType(
-            derived
-        ) is not{} importedBase {
+        if bindImportedClrStaticCall == nil ||
+            GetInheritedImportedStaticCallBase(derived, syntax.Identifier.ValueText) is not{} importedBase {
             return false
         }
         let bindImportedClrStaticCall = bindImportedClrStaticCall!!
-        let probe = ImportedClassSymbol(importedBase, syntax, references: Scope.References).WithFamilyAccessBase(
-            importedBase
-        )
-        if !probe.HasVisibleStaticMethod(syntax.Identifier.ValueText) {
-            return false
-        }
         result = bindImportedClrStaticCall(importedBase, syntax)
         return true
+    }
+
+    private func GetInheritedImportedStaticCallBase(derived StructSymbol, name string) Type? {
+        if !derived.IsClass || ExpressionBinder.GetInheritedClrBaseType(derived) is not{} importedBase {
+            return nil
+        }
+        let probe = ImportedClassSymbol(importedBase, nil, references: Scope.References).WithFamilyAccessBase(
+            importedBase
+        )
+        return if probe.HasVisibleStaticMethod(name) {
+            importedBase
+        } else {
+            nil
+        }
     }
 
     private func GetConstructorInitializerReceiverType() StructSymbol? {
@@ -502,7 +509,7 @@ internal partial class OverloadResolver {
     /// When no such candidate exists, this returns `false` and
     /// the CLR paths run exactly as before, so genuine constructor/conversion
     /// calls (e.g. `StringBuilder(16)`) are unaffected.
-    private func HasNonConstructorCallableCandidate(syntax CallExpressionSyntax) bool {
+    internal func HasNonConstructorCallableCandidate(syntax CallExpressionSyntax) bool {
         let name = syntax.Identifier.ValueText
         // A same-compilation free function or extension function (extension
         // functions are flattened into the global function table — issue
@@ -533,7 +540,7 @@ internal partial class OverloadResolver {
                 return true
             }
         }
-        if HasEnclosingMemberCallableCandidate(name) {
+        if HasEnclosingMemberCallableCandidate(name) || GetLexicallyEnclosingStaticCallOwner(name) != nil {
             return true
         }
         // Issue #1159: the implicit `this` an unqualified instance-member
@@ -600,7 +607,7 @@ internal partial class OverloadResolver {
             if !TypeMemberModel.GetMethods(receiverStruct, name, MemberQuery.Instance(MemberKinds.Method))
                 .IsDefaultOrEmpty ||
                 !TypeMemberModel
-                .GetMethods(receiverStruct, name, MemberQuery.Static(MemberKinds.Method)).IsDefaultOrEmpty {
+                .GetMethods(receiverStruct, name, MemberQuery.InheritedStatic(MemberKinds.Method)).IsDefaultOrEmpty {
                 return true
             }
         } else if effThis?.Type is InterfaceSymbol receiverIface {
@@ -626,13 +633,32 @@ internal partial class OverloadResolver {
             } else if GetImplicitStaticSelfOwner() is StructSymbol staticStruct {
                 // Issue #1585: implicit static-self dispatch inside a
                 // `shared` method body of a user struct/class.
-                if !TypeMemberModel.GetMethods(staticStruct, name, MemberQuery.Static(MemberKinds.Method))
+                if !TypeMemberModel.GetMethods(staticStruct, name, MemberQuery.InheritedStatic(MemberKinds.Method))
                     .IsDefaultOrEmpty {
                     return true
                 }
             }
         }
-        return false
+        let owner = (effThis?.Type ?? GetImplicitStaticSelfOwner()) as StructSymbol
+        return owner != nil && GetInheritedImportedStaticCallBase(owner, name) != nil
+    }
+
+    private func GetLexicallyEnclosingStaticCallOwner(name string) StructSymbol? {
+        let lexicalSelfType = GetEffectiveThisParameter()?.Type ?? GetImplicitStaticSelfOwner()
+        for var enclosing TypeSymbol? = lexicalSelfType?.ContainingType;
+            enclosing != nil;
+            enclosing = enclosing!!
+            .ContainingType {
+            if enclosing is StructSymbol enclosingStruct && !TypeMemberModel.GetMethods(
+                enclosingStruct,
+                name,
+                MemberQuery.Static(MemberKinds.Method)
+            )
+                .IsDefaultOrEmpty {
+                return enclosingStruct
+            }
+        }
+        return nil
     }
 
     func BindCallExpression(syntax CallExpressionSyntax) BoundExpression {
@@ -1334,24 +1360,9 @@ internal partial class OverloadResolver {
                 // private/overload/optional/variadic/generic fidelity. Consulted
                 // before the type-import (`using static`) and imported-CLR
                 // paths because lexical scope outranks imports.
-                if bindUserTypeStaticCall != nil {
-                    let lexicalSelfType = GetEffectiveThisParameter()?.Type ?? GetImplicitStaticSelfOwner()
-                    for var enclosing TypeSymbol? = lexicalSelfType?.ContainingType;
-                        enclosing != nil;
-                        enclosing = enclosing!!
-                        .ContainingType {
-                        if enclosing is not StructSymbol enclosingStruct {
-                            continue
-                        }
-                        let enclosingStatics = TypeMemberModel.GetMethods(
-                            enclosingStruct,
-                            syntax.Identifier.ValueText,
-                            MemberQuery.Static(MemberKinds.Method)
-                        )
-                        if !enclosingStatics.IsDefaultOrEmpty {
-                            return bindUserTypeStaticCall!!(enclosingStruct, syntax)
-                        }
-                    }
+                if bindUserTypeStaticCall != nil &&
+                    GetLexicallyEnclosingStaticCallOwner(syntax.Identifier.ValueText) is {} enclosingStruct {
+                    return bindUserTypeStaticCall!!(enclosingStruct, syntax)
                 }
                 // Issue #1201 (C# `using static`): an unqualified call may resolve
                 // to a `shared` (static) method of a type brought into scope by a

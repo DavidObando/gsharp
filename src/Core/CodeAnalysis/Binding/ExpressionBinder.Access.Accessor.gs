@@ -2591,6 +2591,33 @@ internal partial class ExpressionBinder {
                 out failureHandled
             )
         }
+        if CanUseSpanAlias(targetName.IdentifierToken, expression: true) {
+            failureHandled = true
+            if index.Indices.Count != 1 || !TryBuildTypeClauseFromExpression(index.Indices[0], out var elementClause) {
+                Diagnostics.ReportNativeSpanType(index.Location, "span[T] requires exactly one element type")
+                return false
+            }
+            let clause = TypeClauseSyntax(
+                index.SyntaxTree,
+                nil,
+                nil,
+                nil,
+                targetName.IdentifierToken,
+                index.OpenBracketToken,
+                GSharp
+                    .Core
+                    .CodeAnalysis
+                    .Syntax
+                    .SeparatedSyntaxList[TypeClauseSyntax](ImmutableArray.Create[SyntaxNode](elementClause)),
+                index.CloseBracketToken,
+                nil
+            )
+            if bindTypeClause(clause) is not ImportedTypeSymbol spanType {
+                return false
+            }
+            constructedImported = ImportedClassSymbol(spanType.Type, index, spanType, $scope.References)
+            return true
+        }
         if name == "slice" && binderCtx.CanUseNativeBufferAlias(
             $scope,
             targetName.IdentifierToken,
@@ -2773,6 +2800,36 @@ internal partial class ExpressionBinder {
                 return false
             }
             constructedImported = ImportedClassSymbol(managedType.Type, generic, managedType, $scope.References)
+            return true
+        }
+        if generic
+            .Identifier
+            .Text == "span" &&
+            (generic.ReadOnlySpanModifier != nil || CanUseSpanAlias(generic.Identifier, expression: true)) {
+            failureHandled = true
+            if !CanUseSpanAlias(generic.Identifier, expression: true) {
+                Diagnostics.ReportNativeSpanType(
+                    generic.Location,
+                    "a same-named value shadows the span type receiver; use System.ReadOnlySpan[T] explicitly"
+                )
+                return false
+            }
+            let arguments = generic.TypeArgumentList
+            let clause = TypeClauseSyntax(
+                generic.SyntaxTree,
+                nil,
+                nil,
+                nil,
+                generic.Identifier,
+                arguments.OpenBracketToken,
+                arguments.Arguments,
+                arguments.CloseBracketToken,
+                nil
+            ){ReadOnlySpanModifier = generic.ReadOnlySpanModifier}
+            if bindTypeClause(clause) is not ImportedTypeSymbol spanType {
+                return false
+            }
+            constructedImported = ImportedClassSymbol(spanType.Type, generic, spanType, $scope.References)
             return true
         }
         if name == "slice" &&

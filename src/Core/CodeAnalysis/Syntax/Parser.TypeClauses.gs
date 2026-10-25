@@ -12,6 +12,13 @@ import System.Linq
 import System.Runtime.CompilerServices
 
 open partial class Parser {
+    private func IsReadOnlySpanHead(offset int32 = 0) bool -> Peek(offset).Kind == SyntaxKind.IdentifierToken && Peek(
+        offset
+    ).Text == "readonly" &&
+        Peek(offset + 1).Kind == SyntaxKind.IdentifierToken && Peek(offset + 1).Text == "span" && Peek(
+        offset + 2
+    ).Kind == SyntaxKind.OpenSquareBracketToken
+
     private func IsReadOnlySliceHead(offset int32 = 0) bool -> Peek(offset).Kind == SyntaxKind.IdentifierToken && Peek(
         offset
     ).Text == "readonly" &&
@@ -47,6 +54,12 @@ open partial class Parser {
     }
 
     private func ParseTypeClauseCore() TypeClauseSyntax {
+        if IsReadOnlySpanHead() {
+            let modifier = NextToken()
+            let type = ParseTypeClause()
+            type.ReadOnlySpanModifier = modifier
+            return type
+        }
         if IsReadOnlyManagedHead() {
             let modifier = NextToken()
             let type = ParseTypeClause()
@@ -182,6 +195,7 @@ open partial class Parser {
             if Current.Kind != SyntaxKind.IdentifierToken ||
                 IsChannelDirectionHead() ||
                 IsReadOnlySliceHead() ||
+                IsReadOnlySpanHead() ||
                 IsReadOnlyManagedHead() ||
                 IsFunctionPointerTypeHead() {
                 let nestedElement = ParseTypeClause()
@@ -438,7 +452,7 @@ open partial class Parser {
     /// list on the identifier itself (`List[int32]`). The `unmanaged`
     /// function-pointer head keeps its ADR-0095 meaning.
     private func LooksLikeTupleElementName(offset int32 = 0) bool {
-        if IsReadOnlySliceHead(offset) || IsReadOnlyManagedHead(offset) {
+        if IsReadOnlySliceHead(offset) || IsReadOnlySpanHead(offset) || IsReadOnlyManagedHead(offset) {
             return false
         }
         // `unmanaged[CC] (…) -> R` / `unmanaged (…) -> R` is a raw
