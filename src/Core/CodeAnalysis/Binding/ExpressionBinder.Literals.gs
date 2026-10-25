@@ -2105,6 +2105,19 @@ internal partial class ExpressionBinder {
                 }
                 continue
             }
+            if hasField &&
+                field!!.IsReadOnly &&
+                structSymbol!!.ClrType != nil &&
+                (!usesGetter || !structSymbol!!.IsClass) {
+                Diagnostics.ReportCannotAssign(initSyntax.FieldIdentifier.Location, fieldName)
+                seenFieldNames.Add(fieldName)
+                if initSyntax.Value is CollectionInitializerExpressionSyntax{Target: nil} readonlyCollection {
+                    BindCollectionElementsForDiagnostics(readonlyCollection)
+                } else {
+                    let _ = BindExpression(initSyntax.Value, memberType)
+                }
+                continue
+            }
             // Issue #1567: a braced member value `Member: { a, b }` populates the
             // collection member by lowering to `.Add(...)` calls on the
             // constructed receiver's `Member` (the C# collection-initializer-in-
@@ -2224,6 +2237,10 @@ internal partial class ExpressionBinder {
                     continue
                 }
                 if structSymbol!!.InstanceFieldInitializers.TryGetValue(field, out var initExpr) {
+                    if field.IsReadOnly && structSymbol!!.ClrType != nil {
+                        Diagnostics.ReportCannotAssign(syntax.TypeIdentifier.Location, field.Name)
+                        continue
+                    }
                     inits.Add(BoundFieldInitializer(field, initExpr){IsDeclarationInitializer = true})
                     seenFieldNames.Add(field.Name)
                 }
@@ -3980,20 +3997,22 @@ internal partial class ExpressionBinder {
             return nil
         }
 
-        private func GetStructFieldZeroValue(
-            syntax SyntaxNode,
-            type StructSymbol,
-            field FieldSymbol
-        ) BoundExpression? -> if type.ClrType == nil {
-            MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, field.Type)
-        } else {
-            (
-                if type.InstanceFieldInitializers.TryGetValue(field, out var zeroValue) {
-                    zeroValue
-                } else {
-                    default(BoundExpression?)
-                }
-            )
+        private func GetStructFieldZeroValue(syntax SyntaxNode, type StructSymbol, field FieldSymbol) BoundExpression? {
+            let clrType = type.ClrType
+            if clrType == nil {
+                return MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, field.Type)
+            }
+            // Imported declaration initializers are not mandatory collection zero values.
+            if ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var kinds) && kinds!!.TryGetValue(
+                field.Name,
+                out var kind
+            ) {
+                return MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(
+                    clrType.GetField(field.Name, BindingFlags.Public | BindingFlags.Instance),
+                    kind
+                )
+            }
+            return nil
         }
 
         /// Issue #377 sub-item 2: returns true for argument expressions that are

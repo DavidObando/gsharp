@@ -32,6 +32,7 @@ internal shared class ImportedAssemblySemantics {
     ) : IEquatable[AssemblySemantics] { }
 
     const TypeSemanticsMetadataKey string = "GSharp.TypeSemantics"
+    internal const FieldInitializerHostName string = "<>FieldInitializers"
 
     /// Gets the reserved initializer method name for the ADR-0214 imported literal protocol.
     /// @param fieldName The initialized field.

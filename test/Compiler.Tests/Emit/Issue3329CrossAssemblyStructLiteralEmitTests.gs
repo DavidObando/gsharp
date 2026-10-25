@@ -29,6 +29,148 @@ open class Issue3329CrossAssemblyStructLiteralEmitTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func ImportedDataStruct_ReadonlyInitializerRejectsExternalWrites(useReferenceAssembly bool) {
+        const library = `package i5296readonly
+public data struct Readonly {
+    public let X int32 = 7
+}`
+        let directory = Directory.CreateDirectory(
+            Path.Combine(AppContext.BaseDirectory, "gs_5296_readonly_" + Guid.NewGuid().ToString("N"))
+        )
+            .FullName
+        try {
+            let producer = Path.Combine(directory, "i5296readonly.dll")
+            let reference = Path.Combine(directory, "reference.dll")
+            let producerSource = Path.Combine(directory, "library.gs")
+            let consumerSource = Path.Combine(directory, "consumer.gs")
+            let consumer = Path.Combine(directory, "consumer.dll")
+            File.WriteAllText(producerSource, library)
+            Compile([]string{"/target:library", "/out:" + producer, "/refout:" + reference, producerSource})
+            IlVerifier.Verify(producer)
+            for (literal, location) in[](Literal string, Location string){
+                ("Readonly{}", "(2,13,2,21)"),
+                ("Readonly{X: 9}", "(2,22,2,23)")
+            } {
+                File.WriteAllText(
+                    consumerSource,
+                    "import i5296readonly\nlet value = " + literal + "\nSystem.Console.WriteLine(value.X)"
+                )
+                let rejected = TryCompile(
+                    []string{
+                        "/target:exe",
+                        "/out:" + consumer,
+                        "/r:" +
+                            (
+                            if useReferenceAssembly {
+                                reference
+                            } else {
+                                producer
+                            }
+                        ),
+                        consumerSource
+                    }
+                )
+                if rejected.Code == 0 {
+                    IlVerifier.Verify(consumer, []string{producer})
+                }
+                Assert.NotEqual(0, rejected.Code)
+                Assert.True(
+                    rejected.Output.Contains("consumer.gs" + location + ": error GS0127:", StringComparison.Ordinal),
+                    rejected.Output
+                )
+                Assert.False(File.Exists(consumer), rejected.Output)
+            }
+            Assert.Equal(
+                System.Text.Encoding.UTF8.GetBytes("0" + Environment.NewLine),
+                System
+                    .Text
+                    .Encoding
+                    .UTF8
+                    .GetBytes(
+                    CompileAndRun(
+                        "import i5296readonly\nSystem.Console.WriteLine(default(Readonly).X)",
+                        library,
+                        "i5296readonly",
+                        useReferenceAssembly
+                    )
+                )
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
+    func ImportedDataStruct_MixedInitializersUseCollectionZerosNotDeclarationValues() {
+        const expression = "Basket{Tag: 0, 1, Items: Effects.ExplicitItems()}"
+        const library = `package i5296mixed
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func DefaultItems() []int32 {
+            Trace = Trace + "D"
+            return []int32{10, 11}
+        }
+        public func ExplicitItems() []int32 {
+            Trace = Trace + "E"
+            return []int32{8, 9, 10}
+        }
+    }
+}
+public data struct Basket {
+    public var Tag int32
+    public var Items []int32 = Effects.DefaultItems()
+    public func Add(value int32) {
+        Effects.Trace = Effects.Trace + "A"
+        Tag = Tag + value + Items.Length
+    }
+}`
+        let source = `import System
+import i5296mixed
+data struct LocalBasket {
+    public var Tag int32
+    public var Items []int32 = Effects.DefaultItems()
+    public func Add(value int32) {
+        Effects.Trace = Effects.Trace + "A"
+        Tag = Tag + value + Items.Length
+    }
+}
+let local = ` + expression.Replace("Basket", "LocalBasket", StringComparison.Ordinal) + `
+Console.WriteLine(Effects.Trace + ":" + local.Tag.ToString() + "," + local.Items.Length.ToString())
+Effects.Trace = ""
+let imported = ` + expression + `
+Console.WriteLine(Effects.Trace + ":" + imported.Tag.ToString() + "," + imported.Items.Length.ToString())`
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes("AE:1,3\nAE:1,3\n".ReplaceLineEndings(Environment.NewLine)),
+            System.Text.Encoding.UTF8.GetBytes(CompileAndRun(source, library, "i5296mixed"))
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedDataStruct_ConstantInitializerDoesNotTriggerStaticConstructor(throws bool) {
+        let initialization = if throws {
+            `throw System.InvalidOperationException("unexpected static initialization")`
+        } else {
+            `System.Console.Write("S")`
+        }
+        let members = `public var Value int32 = 1
+    shared { init { ` + initialization + ` } }`
+        let library = "package i5296static\npublic data struct Imported {\n" + members + "\n}"
+        let source = "import i5296static\ndata struct Local {\n" + members + `
+}
+System.Console.WriteLine(Local{}.Value)
+System.Console.WriteLine(Imported{}.Value)`
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes("1\n1\n".ReplaceLineEndings(Environment.NewLine)),
+            System.Text.Encoding.UTF8.GetBytes(CompileAndRun(source, library, "i5296static"))
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func ImportedDataStruct_OmittedInlineInitializersMatchLocalLiterals(useReferenceAssembly bool) {
         const library = `package i5296defaults
 public enum Layout { Stacked, Compact }
@@ -506,6 +648,11 @@ stderr:
         }
 
         private func Compile(args[]string) {
+            let result = TryCompile(args)
+            Assert.True(result.Code == 0, result.Output)
+        }
+
+        private func TryCompile(args[]string)(Code int32, Output string) {
             using let stdoutWriter = StringWriter()
             using let stderrWriter = StringWriter()
             let prevOut = Console.Out
@@ -519,7 +666,7 @@ stderr:
                 Console.SetOut(prevOut)
                 Console.SetError(prevErr)
             }
-            Assert.True(compileExit == 0, (`gsc failed:
+            return (compileExit, (`gsc failed:
 stdout:
 ` + "$stdoutWriter" + `
 stderr:

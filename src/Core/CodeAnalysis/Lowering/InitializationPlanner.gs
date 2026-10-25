@@ -106,6 +106,7 @@ internal shared class InitializationPlanner {
         }
         let plans = program.Initializers.ToBuilder()
         let functions = program.Functions.ToBuilder()
+        let types = program.Structs.ToBuilder()
         for type in program.Structs {
             if type.ClrType == nil &&
                 type.IsData &&
@@ -113,7 +114,23 @@ internal shared class InitializationPlanner {
                 !type.IsInline &&
                 !type
                 .NeedsSynthesizedValueStructDefaultCtor {
-                let methods = type.StaticMethods.ToBuilder()
+                // A nested host retains private access without triggering the struct's static constructor.
+                let host = types.FirstOrDefault(
+                    (candidate StructSymbol) -> candidate.ContainingType == type &&
+                        candidate.Name == ImportedAssemblySemantics.FieldInitializerHostName
+                ) ??
+                    StructSymbol(
+                    ImportedAssemblySemantics.FieldInitializerHostName,
+                    ImmutableArray[FieldSymbol].Empty,
+                    Accessibility.Public,
+                    declaration: nil,
+                    type.PackageName,
+                    isData: false,
+                    isInline: false,
+                    isClass: true
+                )
+                host.SetContainingType(type)
+                let methods = host.StaticMethods.ToBuilder()
                 for field in type.Fields {
                     if !(field.Declaration is FieldDeclarationSyntax{Initializer: not nil}) ||
                         !type
@@ -132,7 +149,7 @@ internal shared class InitializationPlanner {
                         declaration: nil,
                         program.Packages.First((package_ PackageSymbol) -> package_.Name == type.PackageName),
                         Accessibility.Public
-                    ){IsStatic = true, IsSpecialName = true, StaticOwnerType = type}
+                    ){IsStatic = true, IsSpecialName = true, StaticOwnerType = host}
                     if functions.ContainsKey(function) {
                         continue
                     }
@@ -147,7 +164,12 @@ internal shared class InitializationPlanner {
                         )
                     )
                 }
-                type.SetStaticMethods(methods.ToImmutable())
+                if methods.Count > 0 {
+                    host.SetStaticMethods(methods.ToImmutable())
+                    if !types.Contains(host) {
+                        types.Add(host)
+                    }
+                }
             }
             let fields = type.InstanceFieldInitializers.Values
             let primary = type.BaseConstructorInitializer?.Arguments ?? ImmutableArray[BoundExpression].Empty
@@ -273,7 +295,7 @@ internal shared class InitializationPlanner {
             functions.ToImmutable(),
             program.EntryPoint,
             program.Statement,
-            program.Structs,
+            types.ToImmutable(),
             program.Interfaces,
             program.Enums,
             program.Globals,

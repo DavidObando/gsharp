@@ -19,12 +19,17 @@ selection and evaluation order, and could execute an authored constructor body.
 
 ## Decision
 
-Preserve initializer expressions in compiler-generated static methods on the
-declaring data struct. Use the existing initialization planner, function-body
-pipeline, and method emitter. Each method returns one explicit field initializer.
-Its reserved metadata name is `<>fieldInitializer$` followed by the field name.
-The method is public for cross-assembly calls and has the CLR `SpecialName` flag.
-It is not a source member or an imported source-visible static method.
+Preserve initializer expressions in compiler-generated static methods on a
+public nested helper class named `<>FieldInitializers`. Use the existing
+initialization planner, function-body pipeline, and method emitter. Nesting
+preserves private declaring-type access without triggering its static
+constructor. An initializer that accesses a declaring-type static member still
+triggers that member's normal initialization rules.
+
+Each method returns one explicit field initializer. Its reserved metadata name
+is `<>fieldInitializer$` followed by the field name. The method is public for
+cross-assembly calls and has the CLR `SpecialName` flag. Neither the host nor its
+methods are source members.
 
 Generate methods in field declaration order, only for source data structs whose
 literal initializers do not require an owning constructor. Existing generic,
@@ -34,14 +39,24 @@ unchanged. Do not export another method for an implicit collection zero value.
 When reconstructing an imported aggregate, represent each method as an existing
 bound CLR static call in its field-initializer map. Let the existing literal
 binder select omitted fields and preserve evaluation order. Use collection-zero
-reconstruction only when no initializer method exists for that field.
+reconstruction only when no initializer method exists for that field. Mandatory
+zero readers use collection markers, not declaration-initializer map entries.
+Mixed literals and collection suffixes must not evaluate an overridden
+declaration initializer to obtain a sound collection zero.
+
+Reject an imported literal's external readonly-field writes with `GS0127`.
+For an omitted initializer, locate the diagnostic at the literal type name.
+For an explicit write, locate it at the field name. Do not emit unverifiable
+stores into CLR `InitOnly` storage. Supporting readonly literal initialization
+requires a separate legal constructor protocol; this correction does not
+introduce one.
 
 ## Consequences
 
 Separate producer and consumer assemblies preserve source-local literal behavior.
 Initializer expressions retain access to private declaring-type members. Their
 normal lowering supports nonconstant values without serialized bound expressions.
-Repeated compilation reuses generated method symbols without losing their bodies.
+Repeated preparation reuses generated helper symbols without losing their bodies.
 
 Both projects must use the corrected compiler. Older producer assemblies do not
 contain recoverable arbitrary initializer expressions. Their existing collection
@@ -51,7 +66,9 @@ calls, and primary positional defaults do not change.
 ADR-0154 coverage uses separate G# producer and consumer invocations of the real
 compiler driver, IL verification, and exact runtime-output assertions. It covers
 the reported defaults, explicit overrides, evaluation order, private calls, and
-explicit collection initializers.
+explicit collection initializers, mandatory collection zeros, and static
+constructor timing. Readonly coverage verifies the producer and a raw-default
+consumer without verifier suppressions, and checks rejection diagnostics.
 
 ## Alternatives considered
 

@@ -1185,7 +1185,9 @@ The semantics match C#:
   Other public-only, non-generic literals retain inline
   initialization for omitted fields, including data structs imported from a
   separately compiled G# assembly. Explicitly supplied fields skip their inline
-  initializers in these literals. Braces do not execute an authored
+  initializers in these literals. Imported literals that require external
+  writes to read-only fields report `GS0127` rather than emit unverifiable IL.
+  Braces do not execute an authored
   constructor body; calling `T(...)` still does. Compiler-owned initialization
   remains distinct when an authored parameterless constructor exists. Braced
   member/content population runs after primary inputs and declaration

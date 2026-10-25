@@ -626,9 +626,12 @@ class ImportedTypeSymbol : TypeSymbol {
             let instanceInitBuilder = ImmutableDictionary.CreateBuilder[FieldSymbol, BoundExpression]()
             // ADR-0214 retains arbitrary initializer expressions in their declaring assembly.
             // The literal binder selects omitted fields without changing evaluation order.
-            if semantics!!.IsValueType {
+            if semantics!!.IsValueType && type.GetNestedType(
+                ImportedAssemblySemantics.FieldInitializerHostName,
+                BindingFlags.Public
+            ) is {} initializerHost {
                 for field in aggregate.Fields {
-                    let initializer = type.GetMethod(
+                    let initializer = initializerHost.GetMethod(
                         ImportedAssemblySemantics.GetFieldInitializerMethodName(field.Name),
                         BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly,
                         binder: nil,
