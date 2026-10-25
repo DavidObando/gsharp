@@ -1603,7 +1603,7 @@ internal partial class ExpressionBinder {
         enclosingTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
     ) BoundExpression {
         if resolvedDefinition == nil && syntax.TypeArgumentList is {} nativeTypeArguments {
-            if binderCtx.CanUseSpanAlias($scope, syntax.TypeIdentifier, getCurrentFunction(), expression: true) {
+            if CanUseSpanAlias(syntax.TypeIdentifier, expression: true) {
                 return RejectNativeSpanAllocation(syntax)
             }
             if binderCtx.CanUseNativeBufferAlias(

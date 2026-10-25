@@ -2591,7 +2591,7 @@ internal partial class ExpressionBinder {
                 out failureHandled
             )
         }
-        if binderCtx.CanUseSpanAlias($scope, targetName.IdentifierToken, getCurrentFunction(), expression: true) {
+        if CanUseSpanAlias(targetName.IdentifierToken, expression: true) {
             failureHandled = true
             if index.Indices.Count != 1 || !TryBuildTypeClauseFromExpression(index.Indices[0], out var elementClause) {
                 Diagnostics.ReportNativeSpanType(index.Location, "span[T] requires exactly one element type")
@@ -2805,16 +2805,9 @@ internal partial class ExpressionBinder {
         if generic
             .Identifier
             .Text == "span" &&
-            (
-            generic.ReadOnlySpanModifier != nil || binderCtx.CanUseSpanAlias(
-                $scope,
-                generic.Identifier,
-                getCurrentFunction(),
-                expression: true
-            )
-        ) {
+            (generic.ReadOnlySpanModifier != nil || CanUseSpanAlias(generic.Identifier, expression: true)) {
             failureHandled = true
-            if binderCtx.HasValueName($scope, name) {
+            if !CanUseSpanAlias(generic.Identifier, expression: true) {
                 Diagnostics.ReportNativeSpanType(
                     generic.Location,
                     "a same-named value shadows the span type receiver; use System.ReadOnlySpan[T] explicitly"

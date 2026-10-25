@@ -540,7 +540,7 @@ internal partial class OverloadResolver {
                 return true
             }
         }
-        if HasEnclosingMemberCallableCandidate(name) {
+        if HasEnclosingMemberCallableCandidate(name) || GetLexicallyEnclosingStaticCallOwner(name) != nil {
             return true
         }
         // Issue #1159: the implicit `this` an unqualified instance-member
@@ -641,6 +641,24 @@ internal partial class OverloadResolver {
         }
         let owner = (effThis?.Type ?? GetImplicitStaticSelfOwner()) as StructSymbol
         return owner != nil && GetInheritedImportedStaticCallBase(owner, name) != nil
+    }
+
+    private func GetLexicallyEnclosingStaticCallOwner(name string) StructSymbol? {
+        let lexicalSelfType = GetEffectiveThisParameter()?.Type ?? GetImplicitStaticSelfOwner()
+        for var enclosing TypeSymbol? = lexicalSelfType?.ContainingType;
+            enclosing != nil;
+            enclosing = enclosing!!
+            .ContainingType {
+            if enclosing is StructSymbol enclosingStruct && !TypeMemberModel.GetMethods(
+                enclosingStruct,
+                name,
+                MemberQuery.Static(MemberKinds.Method)
+            )
+                .IsDefaultOrEmpty {
+                return enclosingStruct
+            }
+        }
+        return nil
     }
 
     func BindCallExpression(syntax CallExpressionSyntax) BoundExpression {
@@ -1342,24 +1360,9 @@ internal partial class OverloadResolver {
                 // private/overload/optional/variadic/generic fidelity. Consulted
                 // before the type-import (`using static`) and imported-CLR
                 // paths because lexical scope outranks imports.
-                if bindUserTypeStaticCall != nil {
-                    let lexicalSelfType = GetEffectiveThisParameter()?.Type ?? GetImplicitStaticSelfOwner()
-                    for var enclosing TypeSymbol? = lexicalSelfType?.ContainingType;
-                        enclosing != nil;
-                        enclosing = enclosing!!
-                        .ContainingType {
-                        if enclosing is not StructSymbol enclosingStruct {
-                            continue
-                        }
-                        let enclosingStatics = TypeMemberModel.GetMethods(
-                            enclosingStruct,
-                            syntax.Identifier.ValueText,
-                            MemberQuery.Static(MemberKinds.Method)
-                        )
-                        if !enclosingStatics.IsDefaultOrEmpty {
-                            return bindUserTypeStaticCall!!(enclosingStruct, syntax)
-                        }
-                    }
+                if bindUserTypeStaticCall != nil &&
+                    GetLexicallyEnclosingStaticCallOwner(syntax.Identifier.ValueText) is {} enclosingStruct {
+                    return bindUserTypeStaticCall!!(enclosingStruct, syntax)
                 }
                 // Issue #1201 (C# `using static`): an unqualified call may resolve
                 // to a `shared` (static) method of a type brought into scope by a
