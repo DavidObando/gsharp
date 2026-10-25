@@ -30,7 +30,7 @@ Console.WriteLine(Box{Value: 5}.Kind == "top")
 `
         let image = fixture.Compile(source, "issue5361", true, "/deterministic+")
         IlVerifier.Verify(image)
-        Assert.Equal(Encoding.UTF8.GetBytes("True\n"), RunDriverBytes(image, fixture.Directory))
+        Assert.Equal(Encoding.UTF8.GetBytes("True" + Environment.NewLine), RunDriverBytes(image, fixture.Directory))
         let first = File.ReadAllBytes(image)
         fixture.Compile(source, "issue5361", true, "/deterministic+")
         Assert.Equal(first, File.ReadAllBytes(image))
@@ -98,7 +98,9 @@ func Main() {
         let image = fixture.Compile(source, "primary-class", true)
         IlVerifier.Verify(image)
         Assert.Equal(
-            Encoding.UTF8.GetBytes("ABI\nTrue\nOVBI\nTrue\nPBI\nTrue\nBI\nTrue\nTXBI\ninitializer\n"),
+            Encoding.UTF8.GetBytes(
+                "ABI\nTrue\nOVBI\nTrue\nPBI\nTrue\nBI\nTrue\nTXBI\ninitializer\n".Replace("\n", Environment.NewLine)
+            ),
             RunDriverBytes(image, fixture.Directory)
         )
     }
@@ -121,7 +123,7 @@ func Main() {
 }
 `, "class-tree", true)
         IlVerifier.Verify(image)
-        Assert.Equal(Encoding.UTF8.GetBytes("True\n"), RunDriverBytes(image, fixture.Directory))
+        Assert.Equal(Encoding.UTF8.GetBytes("True" + Environment.NewLine), RunDriverBytes(image, fixture.Directory))
     }
 
     @Theory
