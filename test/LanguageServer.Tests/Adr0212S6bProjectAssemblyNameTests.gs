@@ -4,15 +4,15 @@
 
 package GSharp.LanguageServer.Tests
 
-import System
-import System.IO
-import System.Linq
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import GSharp.LanguageServer
 import Microsoft.CodeAnalysis.CSharp
+import System
+import System.IO
+import System.Linq
 import Xunit
 
 /// ADR-0212 S6b: `ProjectState` hands its `AssemblyName` to every `Compilation` it builds, so a reference
@@ -99,7 +99,12 @@ open class Adr0212S6bProjectAssemblyNameTests {
         Assert.Equal("App", successor.AssemblyName)
         Assert.False(HasInternalAccessErrors(successor))
         // The off-gate snapshot path (clean compilation, different tree) goes through WithReplacedSyntaxTree.
-        let snapshotTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(SourceText.From(Fixture.Source + "\n\n", fixture.SourcePath))
+        let snapshotTree = GSharp
+            .Core
+            .CodeAnalysis
+            .Syntax
+            .SyntaxTree
+            .Parse(SourceText.From(Fixture.Source + "\n\n", fixture.SourcePath))
         let snapshot = project.GetCompilationForSnapshot(fixture.SourcePath, snapshotTree)
         Assert.Equal("App", snapshot.AssemblyName)
         Assert.False(HasInternalAccessErrors(snapshot))
@@ -145,13 +150,19 @@ func Use() int32 {
             System.IO.Directory.CreateDirectory(Directory)
             SourcePath = Path.Combine(Directory, "Use.gs")
             LibraryPath = Path.Combine(Directory, "Lib.dll")
-            let csharp = "[assembly: System.Runtime.CompilerServices.InternalsVisibleTo(\"" +
-                friend.Replace("\"", "\\\"") +
+            let csharp = "[assembly: System.Runtime.CompilerServices.InternalsVisibleTo(\"" + friend.Replace(
+                "\"",
+                "\\\""
+            ) +
                 "\")]\nnamespace Lib { internal static class Hidden { internal static int Value() => 1; } }"
             let compilation = CSharpCompilation.Create(
                 "Lib",
                 []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(csharp)},
-                []Microsoft.CodeAnalysis.PortableExecutableReference{Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(typeof(object).Assembly.Location)},
+                []Microsoft
+                    .CodeAnalysis
+                    .PortableExecutableReference{
+                    Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(typeof(object).Assembly.Location)
+                },
                 CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary)
             )
             let result = compilation.Emit(LibraryPath)
@@ -179,8 +190,7 @@ func Use() int32 {
         func Dispose() {
             try {
                 System.IO.Directory.Delete(Directory, recursive: true)
-            } catch (IOException) {
-            }
+            } catch (IOException) { }
         }
     }
 }
