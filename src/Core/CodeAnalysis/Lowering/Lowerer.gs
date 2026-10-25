@@ -1708,68 +1708,12 @@ class Lowerer : BoundTreeRewriter {
                     cast[MemberInfo?](enumeratorClr.GetField("Current", BindingFlags.Instance | BindingFlags.Public)) ??
                     typeof(IEnumerator).GetProperty("Current")
                 if moveNext != nil && currentMember != nil {
-                    // Issue #774: when iterating an open generic receiver the
-                    // synthesised enumerator type is the symbolic
-                    // `IEnumerator[ElementSym]` whose ClrType is erased to
-                    // `IEnumerator<object>`. The closed `Current` getter reports
-                    // `object`, which would collapse the loop variable's type and
-                    // re-introduce the bug we fixed in the binder. Use the
-                    // enumerator's symbolic type argument instead so the
-                    // BoundClrPropertyAccessExpression carries the user's `T`.
-                    //
-                    // Issue #3311: the synthesised `IEnumerator[ElementSym]` must
-                    // take this path even when ElementSym happens to be CONCRETE —
-                    // a MIXED instantiation such as `Dictionary[int32, V].Keys`
-                    // recovers `IEnumerator[int32]` through the erased closed
-                    // shape, and the emitted symbolic MemberRef
-                    // (`IEnumerator`1<int32>::get_Current`) already leaves an
-                    // int32 on the stack. Falling back to the closed `object`
-                    // getter type here injected an `object → int32` conversion
-                    // whose `unbox.any` tripped the verifier (StackObjRef) and
-                    // crashed at runtime. Gate on the synthesised IEnumerator`1
-                    // open definition so real struct enumerators (whose Current is
-                    // NOT the first type argument, e.g. Dictionary's
-                    // KeyValuePair-returning Enumerator) keep the reflected type.
-                    var currentType TypeSymbol? = nil
-                    // Issue #4907: a symbolic nested struct enumerator
-                    // (`List<T>.Enumerator`) reads `Current` through the open
-                    // property type, bound to the enumerator's own arguments.
-                    if enumeratorType is ImportedTypeSymbol structEnum &&
-                        structEnum
-                        .OpenDefinition
-                        ?.IsValueType == true &&
-                        !structEnum
-                        .TypeArguments
-                        .IsDefaultOrEmpty &&
-                        currentMember is PropertyInfo currentProperty {
-                        currentType = MemberLookup.GetClrPropertyTypeSymbol(enumeratorType, currentProperty)
-                    } else if enumeratorType is ImportedTypeSymbol fieldEnum &&
-                        fieldEnum
-                        .OpenDefinition
-                        ?.IsValueType == true &&
-                        !fieldEnum
-                        .TypeArguments
-                        .IsDefaultOrEmpty &&
-                        currentMember is FieldInfo currentField {
-                        // Issue #5193: a by-ref-like enumerator may expose
-                        // `Current` as a public field.
-                        currentType = MemberLookup.GetClrFieldTypeSymbol(enumeratorType, currentField)
+                    // Project the declared Current member; generic argument order does not identify the element type.
+                    let currentType = switch currentMember {
+                        case property is PropertyInfo: MemberLookup.GetClrPropertyTypeSymbol(enumeratorType, property)
+                        case field is FieldInfo: MemberLookup.GetClrFieldTypeSymbol(enumeratorType, field)
+                        default: GetClrMemberType(currentMember)
                     }
-                    if currentType == nil &&
-                        enumeratorType is ImportedTypeSymbol enumImp &&
-                        !enumImp
-                        .TypeArguments
-                        .IsDefaultOrEmpty &&
-                        (
-                        enumImp.HasSubstitutableTypeArgument || string.Equals(
-                            enumImp.OpenDefinition?.FullName,
-                            "System.Collections.Generic.IEnumerator`1",
-                            StringComparison.Ordinal
-                        )
-                    ) {
-                        currentType = enumImp.TypeArguments[0]
-                    }
-                    currentType ??= GetClrMemberType(currentMember)
                     let createMoveNextCall(BoundExpression) -> BoundExpression = (receiver BoundExpression) -> {
                         return BoundImportedInstanceCallExpression(
                             nil,
@@ -1787,7 +1731,7 @@ class Lowerer : BoundTreeRewriter {
                         // dereferences (the emitter's ldind), matching the
                         // binder-side element typing.
                         return ConversionClassifier.AutoDereferenceRefReturn(
-                            BoundClrPropertyAccessExpression(nil, receiver, currentMember, currentType!!)
+                            BoundClrPropertyAccessExpression(nil, receiver, currentMember, currentType)
                         )
                     }
                     return true

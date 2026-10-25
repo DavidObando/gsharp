@@ -150,6 +150,104 @@ func Main() {
 }`.Replace("READ", read), "True\n", contract.AssemblyPath)
     }
 
+    @Theory
+    @InlineData("property")
+    @InlineData("field")
+    @InlineData("ref")
+    @InlineData("readonly")
+    func ReferenceEnumerator_ProjectsActualCurrentDeclaration(kind string) {
+        let member = switch kind {
+            case "field": "public int Current;"
+            case "ref": "public ref int Current => ref current;"
+            case "readonly": "public ref readonly int Current => ref current;"
+            default: "public int Current => current;"
+        }
+        using let contract = CSharpFixture(`#nullable enable
+using System.Collections.Generic;
+namespace Native {
+    public class View<T> {
+        public Cursor<object, List<T>> GetEnumerator() => new();
+    }
+    public class Cursor<A, B> {
+        private int current;
+        CURRENT_MEMBER
+        public bool MoveNext() {
+            current += 21;
+            FIELD_UPDATE
+            return current <= 42;
+        }
+    }
+}`.Replace("CURRENT_MEMBER", member)
+                .Replace(
+                "FIELD_UPDATE",
+                if kind == "field" {
+                    "Current = current;"
+                } else {
+                    ""
+                }
+            ))
+        AssertOutput(`package ReferenceCurrent
+import System
+import Native
+
+func Main() {
+    var total = 0
+    for value in View[int32]() {
+        Console.WriteLine(value)
+        total += value
+    }
+    Console.WriteLine(total)
+}`, "21\n42\n63\n", contract.AssemblyPath)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ReferenceEnumerator_ProjectsNullableConstrainedCurrent(field bool) {
+        using let contract = CSharpFixture(`#nullable enable
+using System.Collections.Generic;
+namespace Native {
+    public class View<T> {
+        public Cursor<object, int, List<T>> GetEnumerator() => new(42);
+    }
+    public class Cursor<A, B, C> where B : struct {
+        private readonly B value;
+        private int index;
+        public Cursor(B value) { this.value = value; }
+        CURRENT_MEMBER
+        public bool MoveNext() {
+            index++;
+            FIELD_UPDATE
+            return index <= 2;
+        }
+    }
+}`.Replace(
+                "CURRENT_MEMBER",
+                if field {
+                    "public B? Current;"
+                } else {
+                    "public B? Current => index == 1 ? null : value;"
+                }
+            )
+                .Replace(
+                "FIELD_UPDATE",
+                if field {
+                    "Current = index == 1 ? null : value;"
+                } else {
+                    ""
+                }
+            ))
+        AssertOutput(`package NullableCurrent
+import System
+import Native
+
+func Main() {
+    for value in View[int32]() {
+        Console.WriteLine(value == nil ? "nil" : value.ToString())
+    }
+}`, "nil\n42\n", contract.AssemblyPath)
+    }
+
     shared {
         private func AssertOutput(source string, expected string, reference string? = nil, referencePack bool = false) {
             let directory = Path.Combine(AppContext.BaseDirectory, "issue5269", Guid.NewGuid().ToString("N"))
