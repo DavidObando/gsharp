@@ -66,7 +66,7 @@ import System
 /// from (cref:BoundGlobalScope.Statements) rather than from a
 /// member-declaration node, so it is not member-addressable for re-pointing.
 /// Such a file falls back to a full rebuild.
-shared class IncrementalGlobalScopeReuse {
+internal shared class IncrementalGlobalScopeReuse {
     private enum EventAccessorKind {
         Add,
         Remove,
@@ -140,12 +140,16 @@ shared class IncrementalGlobalScopeReuse {
         // edited file's spans may have shifted — so refuse the fast path when
         // the edited file contributed any global-scope diagnostic, to keep
         // diagnostics bit-for-bit identical to a full rebuild.
+        // A diagnostic belongs to the edited tree when it points into that tree's text; an unnamed
+        // tree has no file name to compare, so the text identity decides first.
         let editedFile = previousText.FileName
-        if !string.IsNullOrEmpty(editedFile) {
-            for diagnostic in $scope.Diagnostics {
-                if string.Equals(diagnostic.Location.Text?.FileName, editedFile, StringComparison.Ordinal) {
-                    return false
-                }
+        for diagnostic in $scope.Diagnostics {
+            let diagnosticText = diagnostic.Location.Text
+            if object.ReferenceEquals(diagnosticText, previousText) {
+                return false
+            }
+            if SourcePathIdentity.AreSame(diagnosticText?.FileName, editedFile) {
+                return false
             }
         }
         // ---- Phase 1: gather every reused member whose backing syntax belongs
