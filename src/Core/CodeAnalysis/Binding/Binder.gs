@@ -668,17 +668,15 @@ partial class Binder {
             //         func Bump() { CallCount += 1 }    // bare access OK
             //     }
             //
-            // resolves without requiring `TypeName.` prefix. Static members
-            // are exposed for the enclosing type only (no base-class walk) —
-            // this is consistent with the qualified `Type.StaticMember`
-            // paths (BindUserTypeStaticMemberAccess, BindFieldAssignmentExpression)
-            // which also do not walk inheritance for statics today.
+            // Resolve lexical owners from the innermost type outward (#5262).
+            // Keep each member's declaring owner and do not inherit static members.
             //
             // Shadowing precedence (enforced by paramNames/seenMembers):
             //   parameter > instance member > static member.
-            let ownerStruct StructSymbol? = (function.StaticOwnerType as StructSymbol) ??
-                (function.ReceiverType as StructSymbol)
-            if ownerStruct != nil {
+            for var ownerStruct StructSymbol? = (function.StaticOwnerType as StructSymbol) ??
+                (function.ReceiverType as StructSymbol);
+                ownerStruct != nil;
+                ownerStruct = ownerStruct!!.ContainingType as StructSymbol {
                 if !ownerStruct.StaticFields.IsDefaultOrEmpty {
                     for fld in ownerStruct.StaticFields {
                         if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) {
@@ -733,9 +731,7 @@ partial class Binder {
                 // ADR-0052's "Static events on user types" follow-up entry is
                 // amended accordingly.
                 //
-                // Scoped to the enclosing type with no base-class walk, which
-                // is what every other static path here does (see the note on
-                // the static-field block above). A bare `Ticked += handler`
+                // A bare `Ticked += handler`
                 // still routes to the event-subscription path, which
                 // BindBareEventOrCompoundAssignment checks before it consults
                 // this variable.
@@ -751,6 +747,17 @@ partial class Binder {
                             )
                         }
                     }
+                }
+                // Instance names hide outer members without supplying an outer receiver.
+                for level in ownerStruct.GetHierarchy() {
+                    seenMembers.UnionWith(level.Fields.Select((field FieldSymbol) -> field.Name))
+                    seenMembers.UnionWith(
+                        level
+                            .Properties
+                            .Where((property PropertySymbol) -> !property.IsIndexer)
+                            .Select((property PropertySymbol) -> property.Name)
+                    )
+                    seenMembers.UnionWith(level.Events.Select((evt EventSymbol) -> evt.Name))
                 }
             }
             // ADR-0089 / issue #1030: expose interface static *state* by bare

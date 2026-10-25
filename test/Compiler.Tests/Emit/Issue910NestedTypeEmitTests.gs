@@ -14,6 +14,7 @@ import GSharp.Compiler
 import GSharp.Compiler.Tests
 import System.Linq
 import System.Reflection
+import System.Text
 import Xunit.Sdk
 
 /// Issue #910 / ADR-0110: nested type declarations (`class` / `struct`
@@ -21,6 +22,99 @@ import Xunit.Sdk
 /// must be emitted as real CLR nested types with nested accessibility, be
 /// usable from the enclosing type's members, pass ilverify, and execute.
 open class Issue910NestedTypeEmitTests {
+    @Fact
+    func NestedTypeReadsEnclosingPrivateSharedFieldThroughDriver() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        const source = `class Enclosing {
+    shared { private let Expected int32 = 1 }
+
+    private class Nested {
+        func Read() int32 -> Expected
+    }
+}`
+        let library = fixture.Compile(source, "Exact5262", false)
+        IlVerifier.Verify(library)
+        let executable = fixture.Compile(
+            source.Replace(
+                "    private class Nested {",
+                "    func Run() int32 -> Nested().Read()\n    private class Nested {"
+            ) +
+                "\nSystem.Console.Write(Enclosing().Run())",
+            "Read5262",
+            true
+        )
+        IlVerifier.Verify(executable)
+        Assert.Equal(Encoding.UTF8.GetBytes("1"), Encoding.UTF8.GetBytes(fixture.Run(executable)))
+    }
+
+    @Fact
+    func NestedSharedFieldWritesKeepNearestLexicalOwnerAndShadowing() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let executable = fixture.Compile(`package Lexical5262
+import System
+class Outer {
+    shared { var Value int32 = 100 }
+    class Middle {
+        shared { var Value int32 = 10 }
+        class Leaf {
+            shared {
+                func Bump() int32 {
+                    Value += 2
+                    return Value++
+                }
+            }
+            func Read() int32 -> Value
+            func Parameter(Value int32) int32 -> Value
+        }
+        class Own {
+            var Value int32 = 20
+            func Read() int32 -> Value
+        }
+        func Run() {
+            Console.Write(Leaf.Bump())
+            Console.Write("|")
+            Console.Write(Leaf().Read())
+            Console.Write("|")
+            Console.Write(Value)
+            Console.Write("|")
+            Console.Write(Leaf().Parameter(30))
+            Console.Write("|")
+            Console.Write(Own().Read())
+        }
+    }
+    func Run() {
+        Middle().Run()
+        Console.Write("|")
+        Console.Write(Value)
+    }
+}
+Outer().Run()`, "Write5262", true)
+        IlVerifier.Verify(executable)
+        Assert.Equal(Encoding.UTF8.GetBytes("12|13|13|30|20|100"), Encoding.UTF8.GetBytes(fixture.Run(executable)))
+    }
+
+    @Fact
+    func LexicalInstanceFieldsHideOuterSharedFieldsWithoutAnOuterReceiver() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`class Far {
+    shared { let Hidden int32 = 1 }
+    class Near {
+        var Hidden int32 = 2
+        class Child {
+            func Read() int32 -> Hidden
+        }
+    }
+    class Same {
+        var Hidden int32 = 3
+        shared { func Read() int32 -> Hidden }
+    }
+}`, "Rejected5262", false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("Rejected5262.gs(6,34,6,40): error GS0125", output)
+        Assert.Contains("Rejected5262.gs(11,39,11,45): error GS0125", output)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected5262.dll")))
+    }
+
     @Fact
     func IssueExample_NestedClassInClass_ConstructedFromEnclosingMethod_Runs() {
         let output = CompileAndRun(`package Oahu.Cli.Tests
