@@ -165,6 +165,10 @@ open class Adr0208NarrowingCorpusTests {
                 "g5_yield_after_guard",
                 "h10_tuple_by_ref_parameter_overlaps_element",
                 "h11_enclosing_type_argument_by_ref_parameters_overlap",
+                "h12_conditional_out_argument_of_imported_call",
+                "h13_indexer_setter_clears_aliased_member",
+                "h14_null_conditional_receiver_repeats_ref_argument",
+                "h15_ref_local_alias_repeats_ref_argument",
                 "h1_by_ref_param_survives_calls",
                 "h2_limitation_call_with_container_operand",
                 "h3_limitation_call_writes_global",
@@ -1092,6 +1096,66 @@ func Main() {
     var x Outer[string].Inner? = Outer[string].Inner()
     Console.WriteLine(Run(ref x, ref x))
 }`, "GS0158@9:14 GS0612@13:34", "reject", "", ""}
+            yield[]object{"h12_conditional_out_argument_of_imported_call", `import System.Collections.Generic
+class C {
+    var Value int32 = 1
+}
+func Run(ref a C?, flag bool) int32 {
+    if a == nil { return 0 }
+    let d = Dictionary[string, C?]()
+    d.TryGetValue("missing", out flag ? a : a)
+    return a.Value
+}
+func Main() {
+    var x C? = C{}
+    Console.WriteLine(Run(ref x, true))
+}`, "GS0158@9:14", "reject", "", ""}
+            yield[]object{"h13_indexer_setter_clears_aliased_member", `class C {
+    var Value int32 = 1
+}
+class Box {
+    var Field C? = C{}
+    prop this[i int32] int32 {
+        get -> 0
+        set { Field = nil }
+    }
+}
+func Run(ref a C?, box Box) int32 {
+    if a == nil { return 0 }
+    box[0] = 1
+    return a.Value
+}
+func Main() {
+    let box = Box()
+    Console.WriteLine(Run(ref box.Field, box))
+}`, "GS0158@14:14", "reject", "", ""}
+            yield[]object{"h14_null_conditional_receiver_repeats_ref_argument", `class C {
+    var Value int32 = 1
+    func Clear(ref target C?) { target = nil }
+}
+func Run(ref a C?, ref b C?) int32 {
+    if a == nil { return 0 }
+    b?.Clear(ref b)
+    return a.Value
+}
+func Main() {
+    var v C? = C{}
+    Console.WriteLine(Run(ref v, ref v))
+}`, "GS0158@8:14", "reject", "", ""}
+            yield[]object{"h15_ref_local_alias_repeats_ref_argument", `class C {
+    var Value int32 = 1
+}
+func Clear2(ref x C?, ref y C?) { x = nil }
+func Run(ref a C?, ref b C?) int32 {
+    if a == nil { return 0 }
+    let ref c C? = b
+    Clear2(ref b, ref c)
+    return a.Value
+}
+func Main() {
+    var v C? = C{}
+    Console.WriteLine(Run(ref v, ref v))
+}`, "GS0158@9:14", "reject", "", ""}
             yield[]object{"out-alias_out_ref_alias", `class C { func M() { } }
 func Run(out c C?, ref alias C?) {
     c = C()

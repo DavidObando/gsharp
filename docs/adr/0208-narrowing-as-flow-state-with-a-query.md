@@ -308,7 +308,14 @@ variable among the receiver and the arguments of a call are collected
 through conversions, null assertions, address-of operands and each branch of
 a conditional (`Clear(ref b, b!!)`, `Clear2(ref flag ? b : b, ref b)`); an
 operand counts a variable once, because the branches of one conditional are
-mutually exclusive (`Touch(ref flag ? b : b)` is one reference).
+mutually exclusive (`Touch(ref flag ? b : b)` is one reference). Each variable is
+resolved to the storage it names before it is counted: through `let ref`
+alias chains (`let ref c = b; Clear2(ref b, ref c)`) and through the synthetic
+capture that a null-conditional call uses as its receiver (`b?.Clear(ref
+b)`). A writable conditional address is a write wherever it appears,
+including the `out` argument of an imported call. The exemption is for plain
+function and method calls only: a property or indexer accessor call (a
+source indexer setter, `box[0] = 1`) keeps the full storage invalidation.
 
 **Known limitations of the call rule.** Because a plain call does not kill
 the fact, the rule does not cover a callee that writes the storage by a path

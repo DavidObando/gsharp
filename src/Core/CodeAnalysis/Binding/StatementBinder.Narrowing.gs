@@ -1908,8 +1908,11 @@ internal partial class StatementBinder {
                 MarkMayMutateGlobalRoots()
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function, Arguments: var arguments} {
-                // ADR-0208 R12 (#5292, amendment A3): a plain call does not write by-reference storage.
-                MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                // ADR-0208 R12 (#5292, amendment A3): a plain function call does not write by-reference storage;
+                // a property or indexer accessor can assign the members the storage names.
+                MarkMayMutateGlobalRoots(
+                    writesReferenceStorage: function.MethodKind is MethodKind.PropertyGet or MethodKind.PropertySet
+                )
                 if function.HasCaptures {
                     MayMutateAnyRoot = true
                 }
@@ -1957,6 +1960,10 @@ internal partial class StatementBinder {
         // Variables that one call passes twice by reference, or by reference and by value: the aliasing is visible at
         // the call site, so a write through the call is a write through every by-reference parameter.
         private let callAliasedRoots HashSet[VariableSymbol] = HashSet[VariableSymbol]()
+        private let captureReceivers Dictionary[VariableSymbol, BoundExpression] = Dictionary[
+            VariableSymbol,
+            BoundExpression
+        ]()
 
         private func IsCallArgumentOnly(assigned VariableSymbol) bool -> !assignments.ContainsKey(assigned) &&
             !callAliasedRoots.Contains(assigned)
@@ -2022,10 +2029,18 @@ internal partial class StatementBinder {
                     CollectOccurrences(conditional.WhenFalse, isReference, byReference, byValue)
                 }
                 case variable is BoundVariableExpression {
-                    if isReference {
-                        byReference.Add(variable.Variable)
+                    if captureReceivers.TryGetValue(variable.Variable, out var original) {
+                        // The receiver of a null-conditional access is bound on a synthetic capture.
+                        CollectOccurrences(original, isReference, byReference, byValue)
                     } else {
-                        byValue.Add(variable.Variable)
+                        // Resolve the variable to the storage it names, through `let ref` alias chains.
+                        let chain = StatementBinder.AliasChain(variable.Variable)
+                        let root = chain[chain.Count - 1]
+                        if isReference {
+                            byReference.Add(root)
+                        } else {
+                            byValue.Add(root)
+                        }
                     }
                 }
             }
@@ -2119,6 +2134,8 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitNullConditionalAccessExpression(node BoundNullConditionalAccessExpression) {
+            // The access is bound on a synthetic capture: remember the receiver behind it.
+            captureReceivers[node.Capture] = node.Receiver
             VisitExpression(node.Receiver)
             VisitPossiblySkipped(() -> VisitExpression(node.WhenNotNull))
         }
@@ -2129,6 +2146,8 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitConditionalAddressExpression(node BoundConditionalAddressExpression) {
+            // ADR-0208 R12 (#5292): a writable conditional address is a write, whichever call it reaches.
+            RecordWritableReference(node)
             VisitExpression(node.Condition)
             VisitAlternativePaths(
                 () -> VisitExpression(node.WhenTrueOperand),
