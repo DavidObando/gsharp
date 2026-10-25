@@ -1923,6 +1923,27 @@ internal partial class StatementBinder {
                     }
                 }
             }
+            if node is BoundCallOperationExpression{
+                CalledFunction: ImportedFunctionSymbol importedFunction
+            } importedCall {
+                // ADR-0208 R12 (#5292): a conditional address handed to a `ref`/`out` parameter of an imported
+                // method is a write; one handed to an `in` parameter is a read.
+                let parameters = importedFunction.Method.GetParameters()
+                let count = Math.Min(importedCall.Arguments.Length, parameters.Length)
+                for var i = 0; i < count; i++ {
+                    var argument = importedCall.Arguments[i]
+                    while argument is BoundConversionExpression conversion {
+                        argument = conversion.Expression
+                    }
+                    if argument is BoundConditionalAddressExpression &&
+                        parameters[i]
+                        .ParameterType
+                        .IsByRef &&
+                        !parameters[i].IsIn {
+                        RecordWritableReference(argument)
+                    }
+                }
+            }
             if node is BoundCallOperationExpression call {
                 RecordCallSiteAliasing(call)
                 AnalyzeCallableArguments(call.Arguments)
@@ -2146,8 +2167,6 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitConditionalAddressExpression(node BoundConditionalAddressExpression) {
-            // ADR-0208 R12 (#5292): a writable conditional address is a write, whichever call it reaches.
-            RecordWritableReference(node)
             VisitExpression(node.Condition)
             VisitAlternativePaths(
                 () -> VisitExpression(node.WhenTrueOperand),

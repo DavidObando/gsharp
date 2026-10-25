@@ -674,6 +674,58 @@ Console.WriteLine(Run(ref box.Field, box))
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
         /// @returns The case data.
         func AcceptedCases() sequence[[]object] {
+            yield[]object{"conditional-in-argument-of-imported-call-keeps-the-fact", `
+import System
+import System.Runtime.CompilerServices
+
+class C {
+    var Value int32 = 1
+}
+func Run(flag bool) int32 {
+    var x C? = C{}
+    if x == nil { return 0 }
+    let missing = Unsafe.IsNullRef[C?](in flag ? x : x)
+    if missing { return -1 }
+    return x.Value
+}
+func Main() {
+    Console.WriteLine(Run(true))
+}
+`, []string{"1"}}
+            yield[]object{"in-argument-keeps-the-fact", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Touch(in target C?) { }
+func Run() int32 {
+    var x C? = C{}
+    if x == nil { return 0 }
+    Touch(in x)
+    return x.Value
+}
+func Main() {
+    Console.WriteLine(Run())
+}
+`, []string{"1"}}
+            yield[]object{"conditional-in-argument-keeps-the-fact", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Touch(in target C?) { }
+func Run(flag bool) int32 {
+    var x C? = C{}
+    if x == nil { return 0 }
+    Touch(in flag ? x : x)
+    return x.Value
+}
+func Main() {
+    Console.WriteLine(Run(true))
+}
+`, []string{"1"}}
             yield[]object{"conditional-address-argument-counts-the-variable-once", `
 import System
 

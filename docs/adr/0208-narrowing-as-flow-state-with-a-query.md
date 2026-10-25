@@ -312,8 +312,9 @@ mutually exclusive (`Touch(ref flag ? b : b)` is one reference). Each variable i
 resolved to the storage it names before it is counted: through `let ref`
 alias chains (`let ref c = b; Clear2(ref b, ref c)`) and through the synthetic
 capture that a null-conditional call uses as its receiver (`b?.Clear(ref
-b)`). A writable conditional address is a write wherever it appears,
-including the `out` argument of an imported call. The exemption is for plain
+b)`). A conditional address handed to a `ref`/`out` parameter of an
+imported method is a write; one handed to an `in` parameter is a read
+(`Touch(in flag ? x : x)` keeps the fact, like `Touch(in x)`). The exemption is for plain
 function and method calls only: a property or indexer accessor call (a
 source indexer setter, `box[0] = 1`) keeps the full storage invalidation.
 
