@@ -403,19 +403,9 @@ internal partial class ExpressionBinder {
     /// Binds a same-compilation SOURCE type constructed or referenced through a
     /// package-qualified name — e.g. `Oahu.Decrypt.Mp4Operation(...)` or the
     /// generic `Oahu.Decrypt.Mp4Operation[TResult](...)`. cs2gs
-    /// fully-qualifies type references, but a G# source type has no CLR type at
-    /// bind time, so (cref:TryBindQualifiedClrConstructorCall) (which only
-    /// resolves reference-set types) cannot see it. G# resolves source types by
-    /// simple name from a flat, cross-package type scope, so a leading
-    /// namespace/package prefix is redundant.
-    ///
-    /// This fires only when every leading segment is a pure namespace/package
-    /// component — none names an in-scope value, a known type, an import alias,
-    /// or an imported class (which would make the chain a static-member access or
-    /// nested-type reference handled elsewhere) — and the terminal is a call or
-    /// struct-literal whose simple name resolves to a user aggregate type. In that
-    /// case the redundant prefix is peeled off and the terminal is bound by simple
-    /// name, matching how the same construction binds when written unqualified.
+    /// fully-qualifies type references, but source types have no CLR type while
+    /// binding. Resolve the complete source identity before binding its construction
+    /// or static members. Constructor arguments retain their ordinary lexical scope.
     /// @param syntax The accessor chain forming the qualified name.
     /// @param result The bound terminal construction on success.
     /// @returns Whether the qualified name bound to a source-type construction.
@@ -427,11 +417,8 @@ internal partial class ExpressionBinder {
         if syntax.IsNullConditional {
             return false
         }
-        // Peel the leading dotted-name segments while each is a bare identifier
-        // that does NOT resolve to a value, a type, an import alias, or an
-        // imported class — i.e. a pure namespace/package component. Stop at the
-        // first segment that is anything else (a generic-name type reference, a
-        // type name, or the terminal construction). Only the FIRST segment is
+        // Peel namespace segments until a value or type receiver begins.
+        // Namespace import aliases expand during exact source lookup. Only the FIRST segment is
         // required to fail the in-scope-value check: once a segment has been
         // accepted as a namespace-prefix component, the chain can no longer be a
         // value-access chain (there is no value at its head to access `.member`
@@ -461,46 +448,44 @@ internal partial class ExpressionBinder {
         if !peeledAny {
             return false
         }
-        // Issue #2455: make the exact peeled package name ambient for the
-        // remainder's resolution (both the gate check just below and the
-        // actual bind further down) so a terminal simple name that collides
-        // across two or more independently-imported packages resolves to
-        // THIS specific package's declaration — the qualification's whole
-        // purpose — instead of being second-guessed by the general
-        // import-based ambiguity check.
-        let peeledPackageName = string.Join(".", peeledSegments)
-        let previousHint = $scope.SetQualifiedConstructionPackageHint(peeledPackageName)
-        try {
-            if !RemainderHeadIsSourceType(current) {
-                return false
-            }
-            // Peel the redundant namespace prefix and bind the remainder by simple
-            // name. Use BindExpressionpublic (not BindExpression) so a void
-            // terminal (a `Ns.Type[Args].VoidMethod(...)` call in an
-            // expression-bodied void member) is not prematurely rejected here —
-            // the caller's BindExpression wrapper applies the correct
-            // void-in-value-position check on the original syntax.
-            result = BindExpressionpublic(current)
-            return true
-        } finally {
-            $scope.SetQualifiedConstructionPackageHint(previousHint)
+        if !TryResolveQualifiedSourceTypeHead(current, peeledSegments, out var sourceType) {
+            return false
         }
+        result = BindQualifiedSourceTypeRemainder(current, sourceType!!)
+        return true
     }
 
-    /// Whether the head of [`remainder`](paramref) (after peeling a
-    /// namespace prefix) names a same-compilation user aggregate source type:
-    /// a constructor call `Type(...)`, a struct literal `Type{...}`,
-    /// or a static-member access rooted at a type name `Type.Member` /
-    /// generic type reference `Type[Args].Member`.
-    private func RemainderHeadIsSourceType(remainder ExpressionSyntax) bool {
+    /// Resolves the qualified source identity of a construction or static receiver.
+    /// @param remainder The expression after its namespace prefix.
+    /// @param packageSegments The namespace prefix segments.
+    /// @param sourceType The resolved aggregate type.
+    /// @returns Whether the complete source name resolves.
+    private func TryResolveQualifiedSourceTypeHead(
+        remainder ExpressionSyntax,
+        packageSegments List[string],
+        @NotNullWhen(true) out sourceType TypeSymbol?
+    ) bool {
+        sourceType = nil
         var simpleName string
         var arity int32
         switch remainder {
             case CollectionInitializerExpressionSyntax{Target: {} target} {
-                return RemainderHeadIsSourceType(target)
+                return TryResolveQualifiedSourceTypeHead(target, packageSegments, out sourceType)
             }
             case AccessorExpressionSyntax{LeftPart: CollectionInitializerExpressionSyntax collection} {
-                return RemainderHeadIsSourceType(collection)
+                return TryResolveQualifiedSourceTypeHead(collection, packageSegments, out sourceType)
+            }
+            case ObjectCreationExpressionSyntax{Target: {} target} {
+                return TryResolveQualifiedSourceTypeHead(target, packageSegments, out sourceType)
+            }
+            case AccessorExpressionSyntax{LeftPart: ObjectCreationExpressionSyntax creation} {
+                return TryResolveQualifiedSourceTypeHead(creation, packageSegments, out sourceType)
+            }
+            case AccessorExpressionSyntax{LeftPart: CallExpressionSyntax call} {
+                return TryResolveQualifiedSourceTypeHead(call, packageSegments, out sourceType)
+            }
+            case AccessorExpressionSyntax{LeftPart: StructLiteralExpressionSyntax literal} {
+                return TryResolveQualifiedSourceTypeHead(literal, packageSegments, out sourceType)
             }
             case call is CallExpressionSyntax when !call.Identifier.IsMissing {
                 simpleName = call.Identifier.ValueText
@@ -533,16 +518,88 @@ internal partial class ExpressionBinder {
                 return false
             }
         }
-        return $scope.TryLookupTypeAlias(
-            simpleName,
-            if arity > 0 {
-                arity
-            } else {
-                -1
-            },
-            out var terminalType
+        let segments = packageSegments.Append(simpleName).ToArray()
+        return $scope.TryLookupQualifiedSourceType(
+            $scope.ExpandQualifiedTypeName(segments, segments.Length),
+            arity,
+            out sourceType
         ) &&
-            IsUserAggregateType(terminalType!!)
+            IsUserAggregateType(sourceType!!)
+    }
+
+    private func BindQualifiedSourceTypeRemainder(remainder ExpressionSyntax, sourceType TypeSymbol) BoundExpression {
+        switch remainder {
+            case call is CallExpressionSyntax when sourceType is StructSymbol structure {
+                return overloads.BindConstructorCallExpression(call, structure)
+            }
+            case call is CallExpressionSyntax when sourceType is EnumSymbol {
+                if call.Arguments.Count != 1 {
+                    Diagnostics.ReportWrongArgumentCount(call.Location, sourceType.Name, 1, call.Arguments.Count)
+                    return BoundErrorExpression(call)
+                }
+                let conversionTarget = if call.NullableQuestionToken != nil {
+                    cast[TypeSymbol](NullableTypeSymbol.Get(sourceType))
+                } else {
+                    sourceType
+                }
+                return conversions.BindConversion(call.Arguments[0], conversionTarget, allowExplicit: true)
+            }
+            case literal is StructLiteralExpressionSyntax when sourceType is StructSymbol structure {
+                return BindStructLiteralExpression(literal, structure)
+            }
+            case ObjectCreationExpressionSyntax{Target: {} target} creation {
+                return BindObjectInitializerSuffix(creation, BindQualifiedSourceTypeRemainder(target, sourceType))
+            }
+            case CollectionInitializerExpressionSyntax{Target: {} target} collection {
+                return BindCollectionInitializerSuffix(collection, BindQualifiedSourceTypeRemainder(target, sourceType))
+            }
+            case accessor is AccessorExpressionSyntax {
+                if accessor.LeftPart is CallExpressionSyntax or
+                    StructLiteralExpressionSyntax or
+                    ObjectCreationExpressionSyntax or
+                    CollectionInitializerExpressionSyntax {
+                    let receiver = BindQualifiedSourceTypeRemainder(accessor.LeftPart, sourceType)
+                    return BindAccessorStep(receiver, classSymbol: nil, accessor.RightPart)
+                }
+                let segments = List[(Name string, Args ImmutableArray[TypeSymbol])]()
+                if !TryFlattenUserTypeExpressionSegments(accessor.LeftPart, segments) || segments.Count != 1 {
+                    return BoundErrorExpression(remainder)
+                }
+                let typeArguments = segments[0].Args
+                var receiverType TypeSymbol? = sourceType
+                if !typeArguments.IsDefaultOrEmpty {
+                    receiverType = switch sourceType {
+                        case structure is StructSymbol: cast[TypeSymbol?](
+                            StructSymbol.Construct(structure, typeArguments, $scope.References!!.MapClrTypeToReferences)
+                        )
+                        case interface_ is InterfaceSymbol: cast[TypeSymbol?](
+                            InterfaceSymbol.Construct(
+                                interface_,
+                                typeArguments,
+                                $scope.References!!.MapClrTypeToReferences
+                            )
+                        )
+                        default: default(TypeSymbol?)
+                    }
+                    if receiverType == nil {
+                        Diagnostics.ReportTypeNotGeneric(accessor.LeftPart.Location, sourceType.Name)
+                        return BoundErrorExpression(remainder)
+                    }
+                }
+                if receiverType is EnumSymbol enumeration {
+                    return BindEnumAccessorStep(enumeration, accessor.RightPart)
+                }
+                return BindConstructedGenericTypeAccessorStep(
+                    receiverType as StructSymbol,
+                    receiverType as InterfaceSymbol,
+                    constructedImported: nil,
+                    accessor.RightPart,
+                    accessor.LeftPart
+                )
+            }
+        }
+        Diagnostics.ReportUnableToFindType(remainder.Location, sourceType.Name)
+        return BoundErrorExpression(remainder)
     }
 
     /// Resolves a closed CLR type from a fully-qualified dotted name written in

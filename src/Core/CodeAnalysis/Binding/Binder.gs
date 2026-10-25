@@ -5219,7 +5219,7 @@ partial class Binder {
         //
         // The qualifier and arity must identify the source declaration exactly.
         // Without a metadata homonym, the exact source lookup below handles it.
-        let qualifiedName = ExpandQualifiedTypeName(segmentTexts, totalSegments)
+        let qualifiedName = $scope.ExpandQualifiedTypeName(segmentTexts, totalSegments)
         if $scope.TryLookupQualifiedSourceType(qualifiedName, targetArity, out var packageQualifiedSourceType) &&
             TryResolveOuterPrefix(segmentTexts, totalSegments, targetArity) != nil {
             if targetArity == 0 {
@@ -5333,13 +5333,6 @@ partial class Binder {
         return nil
     }
 
-    private func ExpandQualifiedTypeName(segmentTexts[]string, length int32) string {
-        if $scope.TryLookupImport(segmentTexts[0], out var import_) {
-            return import_!!.Target + "." + string.Join(".", segmentTexts, 1, length - 1)
-        }
-        return string.Join(".", segmentTexts, 0, length)
-    }
-
     /// Issue #526: resolves the first [`outerLen`](paramref) segments of
     /// [`segmentTexts`](paramref) joined by `.` to a single CLR
     /// type. Honors aliases and the active import set for one-segment
@@ -5357,7 +5350,7 @@ partial class Binder {
             )
             return symbol?.ClrType
         }
-        let prefix = ExpandQualifiedTypeName(segmentTexts, outerLen)
+        let prefix = $scope.ExpandQualifiedTypeName(segmentTexts, outerLen)
         // A generic type's metadata name is arity-mangled (`Ns.IFoo`1`); when
         // the deepest prefix segment carries the trailing type-argument list,
         // try the mangled name first so a namespace-qualified generic type

@@ -81,17 +81,8 @@ class BoundScope {
     // same file as the reference being resolved, plus implicit imports.
     private var currentReferencingSyntaxTree AsyncLocal[SyntaxTree?] = AsyncLocal[SyntaxTree?]()
 
-    // Issue #2455: the ambient "qualified construction package hint" (see
-    // SetQualifiedConstructionPackageHint), set only while re-binding the
-    // stripped remainder of a package-qualified source-type construction
-    // (e.g. `Oahu.Audible.Json.Author{...}` peeled down to bare `Author{...}`
-    // by TryBindQualifiedSourceTypeConstruction). Bare re-binding loses the
-    // peeled qualification entirely, so without this hint a same-simple-name
-    // collision across packages (both imported) would either misresolve to
-    // the wrong package (pre-#2455) or be reported as ambiguous (post-#2455)
-    // even though the qualification already disambiguates it. Lazily set/
-    // cleared only on the root scope of the chain, exactly like
-    // currentDeclaringPackageName above.
+    // Explicit package preference for alias lookup, shared across the scope chain.
+    // Qualified constructions resolve their complete identities without this hint.
     private var qualifiedConstructionPackageHint AsyncLocal[string?] = AsyncLocal[string?]()
 
     private var richAnonymousClassMap Dictionary[AnonymousClassExpressionSyntax, StructSymbol]?
@@ -828,6 +819,17 @@ class BoundScope {
         return TryLookupQualifiedSourceType(packageName + "." + name, preferredArity, out type)
     }
 
+    /// Expands the leading import of a qualified type name.
+    /// @param segmentTexts The dotted name segments.
+    /// @param length The number of segments to join.
+    /// @returns The complete name after import expansion.
+    func ExpandQualifiedTypeName(segmentTexts[]string, length int32) string {
+        if TryLookupImport(segmentTexts[0], out var import_) {
+            return import_!!.Target + "." + string.Join(".", segmentTexts, 1, length - 1)
+        }
+        return string.Join(".", segmentTexts, 0, length)
+    }
+
     /// Resolves a dotted source type name by its exact package and possibly
     /// nested type identity.
     /// @param qualifiedName The package-qualified source type name.
@@ -851,6 +853,21 @@ class BoundScope {
         var match TypeSymbol? = nil
         let seen = HashSet[TypeSymbol]()
         for pair in EnumerateTypeAliasesInChain() {
+            if TryGetAliasDeclaringPackageInChain(pair.Key, out var aliasPackage) {
+                let aliasName = pair.Key.Substring(pair.Key.IndexOf('#') + 1)
+                if GetTypeAliasArity(pair.Value) != wantedArity || !string.Equals(
+                    aliasPackage + "." + aliasName,
+                    MangleArity(qualifiedName, wantedArity),
+                    StringComparison.Ordinal
+                ) {
+                    continue
+                }
+                if match != nil && !object.ReferenceEquals(match, pair.Value) {
+                    return false
+                }
+                match = pair.Value
+                continue
+            }
             let candidate = TypeDefinition(pair.Value)
             if !seen.Add(candidate) ||
                 GetTypeAliasArity(candidate) != wantedArity ||
@@ -1786,22 +1803,13 @@ class BoundScope {
         }
     }
 
-    /// Issue #2455: sets the package name explicitly PEELED off a
-    /// package-qualified source-type construction (e.g.
-    /// `Oahu.Audible.Json.Author{...}`) while its stripped, bare-simple-
-    /// name remainder (`Author{...}`) is re-bound by
+    /// Sets a scope-wide preferred package for type alias lookup.
+    /// Qualified constructions instead resolve their complete identities in
     /// (cref:ExpressionBinder.TryBindQualifiedSourceTypeConstruction).
     /// (cref:TryLookupTypeAlias(string, int, out TypeSymbol, out bool))
-    /// consults this FIRST, ahead of both the #2342 own-package preference and
-    /// the general import-based ambiguity resolution, so an explicit
-    /// qualification always wins deterministically — the whole point of
-    /// writing it out — even when the terminal simple name collides across
-    /// two or more packages that are each independently imported (which would
-    /// otherwise report a spurious GS0496 ambiguity despite the reference
-    /// being fully disambiguated by its own qualification). Pass
-    /// `null` to clear. Returns the PREVIOUS value so the
-    /// caller can restore it once the remainder finishes binding. Stored at
-    /// the root of this scope's chain, exactly like
+    /// consults this before the declaring-package preference and import ambiguity checks.
+    /// Pass `null` to clear it. Restore the returned previous value after lookup.
+    /// The root scope stores the preference, like
     /// (cref:currentDeclaringPackageName).
     /// @param packageName The explicitly-qualified package name to make ambient for lookup, or `null` to
     /// clear it.

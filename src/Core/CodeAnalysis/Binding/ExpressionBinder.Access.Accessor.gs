@@ -84,11 +84,8 @@ internal partial class ExpressionBinder {
         // `Oahu.Decrypt.Mp4Operation[TResult](...)`. Source types are visible by
         // simple name across packages, but the qualified path above only resolves
         // CLR-backed reference types (a source type has no CLR type at bind time).
-        // When the leading segments are a pure namespace/package prefix (none names
-        // a value, type, import, or imported class) and the terminal simple name
-        // is a user aggregate, peel the redundant prefix and bind the terminal by
-        // simple name. cs2gs fully-qualifies constructor calls, so this is the
-        // common translated shape.
+        // Resolve the complete source identity instead of rebinding a terminal
+        // simple name, which can select a lexical homonym.
         if TryBindQualifiedSourceTypeConstruction(syntax, out var qualifiedSourceCtor) {
             return qualifiedSourceCtor!!
         }
@@ -3079,14 +3076,24 @@ internal partial class ExpressionBinder {
         !isLeadingSegment || !($scope.TryLookupSymbol(segment) is VariableSymbol)
     ) &&
         !binderCtx.TryLookupSourceType($scope, segment, preferredArity: -1, getCurrentFunction(), out _, out _) &&
-        !($scope.TryLookupImport(segment, out var import_) && import_!!.IsAlias) &&
+        !(
+        $scope.TryLookupImport(segment, out var import_) && import_!!.IsAlias && !$scope.TryMatchSourcePackagePrefix(
+            import_!!.Target,
+            out _
+        )
+    ) &&
         !$scope.TryLookupImportedClass(segment, declaration: nil, out _)
 
     private func IsQualifiedSourceTypeBoundary(
         peeledSegments List[string],
         segment string
     ) bool -> peeledSegments.Count > 0 &&
-        $scope.TryLookupQualifiedSourceType(string.Join(".", peeledSegments) + "." + segment, preferredArity: -1, out _)
+        $scope
+        .TryLookupQualifiedSourceType(
+        $scope.ExpandQualifiedTypeName(peeledSegments.Append(segment).ToArray(), peeledSegments.Count + 1),
+        preferredArity: -1,
+        out _
+    )
 
     /// Peels a leading run of pure namespace/package segments off a dotted
     /// accessor chain, returning the first non-namespace remainder (unchanged

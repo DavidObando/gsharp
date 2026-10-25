@@ -14,6 +14,80 @@ import Xunit
 
 /// Runtime and IL verification for boolean pattern `is` expressions.
 class Issue3351IsPatternEmitTests {
+    @Fact
+    func QualifiedDeclaredAliases_PreserveTheirOwnNamesAndTargetIdentity() {
+        const Source = `package Repro
+import System
+import System.Text
+import NamespaceAlias = Repro
+
+type Count = int32
+type OtherCount = int32
+type Label = string
+type Builder = StringBuilder
+
+func Echo(value Repro.Count) Repro.OtherCount -> value
+let n NamespaceAlias.Count = 41
+Console.WriteLine(Echo(n) + 1)
+let text Repro.Label = "alias"
+Console.WriteLine(text)
+let value object = "alias"
+Console.WriteLine(value is Repro.Label)
+let builder Repro.Builder = StringBuilder()
+builder.Append("ok")
+Console.WriteLine(builder.ToString())`
+        let result = CompileAndRun(Source)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                "42${Environment.NewLine}alias${Environment.NewLine}True${Environment.NewLine}ok${Environment.NewLine}"
+            ),
+            Encoding.UTF8.GetBytes(result.Stdout)
+        )
+    }
+
+    @Theory
+    @InlineData("Demo.Target", "Demo.Target{}", "top")
+    @InlineData("Demo.Target", "Demo.Target()", "top")
+    @InlineData("Demo.Target", "NamespaceAlias.Target{}", "top")
+    @InlineData("Demo.Target", "NamespaceAlias.Target()", "top")
+    @InlineData("Demo.Target", "Demo.Target(Target{}.Tag)", "nested")
+    @InlineData("Demo.Target", "Demo.Target(){Tag = Target{}.Tag}", "nested")
+    @InlineData("Demo.Target", "Demo.Target(){\"collection\"}", "collection")
+    @InlineData("Demo.Target[int32]", "Demo.Target[int32]{}", "generic-top")
+    @InlineData("Demo.Target[int32]", "Demo.Target[int32]()", "generic-top")
+    func QualifiedConstruction_UsesAnnotationIdentityWithoutChangingArgumentScope(
+        returnType string,
+        construction string,
+        tag string
+    ) {
+        const Source = `package Demo
+import System
+import NamespaceAlias = Demo
+
+class Target {
+    var Tag string = "top"
+    init() { }
+    init(tag string) { Tag = tag }
+    func Add(value string) { Tag = value }
+}
+class Target[T] { var Tag string = "generic-top" }
+class Holder {
+    class Target { var Tag string = "nested" }
+    class Target[T] { var Tag string = "generic-nested" }
+    func Make() RETURNTYPE {
+        return CONSTRUCTION
+    }
+}
+let value = Holder().Make()
+Console.WriteLine(value.Tag)
+Console.WriteLine(value.GetType().DeclaringType == nil)`
+        let result = CompileAndRun(Source.Replace("RETURNTYPE", returnType).Replace("CONSTRUCTION", construction))
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(tag + Environment.NewLine + "True" + Environment.NewLine),
+            Encoding.UTF8.GetBytes(result.Stdout)
+        )
+    }
+
     @Theory
     @InlineData("Role", "Role.TextInput")
     @InlineData("Role", "Repro.Role.TextInput")
