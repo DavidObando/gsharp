@@ -118,6 +118,8 @@ class Issue5271ReferenceAssemblyPackTests : IDisposable {
         let nuspec = XDocument.Load(nuspecStream)
         let frameworks = nuspec
             .Descendants()
+            .Where((element XElement) -> element.Name.LocalName == "dependencies")
+            .Elements()
             .Where((element XElement) -> element.Name.LocalName == "group")
             .Select((element XElement) -> element.Attribute("targetFramework")?.Value ?? string.Empty)
             .OrderBy((name string) -> name, StringComparer.Ordinal)
