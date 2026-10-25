@@ -34,7 +34,7 @@ open class IncrementalSemanticModelTests {
         // The ADR-0105 fast path engaged (single body-only edit), so the model
         // build runs over a reused global scope — exactly the scenario the
         // incremental build must keep identical.
-        Assert.Same(comp1.GlobalScope, comp2.ReusedGlobalScope)
+        Assert.Same(comp1.GlobalScope, comp2.GlobalScope)
         AssertModelsEquivalent(comp2)
     }
 
@@ -46,7 +46,7 @@ open class IncrementalSemanticModelTests {
         // Edit a method body in a.gs (the V + 0 keeps the signature identical).
         project.UpdateFile(FileA, SourceA.Replace("return local", "return local + 0"))
         let comp2 = project.GetCompilation()
-        Assert.Same(comp1.GlobalScope, comp2.ReusedGlobalScope)
+        Assert.Same(comp1.GlobalScope, comp2.GlobalScope)
         SemanticLookup.ResetIncrementalCacheCounters()
         let _ = SemanticLookup.BuildModelForTest(comp2, useIncrementalCaches: true)
         let nodeStats = SemanticLookup.NodeBucketCacheStats
@@ -71,7 +71,7 @@ open class IncrementalSemanticModelTests {
         // falls back to a full rebuild (no reused global scope).
         project.UpdateFile(FileC, SourceC.Replace("func Compute(x int32)", "func Compute(x int64)"))
         let comp2 = project.GetCompilation()
-        Assert.Null(comp2.ReusedGlobalScope)
+        Assert.NotSame(comp1.GlobalScope, comp2.GlobalScope)
         AssertModelsEquivalent(comp2)
     }
 
@@ -83,7 +83,7 @@ open class IncrementalSemanticModelTests {
         project.UpdateFile(FileA, SourceA.Replace("return local", "return local + 1"))
         project.UpdateFile(FileC, SourceC.Replace("return sum + x", "return sum + x + 1"))
         let comp2 = project.GetCompilation()
-        Assert.Null(comp2.ReusedGlobalScope)
+        Assert.NotSame(comp1.GlobalScope, comp2.GlobalScope)
         AssertModelsEquivalent(comp2)
     }
 
@@ -94,7 +94,7 @@ open class IncrementalSemanticModelTests {
         let _ = SemanticLookup.BuildModelForTest(comp1, useIncrementalCaches: true)
         project.UpdateFile(FileB, SourceB.Replace("Box(n)", "Box(n + 0)"))
         let comp2 = project.GetCompilation()
-        Assert.Same(comp1.GlobalScope, comp2.ReusedGlobalScope)
+        Assert.Same(comp1.GlobalScope, comp2.GlobalScope)
         // MakeBox is declared in b.gs and called in d.gs — references must
         // include both the declaration and the cross-file call site.
         let makeBox = comp2.GlobalScope.Functions.Single((f FunctionSymbol) -> f.Name == "MakeBox")

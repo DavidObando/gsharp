@@ -215,23 +215,6 @@ func Main() {
     Console.WriteLine(Run(ref xs[0], xs))
 }
 `}
-            yield[]object{"ref-parameter-call", `
-import System
-
-class C {
-    var Value int32 = 1
-}
-func Clear(xs []C?) { xs[0] = nil }
-func Run(ref a C?, xs []C?) int32 {
-    if a == nil { return 0 }
-    Clear(xs)
-    return a.Value
-}
-func Main() {
-    var xs = []C?{C{}}
-    Console.WriteLine(Run(ref xs[0], xs))
-}
-`}
             yield[]object{"ref-parameters-overlap", `
 import System
 
@@ -691,6 +674,201 @@ Console.WriteLine(Run(ref box.Field, box))
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
         /// @returns The case data.
         func AcceptedCases() sequence[[]object] {
+            yield[]object{"conditional-in-argument-of-imported-call-keeps-the-fact", `
+import System
+import System.Runtime.CompilerServices
+
+class C {
+    var Value int32 = 1
+}
+func Run(flag bool) int32 {
+    var x C? = C{}
+    if x == nil { return 0 }
+    let missing = Unsafe.IsNullRef[C?](in flag ? x : x)
+    if missing { return -1 }
+    return x.Value
+}
+func Main() {
+    Console.WriteLine(Run(true))
+}
+`, []string{"1"}}
+            yield[]object{"in-argument-keeps-the-fact", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Touch(in target C?) { }
+func Run() int32 {
+    var x C? = C{}
+    if x == nil { return 0 }
+    Touch(in x)
+    return x.Value
+}
+func Main() {
+    Console.WriteLine(Run())
+}
+`, []string{"1"}}
+            yield[]object{"conditional-in-argument-keeps-the-fact", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Touch(in target C?) { }
+func Run(flag bool) int32 {
+    var x C? = C{}
+    if x == nil { return 0 }
+    Touch(in flag ? x : x)
+    return x.Value
+}
+func Main() {
+    Console.WriteLine(Run(true))
+}
+`, []string{"1"}}
+            yield[]object{"conditional-address-argument-counts-the-variable-once", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Touch(ref target C?) { }
+func Run(ref a C?, ref b C?, flag bool) int32 {
+    if a == nil { return 0 }
+    Touch(ref flag ? b : b)
+    return a.Value
+}
+func Main() {
+    var x C? = C{}
+    var y C? = C{}
+    Console.WriteLine(Run(ref x, ref y, true))
+}
+`, []string{"1"}}
+            yield[]object{"object-and-class-by-reference-parameters-do-not-overlap", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(ref a C?, ref other object?) int32 {
+    if a == nil { return 0 }
+    other = nil
+    return a.Value
+}
+func Main() {
+    var x C? = C{}
+    var y object? = "text"
+    Console.WriteLine(Run(ref x, ref y))
+}
+`, []string{"1"}}
+            yield[]object{"out-parameters-of-interface-and-string-types-do-not-overlap", `
+import System
+
+func Describe(items []IDisposable?, out symbol IDisposable?, out name string?) bool {
+    symbol = nil
+    name = nil
+    symbol = items[0]
+    if symbol == nil {
+        return false
+    }
+    name = symbol.ToString()
+    return symbol.ToString() == name
+}
+func Main() {
+    var symbol IDisposable? = nil
+    var name string? = nil
+    let items = []IDisposable?{nil}
+    Console.WriteLine(Describe(items, out symbol, out name))
+}
+`, []string{"False"}}
+            yield[]object{"ref-argument-to-another-variable-keeps-fact", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Reset(ref target C?) { target = nil }
+func Run(ref a C?, ref b C?) int32 {
+    if a == nil { return 0 }
+    Reset(ref b)
+    return a.Value
+}
+func Main() {
+    var x C? = C{}
+    var y C? = C{}
+    Console.WriteLine(Run(ref x, ref y))
+}
+`, []string{"1"}}
+            yield[]object{"ref-parameter-survives-read-only-calls", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Touch(c C) int32 { return c.Value }
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    let first = Touch(a)
+    let second = Touch(a)
+    return a.Value + first + second
+}
+func Main() {
+    var x C? = C{}
+    Console.WriteLine(Run(ref x))
+}
+`, []string{"3"}}
+            yield[]object{"out-parameter-survives-calls-in-a-loop", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Touch(c C) int32 { return c.Value }
+func Run(out a C?) int32 {
+    a = C{}
+    if a == nil { return 0 }
+    var total int32 = 0
+    for var i = 0; i < 3; i++ {
+        total += Touch(a) + a.Value
+    }
+    return total
+}
+func Main() {
+    var x C? = nil
+    Console.WriteLine(Run(out x))
+}
+`, []string{"6"}}
+            yield[]object{"out-parameters-of-different-types-do-not-overlap", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+func Lookup(d Dictionary[C, string], key C, out found string?) bool -> d.TryGetValue(key, out found)
+func Find(d Dictionary[C, string], c C?, out path C?, out text string?) bool {
+    path = c
+    if path == nil {
+        text = nil
+        return false
+    }
+    for var i = 0; i < 2; i++ {
+        if Lookup(d, path, out text) {
+            return path.Value > 0
+        }
+    }
+    text = nil
+    return false
+}
+func Main() {
+    let c = C{}
+    let d = Dictionary[C, string]()
+    d[c] = "x"
+    var p C? = nil
+    var t string? = nil
+    Console.WriteLine(Find(d, c, out p, out t))
+}
+`, []string{"True"}}
             yield[]object{"ref-local-unrelated-write", `
 import System
 

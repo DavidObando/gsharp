@@ -7,6 +7,7 @@ package GSharp.LanguageServer
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import GSharp.LanguageServer.Protocol
 import Range = GSharp.LanguageServer.Protocol.Range
 import System
@@ -541,28 +542,18 @@ internal shared class CrossAssemblyDefinitionResolver {
 
     private func TryFindStructSymbol(compilation Compilation?, type Type?, out structSymbol StructSymbol?) bool {
         structSymbol = nil
-        if compilation == nil || type == nil {
-            return false
-        }
-        for candidate in compilation.GlobalScope.Structs {
-            if MatchesByPackageAndName(candidate.Name, candidate.PackageName, type) {
-                structSymbol = candidate
-                return true
-            }
+        if FindDeclaredType(compilation, type) is StructSymbol found {
+            structSymbol = found
+            return true
         }
         return false
     }
 
     private func TryFindEnumSymbol(compilation Compilation?, type Type?, out enumSymbol EnumSymbol?) bool {
         enumSymbol = nil
-        if compilation == nil || type == nil {
-            return false
-        }
-        for candidate in compilation.GlobalScope.Enums {
-            if MatchesByPackageAndName(candidate.Name, candidate.PackageName, type) {
-                enumSymbol = candidate
-                return true
-            }
+        if FindDeclaredType(compilation, type) is EnumSymbol found {
+            enumSymbol = found
+            return true
         }
         return false
     }
@@ -573,14 +564,9 @@ internal shared class CrossAssemblyDefinitionResolver {
         out interfaceSymbol InterfaceSymbol?
     ) bool {
         interfaceSymbol = nil
-        if compilation == nil || type == nil {
-            return false
-        }
-        for candidate in compilation.GlobalScope.Interfaces {
-            if MatchesByPackageAndName(candidate.Name, candidate.PackageName, type) {
-                interfaceSymbol = candidate
-                return true
-            }
+        if FindDeclaredType(compilation, type) is InterfaceSymbol found {
+            interfaceSymbol = found
+            return true
         }
         return false
     }
@@ -591,55 +577,71 @@ internal shared class CrossAssemblyDefinitionResolver {
         out declaration DelegateDeclarationSyntax?
     ) bool {
         declaration = nil
-        if compilation == nil || type == nil {
-            return false
-        }
-        for candidate in compilation.GlobalScope.Delegates {
-            if !string.Equals(candidate.Name, type.Name, StringComparison.Ordinal) {
-                continue
-            }
-            for tree in compilation.SyntaxTrees {
-                let match DelegateDeclarationSyntax? = FindDelegateDeclaration(tree.Root, type.Name)
-                if match != nil {
-                    declaration = match
-                    return true
-                }
-            }
+        // Reuse never re-points a delegate's declaration, so read the current trees for the syntax.
+        if FindDeclaredType(compilation, type) is DelegateTypeSymbol found {
+            declaration = FindCurrentDelegateDeclaration(compilation!!, found.Declaration) ?? found.Declaration
+            return declaration != nil
         }
         return false
     }
 
-    private func FindDelegateDeclaration(root SyntaxNode, name string) DelegateDeclarationSyntax? {
-        if root is DelegateDeclarationSyntax decl && string.Equals(
-            decl.Identifier.Text,
-            name,
-            StringComparison.Ordinal
-        ) {
-            return decl
+    // A body-only edit keeps every declaration in place, so the declaration at the same position among
+    // the delegates of the same file is the current form of the one the symbol holds. This keeps the
+    // identity of the selected delegate, including its package and arity.
+    private func FindCurrentDelegateDeclaration(
+        compilation Compilation,
+        original DelegateDeclarationSyntax?
+    ) DelegateDeclarationSyntax? {
+        if original == nil || original.SyntaxTree == nil {
+            return nil
         }
-        for child in root.GetChildren() {
-            let found DelegateDeclarationSyntax? = FindDelegateDeclaration(child, name)
-            if found != nil {
-                return found
+        let originalTree = original.SyntaxTree
+        let originals = List[DelegateDeclarationSyntax]()
+        CollectDelegateDeclarations(originalTree.Root, originals)
+        let index = originals.IndexOf(original)
+        if index < 0 {
+            return nil
+        }
+        let fileName = originalTree.Text?.FileName
+        for tree in compilation.SyntaxTrees {
+            if object.ReferenceEquals(tree, originalTree) || SourcePathIdentity.AreSame(tree.Text?.FileName, fileName) {
+                let currents = List[DelegateDeclarationSyntax]()
+                CollectDelegateDeclarations(tree.Root, currents)
+                return if index < currents.Count {
+                    currents[index]
+                } else {
+                    default(DelegateDeclarationSyntax?)
+                }
             }
         }
         return nil
     }
 
-    /// Matches a G# user-type symbol against a CLR (cref:Type) by the
-    /// pair (namespace = G# package name, simple name). For generic types we
-    /// strip the CLR backtick-arity suffix (e.g. `List`1` → `List`)
-    /// because the G# symbol name omits it.
-    private func MatchesByPackageAndName(symbolName string, symbolPackage string, type Type) bool {
-        if !string.Equals(symbolPackage ?? string.Empty, type.Namespace ?? string.Empty, StringComparison.Ordinal) {
-            return false
+    private func CollectDelegateDeclarations(root SyntaxNode, into List[DelegateDeclarationSyntax]) {
+        if root is DelegateDeclarationSyntax declaration {
+            into.Add(declaration)
         }
-        var clrSimpleName = type.Name
-        let backtick = clrSimpleName.IndexOf('`')
-        if backtick > 0 {
-            clrSimpleName = clrSimpleName.Substring(0, backtick)
+        for child in root.GetChildren() {
+            CollectDelegateDeclarations(child, into)
         }
-        return string.Equals(symbolName, clrSimpleName, StringComparison.Ordinal)
+    }
+
+    /// Asks the sibling compilation for the type it declares under the CLR type's metadata name
+    /// (ADR-0212 §7a): package, dot, name with generic arity, and `+` for each nesting level.
+    private func FindDeclaredType(compilation Compilation?, type Type?) TypeSymbol? {
+        if compilation == nil || type == nil {
+            return nil
+        }
+        let definition = if type.IsGenericType && !type.IsGenericTypeDefinition {
+            type.GetGenericTypeDefinition()
+        } else {
+            type
+        }
+        let metadataName = definition.FullName
+        if string.IsNullOrEmpty(metadataName) {
+            return nil
+        }
+        return compilation.GetTypeByMetadataName(metadataName)
     }
 
     private func ToLocation(token SyntaxToken?) Location? {

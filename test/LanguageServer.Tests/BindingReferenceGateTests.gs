@@ -57,7 +57,6 @@ open class BindingReferenceGateTests {
         private const AllowedNames string = `
             Binder
             BoundBlockStatement
-            BoundBodyCache
             BoundCallExpression
             BoundClrPropertyAccessExpression
             BoundConstrainedStaticCallExpression
@@ -74,7 +73,6 @@ open class BindingReferenceGateTests {
             BoundSlicePattern
             BoundTypePattern
             BoundVariableDeclaration
-            IncrementalGlobalScopeReuse
 `
 
         private func AllowanceEntries() List[string] {

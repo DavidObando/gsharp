@@ -11,6 +11,7 @@ import System.Diagnostics.CodeAnalysis
 import System.Security.Cryptography
 import System.Text
 import System.Threading
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis
@@ -58,8 +59,12 @@ import GSharp.Core.CodeAnalysis.Text
 /// The cached entry carries both the lowered (cref:BoundBlockStatement)
 /// and the per-body diagnostics, so reuse reproduces diagnostics exactly.
 ///
-/// This type is thread-safe.
-class BoundBodyCache {
+/// This type is thread-safe. A compilation chain owns one cache (ADR-0212 §8):
+/// (cref:Compilation.Compilation.IncrementalBodyReuse) creates it and the successor factories
+/// pass it on. A one-shot snapshot compilation never shares it, because its
+/// symbols are new objects and every lookup would miss the identity gate while
+/// every store would evict the live entry.
+internal class BoundBodyCache {
     private let entries ConcurrentDictionary[BoundBodyCacheKey, Entry] = ConcurrentDictionary[
         BoundBodyCacheKey,
         Entry
@@ -117,6 +122,7 @@ class BoundBodyCache {
             loweredBody = entry.LoweredBody
             diagnostics = entry.Diagnostics
             Interlocked.Increment(&hits)
+            CompilationMeasurements.Count("bodies.cache-hits")
             return true
         }
         Interlocked.Increment(&misses)
@@ -149,6 +155,7 @@ class BoundBodyCache {
             }
         )
         Interlocked.Increment(&stores)
+        CompilationMeasurements.Count("bodies.cache-stores")
         // Evict the previous body for this member (if any and if different):
         // a superseded bodyHash can never hit again, so keeping it is a pure leak.
         let priorKey = latestKeyByMember.GetOrAdd(key.StableMemberId, key)
