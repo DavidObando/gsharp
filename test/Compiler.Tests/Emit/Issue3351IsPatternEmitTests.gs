@@ -15,6 +15,122 @@ import Xunit
 /// Runtime and IL verification for boolean pattern `is` expressions.
 class Issue3351IsPatternEmitTests {
     @Theory
+    @InlineData("Demo.Derived.Item", "Derived.Item", "Derived.Item()", "base", "Base", 0, true)
+    @InlineData("Demo.Derived.Item", "Derived.Item", "Demo.Derived.Item()", "base", "Base", 0, false)
+    @InlineData("NamespaceAlias.Derived.Item", "Derived.Item", "DerivedAlias.Item()", "base", "Base", 0, true)
+    @InlineData(
+        "NamespaceAlias.Derived.Item",
+        "Derived.Item",
+        "NamespaceAlias.Derived.Item()",
+        "base",
+        "Base",
+        0,
+        false
+    )
+    @InlineData("Demo.Derived.Deep.Leaf", "Derived.Deep.Leaf", "Derived.Deep.Leaf()", "deep", "Deep", 0, true)
+    @InlineData("Demo.Derived.Deep.Leaf", "Derived.Deep.Leaf", "Demo.Derived.Deep.Leaf()", "deep", "Deep", 0, false)
+    @InlineData("Demo.Derived.Box[int32]", "Derived.Box[int32]", "Derived.Box[int32](7)", "box", "Base", 1, true)
+    @InlineData("Demo.Derived.Box[int32]", "Derived.Box[int32]", "Demo.Derived.Box[int32](7)", "box", "Base", 1, false)
+    @InlineData("Demo.Closed.Item", "Closed.Item", "Closed.Item(7)", "closed", "GenericBase`1", 1, true)
+    @InlineData("Demo.Closed.Item", "Closed.Item", "Demo.Closed.Item(7)", "closed", "GenericBase`1", 1, false)
+    func QualifiedInheritedNestedType_AnnotationsAndPatternsKeepDeclaringIdentity(
+        qualifiedType string,
+        unqualifiedType string,
+        construction string,
+        label string,
+        owner string,
+        arity int32,
+        annotation bool
+    ) {
+        const Source = `package Demo
+import System
+import NamespaceAlias = Demo
+import DerivedAlias = Demo.Derived
+open class Ancestor { public class Item { func Label() string -> "ancestor" } }
+open class Base : Ancestor {
+    public class Item { func Label() string -> "base" }
+    public class Deep { public class Leaf { func Label() string -> "deep" } }
+    public class Box[T] {
+        init(value T) {}
+        func Label() string -> "box"
+    }
+}
+class Derived : Base {}
+open class GenericBase[T] {
+    public class Item {
+        init(value T) {}
+        func Label() string -> "closed"
+    }
+}
+class Closed : GenericBase[int32] {}
+class Item { func Label() string -> "top" }
+let item ANNOTATION = CONSTRUCTION
+let boxed object = item
+Console.WriteLine(item.Label())
+Console.WriteLine(item.GetType().DeclaringType?.Name ?? "none")
+let arguments = item.GetType().GenericTypeArguments
+Console.WriteLine(arguments.Length)
+Console.WriteLine(if arguments.Length == 0 { "none" } else { arguments[0].Name })
+Console.WriteLine(boxed is PATTERN)
+Console.WriteLine(boxed is PATTERN matched)
+Console.WriteLine(switch boxed { case PATTERN: "hit" default: "miss" })`
+        let source = Source
+            .Replace(
+            "ANNOTATION",
+            if annotation {
+                "QUALIFIED"
+            } else {
+                string.Empty
+            }
+        )
+            .Replace("CONSTRUCTION", construction)
+            .Replace(
+            "PATTERN",
+            if annotation {
+                "object"
+            } else {
+                "QUALIFIED"
+            }
+        )
+        let expected = Encoding.UTF8.GetBytes(
+            string.Join(
+                Environment.NewLine,
+                []string{
+                    label,
+                    owner,
+                    arity.ToString(),
+                    if arity == 0 {
+                        "none"
+                    } else {
+                        "Int32"
+                    },
+                    "True",
+                    "True",
+                    "hit",
+                    string.Empty
+                }
+            )
+        )
+        Assert.Equal(
+            expected,
+            Encoding.UTF8.GetBytes(CompileAndRun(source.Replace("QUALIFIED", unqualifiedType)).Stdout)
+        )
+        Assert.Equal(expected, Encoding.UTF8.GetBytes(CompileAndRun(source.Replace("QUALIFIED", qualifiedType)).Stdout))
+    }
+
+    @Theory
+    @InlineData("Demo.Derived.Box", 34)
+    @InlineData("NamespaceAlias.Derived.Box", 44)
+    func QualifiedInheritedNestedType_RetainsLocatedGenericArgumentErrors(qualifier string, column int32) {
+        const Source = `package Demo
+import NamespaceAlias = Demo
+open class Base { public class Box[T] {} }
+class Derived : Base {}
+func Take(value QUALIFIED[Missing]) {}`
+        CompileAndRun(Source.Replace("QUALIFIED", qualifier), "(5,$column,5,${column + 7}): error GS0113:")
+    }
+
+    @Theory
     @InlineData("Demo.Wrapper?(nil)", "Tag", "nil\n0\n0\n0\n0\n")
     @InlineData("NamespaceAlias.Wrapper?(Nothing())", "Read(Next(\"-read\"))", "nil\n0\n1\n0\n0\n")
     @InlineData("Demo.Wrapper(Next(\"top\"))", "Read(Next(\"-read\"))", "top-read\n1\n2\n1\n0\n")

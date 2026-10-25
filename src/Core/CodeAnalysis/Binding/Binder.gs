@@ -5225,7 +5225,7 @@ partial class Binder {
             if targetArity == 0 {
                 return packageQualifiedSourceType!!
             }
-            let constructedSourceType TypeSymbol? = BindAndConstructUserGenericSegment(
+            return BindAndConstructUserGenericSegment(
                 syntax,
                 packageQualifiedSourceType!!,
                 Invariant.Required(
@@ -5236,9 +5236,6 @@ partial class Binder {
                 qualifiedIdentifier.Location,
                 syntax.DottedName
             )
-            if constructedSourceType != nil {
-                return constructedSourceType
-            }
         }
         // Greedy: prefer the longest outer prefix that resolves to a real type,
         // then walk the remaining segments as nested types. Going longest-first
@@ -5273,7 +5270,7 @@ partial class Binder {
             if targetArity == 0 {
                 return sourceType
             }
-            let constructed TypeSymbol? = BindAndConstructUserGenericSegment(
+            return BindAndConstructUserGenericSegment(
                 syntax,
                 sourceType!!,
                 Invariant.Required(
@@ -5284,9 +5281,6 @@ partial class Binder {
                 qualifiedIdentifier.Location,
                 syntax.DottedName
             )
-            if constructed != nil {
-                return constructed
-            }
         }
         // Could not resolve. Pinpoint the failing segment so the diagnostic is
         // actionable: if even the outermost simple name doesn't exist, report

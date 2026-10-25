@@ -845,9 +845,72 @@ class BoundScope {
         if string.IsNullOrEmpty(qualifiedName) {
             return false
         }
+        if TryLookupQualifiedSourceDeclaration(qualifiedName, preferredArity, out type, out var ambiguous) ||
+            ambiguous {
+            return type != nil
+        }
+        // A derived qualifier names its base's nested declaration, not a new declaration.
+        // Resolve an exact source prefix before using the existing nested-type walk.
+        for var boundary = qualifiedName.LastIndexOf('.'); boundary > 0; boundary = qualifiedName.LastIndexOf(
+            '.',
+            boundary - 1
+        ) {
+            if !TryLookupQualifiedSourceDeclaration(
+                qualifiedName.Substring(0, boundary),
+                preferredArity: 0,
+                out var current,
+                out ambiguous
+            ) {
+                if ambiguous {
+                    return false
+                }
+                continue
+            }
+            let segments = qualifiedName.Substring(boundary + 1).Split('.')
+            for var i = 0; i < segments.Length; i++ {
+                let arity = if i == segments.Length - 1 {
+                    preferredArity
+                } else {
+                    0
+                }
+                if TryLookupNestedTypeAlias(current, segments[i], arity, out var nested) {
+                    current = if current is StructSymbol owner {
+                        ApplyEnclosingConstruction(nested!!, owner)
+                    } else {
+                        nested
+                    }
+                } else if current is StructSymbol owner &&
+                    TryLookupNestedTypeAliasIncludingInherited(
+                    owner,
+                    segments[i],
+                    arity,
+                    out nested,
+                    out var declaringContainer
+                ) {
+                    current = ApplyEnclosingConstruction(nested!!, declaringContainer!!)
+                } else {
+                    return false
+                }
+            }
+            type = current
+            return type != nil
+        }
+        return false
+    }
+
+    private func TryLookupQualifiedSourceDeclaration(
+        qualifiedName string,
+        preferredArity int32,
+        out type TypeSymbol?,
+        out ambiguous bool
+    ) bool {
+        type = nil
+        ambiguous = false
+        if string.IsNullOrEmpty(qualifiedName) {
+            return false
+        }
         var match TypeSymbol? = nil
         var matchArity = -1
-        var ambiguous = false
         let seen = HashSet[TypeSymbol]()
         for pair in EnumerateTypeAliasesInChain() {
             var candidate TypeSymbol
