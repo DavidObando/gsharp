@@ -3052,10 +3052,12 @@ internal partial class ExpressionBinder {
         }
     }
 
-    /// Whether [`segment`](paramref) is a pure namespace/package prefix
-    /// component — it does not name a known type/alias, an import alias, or an
-    /// imported class, and (only for the leading segment of a chain, per
-    /// [`isLeadingSegment`](paramref)) does not name an in-scope value.
+    /// Whether [`segment`](paramref) is a pure namespace/package prefix component.
+    /// Source types, import aliases, and imported CLR classes prevent peeling.
+    /// Leading segments also exclude values, predefined type aliases, and type parameters.
+    /// Check import aliases before canonical lookup because namespace targets do not name types.
+    /// Canonical lookup applies only to leading segments; later components already belong to a package.
+    /// Source ambiguity does not exclude an independently resolved CLR receiver.
     /// cs2gs fully-qualifies type references, so a leading run of such segments
     /// in front of a same-compilation source type is redundant and must be
     /// peeled before binding by simple name.
@@ -3078,8 +3080,14 @@ internal partial class ExpressionBinder {
     private func IsNamespacePrefixSegment(segment string, isLeadingSegment bool = true) bool -> (
         !isLeadingSegment || !($scope.TryLookupSymbol(segment) is VariableSymbol)
     ) &&
-        !binderCtx.TryLookupSourceType($scope, segment, preferredArity: -1, getCurrentFunction(), out _, out _) &&
         !($scope.TryLookupImport(segment, out var import_) && import_!!.IsAlias) &&
+        (
+        if isLeadingSegment {
+            lookupType(segment) == nil
+        } else {
+            !binderCtx.TryLookupSourceType($scope, segment, preferredArity: -1, getCurrentFunction(), out _, out _)
+        }
+    ) &&
         !$scope.TryLookupImportedClass(segment, declaration: nil, out _)
 
     private func IsQualifiedSourceTypeBoundary(
