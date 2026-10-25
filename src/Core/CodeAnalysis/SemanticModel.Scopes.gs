@@ -534,8 +534,12 @@ partial class SemanticModel {
         if anchor.Parent is not IfLetBindingClauseSyntax clause {
             return false
         }
+        // The nearest binding form owns the clause; an `if let` inside a guard's `else` is not the guard.
         var owner SyntaxNode? = clause.Parent
-        while owner != nil && owner is not GuardLetStatementSyntax {
+        while owner != nil &&
+            owner is not(
+            IfLetStatementSyntax or IfLetExpressionSyntax or WhileLetStatementSyntax or GuardLetStatementSyntax
+        ) {
             owner = owner.Parent
         }
         return owner is GuardLetStatementSyntax guardLet &&
@@ -723,8 +727,17 @@ partial class SemanticModel {
                 if aggregate.Declaration is not{} declaration {
                     continue
                 }
-                for var i = 0; i < declaration.Fields.Length && i < aggregate.Fields.Length; i++ {
-                    RecordTypeClause(declaration.Fields[i].Type, aggregate.Fields[i].Type, tree, typeClauseTokens)
+                // A field is matched to its symbol by the identifier that declares it: the symbol array also
+                // holds primary-constructor fields and leaves constants out, so the two do not line up.
+                for field in declaration.Fields {
+                    if field.Identifier is {} fieldIdentifier {
+                        for fieldSymbol in aggregate.Fields {
+                            if string.Equals(fieldSymbol.Name, fieldIdentifier.Text, StringComparison.Ordinal) {
+                                RecordTypeClause(field.Type, fieldSymbol.Type, tree, typeClauseTokens)
+                                break
+                            }
+                        }
+                    }
                 }
                 for method in aggregate.Methods.Concat(aggregate.StaticMethods) {
                     RecordFunctionTypeClauses(method, tree, typeClauseTokens)
@@ -760,9 +773,17 @@ partial class SemanticModel {
             tree SyntaxTree,
             typeClauseTokens Dictionary[SyntaxToken, TypeSymbol]
         ) {
-            let symbolIndex = parameters.Length - syntaxParameters.Length
-            for var i = 0; i < syntaxParameters.Length && symbolIndex + i < parameters.Length; i++ {
-                RecordTypeClause(syntaxParameters[i].Type, parameters[symbolIndex + i].Type, tree, typeClauseTokens)
+            // A parameter is matched to its symbol by the identifier that declares it (the symbol array can
+            // start with a receiver the syntax list does not have).
+            for syntaxParameter in syntaxParameters {
+                if syntaxParameter.Identifier is {} parameterIdentifier {
+                    for parameter in parameters {
+                        if string.Equals(parameter.Name, parameterIdentifier.Text, StringComparison.Ordinal) {
+                            RecordTypeClause(syntaxParameter.Type, parameter.Type, tree, typeClauseTokens)
+                            break
+                        }
+                    }
+                }
             }
         }
 

@@ -80,6 +80,27 @@ open class Adr0212ScopeQueryTests {
     }
 
     @Fact
+    func IfLetInsideAGuardElse_SeesItsOwnBinding() {
+        // The nearest binding form owns a clause; the enclosing guard is not it.
+        Assert.IsType[LocalVariableSymbol](Single("PNestedIf", "inner"))
+        Assert.Empty(Compiled.Model.LookupSymbols(Position("PNestedIf"), "outer"))
+    }
+
+    @Fact
+    func FieldTypeClause_IsMatchedToItsOwnFieldNotItsArrayIndex() {
+        // `id` and `extra` are primary-constructor fields prepended to the symbols and `Cap` is a constant held
+        // apart from them: an index would pair `string` with int32.
+        let model = Compiled.Model
+        let label = Compiled
+            .Tree
+            .Root
+            .DescendantNodes()
+            .OfType[FieldDeclarationSyntax]()
+            .Single((f FieldDeclarationSyntax) -> f.Identifier.Text == "Label")
+        Assert.Same(TypeSymbol.String, model.GetSymbolInfo(label.Type.Identifier).Symbol)
+    }
+
+    @Fact
     func IsPatternVariable_IsScopedToItsStatement() {
         Assert.Contains("text", Names("PInIs"))
         Assert.DoesNotContain("text", Names("PAfterIs"))
@@ -430,6 +451,19 @@ interface IShape {
 }
 func Helper(x int32) int32 { return x }
 func Next(s string) string? { return s }
+class Primary(id int64, extra int64) {
+    const Cap int32 = 5
+    var Label string
+}
+func Nested(input string?, fallback string?) int32 {
+    guard let outer = input else {
+        if let inner = fallback {
+            return inner.Length // PNestedIf
+        }
+        return 0
+    }
+    return outer.Length
+}
 partial interface IParts {
     func A() int32
 }
