@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 import System.Collections.Immutable
 
 /// Represents a `prop Name Type { get; set }` declaration inside a type body (ADR-0051).
+@SyntaxChildSourceOrder
 partial class PropertyDeclarationSyntax : SyntaxNode {
     // Backing field for the property the parser assigns after construction. Its setter
     // invalidates the node's cached span (issue #1675).
@@ -157,7 +158,9 @@ partial class PropertyDeclarationSyntax : SyntaxNode {
     }
 
     /// Gets the `this` contextual keyword token when this declaration is an
-    /// indexer member (ADR-0118), or `null` for an ordinary property.
+    /// indexer member (ADR-0118), or `null` for an ordinary property. For an indexer this is the same
+    /// token as (cref:Identifier), which already lists it as a child.
+    @SyntaxChildIgnore
     prop ThisKeyword SyntaxToken? {
         get;
         private set;

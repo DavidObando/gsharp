@@ -68,7 +68,7 @@ GSharp.Core.CodeAnalysis.Syntax.IfLetBindingClauseSyntax: LetKeyword, Identifier
 GSharp.Core.CodeAnalysis.Syntax.IfLetExpressionSyntax: IfKeyword, Bindings, GuardOperatorToken, Guard, ThenBlock, ElseKeyword, ElseExpression
 GSharp.Core.CodeAnalysis.Syntax.IfLetStatementSyntax: IfKeyword, Bindings, GuardOperatorToken, Guard, ThenStatement, ElseClause
 GSharp.Core.CodeAnalysis.Syntax.IfStatementSyntax: IfKeyword, Initializer, Semicolon, Condition, ThenStatement, ElseClause
-GSharp.Core.CodeAnalysis.Syntax.ImportSyntax: ImportKeyword, AliasIdentifier, EqualsToken, Identifiers, IdentifiersWithDots, Annotations
+GSharp.Core.CodeAnalysis.Syntax.ImportSyntax: ImportKeyword, AliasIdentifier, EqualsToken, IdentifiersWithDots, Annotations
 GSharp.Core.CodeAnalysis.Syntax.IndexAssignmentExpressionSyntax: TargetIdentifier, OpenBracketToken, Indices, CloseBracketToken, EqualsToken, Value
 GSharp.Core.CodeAnalysis.Syntax.IndexExpressionSyntax: Target, OpenBracketToken, Indices, CloseBracketToken
 GSharp.Core.CodeAnalysis.Syntax.IndexedCollectionElementSyntax: OpenBracketToken, Key, CloseBracketToken, EqualsToken, Value
@@ -100,12 +100,12 @@ GSharp.Core.CodeAnalysis.Syntax.NamedTupleElementSyntax: NameToken, ColonToken, 
 GSharp.Core.CodeAnalysis.Syntax.NotPatternSyntax: NotKeyword, Pattern
 GSharp.Core.CodeAnalysis.Syntax.NullCoalescingAssignmentExpressionSyntax: Target, OperatorToken, Value
 GSharp.Core.CodeAnalysis.Syntax.ObjectCreationExpressionSyntax: Target, OpenBraceToken, Initializers, CloseBraceToken
-GSharp.Core.CodeAnalysis.Syntax.PackageSyntax: PackageKeyword, Identifiers, IdentifiersWithDots, Annotations
+GSharp.Core.CodeAnalysis.Syntax.PackageSyntax: PackageKeyword, IdentifiersWithDots, Annotations
 GSharp.Core.CodeAnalysis.Syntax.ParameterSyntax: Annotations, Identifier, DeconstructionPattern, EllipsisToken, Type, ScopedModifier, RefKindModifier, EqualsToken, DefaultValue
 GSharp.Core.CodeAnalysis.Syntax.ParenthesizedExpressionSyntax: OpenParenthesisToken, Expression, CloseParenthesisToken
 GSharp.Core.CodeAnalysis.Syntax.ParenthesizedPatternSyntax: OpenParenthesisToken, Pattern, CloseParenthesisToken
 GSharp.Core.CodeAnalysis.Syntax.PropertyAccessorSyntax: AccessibilityModifier, AccessorKeyword, OpenParenToken, ParameterIdentifier, CloseParenToken, Body, SemicolonToken
-GSharp.Core.CodeAnalysis.Syntax.PropertyDeclarationSyntax: Annotations, AccessibilityModifier, OpenModifier, OverrideModifier, AbstractModifier, ExplicitInterfaceOpenParenthesisToken, ExplicitInterfaceType, ExplicitInterfaceCloseParenthesisToken, PropKeyword, Identifier, ThisKeyword, OpenBracketToken, Parameters, CloseBracketToken, ReturnRefModifier, ReturnReadOnlyModifier, Type, OpenBraceToken, Accessors, CloseBraceToken
+GSharp.Core.CodeAnalysis.Syntax.PropertyDeclarationSyntax: Annotations, AccessibilityModifier, OpenModifier, OverrideModifier, AbstractModifier, ExplicitInterfaceOpenParenthesisToken, ExplicitInterfaceType, ExplicitInterfaceCloseParenthesisToken, PropKeyword, Identifier, OpenBracketToken, Parameters, CloseBracketToken, ReturnRefModifier, ReturnReadOnlyModifier, Type, OpenBraceToken, Accessors, CloseBraceToken
 GSharp.Core.CodeAnalysis.Syntax.PropertyInitializerSyntax: PropertyIdentifier, EqualsToken, Value
 GSharp.Core.CodeAnalysis.Syntax.PropertyPatternFieldSyntax: Identifier, ColonToken, Pattern
 GSharp.Core.CodeAnalysis.Syntax.PropertyPatternSyntax: OpenBraceToken, Fields, CloseBraceToken, Designation

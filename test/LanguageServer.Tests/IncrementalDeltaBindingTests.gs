@@ -4,7 +4,7 @@
 
 package GSharp.LanguageServer.Tests
 
-import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.LanguageServer
 import Xunit
 
@@ -12,11 +12,12 @@ import Xunit
 /// ((cref:ProjectState.UpdateFile) + (cref:ProjectState.GetCompilation),
 /// a fresh `Compilation` per edit). They prove that a single-file,
 /// body-only edit reuses the previous compilation's global scope and serves the
-/// unchanged files' bodies from the shared `BoundBodyCache`, while edits
+/// unchanged files' bodies from the compilation chain's body cache (`IncrementalBodyReuse`), while edits
 /// that are not provably body-only fall back to a full rebuild.
 open class IncrementalDeltaBindingTests {
     @Fact
     func BodyOnlyEdit_ReusesGlobalScope_AndServesCacheHitsForUnchangedFiles() {
+        using let measurements = CompilationMeasurements.Start("incremental-delta")
         let project = ProjectState("/test/project.gsproj")
         project.UpdateFile(FileA, `package P
 func A() int {
@@ -35,10 +36,8 @@ func C() int {
 `)
         let comp1 = project.GetCompilation()
         let _ = comp1.BoundProgram // populate the per-project body cache
-        let cache BoundBodyCache? = comp1.BodyCache
-        Assert.NotNull(cache)
-        let hitsBefore = cache!!.Hits
-        let storesBefore = cache!!.Stores
+        let hitsBefore = measurements.GetCounter("bodies.cache-hits")
+        let storesBefore = measurements.GetCounter("bodies.cache-stores")
         // Body-only edit to a.gs — only the returned literal changes.
         project.UpdateFile(FileA, `package P
 func A() int {
@@ -49,12 +48,11 @@ func A() int {
         Assert.NotSame(comp1, comp2)
         // Fast path taken: comp2 reuses comp1's bound global scope (and therefore
         // every symbol instance), and marks a.gs as the only dirty body tree.
-        Assert.Same(comp1.GlobalScope, comp2.ReusedGlobalScope)
         Assert.Same(comp1.GlobalScope, comp2.GlobalScope)
         let _ = comp2.BoundProgram
         // b.gs and c.gs were served from the cache; only a.gs re-bound and re-stored.
-        Assert.Equal(hitsBefore + int64(2), cache!!.Hits)
-        Assert.Equal(storesBefore + int64(1), cache!!.Stores)
+        Assert.Equal(hitsBefore + int64(2), measurements.GetCounter("bodies.cache-hits"))
+        Assert.Equal(storesBefore + int64(1), measurements.GetCounter("bodies.cache-stores"))
     }
 
     @Fact
@@ -80,7 +78,6 @@ func Helper(x int32) int {
 `)
         let comp2 = project.GetCompilation()
         Assert.NotSame(comp1, comp2)
-        Assert.Null(comp2.ReusedGlobalScope)
         Assert.NotSame(comp1.GlobalScope, comp2.GlobalScope)
     }
 
@@ -110,7 +107,6 @@ func B() int {
 }
 `)
         let comp2 = project.GetCompilation()
-        Assert.Null(comp2.ReusedGlobalScope)
         Assert.NotSame(comp1.GlobalScope, comp2.GlobalScope)
     }
 
@@ -130,7 +126,6 @@ func B() int {
 }
 `)
         let comp2 = project.GetCompilation()
-        Assert.Null(comp2.ReusedGlobalScope)
         Assert.NotSame(comp1.GlobalScope, comp2.GlobalScope)
     }
 
@@ -139,6 +134,7 @@ func B() int {
     /// path for a pure in-body edit instead of falling back to a full rebuild.
     @Fact
     func BodyOnlyEdit_FileWithConstructor_ReusesGlobalScope() {
+        using let measurements = CompilationMeasurements.Start("incremental-delta")
         let project = ProjectState("/test/project.gsproj")
         project.UpdateFile(FileA, `package P
 class Box {
@@ -159,9 +155,7 @@ func Use() int32 {
 `)
         let comp1 = project.GetCompilation()
         let _ = comp1.BoundProgram
-        let cache BoundBodyCache? = comp1.BodyCache
-        Assert.NotNull(cache)
-        let hitsBefore = cache!!.Hits
+        let hitsBefore = measurements.GetCounter("bodies.cache-hits")
         // Pure in-body edit to the method (constructor signature unchanged).
         project.UpdateFile(FileA, `package P
 class Box {
@@ -176,11 +170,10 @@ class Box {
 `)
         let comp2 = project.GetCompilation()
         // Fast path engaged: the global scope (and every symbol) is reused.
-        Assert.Same(comp1.GlobalScope, comp2.ReusedGlobalScope)
         Assert.Same(comp1.GlobalScope, comp2.GlobalScope)
         let _ = comp2.BoundProgram
         // b.gs was served from the cache.
-        Assert.True(cache!!.Hits > hitsBefore)
+        Assert.True(measurements.GetCounter("bodies.cache-hits") > hitsBefore)
     }
 
     /// A computed-property type change in a constructor-bearing file is a
@@ -208,7 +201,6 @@ class Counter {
 }
 `)
         let comp2 = project.GetCompilation()
-        Assert.Null(comp2.ReusedGlobalScope)
         Assert.NotSame(comp1.GlobalScope, comp2.GlobalScope)
     }
 

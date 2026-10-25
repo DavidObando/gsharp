@@ -11,6 +11,7 @@ import System.Collections.Immutable
 /// and non-leading `...source` content spreads with the
 /// `Field: value` members, e.g.
 /// `Container{ Width: 320.0, Text("Account"), ...rows }`.
+@SyntaxChildSourceOrder
 partial class StructLiteralExpressionSyntax : ExpressionSyntax {
     // Backing field for the property the parser assigns after construction. Its setter
     // invalidates the node's cached span (issue #1675).

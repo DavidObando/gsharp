@@ -72,7 +72,7 @@ internal partial class MethodBodyEmitter {
         let methodSpec = this
             .outer
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMethodSpecification(openRef, this.outer.emitCtx.Metadata.GetOrAddBlob(sigBlob))
         this.il.OpCode(ILOpCode.Call)
         this.il.Token(methodSpec)

@@ -9,7 +9,9 @@ and writes `SyntaxNode.Children.g.gs`: for each concrete node class, a
 
 The children are in the same order that the reflection path returns them: the
 public instance properties of the class in declaration order, then those of
-each base class. A property is a child when its type is a syntax node, a
+each base class. A class marked `@SyntaxChildSourceOrder` (or derived from one) then
+sorts them by source position (in the base class), because its property order is not the source order
+for every shape (issue #5185). A property is a child when its type is a syntax node, a
 `SeparatedSyntaxList`, or a collection of syntax nodes, and it has no
 `@SyntaxChildIgnore` attribute. The reflection path stays in `SyntaxNode.gs` as
 the fallback for a class without generated code and as the test oracle
@@ -43,6 +45,7 @@ PROP_RE = re.compile(
     r"(?P<name>\w+)\s+(?P<type>[^{>]*?)\s*(?:\{|->|$)"
 )
 MEMBER_INDENT = "    "
+SOURCE_ORDER_ATTRIBUTE = "@SyntaxChildSourceOrder"
 
 
 @dataclass
@@ -61,6 +64,7 @@ class Cls:
     abstract: bool
     base: str | None
     is_open: bool = False
+    own_source_order: bool = False
     props: list[Prop] = field(default_factory=list)
 
 
@@ -72,11 +76,16 @@ def parse_file(path: Path, text: str) -> list[Cls]:
     classes: list[Cls] = []
     current: Cls | None = None
     pending_attrs: list[str] = []
+    class_attrs: list[str] = []
     lines = text.split("\n")
     i = 0
     while i < len(lines):
         raw = lines[i]
         line = strip_comment_and_strings(raw)
+        if line.startswith("@"):
+            class_attrs.append(line.strip())
+            i += 1
+            continue
         m = CLASS_RE.match(line)
         if m and not raw.startswith(" "):
             # Header: collect up to the line that opens the class body.
@@ -98,8 +107,10 @@ def parse_file(path: Path, text: str) -> list[Cls]:
                 abstract="abstract" in m.group("mods").split(),
                 base=base,
                 is_open="open" in m.group("mods").split(),
+                own_source_order=any(a.startswith(SOURCE_ORDER_ATTRIBUTE) for a in class_attrs),
             )
             classes.append(current)
+            class_attrs = []
             pending_attrs = []
             i = j + 1
             continue
@@ -150,6 +161,7 @@ def parse_all(root: Path) -> dict[str, Cls]:
                 # Another part of a partial class: merge the properties in file order.
                 existing.props.extend(cls.props)
                 existing.base = existing.base or cls.base
+                existing.own_source_order = existing.own_source_order or cls.own_source_order
     return classes
 
 
@@ -222,7 +234,56 @@ def effective_props(name: str, classes: dict[str, Cls], nodes: set[str]) -> list
 COMPUTED_KINDS = ("enum", "tokens")
 
 
-def emit_class(cls: Cls, props: list[tuple[Prop, str]]) -> list[str]:
+def is_source_ordered(name: str, classes: dict[str, Cls]) -> bool:
+    """A class is source ordered when it or a base class has @SyntaxChildSourceOrder."""
+    cur: str | None = name
+    while cur is not None and cur in classes:
+        if classes[cur].own_source_order:
+            return True
+        cur = classes[cur].base
+    return False
+
+
+# The bits of `SyntaxNode.SpanPlan` (issue #5279). One virtual read replaces two dictionary
+# lookups on the type of a node in every span computation.
+PLAN_BASE_SPAN = 1
+PLAN_SOURCE_ORDERED = 2
+PLAN_IN_PLACE = 4
+
+
+def has_base_span(name: str, classes: dict[str, Cls]) -> bool:
+    """A class uses the span of SyntaxNode when no class between it and SyntaxNode declares `Span`."""
+    cur: str | None = name
+    while cur is not None and cur in classes and cur != ROOT_NODE:
+        if any(p.name == "Span" for p in classes[cur].props):
+            return False
+        cur = classes[cur].base
+    return True
+
+
+def is_in_place_ordered(source_ordered: bool, props: list[tuple[Prop, str]]) -> bool:
+    """A source-ordered class without a computed property reads its children in place when they are in order."""
+    return source_ordered and not any(kind in COMPUTED_KINDS for _, kind in props)
+
+
+def emit_plan(cls: Cls, plan: int, guard: str) -> list[str]:
+    out = ["    /// ```xmldoc", "    /// <inheritdoc />", "    /// ```"]
+    if cls.is_open:
+        out.append("    internal override prop SpanPlan int32 {")
+        out.append("        get {")
+        out.append(f"            if {guard} {{")
+        out.append("                return ReflectedSpanPlan(GetType())")
+        out.append("            }")
+        out.append(f"            return {plan}")
+        out.append("        }")
+        out.append("    }")
+    else:
+        out.append(f"    internal override prop SpanPlan int32 -> {plan}")
+    out.append("")
+    return out
+
+
+def emit_class(cls: Cls, props: list[tuple[Prop, str]], source_ordered: bool, base_span: bool = True) -> list[str]:
     """Emit the generated part of one concrete class.
 
     Two invariants hold for every class (tested in build/test-generate-syntax-children.py):
@@ -231,6 +292,15 @@ def emit_class(cls: Cls, props: list[tuple[Prop, str]]) -> list[str]:
     2. A class with a property that is computed on each read (a sequence, or a token list that
        allows absent entries) builds its children once into an array, so each lookup is O(1).
        The other classes read their properties in place.
+    3. A class marked `@SyntaxChildSourceOrder` (directly or through a base class) lists the
+       children in the order of their source positions. Its property order is not the source
+       order for every shape. A class of this kind without a computed property reads its children
+       in place while a start check finds them in order (`InPlaceOrdered`, allocation free, once per
+       node) and builds the sorted array only for a node with an inversion (issue #5279). Its
+       property-order accessors (`PropertyChildCount`, `PropertyChild`) stay available to a span.
+       A class with a computed property builds the array and sorts it (issue #5185).
+    5. Every class returns a constant `SpanPlan` (bit 1: span of SyntaxNode, bit 2: source ordered,
+       bit 4: read in place), so a span computation does not look up the type of each node.
     """
     out: list[str] = []
     # The guard compares the runtime type of a live node with a static field. The node always
@@ -239,21 +309,30 @@ def emit_class(cls: Cls, props: list[tuple[Prop, str]]) -> list[str]:
     # the Issue835 guard test scans for.
     exact = f"ExactTypeOf{cls.name}"
     guard = f"GetType() != {exact}"
-    cached = any(kind in COMPUTED_KINDS for _, kind in props)
+    in_place = is_in_place_ordered(source_ordered, props)
+    cached = (source_ordered and not in_place) or any(kind in COMPUTED_KINDS for _, kind in props)
+    plan = (PLAN_BASE_SPAN if base_span else 0) | (PLAN_SOURCE_ORDERED if source_ordered else 0)
+    plan |= PLAN_IN_PLACE if in_place else 0
     out.append(f"partial class {cls.name} {{")
     if cls.is_open:
         out.append("    shared {")
         out.append(f"        internal let {exact} Type = typeof({cls.name})")
         out.append("    }")
         out.append("")
-    if cached:
+    out.extend(emit_plan(cls, plan, guard))
+    if cached or in_place:
         out.append("    /// ```xmldoc")
         out.append("    /// <inheritdoc />")
         out.append("    /// ```")
-        out.append("    internal override func BuildChildren() ImmutableArray[SyntaxNode] {")
+        # A source-ordered class builds the children in property order here. The base class
+        # sorts them (BuildChildren) and computes spans from this unsorted array, so a span
+        # never needs the sort (issue #5185).
+        builder_name = "BuildUnsortedChildren" if source_ordered else "BuildChildren"
+        fallback = "BuildUnsortedChildrenByReflection" if source_ordered else "BuildChildrenByReflection"
+        out.append(f"    internal override func {builder_name}() ImmutableArray[SyntaxNode] {{")
         if cls.is_open:
             out.append(f"        if {guard} {{")
-            out.append("            return BuildChildrenByReflection()")
+            out.append(f"            return {fallback}()")
             out.append("        }")
         out.append("        let builder = ImmutableArray.CreateBuilder[SyntaxNode]()")
         for prop, kind in props:
@@ -274,13 +353,22 @@ def emit_class(cls: Cls, props: list[tuple[Prop, str]]) -> list[str]:
                 out.append("        }")
         out.append("        return builder.ToImmutable()")
         out.append("    }")
-        out.append("}")
-        return out
+        if cached:
+            out.append("}")
+            return out
+        out.append("")
 
+    # A class that reads its children in place keeps the property-order accessors under their own
+    # names when it is source ordered: the wrappers below use them only while the properties are in
+    # source order, and a span always reads them (issue #5279).
+    count_name = "PropertyChildCount" if in_place else "ChildCount"
+    child_name = "PropertyChild" if in_place else "GetChild"
+    if in_place:
+        out.extend(emit_order_check(props, cls.is_open, guard))
     out.append("    /// ```xmldoc")
     out.append("    /// <inheritdoc />")
     out.append("    /// ```")
-    out.append("    internal override prop ChildCount int32 {")
+    out.append(f"    internal override prop {count_name} int32 {{")
     out.append("        get {")
     if cls.is_open:
         out.append(f"            if {guard} {{")
@@ -306,7 +394,7 @@ def emit_class(cls: Cls, props: list[tuple[Prop, str]]) -> list[str]:
     out.append("    /// ```xmldoc")
     out.append("    /// <inheritdoc />")
     out.append("    /// ```")
-    out.append("    internal override func GetChild(index int32) SyntaxNode {")
+    out.append(f"    internal override func {child_name}(index int32) SyntaxNode {{")
     if cls.is_open:
         out.append(f"        if {guard} {{")
         out.append("            return ChildAt(CachedChildren(), index)")
@@ -340,14 +428,86 @@ def emit_class(cls: Cls, props: list[tuple[Prop, str]]) -> list[str]:
         out.append("        }")
     out.append("        throw ArgumentOutOfRangeException(nameof(index))")
     out.append("    }")
+    if in_place:
+        out.extend(emit_order_wrappers(cls.is_open, guard))
     out.append("}")
+    return out
+
+
+def emit_order_check(props: list[tuple[Prop, str]], is_open: bool, guard: str) -> list[str]:
+    """The allocation-free test of a source-ordered class: do the property-order children start in order?
+
+    It follows the rule of `SyntaxNode.SortBySourcePosition`: a child that starts before the
+    previous one is an inversion; equal starts are in order.
+    """
+    out = ["    /// ```xmldoc", "    /// <inheritdoc />", "    /// ```"]
+    out.append("    internal override func PropertyOrderIsSourceOrder() bool {")
+    if is_open:
+        out.append(f"        if {guard} {{")
+        out.append("            return false")
+        out.append("        }")
+    out.append("        var last = int32.MinValue")
+    for n, (prop, kind) in enumerate(props):
+        if kind == "node":
+            suppress = "!!" if prop.type.strip().endswith("?") else ""
+            out.append(f"        let node{n} = {prop.name}")
+            out.append(f"        if IsPresent(node{n}) {{")
+            out.append(f"            let start{n} = node{n}{suppress}.Span.Start")
+            out.append(f"            if start{n} < last {{")
+            out.append("                return false")
+            out.append("            }")
+            out.append(f"            last = start{n}")
+            out.append("        }")
+        else:
+            source = f"SeparatedItems({prop.name})" if kind == "sep" else prop.name
+            out.append(f"        for item{n} in {source} {{")
+            out.append(f"            let start{n} = item{n}.Span.Start")
+            out.append(f"            if start{n} < last {{")
+            out.append("                return false")
+            out.append("            }")
+            out.append(f"            last = start{n}")
+            out.append("        }")
+    out.append("        return true")
+    out.append("    }")
+    out.append("")
+    return out
+
+
+def emit_order_wrappers(is_open: bool, guard: str) -> list[str]:
+    """ChildCount and GetChild of an in-place source-ordered class: the property order, or the sorted array."""
+    out = [""]
+    out.extend(["    /// ```xmldoc", "    /// <inheritdoc />", "    /// ```"])
+    out.append("    internal override prop ChildCount int32 {")
+    out.append("        get {")
+    if is_open:
+        out.append(f"            if {guard} {{")
+        out.append("                return CachedChildren().Length")
+        out.append("            }")
+    out.append("            if InPlaceOrdered() {")
+    out.append("                return PropertyChildCount")
+    out.append("            }")
+    out.append("            return CachedChildren().Length")
+    out.append("        }")
+    out.append("    }")
+    out.append("")
+    out.extend(["    /// ```xmldoc", "    /// <inheritdoc />", "    /// ```"])
+    out.append("    internal override func GetChild(index int32) SyntaxNode {")
+    if is_open:
+        out.append(f"        if {guard} {{")
+        out.append("            return ChildAt(CachedChildren(), index)")
+        out.append("        }")
+    out.append("        if InPlaceOrdered() {")
+    out.append("            return PropertyChild(index)")
+    out.append("        }")
+    out.append("        return ChildAt(CachedChildren(), index)")
+    out.append("    }")
     return out
 
 
 HEADER = """// <auto-generated>
 // Generated by build/generate-syntax-children.py from the syntax node classes in this directory.
 // Do not edit by hand. Run `python3 build/generate-syntax-children.py` after a change to a
-// child-bearing property, and add `partial` to the new class. Issue #5136.
+// child-bearing property, and add `partial` to the new class. Issues #5136 and #5185.
 // </auto-generated>
 
 package GSharp.Core.CodeAnalysis.Syntax
@@ -366,7 +526,7 @@ def generate(root: Path) -> str:
         if name not in nodes or name == ROOT_NODE or cls.abstract:
             continue
         props = effective_props(name, classes, nodes)
-        chunks.append("\n".join(emit_class(cls, props)) + "\n")
+        chunks.append("\n".join(emit_class(cls, props, is_source_ordered(name, classes), has_base_span(name, classes))) + "\n")
     return "\n".join(chunks)
 
 

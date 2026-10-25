@@ -134,19 +134,14 @@ Console.WriteLine(Handler[MyOptions].Field)`
 ` + "$appLog"))
             // Three references reach metadata: the compound read (`ldsfld`),
             // the compound write (`stsfld`), and the trailing `Console.WriteLine`
-            // read. All three must name the construction the author wrote.
-            // Counted, not merely inspected: repairing the write alone left the
-            // read half on `Handler<object>` and ILVerify stayed red, so a
-            // presence-only assertion would have called that a fix.
+            // read. All three must name the construction the author wrote, and
+            // since #5172 equal TypeSpec rows are written once, so the three
+            // references share ONE row. A reference left on `Handler<object>`
+            // would add a second, different row, so the exact list still fails
+            // on a partial repair (repairing the write alone once left the read
+            // half on `Handler<object>` and ILVerify stayed red).
             let specs = DescribeConstructedGenerics(appPath, "Handler")
-            Assert.Equal(
-                []string{
-                    "HelperLib4056.Handler`1<P.MyOptions>",
-                    "HelperLib4056.Handler`1<P.MyOptions>",
-                    "HelperLib4056.Handler`1<P.MyOptions>"
-                },
-                specs
-            )
+            Assert.Equal([]string{"HelperLib4056.Handler`1<P.MyOptions>"}, specs)
         } finally {
             Directory.Delete(tempDir, recursive: true)
         }

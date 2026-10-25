@@ -2349,7 +2349,7 @@ internal class StateMachineEmitter {
         let sigBlob = BlobBuilder()
         let argsEncoder = BlobEncoder(sigBlob).MethodSpecificationSignature(1)
         this.encodeTypeSymbol(argsEncoder.AddArgument(), smStruct)
-        return this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        return this.emitCtx.MetadataRows.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
     }
 
     /// Emits the `builder.AwaitUnsafeOnCompleted<TAwaiter, TSM>(ref awaiter, ref this)`
@@ -2458,7 +2458,7 @@ internal class StateMachineEmitter {
         this.encodeTypeSymbol(argsEncoder.AddArgument(), smStruct)
         let methodSpec = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
         il.OpCode(ILOpCode.Call)
         il.Token(methodSpec)

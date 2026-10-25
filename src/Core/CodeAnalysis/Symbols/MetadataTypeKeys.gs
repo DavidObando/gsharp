@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.Symbols
 
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
 import System.Reflection
 import System.Text
@@ -44,6 +45,10 @@ internal shared class MetadataTypeKeys {
         if type == nil {
             return ""
         }
+        // A modified type has the identity of its unmodified type; the modifiers are compared as data beside it.
+        if type is MetadataModifiedTypeSymbol modified {
+            return Of(modified.Unmodified)
+        }
         for builtIn in BuiltIns {
             if object.ReferenceEquals(builtIn.Key, type) {
                 return builtIn.Value
@@ -75,6 +80,12 @@ internal shared class MetadataTypeKeys {
         if type is ByRefTypeSymbol byRef {
             return Of(byRef.PointeeType) + "&"
         }
+        if type is MetadataFunctionPointerTypeSymbol pointer {
+            return FunctionPointer(
+                Of(pointer.ReturnType),
+                pointer.ParameterTypes.Select((t TypeSymbol) -> Of(t)).ToList()
+            )
+        }
         if type is TypeParameterSymbol parameter {
             return Parameter(parameter.IsMethodTypeParameter, parameter.Ordinal)
         }
@@ -88,6 +99,12 @@ internal shared class MetadataTypeKeys {
     internal func Of(type Type?) string {
         if type == nil {
             return ""
+        }
+        if type.IsFunctionPointer {
+            return FunctionPointer(
+                Of(type.GetFunctionPointerReturnType()),
+                type.GetFunctionPointerParameterTypes().Select((t Type) -> Of(t)).ToList()
+            )
         }
         if type.IsGenericParameter {
             return Parameter(type.DeclaringMethod != nil, type.GenericParameterPosition)
@@ -113,6 +130,48 @@ internal shared class MetadataTypeKeys {
         return Definition(type.Assembly.GetName().Name ?? "", type.FullName ?? "", IsCoreLibrary(type.Assembly))
     }
 
+    /// Tells whether a symbol is one of the built-in types.
+    internal func IsBuiltIn(type TypeSymbol) bool {
+        for builtIn in BuiltIns {
+            if object.ReferenceEquals(builtIn.Key, type) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Lists the types that a type is made of, in order: the element of an array, the pointee, the underlying type of a
+    /// nullable, the arguments of a construction, the return type and parameters of a function pointer, and the type
+    /// beneath a modified type. This is the only place that knows the shapes. Every walk over nested types uses it, so a
+    /// new shape cannot be missed by one walk and covered by another.
+    internal func Parts(type TypeSymbol) ImmutableArray[TypeSymbol] {
+        if type is MetadataModifiedTypeSymbol modified {
+            return ImmutableArray.Create(modified.Unmodified)
+        }
+        if type is NullableTypeSymbol nullable {
+            return ImmutableArray.Create(nullable.UnderlyingType)
+        }
+        if type is ConstructedMetadataTypeSymbol constructed {
+            return constructed.TypeArguments
+        }
+        if type is MetadataArrayTypeSymbol array {
+            return ImmutableArray.Create(array.ElementType)
+        }
+        if type is RectangularArrayTypeSymbol rectangular {
+            return ImmutableArray.Create(rectangular.ElementType)
+        }
+        if type is PointerTypeSymbol pointer {
+            return ImmutableArray.Create(pointer.PointeeType)
+        }
+        if type is ByRefTypeSymbol byRef {
+            return ImmutableArray.Create(byRef.PointeeType)
+        }
+        if type is MetadataFunctionPointerTypeSymbol functionPointer {
+            return functionPointer.ParameterTypes.Insert(0, functionPointer.ReturnType)
+        }
+        return ImmutableArray[TypeSymbol].Empty
+    }
+
     /// Tells whether a type, or a part of it, is a missing type. The test is structural: no text is searched.
     internal func ContainsMissing(type TypeSymbol?) bool {
         if type == nil {
@@ -121,25 +180,10 @@ internal shared class MetadataTypeKeys {
         if type is MissingTypeSymbol {
             return true
         }
-        if type is NullableTypeSymbol nullable {
-            return ContainsMissing(nullable.UnderlyingType)
+        if type is MetadataModifiedTypeSymbol modified && MetadataModifiers.ContainsMissing(modified) {
+            return true
         }
-        if type is ConstructedMetadataTypeSymbol constructed {
-            return constructed.TypeArguments.Any((a TypeSymbol) -> ContainsMissing(a))
-        }
-        if type is MetadataArrayTypeSymbol array {
-            return ContainsMissing(array.ElementType)
-        }
-        if type is RectangularArrayTypeSymbol rectangular {
-            return ContainsMissing(rectangular.ElementType)
-        }
-        if type is PointerTypeSymbol pointer {
-            return ContainsMissing(pointer.PointeeType)
-        }
-        if type is ByRefTypeSymbol byRef {
-            return ContainsMissing(byRef.PointeeType)
-        }
-        return false
+        return Parts(type).Any((part TypeSymbol) -> ContainsMissing(part))
     }
 
     // A built-in name denotes the built-in type only in a core library (a module that defines a base-less System.Object).
@@ -156,7 +200,7 @@ internal shared class MetadataTypeKeys {
     }
 
     // The reflection side of MetadataModule.IsCoreLibrary.
-    private func IsCoreLibrary(assembly Assembly) bool {
+    internal func IsCoreLibrary(assembly Assembly) bool {
         let objectType = assembly.GetType("System.Object", false)
         return objectType != nil && objectType.Assembly == assembly && objectType.BaseType == nil
     }
@@ -172,6 +216,15 @@ internal shared class MetadataTypeKeys {
             "[" + string.Concat(Enumerable.Repeat(",", rank - 1)) + "]"
         }
     }
+
+    // The one spelling of a function pointer: the return type, then the parameters. The calling convention modifiers are
+    // not part of it: MetadataLoadContext reports none for a function pointer (its GetFunctionPointerCallingConventions
+    // is empty even when the return type carries CallConv modifiers), so the context cannot answer that question.
+    // The modifiers are kept on the symbol (MetadataFunctionPointerTypeSymbol.UnmanagedConventions) and tested there.
+    private func FunctionPointer(returnType string, parameters List[string]) string -> "fnptr(" +
+        returnType +
+        ";" +
+        string.Join(";", parameters) + ")"
 
     private func Generic(definition string, arguments List[string]) string -> definition + "<" + string.Join(
         ",",

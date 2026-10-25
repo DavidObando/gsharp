@@ -139,7 +139,7 @@ open class Issue5144ReferenceImageSetTests {
         // The set resolves the escaped spelling, and a nested type resolves through its enclosing type.
         let nested = set.TryResolveNameInAssembly("Escaping5144", "Out5144\\+er+In\\*ner")
         Assert.True(nested != nil && nested.IsResolved)
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact
@@ -210,7 +210,7 @@ open class Issue5144ReferenceImageSetTests {
         )
         Assert.Equal(ReflectionNames(resolver.Assemblies[facadeIndex]), set.GetIndexedNames(facadeIndex))
         Assert.Contains("N5144.Outer+Inner", set.GetIndexedNames(facadeIndex))
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact
@@ -284,7 +284,7 @@ open class Issue5144ReferenceImageSetTests {
             )
         )
         // The context cannot supply them either.
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact
@@ -318,7 +318,7 @@ open class Issue5144ReferenceImageSetTests {
         Assert.True(wellKnown.IsResolved)
         Assert.NotEqual("Shadow5144", wellKnown.Module!!.Identity.Name)
         Assert.True(wellKnown.Module!!.IsExternallyVisible(wellKnown.Handle))
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact

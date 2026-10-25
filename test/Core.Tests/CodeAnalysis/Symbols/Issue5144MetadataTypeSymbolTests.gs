@@ -73,7 +73,7 @@ open class Issue5144MetadataTypeSymbolTests {
         Assert.Equal("System.Collections.Generic.List`1", Symbol(module, "N5144T.Derived").BaseDefinition!!.FullName)
         Assert.Null(Symbol(module, "N5144T.IShape`2").BaseDefinition)
         Assert.Null(shape.ClrType)
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact
@@ -93,7 +93,7 @@ open class Issue5144MetadataTypeSymbolTests {
         Assert.False(baseDefinition.IsResolved)
         Assert.Equal("N5144B.Root", baseDefinition.Missing!!.FullName)
         Assert.False(leaf.Kinds.IsValueType)
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact
@@ -166,7 +166,7 @@ open class Issue5144MetadataTypeSymbolTests {
         let leaf = Symbol(module, "Leaf5144`2")
         Assert.False(leaf.BaseDefinition!!.IsResolved)
         Assert.Equal(2, leaf.GenericParameters.Length)
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
         // The description keeps the parameter rows although the base is missing, on both sides.
         let described = MetadataModelComparison.DescribeSymbol(leaf)
         Assert.Contains("T:0:0,U:1:0", described)
@@ -207,7 +207,7 @@ open class Issue5144MetadataTypeSymbolTests {
             described,
             MetadataModelComparison.DescribeType(resolver.FindTypeForComparison("LeafH5144", "LeafH5144`1")!!)
         )
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact
@@ -226,7 +226,7 @@ open class Issue5144MetadataTypeSymbolTests {
         Assert.True(deepest.IsBaseChainComplete)
         Assert.False(deepest.Kinds.IsDelegate)
         Assert.DoesNotContain("base-missing", MetadataModelComparison.DescribeSymbol(deepest))
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
     }
 
     @Fact
@@ -305,7 +305,7 @@ open class Issue5144MetadataTypeSymbolTests {
         let module = set.FindModule("DerivedS5144")!!
         let derivedSymbol = Symbol(module, "Derived5144")
         Assert.Equal("BaseB5144", derivedSymbol.BaseDefinition!!.Module!!.Identity.Name)
-        Assert.Empty(MetadataModelComparison.Compare(resolver, set))
+        Assert.Empty(MetadataModelComparison.CompareFixture(resolver, set))
         // The comparison key holds the defining assembly, on both sides.
         let described = MetadataModelComparison.DescribeSymbol(derivedSymbol)
         Assert.Contains("BaseB5144!N5144S.Base", described)

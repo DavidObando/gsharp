@@ -1280,7 +1280,9 @@ shared class SemanticLookup {
     func FindTokenAt(tree SyntaxTree, position int32) SyntaxToken? {
         var best SyntaxToken? = nil
         for token in EnumerateTokens(tree.Root) {
-            if token.IsMissing {
+            // Issue #5277: a synthesized token is not written in source. It has a zero-width span at
+            // the end of the token before it, so it must not win the caret there.
+            if token.IsMissing || token.IsSynthesized {
                 continue
             }
             if token.Span.Start <= position && position <= token.Span.End {
@@ -1997,32 +1999,8 @@ shared class SemanticLookup {
         type TypeSymbol?,
         declarations Dictionary[SyntaxToken, Symbol]
     ) {
-        if typeClause == nil || type == nil {
-            return
-        }
-        let wrappedTypes = if type is ImportedTypeSymbol {
-            Array.Empty[TypeSymbol]()
-        } else {
-            TypeSymbol.GetWrappedTypes(type).ToArray()
-        }
-        if wrappedTypes.Length > 0 {
-            let wrappedClauses = typeClause.GetChildren().OfType[TypeClauseSyntax]().ToArray()
-            if typeClause.Identifier != nil || (wrappedTypes.Length == 1 && wrappedClauses.Length != 1) {
-                MapTypeClauseReference(typeClause, wrappedTypes[0], declarations)
-                return
-            }
-            for var i = 0; i < Math.Min(wrappedTypes.Length, wrappedClauses.Length); i++ {
-                MapTypeClauseReference(wrappedClauses[i], wrappedTypes[i], declarations)
-            }
-            return
-        }
-        let identifier SyntaxToken? = if !typeClause.QualifierIdentifierTokens.IsDefaultOrEmpty {
-            typeClause.QualifierIdentifierTokens[^1]
-        } else {
-            typeClause.Identifier
-        }
-        if identifier != nil {
-            declarations[identifier] = type
+        for (identifier, named) in GSharp.Core.CodeAnalysis.SemanticModel.GetTypeClauseSymbols(typeClause, type) {
+            declarations[identifier] = named
         }
     }
 

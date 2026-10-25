@@ -2981,7 +2981,7 @@ class Conversion {
             if clr == nil || clr.IsArray {
                 return false
             }
-            for candidate in EnumerateSelfAndClrInterfaces(clr) {
+            for candidate in ClrTypeUtilities.EnumerateSelfAndInterfaces(clr, true) {
                 var candidateDefinition Type
                 var candidateArguments[]Type
                 try {
@@ -3004,13 +3004,6 @@ class Conversion {
                 return true
             }
             return false
-        }
-
-        private func EnumerateSelfAndClrInterfaces(clr Type) sequence[Type] {
-            yield clr
-            for implemented in ClrTypeUtilities.SafeGetInterfaces(clr) {
-                yield implemented
-            }
         }
 
         // Issue #4172: this used to be its own unguarded copy of the hierarchy

@@ -1233,8 +1233,8 @@ open partial class Parser {
             )
         }
         let expression = ParseExpression()
-        let openBrace = SyntaxToken(syntaxTree, SyntaxKind.OpenBraceToken, arrowPosition, "{", nil)
-        let closeBrace = SyntaxToken(syntaxTree, SyntaxKind.CloseBraceToken, arrowPosition, "}", nil)
+        let openBrace = SyntaxToken.Synthesized(syntaxTree, SyntaxKind.OpenBraceToken, arrowPosition, "{")
+        let closeBrace = SyntaxToken.Synthesized(syntaxTree, SyntaxKind.CloseBraceToken, expression.Span.End, "}")
         let statement = SynthesizeArrowBodyStatement(expression, arrowPosition, asReturn, asRefReturn)
         return BlockStatementSyntax(syntaxTree, openBrace, ImmutableArray.Create(statement), closeBrace)
     }
@@ -1262,14 +1262,14 @@ open partial class Parser {
         if !asReturn {
             return ExpressionStatementSyntax(syntaxTree, expression)
         }
-        let returnKeyword = SyntaxToken(syntaxTree, SyntaxKind.ReturnKeyword, arrowPosition, "return", nil)
+        let returnKeyword = SyntaxToken.Synthesized(syntaxTree, SyntaxKind.ReturnKeyword, arrowPosition, "return")
         // Issue #3879: on a `ref`-returning property/indexer the arrow body
         // desugars to `return ref <expr>`, not `return <expr>` — the `ref`
         // is already on the declaration (`prop P ref int32 -> slot`), so
         // repeating it after the arrow would be noise, and desugaring it
         // away would produce a copy-returning getter that GS0252 rejects.
         let refKeyword = if asRefReturn {
-            SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, arrowPosition, "ref", nil)
+            SyntaxToken.Synthesized(syntaxTree, SyntaxKind.IdentifierToken, arrowPosition, "ref")
         } else {
             default(SyntaxToken?)
         }
@@ -1290,7 +1290,7 @@ open partial class Parser {
     ) {
         let arrowPosition = Current.Position
         let body = ParseArrowExpressionBody(asReturn: true, asRefReturn: asRefReturn)
-        let getKeyword = SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, arrowPosition, "get", nil)
+        let getKeyword = SyntaxToken.Synthesized(syntaxTree, SyntaxKind.IdentifierToken, arrowPosition, "get")
         let getAccessor = PropertyAccessorSyntax(
             syntaxTree,
             accessibilityModifier: nil,
@@ -1301,8 +1301,8 @@ open partial class Parser {
             body,
             semicolonToken: nil
         )
-        let openBrace = SyntaxToken(syntaxTree, SyntaxKind.OpenBraceToken, arrowPosition, "{", nil)
-        let closeBrace = SyntaxToken(syntaxTree, SyntaxKind.CloseBraceToken, arrowPosition, "}", nil)
+        let openBrace = SyntaxToken.Synthesized(syntaxTree, SyntaxKind.OpenBraceToken, arrowPosition, "{")
+        let closeBrace = SyntaxToken.Synthesized(syntaxTree, SyntaxKind.CloseBraceToken, body.Span.End, "}")
         return (openBrace, getAccessor, closeBrace)
     }
 

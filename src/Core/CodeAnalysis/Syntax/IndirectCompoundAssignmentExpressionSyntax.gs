@@ -11,6 +11,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// the plain `=` case. The binder evaluates the target address exactly
 /// once (via a synthesized temp local) and lowers the node to the equivalent
 /// `*tmp = *tmp op value`.
+@SyntaxChildSourceOrder
 partial class IndirectCompoundAssignmentExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the (cref:IndirectCompoundAssignmentExpressionSyntax) class.
     /// @param syntaxTree The parent syntax tree.

@@ -27,6 +27,11 @@ internal class MetadataModule {
     private let typeReferences[]ResolvedTypeReference?
     // One slot for each TypeDef row, indexed by row number.
     private let typeSymbols[]MetadataTypeSymbol?
+    // One slot for each Method, Field, Property and Event row, indexed by row number.
+    private let methodSymbols[]MetadataMethodSymbol?
+    private let fieldSymbols[]MetadataFieldSymbol?
+    private let propertySymbols[]MetadataPropertySymbol?
+    private let eventSymbols[]MetadataEventSymbol?
 
     /// Creates a module over an image.
     /// @param set The set that owns the module.
@@ -52,6 +57,10 @@ internal class MetadataModule {
         Identity = AssemblyIdentity.FromDefinition(Reader)
         typeReferences = [Reader.GetTableRowCount(TableIndex.TypeRef) + 1]ResolvedTypeReference?
         typeSymbols = [Reader.GetTableRowCount(TableIndex.TypeDef) + 1]MetadataTypeSymbol?
+        methodSymbols = [Reader.GetTableRowCount(TableIndex.MethodDef) + 1]MetadataMethodSymbol?
+        fieldSymbols = [Reader.GetTableRowCount(TableIndex.Field) + 1]MetadataFieldSymbol?
+        propertySymbols = [Reader.GetTableRowCount(TableIndex.Property) + 1]MetadataPropertySymbol?
+        eventSymbols = [Reader.GetTableRowCount(TableIndex.Event) + 1]MetadataEventSymbol?
         names = Lazy[MetadataModuleNames](ReadNames, LazyThreadSafetyMode.ExecutionAndPublication)
         isCoreLibrary = Lazy[bool](DefinesObject, LazyThreadSafetyMode.ExecutionAndPublication)
         decoder = Lazy[MetadataSignatureDecoder](
@@ -152,6 +161,52 @@ internal class MetadataModule {
         }
         let created = MetadataTypeSymbol(this, handle)
         return Interlocked.CompareExchange(&typeSymbols[row], created, nil) ?? created
+    }
+
+    /// Gets the symbol of a method row. A race creates one winner, and the loser is dropped unseen.
+    internal func GetMethodSymbol(handle MethodDefinitionHandle) MetadataMethodSymbol {
+        let row = MetadataTokens.GetRowNumber(handle)
+        let existing = methodSymbols[row]
+        if existing != nil {
+            return existing
+        }
+        let owner = GetTypeSymbol(Reader.GetMethodDefinition(handle).GetDeclaringType())
+        let created = MetadataMethodSymbol(owner, handle)
+        return Interlocked.CompareExchange(&methodSymbols[row], created, nil) ?? created
+    }
+
+    /// Gets the symbol of a field row.
+    internal func GetFieldSymbol(handle FieldDefinitionHandle) MetadataFieldSymbol {
+        let row = MetadataTokens.GetRowNumber(handle)
+        let existing = fieldSymbols[row]
+        if existing != nil {
+            return existing
+        }
+        let owner = GetTypeSymbol(Reader.GetFieldDefinition(handle).GetDeclaringType())
+        let created = MetadataFieldSymbol(owner, handle)
+        return Interlocked.CompareExchange(&fieldSymbols[row], created, nil) ?? created
+    }
+
+    /// Gets the symbol of a property row. The owner is the type whose property list holds the row.
+    internal func GetPropertySymbol(owner MetadataTypeSymbol, handle PropertyDefinitionHandle) MetadataPropertySymbol {
+        let row = MetadataTokens.GetRowNumber(handle)
+        let existing = propertySymbols[row]
+        if existing != nil {
+            return existing
+        }
+        let created = MetadataPropertySymbol(owner, handle)
+        return Interlocked.CompareExchange(&propertySymbols[row], created, nil) ?? created
+    }
+
+    /// Gets the symbol of an event row. The owner is the type whose event list holds the row.
+    internal func GetEventSymbol(owner MetadataTypeSymbol, handle EventDefinitionHandle) MetadataEventSymbol {
+        let row = MetadataTokens.GetRowNumber(handle)
+        let existing = eventSymbols[row]
+        if existing != nil {
+            return existing
+        }
+        let created = MetadataEventSymbol(owner, handle)
+        return Interlocked.CompareExchange(&eventSymbols[row], created, nil) ?? created
     }
 
     // Reads and publishes the resolution of a TypeRef row.

@@ -636,13 +636,8 @@ internal partial class MethodBodyEmitter {
                     .outer
                     .userTokens
                     .ResolveUserInstanceMethodToken(instanceOwner, accessorMethodSymbol, accessorHandle)
-                this.il.OpCode(
-                    if node.Event.IsVirtual || node.Event.IsOverride {
-                        ILOpCode.Callvirt
-                    } else {
-                        ILOpCode.Call
-                    }
-                )
+                // Issue #4312: a reference receiver is always `callvirt`.
+                this.il.OpCode(InstanceAccessorOpCode(node.Receiver!!))
                 this.il.Token(accessorToken)
                 return
             }
@@ -662,14 +657,13 @@ internal partial class MethodBodyEmitter {
                 this.il.Token(accessorToken)
                 return
             }
-            let isStatic = node.Receiver == nil
-            let isVirtual = !isStatic &&
-                (node.StructType is InterfaceSymbol || node.Event.IsVirtual || node.Event.IsOverride)
+            // Issue #4312: a static accessor is `call`; an instance accessor follows
+            // the receiver, not the event's own `virtual`/`override` modifiers.
             this.il.OpCode(
-                if isVirtual {
-                    ILOpCode.Callvirt
-                } else {
+                if node.Receiver == nil {
                     ILOpCode.Call
+                } else {
+                    InstanceAccessorOpCode(node.Receiver)
                 }
             )
             this.il.Token(accessorHandle)

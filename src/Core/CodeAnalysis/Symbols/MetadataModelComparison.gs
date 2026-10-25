@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Compilation
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.IO
 import System.Linq
 import System.Reflection.Metadata
@@ -49,16 +50,42 @@ internal shared class MetadataModelComparison {
     /// @param resolver The resolver, which answers for the `MetadataLoadContext` model.
     /// @param set The handle model over the same images, or `null` when it could not be built.
     /// @returns The different answers, in a fixed order: by module, then by table row.
-    internal func Compare(resolver ReferenceResolver, set ReferenceImageSet?) List[ModelDisagreement] {
+    internal func Compare(resolver ReferenceResolver, set ReferenceImageSet?) List[ModelDisagreement] -> Compare(
+        resolver,
+        set,
+        false
+    )
+
+    /// Compares the two models over the modules of the reference set, leaving out the host fallback assemblies
+    /// (the framework implementation that the resolver appends behind the supplied references). A test that builds a
+    /// small fixture uses it, so that the test compares its own modules and not the whole framework again.
+    internal func CompareFixture(resolver ReferenceResolver, set ReferenceImageSet?) List[ModelDisagreement] -> Compare(
+        resolver,
+        set,
+        true
+    )
+
+    /// Tells whether the comparison covers a module.
+    internal func Includes(
+        resolver ReferenceResolver,
+        module MetadataModule,
+        skipHostFallback bool
+    ) bool -> !skipHostFallback ||
+        !resolver.IsHostFallbackName(module.Identity.Name)
+
+    private func Compare(resolver ReferenceResolver, set ReferenceImageSet?, skipHostFallback bool) List[
+        ModelDisagreement
+    ] {
         let result = List[ModelDisagreement]()
         if set == nil {
             result.Add(ModelDisagreement("Q1.set", "reference set", "built", "not built"))
             return result
         }
-        CompareNames(resolver, set, result)
-        CompareTypeReferences(resolver, set, result)
+        CompareNames(resolver, set, result, skipHostFallback)
+        CompareTypeReferences(resolver, set, result, skipHostFallback)
         CompareWellKnownTypes(resolver, set, result)
-        CompareTypeDefinitions(resolver, set, result)
+        CompareTypeDefinitions(resolver, set, result, skipHostFallback)
+        MetadataMemberComparison.Compare(resolver, set, result, skipHostFallback)
         return result
     }
 
@@ -97,13 +124,21 @@ internal shared class MetadataModelComparison {
     }
 
     // Q1: the indexed names of each searched module, in order.
-    private func CompareNames(resolver ReferenceResolver, set ReferenceImageSet, result List[ModelDisagreement]) {
+    private func CompareNames(
+        resolver ReferenceResolver,
+        set ReferenceImageSet,
+        result List[ModelDisagreement],
+        skipHostFallback bool
+    ) {
         let expected = resolver.ReadIndexedTypeNames()
         if expected.Count != set.SearchedCount {
             result.Add(ModelDisagreement("Q1.modules", "reference set", "${expected.Count}", "${set.SearchedCount}"))
             return
         }
         for var i = 0; i < expected.Count; i++ {
+            if !Includes(resolver, set.Modules[i], skipHostFallback) {
+                continue
+            }
             let actual = set.GetIndexedNames(i)
             if expected[i].SequenceEqual(actual) {
                 continue
@@ -133,9 +168,13 @@ internal shared class MetadataModelComparison {
     private func CompareTypeReferences(
         resolver ReferenceResolver,
         set ReferenceImageSet,
-        result List[ModelDisagreement]
+        result List[ModelDisagreement],
+        skipHostFallback bool
     ) {
         for module in set.Modules {
+            if !Includes(resolver, module, skipHostFallback) {
+                continue
+            }
             for handle in module.Reader.TypeReferences {
                 let actual = set.ResolveTypeReference(module, handle)
                 var assemblyName = ""
@@ -166,17 +205,43 @@ internal shared class MetadataModelComparison {
     ) {
         for fullName in set.WellKnown.FullNames {
             let actual = set.WellKnown.TryGet(fullName)!!
-            var found Type? = nil
-            let expected = if resolver.TryResolveType(fullName, false, out found) {
-                Identify(found!!)
-            } else {
+            let found = ExpectedWellKnown(resolver, fullName)
+            let expected = if found == nil {
                 "missing"
+            } else {
+                Identify(found)
             }
             let actualText = Describe(actual)
             if !string.Equals(expected, actualText, StringComparison.OrdinalIgnoreCase) {
                 result.Add(ModelDisagreement("Q1.well-known", fullName, expected, actualText))
             }
         }
+    }
+
+    // The context's answer for a well-known name. A name that the runtime binds specially needs a core library, the same
+    // rule as the table: the first public core library definition, else the first one. Another name is the resolver's own
+    // answer, the first writer with the accessible copy preferred.
+    private func ExpectedWellKnown(resolver ReferenceResolver, fullName string) Type? {
+        if !WellKnownTypes.RequiresCoreLibrary(fullName) {
+            var found Type? = nil
+            return if resolver.TryResolveType(fullName, false, out found) {
+                found
+            } else {
+                nil
+            }
+        }
+        var firstCoreLibrary Type? = nil
+        for assembly in resolver.Assemblies {
+            let candidate = resolver.FindTypeForComparison(assembly.GetName().Name ?? "", fullName)
+            if candidate == nil || !MetadataTypeKeys.IsCoreLibrary(candidate.Assembly) {
+                continue
+            }
+            if candidate.IsVisible {
+                return candidate
+            }
+            firstCoreLibrary ??= candidate
+        }
+        return firstCoreLibrary
     }
 
     private func Identify(type Type) string -> (type.Assembly.GetName().Name ?? string.Empty) +
@@ -188,10 +253,14 @@ internal shared class MetadataModelComparison {
     private func CompareTypeDefinitions(
         resolver ReferenceResolver,
         set ReferenceImageSet,
-        result List[ModelDisagreement]
+        result List[ModelDisagreement],
+        skipHostFallback bool
     ) {
         for var m = 0; m < set.SearchedCount; m++ {
             let module = set.Modules[m]
+            if !Includes(resolver, module, skipHostFallback) {
+                continue
+            }
             for fullName in module.DefinedNames {
                 module.TryGetDefinition(fullName, out var handle)
                 let symbol = module.GetTypeSymbol(handle)
@@ -251,24 +320,30 @@ internal shared class MetadataModelComparison {
 
     // Q13: the constraint rows of each generic parameter. A parameter whose constraint names a type that the context
     // cannot load is written "constraints-missing" on both sides; the other parameters still compare (table 7b).
-    private func ConstraintsOf(symbol MetadataTypeSymbol) string {
+    // Types and methods share these two functions.
+    private func ConstraintsOf(symbol MetadataTypeSymbol) string -> ConstraintsOf(
+        symbol.TypeParameters.Select((p TypeParameterSymbol) -> symbol.GetConstraintTypes(p.Ordinal)).ToImmutableArray()
+    )
+
+    internal func ConstraintsOf(constraints ImmutableArray[ImmutableArray[TypeSymbol]]) string {
         let parts = List[string]()
-        for var i = 0; i < symbol.TypeParameters.Length; i++ {
-            let constraints = symbol.GetConstraintTypes(i)
+        for parameter in constraints {
             parts.Add(
-                if constraints.Any((c TypeSymbol) -> MetadataTypeKeys.ContainsMissing(c)) {
+                if parameter.Any((c TypeSymbol) -> MetadataTypeKeys.ContainsMissing(c)) {
                     "constraints-missing"
                 } else {
-                    string.Join("+", constraints.Select((c TypeSymbol) -> MetadataTypeKeys.Of(c)))
+                    string.Join("+", parameter.Select((c TypeSymbol) -> MetadataTypeKeys.Of(c)))
                 }
             )
         }
         return string.Join(",", parts)
     }
 
-    private func ConstraintsOf(type Type) string {
+    private func ConstraintsOf(type Type) string -> ConstraintsOf(type.GetGenericArguments())
+
+    internal func ConstraintsOf(arguments[]Type) string {
         let parts = List[string]()
-        for argument in type.GetGenericArguments() {
+        for argument in arguments {
             try {
                 parts.Add(
                     string.Join(

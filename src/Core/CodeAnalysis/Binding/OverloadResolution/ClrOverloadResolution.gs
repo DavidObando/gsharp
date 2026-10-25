@@ -4743,7 +4743,7 @@ internal shared class ClrOverloadResolution {
         if !hasVariantSlot {
             return false
         }
-        for candidate in EnumerateSelfAndInterfaces(source) {
+        for candidate in ClrTypeUtilities.EnumerateSelfAndInterfaces(source, false) {
             var candidateDefinition Type
             var candidateArguments[]Type
             try {
@@ -4764,15 +4764,6 @@ internal shared class ClrOverloadResolution {
             }
         }
         return false
-    }
-
-    private func EnumerateSelfAndInterfaces(source Type) sequence[Type] {
-        if source.IsInterface {
-            yield source
-        }
-        for implemented in ClrTypeUtilities.SafeGetInterfaces(source) {
-            yield implemented
-        }
     }
 
     private func AreVarianceCompatibleArguments(parameters[]Type, sourceArguments[]Type, targetArguments[]Type) bool {
@@ -7414,18 +7405,18 @@ internal shared class ClrOverloadResolution {
             if arg == nil || arg.IsGenericParameter {
                 continue
             }
-            // G# does not admit by-ref-like values as generic arguments
-            // (issue #367). Live reflection rejects them even on an otherwise
-            // unconstrained parameter, so this is ordinary inapplicability,
-            // not a compiler identity/context failure.
-            if ClrTypeUtilities.IsByRefLike(arg) {
-                return false
-            }
             var attrs GenericParameterAttributes
             try {
                 attrs = param.GenericParameterAttributes
             } catch (ex Exception) when IsMetadataLoadFailure(ex) {
                 continue
+            }
+            // A by-ref-like argument is admitted only for a parameter that
+            // declares `allows ref struct` (issues #367, #5216). Live
+            // reflection rejects it on any other parameter, so this is ordinary
+            // inapplicability, not a compiler identity/context failure.
+            if ClrTypeUtilities.IsByRefLike(arg) && !ClrTypeUtilities.AllowsByRefLikeArgument(attrs) {
+                return false
             }
             let special = attrs & GenericParameterAttributes.SpecialConstraintMask
             // Issue #1325: a same-compilation user value type (a non-class

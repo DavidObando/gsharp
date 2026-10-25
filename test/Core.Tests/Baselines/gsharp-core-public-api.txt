@@ -331,16 +331,19 @@ type class GSharp.Core.CodeAnalysis.Analyzers.AnalysisContext : System.Object
   method public Void RegisterSyntaxTreeAction(System.Action`1<GSharp.Core.CodeAnalysis.Analyzers.SyntaxTreeAnalysisContext> action)
 type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
   method public Boolean get_ImplicitSystemImport()
+  method public Boolean get_IncrementalBodyReuse()
   method public Boolean get_IsLibrary()
   method public Boolean get_Optimize()
   method public Boolean get_PlatformNilChecks()
   method public Boolean get_WarnOnMissingDocumentation()
   method public GSharp.Core.CodeAnalysis.Analyzers.DiagnosticSuppressionMap get_DiagnosticSuppressions()
-  method public GSharp.Core.CodeAnalysis.Binding.BoundBodyCache get_BodyCache()
   method public GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope get_GlobalScope()
-  method public GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope get_ReusedGlobalScope()
   method public GSharp.Core.CodeAnalysis.Binding.BoundProgram get_BoundProgram()
   method public GSharp.Core.CodeAnalysis.Binding.SubmissionBindingOptions get_Submission()
+  method public GSharp.Core.CodeAnalysis.Compilation.Compilation AddSyntaxTrees(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree[] trees)
+  method public GSharp.Core.CodeAnalysis.Compilation.Compilation RemoveSyntaxTrees(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree[] trees)
+  method public GSharp.Core.CodeAnalysis.Compilation.Compilation ReplaceSyntaxTree(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree oldTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree newTree)
+  method public GSharp.Core.CodeAnalysis.Compilation.Compilation WithReplacedSyntaxTree(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree oldTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree newTree)
   method public GSharp.Core.CodeAnalysis.Compilation.CompilationWorkBudget get_WorkBudget()
   method public GSharp.Core.CodeAnalysis.Compilation.EmitResult Emit()
   method public GSharp.Core.CodeAnalysis.Compilation.EmitResult Emit(System.IO.Stream peStream)
@@ -352,40 +355,37 @@ type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
   method public GSharp.Core.CodeAnalysis.SemanticModel GetSemanticModel(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree)
   method public GSharp.Core.CodeAnalysis.Symbols.NullabilityMode get_Nullability()
   method public GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver get_References()
+  method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol GetTypeByMetadataName(String fullyQualifiedMetadataName, System.Threading.CancellationToken cancellationToken = null)
   method public String get_AssemblyName()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> ApplySourceSuppressions(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics)
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> get_SyntaxTrees()
   method public System.Collections.Immutable.ImmutableArray`1<System.ValueTuple`3<String, Byte[], Boolean>> get_EmbeddedResources()
-  method public System.Collections.Immutable.ImmutableHashSet`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> get_DirtyBodyTrees()
   method public System.Collections.Immutable.ImmutableHashSet`1<String> get_PreprocessorSymbols()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree[] syntaxTrees)
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree[] syntaxTrees)
   method public Void EmitTree(System.IO.TextWriter writer)
   method public Void set_AssemblyName(String value)
-  method public Void set_BodyCache(GSharp.Core.CodeAnalysis.Binding.BoundBodyCache value)
   method public Void set_DebugInformation(GSharp.Core.CodeAnalysis.Emit.DebugInformationOptions value)
-  method public Void set_DirtyBodyTrees(System.Collections.Immutable.ImmutableHashSet`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> value)
   method public Void set_EmbeddedResources(System.Collections.Immutable.ImmutableArray`1<System.ValueTuple`3<String, Byte[], Boolean>> value)
   method public Void set_ImplicitSystemImport(Boolean value)
+  method public Void set_IncrementalBodyReuse(Boolean value)
   method public Void set_IsLibrary(Boolean value)
   method public Void set_Logger(GSharp.Core.CodeAnalysis.Diagnostics.ILogger value)
   method public Void set_Nullability(GSharp.Core.CodeAnalysis.Symbols.NullabilityMode value)
   method public Void set_Optimize(Boolean value)
   method public Void set_PlatformNilChecks(Boolean value)
   method public Void set_PreprocessorSymbols(System.Collections.Immutable.ImmutableHashSet`1<String> value)
-  method public Void set_ReusedGlobalScope(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope value)
   method public Void set_Submission(GSharp.Core.CodeAnalysis.Binding.SubmissionBindingOptions value)
   method public Void set_WarnOnMissingDocumentation(Boolean value)
   method public Void set_WorkBudget(GSharp.Core.CodeAnalysis.Compilation.CompilationWorkBudget value)
   property public Boolean ImplicitSystemImport { get; set; }
+  property public Boolean IncrementalBodyReuse { get; set; }
   property public Boolean IsLibrary { get; set; }
   property public Boolean Optimize { get; set; }
   property public Boolean PlatformNilChecks { get; set; }
   property public Boolean WarnOnMissingDocumentation { get; set; }
   property public GSharp.Core.CodeAnalysis.Analyzers.DiagnosticSuppressionMap DiagnosticSuppressions { get; }
-  property public GSharp.Core.CodeAnalysis.Binding.BoundBodyCache BodyCache { get; set; }
   property public GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope GlobalScope { get; }
-  property public GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope ReusedGlobalScope { get; set; }
   property public GSharp.Core.CodeAnalysis.Binding.BoundProgram BoundProgram { get; }
   property public GSharp.Core.CodeAnalysis.Binding.SubmissionBindingOptions Submission { get; set; }
   property public GSharp.Core.CodeAnalysis.Compilation.CompilationWorkBudget WorkBudget { get; set; }
@@ -396,7 +396,6 @@ type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
   property public String AssemblyName { get; set; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> SyntaxTrees { get; }
   property public System.Collections.Immutable.ImmutableArray`1<System.ValueTuple`3<String, Byte[], Boolean>> EmbeddedResources { get; set; }
-  property public System.Collections.Immutable.ImmutableHashSet`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> DirtyBodyTrees { get; set; }
   property public System.Collections.Immutable.ImmutableHashSet`1<String> PreprocessorSymbols { get; set; }
 type class GSharp.Core.CodeAnalysis.Compilation.EmitResult : System.Object
   method public Boolean get_Success()
@@ -1464,9 +1463,6 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.Binder : System.Object
   method public static GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope BindGlobalScope(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope previous, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> syntaxTrees, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, Boolean implicitSystemImport, System.Collections.Immutable.ImmutableHashSet`1<String> preprocessorSymbols, Boolean isLibrary)
   method public static GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope BindGlobalScope(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope previous, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> syntaxTrees, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, Boolean implicitSystemImport, System.Collections.Immutable.ImmutableHashSet`1<String> preprocessorSymbols, Boolean isLibrary, GSharp.Core.CodeAnalysis.Binding.SubmissionBindingOptions submission)
   method public static GSharp.Core.CodeAnalysis.Binding.BoundProgram BindProgram(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope globalScope, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references = null)
-  method public static GSharp.Core.CodeAnalysis.Binding.BoundProgram BindProgram(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope globalScope, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, GSharp.Core.CodeAnalysis.Binding.BoundBodyCache cache)
-  method public static GSharp.Core.CodeAnalysis.Binding.BoundProgram BindProgram(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope globalScope, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, GSharp.Core.CodeAnalysis.Binding.BoundBodyCache cache, System.Collections.Immutable.ImmutableHashSet`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> dirtyTrees)
-  method public static GSharp.Core.CodeAnalysis.Binding.BoundProgram BindProgram(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope globalScope, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, GSharp.Core.CodeAnalysis.Binding.BoundBodyCache cache, System.Collections.Immutable.ImmutableHashSet`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> dirtyTrees, GSharp.Core.CodeAnalysis.Compilation.CompilationWorkBudget workBudget)
   method public static GSharp.Core.CodeAnalysis.Symbols.TypeSymbol TryInferExpressionType(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope globalScope, GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver references, GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol containingFunction, System.Collections.Generic.IEnumerable`1<GSharp.Core.CodeAnalysis.Symbols.VariableSymbol> additionalLocals, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax expression)
   property public GSharp.Core.CodeAnalysis.DiagnosticBag Diagnostics { get; }
 type sealed class GSharp.Core.CodeAnalysis.Binding.BoundAddressOfExpression : GSharp.Core.CodeAnalysis.Binding.BoundExpression
@@ -1693,19 +1689,6 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement : GSharp.
   method public virtual override GSharp.Core.CodeAnalysis.Binding.BoundNodeKind get_Kind()
   property public GSharp.Core.CodeAnalysis.Binding.BoundNodeKind Kind { get; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundStatement> Statements { get; }
-type sealed class GSharp.Core.CodeAnalysis.Binding.BoundBodyCache : System.Object
-  method public Boolean TryReuse(GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol member, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode bodySyntax, out GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement loweredBody, out System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics)
-  method public Int32 get_Count()
-  method public Int64 get_Hits()
-  method public Int64 get_Misses()
-  method public Int64 get_Stores()
-  method public Void .ctor()
-  method public Void Store(GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol member, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode bodySyntax, GSharp.Core.CodeAnalysis.Binding.BoundBlockStatement loweredBody, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics)
-  method public static Boolean TryCreateKey(GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol member, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode bodySyntax, out GSharp.Core.CodeAnalysis.Binding.BoundBodyCacheKey key)
-  property public Int32 Count { get; }
-  property public Int64 Hits { get; }
-  property public Int64 Misses { get; }
-  property public Int64 Stores { get; }
 type sealed class GSharp.Core.CodeAnalysis.Binding.BoundCallExpression : GSharp.Core.CodeAnalysis.Binding.BoundCallOperationExpression
   method public Boolean get_IsConditionalElided()
   method public GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol get_Function()
@@ -3977,19 +3960,6 @@ type sealed class GSharp.Core.CodeAnalysis.Execution.EmittedProgramResult : Syst
   property public Int32 ExitCode { get; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics { get; }
   property public System.Exception UnhandledException { get; }
-type sealed class GSharp.Core.CodeAnalysis.Execution.InteractiveSessionHost : System.Object, System.IDisposable
-  method public GSharp.Core.CodeAnalysis.Execution.SubmissionRunResult RunSubmission(Byte[] peImage, String assemblyName)
-  method public Object ReadStaticField(System.Reflection.Assembly assembly, String typeFullName, String fieldName)
-  method public Void .ctor(System.Collections.Generic.IReadOnlyList`1<String> referencePaths = null)
-  method public Void Reset()
-  method public sealed Void Dispose()
-type sealed class GSharp.Core.CodeAnalysis.Execution.SubmissionRunResult : System.Object
-  method public Object get_ReturnValue()
-  method public System.Exception get_UnhandledException()
-  method public System.Reflection.Assembly get_Assembly()
-  property public Object ReturnValue { get; }
-  property public System.Exception UnhandledException { get; }
-  property public System.Reflection.Assembly Assembly { get; }
 type sealed class GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderInfo : System.Object
   method public Boolean get_IsValid()
   method public GSharp.Core.CodeAnalysis.Lowering.Async.AsyncMethodBuilderKind get_Kind()
@@ -4247,12 +4217,15 @@ type sealed class GSharp.Core.CodeAnalysis.PEWriter.MetadataWriter : System.Obje
 type sealed class GSharp.Core.CodeAnalysis.PEWriter.PEWriter : System.Object
   method public Void .ctor()
 type sealed class GSharp.Core.CodeAnalysis.SemanticModel : System.Object
+  method public GSharp.Core.CodeAnalysis.Binding.BoundExpression GetReferencedExpression(GSharp.Core.CodeAnalysis.Syntax.SyntaxToken token, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.Binding.BoundNode GetBoundNode(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.Compilation.Compilation get_Compilation()
   method public GSharp.Core.CodeAnalysis.SymbolInfo GetSymbolInfo(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.Symbols.Symbol GetDeclaredSymbol(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree get_SyntaxTree()
+  method public GSharp.Core.CodeAnalysis.TypeInfo GetReceiverTypeInfo(GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax expression, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.TypeInfo GetTypeInfo(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)
+  method public static System.Collections.Immutable.ImmutableArray`1<System.ValueTuple`2<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol>> GetTypeClauseSymbols(GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax typeClause, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type)
   property public GSharp.Core.CodeAnalysis.Compilation.Compilation Compilation { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree SyntaxTree { get; }
 type sealed class GSharp.Core.CodeAnalysis.StructValue : System.Object
@@ -8082,8 +8055,6 @@ type static class GSharp.Core.CodeAnalysis.Binding.ExhaustivenessAnalyzer : Syst
   method public static Boolean AnalyzeSwitchStatement(GSharp.Core.CodeAnalysis.Text.TextLocation location, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol discriminantType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundPatternSwitchArm> arms, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.StructSymbol> structs, GSharp.Core.CodeAnalysis.DiagnosticBag diagnostics)
   method public static Boolean IsExhaustiveDiscriminant(GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type)
   method public static Void AnalyzeSwitchExpression(GSharp.Core.CodeAnalysis.Text.TextLocation location, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol discriminantType, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Binding.BoundSwitchExpressionArm> arms, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.StructSymbol> structs, GSharp.Core.CodeAnalysis.DiagnosticBag diagnostics)
-type static class GSharp.Core.CodeAnalysis.Binding.IncrementalGlobalScopeReuse : System.Object
-  method public static Boolean TryRepointBodyOnlyEdit(GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope scope, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree previousTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree updatedTree)
 type static class GSharp.Core.CodeAnalysis.Binding.IteratorDetection : System.Object
   method public static Boolean ContainsYield(GSharp.Core.CodeAnalysis.Binding.BoundStatement body)
   method public static Boolean ContainsYield(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode body)
@@ -8388,19 +8359,6 @@ type struct GSharp.Core.CodeAnalysis.Analyzers.SyntaxTreeAnalysisContext
   method public Void ReportDiagnostic(GSharp.Core.CodeAnalysis.Diagnostic diagnostic)
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree Tree { get; }
   property public System.Threading.CancellationToken CancellationToken { get; }
-type struct GSharp.Core.CodeAnalysis.Binding.BoundBodyCacheKey : System.IEquatable`1<GSharp.Core.CodeAnalysis.Binding.BoundBodyCacheKey>
-  method public String get_BodyHash()
-  method public String get_StableMemberId()
-  method public Void .ctor(String StableMemberId, String BodyHash)
-  method public Void Deconstruct(out String StableMemberId, out String BodyHash)
-  method public sealed Boolean Equals(GSharp.Core.CodeAnalysis.Binding.BoundBodyCacheKey other)
-  method public static Boolean op_Equality(GSharp.Core.CodeAnalysis.Binding.BoundBodyCacheKey left, GSharp.Core.CodeAnalysis.Binding.BoundBodyCacheKey right)
-  method public static Boolean op_Inequality(GSharp.Core.CodeAnalysis.Binding.BoundBodyCacheKey left, GSharp.Core.CodeAnalysis.Binding.BoundBodyCacheKey right)
-  method public virtual override Boolean Equals(Object obj)
-  method public virtual override Int32 GetHashCode()
-  method public virtual override String ToString()
-  property public String BodyHash { get; }
-  property public String StableMemberId { get; }
 type struct GSharp.Core.CodeAnalysis.Binding.BoundInterpolatedStringPart
   method public Boolean get_IsHole()
   method public Boolean get_IsLiteral()

@@ -1443,8 +1443,8 @@ open partial class Parser {
         typeArguments TypeArgumentListSyntax
     ) CallExpressionSyntax {
         let position = typeArguments.CloseBracketToken.Span.End
-        let openParen = SyntaxToken(syntaxTree, SyntaxKind.OpenParenthesisToken, position, "(", nil)
-        let closeParen = SyntaxToken(syntaxTree, SyntaxKind.CloseParenthesisToken, position, ")", nil)
+        let openParen = SyntaxToken.Synthesized(syntaxTree, SyntaxKind.OpenParenthesisToken, position, "(")
+        let closeParen = SyntaxToken.Synthesized(syntaxTree, SyntaxKind.CloseParenthesisToken, position, ")")
         let emptyArguments = SeparatedSyntaxList[ExpressionSyntax](ImmutableArray[SyntaxNode].Empty)
         return CallExpressionSyntax(syntaxTree, identifier, typeArguments, openParen, emptyArguments, closeParen)
     }

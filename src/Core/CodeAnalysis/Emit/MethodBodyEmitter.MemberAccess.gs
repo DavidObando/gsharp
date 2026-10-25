@@ -803,19 +803,10 @@ internal partial class MethodBodyEmitter {
         // (method-call results, indexer reads, tuple elements, etc.) are
         // spilled to a temp and addressed via `ldloca` rather than left as
         // a value on the stack (unverifiable / SIGSEGV).
-        let receiverIsClass = access.Receiver!!.Type is StructSymbol rs && rs.IsClass
-        // Issue #1068: an interface-typed receiver dispatches the property
-        // accessor virtually (`callvirt get_X`) against the abstract interface
-        // accessor MethodDef.
-        let receiverIsInterface = access.Receiver!!.Type is InterfaceSymbol
+        // Issue #4312: the opcode follows the same predicate that decides how the
+        // receiver was just loaded (see InstanceAccessorOpCode).
         this.EmitInstanceReceiver(access.Receiver!!)
-        this.il.OpCode(
-            if receiverIsClass || receiverIsInterface {
-                ILOpCode.Callvirt
-            } else {
-                ILOpCode.Call
-            }
-        )
+        this.il.OpCode(InstanceAccessorOpCode(access.Receiver!!))
         this.il.Token(getterHandle)
         this.EmitPropertyReadTail(access, addressOnly)
     }
@@ -914,22 +905,12 @@ internal partial class MethodBodyEmitter {
         // route through EmitInstanceReceiver so non-variable struct
         // receivers spill to a temp and pass `ldloca` as `this` instead
         // of leaving a value on the stack.
-        let receiverIsClass = assn.Receiver!!.Type is StructSymbol rs && rs.IsClass
-        // Issue #1068: an interface-typed receiver dispatches the property
-        // setter virtually (`callvirt set_X`) against the abstract interface
-        // accessor MethodDef.
-        let receiverIsInterface = assn.Receiver!!.Type is InterfaceSymbol
+        // Issue #4312: see InstanceAccessorOpCode.
         this.EmitInstanceReceiver(assn.Receiver!!)
         this.EmitExpression(assn.Value)
         this.il.OpCode(ILOpCode.Dup)
         this.il.StoreLocal(valueSlot)
-        this.il.OpCode(
-            if receiverIsClass || receiverIsInterface {
-                ILOpCode.Callvirt
-            } else {
-                ILOpCode.Call
-            }
-        )
+        this.il.OpCode(InstanceAccessorOpCode(assn.Receiver!!))
         this.il.Token(setterHandle)
         // Expression result: the value we just stored — no second receiver
         // evaluation, no getter call.
@@ -1452,6 +1433,26 @@ internal partial class MethodBodyEmitter {
         // Issue #671: receiver-aware MemberRef for symbolic constructed generics.
         this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(setter, targetType))
         this.il.LoadLocal(slot)
+    }
+
+    /// Issue #4312: the one decision that picks `call` or `callvirt` for an
+    /// instance accessor on a bound receiver.
+    /// @remarks It is the complement of the predicate EmitInstanceReceiver uses to
+    /// decide how the receiver is loaded: a value-type receiver was loaded as a
+    /// managed pointer and takes `call`; every other receiver is a reference at
+    /// run time and takes `callvirt`, so the CLR performs the null check on the
+    /// receiver and an `override` accessor dispatches on the run-time type. The
+    /// earlier tests (`is StructSymbol {IsClass: true}` or `is InterfaceSymbol`)
+    /// answered `call` for any reference receiver whose type symbol was wrapped.
+    /// A `base.` access never reaches this: it is lowered to a synthesized
+    /// forwarder, which emits its own non-virtual `call`.
+    /// @param receiver The bound receiver the accessor is invoked on.
+    /// @returns `call` for a value-type receiver, `callvirt` otherwise.
+    private func InstanceAccessorOpCode(receiver BoundExpression) ILOpCode {
+        if ReflectionMetadataEmitter.IsValueTypeSymbol(receiver.Type) {
+            return ILOpCode.Call
+        }
+        return ILOpCode.Callvirt
     }
 
     private func EmitInstanceReceiver(receiver BoundExpression, isReadOnlyCall bool = false) {

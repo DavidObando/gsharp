@@ -44,6 +44,16 @@ internal class ReferenceImageSet {
     // imported signatures only.
     private let constructions ConcurrentDictionary[(MetadataTypeSymbol, TypeArgsKey), ConstructedMetadataTypeSymbol] =
     ConcurrentDictionary[(MetadataTypeSymbol, TypeArgsKey), ConstructedMetadataTypeSymbol]()
+    // The key holds the raw header byte and the required count, so signatures that differ only there stay apart.
+    private let functionPointers ConcurrentDictionary[
+        (uint8, int32, TypeArgsKey),
+        MetadataFunctionPointerTypeSymbol
+    ] = ConcurrentDictionary[(uint8, int32, TypeArgsKey), MetadataFunctionPointerTypeSymbol]()
+    // Modified types: the type beneath, the modifier types in order, and which are required.
+    private let modifiedTypes ConcurrentDictionary[
+        (TypeSymbol, TypeArgsKey, string),
+        MetadataModifiedTypeSymbol
+    ] = ConcurrentDictionary[(TypeSymbol, TypeArgsKey, string), MetadataModifiedTypeSymbol]()
     private let arrays ConcurrentDictionary[TypeSymbol, MetadataArrayTypeSymbol] = ConcurrentDictionary[
         TypeSymbol,
         MetadataArrayTypeSymbol
@@ -132,31 +142,32 @@ internal class ReferenceImageSet {
     }
 
     /// Finds the type definition that a well-known name denotes.
-    /// The first searched module that supplies the name owns it, unless the type is not public.
-    /// Then the first public type of that name in a searched module wins, because a dependency can embed
-    /// an internal copy of a framework type (#3445, #4233). With no public copy, the first writer stands.
+    /// With `requireCoreLibrary`, the definition must live in a core library, the same rule as (cref:IsWellKnown):
+    /// a namesake in another assembly never becomes the entry, even when it comes first. The names that the runtime
+    /// binds specially need it (the tagged types and `System.TypedReference`). Other framework types, such as
+    /// `System.Collections.Generic.List`1`, live in several assemblies of a reference set, so the first writer owns them.
+    /// Among the allowed definitions, the first public one in reference order wins, because a dependency can embed
+    /// an internal copy of a framework type (#3445, #4233). With no public copy, the first allowed definition stands.
+    /// No allowed definition gives `null`, and the table then holds a missing type.
     /// @remarks The grant of `InternalsVisibleTo` to the consumer is not applied here.
     /// It belongs to the compilation, not to the set (ADR-0209 section 7c).
-    internal func TryResolveVisibleName(fullName string) ResolvedTypeReference? {
-        let first = TryResolveName(fullName)
-        if first == nil {
-            return nil
-        }
-        let firstModule = first.Module
-        if firstModule == nil || firstModule.IsExternallyVisible(first.Handle) {
-            return first
-        }
+    internal func TryResolveVisibleName(fullName string, requireCoreLibrary bool) ResolvedTypeReference? {
+        var firstAllowed ResolvedTypeReference? = nil
         for var i = 0; i < SearchedCount; i++ {
-            let candidate = ResolveInModule(Modules[i], first.FullName, HashSet[string](StringComparer.Ordinal))
+            let candidate = ResolveInModule(Modules[i], fullName, HashSet[string](StringComparer.Ordinal))
             if candidate == nil {
                 continue
             }
             let candidateModule = candidate.Module
-            if candidateModule != nil && candidateModule.IsExternallyVisible(candidate.Handle) {
+            if candidateModule == nil || requireCoreLibrary && !candidateModule.IsCoreLibrary {
+                continue
+            }
+            if candidateModule.IsExternallyVisible(candidate.Handle) {
                 return candidate
             }
+            firstAllowed ??= candidate
         }
-        return first
+        return firstAllowed
     }
 
     /// Finds a type that one named assembly defines, after the forwards of that assembly.
@@ -208,15 +219,18 @@ internal class ReferenceImageSet {
     }
 
     /// Tells whether a definition is the well-known type with this tag.
-    /// The definition must have the name of the table entry and live in a core library. A namesake in any other
-    /// assembly is not the special type, even when it comes first in the table.
+    /// A name that the runtime binds specially needs a core library: a namesake in another assembly is not the special
+    /// type, even when it comes first in the table. Any other name is the table entry itself.
     internal func IsWellKnown(module MetadataModule, handle TypeDefinitionHandle, special SpecialType) bool {
         let known = WellKnown.Get(special)
-        return module.IsCoreLibrary && string.Equals(
-            module.GetFullName(handle),
-            known.FullName,
-            StringComparison.Ordinal
-        )
+        if WellKnownTypes.RequiresCoreLibrary(special) {
+            return module.IsCoreLibrary && string.Equals(
+                module.GetFullName(handle),
+                known.FullName,
+                StringComparison.Ordinal
+            )
+        }
+        return known.Module != nil && object.ReferenceEquals(known.Module, module) && known.Handle == handle
     }
 
     /// Tells whether an answer is the well-known type with this tag.
@@ -235,6 +249,51 @@ internal class ReferenceImageSet {
         (definition, TypeArgsKey(typeArguments)),
         (key(MetadataTypeSymbol, TypeArgsKey)) -> ConstructedMetadataTypeSymbol(definition, typeArguments)
     )
+
+    /// Gets the interned function pointer type of a full header, a required count, a return type and parameter types.
+    internal func GetFunctionPointer(
+        header SignatureHeader,
+        requiredParameterCount int32,
+        returnType TypeSymbol,
+        parameterTypes ImmutableArray[TypeSymbol]
+    ) MetadataFunctionPointerTypeSymbol {
+        // The return type is the first part of the key, so one list of objects holds the whole signature.
+        let parts = ImmutableArray.CreateBuilder[TypeSymbol](parameterTypes.Length + 1)
+        parts.Add(returnType)
+        parts.AddRange(parameterTypes)
+        return functionPointers.GetOrAdd(
+            (header.RawValue, requiredParameterCount, TypeArgsKey(parts.ToImmutable())),
+            (key(uint8, int32, TypeArgsKey)) -> MetadataFunctionPointerTypeSymbol(
+                header,
+                requiredParameterCount,
+                returnType,
+                parameterTypes
+            )
+        )
+    }
+
+    /// Gets the interned modified type for a type and its modifiers in blob order.
+    internal func GetModified(
+        unmodified TypeSymbol,
+        modifiers ImmutableArray[MetadataCustomModifier]
+    ) MetadataModifiedTypeSymbol {
+        let types = ImmutableArray.CreateBuilder[TypeSymbol](modifiers.Length)
+        let required = System.Text.StringBuilder()
+        for modifier in modifiers {
+            types.Add(modifier.Type)
+            required.Append(
+                if modifier.IsRequired {
+                    'r'
+                } else {
+                    'o'
+                }
+            )
+        }
+        return modifiedTypes.GetOrAdd(
+            (unmodified, TypeArgsKey(types.ToImmutable()), required.ToString()),
+            (key(TypeSymbol, TypeArgsKey, string)) -> MetadataModifiedTypeSymbol(unmodified, modifiers)
+        )
+    }
 
     /// Gets the interned single-dimensional array of an element type.
     internal func GetArray(elementType TypeSymbol) MetadataArrayTypeSymbol -> arrays.GetOrAdd(

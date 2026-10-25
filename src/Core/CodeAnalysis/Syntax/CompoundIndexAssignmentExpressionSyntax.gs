@@ -12,6 +12,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 /// plain `=` case. The binder evaluates the indexed receiver exactly once
 /// (via a synthesized temp local) and lowers the node to the equivalent
 /// `target[index] = target[index] op value`.
+@SyntaxChildSourceOrder
 partial class CompoundIndexAssignmentExpressionSyntax : ExpressionSyntax {
     /// Initializes a new instance of the
     /// (cref:CompoundIndexAssignmentExpressionSyntax) class.

@@ -62,6 +62,7 @@ class BoundScope {
     // lambdas — unify against one shape cache, mirroring Roslyn's
     // per-compilation anonymous-type cache.
     private var anonymousTypeCache AnonymousTypeCache?
+    private var bindingServices BindingServices?
 
     // Issue #3501 A2: synthesized ref-kind delegate cache, held at the root
     // of the chain, exactly like anonymousTypeCache above.
@@ -1538,6 +1539,23 @@ class BoundScope {
         return matched
     }
 
+    /// Gets the services of this binding pass (issue #5140), walking to the root of this
+    /// scope's chain so every binder over the chain shares one instance. An independent-body
+    /// worker scope is its own root: it owns worker-local services and never reaches the
+    /// coordinator's (ADR-0203 section 4).
+    /// @returns The (cref:BindingServices) for this scope's chain.
+    internal func GetBindingServices() BindingServices -> if Parent != nil && !independentBodyRoot {
+        Parent!!.GetBindingServices()
+    } else {
+        (
+            if bindingServices == nil {
+                (bindingServices = BindingServices())
+            } else {
+                bindingServices
+            }
+        )!!
+    }
+
     /// Gets the per-compile-pass anonymous-class-literal type cache (issue
     /// #2224), walking to the root of this scope's chain so every scope in
     /// one bind pass shares the same cache instance.
@@ -1552,6 +1570,18 @@ class BoundScope {
                 anonymousTypeCache
             }
         )!!
+    }
+
+    /// Issue #5281: makes this scope's chain share an anonymous-type cache
+    /// created by an earlier pass, so shapes and the `<>AnonymousTypeN` counter
+    /// continue across the declaration and body passes.
+    /// @param cache The cache to share.
+    internal func InstallAnonymousTypeCache(cache AnonymousTypeCache) {
+        if SynthesisParent != nil {
+            Parent!!.InstallAnonymousTypeCache(cache)
+            return
+        }
+        anonymousTypeCache = cache
     }
 
     /// Issue #3501 A2: gets the per-compile-pass synthesized ref-kind

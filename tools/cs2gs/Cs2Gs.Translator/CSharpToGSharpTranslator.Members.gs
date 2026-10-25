@@ -2471,7 +2471,7 @@ partial class CSharpToGSharpTranslator {
             // Issue #1354 / #1072: a non-nullable reference property that is
             // null-checked or null-assigned anywhere in the declaring type is
             // really nullable; render it `T?` so the `== nil`/`is null` guard
-            // type-checks (gsc rejects `== nil` on a non-null operand, GS0129).
+            // reads honestly (the guard itself is legal on any reference type).
             if symbol != nil {
                 type = this.PromoteIfUsedAsNullable(type, symbol)
                 if node.Initializer != nil {

@@ -213,7 +213,7 @@ internal class WellKnownReferences {
         )
         this.notImplementedExceptionCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             nieTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -240,7 +240,7 @@ internal class WellKnownReferences {
         )
         this.delegateCombineRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             delegateTypeRef,
             this.emitCtx.Metadata.GetOrAddString("Combine"),
@@ -267,7 +267,7 @@ internal class WellKnownReferences {
         )
         this.delegateRemoveRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             delegateTypeRef,
             this.emitCtx.Metadata.GetOrAddString("Remove"),
@@ -297,7 +297,7 @@ internal class WellKnownReferences {
         )
         this.interlockedCompareExchangeOpenRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             interlockedTypeRef,
             this.emitCtx.Metadata.GetOrAddString("CompareExchange"),
@@ -392,7 +392,7 @@ internal class WellKnownReferences {
         )
         this.isReadOnlyAttributeCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -429,7 +429,7 @@ internal class WellKnownReferences {
         )
         this.paramArrayAttributeCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -463,7 +463,7 @@ internal class WellKnownReferences {
         )
         this.isByRefLikeAttributeCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -510,7 +510,7 @@ internal class WellKnownReferences {
         )
         this.suspendingAttributeCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -547,7 +547,7 @@ internal class WellKnownReferences {
         )
         this.extensionAttributeCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -595,7 +595,7 @@ internal class WellKnownReferences {
         )
         this.asyncStateMachineAttributeCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -634,7 +634,7 @@ internal class WellKnownReferences {
         )
         this.debuggerStepThroughAttributeCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -673,7 +673,7 @@ internal class WellKnownReferences {
         )
         this.compilerGeneratedAttributeCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -712,7 +712,7 @@ internal class WellKnownReferences {
         )
         this.preserveBaseOverridesAttributeCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -751,7 +751,7 @@ internal class WellKnownReferences {
         )
         this.unsafeValueTypeAttributeCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -793,7 +793,7 @@ internal class WellKnownReferences {
         )
         this.fixedBufferAttributeCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -836,7 +836,7 @@ internal class WellKnownReferences {
         )
         this.nullableAttributeByteCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -876,7 +876,7 @@ internal class WellKnownReferences {
         )
         this.nullableAttributeByteArrayCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -917,7 +917,7 @@ internal class WellKnownReferences {
         )
         this.paramCollectionAttributeCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -956,7 +956,7 @@ internal class WellKnownReferences {
         )
         this.tupleElementNamesAttributeCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1000,7 +1000,7 @@ internal class WellKnownReferences {
         )
         this.nullableContextAttributeByteCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             attrTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1033,7 +1033,7 @@ internal class WellKnownReferences {
         )
         this.obsoleteAttributeStringBoolCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             obsoleteTypeRef,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1068,7 +1068,7 @@ internal class WellKnownReferences {
             )
             this.systemAttributeCtorRef = this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 attrTypeRef,
                 this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1101,7 +1101,7 @@ internal class WellKnownReferences {
         )
         this.nullRefExceptionCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: nreTypeRef,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1142,7 +1142,7 @@ internal class WellKnownReferences {
         )
         this.nullRefExceptionMessageCtorRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: nreTypeRef,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1386,7 +1386,7 @@ internal class WellKnownReferences {
         )
         this.stringConcatRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: stringTypeRef,
             name: this.emitCtx.Metadata.GetOrAddString("Concat"),
@@ -1411,7 +1411,7 @@ internal class WellKnownReferences {
         )
         this.stringEqualsRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: stringTypeRef,
             name: this.emitCtx.Metadata.GetOrAddString("Equals"),
@@ -1432,7 +1432,7 @@ internal class WellKnownReferences {
         )
         this.objectInstanceToStringRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: this.ObjectTypeRef,
             name: this.emitCtx.Metadata.GetOrAddString("ToString"),
@@ -1453,7 +1453,7 @@ internal class WellKnownReferences {
         )
         this.objectInstanceGetHashCodeRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: this.ObjectTypeRef,
             name: this.emitCtx.Metadata.GetOrAddString("GetHashCode"),
@@ -1486,7 +1486,7 @@ internal class WellKnownReferences {
         )
         this.objectStaticEqualsRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: this.ObjectTypeRef,
             name: this.emitCtx.Metadata.GetOrAddString("Equals"),
@@ -1539,7 +1539,7 @@ internal class WellKnownReferences {
         )
         let openRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             hashCodeRef,
             this.emitCtx.Metadata.GetOrAddString("Combine"),
@@ -1566,7 +1566,7 @@ internal class WellKnownReferences {
         )
         this.hashCodeAddOpenRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             hashCodeRef,
             this.emitCtx.Metadata.GetOrAddString("Add"),
@@ -1591,7 +1591,7 @@ internal class WellKnownReferences {
         )
         this.hashCodeToHashCodeRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             hashCodeRef,
             this.emitCtx.Metadata.GetOrAddString("ToHashCode"),
@@ -1622,7 +1622,7 @@ internal class WellKnownReferences {
             )
             this.stringBuilderCtorRef = this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 this.GetStringBuilderTypeReference(),
                 this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1662,7 +1662,7 @@ internal class WellKnownReferences {
             )
             this.stringBuilderToStringRef = this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 this.GetStringBuilderTypeReference(),
                 this.emitCtx.Metadata.GetOrAddString("ToString"),
@@ -1690,7 +1690,7 @@ internal class WellKnownReferences {
         )
         this.objectFinalizeRef = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: this.ObjectTypeRef,
             name: this.emitCtx.Metadata.GetOrAddString("Finalize"),
@@ -1775,7 +1775,7 @@ internal class WellKnownReferences {
         )
         return this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: this.ObjectTypeRef,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1793,7 +1793,7 @@ internal class WellKnownReferences {
         )
         return this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             builderRef,
             this.emitCtx.Metadata.GetOrAddString("Append"),

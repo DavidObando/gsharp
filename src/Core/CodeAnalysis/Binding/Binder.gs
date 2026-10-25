@@ -4508,7 +4508,7 @@ partial class Binder {
                 // Issue #367: a by-ref-like (`ref struct`) type cannot be used as
                 // a generic type argument (e.g. `List[Span[int32]]`); the CLR
                 // forbids constructing a generic type over a by-ref-like type.
-                if TypeSymbol.IsByRefLike(ta) {
+                if TypeSymbol.IsByRefLike(ta) && !ClrTypeUtilities.GenericParameterAllowsByRefLike(clrOpenType, i) {
                     let taLocation = topLevelTypeArguments[i].Identifier?.Location ?? identifierToken.Location
                     Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
                     return nil
@@ -5504,7 +5504,7 @@ partial class Binder {
             }
             symbolicArgs.Add(ta)
             // Issue #367: by-ref-like types cannot serve as generic arguments.
-            if TypeSymbol.IsByRefLike(ta) {
+            if TypeSymbol.IsByRefLike(ta) && !ClrTypeUtilities.GenericParameterAllowsByRefLike(clrType, i) {
                 let taLocation = typeArguments[i].Identifier?.Location ?? identifierToken.Location
                 Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
                 return nil
@@ -5744,7 +5744,7 @@ partial class Binder {
                 return nil
             }
             symbolicArgs.Add(ta)
-            if TypeSymbol.IsByRefLike(ta) {
+            if TypeSymbol.IsByRefLike(ta) && !ClrTypeUtilities.GenericParameterAllowsByRefLike(nestedDef, i) {
                 let taLocation = argSyntaxes[i].Identifier?.Location ?? identifierToken.Location
                 Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
                 return nil
@@ -7605,6 +7605,7 @@ partial class Binder {
             // scope chain — a type clause bound in this pass and a literal bound
             // in a method body must unify to the SAME synthesized delegate.
             result.RefDelegateCache = binder.$scope.GetSynthesizedRefDelegateCache()
+            result.AnonymousTypeCache = binder.$scope.GetAnonymousTypeCache()
             // Issue #1929/#1953: collect producer-declared friend assemblies
             // (`@assembly:InternalsVisibleTo("...")`) so the emitter can write
             // real InternalsVisibleToAttribute rows. Diagnostics for malformed
@@ -7652,7 +7653,8 @@ partial class Binder {
                     RichAnonymousObjectPlans = result.RichAnonymousObjectPlans,
                     LatestRichAnonymousObjectPlans = result.LatestRichAnonymousObjectPlans,
                     StructuralAdapters = result.StructuralAdapters,
-                    RefDelegateCache = result.RefDelegateCache
+                    RefDelegateCache = result.RefDelegateCache,
+                    AnonymousTypeCache = result.AnonymousTypeCache
                 }
             }
             // ADR-0156 Phase 2: carry the submission import set on the scope so
@@ -7844,7 +7846,7 @@ partial class Binder {
         /// behaves exactly like the full-rebuild path. The cache never changes the
         /// emitted IL or the diagnostics relative to a from-scratch bind.
         /// @returns A bound program.
-        func BindProgram(
+        internal func BindProgram(
             globalScope BoundGlobalScope,
             references ReferenceResolver?,
             cache BoundBodyCache?
@@ -7868,7 +7870,7 @@ partial class Binder {
         /// (or empty) means "no dirty trees" — every member may be served from the
         /// cache when the soundness gate allows it.
         /// @returns A bound program.
-        func BindProgram(
+        internal func BindProgram(
             globalScope BoundGlobalScope,
             references ReferenceResolver?,
             cache BoundBodyCache?,
@@ -7876,7 +7878,7 @@ partial class Binder {
         ) BoundProgram -> BindProgram(globalScope, references, cache, dirtyTrees, workBudget: nil)
 
         /// Binds bodies using one request-owned worker budget after declarations have completed.
-        func BindProgram(
+        internal func BindProgram(
             globalScope BoundGlobalScope,
             references ReferenceResolver?,
             cache BoundBodyCache?,
@@ -7900,6 +7902,11 @@ partial class Binder {
             // method body resolve to ONE synthesized delegate symbol.
             if globalScope?.RefDelegateCache != nil {
                 parentScope.InstallSynthesizedRefDelegateCache(globalScope.RefDelegateCache!!)
+            }
+            // Issue #5281: continue the declaration pass's anonymous-type cache so a shape
+            // used at top level and in a body is ONE type and no two types share a name.
+            if globalScope?.AnonymousTypeCache != nil {
+                parentScope.InstallAnonymousTypeCache(globalScope.AnonymousTypeCache!!.CreateBodyPassCopy())
             }
             // ADR-0146 / issue #2243: rehydrate the rich anonymous-object literal →
             // synthesized-class map onto this pass's scope chain so a literal
@@ -8503,10 +8510,21 @@ partial class Binder {
             // synthesizer) drives entirely off BoundProgram.Structs, so no
             // further emitter changes are needed to give each synthesized shape
             // a real CLR type.
+            // Issue #5281: the body pass continues the declaration pass's cache, so its symbols
+            // already include globalScope.AnonymousTypes; add each type exactly once, in creation order.
+            let anonymousTypes = List[StructSymbol](globalScope.AnonymousTypes)
+            let seenAnonymous = HashSet[StructSymbol](ReferenceEqualityComparer.Instance)
+            for anonymous in globalScope.AnonymousTypes {
+                seenAnonymous.Add(anonymous)
+            }
+            for anonymous in parentScope.GetAnonymousTypeCache().Symbols {
+                if seenAnonymous.Add(anonymous) {
+                    anonymousTypes.Add(anonymous)
+                }
+            }
             let allStructs = globalScope
                 .Structs
-                .AddRange(globalScope.AnonymousTypes)
-                .AddRange(parentScope.GetAnonymousTypeCache().Symbols)
+                .AddRange(anonymousTypes)
                 .AddRange(parentScope.GetStructuralAdapterRegistry().Types)
             // ADR-0169: guarantee a syntax anchor on every dispatchable bound node
             // the program exposes. Construction sites and the bind dispatchers

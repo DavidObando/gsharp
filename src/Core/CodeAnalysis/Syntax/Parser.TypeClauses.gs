@@ -451,22 +451,22 @@ open partial class Parser {
     /// (`name []T`, `name [3]T`, `name [,]T`) from a generic type-argument
     /// list on the identifier itself (`List[int32]`). The `unmanaged`
     /// function-pointer head keeps its ADR-0095 meaning.
-    private func LooksLikeTupleElementName() bool {
-        if IsReadOnlySliceHead() || IsReadOnlySpanHead() || IsReadOnlyManagedHead() {
+    private func LooksLikeTupleElementName(offset int32 = 0) bool {
+        if IsReadOnlySliceHead(offset) || IsReadOnlySpanHead(offset) || IsReadOnlyManagedHead(offset) {
             return false
         }
         // `unmanaged[CC] (…) -> R` / `unmanaged (…) -> R` is a raw
         // function-pointer TYPE head, never an element name.
-        if IsFunctionPointerTypeHead() {
+        if IsFunctionPointerTypeHead(offset) {
             return false
         }
         // ADR-0174 D2: `in chan[T]` / `out chan[T]` is a directional channel
         // TYPE head, never an element named `in`/`out` (those are reserved
         // identifiers in parameter position anyway).
-        if IsChannelDirectionHead() {
+        if IsChannelDirectionHead(offset) {
             return false
         }
-        switch Peek(1).Kind {
+        switch Peek(offset + 1).Kind {
             case SyntaxKind.IdentifierToken,
             SyntaxKind.FuncKeyword,
             SyntaxKind.MapKeyword,
@@ -482,7 +482,7 @@ open partial class Parser {
                 // `Ident[TypeArgs]` — an array shape opens with `]`, a
                 // number, or a rank comma; a type-argument list never does.
                 return (
-                    Peek(2).Kind is SyntaxKind.CloseSquareBracketToken or
+                    Peek(offset + 2).Kind is SyntaxKind.CloseSquareBracketToken or
                         SyntaxKind.NumberToken or
                         SyntaxKind.CommaToken
                 )
@@ -556,9 +556,9 @@ open partial class Parser {
         ).Kind == SyntaxKind.OpenParenthesisToken
     )
 
-    private func IsChannelDirectionHead() bool -> Current.Kind == SyntaxKind.IdentifierToken &&
-        (Current.Text == "in" || Current.Text == "out") &&
-        Peek(1).Kind == SyntaxKind.ChanKeyword
+    private func IsChannelDirectionHead(offset int32 = 0) bool -> Peek(offset).Kind == SyntaxKind.IdentifierToken &&
+        (Peek(offset).Text == "in" || Peek(offset).Text == "out") &&
+        Peek(offset + 1).Kind == SyntaxKind.ChanKeyword
 
     private func ParseChanTypeClause(directionToken SyntaxToken?, legacyMakeOperand bool) TypeClauseSyntax {
         // ADR-0174 D2: canonical channel type clause `chan[T]` with the
@@ -1024,12 +1024,28 @@ open partial class Parser {
         var bracketDepth = 0
         var braceDepth = 0
         var offset = startOffset + 1
+        var atElementStart = true
+        var sawNamedElement = false
         const maxScan = 4096
         while offset < maxScan {
             let k = Peek(offset).Kind
             if k == SyntaxKind.EndOfFileToken {
                 return false
             }
+            // Issue #5191 / ADR-0172: an arrow function type lists bare
+            // parameter types, so an element written `name Type` can only be
+            // a named tuple element. The `ref`/`out`/`in` parameter modifiers
+            // also lead with an identifier and stay function-type slots.
+            if atElementStart &&
+                parenDepth == 1 &&
+                bracketDepth == 0 &&
+                braceDepth == 0 &&
+                k == SyntaxKind.IdentifierToken &&
+                LooksLikeTupleElementName(offset) &&
+                !((Peek(offset).Text is "ref" or "out" or "in") && CanStartTypeClause(Peek(offset + 1))) {
+                sawNamedElement = true
+            }
+            atElementStart = false
             if k == SyntaxKind.OpenParenthesisToken {
                 parenDepth++
             } else if k == SyntaxKind.CloseParenthesisToken {
@@ -1055,10 +1071,11 @@ open partial class Parser {
                 }
             } else if k == SyntaxKind.CommaToken && parenDepth == 1 && bracketDepth == 0 && braceDepth == 0 {
                 hasTopLevelComma = true
+                atElementStart = true
             }
             offset++
         }
-        if parenDepth != 0 {
+        if parenDepth != 0 || sawNamedElement {
             return false
         }
         // Peek(offset) is the closing `)`. Commit to the arrow-form function

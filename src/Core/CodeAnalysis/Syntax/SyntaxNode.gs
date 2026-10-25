@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Concurrent
@@ -26,6 +27,12 @@ abstract class SyntaxNode {
     /// Children array for a node whose child properties cannot be indexed in place. `null` means
     /// "not built yet". Published as one reference store, like (cref:cachedSpan).
     private var childrenBox ChildrenBox?
+
+    /// Whether the property-order children of an in-place source-ordered node start in source
+    /// order: 0 not decided yet, 1 yes (the node reads them in place), 2 no (it reads the sorted
+    /// array). Decided once by (cref:InPlaceOrdered). The value is a pure function of the
+    /// children, so a race between two threads stores the same value (issue #5279).
+    private var childOrder int32
 
     /// Initializes a new instance of the (cref:SyntaxNode) class.
     /// @param syntaxTree The parent syntax tree.
@@ -55,9 +62,7 @@ abstract class SyntaxNode {
             if cachedSpan != nil {
                 return cachedSpan!!.Value
             }
-            let computed = ComputeSpan()
-            cachedSpan = SpanBox(computed)
-            return computed
+            return ComputeSpan(0)
         }
     }
 
@@ -146,7 +151,70 @@ abstract class SyntaxNode {
     /// properties by reflection on the runtime type. A generated class overrides it when a
     /// property cannot be indexed in place, and guards the override by the exact runtime type.
     /// @returns The children in the order of (cref:GetChildren).
-    internal open func BuildChildren() ImmutableArray[SyntaxNode] -> BuildChildrenByReflection()
+    internal open func BuildChildren() ImmutableArray[SyntaxNode] {
+        let unsorted = BuildUnsortedChildren()
+        return if (SpanPlan & PlanSourceOrdered) != 0 {
+            SortBySourcePosition(unsorted)
+        } else {
+            unsorted
+        }
+    }
+
+    /// Builds the children of this node in property order, before the sort of a class with
+    /// `@SyntaxChildSourceOrder`. A span reads this array, so it never needs the sorted children
+    /// (issue #5185). The base implementation reads the properties by reflection.
+    /// @returns The children in property order.
+    internal open func BuildUnsortedChildren() ImmutableArray[SyntaxNode] -> BuildUnsortedChildrenByReflection()
+
+    /// Describes how a span and the child order of this node are computed, as the bits
+    /// `PlanBaseSpan`, `PlanSourceOrdered` and `PlanInPlace`. A generated class returns a constant,
+    /// so a span computation does not look up the type of each node (issue #5279). A class that the
+    /// generator did not see, and a subclass of a generated open class, reads the plan by reflection.
+    internal open prop SpanPlan int32 -> ReflectedSpanPlan(GetType())
+
+    /// Gets the number of children in property order. Only a node whose plan has `PlanInPlace`
+    /// reads its properties in place; a span reads these accessors, never the sorted children
+    /// (issue #5185).
+    internal open prop PropertyChildCount int32 -> CachedChildren().Length
+
+    /// Gets one child in property order. See (cref:PropertyChildCount).
+    /// @param index The index of the child.
+    /// @returns The child.
+    internal open func PropertyChild(index int32) SyntaxNode -> ChildAt(CachedChildren(), index)
+
+    /// Tests, without allocating, whether the children of an in-place source-ordered node start in
+    /// property order, using the rule of (cref:SortBySourcePosition). The base implementation says no.
+    /// @returns `true` when the property order is the source order.
+    internal open func PropertyOrderIsSourceOrder() bool -> false
+
+    /// Returns whether this node reads its children in place: its plan is in place and the property
+    /// order is the source order. The answer is computed once per node. A node with an inversion
+    /// builds the sorted array instead (cref:CachedChildren).
+    /// @returns `true` when (cref:ChildCount) and (cref:GetChild) read the properties.
+    internal func InPlaceOrdered() bool {
+        let state = childOrder
+        if state != 0 {
+            return state == 1
+        }
+        let ordered = PropertyOrderIsSourceOrder()
+        childOrder = if ordered {
+            1
+        } else {
+            2
+        }
+        if !ordered {
+            // Only the rare inversion is counted: a count for every node would cost more than the check.
+            CompilationMeasurements.Count("syntax.child-order-inversions")
+        }
+        return ordered
+    }
+
+    /// Builds the children in property order by reflection over the public properties.
+    /// @returns The children in property order.
+    internal func BuildUnsortedChildrenByReflection() ImmutableArray[SyntaxNode] {
+        CompilationMeasurements.Count("syntax.child-reflection-fallbacks")
+        return EnumerateChildrenByProperty().ToImmutableArray()
+    }
 
     /// Returns the children array of this node, built once per node. The parser clears it through
     /// (cref:InvalidateCachedSpan) when it assigns a child-bearing property after construction.
@@ -178,10 +246,23 @@ abstract class SyntaxNode {
         }
     }
 
-    /// Enumerates the children by reflection over the public properties. This is the order and the
-    /// content that the generated (cref:GetChild) must reproduce, so tests use it as the oracle.
+    /// Enumerates the children by reflection over the public properties. A class marked with
+    /// `@SyntaxChildSourceOrder` gets its children sorted by source position. This is the order
+    /// and the content that the generated (cref:GetChild) must reproduce, so tests use it as the oracle.
     /// @returns The children of this syntax node.
     internal func GetChildrenByReflection() sequence[SyntaxNode] {
+        if IsSourceOrdered(GetType()) {
+            for child in SortBySourcePosition(EnumerateChildrenByProperty().ToImmutableArray()) {
+                yield child
+            }
+        } else {
+            for child in EnumerateChildrenByProperty() {
+                yield child
+            }
+        }
+    }
+
+    private func EnumerateChildrenByProperty() sequence[SyntaxNode] {
         let accessors = ChildAccessorsByType.GetOrAdd(GetType(), (type Type) -> BuildChildAccessors(type))
         for accessor in accessors {
             // Kind comes from the property's static type, so a failed `as`
@@ -220,21 +301,32 @@ abstract class SyntaxNode {
     /// Gets the last token in this syntax node.
     /// @returns A (cref:SyntaxToken).
     func GetLastToken() SyntaxToken {
-        if this is SyntaxToken token {
-            return token
-        }
+        // A loop, not a recursion: a long chain of operators must not overflow the call stack.
         // A syntax node should always contain at least 1 token.
-        return GetChild(ChildCount - 1).GetLastToken()
+        var node = this
+        while !(node is SyntaxToken) {
+            node = node.GetLastChild()
+        }
+        return cast[SyntaxToken](node)
     }
+
+    /// Gets the child that holds the last token of this node. This is the last child in the list.
+    /// A node whose last child lies inside an earlier child overrides it (cref:UnaryExpressionSyntax).
+    /// The rule is not general: a synthesized token has an inflated span, so containment of spans
+    /// does not show which child is last (issue #5185).
+    /// @returns The child to descend into.
+    internal open func GetLastChild() SyntaxNode -> GetChild(ChildCount - 1)
 
     /// Gets the first token in this syntax node.
     /// @returns A (cref:SyntaxToken).
     func GetFirstToken() SyntaxToken {
-        if this is SyntaxToken token {
-            return token
-        }
+        // A loop, not a recursion: a long chain of operators must not overflow the call stack.
         // A syntax node should always contain at least 1 token.
-        return GetChild(0).GetFirstToken()
+        var node = this
+        while !(node is SyntaxToken) {
+            node = node.GetChild(0)
+        }
+        return cast[SyntaxToken](node)
     }
 
     /// ```xmldoc
@@ -262,33 +354,138 @@ abstract class SyntaxNode {
     internal func InvalidateCachedSpan() {
         cachedSpan = nil
         childrenBox = nil
+        childOrder = 0
     }
 
-    private func ComputeSpan() TextSpan {
-        // Take the minimum start and the maximum end over all children. The children are not in
-        // source order for every node: a postfix `x!!` lists its operator before its operand, a
-        // struct keeps fields and methods in separate lists, and the parser sets some properties
-        // (for example StructDeclarationSyntax.SharedBlock) after construction. The first and last
-        // child would give a truncated span and break position-based walks such as the language
-        // server's interpolated-string hole detection (issue #5136).
+    /// Computes and caches the span of this node. The span is the minimum start and the maximum end
+    /// over all children. Children can overlap even in source order: an interpolated string token
+    /// contains its holes, and the parser synthesizes tokens at the position of a real one (issue
+    /// #5185). The first and last child would give a truncated span and break position-based walks
+    /// such as the language server's interpolated-string hole detection (issue #5136).
+    /// The walk reads the children in property order, so it does not need the sorted children,
+    /// which need the spans of the children (issue #5185). A node whose class overrides (cref:Span)
+    /// is asked for its span and never derived from its children.
+    /// @param depth The number of nested calls so far.
+    /// @returns The span.
+    private func ComputeSpan(depth int32) TextSpan {
+        if depth >= MaxSpanDepth {
+            // A very deep tree (for example many postfix `!!`) must not overflow the call stack.
+            // Fill the caches from the bottom with an explicit stack, then read this node.
+            CacheDeepSpansWithoutRecursion()
+            return cachedSpan!!.Value
+        }
+        let box = childrenBox
+        let plan = SpanPlan
+        // A node that reads its properties in place needs no array. A source-ordered node that
+        // cannot (a computed property) builds its children in property order, which is not
+        // sorted, so the span never needs the sort (issues #5185, #5279).
+        let inPlace = box == nil && (plan & PlanInPlace) != 0
+        let unsorted = if box == nil && !inPlace && (plan & PlanSourceOrdered) != 0 {
+            BuildUnsortedChildren()
+        } else {
+            default(ImmutableArray[SyntaxNode])
+        }
+        let items = if box != nil {
+            box.Items
+        } else {
+            unsorted
+        }
+        let count = if inPlace {
+            PropertyChildCount
+        } else if items.IsDefault {
+            ChildCount
+        } else {
+            items.Length
+        }
         var hasChild = false
         var start = int32.MaxValue
         var end = int32.MinValue
-        let count = ChildCount
         for var i = 0; i < count; i++ {
-            var childSpan = GetChild(i).Span
-            if childSpan.Start < start {
-                start = childSpan.Start
+            let child = if inPlace {
+                PropertyChild(i)
+            } else if items.IsDefault {
+                GetChild(i)
+            } else {
+                items[i]
             }
-            if childSpan.End > end {
-                end = childSpan.End
-            }
+            let childSpan = child.SpanForParent(depth + 1)
+            start = Math.Min(start, childSpan.Start)
+            end = Math.Max(end, childSpan.End)
             hasChild = true
         }
-        return if hasChild {
+        let computed = if hasChild {
             TextSpan.FromBounds(start, end)
         } else {
             TextSpan(0, 0)
+        }
+        cachedSpan = SpanBox(computed)
+        if !unsorted.IsDefault && childrenBox == nil {
+            // The spans of all children are known now, so the sort does not recurse. Publishing
+            // the sorted children saves building them again on the first child lookup.
+            CompilationMeasurements.Count("syntax.child-projections")
+            childrenBox = ChildrenBox(SortBySourcePosition(unsorted))
+        }
+        return computed
+    }
+
+    private func SpanForParent(depth int32) TextSpan {
+        if this is SyntaxToken || cachedSpan != nil || (SpanPlan & PlanBaseSpan) == 0 {
+            return Span
+        }
+        return ComputeSpan(depth)
+    }
+
+    private func CacheDeepSpansWithoutRecursion() {
+        // A post-order walk with an explicit stack. A node that two paths reach (a graph that a
+        // caller built by hand) is finished before the second path pops it, so the walk stays
+        // linear in the number of distinct nodes.
+        let pending = Stack[(Node SyntaxNode, Expanded bool)]()
+        pending.Push((this, false))
+        while pending.Count > 0 {
+            let entry = pending.Pop()
+            let node = entry.Node
+            if entry.Expanded {
+                if node.cachedSpan == nil {
+                    // The spans of all children are cached, so this call does not recurse.
+                    node.ComputeSpan(0)
+                }
+                continue
+            }
+            if node.cachedSpan != nil {
+                // Already planned and finished: a node that two paths reach.
+                continue
+            }
+            CompilationMeasurements.Count("syntax.deep-span-nodes")
+            pending.Push((node, true))
+            let box = node.childrenBox
+            let plan = node.SpanPlan
+            let inPlace = box == nil && (plan & PlanInPlace) != 0
+            let items = if box != nil {
+                box.Items
+            } else if !inPlace && (plan & PlanSourceOrdered) != 0 {
+                node.BuildUnsortedChildren()
+            } else {
+                default(ImmutableArray[SyntaxNode])
+            }
+            let count = if inPlace {
+                node.PropertyChildCount
+            } else if items.IsDefault {
+                node.ChildCount
+            } else {
+                items.Length
+            }
+            for var i = 0; i < count; i++ {
+                let child = if inPlace {
+                    node.PropertyChild(i)
+                } else if items.IsDefault {
+                    node.GetChild(i)
+                } else {
+                    items[i]
+                }
+                if !(child is SyntaxToken) && child.cachedSpan == nil && (child.SpanPlan & PlanBaseSpan) != 0 {
+                    pending.Push((child, false))
+                }
+            }
         }
     }
 
@@ -328,6 +525,86 @@ abstract class SyntaxNode {
     }
 
     shared {
+        /// Sorts children by the start of their span. The sort is stable, so children with the
+        /// same start (for example a missing token) keep their property order. Issue #5185.
+        /// @param items The children in property order.
+        /// @returns The children in source order.
+        internal func SortBySourcePosition(items ImmutableArray[SyntaxNode]) ImmutableArray[SyntaxNode] {
+            // Most nodes are already in order, and then no new array is needed.
+            var sorted = true
+            for var i = 1; i < items.Length; i++ {
+                if items[i].Span.Start < items[i - 1].Span.Start {
+                    sorted = false
+                    break
+                }
+            }
+            if sorted {
+                return items
+            }
+            return items.OrderBy((item SyntaxNode) -> item.Span.Start).ToImmutableArray()
+        }
+
+        /// Returns whether a node class, or one of its base classes, has `@SyntaxChildSourceOrder`.
+        /// @param nodeType The runtime type of a node.
+        /// @returns `true` when the children of the class are sorted by source position.
+        internal func IsSourceOrdered(nodeType Type) bool {
+            return SourceOrderedByType.GetOrAdd(
+                nodeType,
+                (type Type) -> Attribute.IsDefined(type, typeof(SyntaxChildSourceOrderAttribute), true)
+            )
+        }
+
+        /// The number of nested span computations before the walk switches to an explicit stack.
+        private let MaxSpanDepth int32 = 128
+
+        private let SourceOrderedByType ConcurrentDictionary[Type, bool] = ConcurrentDictionary[Type, bool]()
+
+        /// The bits of (cref:SpanPlan): the node uses the span of this class.
+        internal let PlanBaseSpan int32 = 1
+
+        /// The bits of (cref:SpanPlan): the node class has `@SyntaxChildSourceOrder`.
+        internal let PlanSourceOrdered int32 = 2
+
+        /// The bits of (cref:SpanPlan): the node reads its children in place while they are in
+        /// source order. Implies `PlanSourceOrdered`.
+        internal let PlanInPlace int32 = 4
+
+        /// Computes the plan of a node class by reflection. A generated class returns a constant
+        /// with the same value; `Issue5279SpanPlanTests` compares both on a corpus.
+        /// @param nodeType The runtime type of a node.
+        /// @returns The bits of (cref:SpanPlan), without `PlanInPlace`.
+        internal func ReflectedSpanPlan(nodeType Type) int32 {
+            let baseSpan = if HasBaseSpan(nodeType) {
+                PlanBaseSpan
+            } else {
+                0
+            }
+            let ordered = if IsSourceOrdered(nodeType) {
+                PlanSourceOrdered
+            } else {
+                0
+            }
+            return baseSpan | ordered
+        }
+
+        /// Returns whether a node class uses the (cref:Span) getter of this class. A class that
+        /// overrides it, including a class outside this assembly, keeps its own value, so a parent
+        /// asks that node for its span and never derives it from the children.
+        /// @param nodeType The runtime type of a node.
+        /// @returns `true` when the span is the bounds of the children.
+        internal func HasBaseSpan(nodeType Type) bool {
+            return BaseSpanByType.GetOrAdd(nodeType, (type Type) -> DeclaresBaseSpan(type))
+        }
+
+        // The type of a live node always belongs to the compiler's own load context, so this is
+        // not the MetadataLoadContext case of issue #835. IsSameAs is the sanctioned comparison.
+        private func DeclaresBaseSpan(type Type) bool {
+            let declaring = type.GetProperty("Span")?.GetGetMethod()?.DeclaringType
+            return declaring != nil && declaring.IsSameAs(typeof(SyntaxNode))
+        }
+
+        private let BaseSpanByType ConcurrentDictionary[Type, bool] = ConcurrentDictionary[Type, bool]()
+
         /// Returns one element of a children array, with the argument check of the generated accessors.
         /// @param items The children.
         /// @param index The index.

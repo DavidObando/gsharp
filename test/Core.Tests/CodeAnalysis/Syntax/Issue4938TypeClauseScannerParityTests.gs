@@ -256,6 +256,8 @@ open class Issue4938TypeClauseScannerParityTests {
             "span[int32]",
             "readonly span[int32]",
             "[]readonly span[int32]",
+            "(readonly span[int32]) -> int32",
+            "(int32, readonly span[int32]) -> int32",
             "readonly managed[int32]",
             "*func(int32) int32",
             "unmanaged[Cdecl] (int32) -> int32",
