@@ -271,6 +271,46 @@ func Main() {
     }
 
     @Theory
+    @InlineData("string")
+    @InlineData("T")
+    func QualifiedPackage_NonLeadingTypeName_PreservesConstructionAndGenericReceiver(component string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let declarations = Path.Combine(fixture.Directory, "package5267.gs")
+        let neighbor = Path.Combine(fixture.Directory, "neighbor5267.gs")
+        File.WriteAllText(declarations, "package App." + component + `
+public data struct Stamp(Value int32)
+public class Store[T] {
+    shared { var Value int32 }
+}`)
+        File.WriteAllText(neighbor, `package App.Neighbor5267
+public data struct Stamp(Name string)`)
+        let sources = []string{declarations, neighbor}
+        let header = "package PackageConsumer5267\nimport System\nimport App." +
+            component +
+            "\nimport App.Neighbor5267\n"
+        let control = fixture.Compile(header + `func Main() {
+    let neighbor = App.Neighbor5267.Stamp("neighbor")
+    Console.Write(neighbor.Name)
+}`, "packageControl5267", true, sources)
+        Assert.Equal(Encoding.UTF8.GetBytes("neighbor"), VerifyAndRunBytes(control))
+        let prefix = "App." + component
+        let assembly = fixture.Compile(header + `func Run[T]() {
+    let constructed = ` + prefix + `.Stamp(1)
+    let literal = ` + prefix + `.Stamp{Value: 2}
+    ` + prefix + `.Store[int32].Value = 3
+    let neighbor = App.Neighbor5267.Stamp("neighbor")
+    Console.Write(constructed.Value)
+    Console.Write("|")
+    Console.Write(literal.Value)
+    Console.Write("|")
+    Console.Write(` + prefix + `.Store[int32].Value)
+    Console.Write("|" + neighbor.Name)
+}
+func Main() { Run[int32]() }`, "packageTypes5267", true, sources)
+        Assert.Equal(Encoding.UTF8.GetBytes("1|2|3|neighbor"), VerifyAndRunBytes(assembly))
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func NamespaceAliases_CrossedNamespaceTails_CompileAndRunWithoutRecursion(reverseAliases bool) {
