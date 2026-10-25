@@ -5,6 +5,7 @@
 package GSharp.Compiler.Tests
 
 import GSharp.Compiler
+import GSharp.Tests
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
@@ -12,6 +13,8 @@ import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Reflection
+import System.Reflection.Emit
 import System.Text
 import Xunit
 
@@ -29,6 +32,198 @@ import Xunit
 /// - issue #4394: subscribing to an event the subscriber cannot reach compiled; the reachable cells of
 /// the access matrix must still run.
 open class EventAndBaseMethodGroupEmitTests {
+    @Fact
+    func Issue5270_ExactOverrideForwardingRepro_UsesNonvirtualBaseAccessors() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        const source = `import System
+
+open class Parent {
+    open event Changed Action?
+}
+
+class Child : Parent {
+    override event Changed Action? {
+        add { base.Changed += value }
+        remove { base.Changed -= value }
+    }
+}`
+        let dll = fixture.Compile(source, "base-event-repro", false, "/deterministic+", "/debug:none")
+        let first = File.ReadAllBytes(dll)
+        fixture.Compile(source, "base-event-repro", false, "/deterministic+", "/debug:none")
+        Assert.Equal(first, File.ReadAllBytes(dll))
+        IlVerifier.Verify(dll)
+        AssertBaseEventCalls(dll)
+    }
+
+    @Fact
+    func Issue5270_AbstractBaseEvent_RejectsCallsWithLocatedDiagnosticsAndNoImage() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`using System;
+namespace Contracts;
+public abstract class Parent {
+    public abstract event Action? Changed;
+}`, "AbstractEventContract")
+        let (code, diagnostics) = fixture.TryCompile(`import Contracts
+import System
+class Child : Parent {
+    override event Changed Action? {
+        add { base.Changed += value }
+        remove { base.Changed -= value }
+    }
+}`, "abstract-base-event", false, "/reference:" + library)
+        Assert.NotEqual(0, code)
+        Assert.Contains("abstract-base-event.gs(5,20,5,27): error GS0413:", diagnostics, StringComparison.Ordinal)
+        Assert.Contains("abstract-base-event.gs(6,23,6,30): error GS0413:", diagnostics, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "abstract-base-event.dll")))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5270_BaseEvent_PreservesDispatchAndEvaluationOrder(imported bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        const sourceBase = `open class Parent {
+    private event handlers Action[string]?
+    open event Changed Action[string]? {
+        add {
+            Console.Write("A")
+            handlers += value
+        }
+        remove {
+            Console.Write("R")
+            handlers -= value
+        }
+    }
+    func Fire(value string) { handlers?.Invoke(value) }
+}
+`
+        let library = if imported {
+            fixture.CompileCSharp(`using System;
+namespace Contracts;
+public class Parent<T> {
+    private event Action<T>? handlers;
+    public virtual event Action<T>? Changed {
+        add { Console.Write("A"); handlers += value; }
+        remove { Console.Write("R"); handlers -= value; }
+    }
+    public void Fire(T value) { handlers?.Invoke(value); }
+}`, "BaseEventContract")
+        } else {
+            string.Empty
+        }
+        let parentType = if imported {
+            "Parent[string]"
+        } else {
+            "Parent"
+        }
+        let source = "import System\n" +
+            (
+            if imported {
+                "import Contracts\n"
+            } else {
+                sourceBase
+            }
+        ) +
+            `
+class Child : PARENT {
+    override event Changed Action[string]? {
+        add {
+            Console.Write("a")
+            base.Changed += value
+        }
+        remove {
+            Console.Write("r")
+            base.Changed -= value
+        }
+    }
+    func Direct(h Action[string]?) {
+        base.Changed += h
+        base.Changed -= h
+    }
+}
+func Pick(c Child) Child {
+    Console.Write("x")
+    return c
+}
+func Handler() Action[string] {
+    Console.Write("h")
+    return func(text string) { Console.Write(text) }
+}
+func Main() {
+    let c = Child()
+    let p PARENT = c
+    let h = Handler()
+    Pick(c).Changed += h
+    p.Changed += nil
+    c.Fire("F")
+    Pick(c).Changed -= h
+    c.Fire("F")
+    c.Direct(nil)
+}`
+        let program = source.Replace("PARENT", parentType, StringComparison.Ordinal)
+        let references = if imported {
+            []string{library}
+        } else {
+            Array.Empty[string]()
+        }
+        let options = []string{"/deterministic+", "/debug:none"}.Concat(
+            references.Select((path string) -> "/reference:" + path)
+        )
+            .ToArray()
+        let dll = fixture.Compile(program, "base-event-runtime", true, options)
+        let image = File.ReadAllBytes(dll)
+        fixture.Compile(program, "base-event-runtime", true, options)
+        Assert.Equal(image, File.ReadAllBytes(dll))
+        IlVerifier.Verify(dll, references)
+        AssertBaseEventCalls(dll)
+        Assert.Equal(Encoding.UTF8.GetBytes("hxaAaAFxrRAR"), RunBaseEventBytes(dll))
+    }
+
+    private func AssertBaseEventCalls(dll string) {
+        let assembly = EmittedFixture.Load(dll)
+        let child = assembly.GetTypes().Single((type Type) -> type.Name == "Child")
+        for name in[]string{"add_Changed", "remove_Changed"} {
+            let method = child.GetMethod(name)!!
+            let calls = IlInstructionReader
+                .Read(method.GetMethodBody()!!.GetILAsByteArray()!!)
+                .Where(
+                (instruction IlInstruction) -> instruction.OpCode == OpCodes.Call ||
+                    instruction.OpCode == OpCodes.Callvirt
+            )
+                .Where(
+                (instruction IlInstruction) -> method.Module.ResolveMethod(instruction.MetadataToken!!)!!.Name == name
+            )
+                .ToArray()
+            let call = Assert.Single(calls)
+            Assert.Equal(OpCodes.Call, call.OpCode)
+            let target = method.Module.ResolveMethod(call.MetadataToken!!)!!
+            Assert.Equal(child.BaseType, target.DeclaringType)
+        }
+    }
+
+    private func RunBaseEventBytes(dll string)[]uint8 {
+        let start = ProcessStartInfo("dotnet"){
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(dll)!!
+        }
+        start.ArgumentList.Add(dll)
+        using let process = Process.Start(start) ?? throw InvalidOperationException("could not start dotnet")
+        using let output = MemoryStream()
+        let stdout = process.StandardOutput.BaseStream.CopyToAsync(output)
+        let stderr = process.StandardError.ReadToEndAsync()
+        if !process.WaitForExit(30_000) {
+            process.Kill(entireProcessTree: true)
+            process.WaitForExit()
+            Assert.Fail("base event program timed out")
+        }
+        stdout.GetAwaiter().GetResult()
+        Assert.Equal(string.Empty, stderr.Result)
+        Assert.Equal(0, process.ExitCode)
+        return output.ToArray()
+    }
+
     /// Issue #4433: a function literal passed directly to a delegate parameter
     /// on a constructed user-generic receiver must use the receiver-substituted
     /// target, not the open declaration's erased delegate shape.

@@ -827,7 +827,7 @@ shared class SpillSequenceSpiller {
                                     clrEventSub.ConstrainedReceiverTypeParameter,
                                     clrEventSub.ConstrainedInterfaceType,
                                     clrEventSub.EventContainingType
-                                )
+                                ){IsNonVirtualBaseCall = clrEventSub.IsNonVirtualBaseCall}
                             }
                         )
                     }
@@ -845,7 +845,7 @@ shared class SpillSequenceSpiller {
                                 clrEventSub.ConstrainedReceiverTypeParameter,
                                 clrEventSub.ConstrainedInterfaceType,
                                 clrEventSub.EventContainingType
-                            )
+                            ){IsNonVirtualBaseCall = clrEventSub.IsNonVirtualBaseCall}
                         }
                     )
                 }
@@ -863,7 +863,7 @@ shared class SpillSequenceSpiller {
                                     handler,
                                     eventSub.IsAdd,
                                     eventSub.EventType
-                                )
+                                ){IsNonVirtualBaseCall = eventSub.IsNonVirtualBaseCall}
                             }
                         )
                     }
@@ -880,7 +880,7 @@ shared class SpillSequenceSpiller {
                                 handler,
                                 eventSub.IsAdd,
                                 eventSub.EventType
-                            )
+                            ){IsNonVirtualBaseCall = eventSub.IsNonVirtualBaseCall}
                         }
                     )
                 }

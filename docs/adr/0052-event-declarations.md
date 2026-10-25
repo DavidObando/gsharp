@@ -125,6 +125,10 @@ class Derived {
 
 An `open` event emits virtual `add_X`/`remove_X` accessors. An `override` event emits override accessors. The default (no modifier) emits non-virtual accessors.
 
+Inside an instance member, `base.Event += handler` and `base.Event -= handler`
+call the selected base accessor nonvirtually, as base method calls do (issue #5270).
+Ordinary subscriptions still use virtual dispatch.
+
 ### 6. CLR metadata shape
 
 For a field-like event `public event Click func(sender Object, e EventArgs)` on type `MyButton`:
