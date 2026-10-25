@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import stat
 import subprocess
 from xml.sax.saxutils import escape
 
@@ -36,8 +37,11 @@ def main() -> int:
     artifact_root = ROOT / "out/test-artifacts"
     if work == artifact_root or not work.is_relative_to(artifact_root):
         parser.error("--work must be a dedicated directory under out/test-artifacts")
-    if any(path.is_symlink() for path in work.rglob("*")):
-        parser.error("--work must not contain symbolic links")
+    for path in work.rglob("*"):
+        attributes = path.lstat()
+        if (stat.S_ISLNK(attributes.st_mode) or path.resolve() != path
+                or (stat.S_ISREG(attributes.st_mode) and attributes.st_nlink > 1)):
+            parser.error("--work must not contain aliased files or directories")
     work.mkdir(parents=True, exist_ok=True)
     pin = json.loads((ROOT / "global.json").read_text())["msbuild-sdks"]["Gsharp.NET.Sdk"]
     packages = Path(os.environ.get("NUGET_PACKAGES", str(Path.home() / ".nuget/packages")))

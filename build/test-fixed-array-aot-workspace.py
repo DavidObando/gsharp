@@ -98,6 +98,32 @@ class WorkspaceTests(unittest.TestCase):
         with patch.object(aot, "ROOT", checkout):
             self.invoke(["--work", str(checkout / "out/test-artifacts/witness")], rejected=True)
 
+    def test_hard_linked_output_rejects_before_effects(self):
+        fixture = ROOT / "out/test-artifacts" / ("aot-guard-" + uuid.uuid4().hex)
+        work = fixture / "work"
+        work.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, fixture)
+        sentinel = fixture / "protected.props"
+        sentinel.write_text("<Project Keep=\"unchanged\" />\n")
+        (work / "evidence.json").hardlink_to(sentinel)
+        self.invoke(["--work", str(work)], rejected=True)
+        self.assertEqual(sentinel.read_text(), "<Project Keep=\"unchanged\" />\n")
+
+    def test_junction_style_descendant_resolution_rejects_before_effects(self):
+        fixture = ROOT / "out/test-artifacts" / ("aot-guard-" + uuid.uuid4().hex)
+        descendant = fixture / "Producer"
+        descendant.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, fixture)
+        original_resolve = Path.resolve
+
+        def resolve(path, *args, **kwargs):
+            if path == descendant:
+                return ROOT / "src"
+            return original_resolve(path, *args, **kwargs)
+
+        with patch.object(Path, "resolve", autospec=True, side_effect=resolve):
+            self.invoke(["--work", str(fixture)], rejected=True)
+
 
 if __name__ == "__main__":
     unittest.main()
