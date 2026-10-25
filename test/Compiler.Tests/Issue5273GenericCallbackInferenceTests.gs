@@ -5,6 +5,7 @@
 package GSharp.Compiler.Tests
 
 import System
+import System.IO
 import System.Linq
 import Xunit
 
@@ -82,5 +83,49 @@ func Main() {
 }`, "NamedCallback5273", true, references)
         IlVerifier.Verify(dll, []string{library})
         Assert.Equal("content://org.goo.probe/42\n", fixture.Run(dll))
+    }
+
+    @Theory
+    @InlineData("Func[T]")
+    @InlineData("() -> T")
+    func ThrowOnlyCallbackWithoutTypeEvidenceReportsInferenceFailure(callbackType string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let references = ReferenceClosure.RefPackAssemblies().Select((path string) -> "/r:" + path).ToArray()
+        let source = (`package RejectNever5273
+import System
+func Invoke[T](callback ` + callbackType + `) int32 -> 0
+func Main() {
+    Invoke(() -> throw Exception())
+}`)
+        let (code, output) = fixture.TryCompile(source, "RejectNever5273", true, references)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("RejectNever5273.gs(5,5,5,11): error GS0151:", StringComparison.Ordinal), output)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "RejectNever5273.dll")))
+    }
+
+    @Fact
+    func ThrowOnlyCallbackKeepsOtherSignatureEvidenceAndExplicitContext() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let references = ReferenceClosure.RefPackAssemblies().Select((path string) -> "/r:" + path).ToArray()
+        let dll = fixture.Compile(`package ContextualNever5273
+import System
+func FromInput[T](callback Func[T, T]) int32 -> 7
+func Seeded[T](callback Func[T], value T) T -> callback()
+func Main() {
+    Console.WriteLine(FromInput((value int32) -> throw Exception("unused")))
+    try {
+        Seeded(() -> throw Exception("inferred"), 42)
+    } catch (ex Exception) {
+        Console.WriteLine(ex.Message)
+    }
+    try {
+        Seeded[int32](() -> throw Exception("explicit"), 43)
+    } catch (ex Exception) {
+        Console.WriteLine(ex.Message)
+    }
+}`, "ContextualNever5273", true, references)
+        IlVerifier.Verify(dll)
+        Assert.Equal("7\ninferred\nexplicit\n", fixture.Run(dll))
     }
 }
