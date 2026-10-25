@@ -11,7 +11,10 @@ import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Text
+import System.Threading
+import System.Threading.Tasks
 import Xunit
+import Xunit.Sdk
 
 open class Issue5269InvocationListEmitTests {
     @Theory
@@ -248,7 +251,167 @@ func Main() {
 }`, "nil\n42\n", contract.AssemblyPath)
     }
 
+    @Theory
+    @InlineData("normal")
+    @InlineData("hung")
+    @InlineData("escaped")
+    func RuntimeCapture_BoundsExitAndBothBinaryPipes(shape string) {
+        if OperatingSystem.IsWindows() {
+            // Like the existing escaped-pipe verifier probe, this requires POSIX inherited handles.
+            return
+        }
+        let directory = Path.Combine(AppContext.BaseDirectory, "issue5269-capture", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        let pidPath = Path.Combine(directory, "child.pid")
+        try {
+            let script = switch shape {
+                case "normal": "printf '\\377out'; printf '\\376err' >&2; " +
+                    "awk 'BEGIN { for (i = 0; i < 131072; i++) printf \"o\" }'; " +
+                    "awk 'BEGIN { for (i = 0; i < 131072; i++) printf \"e\" }' >&2"
+                case "hung": "echo $$$$ > '$pidPath'; printf '\\377out'; printf '\\376err' >&2; read ignored"
+                default: "(sleep 10 & echo $$! > '$pidPath'); printf '\\377out'; printf '\\376err' >&2"
+            }
+            let startInfo = ProcessStartInfo("/bin/sh"){
+                ArgumentList = {"-c", script},
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                WorkingDirectory = directory
+            }
+            let stopwatch = Stopwatch.StartNew()
+            if shape == "normal" {
+                let result = CaptureProcess(startInfo, 10_000, 1_000)
+                Assert.Equal(0, result.ExitCode)
+                let expectedOutput = List[uint8]([]uint8{0xFF, 0x6F, 0x75, 0x74})
+                let expectedError = List[uint8]([]uint8{0xFE, 0x65, 0x72, 0x72})
+                for var i = 0; i < 131072; i++ {
+                    expectedOutput.Add(0x6F)
+                    expectedError.Add(0x65)
+                }
+                Assert.Equal(expectedOutput.ToArray(), result.Stdout)
+                Assert.Equal(expectedError.ToArray(), result.Stderr)
+            } else {
+                let exception = Assert.ThrowsAny[XunitException](() -> CaptureProcess(startInfo, 1_000, 500))
+                Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5), "capture took ${stopwatch.Elapsed}")
+                Assert.Contains("stdout(hex): FF6F7574", exception.Message, StringComparison.Ordinal)
+                Assert.Contains("stderr(hex): FE657272", exception.Message, StringComparison.Ordinal)
+                Assert.Contains(
+                    if shape == "hung" {
+                        "Emitted program timed out after 1000 ms"
+                    } else {
+                        "Emitted program exited but output pipes timed out"
+                    },
+                    exception.Message,
+                    StringComparison.Ordinal
+                )
+                Assert.True(File.Exists(pidPath), "The actual child must have started.")
+                Assert.True(int32.TryParse(File.ReadAllText(pidPath).Trim(), out var pid) && pid > 0)
+            }
+        } finally {
+            if File.Exists(pidPath) && int32.TryParse(File.ReadAllText(pidPath).Trim(), out var pid) {
+                try {
+                    using let child = Process.GetProcessById(pid)
+                    child.Kill(entireProcessTree: true)
+                    Assert.True(child.WaitForExit(5_000), "Probe child did not terminate.")
+                } catch (ArgumentException) { }
+            }
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     shared {
+        private async func PumpBytes(stream Stream, output MemoryStream, cancellation CancellationToken) {
+            let buffer = [4096]uint8
+            while await stream.ReadAsync(buffer.AsMemory(), cancellation) is var count && count > 0 {
+                lock output {
+                    output.Write(buffer, 0, count)
+                }
+            }
+        }
+
+        private func Snapshot(output MemoryStream)[]uint8 {
+            lock output {
+                return output.ToArray()
+            }
+        }
+
+        private func CaptureProcess(
+            startInfo ProcessStartInfo,
+            timeoutMilliseconds int32 = 30_000,
+            cleanupMilliseconds int32 = 5_000
+        )(ExitCode int32, Stdout[]uint8, Stderr[]uint8) {
+            let process = Process.Start(startInfo) ?? throw InvalidOperationException("Cannot start emitted program")
+            let output = MemoryStream()
+            let error = MemoryStream()
+            let cancellation = CancellationTokenSource()
+            let outputTask = PumpBytes(process.StandardOutput.BaseStream, output, cancellation.Token)
+            let errorTask = PumpBytes(process.StandardError.BaseStream, error, cancellation.Token)
+            let exitTask = process.WaitForExitAsync()
+            let pumps = Task.WhenAll(outputTask, errorTask)
+            let lifetime = Task.WhenAll(exitTask, pumps)
+            // Observe each fault even if its sibling or the process never becomes terminal.
+            let _ = outputTask.ContinueWith((task Task) -> task.Exception, TaskContinuationOptions.OnlyOnFaulted)
+            let _ = errorTask.ContinueWith((task Task) -> task.Exception, TaskContinuationOptions.OnlyOnFaulted)
+            let _ = exitTask.ContinueWith((task Task) -> task.Exception, TaskContinuationOptions.OnlyOnFaulted)
+            var failure = ""
+            try {
+                try {
+                    exitTask.WaitAsync(TimeSpan.FromMilliseconds(timeoutMilliseconds)).GetAwaiter().GetResult()
+                } catch (TimeoutException) {
+                    failure = "Emitted program timed out after $timeoutMilliseconds ms"
+                    try {
+                        process.Kill(entireProcessTree: true)
+                    } catch (ex Exception) {
+                        failure += "; kill failed: $ex"
+                    }
+                    try {
+                        exitTask.WaitAsync(TimeSpan.FromMilliseconds(cleanupMilliseconds)).GetAwaiter().GetResult()
+                    } catch (ex Exception) {
+                        failure += "; termination did not complete: $ex"
+                    }
+                }
+                try {
+                    pumps.WaitAsync(TimeSpan.FromMilliseconds(cleanupMilliseconds)).GetAwaiter().GetResult()
+                } catch (TimeoutException) {
+                    if failure.Length == 0 {
+                        failure = "Emitted program exited but output pipes timed out"
+                    }
+                    cancellation.Cancel()
+                    try {
+                        pumps.WaitAsync(TimeSpan.FromMilliseconds(cleanupMilliseconds)).GetAwaiter().GetResult()
+                    } catch (ex Exception) {
+                        failure += "; pipe settlement: $ex"
+                    }
+                } catch (ex Exception) {
+                    failure += "; output capture failed: $ex"
+                }
+                if failure.Length != 0 {
+                    throw XunitException(
+                        failure + "\nstdout(hex): " + Convert.ToHexString(Snapshot(output)) +
+                            "\nstderr(hex): " +
+                            Convert.ToHexString(Snapshot(error)) +
+                            "\nstdout fault: ${outputTask.Exception}\nstderr fault: ${errorTask.Exception}"
+                    )
+                }
+                return (process.ExitCode, Snapshot(output), Snapshot(error))
+            } finally {
+                // Pending readers retain their buffers and process; disposal cannot race a write.
+                let _ = lifetime.ContinueWith(
+                    (completed Task) -> {
+                        let _ = completed.Exception
+                        process.Dispose()
+                        output.Dispose()
+                        error.Dispose()
+                        cancellation.Dispose()
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default
+                )
+            }
+        }
+
         private func AssertOutput(source string, expected string, reference string? = nil, referencePack bool = false) {
             let directory = Path.Combine(AppContext.BaseDirectory, "issue5269", Guid.NewGuid().ToString("N"))
             Directory.CreateDirectory(directory)
@@ -289,7 +452,7 @@ func Main() {
                         []string{reference}
                     }
                 )
-                using let process = Process.Start(
+                let result = CaptureProcess(
                     ProcessStartInfo("dotnet"){
                         ArgumentList = {outputPath},
                         WorkingDirectory = directory,
@@ -297,22 +460,10 @@ func Main() {
                         RedirectStandardError = true,
                         UseShellExecute = false
                     }
-                ) ??
-                    throw InvalidOperationException("Cannot start emitted program")
-                using let output = MemoryStream()
-                let outputTask = process.StandardOutput.BaseStream.CopyToAsync(output)
-                let errorTask = process.StandardError.ReadToEndAsync()
-                let exited = process.WaitForExit(30_000)
-                if !exited {
-                    process.Kill(entireProcessTree: true)
-                    process.WaitForExit()
-                }
-                Assert.True(exited, "Emitted program timed out")
-                outputTask.GetAwaiter().GetResult()
-                let error = errorTask.GetAwaiter().GetResult()
-                Assert.True(process.ExitCode == 0, "Emitted program failed: $error")
-                Assert.Equal(Encoding.UTF8.GetBytes(expected.ReplaceLineEndings(Environment.NewLine)), output.ToArray())
-                Assert.Equal("", error)
+                )
+                Assert.True(result.ExitCode == 0, "Emitted program failed: ${Encoding.UTF8.GetString(result.Stderr)}")
+                Assert.Equal(Encoding.UTF8.GetBytes(expected.ReplaceLineEndings(Environment.NewLine)), result.Stdout)
+                Assert.Equal(Array.Empty[uint8](), result.Stderr)
             } finally {
                 Directory.Delete(directory, recursive: true)
             }
