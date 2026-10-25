@@ -7,8 +7,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-WORKDIR="$ROOT/out/e2e/nuget-pack-$$"
-mkdir -p "$WORKDIR"
+mkdir -p "$ROOT/out/e2e"
+WORKDIR="$(python3 -c \
+    'import sys, tempfile; print(tempfile.mkdtemp(prefix="nuget-pack-", dir=sys.argv[1]))' \
+    "$ROOT/out/e2e")" || {
+    echo "FAIL: cannot allocate NuGet pack workspace" >&2
+    exit 1
+}
 trap 'rm -rf "$WORKDIR"' EXIT
 # Keep consumer builds separate from repository build properties and SDK caches.
 printf '<Project />\n' > "$WORKDIR/Directory.Build.props"

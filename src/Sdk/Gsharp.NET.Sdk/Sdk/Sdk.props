@@ -22,7 +22,7 @@
          IntermediateOutputPath and TargetName are already resolved (#855). -->
     <GenerateDocumentationFile Condition=" '$(GenerateDocumentationFile)' == '' and '$(OutputType)' != 'Exe' ">true</GenerateDocumentationFile>
 
-    <!-- Use Portable PDB symbol packages unless the project selects another format. -->
+    <!-- Default to snupkg format when symbol packaging is enabled. -->
     <SymbolPackageFormat Condition=" '$(SymbolPackageFormat)' == '' ">snupkg</SymbolPackageFormat>
 
     <!-- Phase 7.7b: suppress NU5131 — our Pack target populates ref/<tfm>/
