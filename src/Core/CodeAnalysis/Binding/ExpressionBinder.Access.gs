@@ -531,6 +531,25 @@ internal partial class ExpressionBinder {
     }
 
     private func BindQualifiedSourceTypeRemainder(remainder ExpressionSyntax, sourceType TypeSymbol) BoundExpression {
+        let receiverSyntax = if remainder is AccessorExpressionSyntax accessor {
+            accessor.LeftPart
+        } else {
+            remainder
+        }
+        var structure StructSymbol? = sourceType as StructSymbol
+        var interface_ InterfaceSymbol? = sourceType as InterfaceSymbol
+        if receiverSyntax is IndexExpressionSyntax{IsNullConditional: false} or
+            GenericNameExpressionSyntax &&
+            !TryResolveConstructedGenericTypeReceiver(
+            receiverSyntax,
+            out structure,
+            out interface_,
+            out _,
+            out _,
+            sourceType
+        ) {
+            return BoundErrorExpression(remainder)
+        }
         switch remainder {
             case call is CallExpressionSyntax {
                 return overloads.BindCallExpression(call, sourceType)
@@ -544,35 +563,21 @@ internal partial class ExpressionBinder {
             case CollectionInitializerExpressionSyntax{Target: {} target} collection {
                 return BindCollectionInitializerSuffix(collection, BindQualifiedSourceTypeRemainder(target, sourceType))
             }
-            case accessor is AccessorExpressionSyntax {
-                if accessor.LeftPart is CallExpressionSyntax or
-                    StructLiteralExpressionSyntax or
-                    ObjectCreationExpressionSyntax or
-                    CollectionInitializerExpressionSyntax {
-                    let receiver = BindQualifiedSourceTypeRemainder(accessor.LeftPart, sourceType)
-                    if receiver is BoundErrorExpression {
-                        return receiver
-                    }
-                    return if accessor.IsNullConditional {
-                        BindNullConditionalAccessExpressionCore(receiver, accessor.RightPart)
-                    } else {
-                        BindAccessorStep(receiver, classSymbol: nil, accessor.RightPart)
-                    }
+            case accessor is AccessorExpressionSyntax when accessor.LeftPart is CallExpressionSyntax or
+                StructLiteralExpressionSyntax or
+                ObjectCreationExpressionSyntax or
+                CollectionInitializerExpressionSyntax {
+                let receiver = BindQualifiedSourceTypeRemainder(accessor.LeftPart, sourceType)
+                if receiver is BoundErrorExpression {
+                    return receiver
                 }
-                var structure StructSymbol? = sourceType as StructSymbol
-                var interface_ InterfaceSymbol? = sourceType as InterfaceSymbol
-                if accessor.LeftPart is IndexExpressionSyntax or GenericNameExpressionSyntax {
-                    if !TryResolveConstructedGenericTypeReceiver(
-                        accessor.LeftPart,
-                        out structure,
-                        out interface_,
-                        out _,
-                        out _,
-                        sourceType
-                    ) {
-                        return BoundErrorExpression(remainder)
-                    }
+                return if accessor.IsNullConditional {
+                    BindNullConditionalAccessExpressionCore(receiver, accessor.RightPart)
+                } else {
+                    BindAccessorStep(receiver, classSymbol: nil, accessor.RightPart)
                 }
+            }
+            case accessor is AccessorExpressionSyntax when !accessor.IsNullConditional {
                 if sourceType is EnumSymbol enumeration {
                     return BindEnumAccessorStep(enumeration, accessor.RightPart)
                 }
@@ -585,7 +590,7 @@ internal partial class ExpressionBinder {
                 )
             }
         }
-        Diagnostics.ReportUnableToFindType(remainder.Location, sourceType.Name)
+        Diagnostics.ReportExpressionMustHaveValue(remainder.Location)
         return BoundErrorExpression(remainder)
     }
 

@@ -15,6 +15,25 @@ import Xunit
 /// Runtime and IL verification for boolean pattern `is` expressions.
 class Issue3351IsPatternEmitTests {
     @Theory
+    @InlineData("Demo.Wrapper", "(6,18,6,25): error GS0124:")
+    @InlineData("Demo.Box[int32]", "(6,18,6,28): error GS0124:")
+    @InlineData("Demo.Box[Missing]", "(6,22,6,29): error GS0113:")
+    @InlineData("Demo.Marker{}", "(6,18,6,26): error GS0124:")
+    @InlineData("Demo.Wrapper?.Count", "(6,18,6,32): error GS0124:")
+    @InlineData("Demo.Box[int32]?.Count", "(6,18,6,35): error GS0124:")
+    @InlineData("NamespaceAlias.Box[int32]?.Count", "(6,28,6,45): error GS0124:")
+    @InlineData("Demo.Box?[int32]", "(6,18,6,29): error GS0124:")
+    func QualifiedTypeRemainder_RequiresValueAndRetainsArgumentErrors(expression string, expectedError string) {
+        const Source = `package Demo
+import NamespaceAlias = Demo
+class Wrapper { shared { const Count int32 = 9 } }
+class Box[T] { shared { const Count int32 = 8 } }
+interface Marker {}
+let value = EXPRESSION`
+        CompileAndRun(Source.Replace("EXPRESSION", expression), expectedError)
+    }
+
+    @Theory
     @InlineData("Demo.Derived.Item", "Derived.Item", "Derived.Item()", "base", "Base", 0, true)
     @InlineData("Demo.Derived.Item", "Derived.Item", "Demo.Derived.Item()", "base", "Base", 0, false)
     @InlineData("NamespaceAlias.Derived.Item", "Derived.Item", "DerivedAlias.Item()", "base", "Base", 0, true)
