@@ -184,6 +184,161 @@ func Main() {
         Assert.Equal(Encoding.UTF8.GetBytes("hxaAaAFxrRAR"), RunBaseEventBytes(dll))
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5270_LiftedBaseEvents_VerifyAndPreserveDispatch(imported bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        const sourceBase = `open class Parent {
+    private event handlers Action[Item]?
+    open event Changed Action[Item]? {
+        add {
+            Console.Write("A")
+            handlers += value
+        }
+        remove {
+            Console.Write("R")
+            handlers -= value
+        }
+    }
+    func Fire(value Item) { handlers?.Invoke(value) }
+}
+`
+        let library = if imported {
+            fixture.CompileCSharp(`using System;
+namespace LiftedContracts;
+public class Parent<T> {
+    private event Action<T>? handlers;
+    public virtual event Action<T>? Changed {
+        add { Console.Write("A"); handlers += value; }
+        remove { Console.Write("R"); handlers -= value; }
+    }
+    public void Fire(T value) { handlers?.Invoke(value); }
+}`, "LiftedBaseEventContract")
+        } else {
+            string.Empty
+        }
+        let source = "import System\nimport System.Threading.Tasks\n" +
+            (
+            if imported {
+                "import LiftedContracts\n"
+            } else {
+                sourceBase
+            }
+        ) +
+            `
+class Item {}
+class Child : PARENT {
+    override event Changed Action[Item]? {
+        add {
+            Console.Write("a")
+            base.Changed += value
+        }
+        remove {
+            Console.Write("r")
+            base.Changed -= value
+        }
+    }
+    func Once(h Action[Item]) Action[Item] {
+        Console.Write("h")
+        return h
+    }
+    func Closures(h Action[Item]) {
+        let add = func() { base.Changed += Once(h) }
+        let remove = func() { base.Changed -= Once(h) }
+        add()
+        Fire(Item())
+        remove()
+        Fire(Item())
+    }
+    async func Async(h Action[Item]) {
+        await Task.Yield()
+        base.Changed += Once(h)
+        Fire(Item())
+        await Task.Yield()
+        base.Changed -= Once(h)
+        Fire(Item())
+    }
+    func Iter(h Action[Item]) sequence[int32] {
+        base.Changed += Once(h)
+        Fire(Item())
+        yield 1
+        base.Changed -= Once(h)
+        Fire(Item())
+        yield 2
+    }
+}
+func Main() {
+    let c = Child()
+    let h Action[Item] = func(value Item) { Console.Write("F") }
+    c.Closures(h)
+    c.Async(h).GetAwaiter().GetResult()
+    for n in c.Iter(h) { Console.Write(n) }
+    c.Changed += h
+    c.Fire(Item())
+    c.Changed -= h
+    c.Fire(Item())
+}`
+        let program = source.Replace(
+            "PARENT",
+            if imported {
+                "Parent[Item]"
+            } else {
+                "Parent"
+            },
+            StringComparison.Ordinal
+        )
+        let references = if imported {
+            []string{library}
+        } else {
+            Array.Empty[string]()
+        }
+        let options = []string{"/deterministic+", "/debug:none"}.Concat(
+            references.Select((path string) -> "/reference:" + path)
+        )
+            .ToArray()
+        let dll = fixture.Compile(program, "lifted-base-events", true, options)
+        let image = File.ReadAllBytes(dll)
+        fixture.Compile(program, "lifted-base-events", true, options)
+        Assert.Equal(image, File.ReadAllBytes(dll))
+        IlVerifier.Verify(dll, references)
+        let assembly = EmittedFixture.Load(dll)
+        let child = assembly.GetTypes().Single((type Type) -> type.Name == "Child")
+        let item = assembly.GetTypes().Single((type Type) -> type.Name == "Item")
+        let forwarders = child
+            .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+            .Where((method MethodInfo) -> method.Name.StartsWith("<>n__", StringComparison.Ordinal))
+            .ToArray()
+        Assert.Equal(6, forwarders.Length)
+        Assert.NotEmpty(forwarders)
+        Assert.All(
+            forwarders,
+            func (method MethodInfo) {
+                Assert.True(method.IsPrivate)
+                Assert.False(method.IsVirtual)
+                let parameter = Assert.Single(method.GetParameters())
+                Assert.Equal(item, Assert.Single(parameter.ParameterType.GetGenericArguments()))
+                let call = Assert.Single(
+                    IlInstructionReader
+                        .Read(method.GetMethodBody()!!.GetILAsByteArray()!!)
+                        .Where(
+                        (instruction IlInstruction) -> instruction.OpCode == OpCodes.Call ||
+                            instruction.OpCode == OpCodes.Callvirt
+                    )
+                        .Where(
+                        (instruction IlInstruction) -> method.Module.ResolveMethod(
+                            instruction.MetadataToken!!
+                        )!!.Name is "add_Changed" or
+                            "remove_Changed"
+                    )
+                )
+                Assert.Equal(OpCodes.Call, call.OpCode)
+                Assert.Equal(child.BaseType, method.Module.ResolveMethod(call.MetadataToken!!)!!.DeclaringType)
+            }
+        )
+        Assert.Equal(Encoding.UTF8.GetBytes("hAFhRhAFhRhAF1hR2aAFrR"), RunBaseEventBytes(dll))
+    }
+
     private func AssertBaseEventCalls(dll string) {
         let assembly = EmittedFixture.Load(dll)
         let child = assembly.GetTypes().Single((type Type) -> type.Name == "Child")

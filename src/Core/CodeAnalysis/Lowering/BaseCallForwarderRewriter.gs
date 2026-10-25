@@ -9,6 +9,7 @@ import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Symbols
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.Linq
 import System.Reflection
 import System.Runtime.CompilerServices
 
@@ -103,7 +104,7 @@ shared class BaseCallForwarderRewriter {
             // forward it through a forwarder that repeats the same accessor
             // call on its own `this`.
             if rewritten.IsPropertyAccessor {
-                let accessorForwarder = this.CreatePropertyAccessorForwarder(rewritten)
+                let accessorForwarder = this.CreateAccessorForwarder(rewritten)
                 return BoundUserInstanceCallExpression(
                     rewritten.Syntax,
                     rewritten.Receiver,
@@ -185,6 +186,38 @@ shared class BaseCallForwarderRewriter {
                     enclosingMethodTypeParameters.CastArray[TypeSymbol]()
                 }
             }
+        }
+
+        protected override func RewriteEventSubscriptionExpression(
+            node BoundEventSubscriptionExpression
+        ) BoundExpression {
+            let rewritten = cast[BoundEventSubscriptionExpression](base.RewriteEventSubscriptionExpression(node))
+            if !rewritten.IsNonVirtualBaseCall || !this.ForwardsBaseCalls || rewritten.Receiver is not{} receiver {
+                return rewritten
+            }
+            return BoundUserInstanceCallExpression(
+                rewritten.Syntax,
+                receiver,
+                this.CreateAccessorForwarder(rewritten),
+                ImmutableArray.Create(rewritten.Handler),
+                rewritten.Type
+            )
+        }
+
+        protected override func RewriteClrEventSubscriptionExpression(
+            node BoundClrEventSubscriptionExpression
+        ) BoundExpression {
+            let rewritten = cast[BoundClrEventSubscriptionExpression](base.RewriteClrEventSubscriptionExpression(node))
+            if !rewritten.IsNonVirtualBaseCall || !this.ForwardsBaseCalls || rewritten.Receiver is not{} receiver {
+                return rewritten
+            }
+            return BoundUserInstanceCallExpression(
+                rewritten.Syntax,
+                receiver,
+                this.CreateAccessorForwarder(rewritten),
+                ImmutableArray.Create(rewritten.Handler),
+                rewritten.Type
+            )
         }
 
         private func GetOrCreateForwarder(
@@ -290,12 +323,29 @@ shared class BaseCallForwarderRewriter {
             return forwarder
         }
 
-        private func CreatePropertyAccessorForwarder(node BoundBaseClassCallExpression) FunctionSymbol {
+        private func CreateAccessorForwarder(node BoundExpression) FunctionSymbol {
             this.ordinalByClass.TryGetValue(this.classDef, out var ordinal)
             this.ordinalByClass[this.classDef] = ordinal + 1
-            let parameters = ImmutableArray.CreateBuilder[ParameterSymbol](node.Arguments.Length)
-            for argument in node.Arguments {
-                parameters.Add(ParameterSymbol("value", argument.Type))
+            // A handler literal can have a structural function type. The
+            // forwarder needs the event's declared delegate signature.
+            let parameterTypes = switch node {
+                case call is BoundBaseClassCallExpression:
+                call.Arguments.Select((argument BoundExpression) -> argument.Type).ToImmutableArray()
+                case subscription is BoundEventSubscriptionExpression:
+                ImmutableArray.Create(subscription.EventType)
+                case subscription is BoundClrEventSubscriptionExpression:
+                ImmutableArray.Create(
+                    if subscription.EventContainingType != nil {
+                        MemberLookup.GetClrEventHandlerTypeSymbol(subscription.EventContainingType, subscription.Event)
+                    } else {
+                        MemberLookup.GetClrEventHandlerTypeSymbol(subscription.Event)
+                    }
+                )
+                default: throw InvalidOperationException("Unsupported base accessor forwarder.")
+            }
+            let parameters = ImmutableArray.CreateBuilder[ParameterSymbol](parameterTypes.Length)
+            for parameterType in parameterTypes {
+                parameters.Add(ParameterSymbol("value", parameterType))
             }
             let parameterArray = parameters.ToImmutable()
             let forwarder = FunctionSymbol(
@@ -312,23 +362,50 @@ shared class BaseCallForwarderRewriter {
             for parameter in parameterArray {
                 arguments.Add(BoundVariableExpression(nil, parameter))
             }
-            let innerCall = BoundBaseClassCallExpression(
+            let receiver = BoundVariableExpression(
                 nil,
-                BoundVariableExpression(
-                    nil,
-                    Invariant.Required(
-                        forwarder.ThisParameter,
-                        "a synthesized forwarder has an instance receiver",
-                        expression: "forwarder.ThisParameter"
-                    )
-                ),
-                node.BaseClass,
-                node.Method,
-                arguments.ToImmutable(),
-                node.Type,
-                node.Property,
-                node.IsSetterAccessor
+                Invariant.Required(
+                    forwarder.ThisParameter,
+                    "a synthesized forwarder has an instance receiver",
+                    expression: "forwarder.ThisParameter"
+                )
             )
+            let argumentArray = arguments.ToImmutable()
+            let innerCall BoundExpression = switch node {
+                case call is BoundBaseClassCallExpression:
+                BoundBaseClassCallExpression(
+                    nil,
+                    receiver,
+                    call.BaseClass,
+                    call.Method,
+                    argumentArray,
+                    call.Type,
+                    call.Property,
+                    call.IsSetterAccessor
+                )
+                case subscription is BoundEventSubscriptionExpression:
+                BoundEventSubscriptionExpression(
+                    nil,
+                    receiver,
+                    subscription.StructType,
+                    subscription.Event,
+                    argumentArray[0],
+                    subscription.IsAdd,
+                    subscription.EventType
+                ){IsNonVirtualBaseCall = subscription.IsNonVirtualBaseCall}
+                case subscription is BoundClrEventSubscriptionExpression:
+                BoundClrEventSubscriptionExpression(
+                    nil,
+                    receiver,
+                    subscription.Event,
+                    argumentArray[0],
+                    subscription.IsAdd,
+                    subscription.ConstrainedReceiverTypeParameter,
+                    subscription.ConstrainedInterfaceType,
+                    subscription.EventContainingType
+                ){IsNonVirtualBaseCall = subscription.IsNonVirtualBaseCall}
+                default: throw InvalidOperationException("Unsupported base accessor forwarder.")
+            }
             this.forwarderBodies[forwarder] = CreateForwarderBody(forwarder, innerCall, node.Type)
             return forwarder
         }

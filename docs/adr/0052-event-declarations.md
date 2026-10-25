@@ -128,6 +128,9 @@ An `open` event emits virtual `add_X`/`remove_X` accessors. An `override` event 
 Inside an instance member, `base.Event += handler` and `base.Event -= handler`
 call the selected base accessor nonvirtually, as base method calls do (issue #5270).
 Ordinary subscriptions still use virtual dispatch.
+In a function literal or an async/iterator member, the base-call forwarder pass
+keeps that nonvirtual call on a private instance method's own `this`, before
+capture or state-machine lowering.
 
 ### 6. CLR metadata shape
 
