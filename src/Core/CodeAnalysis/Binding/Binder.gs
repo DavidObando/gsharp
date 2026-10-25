@@ -7780,7 +7780,7 @@ partial class Binder {
         /// behaves exactly like the full-rebuild path. The cache never changes the
         /// emitted IL or the diagnostics relative to a from-scratch bind.
         /// @returns A bound program.
-        func BindProgram(
+        internal func BindProgram(
             globalScope BoundGlobalScope,
             references ReferenceResolver?,
             cache BoundBodyCache?
@@ -7804,7 +7804,7 @@ partial class Binder {
         /// (or empty) means "no dirty trees" — every member may be served from the
         /// cache when the soundness gate allows it.
         /// @returns A bound program.
-        func BindProgram(
+        internal func BindProgram(
             globalScope BoundGlobalScope,
             references ReferenceResolver?,
             cache BoundBodyCache?,
@@ -7812,7 +7812,7 @@ partial class Binder {
         ) BoundProgram -> BindProgram(globalScope, references, cache, dirtyTrees, workBudget: nil)
 
         /// Binds bodies using one request-owned worker budget after declarations have completed.
-        func BindProgram(
+        internal func BindProgram(
             globalScope BoundGlobalScope,
             references ReferenceResolver?,
             cache BoundBodyCache?,
