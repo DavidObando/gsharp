@@ -195,7 +195,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 // so ControlFlowGraph sees the same goto/label shape the
                 // emitter eventually will; this does not replace the node's
                 // real Body anywhere.
-                let loweredLambdaBody = BodyFacts.LowerLambdaBody(literal.Body)
+                let loweredLambdaBody = literal.LoweredBody ?? BodyFacts.LowerLambdaBody(literal.Body)
+                literal.LoweredBody = loweredLambdaBody
                 // Issue #4222: also recurse into an iterator-returning
                 // function literal, not just an async one, so a nested
                 // iterator local function/lambda gets its own native

@@ -8580,7 +8580,8 @@ partial class Binder {
             )
             // Inferred callees can introduce awaits in existing async functions and nested literals.
             let lifetimeDiagnostics = DiagnosticBag()
-            for (function, body) in BoundProgramOrder.SortFunctions(functionBodies.ToImmutable()) {
+            let orderedFunctions = BoundProgramOrder.SortFunctions(functionBodies.ToImmutable())
+            for (function, body) in orderedFunctions {
                 RefStructAsyncLivenessAnalyzer.Analyze(
                     body.PreEmitAnalysisBody ?? body,
                     function,
@@ -8652,6 +8653,7 @@ partial class Binder {
                 globals,
                 allDelegates
             ){
+                OrderedFunctions = orderedFunctions,
                 Imports = globalScope.GetCumulativeImports(),
                 FriendAssemblies = globalScope.FriendAssemblies,
                 AssemblyAttributes = globalScope.AssemblyAttributes,
