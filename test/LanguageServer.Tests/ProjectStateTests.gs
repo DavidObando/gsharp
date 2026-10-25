@@ -228,4 +228,51 @@ var value = Uri("https://example.com")
         let second = compilation.BoundProgram
         Assert.Same(first, second)
     }
+
+    @Fact
+    func GetCompilation_Supersede_CancelsThePredecessorsLifetimeToken_AndOnlyThat() {
+        // ADR-0212 S6: each cached compilation has its own lifetime token; the project cancels it when a
+        // successor replaces the compilation, so a bind nobody wants releases its waiters.
+        let project = ProjectState("/test/project.gsproj")
+        project.UpdateFile("/test/file1.gs", "package P\nfunc A() int32 {\n    return 1\n}\n")
+        project.UpdateFile("/test/file2.gs", "package P\nfunc B() int32 {\n    return 2\n}\n")
+        let first = project.GetCompilation()
+        Assert.False(first.WorkBudget.CancellationToken.IsCancellationRequested)
+        Assert.Same(first, project.GetCompilation())
+        Assert.False(first.WorkBudget.CancellationToken.IsCancellationRequested)
+        project.UpdateFile("/test/file1.gs", "package P\nfunc A() int32 {\n    return 100\n}\n")
+        let second = project.GetCompilation()
+        Assert.NotSame(first, second)
+        Assert.True(first.WorkBudget.CancellationToken.IsCancellationRequested)
+        Assert.False(second.WorkBudget.CancellationToken.IsCancellationRequested)
+        Assert.NotEqual(first.WorkBudget.CancellationToken, second.WorkBudget.CancellationToken)
+        // The superseded compilation cannot build any more; the successor can.
+        Assert.ThrowsAny[OperationCanceledException](() -> first.BoundProgram)
+        Assert.NotNull(second.BoundProgram)
+    }
+
+    @Fact
+    func GetCompilationForSnapshot_DoesNotCancelTheLiveCompilation() {
+        let project = ProjectState("/test/project.gsproj")
+        project.UpdateFile("/test/file1.gs", "package P\nfunc A() int32 {\n    return 1\n}\n")
+        let live = project.GetCompilation()
+        let snapshotTree = GSharp
+            .Core
+            .CodeAnalysis
+            .Syntax
+            .SyntaxTree
+            .Parse(
+            GSharp
+                .Core
+                .CodeAnalysis
+                .Text
+                .SourceText
+                .From("package P\nfunc A() int32 {\n    return 5\n}\n", "/test/file1.gs")
+        )
+        let snapshot = project.GetCompilationForSnapshot("/test/file1.gs", snapshotTree)
+        Assert.NotSame(live, snapshot)
+        Assert.False(live.WorkBudget.CancellationToken.IsCancellationRequested)
+        Assert.False(snapshot.WorkBudget.CancellationToken.IsCancellationRequested)
+        Assert.NotNull(live.BoundProgram)
+    }
 }

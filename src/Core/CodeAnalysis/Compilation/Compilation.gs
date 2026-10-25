@@ -48,6 +48,11 @@ open class Compilation {
     // Set when ReplaceSyntaxTree re-points this compilation's symbols at a successor's tree.
     // A second re-point would map the wrong declarations, so a retired compilation never reuses.
     private var retired bool
+    // ADR-0212 §7a: each diagnostics query publishes once, under the build gate. A cancelled
+    // build publishes nothing.
+    private var declarationDiagnostics DiagnosticList?
+    private var bodyDiagnostics DiagnosticList?
+    private var allDiagnostics DiagnosticList?
 
     /// Initializes a new instance of the (cref:Compilation) class.
     /// @param syntaxTrees The syntax trees.
@@ -356,7 +361,7 @@ open class Compilation {
             using let measurement = CompilationMeasurements.BeginPhase("bodies")
             // ADR-0186: body binding reads imported member signatures too.
             using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
-            WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+            ThrowIfCannotBuild_Locked()
             BodyBindProbe?.Invoke()
             let bp = Binder.BindProgram(declarations, References, BodyCache, DirtyBodyTrees, WorkBudget)
             CompilationMeasurements.Count("input.methods", bp.Functions.Count)
@@ -374,7 +379,7 @@ open class Compilation {
         if globalScope != nil {
             return globalScope!!
         }
-        WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+        ThrowIfCannotBuild_Locked()
         let reused = if ReusedGlobalScope is {} candidate && !candidate.HasNativeProtocols {
             candidate
         } else {
@@ -408,6 +413,149 @@ open class Compilation {
         return bound
     }
 
+    // Must run while the build gate is held. A build needs a live lifetime token and a compilation
+    // that no successor re-pointed: both cases throw (ADR-0212 §8, Q7).
+    private func ThrowIfCannotBuild_Locked() {
+        WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+        if retired {
+            throw OperationCanceledException("A successor compilation retired this compilation.")
+        }
+    }
+
+    // Holds the build gate for state that is built from this compilation's symbols, such as the
+    // index of a semantic model, so that a re-point never overlaps it (ADR-0212 §8).
+    internal func EnterBuildGate(cancellationToken CancellationToken) {
+        buildGate.Wait(cancellationToken)
+        var entered = false
+        try {
+            ThrowIfCannotBuild_Locked()
+            entered = true
+        } finally {
+            if !entered {
+                buildGate.Release()
+            }
+        }
+    }
+
+    internal func ExitBuildGate() {
+        buildGate.Release()
+    }
+
+    /// Returns the diagnostics of the declarations: every tree's parse diagnostics in tree order,
+    /// then the global scope's diagnostics, with source suppressions applied (ADR-0212 §7a).
+    /// @remarks The result is built once and cached. It forces the declaration bind, not the body bind.
+    /// @param cancellationToken Cancels this caller's wait for a build in flight, never the build.
+    /// @returns The diagnostics, or an empty array.
+    func GetDeclarationDiagnostics(cancellationToken CancellationToken = default(CancellationToken)) ImmutableArray[
+        Diagnostic
+    ] {
+        let published = Volatile.Read[DiagnosticList?](&this.declarationDiagnostics)
+        if published != nil {
+            return published.Items
+        }
+        let declarations = GetGlobalScope(cancellationToken)
+        buildGate.Wait(cancellationToken)
+        try {
+            if declarationDiagnostics != nil {
+                return declarationDiagnostics!!.Items
+            }
+            ThrowIfCannotBuild_Locked()
+            let parse = SyntaxTrees.SelectMany((st SyntaxTree) -> st.Diagnostics.AsEnumerable())
+            let items = ApplySourceSuppressions(parse.Concat(declarations.Diagnostics).ToImmutableArray())
+            WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+            Volatile.Write[DiagnosticList?](&this.declarationDiagnostics, DiagnosticList(items))
+            return items
+        } finally {
+            buildGate.Release()
+        }
+    }
+
+    /// Returns the diagnostics of the member bodies and top-level statements, with source
+    /// suppressions applied (ADR-0212 §7a).
+    /// @remarks The result is built once and cached. It forces the body bind.
+    /// @param cancellationToken Cancels this caller's wait for a build in flight, never the build.
+    /// @returns The diagnostics, or an empty array.
+    func GetBodyDiagnostics(cancellationToken CancellationToken = default(CancellationToken)) ImmutableArray[
+        Diagnostic
+    ] {
+        let published = Volatile.Read[DiagnosticList?](&this.bodyDiagnostics)
+        if published != nil {
+            return published.Items
+        }
+        let program = GetBoundProgram(cancellationToken)
+        buildGate.Wait(cancellationToken)
+        try {
+            if bodyDiagnostics != nil {
+                return bodyDiagnostics!!.Items
+            }
+            ThrowIfCannotBuild_Locked()
+            let items = ApplySourceSuppressions(program.Diagnostics)
+            WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+            Volatile.Write[DiagnosticList?](&this.bodyDiagnostics, DiagnosticList(items))
+            return items
+        } finally {
+            buildGate.Release()
+        }
+    }
+
+    /// Returns the diagnostics `Emit` reports before it lowers the program, with source suppressions
+    /// applied (ADR-0212 §7a): the declaration diagnostics, then the body diagnostics, then, when
+    /// neither holds an error, the documentation diagnostics. The documentation rule is the one `gsc`
+    /// follows: a project with an error reports no documentation warning (ADR-0212 Q14).
+    /// @remarks The result is built once and cached. It forces the declaration and the body bind.
+    /// @param cancellationToken Cancels this caller's wait for a build in flight, never the build.
+    /// @returns The diagnostics, or an empty array.
+    func GetDiagnostics(cancellationToken CancellationToken = default(CancellationToken)) ImmutableArray[Diagnostic] {
+        let published = Volatile.Read[DiagnosticList?](&this.allDiagnostics)
+        if published != nil {
+            return published.Items
+        }
+        let declaration = GetDeclarationDiagnostics(cancellationToken)
+        let body = GetBodyDiagnostics(cancellationToken)
+        let program = GetBoundProgram(cancellationToken)
+        buildGate.Wait(cancellationToken)
+        try {
+            if allDiagnostics != nil {
+                return allDiagnostics!!.Items
+            }
+            ThrowIfCannotBuild_Locked()
+            var items = declaration.AddRange(body)
+            if !items.Any((d Diagnostic) -> d.IsError) {
+                let documentation = ValidateDocumentation(program)
+                items = items.AddRange(ApplySourceSuppressions(documentation.ToImmutableArray()))
+            }
+            WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+            Volatile.Write[DiagnosticList?](&this.allDiagnostics, DiagnosticList(items))
+            return items
+        } finally {
+            buildGate.Release()
+        }
+    }
+
+    // The documentation pass of Emit and of GetDiagnostics: one rule (ADR-0212 §7a).
+    private func ValidateDocumentation(program BoundProgram) DiagnosticBag {
+        let documentationDiagnostics = DiagnosticBag()
+        using let documentationValidationPhase = CompilationMeasurements.BeginPhase("documentation.validation")
+        DocumentationValidator.Validate(
+            SyntaxTrees,
+            program.Functions.Keys.ToImmutableArray(),
+            program.Structs,
+            documentationDiagnostics,
+            WarnOnMissingDocumentation
+        )
+        return documentationDiagnostics
+    }
+
+    private class DiagnosticList {
+        internal init(items ImmutableArray[Diagnostic]) {
+            Items = items
+        }
+
+        internal prop Items ImmutableArray[Diagnostic] {
+            get;
+        }
+    }
+
     /// Returns a successor compilation in which [`newTree`](paramref) replaces [`oldTree`](paramref)
     /// (ADR-0212 §7a). The successor copies every option of this compilation except
     /// (cref:WorkBudget), which the host sets before the first query because it owns the token.
@@ -434,7 +582,15 @@ open class Compilation {
         buildGate.Wait()
         try {
             if Submission == nil && !retired {
-                var declarations BoundGlobalScope? = globalScope
+                // A predecessor that was itself re-pointed holds the shared scope as ReusedGlobalScope until its first query.
+                var declarations BoundGlobalScope? = globalScope ??
+                    (
+                    if ReusedGlobalScope is {} pendingScope && !pendingScope.HasNativeProtocols {
+                        pendingScope
+                    } else {
+                        default(BoundGlobalScope?)
+                    }
+                )
                 if declarations == nil && !WorkBudget.CancellationToken.IsCancellationRequested {
                     declarations = BuildGlobalScope_Locked()
                 }
@@ -833,16 +989,7 @@ open class Compilation {
         if allDiagnostics.Any((d Diagnostic) -> d.IsError) {
             return (nil, program, allDiagnostics)
         }
-        let documentationDiagnostics = DiagnosticBag()
-        using let documentationValidationPhase = CompilationMeasurements.BeginPhase("documentation.validation")
-        DocumentationValidator.Validate(
-            SyntaxTrees,
-            program.Functions.Keys.ToImmutableArray(),
-            program.Structs,
-            documentationDiagnostics,
-            WarnOnMissingDocumentation
-        )
-        documentationValidationPhase?.Dispose()
+        let documentationDiagnostics = ValidateDocumentation(program)
         // ADR-0055 / issue #368: lower interpolated strings to the
         // DefaultInterpolatedStringHandler pattern on the emit path only, before
         // the async/iterator rewriters and IL emission. The interpreter path is
