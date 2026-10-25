@@ -110,6 +110,7 @@ internal shared class InitializationPlanner {
         for type in program.Structs {
             if type.ClrType == nil &&
                 type.IsData &&
+                !type.HasDeclaredPrimaryConstructor &&
                 !type.IsClass &&
                 !type.IsInline &&
                 !type

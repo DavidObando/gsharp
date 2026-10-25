@@ -31,6 +31,81 @@ open class Issue3329CrossAssemblyStructLiteralEmitTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func ImportedDataStruct_PrimaryConstructorsDoNotExportLiteralInitializers(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(`package i5296primary
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Next(mark string, value int32) int32 {
+            Trace = Trace + mark
+            return value
+        }
+    }
+}
+public data struct EmptyPrimary() {
+    public var X int32 = Effects.Next("I", 1)
+}
+public data struct Primary(Seed int32 = 0) {
+    public var X int32 = Effects.Next("I", 1)
+}
+public data struct NonPrimary {
+    public var X int32 = Effects.Next("I", 1)
+}`, "i5296primary", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let consumer = fixture.Compile(`import System
+import i5296primary
+data struct LocalPrimary() {
+    public var X int32 = Effects.Next("I", 1)
+}
+data struct LocalNonPrimary {
+    public var X int32 = Effects.Next("I", 1)
+}
+let local = LocalPrimary{X: Effects.Next("E", 9)}
+Console.WriteLine(Effects.Trace + ":" + local.X.ToString())
+Effects.Trace = ""
+let explicit = Effects.Next("E", 9)
+var imported = EmptyPrimary()
+imported.X = explicit
+Console.WriteLine(Effects.Trace + ":" + imported.X.ToString())
+Effects.Trace = ""
+Console.WriteLine(LocalPrimary{}.X)
+Console.WriteLine(Effects.Trace)
+Effects.Trace = ""
+Console.WriteLine(EmptyPrimary().X)
+Console.WriteLine(Effects.Trace)
+Effects.Trace = ""
+let localNonPrimary = LocalNonPrimary{X: Effects.Next("E", 9)}
+Console.WriteLine(Effects.Trace + ":" + localNonPrimary.X.ToString())
+Effects.Trace = ""
+let importedNonPrimary = NonPrimary{X: Effects.Next("E", 9)}
+Console.WriteLine(Effects.Trace + ":" + importedNonPrimary.X.ToString())
+Effects.Trace = ""
+Console.WriteLine(NonPrimary{}.X)
+Console.WriteLine(Effects.Trace)`, "consumer", executable: true, "/r:" + selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes("EI:9\nEI:9\n1\nI\n1\nI\nE:9\nE:9\n1\nI\n"),
+            System.Text.Encoding.UTF8.GetBytes(fixture.Run(consumer))
+        )
+        let assembly = EmittedFixture.Load(producer)
+        for name in[]string{"EmptyPrimary", "Primary"} {
+            let type = assembly.GetType("i5296primary." + name, throwOnError: true)
+            Assert.Null(type!!.GetNestedType("<>FieldInitializers", BindingFlags.Public))
+        }
+        let nonPrimary = assembly.GetType("i5296primary.NonPrimary", throwOnError: true)
+        Assert.NotNull(nonPrimary!!.GetNestedType("<>FieldInitializers", BindingFlags.Public))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func ImportedDataStruct_NestedReadonlyCollectionDiagnosticsRetainConsumerAnchors(useReferenceAssembly bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let reference = Path.Combine(fixture.Directory, "producer.ref.dll")

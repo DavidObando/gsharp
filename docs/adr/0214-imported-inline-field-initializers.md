@@ -35,6 +35,8 @@ Generate methods in field declaration order, only for source data structs whose
 literal initializers do not require an owning constructor. Existing generic,
 primary-constructor, non-public-storage, and collection-zero protocols stay
 unchanged. Do not export another method for an implicit collection zero value.
+Use `HasDeclaredPrimaryConstructor` to exclude every declared primary constructor,
+including an empty parameter list, from this export protocol.
 
 When reconstructing an imported aggregate, represent each method as an existing
 bound CLR static call in its field-initializer map. Let the existing literal
@@ -86,6 +88,12 @@ internal collection metadata, source-local parity, ordered explicit overrides,
 and rejection of the same member from a non-friend assembly.
 Nested readonly collection diagnostics also retain the consumer filename and
 span at field initializers and separate constructor sites.
+Primary-constructor exclusion coverage checks emitted metadata for empty and
+nonempty parameter lists. Independent consumers verify constructor-owned effects
+and explicit writes, alongside ordinary nonprimary literal overrides.
+Imported empty-primary brace construction has a pre-existing selection gap,
+tracked separately in [#5364](https://github.com/DavidObando/gsharp/issues/5364).
+This export exclusion does not claim to correct that construction protocol.
 
 ## Alternatives considered
 

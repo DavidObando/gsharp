@@ -1183,7 +1183,8 @@ The semantics match C#:
   nested aggregates and nonempty fixed arrays) reports `GS0604`, just like an
   explicit `default` of that type. Nullable handles remain legal defaults.
   Other public-only, non-generic literals retain inline
-  initialization for omitted fields, including data structs imported from a
+  initialization for omitted fields when they have no declared primary
+  constructor, including data structs imported from a
   separately compiled G# assembly. Explicitly supplied fields skip their inline
   initializers in these literals. Construction, including structural projection,
   that requires external initializer writes to imported read-only fields reports
