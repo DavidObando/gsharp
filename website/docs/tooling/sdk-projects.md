@@ -242,6 +242,11 @@ When `ProduceReferenceAssembly` is true, the SDK asks `gsc` for `/refout:<path>`
 dotnet pack -c Release
 ```
 
+The SDK enables symbol packages by default when `IncludeBuildOutput` is true. The default format is `snupkg`.
+For content-only packages, set `IncludeBuildOutput` to `false`; the SDK then leaves symbol packaging disabled by default.
+An explicit `IncludeSymbols` value takes precedence. Set it to `false` to omit symbols from a library package,
+or to `true` when a content-only package supplies its own symbol files. `SymbolPackageFormat` remains configurable.
+
 ## Multiple packages in one project
 
 G# `package` declarations map to CLR namespaces, not to MSBuild projects. One `.gsproj` produces one assembly, and that assembly may contain multiple G# packages/namespaces. This matches C# projects, where a single assembly can contain many namespaces.

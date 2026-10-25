@@ -22,9 +22,7 @@
          IntermediateOutputPath and TargetName are already resolved (#855). -->
     <GenerateDocumentationFile Condition=" '$(GenerateDocumentationFile)' == '' and '$(OutputType)' != 'Exe' ">true</GenerateDocumentationFile>
 
-    <!-- Phase 7.7b: ensure dotnet pack produces a .snupkg symbol package
-         carrying the Portable PDB alongside the main .nupkg. -->
-    <IncludeSymbols Condition=" '$(IncludeSymbols)' == '' ">true</IncludeSymbols>
+    <!-- Use Portable PDB symbol packages unless the project selects another format. -->
     <SymbolPackageFormat Condition=" '$(SymbolPackageFormat)' == '' ">snupkg</SymbolPackageFormat>
 
     <!-- Phase 7.7b: suppress NU5131 — our Pack target populates ref/<tfm>/
