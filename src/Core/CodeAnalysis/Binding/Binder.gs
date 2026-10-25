@@ -1031,7 +1031,7 @@ partial class Binder {
             ) {
                 child.Diagnostics.ReportAllPathsMustReturn(method.Declaration!!.Identifier.Location)
             }
-            AnalyzeFunctionBody(body, lowered, method, child.Diagnostics)
+            AnalyzeFunctionBody(body, lowered, method, child.Diagnostics, child.binderCtx.References)
             Diagnostics.AddRange(child.Diagnostics.ToImmutableArray())
             methodBodies[method] = lowered
         }
@@ -8220,7 +8220,13 @@ partial class Binder {
                                         VerifyConvenienceInitDelegatesFirst(ctor, ctorBody, ctorBinder.Diagnostics)
                                     }
                                     let lowered = Lowerer.Lower(ctorBody, structSym)
-                                    AnalyzeFunctionBody(ctorBody, lowered, ctor.Function, ctorBinder.Diagnostics)
+                                    AnalyzeFunctionBody(
+                                        ctorBody,
+                                        lowered,
+                                        ctor.Function,
+                                        ctorBinder.Diagnostics,
+                                        ctorBinder.binderCtx.References
+                                    )
                                     return BodyBindResult(lowered, ctorBinder.Diagnostics.ToImmutableArray())
                                 }
                             )
@@ -9006,7 +9012,13 @@ partial class Binder {
                                 !ControlFlowGraph.AllPathsReturn(lowered) {
                                 binder.Diagnostics.ReportAllPathsMustReturn(declaration.Identifier.Location)
                             }
-                            AnalyzeFunctionBody(body, lowered, function, binder.Diagnostics)
+                            AnalyzeFunctionBody(
+                                body,
+                                lowered,
+                                function,
+                                binder.Diagnostics,
+                                binder.binderCtx.References
+                            )
                             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
                         }
                     )
@@ -9064,7 +9076,13 @@ partial class Binder {
                                 .AllPathsReturn(lowered) {
                                 binder.Diagnostics.ReportAllPathsMustReturn(bodySyntax.OpenBraceToken.Location)
                             }
-                            AnalyzeFunctionBody(body, lowered, accessor, binder.Diagnostics)
+                            AnalyzeFunctionBody(
+                                body,
+                                lowered,
+                                accessor,
+                                binder.Diagnostics,
+                                binder.binderCtx.References
+                            )
                             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
                         }
                     )
@@ -9130,7 +9148,7 @@ partial class Binder {
                                 !ControlFlowGraph.AllPathsReturn(lowered) {
                                 binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation)
                             }
-                            AnalyzeFunctionBody(body, lowered, member, binder.Diagnostics)
+                            AnalyzeFunctionBody(body, lowered, member, binder.Diagnostics, binder.binderCtx.References)
                             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
                         }
                     )
@@ -9187,7 +9205,7 @@ partial class Binder {
                                 .AllPathsReturn(lowered) {
                                 binder.Diagnostics.ReportAllPathsMustReturn(structMethodDeclaration.Identifier.Location)
                             }
-                            AnalyzeFunctionBody(body, lowered, method, binder.Diagnostics)
+                            AnalyzeFunctionBody(body, lowered, method, binder.Diagnostics, binder.binderCtx.References)
                             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
                         }
                     )
@@ -9200,7 +9218,8 @@ partial class Binder {
             bound BoundStatement,
             lowered BoundBlockStatement,
             function FunctionSymbol,
-            diagnostics DiagnosticBag
+            diagnostics DiagnosticBag,
+            references ReferenceResolver
         ) {
             // Issue #4453: the protected-receiver rule reads the bound body, where
             // every receiver still has the static type the source gave it.
@@ -9211,7 +9230,7 @@ partial class Binder {
             if function.IsAsyncOrSuspending {
                 NativeSliceSuspensionAnalyzer(diagnostics).Visit(body)
             }
-            RefStructAsyncLivenessAnalyzer.Analyze(body, function, diagnostics)
+            RefStructAsyncLivenessAnalyzer.Analyze(body, function, diagnostics, references)
         }
 
         /// ADR-0140 / issue #2131: binds the `shared { init { … } }`

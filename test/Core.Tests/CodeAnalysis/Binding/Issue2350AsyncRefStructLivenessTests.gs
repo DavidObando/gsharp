@@ -11,6 +11,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import GSharp.Tests
+import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
@@ -26,6 +27,26 @@ import Xunit
 /// rejecting genuinely unsafe cases (live-across-suspension, capture, and
 /// unsafe finally interaction).
 open class Issue2350AsyncRefStructLivenessTests {
+    @Theory
+    @InlineData("pending Task[int32]", "await pending")
+    @InlineData("ch chan[int32]", "<-ch")
+    func SpillTemporaryDiagnosticRetainsSuspensionSourceRange(parameter string, suspension string) {
+        let source = `
+import System
+import System.Threading.Tasks
+func Consume(value ReadOnlySpan[byte], extra int32) int32 -> value.Length + extra
+async func Read(PARAMETER) Task[int32] -> Consume(ReadOnlySpan[byte]([]byte{65}), SUSPENSION)
+`.Replace("PARAMETER", parameter).Replace("SUSPENSION", suspension)
+        let text = SourceText.From(source)
+        let tree = SyntaxTree.Parse(text)
+        let compilation = Compilation(tree)
+        let program = Binder.BindProgram(compilation.GlobalScope, compilation.References)
+        let diagnostic = Assert.Single(program.Diagnostics.Where((d Diagnostic) -> d.Id == "GS0219"))
+        Assert.Same(text, diagnostic.Location.Text)
+        Assert.Equal(source.IndexOf(suspension, StringComparison.Ordinal), diagnostic.Location.Span.Start)
+        Assert.Equal(suspension.Length, diagnostic.Location.Span.Length)
+    }
+
     // The exact shape reported against Oahu.Diagnostics.PipelineProbeCheck:
     // a Span[T] local is scoped to a single loop iteration and is fully
     // consumed (read) before the loop's own `await`, so its value never

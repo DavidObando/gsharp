@@ -159,7 +159,12 @@ internal shared class SuspensionInference {
             }
             if newlySuspending.Contains(function) {
                 // The async-only analyses ran while this body was still plain.
-                RefStructAsyncLivenessAnalyzer.Analyze(rewritten.PreEmitAnalysisBody ?? rewritten, function, bag)
+                RefStructAsyncLivenessAnalyzer.Analyze(
+                    rewritten.PreEmitAnalysisBody ?? rewritten,
+                    function,
+                    bag,
+                    references
+                )
             }
         }
         for type in structs {
