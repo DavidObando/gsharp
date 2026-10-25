@@ -83,6 +83,17 @@ Console.WriteLine(Demo.Role(1) == Role.One)`
         )
     }
 
+    @Fact
+    func QualifiedTypeCall_DoesNotFallBackToLexicalTypeParameter() {
+        const Source = `package Demo
+interface Target {}
+func Create[Target init()]() {
+    Target()
+    Demo.Target()
+}`
+        CompileAndRun(Source, "(5,10,5,16): error GS0131:")
+    }
+
     @Theory
     @InlineData("Demo.Box(5)")
     @InlineData("Demo.Box{Value: 5}")

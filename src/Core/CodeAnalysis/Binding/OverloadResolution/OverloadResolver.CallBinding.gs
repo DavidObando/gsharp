@@ -661,6 +661,16 @@ internal partial class OverloadResolver {
         return nil
     }
 
+    private func IsConstructibleSourceType(type TypeSymbol?) bool -> type is StructSymbol aggregate &&
+        (
+        aggregate.IsClass ||
+            aggregate.IsInline ||
+            aggregate.HasPrimaryConstructor ||
+            !aggregate
+            .EffectiveExplicitConstructors
+            .IsDefaultOrEmpty
+    )
+
     /// Binds calls with the same conversion and construction rules for simple and qualified targets.
     /// @param syntax The call syntax.
     /// @param resolvedType The exact qualified target, or null for ordinary lookup.
@@ -811,14 +821,7 @@ internal partial class OverloadResolver {
                 }
             ) == ctorPreferredArity
         ) &&
-            (
-            sourceCtorStruct.IsClass ||
-                sourceCtorStruct.IsInline ||
-                sourceCtorStruct.HasPrimaryConstructor ||
-                !sourceCtorStruct
-                .ExplicitConstructors
-                .IsDefaultOrEmpty
-        )
+            IsConstructibleSourceType(sourceCtorStruct)
         // ADR-0187 / issue #4350: construction syntax that names a constructible
         // source type is never shadowed by receiver-clause EXTENSION functions
         // of the same name. C# never considers an extension method for `new
@@ -900,18 +903,7 @@ internal partial class OverloadResolver {
                 )
                 return conversions.BindConversion(syntax.Arguments[0], explicitConversionType, allowExplicit: true)
             }
-            if syntax.NullableQuestionToken != nil ||
-                !(
-                conversionType is StructSymbol constructibleSingleArgStruct &&
-                    (
-                    constructibleSingleArgStruct.IsClass ||
-                        constructibleSingleArgStruct.IsInline ||
-                        constructibleSingleArgStruct.HasPrimaryConstructor ||
-                        !constructibleSingleArgStruct
-                        .ExplicitConstructors
-                        .IsDefaultOrEmpty
-                )
-            ) {
+            if syntax.NullableQuestionToken != nil || !IsConstructibleSourceType(conversionType) {
                 // ADR-0047 §6 / #175: `Type(x)` as an explicit conversion
                 // is still a use of the named type.
                 reportObsoleteUseIfApplicable(
@@ -935,14 +927,7 @@ internal partial class OverloadResolver {
         // `Entry(1, 2)` lowers to a struct literal initializing its fields.
         if !hasNonConstructorCallable &&
             conversionType is StructSymbol classType &&
-            (
-            classType.IsClass ||
-                classType.IsInline ||
-                classType.HasPrimaryConstructor ||
-                !classType
-                .ExplicitConstructors
-                .IsDefaultOrEmpty
-        ) {
+            IsConstructibleSourceType(classType) {
             return BindConstructorCallExpression(syntax, classType)
         }
         // Issue #988: `T()` constructs the type parameter `T` when the enclosing
@@ -956,7 +941,7 @@ internal partial class OverloadResolver {
             .Arguments
             .Count == 0 &&
             syntax.TypeArgumentList == nil &&
-            lookupType(syntax.Identifier.ValueText) is TypeParameterSymbol typeParam {
+            (resolvedType ?? lookupType(syntax.Identifier.ValueText)) is TypeParameterSymbol typeParam {
             if typeParam.HasDefaultConstructorConstraint {
                 return BoundTypeParameterConstructionExpression(syntax, typeParam)
             }
