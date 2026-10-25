@@ -32,9 +32,17 @@ func terminateProcessTree(process *os.Process) error {
 			return nil
 		}
 		// Darwin can report EPERM while a killed group awaits reaping.
-		// Only ESRCH confirms that the group is gone.
 		if err != nil && !errors.Is(err, syscall.EPERM) {
 			return err
+		}
+		if err == nil {
+			exited, inspectErr := processGroupMembersExited(process.Pid)
+			if inspectErr != nil {
+				return fmt.Errorf("inspect process group %d: %w", process.Pid, inspectErr)
+			}
+			if exited {
+				return nil
+			}
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("process group %d did not terminate: %w", process.Pid, errors.Join(context.DeadlineExceeded, err))

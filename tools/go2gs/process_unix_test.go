@@ -63,10 +63,15 @@ func TestProcessGroupTerminationDrainsMissedDescendants(t *testing.T) {
 	if err := terminateProcessTree(parent.Process); err != nil {
 		t.Fatal(err)
 	}
-	if err := syscall.Kill(childPID, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("descendant %d survived process-group termination: %v", childPID, err)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(childPID, 0); errors.Is(err, syscall.ESRCH) {
+			drained = true
+			return
+		}
+		time.Sleep(time.Millisecond)
 	}
-	drained = true
+	t.Fatalf("descendant %d survived process-group termination", childPID)
 }
 
 func TestProcessGroupTerminationFailsWhenGroupDoesNotDrain(t *testing.T) {
@@ -75,10 +80,11 @@ func TestProcessGroupTerminationFailsWhenGroupDoesNotDrain(t *testing.T) {
 		err  error
 	}{{"successful-signal", nil}, {"permission-error", syscall.EPERM}} {
 		t.Run(test.name, func(t *testing.T) {
+			worker := startTestProcessGroup(t, 0, "sleep")
 			original := signalProcessGroup
 			t.Cleanup(func() { signalProcessGroup = original })
 			signalProcessGroup = func(int, syscall.Signal) error { return test.err }
-			err := cleanupProcessTree(&os.Process{Pid: 123})
+			err := cleanupProcessTree(worker.Process)
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("persistent process group did not report a termination deadline: %v", err)
 			}
@@ -118,6 +124,25 @@ func TestProcessRunnerCancellationDoesNotWaitAfterTerminationFailure(t *testing.
 	if elapsed := time.Since(started); elapsed >= 2*time.Second {
 		t.Fatalf("termination failure waited for the unkillable worker: %v", elapsed)
 	}
+}
+
+func startTestProcessGroup(t *testing.T, group int, helper string) *exec.Cmd {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(executable, "-test.run=^TestProcessHelper$")
+	cmd.Env = []string{"GO2GS_PROCESS_HELPER=" + helper}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: group}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	return cmd
 }
 
 func waitForTestChildPID(t *testing.T, path string) int {
