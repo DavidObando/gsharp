@@ -33,6 +33,11 @@ internal shared class ImportedAssemblySemantics {
 
     const TypeSemanticsMetadataKey string = "GSharp.TypeSemantics"
 
+    /// Gets the reserved initializer method name for the ADR-0214 imported literal protocol.
+    /// @param fieldName The initialized field.
+    /// @returns The compiler-generated method name.
+    internal func GetFieldInitializerMethodName(fieldName string) string -> "<>fieldInitializer$" + fieldName
+
     /// Issue #3329: the metadata key for the per-type magic-collection-field
     /// marker — recorded for EVERY gsc-compiled value-type struct with at
     /// least one ADR-0159 magic-collection-typed field (map/slice/fixed

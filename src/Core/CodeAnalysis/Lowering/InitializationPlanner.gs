@@ -9,6 +9,7 @@ import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Lowering.Iterators
 import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Core.CodeAnalysis.Syntax
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
@@ -106,6 +107,48 @@ internal shared class InitializationPlanner {
         let plans = program.Initializers.ToBuilder()
         let functions = program.Functions.ToBuilder()
         for type in program.Structs {
+            if type.ClrType == nil &&
+                type.IsData &&
+                !type.IsClass &&
+                !type.IsInline &&
+                !type
+                .NeedsSynthesizedValueStructDefaultCtor {
+                let methods = type.StaticMethods.ToBuilder()
+                for field in type.Fields {
+                    if !(field.Declaration is FieldDeclarationSyntax{Initializer: not nil}) ||
+                        !type
+                        .InstanceFieldInitializers
+                        .TryGetValue(field, out var expression) {
+                        continue
+                    }
+                    let name = ImportedAssemblySemantics.GetFieldInitializerMethodName(field.Name)
+                    // Imported literals need the expression, not an authored constructor
+                    // or an initializer for a field that the literal explicitly supplies.
+                    let function = methods.FirstOrDefault((method FunctionSymbol) -> method.Name == name) ??
+                        FunctionSymbol(
+                        name,
+                        ImmutableArray[ParameterSymbol].Empty,
+                        field.Type,
+                        declaration: nil,
+                        program.Packages.First((package_ PackageSymbol) -> package_.Name == type.PackageName),
+                        Accessibility.Public
+                    ){IsStatic = true, IsSpecialName = true, StaticOwnerType = type}
+                    if functions.ContainsKey(function) {
+                        continue
+                    }
+                    if !methods.Contains(function) {
+                        methods.Add(function)
+                    }
+                    functions.Add(
+                        function,
+                        BoundBlockStatement(
+                            expression.Syntax,
+                            ImmutableArray.Create[BoundStatement](BoundReturnStatement(expression.Syntax, expression))
+                        )
+                    )
+                }
+                type.SetStaticMethods(methods.ToImmutable())
+            }
             let fields = type.InstanceFieldInitializers.Values
             let primary = type.BaseConstructorInitializer?.Arguments ?? ImmutableArray[BoundExpression].Empty
             if (
@@ -220,7 +263,7 @@ internal shared class InitializationPlanner {
                 BoundBlockStatement(nil, statements)
             )
         }
-        if plans.Count == program.Initializers.Count {
+        if plans.Count == program.Initializers.Count && functions.Count == program.Functions.Count {
             return program
         }
         return BoundProgram(

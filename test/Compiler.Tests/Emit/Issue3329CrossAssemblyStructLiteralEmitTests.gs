@@ -26,6 +26,110 @@ import Xunit
 /// which is more convenient to drive from a test than a REPL session and
 /// confirms the fix is not REPL-specific.
 open class Issue3329CrossAssemblyStructLiteralEmitTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedDataStruct_OmittedInlineInitializersMatchLocalLiterals(useReferenceAssembly bool) {
+        const library = `package i5296defaults
+public enum Layout { Stacked, Compact }
+public data struct PropertyGrid {
+    public var Layout Layout
+    public var LabelWidth float64 = 160
+}
+public data struct SettingsLayoutInput {
+    public var SidebarWidth float64 = 180
+}`
+        const source = `import System
+import i5296defaults
+data struct LocalGrid {
+    public var LabelWidth float64 = 160
+}
+Console.WriteLine(LocalGrid{}.LabelWidth)
+Console.WriteLine(PropertyGrid{Layout: Layout.Compact}.LabelWidth)
+Console.WriteLine(SettingsLayoutInput{}.SidebarWidth)
+Console.WriteLine(PropertyGrid{Layout: Layout.Compact, LabelWidth: 160}.LabelWidth)`
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes("160\n160\n180\n160\n".ReplaceLineEndings(Environment.NewLine)),
+            System.Text.Encoding.UTF8.GetBytes(CompileAndRun(source, library, "i5296defaults", useReferenceAssembly))
+        )
+    }
+
+    @Fact
+    func ImportedDataStruct_InlineInitializersPreserveOverridesAndEvaluationOrder() {
+        const library = `package i5296order
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Next(mark string, value int32) int32 {
+            Trace = Trace + mark
+            return value
+        }
+    }
+}
+public data struct Imported {
+    public var A int32 = Effects.Next("A", 1)
+    public var B int32 = Effects.Next("B", 2)
+    public var C int32 = Effects.Next("C", 3)
+}`
+        const source = `import System
+import i5296order
+data struct Local {
+    public var A int32 = Effects.Next("A", 1)
+    public var B int32 = Effects.Next("B", 2)
+    public var C int32 = Effects.Next("C", 3)
+}
+let local = Local{C: Effects.Next("X", 9)}
+Console.WriteLine(Effects.Trace + ":" + local.A.ToString() + "," + local.B.ToString() + "," + local.C.ToString())
+Effects.Trace = ""
+let imported = Imported{C: Effects.Next("X", 9)}
+Console.WriteLine(Effects.Trace + ":" + imported.A.ToString() + "," + imported.B.ToString() + "," + imported.C.ToString())
+Effects.Trace = ""
+let empty = Imported{}
+Console.WriteLine(Effects.Trace + ":" + empty.A.ToString() + "," + empty.B.ToString() + "," + empty.C.ToString())
+Effects.Trace = ""
+let explicit = Imported{C: Effects.Next("X", 9), B: Effects.Next("Y", 8), A: Effects.Next("Z", 7)}
+Console.WriteLine(Effects.Trace + ":" + explicit.A.ToString() + "," + explicit.B.ToString() + "," + explicit.C.ToString())
+Effects.Trace = ""
+Console.WriteLine(default(Imported).A)
+let array = [1]Imported{}
+Console.WriteLine(array[0].A)
+Console.WriteLine(Effects.Trace.Length)`
+        Assert.Equal(
+            System
+                .Text
+                .Encoding
+                .UTF8
+                .GetBytes(
+                "XAB:1,2,9\nXAB:1,2,9\nABC:1,2,3\nXYZ:7,8,9\n0\n0\n0\n".ReplaceLineEndings(Environment.NewLine)
+            ),
+            System.Text.Encoding.UTF8.GetBytes(CompileAndRun(source, library, "i5296order"))
+        )
+    }
+
+    @Fact
+    func ImportedDataStruct_InlineInitializersRetainPrivateCallsAndCollectionValues() {
+        const library = `package i5296expressions
+public data struct Input {
+    public var Values []int32 = []int32{Seed()}
+    public var Text string = "seed:${Seed()}"
+    shared {
+        private func Seed() int32 -> 4
+    }
+}`
+        const source = `import System
+import i5296expressions
+let input = Input{}
+Console.WriteLine(input.Values.Length)
+if input.Values.Length != 0 {
+    Console.WriteLine(input.Values[0])
+}
+Console.WriteLine(input.Text)`
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes("1\n4\nseed:4\n".ReplaceLineEndings(Environment.NewLine)),
+            System.Text.Encoding.UTF8.GetBytes(CompileAndRun(source, library, "i5296expressions"))
+        )
+    }
+
     @Fact
     func PlainStruct_EmptyLiteral_SliceField_ZeroInitializesToEmptyNotNull() {
         const library = `package i3329lib1
@@ -299,10 +403,25 @@ System.Console.WriteLine(value.Counts.Count)`)
     }
 
     shared {
-        private func CompileAndRun(source string, library string? = nil, libraryAssemblyName string? = nil) string {
-            let tempDir = Directory.CreateTempSubdirectory("gs_3329_").FullName
+        private func CompileAndRun(
+            source string,
+            library string? = nil,
+            libraryAssemblyName string? = nil,
+            useReferenceAssembly bool = false
+        ) string {
+            let tempDir = Directory.CreateDirectory(
+                Path.Combine(AppContext.BaseDirectory, "gs_3329_" + Guid.NewGuid().ToString("N"))
+            )
+                .FullName
             try {
-                let dllPath = BuildExecutable(tempDir, source, library, libraryAssemblyName, out var libDll)
+                let dllPath = BuildExecutable(
+                    tempDir,
+                    source,
+                    library,
+                    libraryAssemblyName,
+                    out var libDll,
+                    useReferenceAssembly
+                )
                 let rtConfig = Path.ChangeExtension(dllPath, ".runtimeconfig.json")
                 if !File.Exists(rtConfig) {
                     File.WriteAllText(rtConfig, `{
@@ -352,16 +471,26 @@ stderr:
             source string,
             library string?,
             libraryAssemblyName string?,
-            out libDll string?
+            out libDll string?,
+            useReferenceAssembly bool
         ) string {
             libDll = nil
+            var libReference string? = nil
             if library != nil {
                 // ilverify resolves `-r` references by FILE NAME, so the library
                 // must be written out under its assembly identity.
                 let libSrc = Path.Combine(tempDir, libraryAssemblyName + ".gs")
                 libDll = Path.Combine(tempDir, libraryAssemblyName + ".dll")
                 File.WriteAllText(libSrc, library)
-                Compile([]string{"/out:" + libDll, "/target:library", "/targetframework:net10.0", libSrc})
+                let libraryArgs = List[string]{"/out:" + libDll, "/target:library", "/targetframework:net10.0", libSrc}
+                if useReferenceAssembly {
+                    libReference = Path.Combine(
+                        Directory.CreateDirectory(Path.Combine(tempDir, "ref")).FullName,
+                        libraryAssemblyName + ".dll"
+                    )
+                    libraryArgs.Add("/refout:" + libReference)
+                }
+                Compile(libraryArgs.ToArray())
                 IlVerifier.Verify(libDll!!)
             }
             let srcPath = Path.Combine(tempDir, "test.gs")
@@ -369,7 +498,7 @@ stderr:
             File.WriteAllText(srcPath, source)
             let args = List[string]{"/out:" + dllPath, "/target:exe", "/targetframework:net10.0"}
             if libDll != nil {
-                args.Add("/r:" + libDll)
+                args.Add("/r:" + (libReference ?? libDll))
             }
             args.Add(srcPath)
             Compile(args.ToArray())

@@ -1183,7 +1183,9 @@ The semantics match C#:
   nested aggregates and nonempty fixed arrays) reports `GS0604`, just like an
   explicit `default` of that type. Nullable handles remain legal defaults.
   Other public-only, non-generic literals retain inline
-  initialization for omitted fields. Braces do not execute an authored
+  initialization for omitted fields, including data structs imported from a
+  separately compiled G# assembly. Explicitly supplied fields skip their inline
+  initializers in these literals. Braces do not execute an authored
   constructor body; calling `T(...)` still does. Compiler-owned initialization
   remains distinct when an authored parameterless constructor exists. Braced
   member/content population runs after primary inputs and declaration
