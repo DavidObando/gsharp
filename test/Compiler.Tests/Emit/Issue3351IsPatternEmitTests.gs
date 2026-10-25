@@ -15,6 +15,87 @@ import Xunit
 /// Runtime and IL verification for boolean pattern `is` expressions.
 class Issue3351IsPatternEmitTests {
     @Theory
+    @InlineData("Demo.Wrapper?(nil)", "Tag", "nil\n0\n0\n0\n0\n")
+    @InlineData("NamespaceAlias.Wrapper?(Nothing())", "Read(Next(\"-read\"))", "nil\n0\n1\n0\n0\n")
+    @InlineData("Demo.Wrapper(Next(\"top\"))", "Read(Next(\"-read\"))", "top-read\n1\n2\n1\n0\n")
+    @InlineData("Demo.Wrapper{Tag: Next(\"top\")}", "Read(Next(\"-read\"))", "top-read\n1\n2\n1\n0\n")
+    @InlineData("Demo.Wrapper(){Tag = Next(\"top\")}", "Read(Next(\"-read\"))", "top-read\n1\n2\n1\n0\n")
+    @InlineData("Demo.Wrapper(){Next(\"top\")}", "Read(Next(\"-read\"))", "top-read\n1\n2\n1\n1\n")
+    func QualifiedConstructionContinuation_NullConditionalGuardsAndEvaluatesOnce(
+        construction string,
+        continuation string,
+        expected string
+    ) {
+        const Source = `package Demo
+import System
+import NamespaceAlias = Demo
+class Wrapper {
+    var Tag string = "top"
+    shared {
+        var Constructions int32
+        var Reads int32
+        var Adds int32
+    }
+    init() { Constructions += 1 }
+    init(tag string) {
+        Constructions += 1
+        Tag = tag
+    }
+    func Read(suffix string) string {
+        Reads += 1
+        return Tag + suffix
+    }
+    func Add(value string) {
+        Adds += 1
+        Tag = value
+    }
+}
+class Holder {
+    class Wrapper { var Tag string = "nested" }
+    shared {
+        var Arguments int32
+        func Next(value string) string {
+            Arguments += 1
+            return value
+        }
+        func Nothing() object? {
+            Arguments += 1
+            return nil
+        }
+    }
+    func Run() {
+        let value = CONSTRUCTION?.CONTINUATION
+        Console.WriteLine(value ?? "nil")
+        Console.WriteLine(Demo.Wrapper.Constructions)
+        Console.WriteLine(Arguments)
+        Console.WriteLine(Demo.Wrapper.Reads)
+        Console.WriteLine(Demo.Wrapper.Adds)
+    }
+}
+Holder().Run()`
+        let source = Source.Replace("CONSTRUCTION", construction).Replace("CONTINUATION", continuation)
+        let result = CompileAndRun(source)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(expected.Replace("\n", Environment.NewLine)),
+            Encoding.UTF8.GetBytes(result.Stdout)
+        )
+        CompileAndRun(
+            source.Replace("let value =", "let value string ="),
+            "(39,28,39,${28 + construction.Length + 2 + continuation.Length}): error GS0155:"
+        )
+    }
+
+    @Theory
+    @InlineData("Demo.Wrapper()")
+    @InlineData("Demo.Wrapper{}")
+    func QualifiedConstructionContinuation_NullConditionalRetainsNullableResultType(construction string) {
+        const Source = `package Demo
+class Wrapper { var Tag string = "top" }
+let value string = CONSTRUCTION?.Tag`
+        CompileAndRun(Source.Replace("CONSTRUCTION", construction), "(3,20,3,39): error GS0155:")
+    }
+
+    @Theory
     @InlineData("Demo.Derived(baseValue)", "Object.ReferenceEquals(baseValue, value)", "True\n")
     @InlineData("Demo.Wrapper?(nil)", "value == nil", "True\n0\n")
     @InlineData("Demo.Outer.Derived(nestedBaseValue)", "Object.ReferenceEquals(nestedBaseValue, value)", "True\n")

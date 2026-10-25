@@ -550,7 +550,14 @@ internal partial class ExpressionBinder {
                     ObjectCreationExpressionSyntax or
                     CollectionInitializerExpressionSyntax {
                     let receiver = BindQualifiedSourceTypeRemainder(accessor.LeftPart, sourceType)
-                    return BindAccessorStep(receiver, classSymbol: nil, accessor.RightPart)
+                    if receiver is BoundErrorExpression {
+                        return receiver
+                    }
+                    return if accessor.IsNullConditional {
+                        BindNullConditionalAccessExpressionCore(receiver, accessor.RightPart)
+                    } else {
+                        BindAccessorStep(receiver, classSymbol: nil, accessor.RightPart)
+                    }
                 }
                 var structure StructSymbol? = sourceType as StructSymbol
                 var interface_ InterfaceSymbol? = sourceType as InterfaceSymbol
