@@ -742,17 +742,23 @@ internal class MemberLookup {
 
     private class SymbolicInferenceConflictMarker { }
 
+    private class SourceInferenceBounds {
+        public var Exact TypeSymbol?
+        public var Lower TypeSymbol?
+        public let Upper List[TypeSymbol] = List[TypeSymbol]()
+    }
+
     private class SourceInferenceState {
         init(substitution Dictionary[TypeParameterSymbol, TypeSymbol]) {
             this.FixedParameters = HashSet[TypeParameterSymbol](substitution.Keys)
-            this.Bounds = Dictionary[TypeParameterSymbol, SymbolicInferenceBounds]()
+            this.Bounds = Dictionary[TypeParameterSymbol, SourceInferenceBounds]()
         }
 
         prop FixedParameters HashSet[TypeParameterSymbol] {
             get;
         }
 
-        prop Bounds Dictionary[TypeParameterSymbol, SymbolicInferenceBounds] {
+        prop Bounds Dictionary[TypeParameterSymbol, SourceInferenceBounds] {
             get;
         }
     }
@@ -6430,26 +6436,28 @@ internal class MemberLookup {
             }
             let byParameter = state.Bounds
             if !byParameter.TryGetValue(parameter, out var bounds) {
-                bounds = SymbolicInferenceBounds(1)
+                bounds = SourceInferenceBounds()
                 byParameter[parameter] = bounds
             }
-            bounds.Add(0, argument, kind)
-            let exact = bounds.Exact[0]
-            let lower = bounds.Lower[0]
-            let upper = bounds.Upper[0]
-            var fixedType TypeSymbol? = nil
-            if exact != nil && exact.Count > 0 {
-                for bound in exact {
-                    fixedType = MergeRecoveredTypeArgument(fixedType, bound, allowBaseWidening: false)
+            switch kind {
+                case SymbolicInferenceBoundKind.Exact {
+                    bounds.Exact = MergeRecoveredTypeArgument(bounds.Exact, argument, allowBaseWidening: false)
                 }
-            } else if lower != nil && lower.Count > 0 {
-                // A callback input is an upper bound, not a value that can widen
-                // lower evidence. A later value also replaces an input-only guess.
-                for bound in lower {
-                    fixedType = MergeRecoveredTypeArgument(fixedType, bound)
+                case SymbolicInferenceBoundKind.Upper {
+                    bounds.Upper.Add(argument)
                 }
-            } else if upper != nil && upper.Count > 0 {
-                fixedType = FindSymbolicInferenceCandidate(nil, upper) ?? upper[0]
+                case SymbolicInferenceBoundKind.MethodGroupUpper {
+                    return
+                }
+                default {
+                    bounds.Lower = MergeRecoveredTypeArgument(bounds.Lower, argument)
+                }
+            }
+            // Each summary retains the ordered fold without replaying earlier bounds.
+            // Upper evidence cannot widen lower evidence or replace an exact bound.
+            var fixedType = bounds.Exact ?? bounds.Lower
+            if fixedType == nil && bounds.Upper.Count > 0 {
+                fixedType = FindSymbolicInferenceCandidate(nil, bounds.Upper) ?? bounds.Upper[0]
             }
             if fixedType != nil {
                 substitution[parameter] = fixedType
