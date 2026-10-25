@@ -673,13 +673,21 @@ partial class Binder {
             //
             // Shadowing precedence (enforced by paramNames/seenMembers):
             //   parameter > instance member > static member.
-            for var ownerStruct StructSymbol? = (function.StaticOwnerType as StructSymbol) ??
-                (function.ReceiverType as StructSymbol);
+            let lexicalOwner StructSymbol? = (function.StaticOwnerType as StructSymbol) ??
+                (function.ReceiverType as StructSymbol)
+            for var ownerStruct = lexicalOwner;
                 ownerStruct != nil;
                 ownerStruct = ownerStruct!!.ContainingType as StructSymbol {
+                let isOuterOwner = !object.ReferenceEquals(ownerStruct, lexicalOwner)
                 if !ownerStruct.StaticFields.IsDefaultOrEmpty {
                     for fld in ownerStruct.StaticFields {
-                        if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) {
+                        if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) ||
+                            (
+                            isOuterOwner && !object.ReferenceEquals(
+                                memberLookup.FindLexicalMemberOwner(lexicalOwner!!, fld.Name),
+                                ownerStruct
+                            )
+                        ) {
                             continue
                         }
                         if seenMembers.Add(fld.Name) {
@@ -692,7 +700,13 @@ partial class Binder {
                 // as the compile-time constant value by the emitter/interpreter.
                 if !ownerStruct.ConstFields.IsDefaultOrEmpty {
                     for fld in ownerStruct.ConstFields {
-                        if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) {
+                        if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) ||
+                            (
+                            isOuterOwner && !object.ReferenceEquals(
+                                memberLookup.FindLexicalMemberOwner(lexicalOwner!!, fld.Name),
+                                ownerStruct
+                            )
+                        ) {
                             continue
                         }
                         if seenMembers.Add(fld.Name) {
@@ -702,7 +716,13 @@ partial class Binder {
                 }
                 if !ownerStruct.StaticProperties.IsDefaultOrEmpty {
                     for prop in ownerStruct.StaticProperties {
-                        if paramNames.Contains(prop.Name) || seenMembers.Contains(prop.Name) {
+                        if paramNames.Contains(prop.Name) || seenMembers.Contains(prop.Name) ||
+                            (
+                            isOuterOwner && !object.ReferenceEquals(
+                                memberLookup.FindLexicalMemberOwner(lexicalOwner!!, prop.Name),
+                                ownerStruct
+                            )
+                        ) {
                             continue
                         }
                         if seenMembers.Add(prop.Name) {
@@ -738,7 +758,13 @@ partial class Binder {
                 if !ownerStruct.StaticEvents.IsDefaultOrEmpty {
                     for evt in ownerStruct.StaticEvents {
                         if !evt.IsFieldLike || evt.BackingField == nil || paramNames.Contains(evt.Name) ||
-                            seenMembers.Contains(evt.Name) {
+                            seenMembers.Contains(evt.Name) ||
+                            (
+                            isOuterOwner && !object.ReferenceEquals(
+                                memberLookup.FindLexicalMemberOwner(lexicalOwner!!, evt.Name),
+                                ownerStruct
+                            )
+                        ) {
                             continue
                         }
                         if seenMembers.Add(evt.Name) {
@@ -747,17 +773,6 @@ partial class Binder {
                             )
                         }
                     }
-                }
-                // Instance names hide outer members without supplying an outer receiver.
-                for level in ownerStruct.GetHierarchy() {
-                    seenMembers.UnionWith(level.Fields.Select((field FieldSymbol) -> field.Name))
-                    seenMembers.UnionWith(
-                        level
-                            .Properties
-                            .Where((property PropertySymbol) -> !property.IsIndexer)
-                            .Select((property PropertySymbol) -> property.Name)
-                    )
-                    seenMembers.UnionWith(level.Events.Select((evt EventSymbol) -> evt.Name))
                 }
             }
             // ADR-0089 / issue #1030: expose interface static *state* by bare

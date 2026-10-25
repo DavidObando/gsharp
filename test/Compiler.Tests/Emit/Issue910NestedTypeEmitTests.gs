@@ -116,6 +116,157 @@ Outer().Run()`, "Write5262", true)
     }
 
     @Fact
+    func LexicalEventSubscriptionsCallDeclaringAccessorsInEvaluationOrder() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let executable = fixture.Compile(`package Events5262
+import System
+class Hub {
+    shared {
+        event Ticked Action?
+        func Raise() { Ticked?() }
+        func Stamp(handler Action) Action {
+            Console.Write("S")
+            return handler
+        }
+    }
+    class Subscriber {
+        func Adjust(handler Action) {
+            Ticked += Hub.Stamp(handler)
+            Ticked += Hub.Stamp(handler)
+            Hub.Raise()
+            Ticked -= Hub.Stamp(handler)
+            Hub.Raise()
+        }
+    }
+    func Run() { Subscriber().Adjust(func() { Console.Write("H") }) }
+}
+Hub().Run()`, "Events5262", true)
+        IlVerifier.Verify(executable)
+        let assembly = Assembly.Load(File.ReadAllBytes(executable))
+        let subscriber = assembly.GetType("Events5262.Hub+Subscriber")!!
+        let adjust = subscriber.GetMethod("Adjust")!!
+        let accessors = List[string]()
+        for instruction in IlInstructionReader.Read(adjust.GetMethodBody()!!.GetILAsByteArray()) {
+            if instruction.MetadataToken is {} token {
+                let called = adjust.Module.ResolveMethod(token)!!
+                if called.Name == "add_Ticked" || called.Name == "remove_Ticked" {
+                    accessors.Add(called.DeclaringType!!.FullName + "." + called.Name)
+                }
+            }
+        }
+        Assert.Equal(
+            []string{"Events5262.Hub.add_Ticked", "Events5262.Hub.add_Ticked", "Events5262.Hub.remove_Ticked"},
+            accessors.ToArray()
+        )
+        Assert.Equal(Encoding.UTF8.GetBytes("SSHHSH"), Encoding.UTF8.GetBytes(fixture.Run(executable)))
+    }
+
+    @Fact
+    func InheritedClrMembersHideLexicalStateWithoutChangingItsStorage() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace Foreign5262 {
+public class MutableBase {
+    public int Value { get; set; } = 5;
+    public int Field = 7;
+    private int Hidden = 9;
+}
+}`, "Foreign5262")
+        let executable = fixture.Compile(`package Imported5262
+import System
+class Outer {
+    shared {
+        var Message string = "outer"
+        var Value int32 = 100
+        var Field int32 = 200
+        var Hidden int32 = 300
+    }
+    class Error : Exception {
+        init() : base("inner") { }
+        func Read() string -> Message
+    }
+    class Mutable : Foreign5262.MutableBase {
+        func Update() {
+            Value += 2
+            Field = Field + 1
+            Console.Write(Value)
+            Console.Write("|")
+            Console.Write(Field)
+            Console.Write("|")
+            Console.Write(Hidden)
+        }
+    }
+    func Run() {
+        Console.Write(Error().Read())
+        Console.Write("|")
+        Console.Write(Message)
+        Console.Write("|")
+        Mutable().Update()
+        Console.Write("|")
+        Console.Write(Value)
+        Console.Write("|")
+        Console.Write(Field)
+    }
+}
+Outer().Run()`, "Imported5262", true, "/r:" + contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("inner|outer|7|8|300|100|200"),
+            Encoding.UTF8.GetBytes(fixture.Run(executable))
+        )
+    }
+
+    @Fact
+    func NearerInstanceSharedAndInheritedMethodsHideOuterCallbacks() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let executable = fixture.Compile(`package Methods5262
+import System
+open class Base { func Read() int32 -> 4 }
+class Outer {
+    shared { let Read () -> int32 = func() int32 { return 1 } }
+    class Instance {
+        func Read() int32 -> 2
+        func Pick() int32 {
+            let f () -> int32 = Read
+            return f()
+        }
+    }
+    class Static {
+        shared {
+            func Read() int32 -> 3
+            func Pick() int32 {
+                let f () -> int32 = Read
+                return f()
+            }
+        }
+    }
+    class Derived : Base {
+        func Pick() int32 {
+            let f () -> int32 = Read
+            return f()
+        }
+    }
+    class Fallback {
+        func Pick() int32 {
+            let f () -> int32 = Read
+            return f()
+        }
+    }
+    func Run() {
+        Console.Write(Instance().Pick())
+        Console.Write("|")
+        Console.Write(Static.Pick())
+        Console.Write("|")
+        Console.Write(Derived().Pick())
+        Console.Write("|")
+        Console.Write(Fallback().Pick())
+    }
+}
+Outer().Run()`, "Methods5262", true)
+        IlVerifier.Verify(executable)
+        Assert.Equal(Encoding.UTF8.GetBytes("2|3|4|1"), Encoding.UTF8.GetBytes(fixture.Run(executable)))
+    }
+
+    @Fact
     func IssueExample_NestedClassInClass_ConstructedFromEnclosingMethod_Runs() {
         let output = CompileAndRun(`package Oahu.Cli.Tests
 

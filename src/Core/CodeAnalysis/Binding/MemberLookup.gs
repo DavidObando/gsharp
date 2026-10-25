@@ -61,6 +61,47 @@ internal class MemberLookup {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
     }
 
+    /// Finds the nearest lexical type with a named member, including visible imported base members.
+    /// @param type The innermost lexical type.
+    /// @param name The source member name.
+    /// @returns The lexical lookup owner, or null when no member exists.
+    internal func FindLexicalMemberOwner(type StructSymbol, name string) StructSymbol? {
+        for var current StructSymbol? = type; current != nil; current = current!!.ContainingType as StructSymbol {
+            if TypeMemberModel.EnumerateMembers(current, MemberQuery.All).Any(
+                (member Symbol) -> member.Name == name && member is not PropertySymbol{IsIndexer: true}
+            ) ||
+                TypeMemberModel.TryGetStaticFieldIncludingInherited(current, name, out _, out _) {
+                return current
+            }
+            if ExpressionBinder.GetInheritedClrBaseType(current) is not{} clrBase {
+                continue
+            }
+            let canAccessInternals = (owner Type?) -> binderCtx.References.CanAccessInternalMembers(owner?.Assembly)
+            if ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrBase, name, canAccessInternals) != nil ||
+                ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, name, canAccessInternals) != nil {
+                return current
+            }
+            const flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance |
+            BindingFlags.Static | BindingFlags.FlattenHierarchy
+            if ClrTypeUtilities.SafeGetMethods(clrBase, flags).Any(
+                (method MethodInfo) -> method.Name == name && ClrMemberVisibility.IsVisibleFromDerived(
+                    method,
+                    canAccessInternals(method.DeclaringType)
+                )
+            ) {
+                return current
+            }
+            let eventInfo = ClrTypeUtilities.SafeGetEvent(clrBase, name, flags)
+            if eventInfo != nil && ClrMemberVisibility.IsVisibleFromDerived(
+                eventInfo.GetAddMethod(nonPublic: true),
+                canAccessInternals(eventInfo.DeclaringType)
+            ) {
+                return current
+            }
+        }
+        return nil
+    }
+
     private enum SymbolicInferenceBoundKind {
         Exact,
         Lower,
