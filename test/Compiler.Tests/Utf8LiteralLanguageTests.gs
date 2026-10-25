@@ -13,6 +13,99 @@ import Xunit
 
 class Utf8LiteralLanguageTests {
     @Theory
+    @InlineData("u8\"AB\".Slice(0, 1)", false)
+    @InlineData("ReadOnlySpan[byte]([]byte{65})", false)
+    @InlineData("u8\"AB\".Slice(0, 1)", true)
+    func InferredCallSuspensionChecksAlreadyAsyncBodies(expression string, lambda bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let body = if lambda {
+            `func Create() {
+    let read = async func(ch chan[int32]) int32 {
+        return Consume(EXPRESSION, Take(ch))
+    }
+}`
+        } else {
+            `async func Read(ch chan[int32]) int32 {
+    return Consume(EXPRESSION, Take(ch))
+}
+func Main() {
+    let channel = chan[int32]()
+    let pending = Read(channel)
+    channel <- 1
+    Console.WriteLine(pending.Result)
+}`
+        }
+        let (code, output) = fixture.TryCompile(`package Utf8InferredCall
+import System
+func Take(ch chan[int32]) int32 -> <-ch
+func Consume(value readonly span[byte], extra int32) int32 -> value.Length * 100 + extra
+BODY
+`.Replace("BODY", body).Replace("EXPRESSION", expression), "Utf8InferredCall", false)
+        Assert.NotEqual(0, code)
+        let diagnostic = Assert.Single(
+            output.Split('\n').Where((line string) -> line.Contains("GS0219", StringComparison.Ordinal))
+        )
+        Assert.Contains(
+            if lambda {
+                "(7,"
+            } else {
+                "(6,"
+            },
+            diagnostic,
+            StringComparison.Ordinal
+        )
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Utf8InferredCall.dll")))
+    }
+
+    @Fact
+    func InferredCallAnalysisDoesNotDuplicateExistingSuspensionDiagnostics() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`package Utf8InferredDuplicate
+func Take(ch chan[int32]) int32 -> <-ch
+func Consume(value readonly span[byte], extra int32) int32 -> value.Length + extra
+async func Read(ch chan[int32]) int32 {
+    let value = u8"A"
+    let received = <-ch
+    return Consume(value, received) + Take(ch)
+}
+`, "Utf8InferredDuplicate", false)
+        Assert.NotEqual(0, code)
+        let diagnostic = Assert.Single(
+            output.Split('\n').Where((line string) -> line.Contains("GS0219", StringComparison.Ordinal))
+        )
+        Assert.Contains("(5,", diagnostic, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Utf8InferredDuplicate.dll")))
+    }
+
+    @Fact
+    func InferredCallsPreserveSafeLiteralAndPostSuspensionConstructionOnEmptyChannels() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let assembly = fixture.Compile(`package Utf8InferredSafe
+import System
+func Take(ch chan[int32]) int32 -> <-ch
+func Consume(value readonly span[byte], extra int32) int32 -> int32(value[0]) + extra
+func ConsumeAfter(extra int32, value readonly span[byte]) int32 -> value.Length * 100 + extra
+async func Literal(ch chan[int32]) int32 -> Consume(u8"A", Take(ch))
+async func After(ch chan[int32]) int32 -> ConsumeAfter(Take(ch), u8"AB".Slice(0, 1))
+func Main() {
+    let first = chan[int32]()
+    let literal = Literal(first)
+    Console.WriteLine(literal.IsCompleted)
+    first <- 1
+    Console.WriteLine(literal.Result)
+    let second = chan[int32]()
+    let after = After(second)
+    Console.WriteLine(after.IsCompleted)
+    second <- 1
+    Console.WriteLine(after.Result)
+}`, "Utf8InferredSafe", true)
+        IlVerifier.Verify(assembly)
+        Assert.Equal("False\n66\nFalse\n101\n", fixture.Run(assembly))
+    }
+
+    @Theory
     @InlineData(`return Consume(u8"AB".Slice(0, 1), <-ch)`, "GS0219")
     @InlineData(`return Consume(ReadOnlySpan[byte]([]byte{65}), <-ch)`, "GS0219")
     @InlineData(`let value = u8"A"

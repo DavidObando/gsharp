@@ -126,6 +126,19 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                 .End
         )
             .ToList()
+        return SuppressDuplicateDiagnostics(existing, bind)
+    }
+
+    /// Suppresses exact existing reports during a whole-program analysis rerun.
+    /// @typeparam T The operation result.
+    /// @param bind The analysis operation.
+    /// @returns The operation result.
+    internal func SuppressDuplicateDiagnostics[T](bind() -> T) T -> SuppressDuplicateDiagnostics(
+        diagnostics.ToList(),
+        bind
+    )
+
+    private func SuppressDuplicateDiagnostics[T](existing List[Diagnostic], bind() -> T) T {
         if existing.Count == 0 {
             return bind()
         }
