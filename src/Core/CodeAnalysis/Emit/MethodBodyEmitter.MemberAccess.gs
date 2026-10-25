@@ -1719,7 +1719,7 @@ internal partial class MethodBodyEmitter {
         if fa.Receiver is BoundIndexExpression elementReceiver {
             return elementReceiver.IsArrayBackedElementAccess
         }
-        return false
+        return RefCapabilities.IsDirectlyAddressableForImplicitIn(fa.Receiver!!)
     }
 
     /// Issue #3185: emits the managed-pointer address of an addressable CLR

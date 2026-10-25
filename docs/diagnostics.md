@@ -2,6 +2,15 @@
 
 Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severity level, a human-readable message, and a source location (file, line, column). This document enumerates all identifiers so that project files can suppress or promote them using standard MSBuild properties.
 
+## Fixed-array ABI imports (ADR-0210 F1)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0630 | Error | A marked fixed-array contract has an unsupported revision/unsafe boundary, missing/incompatible canonical owner, malformed shape, unreadable/ambiguous relationship metadata or contradictory element nullability. | Reference the matching SDK-owned V1 definitions and correct producer metadata. Lengths must be 0-32 with canonical balanced children and identical element positions. Interface/base clauses, type/method constraints and inherited public signatures retain receiver-projected annotations. Resolve contradictory paths to one fixed-bearing interface; do not substitute arrays or lookalike carriers. |
+
+This validates explicitly marked CLR contracts; it does not enable the planned
+value lowering of ordinary source `[N]T`.
+
 ## Native CLR span aliases (ADR-0211)
 
 | Code | Severity | Meaning | Remedy |

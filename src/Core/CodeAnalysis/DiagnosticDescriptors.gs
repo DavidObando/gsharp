@@ -2577,6 +2577,11 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "Native protocol contract: {0}."
     )
+    internal let FixedArrayContract DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0630",
+        DiagnosticSeverity.Error,
+        "Fixed-array ABI contract: {0}."
+    )
     internal let NativeSpanType DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0631",
         DiagnosticSeverity.Error,

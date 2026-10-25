@@ -44,6 +44,8 @@ SAMPLES_DIR="$ROOT/samples"
 BASELINE_FILE="$ROOT/build/ilverify-known-failures.txt"
 TMP_BASE="${TMPDIR:-/tmp}"
 OUT_DIR="${GSHARP_ILVERIFY_OUT:-$(mktemp -d "${TMP_BASE%/}/gsharp-ilverify.XXXXXX")}"
+mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 FILTER="${1:-}"
 
 cleanup() {
@@ -162,23 +164,30 @@ verify_sample() {
         extra_refs=(-r "$EXTENSIONS_DLL")
     fi
 
-    local verify_output rc=0
-    verify_output="$(dotnet tool run ilverify "$dll" -s System.Private.CoreLib \
+    local verify_output verify_stderr rc=0
+    printf 'ilverify invocation:'
+    printf ' %q' dotnet tool run ilverify "$dll" -s System.Private.CoreLib \
+        "${REF_ARGS[@]}" ${extra_refs[@]+"${extra_refs[@]}"} ${ignore_args[@]+"${ignore_args[@]}"}
+    printf '\n'
+    dotnet tool run ilverify "$dll" -s System.Private.CoreLib \
         "${REF_ARGS[@]}" ${extra_refs[@]+"${extra_refs[@]}"} \
-        ${ignore_args[@]+"${ignore_args[@]}"} 2>&1)" || rc=$?
+        ${ignore_args[@]+"${ignore_args[@]}"} \
+        >"$OUT_DIR/$name.ilverify.stdout" 2>"$OUT_DIR/$name.ilverify.stderr" || rc=$?
+    verify_output="$(cat "$OUT_DIR/$name.ilverify.stdout")"
+    verify_stderr="$(cat "$OUT_DIR/$name.ilverify.stderr")"
 
-    # #5112: no category or sample allowlist. Check the reported method,
-    # instruction offset, slot metadata and generic constraint before accepting.
-    if [[ $rc -eq 2 ]] && printf '%s\n' "$verify_output" | dotnet "$DIAGNOSTICS_DLL" "$dll"; then
-        echo "PASS(verifier limitation, structurally checked) $name"
+    # Use the shared static-interface and finite return certificates. Do not ignore a diagnostic category.
+    if [[ $rc -eq 2 && ! -s "$OUT_DIR/$name.ilverify.stderr" ]] &&
+        printf '%s\n' "$verify_output" | dotnet "$DIAGNOSTICS_DLL" "$dll" --report; then
+        echo "PASS(approved verifier exception; raw exit=$rc, not strict unsuppressed success) $name"
         SUPPRESSED=$((SUPPRESSED + 1))
         PASSED=$((PASSED + 1))
         return 0
     fi
 
-    # Match on the file name, not the full path: ilverify echoes a normalized
-    # path that may differ from $dll (e.g. collapsed double slashes).
-    if [[ $rc -eq 0 && "$verify_output" == *"All Classes and Methods in "*"/$name.dll Verified."* ]]; then
+    # OUT_DIR is normalized. Require the exact verified subject and no stderr.
+    if [[ $rc -eq 0 && ! -s "$OUT_DIR/$name.ilverify.stderr" &&
+        "$verify_output" == "All Classes and Methods in $dll Verified." ]]; then
         if [[ -n "$codes" ]]; then
             echo "PASS(suppressed: $codes) $name"
             SUPPRESSED=$((SUPPRESSED + 1))
@@ -188,7 +197,10 @@ verify_sample() {
         PASSED=$((PASSED + 1))
     else
         echo "FAIL(ilverify rc=$rc) $name"
+        echo "raw stdout:"
         echo "$verify_output" | sed 's/^/    /'
+        echo "raw stderr:"
+        echo "$verify_stderr" | sed 's/^/    /'
         FAILED=$((FAILED + 1))
         FAILURES+=("$name (ilverify rc=$rc)")
     fi
