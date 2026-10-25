@@ -1670,16 +1670,23 @@ shared class CompletionComputer {
                 items.Add(CompletionItem{Label: keyword, Kind: CompletionItemKind.Keyword})
             }
         }
+        let keywordNames = HashSet[string](seen, StringComparer.Ordinal)
         // Add the names visible at the caret: locals and parameters, the enclosing type's
         // members, then the compilation's functions, variables and types (ADR-0212 slice S3).
         let model = BoundSemantics.GetPositionModel(compilation, content.SyntaxTree)
         if model != nil {
             for symbol in model.LookupSymbols(offset, nil, ct) {
                 ct.ThrowIfCancellationRequested()
-                if seen.Add(symbol.Name) {
+                // A name that is a keyword is written with its `$` escape (ADR-0170).
+                let written = if keywordNames.Contains(symbol.Name) || SyntaxFacts.IsReservedIdentifier(symbol.Name) {
+                    "$" + symbol.Name
+                } else {
+                    symbol.Name
+                }
+                if seen.Add(written) {
                     items.Add(
                         CompletionItem{
-                            Label: symbol.Name,
+                            Label: written,
                             Kind: GetCompletionKind(symbol),
                             Detail: HoverComputer.FormatSymbol(symbol)
                         }

@@ -534,6 +534,7 @@ partial class SemanticModel {
                 walker.Visit(body)
             }
             walker.Visit(program.Statement)
+            SemanticModel.RecordSymbolTypeClauses(declaredBySyntax, tree, typeClauseTokens)
             let localDeclarations = SemanticModel.CollectLocalDeclarations(declaredBySyntax)
             return SemanticModel.Index(
                 boundBySyntax,

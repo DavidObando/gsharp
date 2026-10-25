@@ -51,6 +51,23 @@ open class Adr0212ScopeFeatureTests {
     }
 
     @Fact
+    func Completion_WritesAKeywordNamedSymbolWithItsEscape() {
+        // The local `$type` is named `type`; written bare it would be the keyword.
+        let source = `package P
+func Escaped($params string) string {
+    let $type = $params
+    // caret
+    return $type
+}
+`
+        let items = Complete(source, "// caret")
+        Assert.Contains(items, (i CompletionItem) -> i.Label == "$$type")
+        // `params` is only special in a parameter list, so a use is written bare.
+        Assert.Contains(items, (i CompletionItem) -> i.Label == "params" && i.Kind == CompletionItemKind.Variable)
+        Assert.DoesNotContain(items, (i CompletionItem) -> i.Label == "type" && i.Kind == CompletionItemKind.Variable)
+    }
+
+    @Fact
     func Completion_ListsEachNameOnce() {
         let items = Complete(Source, "// caret")
         let labels = items.Select((i CompletionItem) -> i.Label).ToList()

@@ -212,62 +212,128 @@ partial class SemanticModel {
         result ImmutableArray[Symbol].Builder,
         seen HashSet[string]
     ) {
+        // Walk the lexically enclosing types, innermost first. The innermost type, when the position is in
+        // one of its members, offers its instance and static members (static only inside a `shared` member).
+        // Every type further out offers its static members, as a nested type sees them without qualification.
         var node SyntaxNode? = innermost
         var insideMember = false
         var isShared = false
-        var owner StructDeclarationSyntax? = nil
+        var sawType = false
         while node is {} current {
-            if current is FunctionDeclarationSyntax or ConstructorDeclarationSyntax or PropertyAccessorSyntax {
+            if current is FunctionDeclarationSyntax or
+                ConstructorDeclarationSyntax or
+                PropertyAccessorSyntax or
+                DeinitDeclarationSyntax {
                 insideMember = true
             } else if current is SharedBlockSyntax {
                 isShared = true
-            } else if current is StructDeclarationSyntax structDeclaration {
-                if insideMember {
-                    owner = structDeclaration
+            } else if current is StructDeclarationSyntax or InterfaceDeclarationSyntax {
+                if sawType || insideMember {
+                    let type TypeSymbol? = if current is StructDeclarationSyntax structDeclaration {
+                        StructSymbolOf(structDeclaration)
+                    } else {
+                        GetDeclaredSymbol(current) as TypeSymbol
+                    }
+                    if type != nil {
+                        let before = result.Count
+                        AddTypeMembers(type, !sawType && insideMember && !isShared, name, result, seen)
+                        if name != nil && result.Count > before {
+                            return
+                        }
+                    }
                 }
-                break
+                sawType = true
+                insideMember = false
+                isShared = false
             }
             node = current.Parent
         }
-        if owner == nil || StructSymbolOf(owner) is not{} structSymbol {
-            return
-        }
-        let query = if isShared {
-            MemberQuery.InheritedStatic()
-        } else {
+    }
+
+    private func AddTypeMembers(
+        type TypeSymbol,
+        includeInstance bool,
+        name string?,
+        result ImmutableArray[Symbol].Builder,
+        seen HashSet[string]
+    ) {
+        let query = if includeInstance {
             MemberQuery.All
+        } else {
+            MemberQuery.InheritedStatic()
+        }
+        let hierarchy = if type is StructSymbol structSymbol {
+            structSymbol.GetHierarchy()
+        } else {
+            List[StructSymbol]()
         }
         if name != nil {
-            var member = TypeMemberModel.LookupMember(structSymbol, name, query)
-            if member != nil && !IsReceiverlessMember(member, structSymbol) {
+            var member = TypeMemberModel.LookupMember(type, name, query)
+            if member != nil && !IsReceiverlessMember(member, type) {
                 member = nil
             }
-            member ??= FindConstant(structSymbol, name)
+            // An interface's own private helpers are not part of its member surface.
+            if member == nil && type is InterfaceSymbol declaringInterface {
+                member = declaringInterface
+                    .Methods
+                    .Concat(declaringInterface.PrivateMethods)
+                    .FirstOrDefault((m FunctionSymbol) -> string.Equals(m.Name, name, StringComparison.Ordinal))
+            }
+            // A constant is held apart from the other fields and is static; the nearest declaring type
+            // wins over a member the hierarchy has further up.
+            if FindConstant(hierarchy, name, type) is {} constant &&
+                (member == nil || DepthOf(constant, hierarchy) <= DepthOf(member, hierarchy)) {
+                member = constant
+            }
             if member != nil && seen.Add(member.Name) {
                 result.Add(member)
             }
             return
         }
-        for member in TypeMemberModel.EnumerateMembers(structSymbol, query) {
-            if IsReceiverlessMember(member, structSymbol) && IsListable(member.Name) && seen.Add(member.Name) {
-                result.Add(member)
+        let candidates = List[(Depth int32, Member Symbol)]()
+        for member in TypeMemberModel.EnumerateMembers(type, query) {
+            if IsReceiverlessMember(member, type) && IsListable(member.Name) {
+                candidates.Add((DepthOf(member, hierarchy), member))
             }
         }
-        // Constants are held apart from the other fields and are static.
-        for type in structSymbol.GetHierarchy() {
-            for constant in type.ConstFields {
-                if IsReceiverlessMember(constant, structSymbol) && IsListable(constant.Name) && seen.Add(
-                    constant.Name
-                ) {
-                    result.Add(constant)
+        if type is InterfaceSymbol ownInterface {
+            for method in ownInterface.Methods.Concat(ownInterface.PrivateMethods) {
+                if IsListable(method.Name) {
+                    candidates.Add((0, method))
                 }
+            }
+        }
+        for var depth = 0; depth < hierarchy.Count; depth++ {
+            for constant in hierarchy[depth].ConstFields {
+                if IsReceiverlessMember(constant, type) && IsListable(constant.Name) {
+                    candidates.Add((depth, constant))
+                }
+            }
+        }
+        for candidate in candidates.OrderBy((c(Depth int32, Member Symbol)) -> c.Depth) {
+            if seen.Add(candidate.Member.Name) {
+                result.Add(candidate.Member)
             }
         }
     }
 
+    /// How far up the hierarchy [`member`](paramref) is declared: 0 for the type itself.
+    private func DepthOf(member Symbol, hierarchy List[StructSymbol]) int32 {
+        let owner = member.ContainingType
+        for var depth = 0; depth < hierarchy.Count; depth++ {
+            if object.ReferenceEquals(hierarchy[depth], owner) || object.ReferenceEquals(
+                hierarchy[depth].Definition,
+                owner
+            ) {
+                return depth
+            }
+        }
+        return 0
+    }
+
     /// Whether a bare name can bind to [`member`](paramref) inside [`current`](paramref): not an
     /// indexer, not a field-like event's backing field, and not a private member of a base type.
-    private func IsReceiverlessMember(member Symbol, current StructSymbol) bool {
+    private func IsReceiverlessMember(member Symbol, current TypeSymbol) bool {
         if member is PropertySymbol{IsIndexer: true} || member is FieldSymbol{IsEventBackingField: true} {
             return false
         }
@@ -281,13 +347,18 @@ partial class SemanticModel {
         if accessibility == Accessibility.Private {
             let owner = member.ContainingType
             return owner == nil || object.ReferenceEquals(owner, current) ||
-                (current.Definition != nil && object.ReferenceEquals(owner, current.Definition))
+                (
+                current is StructSymbol{Definition: not nil} definition && object.ReferenceEquals(
+                    owner,
+                    definition.Definition
+                )
+            )
         }
         return true
     }
 
-    private func FindConstant(current StructSymbol, name string) Symbol? {
-        for type in current.GetHierarchy() {
+    private func FindConstant(hierarchy List[StructSymbol], name string, current TypeSymbol) Symbol? {
+        for type in hierarchy {
             for constant in type.ConstFields {
                 if string.Equals(constant.Name, name, StringComparison.Ordinal) &&
                     IsReceiverlessMember(constant, current) {
@@ -469,6 +540,13 @@ partial class SemanticModel {
         }
         if parent is PropertyAccessorSyntax accessor {
             return Region(accessor, accessor.Span.Start, accessor.Span.End)
+        }
+        // A `fixed` pointer lives in its body; a `select` receive binding lives in its case body.
+        if parent is FixedStatementSyntax fixedStatement {
+            return BodyRegion(fixedStatement, fixedStatement.Body)
+        }
+        if parent is SelectCaseSyntax selectCase {
+            return BodyRegion(selectCase, selectCase.Body)
         }
         if anchor.FirstAncestorOrSelf[ParameterSyntax]() is {} parameter {
             var owner SyntaxNode? = parameter.Parent
@@ -665,7 +743,7 @@ partial class SemanticModel {
 
         /// Whether a name is one a user wrote, as opposed to a synthesized one.
         private func IsListable(name string?) bool {
-            return !string.IsNullOrEmpty(name) && name!![0] != '<' && name!![0] != '$'
+            return !string.IsNullOrEmpty(name) && name!![0] != '<' && name!![0] != '$' && name != "_"
         }
 
         /// Collects the local variables, parameters and local functions declared in the tree, in
@@ -723,20 +801,28 @@ partial class SemanticModel {
             for function in globalScope.Functions {
                 RecordFunctionTypeClauses(function, tree, typeClauseTokens)
             }
+            for declaredInterface in globalScope.Interfaces {
+                for method in declaredInterface.Methods {
+                    RecordFunctionTypeClauses(method, tree, typeClauseTokens)
+                }
+            }
             for aggregate in globalScope.Structs {
                 if aggregate.Declaration is not{} declaration {
                     continue
                 }
                 // A field is matched to its symbol by the identifier that declares it: the symbol array also
                 // holds primary-constructor fields and leaves constants out, so the two do not line up.
+                let fieldSymbols = aggregate
+                    .Fields
+                    .Concat(aggregate.StaticFields)
+                    .Concat(aggregate.ConstFields)
+                    .ToArray()
                 for field in declaration.Fields {
-                    if field.Identifier is {} fieldIdentifier {
-                        for fieldSymbol in aggregate.Fields {
-                            if string.Equals(fieldSymbol.Name, fieldIdentifier.Text, StringComparison.Ordinal) {
-                                RecordTypeClause(field.Type, fieldSymbol.Type, tree, typeClauseTokens)
-                                break
-                            }
-                        }
+                    RecordFieldTypeClause(field, fieldSymbols, tree, typeClauseTokens)
+                }
+                if declaration.SharedBlock is {} sharedBlock {
+                    for field in sharedBlock.Fields {
+                        RecordFieldTypeClause(field, fieldSymbols, tree, typeClauseTokens)
                     }
                 }
                 for method in aggregate.Methods.Concat(aggregate.StaticMethods) {
@@ -751,6 +837,51 @@ partial class SemanticModel {
                             typeClauseTokens
                         )
                     }
+                }
+            }
+        }
+
+        private func RecordFieldTypeClause(
+            field FieldDeclarationSyntax,
+            fieldSymbols[]FieldSymbol,
+            tree SyntaxTree,
+            typeClauseTokens Dictionary[SyntaxToken, TypeSymbol]
+        ) {
+            if field.Identifier is not{} fieldIdentifier {
+                return
+            }
+            for fieldSymbol in fieldSymbols {
+                if string.Equals(fieldSymbol.Name, fieldIdentifier.ValueText, StringComparison.Ordinal) {
+                    RecordTypeClause(field.Type, fieldSymbol.Type, tree, typeClauseTokens)
+                    return
+                }
+            }
+        }
+
+        /// Pairs the type clause of each declared variable, parameter and property with the declared type.
+        private func RecordSymbolTypeClauses(
+            declaredBySyntax Dictionary[SyntaxNode, Symbol],
+            tree SyntaxTree,
+            typeClauseTokens Dictionary[SyntaxToken, TypeSymbol]
+        ) {
+            for pair in declaredBySyntax {
+                if pair.Key is not SyntaxToken identifier {
+                    continue
+                }
+                switch pair.Value {
+                    case variable is VariableSymbol {
+                        if identifier.Parent is VariableDeclarationSyntax declaration {
+                            RecordTypeClause(declaration.TypeClause, variable.Type, tree, typeClauseTokens)
+                        } else if identifier.Parent is ParameterSyntax parameterSyntax {
+                            RecordTypeClause(parameterSyntax.Type, variable.Type, tree, typeClauseTokens)
+                        }
+                    }
+                    case property is PropertySymbol {
+                        if identifier.Parent is PropertyDeclarationSyntax propertyDeclaration {
+                            RecordTypeClause(propertyDeclaration.Type, property.Type, tree, typeClauseTokens)
+                        }
+                    }
+                    default { }
                 }
             }
         }
@@ -778,7 +909,7 @@ partial class SemanticModel {
             for syntaxParameter in syntaxParameters {
                 if syntaxParameter.Identifier is {} parameterIdentifier {
                     for parameter in parameters {
-                        if string.Equals(parameter.Name, parameterIdentifier.Text, StringComparison.Ordinal) {
+                        if string.Equals(parameter.Name, parameterIdentifier.ValueText, StringComparison.Ordinal) {
                             RecordTypeClause(syntaxParameter.Type, parameter.Type, tree, typeClauseTokens)
                             break
                         }

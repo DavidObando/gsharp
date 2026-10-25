@@ -54,7 +54,7 @@ shared class BoundSemantics {
         if declared != nil {
             return declared
         }
-        let symbols = bound.Model.LookupSymbols(bound.Token.Span.Start, bound.Token.Text)
+        let symbols = bound.Model.LookupSymbols(bound.Token.Span.Start, bound.Token.ValueText)
         return if symbols.IsDefaultOrEmpty {
             default(Symbol?)
         } else {
