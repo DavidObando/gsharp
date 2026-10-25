@@ -12620,9 +12620,8 @@ partial class Binder {
                 // `(...)->void` overload (spurious GS0266). Skipping the binding
                 // leaves the type parameter un-inferred, so the candidate is
                 // rejected and the `(...)->void` overload wins unambiguously.
-                // A throw-only result supplies no emittable type argument (issue #5273).
-                if argumentType == TypeSymbol.Void ||
-                    argumentType == TypeSymbol.Never ||
+                // A nested throw-only result supplies no emittable type argument (issue #5273).
+                if argumentType == TypeSymbol.Void || TypeSymbol.ContainsNeverType(argumentType) ||
                     TypeSymbol.ContainsNullLiteralType(argumentType) {
                     return
                 }

@@ -128,4 +128,64 @@ func Main() {
         IlVerifier.Verify(dll)
         Assert.Equal("7\ninferred\nexplicit\n", fixture.Run(dll))
     }
+
+    @Theory
+    @InlineData("() -> throw Exception()")
+    @InlineData("() -> (() -> throw Exception())")
+    @InlineData("(1, () -> throw Exception())")
+    func NestedThrowOnlyCallbackWithoutTypeEvidenceReportsInferenceFailure(result string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let references = ReferenceClosure.RefPackAssemblies().Select((path string) -> "/r:" + path).ToArray()
+        let source = (`package RejectNestedNever5273
+import System
+func Invoke[T](callback Func[T]) int32 -> 0
+func Main() {
+    Invoke(() -> ` + result + `)
+}`)
+        let (code, output) = fixture.TryCompile(source, "RejectNestedNever5273", true, references)
+        Assert.NotEqual(0, code)
+        Assert.True(
+            output.Contains("RejectNestedNever5273.gs(5,5,5,11): error GS0151:", StringComparison.Ordinal),
+            output
+        )
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "RejectNestedNever5273.dll")))
+    }
+
+    @Fact
+    func NestedThrowOnlyCallbackKeepsUsefulEvidenceAndLegalVoidReturns() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let references = ReferenceClosure.RefPackAssemblies().Select((path string) -> "/r:" + path).ToArray()
+        let dll = fixture.Compile(`package ContextualNestedNever5273
+import System
+import System.Threading.Tasks
+func FromInput[T](callback Func[T, T]) int32 -> 7
+func Seeded[T](callback Func[T], value T) T -> callback()
+func Identity[T](value T) T -> value
+func Main() {
+    Console.WriteLine(FromInput((value Func[int32]) -> (() -> throw Exception("unused"))))
+    let inferred = Seeded(() -> (() -> throw Exception("inferred")), () -> 42)
+    try {
+        inferred()
+    } catch (ex Exception) {
+        Console.WriteLine(ex.Message)
+    }
+    let explicit = Seeded[Func[int32]](() -> (() -> throw Exception("explicit")), () -> 43)
+    try {
+        explicit()
+    } catch (ex Exception) {
+        Console.WriteLine(ex.Message)
+    }
+    let action = Identity(() -> Console.WriteLine("void"))
+    action()
+    let task = Identity(Task.FromResult(() -> throw Exception("task")))
+    try {
+        task.Result()
+    } catch (ex Exception) {
+        Console.WriteLine(ex.Message)
+    }
+}`, "ContextualNestedNever5273", true, references)
+        IlVerifier.Verify(dll)
+        Assert.Equal("7\ninferred\nexplicit\nvoid\ntask\n", fixture.Run(dll))
+    }
 }
