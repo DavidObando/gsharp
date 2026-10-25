@@ -1704,12 +1704,18 @@ shared class CompletionComputer {
                     if aliasDeclaration.Identifier is not{} aliasIdentifier || aliasIdentifier.IsMissing {
                         continue
                     }
-                    let aliasName = aliasIdentifier.Text
-                    if !seen.Add(aliasName) {
+                    // The semantic name finds the alias; a keyword-named alias is written with its escape.
+                    let aliasName = aliasIdentifier.ValueText
+                    let written = if keywordNames.Contains(aliasName) || SyntaxFacts.IsReservedIdentifier(aliasName) {
+                        "$" + aliasName
+                    } else {
+                        aliasName
+                    }
+                    if !seen.Add(written) {
                         continue
                     }
                     let target = model.LookupSymbols(offset, aliasName, ct)
-                    let item = CompletionItem{Label: aliasName, Kind: CompletionItemKind.Class}
+                    let item = CompletionItem{Label: written, Kind: CompletionItemKind.Class}
                     if !target.IsDefaultOrEmpty {
                         item.Kind = GetCompletionKind(target[0])
                         item.Detail = HoverComputer.FormatSymbol(target[0])

@@ -47,7 +47,8 @@ open class Adr0212ScopeFeatureTests {
         // LookupSymbols cannot list an alias (no alias symbol); completion still offers its name.
         let items = Complete(Source, "// caret")
         Assert.Contains(items, (i CompletionItem) -> i.Label == "Meters")
-        Assert.Contains(items, (i CompletionItem) -> i.Label == "Feet")
+        // `type $Feet` is the alias `Feet`; its target is found by the semantic name.
+        Assert.Contains(items, (i CompletionItem) -> i.Label == "Feet" && i.Detail != nil)
     }
 
     @Fact
@@ -135,7 +136,7 @@ class Unrelated {
     shared {
         private const Source string = `package P
 type Meters = int32
-type Feet = int32
+type $Feet = int32
 class Holder {
     var Field int32
     func Other() int32 { return 1 }

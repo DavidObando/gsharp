@@ -198,6 +198,11 @@ partial class SemanticModel {
         if EnclosingSymbolOf(innermost, cancellationToken) is not FunctionSymbol function {
             return
         }
+        // The arguments of `: base(...)` see no `this`.
+        if innermost.FirstAncestorOrSelf[ConstructorDeclarationSyntax]() is {} header &&
+            !IsInConstructorBody(header, innermost) {
+            return
+        }
         if function.ThisParameter is {} thisParameter &&
             (name == nil || string.Equals(thisParameter.Name, name, StringComparison.Ordinal)) &&
             seen.Add(thisParameter.Name) {
@@ -239,6 +244,9 @@ partial class SemanticModel {
                 PropertyAccessorSyntax or
                 DeinitDeclarationSyntax {
                 insideMember = true
+                if current is ConstructorDeclarationSyntax constructor && !IsInConstructorBody(constructor, innermost) {
+                    isShared = true
+                }
             } else if current is SharedBlockSyntax {
                 isShared = true
             } else if current is StructDeclarationSyntax or InterfaceDeclarationSyntax {
@@ -537,8 +545,18 @@ partial class SemanticModel {
 
     /// Gets the region in which the local declared at [`anchor`](paramref) is
     /// visible, and the node that owns the region.
+    /// Whether [`node`](paramref) is in the body of [`constructor`](paramref), not in its parameter list
+    /// or base-initializer arguments.
+    private func IsInConstructorBody(constructor ConstructorDeclarationSyntax, node SyntaxNode) bool {
+        return node.Span.Start >= constructor.Body.Span.Start && node.Span.Start < constructor.Body.Span.End
+    }
+
     private func RegionOf(anchor SyntaxNode) Region? {
         let parent = anchor.Parent
+        // A token the binder synthesized (the implicit `ctx` of a `scope`) has no place in the tree.
+        if parent == nil {
+            return nil
+        }
         if parent is IfLetBindingClauseSyntax clause {
             var owner SyntaxNode? = clause.Parent
             while owner != nil &&
@@ -627,6 +645,14 @@ partial class SemanticModel {
                 return Region(ancestor, anchor.Span.End, ancestor.Span.End)
             }
             ancestor = ancestor.Parent
+        }
+        // The variables of `let (a, b) = ...` and `let {A: a} = ...` are visible after the statement, not in
+        // its own initializer.
+        if anchor.FirstAncestorOrSelf[StatementSyntax]() is {} deconstruction &&
+            deconstruction is TupleDeconstructionStatementSyntax or
+            NamedDeconstructionStatementSyntax {
+            let block = EnclosingBlock(deconstruction)
+            return Region(block, deconstruction.Span.End, block.Span.End)
         }
         // A pattern variable of an `is` pattern is scoped to the statement that holds the test. The
         // binder also lets it leak past an early exit (`if !(x is T t) { return }`); that depends on

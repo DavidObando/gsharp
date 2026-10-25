@@ -115,6 +115,32 @@ open class Adr0212ScopeConformanceTests {
     }
 
     @Fact
+    func ConstructorBaseInitializer_SeesParametersButNoInstanceMembersOrThis() {
+        let model = Compiled
+        let inArguments = Program.IndexOf("base(n)", StringComparison.Ordinal) + 5
+        let names = model.LookupSymbols(inArguments).Select((s Symbol) -> s.Name).ToList()
+        Assert.Contains("n", names)
+        Assert.DoesNotContain("Field2", names)
+        Assert.DoesNotContain("this", names)
+        Assert.Contains("Field2", Names("PCtorBody"))
+        Assert.Contains("this", Names("PCtorBody"))
+    }
+
+    @Fact
+    func Deconstruction_IsNotVisibleInItsOwnInitializer() {
+        let inInitializer = Program.IndexOf("(x, 2)", StringComparison.Ordinal) + 1
+        let found = Assert.Single(Compiled.LookupSymbols(inInitializer, "x"))
+        Assert.True(found.DeclaringSyntaxNodes[0].Span.Start < Program.IndexOf("let (x, y)", StringComparison.Ordinal))
+        Assert.Contains("y", Names("PDecon"))
+    }
+
+    @Fact
+    func ImplicitScopeContext_HasNoPlaceInTheTree() {
+        Assert.DoesNotContain("ctx", Names("PAfterScope"))
+        Assert.DoesNotContain("ctx", Names("PEscaped"))
+    }
+
+    @Fact
     func InterfaceSharedMember_SeesStaticMembersOnly() {
         let names = Names("PIfaceShared")
         Assert.Contains("Hidden", names)
@@ -279,6 +305,14 @@ open class Adr0212ScopeConformanceTests {
         private func CompareName(model SemanticModel, token SyntaxToken, file string, mismatches List[string]) int32 {
             let bound = model.GetSymbolInfo(token).Symbol
             if bound == nil || bound is TypeParameterSymbol || bound is ImportedFunctionSymbol {
+                return 0
+            }
+            // Known gap, #5340: the implicit `ctx` of a `scope` is declared by a token with no place in the
+            // tree, so the scope queries do not offer it.
+            if !bound
+                .DeclaringSyntaxNodes
+                .IsDefaultOrEmpty &&
+                bound.DeclaringSyntaxNodes[0] is SyntaxToken{Parent: nil} {
                 return 0
             }
             // Known gap, #5334: the variable of an `is` pattern follows the binder's flow regions.
@@ -458,6 +492,33 @@ func Discards(_ int32, _ int32, kept int32) int32 {
 
 func Helper() int32 {
     return 0
+}
+
+open class Base2 {
+    var Field2 int32
+    init(v int32) { }
+}
+
+class Derived2 : Base2 {
+    init(n int32) : base(n) {
+        Field2 = n // PCtorBody
+    }
+}
+
+func Decon() int32 {
+    let x = 1
+    if true {
+        let (x, y) = (x, 2) // PDecon
+        return x + y
+    }
+    return x
+}
+
+func Scoped() int32 {
+    scope {
+        let a = 1
+    }
+    return 0 // PAfterScope
 }
 
 interface IStat {
