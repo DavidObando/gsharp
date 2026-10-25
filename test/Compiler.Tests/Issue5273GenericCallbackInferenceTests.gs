@@ -1,4 +1,4 @@
-// <copyright file="Issue5273GenericCallbackInferenceTests.cs" company="GSharp">
+// <copyright file="Issue5273GenericCallbackInferenceTests.gs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
