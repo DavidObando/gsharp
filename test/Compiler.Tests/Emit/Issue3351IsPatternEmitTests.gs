@@ -9,10 +9,95 @@ import GSharp.Compiler.Tests
 import System
 import System.Diagnostics
 import System.IO
+import System.Text
 import Xunit
 
 /// Runtime and IL verification for boolean pattern `is` expressions.
 class Issue3351IsPatternEmitTests {
+    @Theory
+    @InlineData("Role", "Role.TextInput")
+    @InlineData("Role", "Repro.Role.TextInput")
+    @InlineData("Role", "RoleAlias.TextInput")
+    @InlineData("Role", "Role.StringBuilder")
+    @InlineData("Role", "Repro.Role.StringBuilder")
+    @InlineData("Role", "RoleAlias.StringBuilder")
+    @InlineData("System.DayOfWeek", "System.DayOfWeek.Monday")
+    func QualifiedEnumConstant_WithTypeHomonym_RunsInEveryPatternContext(enumType string, constant string) {
+        const Source = `package Repro
+import System
+import System.Text
+import RoleAlias = Repro.Role
+import TextInputAlias = Repro.TextInput
+import NamespaceAlias = Repro
+import SystemAlias = System
+
+public enum Role { TextInput, StringBuilder, Other }
+public class TextInput { }
+public class Monday { }
+class Holder { prop Value ENUMTYPE { get; init; } }
+class Outer { public class TextInput { } }
+
+let role = CONSTANT
+Console.WriteLine(role is CONSTANT)
+Console.WriteLine(role == CONSTANT)
+Console.WriteLine(role !is CONSTANT)
+Console.WriteLine(role is not CONSTANT)
+Console.WriteLine(role is (CONSTANT))
+Console.WriteLine(role is CONSTANT or == role)
+Console.WriteLine(role is CONSTANT and not nil)
+Console.WriteLine(switch role { case CONSTANT: "hit" default: "miss" })
+switch role {
+    case CONSTANT { Console.WriteLine("hit") }
+    default { Console.WriteLine("miss") }
+}
+Console.WriteLine([]ENUMTYPE{role} is [CONSTANT])
+Console.WriteLine(Holder{Value: role} is { Value: CONSTANT })
+let other = Role.Other
+Console.WriteLine(other is Role.TextInput)
+Console.WriteLine(other is Role.StringBuilder)
+let value object = TextInput{}
+Console.WriteLine(value is TextInput)
+Console.WriteLine(value is Repro.TextInput)
+Console.WriteLine(value is TextInputAlias)
+Console.WriteLine(value is NamespaceAlias.TextInput)
+Console.WriteLine(value is System.Text.StringBuilder)
+let builder object = StringBuilder{}
+Console.WriteLine(builder is SystemAlias.Text.StringBuilder)
+let nested object = Outer.TextInput{}
+Console.WriteLine(nested is Outer.TextInput)
+Console.WriteLine(value is Outer.TextInput)`
+        let result = CompileAndRun(Source.Replace("ENUMTYPE", enumType).Replace("CONSTANT", constant))
+        Assert.Equal(0, result.ExitCode)
+        let expected = string.Join(
+            Environment.NewLine,
+            []string? {
+                "True",
+                "True",
+                "False",
+                "False",
+                "True",
+                "True",
+                "True",
+                "hit",
+                "hit",
+                "True",
+                "True",
+                "False",
+                "False",
+                "True",
+                "True",
+                "True",
+                "True",
+                "False",
+                "True",
+                "True",
+                "False",
+                string.Empty
+            }
+        )
+        Assert.Equal(Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(result.Stdout))
+    }
+
     @Fact
     func ValueTypeAndNotNil_AfterTypeNarrowing_IsAlwaysTrue() {
         const Source = `package Issue3351.NotNil
@@ -264,7 +349,7 @@ stdout:
 ` + "$stdout" + `
 stderr:
 ` + "$stderr"))
-                return (process.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine))
+                return (process.ExitCode, stdout)
             } finally {
                 Directory.Delete(directory, recursive: true)
             }
