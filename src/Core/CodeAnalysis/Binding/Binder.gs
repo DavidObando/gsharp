@@ -8588,6 +8588,12 @@ partial class Binder {
                     parentScope.References
                 )
             }
+            RefStructAsyncLivenessAnalyzer.AnalyzeInitializers(
+                allStructs,
+                globalScope.Interfaces,
+                lifetimeDiagnostics,
+                parentScope.References
+            )
             let reportedDiagnostics = HashSet[Diagnostic](diagnostics, DiagnosticBag.EquivalenceComparer)
             for diagnostic in lifetimeDiagnostics {
                 if reportedDiagnostics.Add(diagnostic) {

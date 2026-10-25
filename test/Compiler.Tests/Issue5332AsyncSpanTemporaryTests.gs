@@ -5,10 +5,62 @@
 package GSharp.Compiler.Tests
 
 import System
+import System.Collections.Generic
 import System.IO
 import Xunit
 
 class Issue5332AsyncSpanTemporaryTests {
+    @Theory
+    @MemberData("InitializerHosts")
+    func InitializerHostedAsyncLiteralRejectsLiveTemporary(declaration string, access string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = InitializerProgram(declaration, access, "return Consume(Make(), await pending)")
+        let (code, output) = fixture.TryCompile(source, "InitializerSpanTemporary", true)
+        Assert.NotEqual(0, code)
+        Assert.Contains("error GS0219:", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        let prefix = source.Substring(0, source.IndexOf("await pending", StringComparison.Ordinal))
+        let line = prefix.Split('\n').Length
+        let column = prefix.Length - prefix.LastIndexOf('\n')
+        Assert.Contains(".gs($line,$column,$line,${column + "await pending".Length})", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "InitializerSpanTemporary.dll")))
+    }
+
+    @Theory
+    @MemberData("InitializerHosts")
+    func InitializerHostedAsyncLiteralConsumesLocalBeforeSuspending(declaration string, access string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = InitializerProgram(
+            declaration,
+            access,
+            "let value = Make()\nlet before = Consume(value, 0)\nreturn before + await pending"
+        )
+        let assembly = fixture.Compile(source, "InitializerSpanTemporary", true)
+        Assert.Equal("make;False\n101\nmake;101\n", fixture.Run(assembly))
+    }
+
+    @Fact
+    func PreparationFailureReportsSourceAnchoredDiagnosticThroughDriver() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package GuardDiagnostic
+import System.Threading.Tasks
+async func Read(pending Task[bool]) int32 {
+    return switch 1 {
+        case 1 when await pending: 10
+        default: 0
+    }
+}`
+        let (code, output) = fixture.TryCompile(source, "GuardDiagnostic", false)
+        Assert.NotEqual(0, code)
+        Assert.Contains(".gs(5,21,5,34): error GS9998:", output, StringComparison.Ordinal)
+        Assert.Contains(
+            "'await' inside a switch-expression 'when' guard is not yet supported",
+            output,
+            StringComparison.Ordinal
+        )
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "GuardDiagnostic.dll")))
+    }
+
     @Theory
     @InlineData("async func Read(ch chan[int32]) int32 -> Consume(Make(), Take(ch))")
     @InlineData(`func Create() {
@@ -197,5 +249,63 @@ async func Read(ch chan[int32]) int32 {
         Assert.Contains(".gs($location)", output, StringComparison.Ordinal)
         Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "SpanChannelLocal.dll")))
+    }
+
+    shared {
+        func InitializerHosts() IEnumerable[[]object] {
+            yield[]object{"class Holder { public var Read (Task[int32]) -> Task[int32] = LAMBDA }", "Holder().Read"}
+            yield[]object{
+                "class Holder { shared { public var Read (Task[int32]) -> Task[int32] = LAMBDA } }",
+                "Holder.Read"
+            }
+            yield[]object{
+                "interface Holder { shared { var Read (Task[int32]) -> Task[int32] = LAMBDA } }",
+                "Holder.Read"
+            }
+            yield[]object{
+                "class Holder { shared { public var Read (Task[int32]) -> Task[int32]\ninit { Read = LAMBDA } } }",
+                "Holder.Read"
+            }
+            yield[]object{"class Holder() : Parent(LAMBDA) {}", "Holder().Read"}
+            yield[]object{"class Holder : Parent { init() : base(LAMBDA) {} }", "Holder().Read"}
+        }
+
+        private func InitializerProgram(declaration string, access string, body string) string -> `package InitializerSpanTemporary
+import System
+import System.Threading.Tasks
+class Helpers {
+    shared {
+        public func Make() ReadOnlySpan[byte] {
+            Console.Write("make;")
+            return ReadOnlySpan[byte]([]byte{65})
+        }
+        public func Consume(value ReadOnlySpan[byte], extra int32) int32 -> value.Length * 100 + extra
+    }
+}
+open class Parent {
+    public var Read (Task[int32]) -> Task[int32]
+    init(read (Task[int32]) -> Task[int32]) { Read = read }
+}
+DECLARATION
+func Main() {
+    let read = ACCESS
+    let gate = TaskCompletionSource[int32]()
+    let pending = read(gate.Task)
+    Console.WriteLine(pending.IsCompleted)
+    gate.SetResult(1)
+    Console.WriteLine(pending.GetAwaiter().GetResult())
+    Console.WriteLine(read(Task.FromResult(1)).GetAwaiter().GetResult())
+}`.Replace(
+            "DECLARATION",
+            declaration.Replace(
+                "LAMBDA",
+                "async func(pending Task[int32]) int32 {\n" + body.Replace("Make()", "Helpers.Make()").Replace(
+                    "Consume(",
+                    "Helpers.Consume("
+                ) +
+                    "\n}"
+            )
+        )
+            .Replace("ACCESS", access)
     }
 }

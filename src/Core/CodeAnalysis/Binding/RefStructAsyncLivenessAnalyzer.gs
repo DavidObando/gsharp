@@ -5,6 +5,8 @@
 package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Lowering
 import GSharp.Core.CodeAnalysis.Lowering.Async
 import GSharp.Core.CodeAnalysis.Symbols
@@ -258,6 +260,38 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         finder.VisitStatement(body)
     }
 
+    /// Checks initializer roots before emission creates (cref:BoundProgram.Initializers) plans from them.
+    func AnalyzeInitializers(
+        types ImmutableArray[StructSymbol],
+        interfaces ImmutableArray[InterfaceSymbol],
+        diagnostics DiagnosticBag,
+        references ReferenceResolver?
+    ) {
+        let finder = AsyncLambdaScopeFinder(diagnostics, references, includeOperandTemporaries: true)
+        for type in types {
+            for (_, initializer) in BoundProgramOrder.FieldInitializers(type.InstanceFieldInitializers) {
+                finder.VisitExpression(initializer)
+            }
+            for (_, initializer) in BoundProgramOrder.FieldInitializers(type.StaticFieldInitializers) {
+                finder.VisitExpression(initializer)
+            }
+            finder.VisitStatement(BoundBlockStatement(nil, type.StaticInitializerStatements))
+            for argument in type.BaseConstructorInitializer?.Arguments ?? ImmutableArray[BoundExpression].Empty {
+                finder.VisitExpression(argument)
+            }
+            for constructor in type.ExplicitConstructors {
+                for argument in constructor.BaseInitializer?.Arguments ?? ImmutableArray[BoundExpression].Empty {
+                    finder.VisitExpression(argument)
+                }
+            }
+        }
+        for type in interfaces {
+            for (_, initializer) in BoundProgramOrder.FieldInitializers(type.StaticFieldInitializers) {
+                finder.VisitExpression(initializer)
+            }
+        }
+    }
+
     /// Runs the full liveness analysis for one async/iterator scope (a
     /// top-level function/method/accessor body, or an async/iterator
     /// lambda/local-function literal's body). Locals declared by a nested
@@ -287,22 +321,26 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             return
         }
         // Preserve source-local rules and prove the actual explicit and implicit suspension representation.
-        let preparationReferences = references ?? ReferenceResolver.Default()
-        let handlerLowered = InterpolatedStringHandlerLowerer.LowerBody(body, preparationReferences)
-        let spilledBody = AsyncStateMachineRewriter.PrepareBody(handlerLowered, preparationReferences)
-        let spilledCollector = InterestingLocalCollector(collectByRefLikeLocals: true)
-        spilledCollector.VisitStatement(spilledBody)
-        spilledCollector.Locals.ExceptWith(reporting.Crossing)
-        if spilledCollector.Locals.Count == 0 {
-            return
+        try {
+            let preparationReferences = references ?? ReferenceResolver.Default()
+            let handlerLowered = InterpolatedStringHandlerLowerer.LowerBody(body, preparationReferences)
+            let spilledBody = AsyncStateMachineRewriter.PrepareBody(handlerLowered, preparationReferences)
+            let spilledCollector = InterestingLocalCollector(collectByRefLikeLocals: true)
+            spilledCollector.VisitStatement(spilledBody)
+            spilledCollector.Locals.ExceptWith(reporting.Crossing)
+            if spilledCollector.Locals.Count == 0 {
+                return
+            }
+            AnalyzeRegion(
+                spilledBody,
+                liveOutOfRegion: HashSet[VariableSymbol](),
+                ambientLive: HashSet[VariableSymbol](),
+                spilledCollector.Locals,
+                ReportingContext(diagnostics)
+            )
+        } catch (ex EmitDiagnosticException) {
+            diagnostics.Report(Compilation.CreateInternalErrorDiagnostic(ex))
         }
-        AnalyzeRegion(
-            spilledBody,
-            liveOutOfRegion: HashSet[VariableSymbol](),
-            ambientLive: HashSet[VariableSymbol](),
-            spilledCollector.Locals,
-            ReportingContext(diagnostics)
-        )
     }
 
     internal func FindLocalsLiveAcrossSuspension(body BoundBlockStatement, locals IEnumerable[VariableSymbol]) HashSet[
