@@ -817,12 +817,12 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             Variable: LocalVariableSymbol{IsReadOnly: true, RefKind: RefKind.None}
         }
 
-        private func IsOpaqueStorageReceiver(expression BoundExpression?) bool -> expression != nil &&
-            (
-            RefCapabilities.IsRefReturningAccess(expression) ||
-                expression is BoundDereferenceExpression dereference &&
-                RefCapabilities.IsRefReturningAccess(dereference.Operand)
-        )
+        private func IsOpaqueStorageReceiver(expression BoundExpression?) bool -> switch expression {
+            case block is BoundBlockExpression: IsOpaqueStorageReceiver(block.Expression)
+            case dereference is BoundDereferenceExpression: IsOpaqueStorageReceiver(dereference.Operand)
+            case {} expression: RefCapabilities.IsRefReturningAccess(expression)
+            default: false
+        }
 
         /// Whether [`receiver`](paramref) denotes value storage rather than
         /// a copy: field/element chains and captured conditional addresses.
