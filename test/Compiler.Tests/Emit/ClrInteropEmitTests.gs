@@ -208,29 +208,66 @@ func Main() {
     Console.Write(literal.Value)
 }`
         let assembly = fixture.Compile(source, "qualified5267", executable: true)
-        IlVerifier.Verify(assembly)
-        let start = ProcessStartInfo("dotnet"){
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            WorkingDirectory = fixture.Directory
-        }
-        start.ArgumentList.Add(assembly)
-        using let process = Process.Start(start)!!
-        let stderr = process.StandardError.ReadToEndAsync()
-        using let stdout = MemoryStream()
-        let readOutput = process.StandardOutput.BaseStream.CopyToAsync(stdout)
-        if !process.WaitForExit(30_000) {
-            process.Kill(entireProcessTree: true)
-            process.WaitForExit()
-            Assert.Fail("qualified call witness timed out")
-        }
-        readOutput.GetAwaiter().GetResult()
-        Assert.True(process.ExitCode == 0, stderr.GetAwaiter().GetResult())
         Assert.Equal(
             Encoding.UTF8.GetBytes(expected + "|nested|lexical|owner-alias|type-alias|5|6|7|8|9"),
-            stdout.ToArray()
+            VerifyAndRunBytes(assembly)
         )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ClrReceiver_AmbiguousSourceImports_DoNotSelectUnrelatedNestedConstructor(reverseSources bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let first = Path.Combine(fixture.Directory, "first.gs")
+        let second = Path.Combine(fixture.Directory, "second.gs")
+        File.WriteAllText(first, `package First5267
+public class String { func Label() string -> "first" }
+public class Int32 { }`)
+        File.WriteAllText(second, `package Second5267
+public class String { func Label() string -> "second" }
+public class Int32 { }`)
+        let sources = if reverseSources {
+            []string{second, first}
+        } else {
+            []string{first, second}
+        }
+        let imports = if reverseSources {
+            "import Second5267\nimport First5267\n"
+        } else {
+            "import First5267\nimport Second5267\n"
+        }
+        let header = "package Consumer5267\nimport System\n" + imports
+        let (exit, output) = fixture.TryCompile(
+            header + "func Ambiguous(value String) { }\n",
+            "ambiguous5267",
+            false,
+            sources
+        )
+        Assert.NotEqual(0, exit)
+        let diagnostic = Assert.Single(
+            output.Split('\n').Where((line string) -> line.Contains(": error ", StringComparison.Ordinal))
+        )
+        Assert.Contains("ambiguous5267.gs(5,22,5,28): error GS0496:", diagnostic, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "ambiguous5267.dll")))
+        let assembly = fixture.Compile(header + `class Owner {
+    internal data struct Format(Name string)
+    internal data struct Parse(Name string)
+}
+func FormatOne() string -> String.Format("{0}", 1)
+func FormatTwo() string -> String.Format("{0}:{1}", 1, 2)
+func ParseNumber() int32 -> Int32.Parse("42")
+func Main() {
+    let first = First5267.String()
+    let second = Second5267.String()
+    Console.Write(FormatOne())
+    Console.Write("|" + FormatTwo())
+    Console.Write("|")
+    Console.Write(ParseNumber())
+    Console.Write("|" + first.Label())
+    Console.Write("|" + second.Label())
+}`, "ambiguousClr5267", true, sources)
+        Assert.Equal(Encoding.UTF8.GetBytes("1|1:2|42|first|second"), VerifyAndRunBytes(assembly))
     }
 
     @Theory
@@ -307,6 +344,29 @@ Console.WriteLine("route".Describe(200, contentType: "text/html"))`
     }
 
     shared {
+        private func VerifyAndRunBytes(assembly string)[]uint8 {
+            IlVerifier.Verify(assembly)
+            let start = ProcessStartInfo("dotnet"){
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = Path.GetDirectoryName(assembly)!!
+            }
+            start.ArgumentList.Add(assembly)
+            using let process = Process.Start(start)!!
+            let stderr = process.StandardError.ReadToEndAsync()
+            using let stdout = MemoryStream()
+            let readOutput = process.StandardOutput.BaseStream.CopyToAsync(stdout)
+            if !process.WaitForExit(30_000) {
+                process.Kill(entireProcessTree: true)
+                process.WaitForExit()
+                Assert.Fail("qualified call witness timed out")
+            }
+            readOutput.GetAwaiter().GetResult()
+            Assert.True(process.ExitCode == 0, stderr.GetAwaiter().GetResult())
+            return stdout.ToArray()
+        }
+
         private func CompileAndRun(source string, references ...string) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_clr_emit_").FullName
             try {
