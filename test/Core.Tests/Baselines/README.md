@@ -89,6 +89,14 @@ adjust. Only the entry-point body and its local signature change; the other
 images produce byte-identical stdout and pass unsuppressed ILVerify. The sample
 inventory, existing compile-failure entries, and hashing policy are unchanged.
 
+The #5325 storage repair intentionally changes six samples: `AllowsRefStruct`,
+`AsyncLet`, `FanInMerge`, `Pipeline`, `ScopeAll`, and `WorkerPool`.
+Their eight async `MoveNext` methods remove eleven unused trailing receiver locals.
+The canonical source-field addressability query aligns scratch-local planning with actual receiver emission.
+Executable IL bytes, exception regions, maximum stacks, and retained local slots are unchanged.
+Both genuine compiler images produce the independently expected stdout for all six samples.
+Only the paired sample hashes and `MethodBodies` digests change; inventory and hashing rules remain unchanged.
+
 The #5037 cleanup fix changes exactly `TupleSequenceIterators` and
 `YieldInTryFinally`. The tuple sample's two generated iterators now preserve
 enumerator cleanup through yields, with an `IDisposable.Dispose` reference and
