@@ -393,6 +393,12 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 | GS0412 | Error | A `stackalloc [n]T{…}` initializer length must match the explicit count. | A `stackalloc [n]T{…}` whose explicit constant count `n` disagrees with the number of initializer elements (e.g. `stackalloc [2]int32{1, 2, 3}`). As in C#, the two must match; use the count-inferred `stackalloc []T{…}` to avoid repeating the length. |
 | GS9007 | Error | A type may contain at most one `shared` block. | A class or struct with two `shared { ... }` blocks; merge them into one. |
 
+For array pinning, an inferred non-null one-dimensional CLR array is equivalent
+to an annotated `[]T` local. For example, `Encoding.UTF8.GetBytes("x")` can be
+pinned directly with `fixed value *uint8 = bytes { ... }`. No annotation or
+array copy is required. Rectangular and explicitly nullable arrays remain
+rejected.
+
 ### Immutable byte-string diagnostics (GS0627–GS0628)
 
 | Code | Severity | Meaning | Remedy |
