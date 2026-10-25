@@ -2105,9 +2105,10 @@ internal partial class ExpressionBinder {
                 }
                 continue
             }
-            if hasField &&
-                field!!.IsReadOnly &&
-                structSymbol!!.ClrType != nil &&
+            if hasField && !BoundStructLiteralExpression.CanWriteInitializerField(
+                fieldDeclaringType ?? structSymbol!!,
+                field!!
+            ) &&
                 (!usesGetter || !structSymbol!!.IsClass) {
                 Diagnostics.ReportCannotAssign(initSyntax.FieldIdentifier.Location, fieldName)
                 seenFieldNames.Add(fieldName)
@@ -2237,10 +2238,6 @@ internal partial class ExpressionBinder {
                     continue
                 }
                 if structSymbol!!.InstanceFieldInitializers.TryGetValue(field, out var initExpr) {
-                    if field.IsReadOnly && structSymbol!!.ClrType != nil {
-                        Diagnostics.ReportCannotAssign(syntax.TypeIdentifier.Location, field.Name)
-                        continue
-                    }
                     inits.Add(BoundFieldInitializer(field, initExpr){IsDeclarationInitializer = true})
                     seenFieldNames.Add(field.Name)
                 }
@@ -4008,7 +4005,7 @@ internal partial class ExpressionBinder {
                 out var kind
             ) {
                 return MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(
-                    clrType.GetField(field.Name, BindingFlags.Public | BindingFlags.Instance),
+                    clrType.GetField(field.Name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
                     kind
                 )
             }

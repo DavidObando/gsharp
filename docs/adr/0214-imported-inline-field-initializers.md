@@ -43,10 +43,17 @@ reconstruction only when no initializer method exists for that field. Mandatory
 zero readers use collection markers, not declaration-initializer map entries.
 Mixed literals and collection suffixes must not evaluate an overridden
 declaration initializer to obtain a sound collection zero.
+Look up the selected aggregate field with public and non-public reflection
+flags: friend-visible internal fields need the same mandatory zero. This lookup
+does not admit members; the aggregate and ordinary accessibility checks do that.
 
-Reject an imported literal's external readonly-field writes with `GS0127`.
+Reject external readonly-field initializer writes with `GS0127`. The shared
+bound-construction safety traversal checks the actual initializer list, including
+structural projections and synthesized collection zeros, rather than depending
+on a literal-only binder guard.
 For an omitted initializer, locate the diagnostic at the literal type name.
-For an explicit write, locate it at the field name. Do not emit unverifiable
+For an explicit write, locate it at the field name. For a structural projection,
+locate it at the projected expression. Do not emit unverifiable
 stores into CLR `InitOnly` storage. Supporting readonly literal initialization
 requires a separate legal constructor protocol; this correction does not
 introduce one.
@@ -68,7 +75,10 @@ compiler driver, IL verification, and exact runtime-output assertions. It covers
 the reported defaults, explicit overrides, evaluation order, private calls, and
 explicit collection initializers, mandatory collection zeros, and static
 constructor timing. Readonly coverage verifies the producer and a raw-default
-consumer without verifier suppressions, and checks rejection diagnostics.
+consumer without verifier suppressions, and checks literal and projection
+rejection diagnostics with no output image. Independent friend consumers exercise
+internal collection metadata, source-local parity, ordered explicit overrides,
+and rejection of the same member from a non-friend assembly.
 
 ## Alternatives considered
 

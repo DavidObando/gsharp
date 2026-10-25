@@ -75,6 +75,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                 )
             }
             case literal is BoundStructLiteralExpression {
+                literal.ValidateInitializerWrites(this.diagnostics, this.initializerAnchor)
                 if literal.CopySource == nil {
                     this.CheckConstruction(
                         literal.StructType,

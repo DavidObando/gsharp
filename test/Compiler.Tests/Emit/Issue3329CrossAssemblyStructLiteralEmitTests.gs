@@ -6,10 +6,12 @@ package GSharp.Compiler.Tests.Emit
 
 import GSharp.Compiler
 import GSharp.Compiler.Tests
+import GSharp.Core.Tests
 import System
 import System.Collections.Generic
 import System.Diagnostics
 import System.IO
+import System.Reflection
 import Xunit
 
 /// Issue #3329 — a struct literal (`S{}`) for a struct type declared in
@@ -26,6 +28,120 @@ import Xunit
 /// which is more convenient to drive from a test than a REPL session and
 /// confirms the fix is not REPL-specific.
 open class Issue3329CrossAssemblyStructLiteralEmitTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedDataStruct_ReadonlyProjectionRejectsExternalWrites(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(`package i5296projection
+public data struct Target {
+    public var A int32
+    public let X int32 = 7
+}
+public data struct Mutable {
+    public var A int32
+    public var X int32 = 7
+}`, "i5296projection", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let rejectedReference = Path.Combine(fixture.Directory, "rejected.ref.dll")
+        let (code, output) = fixture.TryCompile(`import i5296projection
+data struct Source { public var A int32 }
+let source = Source{A: 3}
+let target Target = source
+System.Console.WriteLine(target.X)`, "rejected", executable: true, "/r:" + selected, "/refout:" + rejectedReference)
+        if code == 0 {
+            IlVerifier.Verify(Path.Combine(fixture.Directory, "rejected.dll"), []string{producer})
+        }
+        Assert.True(code != 0, output)
+        Assert.Contains("rejected.gs(4,21,4,27): error GS0127:", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        let consumer = fixture.Compile(`import i5296projection
+data struct Source {
+    public var A int32
+    public var X int32
+}
+let source = Source{A: 3, X: 9}
+let target Mutable = source
+System.Console.WriteLine(target.A)
+System.Console.WriteLine(target.X)
+System.Console.WriteLine(default(Target).X)`, "control", executable: true, "/r:" + selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes("3\n9\n0\n"),
+            System.Text.Encoding.UTF8.GetBytes(fixture.Run(consumer))
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedDataStruct_FriendMixedInitializerSeedsInternalCollection(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(`package i5296friend
+@assembly:InternalsVisibleTo("FriendConsumer")
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func ExplicitItems() []int32 {
+            Trace = Trace + "E"
+            return []int32{8, 9, 10}
+        }
+    }
+}
+public data struct Basket {
+    public var Tag int32
+    internal var Items []int32
+    public func Add(value int32) {
+        Effects.Trace = Effects.Trace + "A"
+        Tag = Tag + value + Items.Length
+    }
+}`, "i5296friend", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let imported = EmittedFixture.Load(File.ReadAllBytes(producer), fixture.Directory).GetType("i5296friend.Basket")
+        let field = imported!!.GetField("Items", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+        Assert.True(field!!.IsAssembly)
+        Assert.Null(imported!!.GetField("Items", BindingFlags.Instance | BindingFlags.Public))
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let consumer = fixture.Compile(`import System
+import i5296friend
+data struct LocalBasket {
+    public var Tag int32
+    internal var Items []int32
+    public func Add(value int32) {
+        Effects.Trace = Effects.Trace + "A"
+        Tag = Tag + value + Items.Length
+    }
+}
+let local = LocalBasket{Tag: 0, 1, Items: Effects.ExplicitItems()}
+Console.WriteLine(Effects.Trace + ":" + local.Tag.ToString() + "," + local.Items.Length.ToString())
+Effects.Trace = ""
+let imported = Basket{Tag: 0, 1, Items: Effects.ExplicitItems()}
+Console.WriteLine(Effects.Trace + ":" + imported.Tag.ToString() + "," + imported.Items.Length.ToString())`, "FriendConsumer", executable: true, "/assemblyname:FriendConsumer", "/r:" +
+                selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes("AE:1,3\nAE:1,3\n"),
+            System.Text.Encoding.UTF8.GetBytes(fixture.Run(consumer))
+        )
+        let (code, output) = fixture.TryCompile(`import i5296friend
+let value = Basket{Items: []int32{}}`, "NonFriend", executable: true, "/assemblyname:NonFriend", "/r:" + selected)
+        Assert.True(code != 0, output)
+        Assert.Contains("NonFriend.gs(2,20,2,25): error GS0158:", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "NonFriend.dll")))
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)

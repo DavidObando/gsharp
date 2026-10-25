@@ -8,6 +8,7 @@ import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Immutable
 import System.Linq
@@ -81,6 +82,36 @@ class BoundStructLiteralExpression : BoundExpression {
         (StructType.Definition ?? StructType).IsData &&
         (StructType.Definition ?? StructType).HasDeclaredPrimaryConstructor
 
+    /// Checks imported value-type stores after every construction path selects its initializers.
+    internal func ValidateInitializerWrites(diagnostics DiagnosticBag, anchor SyntaxNode?) {
+        // Class positional initializers may instead be arguments to an owning CLR constructor.
+        if StructType.IsClass {
+            return
+        }
+        for initializer in Initializers {
+            if initializer.Field is not{} field ||
+                CanWriteInitializerField(initializer.FieldDeclaringType ?? StructType, field) {
+                continue
+            }
+            let syntax = Syntax ?? anchor
+            let location = if syntax is StructLiteralExpressionSyntax literal {
+                literal
+                    .Initializers
+                    .FirstOrDefault(
+                    (candidate FieldInitializerSyntax) -> candidate.FieldIdentifier.ValueText == field.Name
+                )
+                    ?.FieldIdentifier
+                    .Location ??
+                    literal
+                    .TypeIdentifier
+                    .Location
+            } else {
+                syntax?.Location ?? default(TextLocation)
+            }
+            diagnostics.ReportCannotAssign(location, field.Name)
+        }
+    }
+
     internal func GetPrimaryArgument(name string) BoundFieldInitializer? {
         let member = GetPrimaryMember(StructType, name)
         for initializer in Initializers {
@@ -123,6 +154,9 @@ class BoundStructLiteralExpression : BoundExpression {
     }
 
     shared {
+        internal func CanWriteInitializerField(type StructSymbol, field FieldSymbol) bool -> !field.IsReadOnly ||
+            type.ClrType == nil
+
         internal func PreparePrimaryArguments(
             syntax SyntaxNode?,
             type StructSymbol,
