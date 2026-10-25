@@ -8578,6 +8578,21 @@ partial class Binder {
                 allStructs,
                 globalScope.Interfaces
             )
+            // Inferred callees can introduce awaits in existing async functions and nested literals.
+            let lifetimeDiagnostics = DiagnosticBag()
+            for (function, body) in BoundProgramOrder.SortFunctions(functionBodies.ToImmutable()) {
+                RefStructAsyncLivenessAnalyzer.Analyze(
+                    body.PreEmitAnalysisBody ?? body,
+                    function,
+                    lifetimeDiagnostics,
+                    parentScope.References
+                )
+            }
+            for diagnostic in lifetimeDiagnostics {
+                if !diagnostics.Any((existing Diagnostic) -> DiagnosticBag.AreEquivalent(existing, diagnostic)) {
+                    diagnostics.Add(diagnostic)
+                }
+            }
             // ADR-0174 D10 / GS0562: batching a rendezvous channel is correct and
             // pointless. Reported here, over the bound bodies, because the question
             // is about the receiver's declaration rather than the call.
@@ -9230,7 +9245,13 @@ partial class Binder {
             if function.IsAsyncOrSuspending {
                 NativeSliceSuspensionAnalyzer(diagnostics).Visit(body)
             }
-            RefStructAsyncLivenessAnalyzer.Analyze(body, function, diagnostics, references)
+            RefStructAsyncLivenessAnalyzer.Analyze(
+                body,
+                function,
+                diagnostics,
+                references,
+                includeOperandTemporaries: false
+            )
         }
 
         /// ADR-0140 / issue #2131: binds the `shared { init { … } }`

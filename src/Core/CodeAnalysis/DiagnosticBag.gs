@@ -291,7 +291,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     }
 
     shared {
-        private func AreEquivalent(left Diagnostic, right Diagnostic) bool {
+        internal func AreEquivalent(left Diagnostic, right Diagnostic) bool {
             return left.Id == right.Id &&
                 left.Severity == right.Severity &&
                 left.Message == right.Message &&

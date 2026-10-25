@@ -101,6 +101,13 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             get;
         }
 
+        protected override func VisitBlockExpression(node BoundBlockExpression) {
+            // Expression-scoped locals cannot cross suspension outside their own block.
+            if AsyncBoundTreeQueries.HasAwait(node) || BodyFacts.ContainsYield(BoundExpressionStatement(nil, node)) {
+                base.VisitBlockExpression(node)
+            }
+        }
+
         protected override func VisitVariableDeclaration(node BoundVariableDeclaration) {
             if node.Variable is LocalVariableSymbol local &&
                 (
@@ -163,10 +170,12 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     private class AsyncLambdaScopeFinder : BoundTreeWalker {
         private let diagnostics DiagnosticBag
         private let references ReferenceResolver?
+        private let includeOperandTemporaries bool
 
-        init(diagnostics DiagnosticBag, references ReferenceResolver?) {
+        init(diagnostics DiagnosticBag, references ReferenceResolver?, includeOperandTemporaries bool) {
             this.diagnostics = diagnostics
             this.references = references
+            this.includeOperandTemporaries = includeOperandTemporaries
         }
 
         override func VisitExpression(node BoundExpression?) {
@@ -195,7 +204,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                         loweredLambdaBody,
                         diagnostics,
                         collectByRefLikeLocals: literal.Function.IsAsyncOrSuspending,
-                        references
+                        references,
+                        includeOperandTemporaries
                     )
                 }
                 VisitStatement(loweredLambdaBody)
@@ -220,11 +230,13 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     /// @param enclosing The function/method/accessor whose body is being checked.
     /// @param diagnostics The diagnostic bag to report GS0219/GS0258 violations to.
     /// @param references The compilation references used by the actual async preparation.
+    /// @param includeOperandTemporaries Whether whole-program call rewriting has completed.
     func Analyze(
         body BoundBlockStatement?,
         enclosing FunctionSymbol?,
         diagnostics DiagnosticBag?,
-        references ReferenceResolver?
+        references ReferenceResolver?,
+        includeOperandTemporaries bool = true
     ) {
         if body == nil || enclosing == nil || diagnostics == nil {
             return
@@ -234,9 +246,15 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             // plain iterator still blanket-rejects them elsewhere) — only
             // native ref-alias locals (#4222) are interesting in an iterator
             // that isn't also async.
-            AnalyzeScope(body, diagnostics, collectByRefLikeLocals: enclosing.IsAsyncOrSuspending, references)
+            AnalyzeScope(
+                body,
+                diagnostics,
+                collectByRefLikeLocals: enclosing.IsAsyncOrSuspending,
+                references,
+                includeOperandTemporaries
+            )
         }
-        let finder = AsyncLambdaScopeFinder(diagnostics, references)
+        let finder = AsyncLambdaScopeFinder(diagnostics, references, includeOperandTemporaries)
         finder.VisitStatement(body)
     }
 
@@ -250,7 +268,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         body BoundBlockStatement,
         diagnostics DiagnosticBag,
         collectByRefLikeLocals bool,
-        references ReferenceResolver?
+        references ReferenceResolver?,
+        includeOperandTemporaries bool
     ) {
         let collector = InterestingLocalCollector(collectByRefLikeLocals)
         collector.VisitStatement(body)
@@ -264,11 +283,12 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 reporting
             )
         }
-        if !collectByRefLikeLocals {
+        if !collectByRefLikeLocals || !includeOperandTemporaries {
             return
         }
         // Preserve source-local rules and prove the actual explicit and implicit suspension representation.
-        let spilledBody = AsyncStateMachineRewriter.PrepareBody(body, references)
+        let handlerLowered = InterpolatedStringHandlerLowerer.LowerBody(body, references ?? ReferenceResolver.Default())
+        let spilledBody = AsyncStateMachineRewriter.PrepareBody(handlerLowered, references)
         let spilledCollector = InterestingLocalCollector(collectByRefLikeLocals: true)
         spilledCollector.VisitStatement(spilledBody)
         spilledCollector.Locals.ExceptWith(reporting.Crossing)

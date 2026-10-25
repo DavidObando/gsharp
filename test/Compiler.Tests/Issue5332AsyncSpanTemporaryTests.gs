@@ -10,6 +10,114 @@ import Xunit
 
 class Issue5332AsyncSpanTemporaryTests {
     @Theory
+    @InlineData("async func Read(ch chan[int32]) int32 -> Consume(Make(), Take(ch))")
+    @InlineData(`func Create() {
+    let read = async func(ch chan[int32]) int32 {
+        return Consume(Make(), Take(ch))
+    }
+}`)
+    func InferredCalleeSuspensionChecksAlreadyAsyncScopes(declaration string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package InferredSpanTemporary
+import System
+func Make() ReadOnlySpan[byte] -> ReadOnlySpan[byte]([]byte{65})
+func Consume(value ReadOnlySpan[byte], extra int32) int32 -> value.Length * 100 + extra
+func Take(ch chan[int32]) int32 -> <-ch
+` + declaration
+        let (code, output) = fixture.TryCompile(source, "InferredSpanTemporary", false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0219", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        let prefix = source.Substring(0, source.LastIndexOf("Take(ch)", StringComparison.Ordinal))
+        let line = prefix.Split('\n').Length
+        let column = prefix.Length - prefix.LastIndexOf('\n')
+        let endColumn = column + "Take(ch)".Length
+        Assert.Contains(".gs($line,$column,$line,$endColumn)", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "InferredSpanTemporary.dll")))
+    }
+
+    @Fact
+    func RewrittenCallsReportEachUnsafeSuspensionOnlyOnce() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`package InferredSpanDiagnostics
+import System
+import System.Threading.Tasks
+func Make() ReadOnlySpan[byte] -> ReadOnlySpan[byte]([]byte{65})
+func Consume(value ReadOnlySpan[byte], extra int32) int32 -> value.Length + extra
+func After(extra int32, value ReadOnlySpan[byte]) int32 -> value.Length + extra
+func Take(ch chan[int32]) int32 -> <-ch
+async func Read(ch chan[int32], pending Task[int32]) int32 {
+    let safe = After(Take(ch), Make())
+    let first = Consume(Make(), await pending)
+    return safe + first + Consume(Make(), Take(ch))
+}
+`, "InferredSpanDiagnostics", false)
+        Assert.NotEqual(0, code)
+        Assert.Equal(2, output.Split("error GS0219:", StringSplitOptions.None).Length - 1)
+        Assert.Contains(".gs(10,33,10,46)", output, StringComparison.Ordinal)
+        Assert.Contains(".gs(11,43,11,51)", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "InferredSpanDiagnostics.dll")))
+    }
+
+    @Fact
+    func GatedHandlerConsumesSpanBeforeLaterSuspension() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`using System;
+using System.Runtime.CompilerServices;
+namespace HandlerFixture;
+[InterpolatedStringHandler]
+public struct GateHandler {
+    private bool appendNext;
+    public GateHandler(int literalLength, int formattedCount, bool enabled, bool appendNext, out bool shouldAppend) {
+        this.appendNext = appendNext;
+        shouldAppend = enabled;
+        Console.Write("ctor;");
+    }
+    public bool AppendLiteral(string value) { Console.Write("literal;"); return true; }
+    public bool AppendFormatted(ReadOnlySpan<byte> value) {
+        Console.Write("span:" + value.Length + ";");
+        return appendNext;
+    }
+    public bool AppendFormatted(int value) { Console.Write("int:" + value + ";"); return true; }
+}
+public static class HandlerApi {
+    public static void Write(bool enabled, bool appendNext,
+        [InterpolatedStringHandlerArgument("enabled", "appendNext")] GateHandler handler) {
+        Console.WriteLine("done");
+    }
+}`, "SpanHandler")
+        let assembly = fixture.Compile(`package SpanHandlerAwait
+import System
+import System.Threading.Tasks
+import HandlerFixture
+func Make() ReadOnlySpan[byte] {
+    Console.Write("make;")
+    return ReadOnlySpan[byte]([]byte{65})
+}
+async func Read(pending Task[int32], enabled bool, appendNext bool) {
+    HandlerApi.Write(enabled, appendNext, "${Make()}${await pending}")
+}
+func Check(enabled bool, appendNext bool) {
+    let gate = TaskCompletionSource[int32]()
+    let pending = Read(gate.Task, enabled, appendNext)
+    Console.WriteLine(pending.IsCompleted)
+    gate.SetResult(7)
+    pending.GetAwaiter().GetResult()
+}
+func Main() {
+    Check(false, true)
+    Check(true, false)
+    Check(true, true)
+    Read(Task.FromResult(7), true, true).GetAwaiter().GetResult()
+}`, "SpanHandlerAwait", true, "/r:" + library)
+        Assert.Equal(
+            "ctor;done\nTrue\nctor;make;span:1;done\nTrue\nctor;make;span:1;False\nint:7;done\nctor;make;span:1;int:7;done\n",
+            fixture.Run(assembly)
+        )
+    }
+
+    @Theory
     @InlineData("return Consume(Make(), await pending)", "await pending")
     @InlineData("return Consume(ReadOnlySpan[byte]([]byte{65}), await pending)", "await pending")
     @InlineData("return Consume((if flag { Make() } else { Make() }), await pending)", "await pending")
