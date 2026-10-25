@@ -8,17 +8,44 @@ import GSharp.Compiler
 import GSharp.Compiler.Tests
 import System
 import System.Collections.Generic
+import System.ComponentModel
 import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Text
+import System.Threading
+import System.Threading.Tasks
 import Xunit
+import Xunit.Sdk
 
 /// Issue #605: `await using let` support for types implementing
 /// `IAsyncDisposable`. Tests cover user-defined G# classes, CLR types,
 /// mixed IDisposable + IAsyncDisposable, exception safety, return semantics,
 /// and negative diagnostics (outside async, async-only with sync using).
 open class Issue605AwaitUsingLetEmitTests {
+    @Fact
+    func CompileAndRunBytes_TimeoutReportsBothStreamsAndStopsChild() {
+        let exception = Assert.ThrowsAny[XunitException](
+            func () object? {
+                return CompileAndRunBytes(`import System
+import System.Threading
+Console.Write("timeout-stdout")
+Console.Error.Write("timeout-stderr")
+Thread.Sleep(Timeout.Infinite)`, timeoutMilliseconds: 2_000)
+            }
+        )
+        Assert.Contains("timed out after 2000 ms", exception.Message, StringComparison.Ordinal)
+        Assert.Contains("kill requested; exited=True", exception.Message, StringComparison.Ordinal)
+        Assert.Contains("stdout capture=RanToCompletion; stderr capture=RanToCompletion", exception.Message)
+        Assert.Contains("stdout:${Environment.NewLine}timeout-stdout", exception.Message, StringComparison.Ordinal)
+        Assert.Contains("stderr:${Environment.NewLine}timeout-stderr", exception.Message, StringComparison.Ordinal)
+        let pid = int32.Parse(exception.Message.Split("pid=", StringSplitOptions.None)[1].Split(';')[0])
+        try {
+            using let child = Process.GetProcessById(pid)
+            Assert.True(child.HasExited, "Timed-out child $pid is still running.")
+        } catch (ArgumentException) { }
+    }
+
     @Fact
     func AwaitUsingLet_AsyncValueTaskDisposeAsync_ExactTopLevelRepro() {
         let source = `import System
@@ -90,13 +117,14 @@ try {
 } catch (ex InvalidOperationException) {
     Console.Write("caught:" + ex.Message + ";")
 }`
-        let expected = "acquire:outer;acquire:inner;body;begin:inner;pending:False;" +
-            "end:inner;defer;begin:outer;outer-pending:False;end:outer;" +
-            if fail {
+        let tail = if fail {
             "caught:body;"
         } else {
             "result:7;"
         }
+        let expected = "acquire:outer;acquire:inner;body;begin:inner;pending:False;" +
+            "end:inner;defer;begin:outer;outer-pending:False;end:outer;" +
+            tail
         Assert.Equal(
             Encoding.UTF8.GetBytes(expected),
             CompileAndRunBytes(
@@ -325,7 +353,7 @@ test()`
             .GetString(CompileAndRunBytes(source))
             .ReplaceLineEndings(Environment.NewLine)
 
-        private func CompileAndRunBytes(source string)[]uint8 {
+        private func CompileAndRunBytes(source string, timeoutMilliseconds int32 = 30_000)[]uint8 {
             let tempDir = Directory.CreateTempSubdirectory("gs_issue605_").FullName
             try {
                 let srcPath = Path.Combine(tempDir, "test.gs")
@@ -363,25 +391,76 @@ stderr:
                 psi.ArgumentList.Add(outPath)
                 using let proc = Process.Start(psi) ?? throw InvalidOperationException("Failed to start dotnet exec")
                 using let stdout = MemoryStream()
-                let outputCopy = proc.StandardOutput.BaseStream.CopyToAsync(stdout)
-                let errorRead = proc.StandardError.ReadToEndAsync()
-                if !proc.WaitForExit(30_000) {
-                    proc.Kill(entireProcessTree: true)
-                    proc.WaitForExit()
-                    Assert.Fail("dotnet exec timed out")
+                using let stderr = MemoryStream()
+                using let captureCancellation = CancellationTokenSource()
+                let outputCopy = proc.StandardOutput.BaseStream.CopyToAsync(stdout, captureCancellation.Token)
+                let errorCopy = proc.StandardError.BaseStream.CopyToAsync(stderr, captureCancellation.Token)
+                let captures = Task.WhenAll([]Task{outputCopy, errorCopy})
+                let cleanupTimeout = TimeSpan.FromSeconds(5)
+                var failure = string.Empty
+                try {
+                    if !proc.WaitForExit(timeoutMilliseconds) {
+                        failure = "timed out after $timeoutMilliseconds ms"
+                    }
+                } finally {
+                    try {
+                        if !proc.HasExited {
+                            failure += "; kill requested"
+                            try {
+                                proc.Kill(entireProcessTree: true)
+                            } catch (InvalidOperationException) when proc.HasExited {
+                                failure += "; exited before kill"
+                            } catch (ex Win32Exception) {
+                                failure += "; kill failed: " + ex.Message
+                            }
+                            failure += "; exited=${proc.WaitForExit(5_000)}"
+                        }
+                        try {
+                            captures.WaitAsync(cleanupTimeout).GetAwaiter().GetResult()
+                        } catch (TimeoutException) {
+                            failure += "; output streams did not close within 5000 ms"
+                        }
+                    } finally {
+                        captureCancellation.Cancel()
+                        try {
+                            captures.WaitAsync(cleanupTimeout).GetAwaiter().GetResult()
+                        } catch (OperationCanceledException) when captureCancellation.IsCancellationRequested {
+                            failure += "; output capture cancelled"
+                        } catch (TimeoutException) {
+                            let _ = captures.ContinueWith(
+                                (task Task) -> task.Exception,
+                                TaskContinuationOptions.OnlyOnFaulted
+                            )
+                            throw XunitException(
+                                "dotnet exec $failure; pid=${proc.Id}; output capture did not stop after cancellation; " +
+                                    "stdout capture=${outputCopy.Status}; stderr capture=${errorCopy.Status}"
+                            )
+                        }
+                    }
                 }
-                outputCopy.GetAwaiter().GetResult()
-                let stderr = errorRead.GetAwaiter().GetResult()
-                Assert.True(proc.ExitCode == 0, (`exited ` + "${proc.ExitCode}" + `
+                let exit = if proc.HasExited {
+                    proc.ExitCode.ToString()
+                } else {
+                    "<still-running>"
+                }
+                Assert.True(
+                    failure.Length == 0 && proc.ExitCode == 0,
+                    (
+                        "dotnet exec $failure; pid=${proc.Id}; exit=$exit; " +
+                            "stdout capture=${outputCopy.Status}; stderr capture=${errorCopy.Status}" +
+                            `
 stdout:
-` + Encoding.UTF8.GetString(stdout.ToArray()) + `
+` +
+                            Encoding
+                            .UTF8
+                            .GetString(stdout.ToArray()) + `
 stderr:
-` + "$stderr"))
+` + Encoding.UTF8.GetString(stderr.ToArray())
+                    )
+                )
                 return stdout.ToArray()
             } finally {
-                try {
-                    Directory.Delete(tempDir, recursive: true)
-                } catch { }
+                Directory.Delete(tempDir, recursive: true)
             }
         }
 
