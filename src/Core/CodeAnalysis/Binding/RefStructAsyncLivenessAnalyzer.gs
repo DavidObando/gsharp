@@ -726,6 +726,11 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         } else {
             default(TextLocation)
         }
+        let fallbackLocation = if suspensionLocation.Text != nil {
+            suspensionLocation
+        } else {
+            owningStatement?.Syntax?.Location ?? default(TextLocation)
+        }
         for v in live {
             if object.ReferenceEquals(v, excludedSelfKill) {
                 continue
@@ -735,7 +740,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             if bag == nil {
                 continue
             }
-            let location = v.DeclaringSyntax?.Location ?? owningStatement?.Syntax?.Location ?? suspensionLocation
+            let location = v.DeclaringSyntax?.Location ?? fallbackLocation
             let suspensionContext = if suspensionKeyword == "yield" {
                 "an iterator"
             } else {

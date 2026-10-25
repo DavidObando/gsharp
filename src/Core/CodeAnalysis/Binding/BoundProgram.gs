@@ -276,7 +276,7 @@ class BoundProgram {
         get {
             return orderedFunctions.Value
         }
-        set {
+        init {
             orderedFunctions = Lazy[ImmutableArray[KeyValuePair[FunctionSymbol, BoundBlockStatement]]](() -> value)
         }
     }

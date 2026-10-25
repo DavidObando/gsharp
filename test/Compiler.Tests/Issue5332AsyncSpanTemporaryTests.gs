@@ -10,6 +10,85 @@ import System.IO
 import Xunit
 
 class Issue5332AsyncSpanTemporaryTests {
+    @Fact
+    func NestedAsyncLiteralInNonSuspendingExpressionBlockIsChecked() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package NestedBlock
+import System
+import System.Threading.Tasks
+func Make() ReadOnlySpan[byte] -> ReadOnlySpan[byte]([]byte{65})
+func Consume(value ReadOnlySpan[byte], extra int32) int32 -> value.Length * 100 + extra
+func Create() (Task[int32]) -> Task[int32] {
+    return {
+        let marker = 0
+        async func(pending Task[int32]) int32 {
+            return Consume(Make(), await pending)
+        }
+    }
+}
+func Main() {
+    let gate = TaskCompletionSource[int32]()
+    let pending = Create()(gate.Task)
+    Console.WriteLine(pending.IsCompleted)
+    gate.SetResult(1)
+    Console.WriteLine(pending.GetAwaiter().GetResult())
+}`
+        let (code, output) = fixture.TryCompile(source, "NestedBlock", true)
+        Assert.NotEqual(0, code)
+        Assert.Contains(".gs(10,36,10,49): error GS0219:", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "NestedBlock.dll")))
+    }
+
+    @Fact
+    func ExpressionScopedSpanIsConsumedBeforeOuterSuspension() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let assembly = fixture.Compile(`package ScopedBlock
+import System
+import System.Threading.Tasks
+func Make() ReadOnlySpan[byte] {
+    Console.Write("make;")
+    return ReadOnlySpan[byte]([]byte{65})
+}
+func Combine(first int32, second int32) int32 -> first + second
+async func Read(pending Task[int32]) int32 -> Combine({ let value = Make() value.Length * 100 }, await pending)
+func Main() {
+    let gate = TaskCompletionSource[int32]()
+    let pending = Read(gate.Task)
+    Console.WriteLine(pending.IsCompleted)
+    gate.SetResult(1)
+    Console.WriteLine(pending.GetAwaiter().GetResult())
+    Console.WriteLine(Read(Task.FromResult(1)).GetAwaiter().GetResult())
+}`, "ScopedBlock", true)
+        Assert.Equal("make;False\n101\nmake;101\n", fixture.Run(assembly))
+    }
+
+    @Theory
+    @InlineData("pending Task[int32]", "await pending")
+    @InlineData("ch chan[int32]", "<-ch")
+    func SyntheticTemporaryDiagnosticPrefersSuspensionOverAssignment(parameter string, suspension string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package AssignmentSuspension
+import System
+import System.Threading.Tasks
+func Make() ReadOnlySpan[byte] -> ReadOnlySpan[byte]([]byte{65})
+func Consume(value ReadOnlySpan[byte], extra int32) int32 -> value.Length * 100 + extra
+async func Read(PARAMETER) int32 -> Consume(Make(), {
+    var extra = 0
+    extra = SUSPENSION
+    extra
+})`.Replace("PARAMETER", parameter).Replace("SUSPENSION", suspension)
+        let (code, output) = fixture.TryCompile(source, "AssignmentSuspension", false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("error GS0219:", output, StringComparison.Ordinal)
+        let prefix = source.Substring(0, source.IndexOf(suspension, StringComparison.Ordinal))
+        let line = prefix.Split('\n').Length
+        let column = prefix.Length - prefix.LastIndexOf('\n')
+        Assert.Contains(".gs($line,$column,$line,${column + suspension.Length})", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "AssignmentSuspension.dll")))
+    }
+
     @Theory
     @MemberData("InitializerHosts")
     func InitializerHostedAsyncLiteralRejectsLiveTemporary(declaration string, access string) {
