@@ -4698,7 +4698,7 @@ internal class ReflectionMetadataEmitter {
         if fa.Receiver is BoundTupleElementAccessExpression tuple {
             return RefCapabilities.IsDirectlyAddressableForImplicitIn(tuple)
         }
-        return false
+        return RefCapabilities.IsDirectlyAddressableForImplicitIn(fa.Receiver!!)
     }
 
     private func ResolveCoreType(fullName string, fallback Type) Type {
