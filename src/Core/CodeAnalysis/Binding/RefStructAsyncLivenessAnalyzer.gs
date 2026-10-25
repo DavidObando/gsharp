@@ -68,7 +68,7 @@ import System.Linq
 /// *through* an alias (`alias = 42`) is a use of the alias, not a kill
 /// of it, unlike overwriting a by-ref-like value local outright.
 internal shared class RefStructAsyncLivenessAnalyzer {
-    /// Validates every owning root after suspension inference finishes rewriting.
+    /// Reuses unchanged function analyses and validates rewritten bodies and every initializer root.
     /// @param functions The rewritten function bodies.
     /// @param originalFunctions The function bodies before suspension inference.
     /// @param inferredFunctions The functions newly marked suspending.
@@ -94,11 +94,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) -> pair.Key,
             SymbolSourceOrderComparer.Instance
         ) {
-            if originalFunctions.TryGetValue(function, out var originalBody) && object.ReferenceEquals(
-                body,
-                originalBody
-            ) &&
-                !inferredFunctions.Contains(function) {
+            // Synthesized bodies do not necessarily receive the early function-body analysis.
+            if function.Declaration != nil && originalFunctions.TryGetValue(function, out var originalBody) &&
+                object.ReferenceEquals(body, originalBody) && !inferredFunctions.Contains(function) {
                 continue
             }
             bag.SuppressDuplicateDiagnostics(
