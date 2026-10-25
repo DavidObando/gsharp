@@ -239,17 +239,31 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     private func AnalyzeScope(body BoundBlockStatement, diagnostics DiagnosticBag, collectByRefLikeLocals bool) {
         let collector = InterestingLocalCollector(collectByRefLikeLocals)
         collector.VisitStatement(body)
-        if collector.Locals.Count == 0 {
-            // Nothing interesting declared directly in this scope — nothing
-            // to check (whether or not it contains nested async/iterator
-            // lambdas is handled separately by the caller).
+        if collector.Locals.Count != 0 {
+            AnalyzeRegion(
+                body,
+                liveOutOfRegion: HashSet[VariableSymbol](),
+                ambientLive: HashSet[VariableSymbol](),
+                collector.Locals,
+                ReportingContext(diagnostics)
+            )
+        }
+        if !collectByRefLikeLocals {
+            return
+        }
+        // Preserve source-local rules; apply the same proof to newly introduced operand temporaries.
+        let spilledBody = SpillSequenceSpiller.Rewrite(body)
+        let spilledCollector = InterestingLocalCollector(collectByRefLikeLocals: true)
+        spilledCollector.VisitStatement(spilledBody)
+        spilledCollector.Locals.ExceptWith(collector.Locals)
+        if spilledCollector.Locals.Count == 0 {
             return
         }
         AnalyzeRegion(
-            body,
+            spilledBody,
             liveOutOfRegion: HashSet[VariableSymbol](),
             ambientLive: HashSet[VariableSymbol](),
-            collector.Locals,
+            spilledCollector.Locals,
             ReportingContext(diagnostics)
         )
     }

@@ -12,6 +12,38 @@ import System.Text
 import Xunit
 
 class Utf8LiteralLanguageTests {
+    @Theory
+    @InlineData("u8\"AB\".Slice(0, 1)")
+    @InlineData("View()")
+    @InlineData("ReadOnlySpan[byte]([]byte{65})")
+    @InlineData("(if true { u8\"A\" } else { u8\"B\" })")
+    func RefLikeOperandTemporariesCannotDisappearAcrossAwait(expression string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`package Utf8Temporary
+import System
+import System.Threading.Tasks
+func View() readonly span[byte] -> u8"A"
+func Consume(value readonly span[byte], extra int32) int32 -> value.Length + extra
+async func Read(pending Task[int32]) Task[int32] -> Consume(EXPRESSION, await pending)
+`.Replace("EXPRESSION", expression), "Utf8Temporary", false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0219", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Utf8Temporary.dll")))
+    }
+
+    @Fact
+    func DerivedSpanReceiverTemporariesCannotDisappearAcrossAwait() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`package Utf8TemporaryReceiver
+import System.Threading.Tasks
+async func Read(pending Task[int32]) Task[int32] -> u8"AB".Slice(0, 1).Slice(await pending, 0).Length
+`, "Utf8TemporaryReceiver", false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0219", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+    }
+
     @Fact
     func AwaitedConditionalsAndArgumentsOnlyDeferStaticLiteralValues() {
         using let fixture = NativeSliceLanguageTests.Fixture()
@@ -19,12 +51,14 @@ class Utf8LiteralLanguageTests {
 import System
 import System.Threading.Tasks
 func Consume(value readonly span[byte], extra int32) int32 -> int32(value[0]) + extra
+func ConsumeAfter(extra int32, value readonly span[byte]) int32 -> value.Length * 100 + extra
 async func Read(pending Task[bool]) Task[string] {
     let value = (await pending) ? u8"Aé" : u8"B\0"
     return Convert.ToHexString(value)
 }
-async func Argument(pending Task[int32]) Task[int32] -> Consume(u8"A", await pending)
+async func Argument(pending Task[int32]) Task[int32] -> Consume(u8"A" + u8"", await pending)
 async func Receiver(pending Task[int32]) Task[int32] -> int32(u8"AB".Slice(await pending, 1)[0])
+async func After(pending Task[int32]) Task[int32] -> ConsumeAfter(await pending, u8"AB".Slice(0, 1))
 func Main() {
     let trueGate = TaskCompletionSource[bool]()
     let whenTrue = Read(trueGate.Task)
@@ -42,9 +76,13 @@ func Main() {
     let receiver = Receiver(receiverGate.Task)
     receiverGate.SetResult(1)
     Console.WriteLine(receiver.Result)
+    let afterGate = TaskCompletionSource[int32]()
+    let after = After(afterGate.Task)
+    afterGate.SetResult(1)
+    Console.WriteLine(after.Result)
 }`, "Utf8Spill", true)
         IlVerifier.Verify(assembly)
-        Assert.Equal("41C3A9\n4200\n66\n66\n", fixture.Run(assembly))
+        Assert.Equal("41C3A9\n4200\n66\n66\n101\n", fixture.Run(assembly))
     }
 
     @Fact
