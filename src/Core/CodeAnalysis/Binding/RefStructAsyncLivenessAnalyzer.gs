@@ -70,6 +70,8 @@ import System.Linq
 internal shared class RefStructAsyncLivenessAnalyzer {
     /// Validates every owning root after suspension inference finishes rewriting.
     /// @param functions The rewritten function bodies.
+    /// @param originalFunctions The function bodies before suspension inference.
+    /// @param inferredFunctions The functions newly marked suspending.
     /// @param statement The complete top-level body, including library initializers.
     /// @param structs The user and synthesized types.
     /// @param interfaces The user interfaces.
@@ -77,6 +79,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     /// @param references The compilation references used by async preparation.
     func AnalyzeProgram(
         functions ImmutableDictionary[FunctionSymbol, BoundBlockStatement].Builder,
+        originalFunctions ImmutableDictionary[FunctionSymbol, BoundBlockStatement],
+        inferredFunctions ImmutableHashSet[FunctionSymbol],
         statement BoundBlockStatement,
         structs ImmutableArray[StructSymbol],
         interfaces ImmutableArray[InterfaceSymbol],
@@ -90,6 +94,13 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) -> pair.Key,
             SymbolSourceOrderComparer.Instance
         ) {
+            if originalFunctions.TryGetValue(function, out var originalBody) && object.ReferenceEquals(
+                body,
+                originalBody
+            ) &&
+                !inferredFunctions.Contains(function) {
+                continue
+            }
             bag.SuppressDuplicateDiagnostics(
                 () -> {
                     Analyze(body.PreEmitAnalysisBody ?? body, function, bag, references)

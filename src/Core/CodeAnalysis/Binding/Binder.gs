@@ -8563,7 +8563,8 @@ partial class Binder {
             // bodies were bound against, or a references-less compilation would
             // bind channel operations yet never colour the functions around them.
             let inferenceBinders = Dictionary[FunctionSymbol, Binder]()
-            SuspensionInference.Run(
+            let originalFunctionBodies = functionBodies.ToImmutable()
+            let inferredFunctions = SuspensionInference.Run(
                 functionBodies,
                 globalScope.EntryPoint,
                 parentScope.References,
@@ -8608,6 +8609,8 @@ partial class Binder {
             }
             RefStructAsyncLivenessAnalyzer.AnalyzeProgram(
                 functionBodies,
+                originalFunctionBodies,
+                inferredFunctions,
                 statement,
                 allStructs,
                 globalScope.Interfaces,
