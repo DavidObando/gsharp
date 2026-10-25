@@ -33,8 +33,11 @@ def main() -> int:
     parser.add_argument("--work", type=Path, default=Path("out/test-artifacts/fixed-array-f1-aot"))
     args = parser.parse_args()
     work = args.work.resolve()
-    if not work.is_relative_to(ROOT):
-        parser.error("--work must be inside this worktree")
+    artifact_root = ROOT / "out/test-artifacts"
+    if work == artifact_root or not work.is_relative_to(artifact_root):
+        parser.error("--work must be a dedicated directory under out/test-artifacts")
+    if any(path.is_symlink() for path in work.rglob("*")):
+        parser.error("--work must not contain symbolic links")
     work.mkdir(parents=True, exist_ok=True)
     pin = json.loads((ROOT / "global.json").read_text())["msbuild-sdks"]["Gsharp.NET.Sdk"]
     packages = Path(os.environ.get("NUGET_PACKAGES", str(Path.home() / ".nuget/packages")))
