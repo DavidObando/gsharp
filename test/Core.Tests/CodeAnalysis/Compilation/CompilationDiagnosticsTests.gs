@@ -300,6 +300,49 @@ open class CompilationDiagnosticsTests {
         Assert.ThrowsAny[OperationCanceledException](() -> previous.GetSemanticModel(b).GetBoundNode(b.Root))
     }
 
+    @Fact
+    func SemanticModel_ReceiverQueries_WaitWithTheRequestToken_WhileABuildIsHeld() {
+        let tree = Parse("C.gs", "package P\nfunc A() int32 {\n    return 1\n}\nfunc C() int32 {\n    return A()\n}\n")
+        let compilation = Compilation(tree){IsLibrary = true}
+        let _ = compilation.GlobalScope
+        using let entered = ManualResetEventSlim(false)
+        using let release = ManualResetEventSlim(false)
+        compilation.BodyBindProbe = () -> {
+            entered.Set()
+            release.Wait()
+        }
+        let builder = Task.Run(() -> compilation.BoundProgram)
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(30)))
+        let model = compilation.GetSemanticModel(tree)
+        let call = tree.Root.DescendantNodes().OfType[CallExpressionSyntax]().First()
+        using let request = CancellationTokenSource()
+        let receiver = Task.Run(() -> model.GetReceiverTypeInfo(call, request.Token))
+        let referenced = Task.Run(() -> model.GetReferencedExpression(call.Identifier, request.Token))
+        Assert.False(Task.WaitAll([]Task{receiver, referenced}, TimeSpan.FromMilliseconds(300)))
+        request.Cancel()
+        Assert.Equal(0, Task.WaitAny([]Task{receiver}, TimeSpan.FromSeconds(30)))
+        Assert.Equal(0, Task.WaitAny([]Task{referenced}, TimeSpan.FromSeconds(30)))
+        Assert.True(receiver.IsCanceled || receiver.IsFaulted)
+        Assert.True(referenced.IsCanceled || referenced.IsFaulted)
+        release.Set()
+        Assert.True(builder.Wait(TimeSpan.FromSeconds(30)))
+    }
+
+    @Fact
+    func ReplaceSyntaxTree_TwoBodyEditsWithNoQueryBetween_KeepTheSharedScopeEvenWhenTheMiddleCompilationIsDead() {
+        let a = Parse("A.gs", AText)
+        let b = Parse("B.gs", BText)
+        let first = Compilation(a, b){IsLibrary = true}
+        let scope_ = first.GlobalScope
+        using let lifetime = CancellationTokenSource()
+        let second = first.ReplaceSyntaxTree(a, Parse("A.gs", AText.Replace("return 1", "return 100")))
+        second.WorkBudget = CompilationWorkBudget(cancellationToken: lifetime.Token)
+        // The host retires the middle compilation before it was ever queried.
+        lifetime.Cancel()
+        let third = second.ReplaceSyntaxTree(b, Parse("B.gs", BText.Replace("return 2", "return 200")))
+        Assert.Same(scope_, third.GlobalScope)
+    }
+
     private class Counter {
         var Value int32
     }

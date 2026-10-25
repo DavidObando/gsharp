@@ -582,7 +582,15 @@ open class Compilation {
         buildGate.Wait()
         try {
             if Submission == nil && !retired {
-                var declarations BoundGlobalScope? = globalScope
+                // A predecessor that was itself re-pointed holds the shared scope as ReusedGlobalScope until its first query.
+                var declarations BoundGlobalScope? = globalScope ??
+                    (
+                    if ReusedGlobalScope is {} pendingScope && !pendingScope.HasNativeProtocols {
+                        pendingScope
+                    } else {
+                        default(BoundGlobalScope?)
+                    }
+                )
                 if declarations == nil && !WorkBudget.CancellationToken.IsCancellationRequested {
                     declarations = BuildGlobalScope_Locked()
                 }
