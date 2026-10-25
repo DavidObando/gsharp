@@ -8,6 +8,7 @@ import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Linq
 import System.Reflection
@@ -170,7 +171,7 @@ shared class BoundSemantics {
         let fileName = tree.Text?.FileName
         if !string.IsNullOrEmpty(fileName) {
             for candidate in compilation.SyntaxTrees {
-                if string.Equals(candidate.Text?.FileName, fileName, StringComparison.Ordinal) &&
+                if SourcePathIdentity.AreSame(candidate.Text?.FileName, fileName) &&
                     candidate
                     .Text
                     .Length == tree

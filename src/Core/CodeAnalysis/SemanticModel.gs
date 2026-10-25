@@ -8,6 +8,7 @@ import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Concurrent
 import System.Collections.Generic
@@ -455,7 +456,7 @@ partial class SemanticModel {
                     for part in tree.Root.Members.OfType[StructDeclarationSyntax]() {
                         if part.Identifier is {} partIdentifier && !partIdentifier.IsMissing {
                             for location in partLocations {
-                                if string.Equals(location.FileName, tree.Text?.FileName, StringComparison.Ordinal) &&
+                                if SourcePathIdentity.AreSame(location.FileName, tree.Text?.FileName) &&
                                     location
                                     .Span
                                     .Start == partIdentifier
@@ -480,7 +481,7 @@ partial class SemanticModel {
                     for part in tree.Root.Members.OfType[InterfaceDeclarationSyntax]() {
                         if part.Identifier is {} partIdentifier && !partIdentifier.IsMissing {
                             for location in merged.PartialPartLocations {
-                                if string.Equals(location.FileName, tree.Text?.FileName, StringComparison.Ordinal) &&
+                                if SourcePathIdentity.AreSame(location.FileName, tree.Text?.FileName) &&
                                     location
                                     .Span
                                     .Start == partIdentifier
@@ -505,7 +506,7 @@ partial class SemanticModel {
                     for part in tree.Root.Members.OfType[InterfaceDeclarationSyntax]() {
                         if part.Identifier is {} partIdentifier && !partIdentifier.IsMissing {
                             for location in merged.PartialPartLocations {
-                                if string.Equals(location.FileName, tree.Text?.FileName, StringComparison.Ordinal) &&
+                                if SourcePathIdentity.AreSame(location.FileName, tree.Text?.FileName) &&
                                     location
                                     .Span
                                     .Start == partIdentifier
