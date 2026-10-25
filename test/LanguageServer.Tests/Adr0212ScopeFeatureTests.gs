@@ -43,6 +43,14 @@ open class Adr0212ScopeFeatureTests {
     }
 
     @Fact
+    func Completion_OffersTypeAliasNames() {
+        // LookupSymbols cannot list an alias (no alias symbol); completion still offers its name.
+        let items = Complete(Source, "// caret")
+        Assert.Contains(items, (i CompletionItem) -> i.Label == "Meters")
+        Assert.Contains(items, (i CompletionItem) -> i.Label == "Feet")
+    }
+
+    @Fact
     func Completion_ListsEachNameOnce() {
         let items = Complete(Source, "// caret")
         let labels = items.Select((i CompletionItem) -> i.Label).ToList()
@@ -109,6 +117,8 @@ class Unrelated {
 
     shared {
         private const Source string = `package P
+type Meters = int32
+type Feet = int32
 class Holder {
     var Field int32
     func Other() int32 { return 1 }

@@ -1687,6 +1687,30 @@ shared class CompletionComputer {
                 }
             }
         }
+        // Type aliases (`type A = T`): LookupSymbols answers an alias by name with the type it names but
+        // cannot list it, as that symbol carries the target's name. The names come from the trees'
+        // declarations until an alias symbol exists (follow-up of ADR-0212 slice S3).
+        if model != nil {
+            for tree in compilation.SyntaxTrees {
+                for aliasDeclaration in tree.Root.Members.OfType[TypeAliasDeclarationSyntax]() {
+                    ct.ThrowIfCancellationRequested()
+                    if aliasDeclaration.Identifier is not{} aliasIdentifier || aliasIdentifier.IsMissing {
+                        continue
+                    }
+                    let aliasName = aliasIdentifier.Text
+                    if !seen.Add(aliasName) {
+                        continue
+                    }
+                    let target = model.LookupSymbols(offset, aliasName, ct)
+                    let item = CompletionItem{Label: aliasName, Kind: CompletionItemKind.Class}
+                    if !target.IsDefaultOrEmpty {
+                        item.Kind = GetCompletionKind(target[0])
+                        item.Detail = HoverComputer.FormatSymbol(target[0])
+                    }
+                    items.Add(item)
+                }
+            }
+        }
         // Add primitive types
         for type in[]string{"bool", "int32", "string", "void"} {
             if seen.Add(type) {
