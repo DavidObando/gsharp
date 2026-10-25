@@ -7,12 +7,15 @@ package GSharp.Compiler.Tests.Emit
 import GSharp.Compiler.Tests
 import System
 import System.Collections.Generic
+import System.ComponentModel
 import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Reflection
 import System.Reflection.Emit
 import System.Text
+import System.Threading
+import System.Threading.Tasks
 import Xunit
 
 class Issue5274DataFieldEqualityTests {
@@ -209,8 +212,120 @@ func Main() {
         AssertOutputBytes(dll, "True\nTrue\nTrue\n")
     }
 
+    @Fact
+    func HashSpecifications_ReuseCanonicalRows_WithoutAliasingOpenArguments() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package HashReuse
+import System
+public data struct Repeated(A int32, B int32, C int32, D int32, E int32, F int32, G int32, H int32, I int32)
+public data struct Again(A int32, B int32, C int32, D int32, E int32, F int32, G int32, H int32, I int32)
+public data struct Eight(A int32, B int32, C int32, D int32, E int32, F int32, G int32, H int32)
+public data struct EightAgain(A int32, B int32, C int32, D int32, E int32, F int32, G int32, H int32)
+public data struct Open[T struct, U struct](A T, B T, C U, D T?, E U?, F int32, G int32?, H T, I U)
+public data struct OpenAgain[T struct, U struct](A T, B T, C U, D T?, E U?, F int32, G int32?, H T, I U)
+func Main() {
+    let a = Repeated(1, 2, 3, 4, 5, 6, 7, 8, 9)
+    Console.WriteLine(a.Equals(Repeated(1, 2, 3, 4, 5, 6, 7, 8, 9)))
+    Console.WriteLine(a.GetHashCode() == Again(1, 2, 3, 4, 5, 6, 7, 8, 9).GetHashCode())
+    let b = Open[int32, int64](1, 2, 3, nil, 5, 6, nil, 8, 9)
+    Console.WriteLine(b.Equals(Open[int32, int64](1, 2, 3, nil, 5, 6, nil, 8, 9)))
+    Console.WriteLine(b.GetHashCode() == OpenAgain[int32, int64](1, 2, 3, nil, 5, 6, nil, 8, 9).GetHashCode())
+}`, "HashReuse", true)
+        IlVerifier.Verify(dll)
+        let assembly = Assembly.LoadFile(dll)
+        let repeated = HashSpecifications(assembly.GetType("HashReuse.Repeated", throwOnError: true)!!)
+        Assert.Equal(9, repeated.Length)
+        let integer = Assert.Single(repeated.Distinct())
+        Assert.Equal(repeated, HashSpecifications(assembly.GetType("HashReuse.Again", throwOnError: true)!!))
+        let eight = Assert.Single(HashSpecifications(assembly.GetType("HashReuse.Eight", throwOnError: true)!!))
+        Assert.Equal(
+            eight,
+            Assert.Single(HashSpecifications(assembly.GetType("HashReuse.EightAgain", throwOnError: true)!!))
+        )
+        let openType = assembly.GetType("HashReuse.Open`2", throwOnError: true)!!.MakeGenericType(
+            typeof(int32),
+            typeof(int64)
+        )
+        let other = assembly.GetType("HashReuse.OpenAgain`2", throwOnError: true)!!.MakeGenericType(
+            typeof(int64),
+            typeof(int32)
+        )
+        let openSpecs = HashSpecifications(openType)
+        Assert.Equal(9, openSpecs.Length)
+        Assert.Equal(6, openSpecs.Distinct().Count())
+        Assert.Equal(openSpecs[0], openSpecs[1])
+        Assert.Equal(openSpecs[0], openSpecs[7])
+        Assert.Equal(openSpecs[2], openSpecs[8])
+        Assert.Equal(integer, openSpecs[5])
+        Assert.Equal(openSpecs, HashSpecifications(other))
+        Assert.Equal(7, repeated.Concat(openSpecs).Append(eight).Distinct().Count())
+        AssertTypedCalls(
+            openType,
+            []Type{
+                typeof(int32),
+                typeof(int32),
+                typeof(int64),
+                typeof(int32?),
+                typeof(int64?),
+                typeof(int32),
+                typeof(int32?),
+                typeof(int32),
+                typeof(int64)
+            }
+        )
+        AssertTypedCalls(
+            other,
+            []Type{
+                typeof(int64),
+                typeof(int64),
+                typeof(int32),
+                typeof(int64?),
+                typeof(int32?),
+                typeof(int32),
+                typeof(int32?),
+                typeof(int64),
+                typeof(int32)
+            }
+        )
+        AssertOutputBytes(dll, "True\nTrue\nTrue\nTrue\n")
+    }
+
+    @Fact
+    func TimedOutOutputFixture_TerminatesTheChild_AndCompletesPipeReads() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package EqualityTimeout
+import System
+import System.Threading
+func Main() {
+    Console.Write("partial")
+    Thread.Sleep(Timeout.Infinite)
+}`, "EqualityTimeout", true)
+        IlVerifier.Verify(dll)
+        using let process = StartFixture(dll)
+        try {
+            let error = Assert.Throws[InvalidOperationException](() -> ReadOutputBytes(process))
+            Assert.True(process.HasExited, "The timed-out child is still running.")
+            Assert.StartsWith("Equality fixture timed out.", error.Message, StringComparison.Ordinal)
+            Assert.Contains("Child terminated: True.", error.Message, StringComparison.Ordinal)
+            Assert.Contains("Pipe reads completed: True.", error.Message, StringComparison.Ordinal)
+        } finally {
+            if !process.HasExited {
+                process.Kill(entireProcessTree: true)
+                Assert.True(process.WaitForExit(10_000), "Timeout control child survived cleanup.")
+            }
+        }
+    }
+
     shared {
         private func AssertOutputBytes(assembly string, expected string) {
+            using let process = StartFixture(assembly)
+            Assert.Equal(
+                Encoding.UTF8.GetBytes(expected.Replace("\n", Environment.NewLine, StringComparison.Ordinal)),
+                ReadOutputBytes(process)
+            )
+        }
+
+        private func StartFixture(assembly string) Process {
             let start = ProcessStartInfo("dotnet"){
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
@@ -219,20 +334,63 @@ func Main() {
                     throw InvalidOperationException("Missing fixture directory.")
             }
             start.ArgumentList.Add(assembly)
-            using let process = Process.Start(start) ?? throw InvalidOperationException("Failed to start fixture.")
+            return Process.Start(start) ?? throw InvalidOperationException("Failed to start fixture.")
+        }
+
+        private func ReadOutputBytes(process Process)[]uint8 {
             using let output = MemoryStream()
-            let stdout = process.StandardOutput.BaseStream.CopyToAsync(output)
-            let stderr = process.StandardError.ReadToEndAsync()
+            using let cancellation = CancellationTokenSource()
+            let stdout = process.StandardOutput.BaseStream.CopyToAsync(output, cancellation.Token)
+            let stderr = process.StandardError.ReadToEndAsync(cancellation.Token)
+            let reads = Task.WhenAll([]Task{stdout, stderr})
             if !process.WaitForExit(30_000) {
-                process.Kill(entireProcessTree: true)
-                throw InvalidOperationException("Equality fixture timed out.")
+                let message = StringBuilder("Equality fixture timed out.")
+                try {
+                    process.Kill(entireProcessTree: true)
+                } catch (error InvalidOperationException) {
+                    message.Append(" Kill failed: ").Append(error.Message)
+                } catch (error Win32Exception) {
+                    message.Append(" Kill failed: ").Append(error.Message)
+                }
+                message.Append(" Child terminated: ").Append(process.WaitForExit(10_000)).Append(".")
+                cancellation.Cancel()
+                let _ = reads.ContinueWith((task Task) -> task.Exception, TaskContinuationOptions.OnlyOnFaulted)
+                try {
+                    reads.Wait(10_000)
+                } catch (error AggregateException) when error.InnerExceptions.All(
+                    (failure Exception) -> failure is OperationCanceledException or
+                        IOException or
+                        ObjectDisposedException
+                ) {
+                    message.Append(" Pipe read cancellation: ").Append(error.Message)
+                }
+                message.Append(" Pipe reads completed: ").Append(reads.IsCompleted).Append(".")
+                throw InvalidOperationException(message.ToString())
             }
-            stdout.GetAwaiter().GetResult()
+            reads.GetAwaiter().GetResult()
             Assert.True(process.ExitCode == 0, stderr.GetAwaiter().GetResult())
-            Assert.Equal(
-                Encoding.UTF8.GetBytes(expected.Replace("\n", Environment.NewLine, StringComparison.Ordinal)),
-                output.ToArray()
+            return output.ToArray()
+        }
+
+        private func HashSpecifications(type Type)[]int32 {
+            let hash = type.GetMethod("GetHashCode", Type.EmptyTypes) ??
+                throw InvalidOperationException("Missing hash.")
+            let instructions = IlInstructionReader.Read(hash.GetMethodBody()?.GetILAsByteArray())
+            Assert.NotEmpty(instructions)
+            return instructions
+                .Where(
+                (instruction IlInstruction) -> instruction.MetadataToken is int32 token &&
+                    hash
+                    .Module
+                    .ResolveMethod(token, type.GetGenericArguments(), nil)
+                    ?.Name is "Add" or
+                    "Combine"
             )
+                .Select(
+                (instruction IlInstruction) -> instruction.MetadataToken ??
+                    throw InvalidOperationException("Missing hash specification.")
+            )
+                .ToArray()
         }
 
         private func AssertTypedCalls(type Type, fields[]Type) {
