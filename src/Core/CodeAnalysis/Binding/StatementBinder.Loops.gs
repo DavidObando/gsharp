@@ -662,6 +662,9 @@ internal partial class StatementBinder {
         )
         condition = boundCondition
         post = boundPost
+        if NarrowingComparison.LoopsEnabled {
+            ReportLoopExitGain(bodySyntax, boundCondition)
+        }
         return body
     }
 
@@ -971,6 +974,9 @@ internal partial class StatementBinder {
             }
         )
         $scope = $scope.Pop()
+        if NarrowingComparison.LoopsEnabled {
+            ReportLoopExitGain(bodySyntax, condition)
+        }
         let bodyLabel = BoundLabel("body${binderCtx.LabelCounter}")
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         statements.Add(BoundLabelStatement(originatingSyntax, bodyLabel))
@@ -1000,6 +1006,9 @@ internal partial class StatementBinder {
         // enclosing block, matching C#'s `goto`/label semantics).
         if !IsLabelableLoop(inner) {
             let reachableOnEntry = currentStatementListFallsThrough
+            if NarrowingComparison.LoopsEnabled {
+                ReportBackwardJumpSpan(syntax)
+            }
             let userLabel = DefineUserLabel(labelName, syntax.LabelIdentifier.Location)
             let boundInner = BindStatement(inner)
             let labeledStatement = BoundBlockStatement(

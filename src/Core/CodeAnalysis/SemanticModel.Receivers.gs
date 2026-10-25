@@ -36,7 +36,6 @@ partial class SemanticModel {
         cancellationToken CancellationToken = default(CancellationToken)
     ) TypeInfo {
         cancellationToken.ThrowIfCancellationRequested()
-        index.Get(cancellationToken)
         if !object.ReferenceEquals(expression.SyntaxTree, syntaxTree) {
             return TypeInfo.None
         }
@@ -72,7 +71,6 @@ partial class SemanticModel {
         cancellationToken CancellationToken = default(CancellationToken)
     ) BoundExpression? {
         cancellationToken.ThrowIfCancellationRequested()
-        index.Get(cancellationToken)
         if token.Kind != SyntaxKind.IdentifierToken || token.IsMissing || !object.ReferenceEquals(
             token.SyntaxTree,
             syntaxTree

@@ -108,7 +108,7 @@ shared class CodeActionComputer {
         // (hover / format / right-click in an editor) and must stay cheap.
         let compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
         let requestSpan = RangeToSpan(content, $range)
-        for diag in EnumerateRelevantDiagnostics(compilation, content.SyntaxTree, ct) {
+        for diag in EnumerateRelevantDiagnostics(compilation, content.SyntaxTree) {
             ct.ThrowIfCancellationRequested()
             if !Overlaps(diag.Location.Span, requestSpan) {
                 continue
@@ -129,20 +129,17 @@ shared class CodeActionComputer {
         }
     }
 
-    private func EnumerateRelevantDiagnostics(compilation Compilation, tree SyntaxTree, ct CancellationToken) sequence[
-        CoreDiagnostic
-    ] {
+    private func EnumerateRelevantDiagnostics(compilation Compilation, tree SyntaxTree) sequence[CoreDiagnostic] {
         // Quick-fix triggers come exclusively from the binding pass — syntax
         // errors don't carry the type information we key on. Filtering by
         // source tree mirrors DocumentSyncHandler so multi-file projects only
-        // surface fixes for the file the user is editing. Bodies come first, then declarations
-        // (ADR-0212 §7a), which keeps the order of the fixes.
-        for d in compilation.GetBodyDiagnostics(ct) {
+        // surface fixes for the file the user is editing.
+        for d in compilation.BoundProgram.Diagnostics {
             if d.Location.Text == tree.Text {
                 yield d
             }
         }
-        for d in compilation.GetDeclarationDiagnostics(ct) {
+        for d in compilation.GlobalScope.Diagnostics {
             if d.Location.Text == tree.Text {
                 yield d
             }

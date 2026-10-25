@@ -1633,11 +1633,14 @@ internal partial class StatementBinder {
         )
     )
 
-    private func MayBeMutatedByUnknownWrite(mutations AssignedRootsCollector, path AccessPath) bool -> (
-        mutations.MayMutateAnyRootViaPointer &&
-            (path.HasMembers || !path.Root.IsReadOnly || IsByReferenceRoot(path.Root))
+    private func MayBeMutatedByUnknownWrite(mutations AssignedRootsCollector, path AccessPath) bool ->
+    MayBeMutatedByUnknownWrite(mutations.MayMutateAnyRoot, mutations.MayMutateAnyRootViaPointer, path)
+
+    // The same decision from the two flags, for the region walker of ADR-0213 (slice L0).
+    private func MayBeMutatedByUnknownWrite(mayMutateAnyRoot bool, viaPointer bool, path AccessPath) bool -> (
+        viaPointer && (path.HasMembers || !path.Root.IsReadOnly || IsByReferenceRoot(path.Root))
     ) ||
-        (mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(path))
+        (mayMutateAnyRoot && MayBeMutatedByUnknownCallable(path))
 
     // Binding a header expression (an `if` condition, a switch discriminant or
     // guard, a catch filter) never runs the post-statement alias update, but

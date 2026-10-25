@@ -358,9 +358,6 @@ type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol GetTypeByMetadataName(String fullyQualifiedMetadataName, System.Threading.CancellationToken cancellationToken = null)
   method public String get_AssemblyName()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> ApplySourceSuppressions(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics)
-  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> GetBodyDiagnostics(System.Threading.CancellationToken cancellationToken = null)
-  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> GetDeclarationDiagnostics(System.Threading.CancellationToken cancellationToken = null)
-  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> GetDiagnostics(System.Threading.CancellationToken cancellationToken = null)
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> get_SyntaxTrees()
   method public System.Collections.Immutable.ImmutableArray`1<System.ValueTuple`3<String, Byte[], Boolean>> get_EmbeddedResources()
   method public System.Collections.Immutable.ImmutableHashSet`1<String> get_PreprocessorSymbols()
@@ -4228,7 +4225,6 @@ type sealed class GSharp.Core.CodeAnalysis.SemanticModel : System.Object
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree get_SyntaxTree()
   method public GSharp.Core.CodeAnalysis.TypeInfo GetReceiverTypeInfo(GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax expression, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.TypeInfo GetTypeInfo(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)
-  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> GetDiagnostics(System.Threading.CancellationToken cancellationToken = null)
   method public static System.Collections.Immutable.ImmutableArray`1<System.ValueTuple`2<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol>> GetTypeClauseSymbols(GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax typeClause, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type)
   property public GSharp.Core.CodeAnalysis.Compilation.Compilation Compilation { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree SyntaxTree { get; }

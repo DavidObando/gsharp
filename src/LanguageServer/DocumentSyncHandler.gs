@@ -6,7 +6,9 @@ package GSharp.LanguageServer
 
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Analyzers
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Documentation
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import GSharp.LanguageServer.Protocol
@@ -114,22 +116,62 @@ shared class DocumentSyncHandler {
             nextNewLine = text.IndexOf('\n', nextNewLine + 1)
         }
         let diagnostics = List[GSharp.LanguageServer.Protocol.Diagnostic]()
-        // ADR-0212 §7: the compilation answers which diagnostics this file has. A tree that the
-        // compilation does not hold (a stale snapshot) has no semantic answer, only its parse diagnostics.
-        let queryable = !skipBinding && compilation.SyntaxTrees.Contains(syntaxTree)
-        if !queryable {
-            // ADR-0175 amendment (#4422): parser warnings honour @SuppressDiagnostic
-            // exactly as gsc's EmitResult does.
-            for d in compilation.ApplySourceSuppressions(syntaxTree.Diagnostics) {
-                diagnostics.Add(
-                    BuildDiagnostic("Syntax", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text)
-                )
-            }
-        }
-        if queryable {
-            AppendCompilationDiagnostics(syntaxTree, compilation, useProject, diagnostics)
+        // ADR-0175 amendment (#4422): parser warnings honour @SuppressDiagnostic
+        // exactly as gsc's EmitResult does.
+        for d in compilation.ApplySourceSuppressions(syntaxTree.Diagnostics) {
+            diagnostics.Add(
+                BuildDiagnostic("Syntax", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text)
+            )
         }
         if !skipBinding {
+            // ADR-0175 amendment (#4422): drop what a source
+            // @SuppressDiagnostic scope covers, exactly as gsc's EmitResult does.
+            for d in compilation.ApplySourceSuppressions(compilation.GlobalScope.Diagnostics) {
+                // Only report diagnostics that originate from this file's syntax tree.
+                if useProject && d.Location.Text != syntaxTree.Text {
+                    continue
+                }
+                diagnostics.Add(
+                    BuildDiagnostic("Semantic", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text)
+                )
+            }
+            let program = compilation.BoundProgram
+            for d in compilation.ApplySourceSuppressions(program.Diagnostics) {
+                if useProject && d.Location.Text != syntaxTree.Text {
+                    continue
+                }
+                diagnostics.Add(
+                    BuildDiagnostic("Binding", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text)
+                )
+            }
+            // Documentation validation (warnings only — these don't block compilation).
+            let docDiagnostics = DiagnosticBag()
+            DocumentationValidator.Validate(
+                if useProject {
+                    compilation.SyntaxTrees
+                } else {
+                    ImmutableArray.Create(syntaxTree)
+                },
+                program.Functions.Keys.ToImmutableArray(),
+                program.Structs,
+                docDiagnostics,
+                warnOnMissingDocs: false
+            )
+            for d in compilation.ApplySourceSuppressions(docDiagnostics.ToImmutableArray()) {
+                if useProject && d.Location.Text != syntaxTree.Text {
+                    continue
+                }
+                diagnostics.Add(
+                    BuildDiagnostic(
+                        d.Id,
+                        d.Message,
+                        d.Location.Span.Start,
+                        d.Location.Span.End,
+                        syntaxTree.Text,
+                        ToLspSeverity(d.Severity)
+                    )
+                )
+            }
             // ADR-0169: run the project's G# analyzers in this (debounced,
             // bind-inclusive) phase, budgeted per analyzer so a slow analyzer
             // is disabled (GS9302) instead of holding up interactive
@@ -165,61 +207,6 @@ shared class DocumentSyncHandler {
             }
         }
         return DiagnosticComputationResult(DocumentContent(syntaxTree, newLines, project, workspace), diagnostics)
-    }
-
-    // The wire code of a compiler diagnostic names its phase ("Syntax", "Semantic", "Binding"), and only a
-    // documentation diagnostic carries its own id. The phase is the query whose result holds the instance.
-    private func AppendCompilationDiagnostics(
-        syntaxTree SyntaxTree,
-        compilation Compilation,
-        useProject bool,
-        diagnostics List[GSharp.LanguageServer.Protocol.Diagnostic]
-    ) {
-        // A standalone buffer reports everything its one-tree compilation reports; a project file reports
-        // what is located in its own tree.
-        let own = if useProject {
-            compilation.GetSemanticModel(syntaxTree).GetDiagnostics()
-        } else {
-            compilation.GetDiagnostics()
-        }
-        let parse = HashSet[GSharp.Core.CodeAnalysis.Diagnostic](ReferenceEqualityComparer.Instance)
-        for d in syntaxTree.Diagnostics {
-            parse.Add(d)
-        }
-        let declaration = HashSet[GSharp.Core.CodeAnalysis.Diagnostic](ReferenceEqualityComparer.Instance)
-        for d in compilation.GetDeclarationDiagnostics() {
-            declaration.Add(d)
-        }
-        let body = HashSet[GSharp.Core.CodeAnalysis.Diagnostic](ReferenceEqualityComparer.Instance)
-        for d in compilation.GetBodyDiagnostics() {
-            body.Add(d)
-        }
-        for d in own {
-            if parse.Contains(d) {
-                diagnostics.Add(
-                    BuildDiagnostic("Syntax", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text)
-                )
-            } else if declaration.Contains(d) {
-                diagnostics.Add(
-                    BuildDiagnostic("Semantic", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text)
-                )
-            } else if body.Contains(d) {
-                diagnostics.Add(
-                    BuildDiagnostic("Binding", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text)
-                )
-            } else {
-                diagnostics.Add(
-                    BuildDiagnostic(
-                        d.Id,
-                        d.Message,
-                        d.Location.Span.Start,
-                        d.Location.Span.End,
-                        syntaxTree.Text,
-                        ToLspSeverity(d.Severity)
-                    )
-                )
-            }
-        }
     }
 
     private func BuildDiagnostic(code string, message string, start int32, end int32, sourceText SourceText) GSharp
