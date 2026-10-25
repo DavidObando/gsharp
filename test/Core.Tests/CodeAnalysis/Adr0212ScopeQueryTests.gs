@@ -71,6 +71,39 @@ open class Adr0212ScopeQueryTests {
     }
 
     @Fact
+    func GuardLet_EarlierBindingIsVisibleToLaterClausesButNotTheElseBody() {
+        let model = Compiled.Model
+        let inSecondClause = Source.IndexOf("Next(guarded)", StringComparison.Ordinal) + 5
+        Assert.IsType[LocalVariableSymbol](Assert.Single(model.LookupSymbols(inSecondClause, "guarded")))
+        Assert.DoesNotContain("guarded", Names("PGuardElse"))
+        Assert.DoesNotContain("secondValue", Names("PGuardElse"))
+    }
+
+    @Fact
+    func IsPatternVariable_IsScopedToItsStatement() {
+        Assert.Contains("text", Names("PInIs"))
+        Assert.DoesNotContain("text", Names("PAfterIs"))
+    }
+
+    @Fact
+    func PartialInterface_EveryPartHasAnEnclosingSymbol() {
+        Assert.Equal("IParts", Assert.IsType[InterfaceSymbol](Enclosing("PPartInterface")).Name)
+    }
+
+    @Fact
+    func Members_ExcludeIndexersAndInheritedPrivateMembersAndIncludeConstants() {
+        let names = Names("PDerived")
+        Assert.Contains("Mine", names)
+        Assert.Contains("Shown", names)
+        Assert.DoesNotContain("Hidden", names)
+        Assert.Contains("Max", names)
+        Assert.IsType[FieldSymbol](Single("PDerived", "Max"))
+        // The indexer does not hide the global function of the same name.
+        Assert.IsType[FunctionSymbol](Single("PDerived", "Item"))
+        Assert.Empty(Compiled.Model.LookupSymbols(Position("PDerived"), "Hidden"))
+    }
+
+    @Fact
     func GuardLet_BindingIsVisibleAfterTheStatement() {
         Assert.Contains("guarded", Names("PAfterGuard"))
         Assert.DoesNotContain("guarded", Names("PBeforeGuard"))
@@ -396,6 +429,31 @@ interface IShape {
     func Area() int32
 }
 func Helper(x int32) int32 { return x }
+func Next(s string) string? { return s }
+partial interface IParts {
+    func A() int32
+}
+partial interface IParts {
+    // PPartInterface
+    func B() int32
+}
+open class BaseHolder {
+    private var Hidden int32
+    var Shown int32
+}
+class Derived : BaseHolder {
+    private var Mine int32
+    const Max int32 = 50
+    prop this[i int32] int32 {
+        get {
+            return i
+        }
+    }
+    func Use() int32 {
+        return Mine // PDerived
+    }
+}
+func Item() int32 { return 1 }
 class Counter : IShape {
     var Value int32
     var Other int32
@@ -448,8 +506,8 @@ func Shadow(Total int32, maybe string?, items []int32) int32 {
     }
     let after = outer // PAfter
     // PBeforeGuard
-    guard let guarded = maybe else {
-        return 0
+    guard let guarded = maybe, let secondValue = Next(guarded) else {
+        return 0 // PGuardElse
     }
     let usesGuarded = guarded // PAfterGuard
     while let w = maybe {
@@ -492,6 +550,10 @@ func Shadow(Total int32, maybe string?, items []int32) int32 {
         }
         default { }
     }
+    if probe is string text {
+        let inIs = text // PInIs
+    }
+    let afterIs = 1 // PAfterIs
     let afterPattern = 3 // PAfterPattern
     let fact = func(n int32) int32 {
         if n <= 1 { return 1 }

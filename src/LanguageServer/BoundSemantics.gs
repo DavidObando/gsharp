@@ -48,6 +48,11 @@ shared class BoundSemantics {
         if bound == nil {
             return nil
         }
+        // The token may declare a symbol that is not yet visible at its own position (a stale local).
+        let declared = bound.Model.GetSymbolInfo(bound.Token).Symbol
+        if declared != nil {
+            return declared
+        }
         let symbols = bound.Model.LookupSymbols(bound.Token.Span.Start, bound.Token.Text)
         return if symbols.IsDefaultOrEmpty {
             default(Symbol?)

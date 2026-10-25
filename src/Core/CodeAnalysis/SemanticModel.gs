@@ -120,9 +120,16 @@ partial class SemanticModel {
         if node is StructDeclarationSyntax structDeclaration &&
             index
             .Value
-            .StructsByIdentifier
+            .TypesByIdentifier
             .TryGetValue(structDeclaration.Identifier, out var declaredStruct) {
             return declaredStruct
+        }
+        if node is InterfaceDeclarationSyntax interfaceDeclaration &&
+            index
+            .Value
+            .TypesByIdentifier
+            .TryGetValue(interfaceDeclaration.Identifier, out var declaredInterface) {
+            return declaredInterface
         }
         return nil
     }
@@ -280,7 +287,7 @@ partial class SemanticModel {
         TypeClauseTokens Dictionary[SyntaxToken, TypeSymbol],
         LocalDeclarations ImmutableArray[(Anchor SyntaxNode, Local Symbol)],
         LocalDeclarationsByName Dictionary[string, ImmutableArray[(Anchor SyntaxNode, Local Symbol)]],
-        StructsByIdentifier Dictionary[SyntaxToken, StructSymbol]
+        TypesByIdentifier Dictionary[SyntaxToken, Symbol]
     ) : IEquatable[SemanticModel.Index] { }
 
     /// Records the outermost bound node per syntax node (first-win in a
@@ -434,7 +441,7 @@ partial class SemanticModel {
             SemanticModel.RecordTypeClauses(globalScope, tree, typeClauseTokens)
             // A shared class's declaration node is a copy the binder made when it moved the members
             // into the shared block; the identifier token is the same object in both.
-            let structsByIdentifier = Dictionary[SyntaxToken, StructSymbol](ReferenceEqualityComparer.Instance)
+            let structsByIdentifier = Dictionary[SyntaxToken, Symbol](ReferenceEqualityComparer.Instance)
             for declaredStruct in program.Structs {
                 if declaredStruct.Declaration is {} structDeclaration && object.ReferenceEquals(
                     structDeclaration.Identifier.SyntaxTree,
@@ -455,6 +462,56 @@ partial class SemanticModel {
                                     .Span
                                     .Start {
                                     structsByIdentifier.TryAdd(partIdentifier, declaredStruct)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // The same for an interface: the merged declaration of a partial interface lists its parts.
+            for declaredInterface in program.Interfaces {
+                if declaredInterface.Declaration is {} interfaceDeclaration && object.ReferenceEquals(
+                    interfaceDeclaration.Identifier.SyntaxTree,
+                    tree
+                ) {
+                    structsByIdentifier.TryAdd(interfaceDeclaration.Identifier, declaredInterface)
+                }
+                if declaredInterface.Declaration is {} merged && !merged.PartialPartLocations.IsDefaultOrEmpty {
+                    for part in tree.Root.Members.OfType[InterfaceDeclarationSyntax]() {
+                        if part.Identifier is {} partIdentifier && !partIdentifier.IsMissing {
+                            for location in merged.PartialPartLocations {
+                                if string.Equals(location.FileName, tree.Text?.FileName, StringComparison.Ordinal) &&
+                                    location
+                                    .Span
+                                    .Start == partIdentifier
+                                    .Span
+                                    .Start {
+                                    structsByIdentifier.TryAdd(partIdentifier, declaredInterface)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // The same for an interface: the merged declaration of a partial interface lists its parts.
+            for declaredInterface in program.Interfaces {
+                if declaredInterface.Declaration is {} interfaceDeclaration && object.ReferenceEquals(
+                    interfaceDeclaration.Identifier.SyntaxTree,
+                    tree
+                ) {
+                    structsByIdentifier.TryAdd(interfaceDeclaration.Identifier, declaredInterface)
+                }
+                if declaredInterface.Declaration is {} merged && !merged.PartialPartLocations.IsDefaultOrEmpty {
+                    for part in tree.Root.Members.OfType[InterfaceDeclarationSyntax]() {
+                        if part.Identifier is {} partIdentifier && !partIdentifier.IsMissing {
+                            for location in merged.PartialPartLocations {
+                                if string.Equals(location.FileName, tree.Text?.FileName, StringComparison.Ordinal) &&
+                                    location
+                                    .Span
+                                    .Start == partIdentifier
+                                    .Span
+                                    .Start {
+                                    structsByIdentifier.TryAdd(partIdentifier, declaredInterface)
                                 }
                             }
                         }

@@ -147,7 +147,7 @@ partial class SemanticModel {
             // call themselves and each other; every other local follows its declaration.
             let hoisted = local is FunctionSymbol
             let region = RegionOf(anchor)
-            if region == nil {
+            if region == nil || IsInGuardElse(anchor, position) {
                 continue
             }
             // The one declaration-order rule: a local is visible from the end of its own
@@ -238,21 +238,64 @@ partial class SemanticModel {
             MemberQuery.All
         }
         if name != nil {
-            let member = TypeMemberModel.LookupMember(structSymbol, name, query)
+            var member = TypeMemberModel.LookupMember(structSymbol, name, query)
+            if member != nil && !IsReceiverlessMember(member, structSymbol) {
+                member = nil
+            }
+            member ??= FindConstant(structSymbol, name)
             if member != nil && seen.Add(member.Name) {
                 result.Add(member)
             }
             return
         }
         for member in TypeMemberModel.EnumerateMembers(structSymbol, query) {
-            // A field-like event's backing field is not a name a user wrote.
-            if member is FieldSymbol{IsEventBackingField: true} {
-                continue
-            }
-            if IsListable(member.Name) && seen.Add(member.Name) {
+            if IsReceiverlessMember(member, structSymbol) && IsListable(member.Name) && seen.Add(member.Name) {
                 result.Add(member)
             }
         }
+        // Constants are held apart from the other fields and are static.
+        for type in structSymbol.GetHierarchy() {
+            for constant in type.ConstFields {
+                if IsReceiverlessMember(constant, structSymbol) && IsListable(constant.Name) && seen.Add(
+                    constant.Name
+                ) {
+                    result.Add(constant)
+                }
+            }
+        }
+    }
+
+    /// Whether a bare name can bind to [`member`](paramref) inside [`current`](paramref): not an
+    /// indexer, not a field-like event's backing field, and not a private member of a base type.
+    private func IsReceiverlessMember(member Symbol, current StructSymbol) bool {
+        if member is PropertySymbol{IsIndexer: true} || member is FieldSymbol{IsEventBackingField: true} {
+            return false
+        }
+        let accessibility Accessibility? = switch member {
+            case field is FieldSymbol: field.Accessibility
+            case property is PropertySymbol: property.Accessibility
+            case function is FunctionSymbol: function.Accessibility
+            case declaredEvent is EventSymbol: declaredEvent.Accessibility
+            default: default(Accessibility?)
+        }
+        if accessibility == Accessibility.Private {
+            let owner = member.ContainingType
+            return owner == nil || object.ReferenceEquals(owner, current) ||
+                (current.Definition != nil && object.ReferenceEquals(owner, current.Definition))
+        }
+        return true
+    }
+
+    private func FindConstant(current StructSymbol, name string) Symbol? {
+        for type in current.GetHierarchy() {
+            for constant in type.ConstFields {
+                if string.Equals(constant.Name, name, StringComparison.Ordinal) &&
+                    IsReceiverlessMember(constant, current) {
+                    return constant
+                }
+            }
+        }
+        return nil
     }
 
     private func AddGlobals(
@@ -282,8 +325,8 @@ partial class SemanticModel {
         if GetDeclaredSymbol(declaration, cancellationToken) is StructSymbol declared {
             return declared
         }
-        return if index.Value.StructsByIdentifier.TryGetValue(declaration.Identifier, out var byIdentifier) {
-            byIdentifier
+        return if index.Value.TypesByIdentifier.TryGetValue(declaration.Identifier, out var byIdentifier) {
+            byIdentifier as StructSymbol
         } else {
             default(StructSymbol?)
         }
@@ -405,8 +448,10 @@ partial class SemanticModel {
                 return Region(whileLet, clause.Span.End, whileLet.Body.Span.End)
             }
             if owner is GuardLetStatementSyntax guardLet {
+                // A binding is visible to the clauses after it and, once the statement is done, to the rest
+                // of the block, but not to the `else` body (see IsInGuardElse).
                 let block = EnclosingBlock(guardLet)
-                return Region(block, guardLet.Span.End, block.Span.End)
+                return Region(block, clause.Span.End, block.Span.End)
             }
         }
         if parent is ForRangeStatementSyntax forRange {
@@ -467,8 +512,40 @@ partial class SemanticModel {
             }
             ancestor = ancestor.Parent
         }
+        // A pattern variable of an `is` pattern is scoped to the statement that holds the test. The
+        // binder also lets it leak past an early exit (`if !(x is T t) { return }`); that depends on
+        // flow and is not modeled.
+        if parent is TypePatternSyntax or VarPatternSyntax or PropertyPatternSyntax or SlicePatternSyntax {
+            var statement SyntaxNode? = parent
+            while statement != nil && statement is not StatementSyntax {
+                statement = statement.Parent
+            }
+            if statement != nil {
+                return Region(statement, anchor.Span.End, statement.Span.End)
+            }
+        }
         let block = EnclosingBlock(anchor)
         return Region(block, anchor.Span.End, block.Span.End)
+    }
+
+    /// Whether [`position`](paramref) is in the `else` body of the `guard let` that declares
+    /// [`anchor`](paramref): the body runs when a binding failed.
+    private func IsInGuardElse(anchor SyntaxNode, position int32) bool {
+        if anchor.Parent is not IfLetBindingClauseSyntax clause {
+            return false
+        }
+        var owner SyntaxNode? = clause.Parent
+        while owner != nil && owner is not GuardLetStatementSyntax {
+            owner = owner.Parent
+        }
+        return owner is GuardLetStatementSyntax guardLet &&
+            position >= guardLet
+            .ElseKeyword
+            .Span
+            .Start &&
+            position < guardLet
+            .Span
+            .End
     }
 
     private func BodyRegion(owner SyntaxNode, body SyntaxNode?) Region? {

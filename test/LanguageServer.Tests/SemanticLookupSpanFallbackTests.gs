@@ -56,6 +56,9 @@ open class SemanticLookupSpanFallbackTests {
         let local Symbol? = SemanticLookup.ResolveSymbol(compilation, localUse)
         Assert.IsType[ParameterSymbol](parameter)
         Assert.IsType[LocalVariableSymbol](local)
+        // The declaring identifier of the local is not visible at its own position.
+        let declaration SyntaxToken? = FindFirstIdentifier(staleTree, "greeting")
+        Assert.IsType[LocalVariableSymbol](SemanticLookup.ResolveSymbol(compilation, declaration))
     }
 
     @Fact
