@@ -139,6 +139,16 @@ internal partial class ExpressionBinder {
 
     private prop function FunctionSymbol? -> getCurrentFunction()
 
+    private func CanUseSpanAlias(identifier SyntaxToken, expression bool = false) bool ->
+    binderCtx.CanUseSpanAlias($scope, identifier, getCurrentFunction(), expression) &&
+        (
+        !expression ||
+            (
+            !TryResolveInheritedClrInstanceMemberByBareName(identifier.ValueText, out _, out _) &&
+                !TryResolveInterfaceInstancePropertyByBareName(identifier.ValueText, out _, out _)
+        )
+    )
+
     /// Issue #1159: returns the implicit-`this` parameter that an
     /// unqualified instance-member reference should bind against. For a direct
     /// instance method body this is the enclosing function's own

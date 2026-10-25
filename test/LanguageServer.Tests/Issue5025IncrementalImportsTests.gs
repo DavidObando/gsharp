@@ -78,7 +78,7 @@ open class Issue5025IncrementalImportsTests {
                     }
                 )
                 await AssertBindingAsync(server, documents, uri, source)
-                Assert.Same(scope_, project.GetCompilation().ReusedGlobalScope)
+                Assert.Same(scope_, project.GetCompilation().GlobalScope)
             }
             Assert.Equal(Source, File.ReadAllText(path))
         } finally {
