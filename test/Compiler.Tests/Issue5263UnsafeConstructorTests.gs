@@ -7,6 +7,82 @@ import Xunit
 
 class Issue5263UnsafeConstructorTests {
     @Theory
+    @InlineData("conversion")
+    @InlineData("receiver")
+    @InlineData("extension")
+    func MetadataOwner_DoesNotSupplyLexicalUnsafeContext(kind string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let isExtension = kind == "extension"
+        let owner = if isExtension {
+            "class"
+        } else {
+            "struct"
+        }
+        let annotation = if isExtension {
+            "@ExtensionOwner(typeof(Owner))\n"
+        } else {
+            ""
+        }
+        let declaration = if kind == "conversion" {
+            "func operator implicit(value Owner) int32"
+        } else if kind == "receiver" {
+            "func (value Owner) operator +(right Owner) int32"
+        } else {
+            "func (value string) Read() int32"
+        }
+        let invocation = if kind == "conversion" {
+            "let value int32 = Owner{}"
+        } else if kind == "receiver" {
+            "let owner = Owner{}\n    let value = owner + owner"
+        } else {
+            "let value = \"owner\".Read()"
+        }
+        for modifier in[]string{"", "unsafe "} {
+            let source = `package Metadata5263
+import System
+unsafe ` + owner + ` Owner {}
+` + annotation + modifier + declaration + ` {
+    fixed text *char = "X" { Console.Write(text[0]) }
+    return 7
+}
+func Main() {
+    ` + invocation + `
+    Console.Write(value)
+}`
+            if modifier.Length == 0 {
+                let (code, output) = fixture.TryCompile(source, "MetadataSafe5263", true)
+                Assert.NotEqual(0, code)
+                let line = if isExtension {
+                    6
+                } else {
+                    5
+                }
+                Assert.Contains(
+                    "MetadataSafe5263.gs($line,5,$line,10): error GS0400:",
+                    output,
+                    StringComparison.Ordinal
+                )
+                Assert.Equal(1, output.Split(": error ", StringSplitOptions.None).Length - 1)
+                Assert.False(File.Exists(Path.Combine(fixture.Directory, "MetadataSafe5263.dll")))
+            } else {
+                let assembly = fixture.Compile(source, "MetadataUnsafe5263", true)
+                IlVerifier.Verify(
+                    assembly,
+                    nil,
+                    []string{
+                        "UnmanagedPointer",
+                        "StackUnexpected",
+                        "StackByRef",
+                        "ExpectedPtr",
+                        "StackUnexpectedArrayType"
+                    }
+                )
+                Assert.Equal(Encoding.UTF8.GetBytes("X7"), Encoding.UTF8.GetBytes(fixture.Run(assembly)))
+            }
+        }
+    }
+
+    @Theory
     @InlineData("class")
     @InlineData("struct")
     func UnsafeType_ConstructorsAndMembersInheritContext(kind string) {
@@ -55,22 +131,44 @@ partial class Outer {
     init(value string) {
         fixed text *char = value { Console.Write(text[0]) }
     }
-    class Inner {
+    interface Reader {
+        func ReadInterface() {
+            fixed text *char = "I" { Console.Write(text[0]) }
+        }
+    }
+    class Inner : Reader {
         init(value string) {
             fixed text *char = value { Console.Write(text[0]) }
+        }
+        func Read() {
+            fixed text *char = "M" { Console.Write(text[0]) }
+        }
+        prop Value char {
+            get {
+                fixed text *char = "G" { return text[0] }
+            }
+        }
+        shared {
+            init {
+                fixed text *char = "S" { Console.Write(text[0]) }
+            }
         }
     }
 }
 func Main() {
     let outer = Outer("P")
     let inner = Outer.Inner("N")
+    inner.Read()
+    Console.Write(inner.Value)
+    let reader Outer.Reader = inner
+    reader.ReadInterface()
 }`, "Nested5263", true, part)
         IlVerifier.Verify(
             assembly,
             nil,
             []string{"UnmanagedPointer", "StackUnexpected", "StackByRef", "ExpectedPtr", "StackUnexpectedArrayType"}
         )
-        Assert.Equal(Encoding.UTF8.GetBytes("PN"), Encoding.UTF8.GetBytes(fixture.Run(assembly)))
+        Assert.Equal(Encoding.UTF8.GetBytes("PSNMGI"), Encoding.UTF8.GetBytes(fixture.Run(assembly)))
     }
 
     @Fact

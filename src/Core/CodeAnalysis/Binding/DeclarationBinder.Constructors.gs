@@ -1116,7 +1116,7 @@ internal partial class DeclarationBinder {
             $package,
             Accessibility.Private,
             receiverType: structSymbol
-        )
+        ){IsUnsafe = binderCtx.InUnsafeContext}
         let deinitSymbol = DeinitSymbol(ctorFunction, deinitSyntax)
         structSymbol.SetDeinitializer(deinitSymbol)
     }
@@ -1141,7 +1141,7 @@ internal partial class DeclarationBinder {
             $package,
             Accessibility.Public,
             receiverType: structSymbol
-        ){IsSpecialName = true}
+        ){IsSpecialName = true, IsUnsafe = binderCtx.InUnsafeContext}
         let ctorSymbol = ConstructorSymbol(ctorFunction, declaration: nil)
         ctorSymbol.MarkSynthesizedFromPrimaryConstructor()
         return ctorSymbol
@@ -1215,7 +1215,7 @@ internal partial class DeclarationBinder {
             $package,
             ctorAccessibility,
             receiverType: structSymbol
-        ){IsSpecialName = true}
+        ){IsSpecialName = true, IsUnsafe = binderCtx.InUnsafeContext}
         let constructorSymbol = ConstructorSymbol(ctorFunction, ctorSyntax)
         Binder.AttachDocumentation(ctorFunction, ctorSyntax)
         // ADR-0065 §2: propagate the contextual `convenience` modifier from

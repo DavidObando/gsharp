@@ -135,19 +135,11 @@ partial class Binder {
             return Statements.OutsideExceptionHandlers(() -> Expressions.BindLambdaBodyExpression(syntax, targetType))
         }
         binderCtx = BinderContext(parent)
-        // Member bodies bind after declaration scopes unwind. Restore the function and lexical type contexts at the binder root.
+        // Declaration binding captures lexical unsafe context. Metadata ownership does not establish that context.
         binderCtx.UnsafeDepth = if function?.IsUnsafe == true {
             1
         } else {
             0
-        }
-        var containingType = function?.ContainingType
-        while containingType is {} owner {
-            if owner is StructSymbol structOwner && structOwner.Declaration?.IsUnsafe == true {
-                binderCtx.UnsafeDepth++
-                break
-            }
-            containingType = owner.ContainingType
         }
         memberLookup = MemberLookup(binderCtx)
         conversions = ConversionClassifier(
@@ -9259,11 +9251,11 @@ partial class Binder {
                 "initBlocks is only non-empty when structDeclaration is non-null",
                 expression: "structDeclaration"
             )
-            let context = FunctionSymbol(
-                "<static-initializer>",
-                ImmutableArray[ParameterSymbol].Empty,
-                TypeSymbol.Void
-            ){IsStatic = true, StaticOwnerType = structSym, IsStaticInitializer = true}
+            let context = Invariant.Required(
+                structSym.StaticInitializerFunction,
+                "a declared static initializer has a captured lexical binding context",
+                expression: "structSym.StaticInitializerFunction"
+            )
             let previousPackage = parentScope.SetCurrentDeclaringPackage(structSym.PackageName)
             let previousTree = parentScope.SetCurrentReferencingSyntaxTree(structDeclaration.SyntaxTree)
             try {
