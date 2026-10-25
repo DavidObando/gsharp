@@ -13,6 +13,46 @@ import Xunit
 
 class Utf8LiteralLanguageTests {
     @Theory
+    @InlineData("LAMBDA", false)
+    @InlineData("LAMBDA", true)
+    @InlineData("class Holder { var Saved int32 = { LAMBDA\n0 } }", true)
+    @InlineData("class Holder { shared { var Saved int32 = { LAMBDA\n0 } } }", true)
+    @InlineData("class Holder { shared { init { LAMBDA } } }", true)
+    @InlineData("open class Base(Value int32) {}\nclass Holder() : Base({ LAMBDA\n0 }) {}", true)
+    @InlineData("open class Base(Value int32) {}\nclass Holder : Base { init() : Base({ LAMBDA\n0 }) {} }", true)
+    func AsyncLambdaLivenessCoversProgramAndInitializerRoots(declaration string, inferred bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let lambda = `let read = async func(ch chan[int32]) int32 {
+    return Consume(u8"AB".Slice(0, 1), RECEIVE)
+}`.Replace(
+            "RECEIVE",
+            if inferred {
+                "Take(ch)"
+            } else {
+                "<-ch"
+            }
+        )
+        let source = `package Utf8InitializerRoots
+import System
+func Take(ch chan[int32]) int32 -> <-ch
+func Consume(value readonly span[byte], extra int32) int32 -> value.Length + extra
+DECLARATION
+`.Replace("DECLARATION", declaration.Replace("LAMBDA", lambda))
+        let expectedLine = source.Substring(0, source.IndexOf("return Consume", StringComparison.Ordinal)).Count(
+            (character char) -> character == '\n'
+        ) +
+            1
+        let (code, output) = fixture.TryCompile(source, "Utf8InitializerRoots", executable: true)
+        Assert.NotEqual(0, code)
+        let diagnostic = Assert.Single(
+            output.Split('\n').Where((line string) -> line.Contains("GS0219", StringComparison.Ordinal))
+        )
+        Assert.Contains("(" + expectedLine.ToString() + ",", diagnostic, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Utf8InitializerRoots.dll")))
+    }
+
+    @Theory
     @InlineData("u8\"AB\".Slice(0, 1)", false)
     @InlineData("ReadOnlySpan[byte]([]byte{65})", false)
     @InlineData("u8\"AB\".Slice(0, 1)", true)

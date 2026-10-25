@@ -8606,6 +8606,14 @@ partial class Binder {
                 // `func Main()` keeps its own body and the (empty) statement block.
                 statement = inferredEntryBody
             }
+            RefStructAsyncLivenessAnalyzer.AnalyzeProgram(
+                functionBodies,
+                statement,
+                allStructs,
+                globalScope.Interfaces,
+                diagnostics,
+                parentScope.References
+            )
             // Issue #3501 A2: union the ref-kind delegates synthesized while
             // binding top-level statements (already in globalScope.Delegates via
             // BindGlobalScope) with those synthesized while binding

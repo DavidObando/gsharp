@@ -11,6 +11,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Text
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.Linq
 
 /// Issue #2350: replaces the coarse, syntax-only rejection of a by-ref-like
 /// (`ref struct`) local declared anywhere in an async function (the
@@ -65,6 +66,74 @@ import System.Collections.Immutable
 /// *through* an alias (`alias = 42`) is a use of the alias, not a kill
 /// of it, unlike overwriting a by-ref-like value local outright.
 internal shared class RefStructAsyncLivenessAnalyzer {
+    /// Validates every owning root after suspension inference finishes rewriting.
+    /// @param functions The rewritten function bodies.
+    /// @param statement The complete top-level body, including library initializers.
+    /// @param structs The user and synthesized types.
+    /// @param interfaces The user interfaces.
+    /// @param diagnostics Existing and new compilation diagnostics.
+    /// @param references The compilation references used by async preparation.
+    func AnalyzeProgram(
+        functions ImmutableDictionary[FunctionSymbol, BoundBlockStatement].Builder,
+        statement BoundBlockStatement,
+        structs ImmutableArray[StructSymbol],
+        interfaces ImmutableArray[InterfaceSymbol],
+        diagnostics ImmutableArray[Diagnostic].Builder,
+        references ReferenceResolver?
+    ) {
+        let bag = DiagnosticBag()
+        bag.AddRange(diagnostics)
+        let existingCount = bag.Count
+        for (function, body) in functions.OrderBy(
+            (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) -> pair.Key,
+            SymbolSourceOrderComparer.Instance
+        ) {
+            bag.SuppressDuplicateDiagnostics(
+                () -> {
+                    Analyze(body.PreEmitAnalysisBody ?? body, function, bag, references)
+                    return 0
+                }
+            )
+        }
+        let finder = AsyncLambdaScopeFinder(bag, references)
+        let VisitRoot = (root BoundNode?) -> bag.SuppressDuplicateDiagnostics(
+            () -> {
+                finder.Visit(root)
+                return 0
+            }
+        )
+        VisitRoot(statement)
+        for type in structs {
+            for (_, initializer) in BoundProgramOrder.FieldInitializers(type.InstanceFieldInitializers) {
+                VisitRoot(initializer)
+            }
+            for (_, initializer) in BoundProgramOrder.FieldInitializers(type.StaticFieldInitializers) {
+                VisitRoot(initializer)
+            }
+            for initializer in type.StaticInitializerStatements {
+                VisitRoot(initializer)
+            }
+            if type.BaseConstructorInitializer is {} initializer {
+                for argument in initializer.Arguments {
+                    VisitRoot(argument)
+                }
+            }
+            for constructor in type.ExplicitConstructors {
+                if constructor.BaseInitializer is {} initializer {
+                    for argument in initializer.Arguments {
+                        VisitRoot(argument)
+                    }
+                }
+            }
+        }
+        for type in interfaces {
+            for (_, initializer) in BoundProgramOrder.FieldInitializers(type.StaticFieldInitializers) {
+                VisitRoot(initializer)
+            }
+        }
+        diagnostics.AddRange(bag.Skip(existingCount))
+    }
+
     private class ReportingContext {
         init(diagnostics DiagnosticBag?) {
             Diagnostics = diagnostics

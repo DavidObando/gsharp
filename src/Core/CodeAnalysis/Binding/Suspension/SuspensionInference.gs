@@ -84,8 +84,6 @@ internal shared class SuspensionInference {
         let ordered = bodies.Keys.OrderBy(SortKey, StringComparer.Ordinal).ToList()
         let facts = Dictionary[FunctionSymbol, SuspensionPointCollector.Facts]()
         let bag = DiagnosticBag()
-        bag.AddRange(diagnostics)
-        let existingDiagnosticCount = bag.Count
         for function in ordered {
             facts[function] = SuspensionPointCollector.Collect(bodies[function])
         }
@@ -158,20 +156,6 @@ internal shared class SuspensionInference {
             if !object.ReferenceEquals(rewritten, body) {
                 SyntaxAnchoringWalker.Anchor(rewritten, function.Declaration)
                 bodies[function] = rewritten
-            }
-            if newlySuspending.Contains(function) || !object.ReferenceEquals(rewritten, body) {
-                // Inferred calls can add suspensions to async bodies and their nested lambdas.
-                bag.SuppressDuplicateDiagnostics(
-                    () -> {
-                        RefStructAsyncLivenessAnalyzer.Analyze(
-                            rewritten.PreEmitAnalysisBody ?? rewritten,
-                            function,
-                            bag,
-                            references
-                        )
-                        return 0
-                    }
-                )
             }
         }
         for type in structs {
@@ -261,7 +245,7 @@ internal shared class SuspensionInference {
                 )
             )
         }
-        diagnostics.AddRange(bag.Skip(existingDiagnosticCount))
+        diagnostics.AddRange(bag)
         return newlySuspending
     }
 
