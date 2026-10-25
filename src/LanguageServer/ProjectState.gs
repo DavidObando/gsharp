@@ -15,11 +15,11 @@ import GSharp.Core.CodeAnalysis.Syntax
 import SystemObject = System.Object
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Analyzers
-import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Text
 import System.Collections.Immutable
 import System.Security.Cryptography
 import System.Text
+import System.Threading
 
 /// Represents the state of a single GSharp project, holding all source files
 /// and producing a unified (cref:Compilation) from them.
@@ -30,6 +30,9 @@ open class ProjectState {
     )
 
     private var compilation Compilation?
+    // ADR-0212 §8: the lifetime token of `compilation`. The project cancels it when a successor replaces the
+    // compilation, which releases every waiter on a build nobody wants.
+    private var compilationLifetime CancellationTokenSource?
     private var isDirty bool = true
     private var references IReadOnlyList[string] = Array.Empty[string]()
     private var referenceSourcePath string?
@@ -218,20 +221,24 @@ open class ProjectState {
             }
             let trees = syntaxTrees.Values.ToArray()
             let resolver ReferenceResolver? = GetOrBuildResolver_NoLock()
+            // Cancel the superseded compilation first, so the successor factory never waits for its build.
+            RetireCompilation_NoLock()
             // ADR-0105 (Phase 2): when a single file changed, ask the previous compilation for its
             // successor. A body-only edit reuses the previous global scope and re-binds only the
             // edited file; any other edit binds from scratch (ADR-0212 §7a).
             let incremental Compilation? = TryBuildSuccessor_NoLock(trees, resolver)
             if incremental != nil {
-                compilation = incremental
+                compilation = AttachLifetime_NoLock(incremental)
                 isDirty = false
                 return compilation!!
             }
-            compilation = if trees.Length == 0 {
-                NewCompilation_NoLock(resolver, true, SyntaxTree.Parse(string.Empty))
-            } else {
-                NewCompilation_NoLock(resolver, true, trees)
-            }
+            compilation = AttachLifetime_NoLock(
+                if trees.Length == 0 {
+                    NewCompilation_NoLock(resolver, true, SyntaxTree.Parse(string.Empty))
+                } else {
+                    NewCompilation_NoLock(resolver, true, trees)
+                }
+            )
             isDirty = false
             return compilation!!
         }
@@ -320,6 +327,23 @@ open class ProjectState {
             loadDiagnostics = gsAnalyzerLoadDiagnostics
             return cachedGsAnalyzers
         }
+    }
+
+    // Cancels the lifetime token of the cached compilation. A dead compilation never builds again; readers that
+    // hold it see OperationCanceledException for state it has not built (ADR-0212 §8, Q7).
+    // The source is not disposed: it has no timer and no registration, and readers keep copies of its token.
+    private func RetireCompilation_NoLock() {
+        compilationLifetime?.Cancel()
+        compilationLifetime = nil
+    }
+
+    // Gives a compilation of the cached chain its own lifetime token. Snapshot compilations keep the default
+    // budget: they are one request and nothing cancels them.
+    private func AttachLifetime_NoLock(created Compilation) Compilation {
+        let source = CancellationTokenSource()
+        compilationLifetime = source
+        created.WorkBudget = CompilationWorkBudget(cancellationToken: source.Token)
+        return created
     }
 
     // The server keeps no body cache and no reused scope of its own: IncrementalBodyReuse makes the

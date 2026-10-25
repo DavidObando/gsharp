@@ -63,8 +63,16 @@ internal shared class IlVerifyFalsePositives {
         let accepted = List[string]()
         let unexpected = List[string]()
         let filterRule = IlVerifyFilterInFinallyRule.Load(assemblyPath)
+        var matchedReturns = 0
+        var requiredReturns = 0
         for line in errorLines {
-            if ApprovedReturnMatches(assemblyPath, line) {
+            let approval = ApprovedReturnMatches(assemblyPath, line)
+            if approval.Matches {
+                if requiredReturns != 0 && requiredReturns != approval.RequiredCount {
+                    return (false, []string{}, errorLines.ToArray())
+                }
+                requiredReturns = approval.RequiredCount
+                matchedReturns++
                 accepted.Add(line + " [approved #5244; dotnet/runtime#129030]")
             } else if (allowFilterInFinally && filterRule.Matches(errorCode: nil, line)) ||
                 IlVerifyStaticInterfaceRule.Matches(assemblyPath, line) {
@@ -73,44 +81,64 @@ internal shared class IlVerifyFalsePositives {
                 unexpected.Add(line)
             }
         }
+        if matchedReturns != requiredReturns {
+            return (false, []string{}, errorLines.ToArray())
+        }
         return (true, accepted.ToArray(), unexpected.ToArray())
     }
 
-    private func ApprovedReturnMatches(assemblyPath string, line string) bool {
+    private func ApprovedReturnMatches(assemblyPath string, line string)(Matches bool, RequiredCount int32) {
         let literal = line == "[IL]: Error [ReturnPtrToStack]: [" + Path.GetFullPath(assemblyPath) +
             " : Utf8Proof.Utf8Candidate::Get()][offset 0x00000014] " +
             "Return type is ByRef, TypedReference, ArgHandle, or ArgIterator."
         let prefix = "[IL]: Error [ReturnPtrToStack]: [" + Path.GetFullPath(assemblyPath) + " : Gsharp.Values."
         let suffix = "] Return type is ByRef, TypedReference, ArgHandle, or ArgIterator."
+        let productPrefix = "[IL]: Error [ReturnPtrToStack]: [" + Path.GetFullPath(assemblyPath) +
+            " : Utf8LiteralProof.Literals::"
+        let product = line == productPrefix +
+            "Get()][offset 0x00000014" +
+            suffix ||
+            line == productPrefix +
+            "Empty()][offset 0x00000014" +
+            suffix ||
+            line == productPrefix +
+            "Derived()][offset 0x0000000F" +
+            suffix
         if !literal &&
+            !product &&
             line != prefix +
             "Slice`1::AsSpan()][offset 0x00000017" +
             suffix &&
             line != prefix +
             "ReadOnlySlice`1::AsSpan()][offset 0x00000010" +
             suffix {
-            return false
+            return (false, 0)
         }
         try {
-            if literal {
-                // #5242: this exact witnessed image includes the contiguous payload and hidden zero.
-                // Generated product literals are not admitted by this finite research certificate.
-                return Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(assemblyPath))) ==
-                "38B57BE6D6B8ABD3BE70316B48C3ABB6371BCCAF28E6FA6EE6188B005F557BBE"
+            if literal || product {
+                // #5242: whole-image hashes freeze RVA bytes, bounded slices and every signed target.
+                // Future compiler images require separate review; ref-like signatures do not grant admission.
+                let hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(assemblyPath)))
+                return if literal {
+                    (hash == "38B57BE6D6B8ABD3BE70316B48C3ABB6371BCCAF28E6FA6EE6188B005F557BBE", 1)
+                } else {
+                    (hash == "D8093A176AC3BBEBC3022ADABD7F7BA4FA9AB02436142386B5DE26981A1AB3CC", 3)
+                }
             }
-            return RuntimeReturnProof(
-                assemblyPath
-            ) == "A5AB56A01AD8B7616B8ACB4A28E8C16042F95FB54F4AD51C5C43FC6994075814"
+            return (
+                RuntimeReturnProof(assemblyPath) == "A5AB56A01AD8B7616B8ACB4A28E8C16042F95FB54F4AD51C5C43FC6994075814",
+                2
+            )
         } catch (BadImageFormatException) {
-            return false
+            return (false, 0)
         } catch (IOException) {
-            return false
+            return (false, 0)
         } catch (UnauthorizedAccessException) {
-            return false
+            return (false, 0)
         } catch (ArgumentException) {
-            return false
+            return (false, 0)
         } catch (InvalidOperationException) {
-            return false
+            return (false, 0)
         }
     }
 
