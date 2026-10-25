@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func init() {
@@ -35,6 +37,10 @@ func init() {
 
 func TestProcessGroupTerminationAcceptsUnreapedZombies(t *testing.T) {
 	worker := startTestProcessGroup(t, 0, "sleep")
+	exited := testProcessExitProbe(t, worker.Process.Pid)
+	if exited() {
+		t.Fatal("zombie fixture exited before termination")
+	}
 	if err := worker.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
@@ -44,6 +50,9 @@ func TestProcessGroupTerminationAcceptsUnreapedZombies(t *testing.T) {
 	}
 	if state := linuxTestProcessState(t, worker.Process.Pid); state != 'Z' {
 		t.Fatalf("fixture was reaped before verification: %c", state)
+	}
+	if !exited() {
+		t.Fatal("kernel exit probe rejected the unreaped zombie")
 	}
 }
 
@@ -84,24 +93,63 @@ func TestProcessGroupRejectsZombieLeaderWithLiveThreads(t *testing.T) {
 	if threads <= 1 {
 		t.Fatalf("fixture lacks live threads beside its zombie leader: %d", threads)
 	}
+	if testProcessExitProbe(t, worker.Process.Pid)() {
+		t.Fatal("kernel exit probe accepted live threads beside a zombie leader")
+	}
 	if exited, err := processGroupMembersExited(worker.Process.Pid); err != nil || exited {
 		t.Fatalf("live threads were waived behind a zombie leader: exited=%v error=%v", exited, err)
 	}
 }
 
 func TestProcessGroupRejectsIncompleteProcView(t *testing.T) {
+	status := []byte(fmt.Sprintf("NStgid:\t%d\n", os.Getpid()))
 	for _, mounts := range []string{
 		"proc /proc proc rw,hidepid=2 0 0\n",
 		"tmpfs /proc tmpfs rw 0 0\n",
 		"proc /hidden proc rw 0 0\n",
 		"broken\n",
 	} {
-		if err := validateProcessGroupProcView([]byte(mounts), strconv.Itoa(os.Getpid())); err == nil {
+		if err := validateProcessGroupProcView([]byte(mounts), status); err == nil {
 			t.Fatalf("incomplete process visibility was accepted: %q", mounts)
 		}
 	}
-	if err := validateProcessGroupProcView([]byte("proc /proc proc rw 0 0\n"), "0"); err == nil {
-		t.Fatal("a different PID namespace was accepted")
+	for _, status := range []string{
+		"",
+		"NStgid:\n",
+		"NStgid:\t0\n",
+		fmt.Sprintf("NStgid:\t%d\t%d\n", os.Getpid(), os.Getpid()),
+	} {
+		if err := validateProcessGroupProcView([]byte("proc /proc proc rw 0 0\n"), []byte(status)); err == nil {
+			t.Fatalf("incomplete or mismatched PID namespace was accepted: %q", status)
+		}
+	}
+}
+
+func testProcessExitProbe(t *testing.T, pid int) func() bool {
+	t.Helper()
+	fd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := unix.Close(fd); err != nil {
+			t.Error(err)
+		}
+	})
+	return func() bool {
+		t.Helper()
+		events := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+		_, err := unix.Poll(events, 0)
+		if errors.Is(err, unix.EINTR) {
+			return false
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if events[0].Revents&(unix.POLLERR|unix.POLLNVAL) != 0 {
+			t.Fatalf("invalid process exit event: %#x", events[0].Revents)
+		}
+		return events[0].Revents&(unix.POLLIN|unix.POLLHUP) != 0
 	}
 }
 

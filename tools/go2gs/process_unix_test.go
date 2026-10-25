@@ -52,6 +52,10 @@ func TestProcessGroupTerminationDrainsMissedDescendants(t *testing.T) {
 		<-done
 	})
 	childPID := waitForTestChildPID(t, pidPath)
+	childExited := testProcessExitProbe(t, childPID)
+	if childExited() {
+		t.Fatal("descendant exited before the termination test")
+	}
 	first := true
 	signalProcessGroup = func(pid int, signal syscall.Signal) error {
 		if first {
@@ -65,7 +69,7 @@ func TestProcessGroupTerminationDrainsMissedDescendants(t *testing.T) {
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := syscall.Kill(childPID, 0); errors.Is(err, syscall.ESRCH) {
+		if childExited() {
 			drained = true
 			return
 		}
