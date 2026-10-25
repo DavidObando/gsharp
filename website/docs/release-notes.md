@@ -16,7 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 The entries below are newer than v0.5.212. Published features and migration notes follow in the release section.
 
-- Check ref-like liveness after suspension inference across function bodies, top-level statements, field initializers, static initializer statements, and base-constructor arguments. Include nested async lambdas. Preserve exact diagnostic counts and safe parked-channel literal evaluation. Part of #5332 and #5328.
+- Check ref-like liveness after suspension inference across function bodies, top-level statements, field initializers, static initializer statements, and base-constructor arguments. Include nested async lambdas. Convert typed spill failures into source-located diagnostics. Keep synthesized-temporary diagnostics stable when inference renumbers spills. Preserve exact diagnostic counts and safe parked-channel literal evaluation. Part of #5332 and #5328.
 
 - **go2gs waits for owned Unix worker groups to terminate** (issue #5344, part of #4333). A successful group signal did not prove that every descendant had exited. Cleanup now repeats `SIGKILL` with a two-second cleanup deadline. It requires the group to disappear or, on Linux, two matching complete observations of dead members only. Linux rejects a hidden process view, a live member beside a zombie, and live threads behind a zombie leader. Transient macOS `EPERM` errors are retried, not treated as success. A termination failure returns without waiting indefinitely for the worker. Existing cancellation assertions and inherited-group handling are unchanged.
 

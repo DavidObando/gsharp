@@ -13,6 +13,39 @@ import Xunit
 
 class Utf8LiteralLanguageTests {
     @Theory
+    @InlineData(1)
+    @InlineData(2)
+    func MixedInferredAndExplicitAwaitsPreserveExactTemporaryDiagnosticCounts(count int32) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let parameters = string.Join(
+            ", ",
+            Enumerable.Range(0, count).Select((index int32) -> "value" + index.ToString() + " readonly span[byte]")
+        )
+        let operands = string.Join(", ", Enumerable.Repeat("ReadOnlySpan[byte]([]byte{65})", count))
+        let source = `package Utf8MixedSuspensions
+import System
+import System.Threading.Tasks
+func Take(ch chan[int32]) int32 -> <-ch
+func Consume(PARAMETERS, extra int32) int32 -> value0.Length + extra
+async func Read(ch chan[int32], pending Task[int32]) int32 {
+    let received = Take(ch)
+    return Consume(OPERANDS, await pending)
+}
+`.Replace("PARAMETERS", parameters).Replace("OPERANDS", operands)
+        let (code, output) = fixture.TryCompile(source, "Utf8MixedSuspensions", false)
+        Assert.NotEqual(0, code)
+        let diagnostics = output
+            .Split('\n')
+            .Where((line string) -> line.Contains("GS0219", StringComparison.Ordinal))
+            .ToArray()
+        Assert.NotEmpty(diagnostics)
+        Assert.Equal(count, diagnostics.Length)
+        Assert.All(diagnostics, (diagnostic string) -> Assert.Contains("(8,", diagnostic, StringComparison.Ordinal))
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Utf8MixedSuspensions.dll")))
+    }
+
+    @Theory
     @InlineData("LAMBDA", false)
     @InlineData("LAMBDA", true)
     @InlineData("class Holder { var Saved int32 = { LAMBDA\n0 } }", true)

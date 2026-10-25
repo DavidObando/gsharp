@@ -5,6 +5,8 @@
 package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Lowering
 import GSharp.Core.CodeAnalysis.Lowering.Async
 import GSharp.Core.CodeAnalysis.Symbols
@@ -337,7 +339,13 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             return
         }
         // Preserve source-local rules and prove the actual explicit and implicit suspension representation.
-        let spilledBody = AsyncStateMachineRewriter.PrepareBody(body, references)
+        var spilledBody BoundBlockStatement
+        try {
+            spilledBody = AsyncStateMachineRewriter.PrepareBody(body, references)
+        } catch (ex EmitDiagnosticException) {
+            diagnostics.Report(Compilation.CreateInternalErrorDiagnostic(ex))
+            return
+        }
         let spilledCollector = InterestingLocalCollector(collectByRefLikeLocals: true)
         spilledCollector.VisitStatement(spilledBody)
         spilledCollector.Locals.ExceptWith(reporting.Crossing)
@@ -767,10 +775,16 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     "a local live across $article '$suspensionKeyword' suspension point in $suspensionContext (it would require hoisting a managed pointer into the state machine)"
                 )
             } else {
+                // Inference can renumber synthesized locals; keep their diagnostics tied to source, not spill ordinals.
+                let subject = if v.DeclaringSyntax == nil {
+                    "compiler-generated temporary"
+                } else {
+                    "variable '${v.Name}'"
+                }
                 bag.ReportByRefLikeEscape(
                     location,
                     v.Type,
-                    "be declared as a local in $suspensionContext and remain live across $article '$suspensionKeyword' suspension point (variable '${v.Name}'); restructure the code so its value is no longer needed after the '$suspensionKeyword'"
+                    "be declared as a local in $suspensionContext and remain live across $article '$suspensionKeyword' suspension point ($subject); restructure the code so its value is no longer needed after the '$suspensionKeyword'"
                 )
             }
         }

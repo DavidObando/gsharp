@@ -15,6 +15,7 @@ import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
+import System.Threading
 import Xunit
 
 /// Issue #2350: (cref:GSharp.Core.CodeAnalysis.Binding.RefStructAsyncLivenessAnalyzer)
@@ -27,6 +28,33 @@ import Xunit
 /// rejecting genuinely unsafe cases (live-across-suspension, capture, and
 /// unsafe finally interaction).
 open class Issue2350AsyncRefStructLivenessTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func DiagnosticsOnlyConvertsUnsupportedSpillFailureAtOriginalGuard(boundProgram bool) {
+        let source = `import System.Threading.Tasks
+async func Pick(n int32, pending Task[bool]) int32 {
+    let value = switch n {
+        case 1 when await pending: 10
+        default: 0
+    }
+    return value
+}`
+        let text = SourceText.From(source)
+        let compilation = Compilation(SyntaxTree.Parse(text))
+        let diagnostics = if boundProgram {
+            compilation.GetBoundProgram(default(CancellationToken)).Diagnostics
+        } else {
+            compilation.GetDiagnostics()
+        }
+        let diagnostic = Assert.Single(diagnostics)
+        Assert.Equal("GS9998", diagnostic.Id)
+        Assert.Contains("'await' inside a switch-expression 'when' guard is not yet supported", diagnostic.Message)
+        Assert.Same(text, diagnostic.Location.Text)
+        Assert.Equal(source.IndexOf("await pending", StringComparison.Ordinal), diagnostic.Location.Span.Start)
+        Assert.Equal("await pending".Length, diagnostic.Location.Span.Length)
+    }
+
     @Theory
     @InlineData("pending Task[int32]", "await pending")
     @InlineData("ch chan[int32]", "<-ch")
