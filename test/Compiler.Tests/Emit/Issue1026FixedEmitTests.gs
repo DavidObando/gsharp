@@ -36,6 +36,112 @@ import Xunit
 /// inherent unsafety, rather than skipping ilverify globally.
 open class Issue1026FixedEmitTests {
     @Fact
+    func ByteCapture_NonterminalFifoCopiesDeferSnapshotsUntilBothCopiesStop() {
+        if !OperatingSystem.IsLinux() {
+            return
+        }
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let stdoutPath = Path.Combine(fixture.Directory, "stdout.fifo")
+        let stderrPath = Path.Combine(fixture.Directory, "stderr.fifo")
+        let create = ProcessStartInfo("mkfifo"){
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        }
+        create.ArgumentList.Add(stdoutPath)
+        create.ArgumentList.Add(stderrPath)
+        using let fifo = Process.Start(create) ?? throw InvalidOperationException("Failed to create FIFOs")
+        Assert.Empty(CaptureBytes(fifo, fifo.StandardOutput.BaseStream, fifo.StandardError.BaseStream, 5_000))
+        using let stdout = FileStream(
+            stdoutPath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.ReadWrite,
+            1,
+            FileOptions.None
+        )
+        using let stderr = FileStream(
+            stderrPath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.ReadWrite,
+            1,
+            FileOptions.None
+        )
+        using let stdoutWriter = FileStream(
+            stdoutPath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.ReadWrite,
+            1,
+            FileOptions.None
+        )
+        using let stderrWriter = FileStream(
+            stderrPath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.ReadWrite,
+            1,
+            FileOptions.None
+        )
+        stdoutWriter.WriteByte(uint8(255))
+        stderrWriter.WriteByte(uint8(254))
+        let assembly = fixture.Compile("System.Environment.Exit(17)", "failed", true)
+        let start = ProcessStartInfo("dotnet"){
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = fixture.Directory
+        }
+        start.ArgumentList.Add(assembly)
+        using let process = Process.Start(start) ?? throw InvalidOperationException("Failed to start witness")
+        let snapshots = List[Task[[]uint8]]()
+        let copies = List[Task]()
+        let elapsed = Stopwatch.StartNew()
+        try {
+            let failure = Assert.Throws[InvalidOperationException](() -> CaptureBytes(process, stdout, stderr, 2_000))
+            for name in[]string{"Stdout", "Stderr"} {
+                if failure.Data[name + "Snapshot"] is Task[[]uint8]snapshot {
+                    snapshots.Add(snapshot)
+                }
+                if failure.Data[name + "Copy"] is Task copy {
+                    copies.Add(copy)
+                }
+                Assert.Null(failure.Data[name])
+            }
+            Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(12), "Capture exceeded its bounded cleanup budget")
+            Assert.Contains("Child process exited with code 17", failure.Message, StringComparison.Ordinal)
+            Assert.Contains("<snapshot pending>", failure.Message, StringComparison.Ordinal)
+            Assert.Equal(true, failure.Data["CaptureCancellationRequested"])
+            Assert.Equal(2, snapshots.Count)
+            Assert.Equal(2, copies.Count)
+            for copy in copies {
+                Assert.False(copy.IsCompleted)
+            }
+            for snapshot in snapshots {
+                Assert.False(snapshot.IsCompleted)
+            }
+        } finally {
+            stdoutWriter.WriteByte(uint8(1))
+            stderrWriter.WriteByte(uint8(1))
+            let all = Task.WhenAll(snapshots.ToArray())
+            let _ = all.ContinueWith(
+                (finished Task[[][]uint8]) -> finished.Exception,
+                TaskContinuationOptions.OnlyOnFaulted
+            )
+            let _ = Task.WhenAny(all, Task.Delay(5_000)).GetAwaiter().GetResult()
+        }
+        for copy in copies {
+            Assert.True(copy.IsCanceled)
+        }
+        for snapshot in snapshots {
+            Assert.True(snapshot.IsCompletedSuccessfully)
+        }
+        Assert.Equal([]uint8{255}, snapshots[0].Result)
+        Assert.Equal([]uint8{254}, snapshots[1].Result)
+    }
+
+    @Fact
     func ByteCapture_TimeoutReapsChildAndPreservesBothRawPipes() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let assembly = fixture.Compile(`import System
@@ -342,20 +448,22 @@ run()`
         }
 
         private func CaptureBytes(process Process, stdout Stream, stderr Stream, timeoutMilliseconds int32)[]uint8 {
-            using let capturedOut = MemoryStream()
-            using let capturedError = MemoryStream()
+            let capturedOut = MemoryStream()
+            let capturedError = MemoryStream()
             using let cancelCapture = CancellationTokenSource()
             let output = stdout.CopyToAsync(capturedOut, cancelCapture.Token)
+            let stdoutSnapshot = SnapshotAfterCapture(output, capturedOut)
             let error = stderr.CopyToAsync(capturedError, cancelCapture.Token)
-            // Observe both faults, including tasks that finish after the cleanup deadline.
+            let stderrSnapshot = SnapshotAfterCapture(error, capturedError)
+            // Observe snapshot faults even after the bounded cleanup deadline.
             let observed = Task.WhenAll(
                 []Task{
-                    output.ContinueWith(
-                        (finished Task) -> finished.Exception,
+                    stdoutSnapshot.ContinueWith(
+                        (finished Task[[]uint8]) -> finished.Exception,
                         TaskContinuationOptions.ExecuteSynchronously
                     ),
-                    error.ContinueWith(
-                        (finished Task) -> finished.Exception,
+                    stderrSnapshot.ContinueWith(
+                        (finished Task[[]uint8]) -> finished.Exception,
                         TaskContinuationOptions.ExecuteSynchronously
                     )
                 }
@@ -401,22 +509,42 @@ run()`
             }
             Record("stdout", output)
             Record("stderr", error)
-            let stdoutBytes = capturedOut.ToArray()
-            let stderrBytes = capturedError.ToArray()
+            Record("stdout snapshot", stdoutSnapshot)
+            Record("stderr snapshot", stderrSnapshot)
+            let stdoutBytes = if stdoutSnapshot.IsCompletedSuccessfully {
+                stdoutSnapshot.Result
+            } else {
+                default([]?uint8)
+            }
+            let stderrBytes = if stderrSnapshot.IsCompletedSuccessfully {
+                stderrSnapshot.Result
+            } else {
+                default([]?uint8)
+            }
             let primary = if timedOut {
-                "Pinned array witness timed out after $timeoutMilliseconds ms"
+                "Child process timed out after $timeoutMilliseconds ms"
             } else if process.ExitCode != 0 {
-                "Pinned array witness exited with code ${process.ExitCode}"
-            } else if failures.Count != 0 {
-                "Pinned array witness capture failed"
+                "Child process exited with code ${process.ExitCode}"
+            } else if failures.Count != 0 || stdoutBytes == nil || stderrBytes == nil {
+                "Child process capture failed"
             } else if stderrBytes.Length != 0 {
-                "Pinned array witness wrote unexpected stderr"
+                "Child process wrote unexpected stderr"
             } else {
                 default(string?)
             }
             if primary != nil {
-                let message = "$primary; stdout (${output.Status}): ${BitConverter.ToString(stdoutBytes)}; " +
-                    "stderr (${error.Status}): ${BitConverter.ToString(stderrBytes)}; " +
+                let stdoutText = if stdoutBytes is {} bytes {
+                    BitConverter.ToString(bytes)
+                } else {
+                    "<snapshot pending>"
+                }
+                let stderrText = if stderrBytes is {} bytes {
+                    BitConverter.ToString(bytes)
+                } else {
+                    "<snapshot pending>"
+                }
+                let message = "$primary; stdout (${output.Status}): $stdoutText; " +
+                    "stderr (${error.Status}): $stderrText; " +
                     "capture cancellation requested: ${cancelCapture.IsCancellationRequested}"
                 let context = AggregateException(failures)
                 let failure Exception = if timedOut {
@@ -428,10 +556,25 @@ run()`
                 failure.Data["Stderr"] = stderrBytes
                 failure.Data["StdoutStatus"] = output.Status.ToString()
                 failure.Data["StderrStatus"] = error.Status.ToString()
+                failure.Data["StdoutCopy"] = output
+                failure.Data["StderrCopy"] = error
+                failure.Data["StdoutSnapshot"] = stdoutSnapshot
+                failure.Data["StderrSnapshot"] = stderrSnapshot
                 failure.Data["CaptureCancellationRequested"] = cancelCapture.IsCancellationRequested
                 throw failure
             }
-            return stdoutBytes
+            return stdoutBytes ?? throw InvalidOperationException("Child process stdout snapshot is unavailable")
+        }
+
+        private func SnapshotAfterCapture(copy Task, bytes MemoryStream) Task[[]uint8] {
+            return copy.ContinueWith(
+                (finished Task) -> {
+                    let _ = finished.Exception
+                    using let captured = bytes
+                    return captured.ToArray()
+                },
+                TaskContinuationOptions.ExecuteSynchronously
+            )
         }
 
         private let FixedIlVerifyIgnored[]string = []string{

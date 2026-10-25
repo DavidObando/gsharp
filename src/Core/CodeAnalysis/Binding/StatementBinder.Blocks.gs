@@ -2056,8 +2056,8 @@ internal partial class StatementBinder {
                 }
                 source = MakeFixedBufferElementReference(bufferAccess)
             } else if ExpressionBinder.GetArraySliceElementType(source.Type) is {} arrayElement {
-                // Source arrays and imported CLR arrays share the same storage.
-                // Pin the original reference and derive its element address.
+                // This query covers []T, [N]T, and imported CLR arrays.
+                // All use the same pinned-local and ldelema path.
                 pinKind = FixedPinKind.Array
                 elementType = arrayElement
                 pinnedUnderlying = source.Type
