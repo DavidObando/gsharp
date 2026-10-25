@@ -6456,6 +6456,14 @@ internal class MemberLookup {
             // Each summary retains the ordered fold without replaying earlier bounds.
             // Upper evidence cannot widen lower evidence or replace an exact bound.
             var fixedType = bounds.Exact ?? bounds.Lower
+            // Keep the earlier binding when lower and exact evidence conflict.
+            // Applicability must diagnose the conflicting argument, not an earlier valid argument.
+            if bounds.Exact is {} exact &&
+                bounds.Lower is {} lower &&
+                !HasImplicitSymbolicConversion(lower, exact) &&
+                substitution.TryGetValue(parameter, out var previous) {
+                fixedType = previous
+            }
             if fixedType == nil && bounds.Upper.Count > 0 {
                 fixedType = FindSymbolicInferenceCandidate(nil, bounds.Upper) ?? bounds.Upper[0]
             }

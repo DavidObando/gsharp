@@ -86,6 +86,32 @@ func Main() {
     }
 
     @Theory
+    @InlineData("[]T", "[]string{\"str\"}", "5,15,5,30")
+    @InlineData("[1]T", "[1]string{\"str\"}", "5,15,5,31")
+    @InlineData("List[T]", "List[string]()", "5,15,5,29")
+    func ConflictingExactEvidenceRetainsTheEarlierArgumentContract(
+        laterType string,
+        laterArgument string,
+        location string
+    ) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let references = ReferenceClosure.RefPackAssemblies().Select((path string) -> "/r:" + path).ToArray()
+        let source = "package ConflictingBounds5273\nimport System.Collections.Generic\nfunc Show[T](source T, later " +
+            laterType +
+            ") { }\nfunc Main() {\n    Show(131, " +
+            laterArgument +
+            ")\n}"
+        let (code, output) = fixture.TryCompile(source, "ConflictingBounds5273", true, references)
+        Assert.NotEqual(0, code)
+        Assert.True(
+            output.Contains("ConflictingBounds5273.gs(" + location + "): error GS0154:", StringComparison.Ordinal),
+            output
+        )
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "ConflictingBounds5273.dll")))
+    }
+
+    @Theory
     @InlineData("Func[T, bool]", false)
     @InlineData("Func[T, bool]", true)
     @InlineData("(T) -> bool", false)
