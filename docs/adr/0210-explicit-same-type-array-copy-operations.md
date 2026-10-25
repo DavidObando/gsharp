@@ -1445,6 +1445,9 @@ A buildable generic-value-loss mutant fails that native witness. This is
 host-specific evidence, not certification of every release-supported target.
 Reproduce with `python3 e2etests/fixed-array-abi-aot.py --rid osx-arm64`;
 supply installed native linker dependency paths when the host requires them.
+The helper accepts dedicated directories under `out/test-artifacts` only.
+It rejects shared roots, redirected paths and multiply-linked files before builds or writes.
+Run `python3 build/test-fixed-array-aot-workspace.py` for non-destructive guard tests.
 
 Before the exception approval below, these witnesses did not close the full-runtime gate: ILVerify 10.0.8
 reports the same two `ReturnPtrToStack` diagnostics in existing native-slice
