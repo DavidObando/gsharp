@@ -19,10 +19,8 @@ import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding.Suspension
 
 internal partial class ExpressionBinder {
-    /// Classifies [`name`](paramref) on the enclosing class's base: a
-    /// source event (walking the base chain) or an imported one, and returns
-    /// the base's own event so the subscription binds to its accessors
-    /// rather than to whatever the name means on the derived class.
+    /// Looks up [`name`](paramref) on base classes, from nearest to farthest.
+    /// Writes the selected event through the output parameters; the caller checks accessibility.
     /// @param name The member name after `base.`.
     /// @param sourceEvent The base's source event, when it declares one.
     /// @param sourceOwner The base class (in the hierarchy seen from the derived class) that declares
@@ -280,7 +278,7 @@ internal partial class ExpressionBinder {
         // (nearest base first, field before property, non-virtual accessor
         // calls). A real value named `base` keeps its ordinary meaning.
         //
-        // Base subscriptions select the inherited event and bypass virtual dispatch, as base methods do.
+        // TryGetBaseEvent applies base-member hiding rules; base subscriptions call the selected accessors without virtual dispatch.
         if accessor.LeftPart is NameExpressionSyntax{IdentifierToken: {ValueText: "base"}} baseName &&
             IsContextualBaseKeyword(baseName) {
             var baseSourceEvent EventSymbol? = nil

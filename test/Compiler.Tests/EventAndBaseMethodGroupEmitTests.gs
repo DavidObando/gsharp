@@ -9,14 +9,19 @@ import GSharp.Tests
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
+import System.Collections.Concurrent
 import System.Collections.Generic
+import System.ComponentModel
 import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Reflection
 import System.Reflection.Emit
 import System.Text
+import System.Threading
+import System.Threading.Tasks
 import Xunit
+import Xunit.Sdk
 
 /// Three gaps the review of PR #4380 (base-call forwarders) found, each
 /// compiled with gsc, verified with ILVerify and run, and where the shape has
@@ -210,18 +215,167 @@ func Main() {
         }
         start.ArgumentList.Add(dll)
         using let process = Process.Start(start) ?? throw InvalidOperationException("could not start dotnet")
-        using let output = MemoryStream()
-        let stdout = process.StandardOutput.BaseStream.CopyToAsync(output)
-        let stderr = process.StandardError.ReadToEndAsync()
-        if !process.WaitForExit(30_000) {
-            process.Kill(entireProcessTree: true)
-            process.WaitForExit()
-            Assert.Fail("base event program timed out")
+        return ReadBaseEventBytes(process, 30_000, out _, out _)
+    }
+
+    private func ReadBaseEventBytes(
+        process Process,
+        timeoutMilliseconds int32,
+        out stdout Task,
+        out stderr Task
+    )[]uint8 {
+        let output = ConcurrentQueue[uint8]()
+        let error = ConcurrentQueue[uint8]()
+        let failures = List[string]()
+        using let cancellation = CancellationTokenSource()
+        stdout = PumpBaseEventBytes(process.StandardOutput.BaseStream, output, cancellation.Token)
+        stderr = PumpBaseEventBytes(process.StandardError.BaseStream, error, cancellation.Token)
+        let drains = Task.WhenAll(stdout, stderr)
+        for task in[]Task{stdout, stderr, drains} {
+            let _ = task.ContinueWith((completed Task) -> completed.Exception, TaskContinuationOptions.OnlyOnFaulted)
         }
-        stdout.GetAwaiter().GetResult()
-        Assert.Equal(string.Empty, stderr.Result)
-        Assert.Equal(0, process.ExitCode)
+        try {
+            if !process.WaitForExit(timeoutMilliseconds) {
+                failures.Add("base event program timed out")
+            } else if process.ExitCode != 0 {
+                failures.Add("base event program exited with code ${process.ExitCode}")
+            }
+        } catch (ex Exception) when ex is InvalidOperationException || ex is Win32Exception {
+            failures.Add("process wait: $ex")
+        } finally {
+            try {
+                if !process.HasExited {
+                    process.Kill(entireProcessTree: true)
+                }
+            } catch (ex Exception) when ex is InvalidOperationException || ex is Win32Exception {
+                failures.Add("process termination: $ex")
+            }
+            try {
+                if !process.WaitForExit(5_000) {
+                    failures.Add("child did not exit after termination")
+                }
+            } catch (ex Exception) when ex is InvalidOperationException || ex is Win32Exception {
+                failures.Add("termination wait: $ex")
+            }
+            if !WaitBaseEventPumps(drains, failures) {
+                failures.Add("output pipes did not close")
+                try {
+                    cancellation.Cancel()
+                } catch (ex AggregateException) {
+                    failures.Add("pipe cancellation: ${ex.Flatten()}")
+                }
+                for stream in[]Stream{process.StandardOutput.BaseStream, process.StandardError.BaseStream} {
+                    try {
+                        stream.Dispose()
+                    } catch (ex Exception) when ex is IOException || ex is ObjectDisposedException {
+                        failures.Add("pipe close: $ex")
+                    }
+                }
+                if !WaitBaseEventPumps(drains, failures) {
+                    failures.Add("output tasks remain pending after cancellation and pipe closure")
+                }
+            }
+        }
+        if failures.Count > 0 || !error.IsEmpty {
+            throw XunitException(
+                string.Join(Environment.NewLine, failures) +
+                    "\nstdout task: ${stdout.Status}\n${stdout.Exception}\nstderr task: ${stderr.Status}\n${stderr.Exception}" +
+                    "\nstdout:\n${Encoding.UTF8.GetString(output.ToArray())}\nstderr:\n${Encoding.UTF8.GetString(error.ToArray())}"
+            )
+        }
         return output.ToArray()
+    }
+
+    private func WaitBaseEventPumps(drains Task, failures List[string]) bool {
+        try {
+            return drains.Wait(5_000)
+        } catch (ex AggregateException) {
+            failures.Add("output tasks: ${ex.Flatten()}")
+            return true
+        }
+    }
+
+    private async func PumpBaseEventBytes(
+        stream Stream,
+        output ConcurrentQueue[uint8],
+        cancellation CancellationToken
+    ) {
+        let buffer = [1024]uint8
+        while true {
+            let count = await stream.ReadAsync(buffer.AsMemory(), cancellation)
+            if count == 0 {
+                return
+            }
+            for var i = 0; i < count; i++ {
+                output.Enqueue(buffer[i])
+            }
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5270_StalledChild_ReportsPartialOutputAndObservesBothPipes(pipeFault bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`import System
+import System.Threading
+Console.Write("partial-out")
+Console.Out.Flush()
+Console.Error.Write("ready\npartial-error")
+Console.Error.Flush()
+Thread.Sleep(Timeout.Infinite)`, "base-event-stalled", true)
+        let start = ProcessStartInfo("dotnet"){
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        }
+        start.ArgumentList.Add(dll)
+        using let process = Process.Start(start) ?? throw InvalidOperationException("could not start dotnet")
+        var stdout = Task.CompletedTask
+        var stderr = Task.CompletedTask
+        try {
+            let ready = [6]uint8
+            let readyRead = process.StandardError.BaseStream.ReadExactlyAsync(ready.AsMemory()).AsTask()
+            let _ = readyRead.ContinueWith(
+                (completed Task) -> completed.Exception,
+                TaskContinuationOptions.OnlyOnFaulted
+            )
+            readyRead.WaitAsync(TimeSpan.FromSeconds(30)).GetAwaiter().GetResult()
+            Assert.Equal(Encoding.UTF8.GetBytes("ready\n"), ready)
+            if pipeFault {
+                process.StandardOutput.BaseStream.Dispose()
+                process.StandardError.BaseStream.Dispose()
+            }
+            let failure = Assert.Throws[XunitException](
+                func () object? {
+                    return ReadBaseEventBytes(process, 100, out stdout, out stderr)
+                }
+            )
+            Assert.True(process.HasExited)
+            Assert.True(stdout.IsCompleted)
+            Assert.True(stderr.IsCompleted)
+            Assert.Contains("base event program timed out", failure.Message, StringComparison.Ordinal)
+            if pipeFault {
+                Assert.NotNull(stdout.Exception)
+                Assert.NotNull(stderr.Exception)
+                Assert.Contains("stdout task: Faulted\n${stdout.Exception}", failure.Message, StringComparison.Ordinal)
+                Assert.Contains("stderr task: Faulted\n${stderr.Exception}", failure.Message, StringComparison.Ordinal)
+                Assert.Contains("ObjectDisposedException", failure.Message, StringComparison.Ordinal)
+            } else {
+                Assert.True(stdout.IsCompletedSuccessfully)
+                Assert.True(stderr.IsCompletedSuccessfully)
+                Assert.Contains(
+                    "stdout:\npartial-out\nstderr:\npartial-error",
+                    failure.Message,
+                    StringComparison.Ordinal
+                )
+            }
+        } finally {
+            if !process.HasExited {
+                process.Kill(entireProcessTree: true)
+                Assert.True(process.WaitForExit(5_000))
+            }
+        }
     }
 
     /// Issue #4433: a function literal passed directly to a delegate parameter

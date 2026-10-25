@@ -468,7 +468,7 @@ class Derived : Base {
     }
 }`
         let result = EmittedOracle.Evaluate(source)
-        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.IsError)
         Assert.Equal(string.Empty, result.Output)
     }
 
