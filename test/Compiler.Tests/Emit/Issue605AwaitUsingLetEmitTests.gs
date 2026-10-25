@@ -11,6 +11,7 @@ import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Text
 import Xunit
 
 /// Issue #605: `await using let` support for types implementing
@@ -18,6 +19,99 @@ import Xunit
 /// mixed IDisposable + IAsyncDisposable, exception safety, return semantics,
 /// and negative diagnostics (outside async, async-only with sync using).
 open class Issue605AwaitUsingLetEmitTests {
+    @Fact
+    func AwaitUsingLet_AsyncValueTaskDisposeAsync_ExactTopLevelRepro() {
+        let source = `import System
+import System.Threading.Tasks
+class Resource : IAsyncDisposable {
+    async func DisposeAsync() ValueTask {
+        await Task.Delay(1)
+    }
+}
+await using let resource = Resource()`
+        Assert.Equal([]uint8{}, CompileAndRunBytes(source))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func AwaitUsingLet_AsyncValueTaskDisposeAsync_AwaitsLifoCleanupOnce(fail bool) {
+        let source = `import System
+import System.Threading.Tasks
+
+class Resource : IDisposable, IAsyncDisposable {
+    var Name string = ""
+    let Started TaskCompletionSource[bool] = TaskCompletionSource[bool]()
+    let Release TaskCompletionSource[bool] = TaskCompletionSource[bool]()
+
+    func Dispose() {
+        Console.Write("wrong-sync;")
+    }
+
+    async func DisposeAsync() ValueTask {
+        Console.Write("begin:" + Name + ";")
+        Started.SetResult(true)
+        await Release.Task
+        Console.Write("end:" + Name + ";")
+    }
+}
+
+func Acquire(resource Resource) Resource {
+    Console.Write("acquire:" + resource.Name + ";")
+    return resource
+}
+
+async func Exercise(outer Resource, inner Resource, fail bool) int32 {
+    await using let first = Acquire(outer)
+    defer Console.Write("defer;")
+    await using let second = Acquire(inner)
+    Console.Write("body;")
+    if fail {
+        throw InvalidOperationException("body")
+    }
+    return 7
+}
+
+let outer = Resource()
+outer.Name = "outer"
+let inner = Resource()
+inner.Name = "inner"
+let pending = Exercise(outer, inner, FAIL)
+if !inner.Started.Task.IsCompleted {
+    throw InvalidOperationException("inner cleanup did not start")
+}
+Console.Write("pending:" + pending.IsCompleted.ToString() + ";")
+inner.Release.SetResult(true)
+await outer.Started.Task
+Console.Write("outer-pending:" + pending.IsCompleted.ToString() + ";")
+outer.Release.SetResult(true)
+try {
+    Console.Write("result:" + (await pending).ToString() + ";")
+} catch (ex InvalidOperationException) {
+    Console.Write("caught:" + ex.Message + ";")
+}`
+        let expected = "acquire:outer;acquire:inner;body;begin:inner;pending:False;" +
+            "end:inner;defer;begin:outer;outer-pending:False;end:outer;" +
+            if fail {
+            "caught:body;"
+        } else {
+            "result:7;"
+        }
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(expected),
+            CompileAndRunBytes(
+                source.Replace(
+                    "FAIL",
+                    if fail {
+                        "true"
+                    } else {
+                        "false"
+                    }
+                )
+            )
+        )
+    }
+
     @Fact
     func AwaitUsingLet_UserClassImplementsIAsyncDisposable_DisposeAsyncCalledAtScopeExit() {
         let source = `package Probe
@@ -226,7 +320,12 @@ test()`
     }
 
     shared {
-        private func CompileAndRun(source string) string {
+        private func CompileAndRun(source string) string -> Encoding
+            .UTF8
+            .GetString(CompileAndRunBytes(source))
+            .ReplaceLineEndings(Environment.NewLine)
+
+        private func CompileAndRunBytes(source string)[]uint8 {
             let tempDir = Directory.CreateTempSubdirectory("gs_issue605_").FullName
             try {
                 let srcPath = Path.Combine(tempDir, "test.gs")
@@ -263,15 +362,22 @@ stderr:
                 psi.ArgumentList.Add(Path.ChangeExtension(outPath, ".runtimeconfig.json"))
                 psi.ArgumentList.Add(outPath)
                 using let proc = Process.Start(psi) ?? throw InvalidOperationException("Failed to start dotnet exec")
-                let stdout = proc.StandardOutput.ReadToEnd()
-                let stderr = proc.StandardError.ReadToEnd()
-                Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out")
+                using let stdout = MemoryStream()
+                let outputCopy = proc.StandardOutput.BaseStream.CopyToAsync(stdout)
+                let errorRead = proc.StandardError.ReadToEndAsync()
+                if !proc.WaitForExit(30_000) {
+                    proc.Kill(entireProcessTree: true)
+                    proc.WaitForExit()
+                    Assert.Fail("dotnet exec timed out")
+                }
+                outputCopy.GetAwaiter().GetResult()
+                let stderr = errorRead.GetAwaiter().GetResult()
                 Assert.True(proc.ExitCode == 0, (`exited ` + "${proc.ExitCode}" + `
 stdout:
-` + "$stdout" + `
+` + Encoding.UTF8.GetString(stdout.ToArray()) + `
 stderr:
 ` + "$stderr"))
-                return stdout.ReplaceLineEndings(Environment.NewLine)
+                return stdout.ToArray()
             } finally {
                 try {
                     Directory.Delete(tempDir, recursive: true)
