@@ -69,8 +69,10 @@ internal partial class DeclarationBinder {
         // Issue #1085: defer the actual argument binding and base-constructor
         // resolution until all declared types' explicit constructors exist.
         let capturedScope = $scope
+        let capturedUnsafeContext = binderCtx.InUnsafeContext
         pendingBaseInitializerBindings.Add(
             () -> {
+                using let unsafeContext = binderCtx.PushUnsafeContext(capturedUnsafeContext)
                 let outerScope = $scope
                 $scope = capturedScope
                 // Issue #2342: re-establish this type's OWN owning package as the
@@ -1114,7 +1116,7 @@ internal partial class DeclarationBinder {
             $package,
             Accessibility.Private,
             receiverType: structSymbol
-        )
+        ){IsUnsafe = binderCtx.InUnsafeContext}
         let deinitSymbol = DeinitSymbol(ctorFunction, deinitSyntax)
         structSymbol.SetDeinitializer(deinitSymbol)
     }
@@ -1139,7 +1141,7 @@ internal partial class DeclarationBinder {
             $package,
             Accessibility.Public,
             receiverType: structSymbol
-        ){IsSpecialName = true}
+        ){IsSpecialName = true, IsUnsafe = binderCtx.InUnsafeContext}
         let ctorSymbol = ConstructorSymbol(ctorFunction, declaration: nil)
         ctorSymbol.MarkSynthesizedFromPrimaryConstructor()
         return ctorSymbol
@@ -1213,7 +1215,7 @@ internal partial class DeclarationBinder {
             $package,
             ctorAccessibility,
             receiverType: structSymbol
-        ){IsSpecialName = true}
+        ){IsSpecialName = true, IsUnsafe = binderCtx.InUnsafeContext}
         let constructorSymbol = ConstructorSymbol(ctorFunction, ctorSyntax)
         Binder.AttachDocumentation(ctorFunction, ctorSyntax)
         // ADR-0065 §2: propagate the contextual `convenience` modifier from
@@ -1244,8 +1246,10 @@ internal partial class DeclarationBinder {
             )
         ) {
             let capturedScope = $scope
+            let capturedUnsafeContext = binderCtx.InUnsafeContext
             pendingBaseInitializerBindings.Add(
                 () -> {
+                    using let unsafeContext = binderCtx.PushUnsafeContext(capturedUnsafeContext)
                     let outerScope = $scope
                     $scope = capturedScope
                     // Issue #2342: re-establish this type's OWN owning package as

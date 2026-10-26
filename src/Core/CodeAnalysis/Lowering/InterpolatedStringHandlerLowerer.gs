@@ -728,6 +728,13 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
     }
 
     shared {
+        /// Lowers one body for the canonical async lifetime proof.
+        /// @param body The body after suspending-call rewriting.
+        /// @param references The compilation's reference closure.
+        /// @returns The body with actual handler append lifetimes.
+        internal func LowerBody(body BoundBlockStatement, references ReferenceResolver) BoundBlockStatement ->
+        cast[BoundBlockStatement](InterpolatedStringHandlerLowerer(references).RewriteStatement(body))
+
         /// Produces a copy of [`program`](paramref) in which every interpolated
         /// string has been lowered to the handler pattern. Returns the original
         /// instance unchanged when no interpolation is present.
