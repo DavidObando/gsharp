@@ -1128,7 +1128,12 @@ shared class SpillSequenceSpiller {
                 innerSpill = SpillExpression(awaitExpr.Expression)
                 innerExpr = innerSpill.Value
             }
-            let awaitNode = BoundAwaitExpression(nil, innerExpr, awaitExpr.Type, awaitExpr.AwaiterTypeSymbol)
+            let awaitNode = BoundAwaitExpression(
+                awaitExpr.Syntax,
+                innerExpr,
+                awaitExpr.Type,
+                awaitExpr.AwaiterTypeSymbol
+            )
             awaitExpr.CopyImplicitCompletionTo(awaitNode)
             let locals = ImmutableArray.CreateBuilder[LocalVariableSymbol]()
             let sideEffects = ImmutableArray.CreateBuilder[BoundStatement]()

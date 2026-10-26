@@ -1412,12 +1412,17 @@ bounded PR slices and closure gates:
 | F3: retained locations and slice composition | Add view operations/types using existing promotion/location machinery. Cover early borrows/captures, escape/GC, parent replacement/swap, nested fields/arrays/slices, pure paths, permissions, owner rebinding/growth, overlap, effectful indexing and suspension rejection. Unknown origins stay rejected. |
 | F4: tooling and breaking rollout | Complete structural equality, import/IDE/formatter/debugger displays, migration diagnostics/fixes and reference/spec examples. Close all F1-F3 gates before enabling the new default. The maintainer chooses the breaking release; publish, pin in a separate clean-build PR, then adopt in repository source. |
 
+F2a (#5323/#5327) supplies callable typed CLR-copy services for all 33
+carrier lengths, without source fixed-value lowering.
 The independent #5325 correction preserves existing nested value-field storage
 through native-slice elements. Ref-returning storage remains a location through
 bound-block prefixes; source-field receivers use the canonical addressability
 query. This correction needs no F1 carriers, copy bridges or verifier-policy
 changes. It does not complete F2/F3 or enable fixed-array value defaults.
 Suspending stores remain a separate gate, including the existing #5012 defect.
+Neither foundation grants retained fixed views.
+F1/F2a integration must include #5331's complete-diagnostic-set correction;
+the earlier green F1/F2a heads predate that shared policy fix.
 
 Every behavioral test needs ADR-0154 RED/GREEN evidence through the actual
 product path, not just Roslyn fixtures. Run unfiltered ILVerify

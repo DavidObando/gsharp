@@ -135,6 +135,12 @@ partial class Binder {
             return Statements.OutsideExceptionHandlers(() -> Expressions.BindLambdaBodyExpression(syntax, targetType))
         }
         binderCtx = BinderContext(parent)
+        // Declaration binding captures lexical unsafe context. Metadata ownership does not establish that context.
+        binderCtx.UnsafeDepth = if function?.IsUnsafe == true {
+            1
+        } else {
+            0
+        }
         memberLookup = MemberLookup(binderCtx)
         conversions = ConversionClassifier(
             binderCtx,
@@ -1031,7 +1037,7 @@ partial class Binder {
             ) {
                 child.Diagnostics.ReportAllPathsMustReturn(method.Declaration!!.Identifier.Location)
             }
-            AnalyzeFunctionBody(body, lowered, method, child.Diagnostics)
+            AnalyzeFunctionBody(body, lowered, method, child.Diagnostics, child.binderCtx.References)
             Diagnostics.AddRange(child.Diagnostics.ToImmutableArray())
             methodBodies[method] = lowered
         }
@@ -5217,39 +5223,15 @@ partial class Binder {
         // — were all one wrong base link. The bare-name spelling was already
         // correct, which is why only the QUALIFIED spelling failed.
         //
-        // Scoped tightly on purpose, in TWO ways.
-        //
-        // First (see TryLookupSourceTypeInPackage): the qualifier must exactly
-        // name a package this compilation declares, and that package must
-        // declare this name at this arity.
-        //
-        // Second, and just as important: there must ACTUALLY BE an imported
-        // homonym to beat. This rule is only about a source-vs-metadata
-        // collision — C#'s CS0436 — so it must not reorder a source-vs-SOURCE
-        // question, which is governed by ordinary scope shadowing and not by
-        // this probe. Issue #3466 is the case that pins it down: inside
-        // `Holder`, which declares a nested `Target`, the name
-        // `Demo.Target` has no CLR type at all, so the walk below and the
-        // simple-name fallback under it keep resolving it exactly as they did.
-        // Without this second condition the type clause started disagreeing
-        // with the construction expression beside it — the type resolved to the
-        // top-level `Demo.Target` while `Demo.Target()` still resolved to
-        // `Holder.Target`, giving `GS0155 Cannot convert 'Holder.Target' to
-        // 'Target'`. (That disagreement is a real pre-existing gap in the
-        // QUALIFIED-construction path, which resolves a package-qualified name
-        // by inner-scope simple name; it is reported separately rather than
-        // widened into here.)
-        if $scope.TryLookupSourceTypeInPackage(
-            string.Join(".", segmentTexts, 0, totalSegments - 1),
-            segmentTexts[totalSegments - 1],
-            targetArity,
-            out var packageQualifiedSourceType
-        ) &&
+        // The qualifier and arity must identify the source declaration exactly.
+        // Without a metadata homonym, the exact source lookup below handles it.
+        let qualifiedName = $scope.ExpandQualifiedTypeName(segmentTexts, totalSegments)
+        if $scope.TryLookupQualifiedSourceType(qualifiedName, targetArity, out var packageQualifiedSourceType) &&
             TryResolveOuterPrefix(segmentTexts, totalSegments, targetArity) != nil {
             if targetArity == 0 {
                 return packageQualifiedSourceType!!
             }
-            let constructedSourceType TypeSymbol? = BindAndConstructUserGenericSegment(
+            return BindAndConstructUserGenericSegment(
                 syntax,
                 packageQualifiedSourceType!!,
                 Invariant.Required(
@@ -5260,9 +5242,6 @@ partial class Binder {
                 qualifiedIdentifier.Location,
                 syntax.DottedName
             )
-            if constructedSourceType != nil {
-                return constructedSourceType
-            }
         }
         // Greedy: prefer the longest outer prefix that resolves to a real type,
         // then walk the remaining segments as nested types. Going longest-first
@@ -5291,48 +5270,15 @@ partial class Binder {
                 return ConstructIfGeneric(walked, syntax, targetArity)
             }
         }
-        // Same-compilation package-qualified source type: the qualifier segments
-        // form a package/namespace prefix and the final segment names a source
-        // type declared in this compilation (e.g. `Oahu.Decrypt.INewSplitCallback[T]`
-        // referenced from within package `Oahu.Decrypt`). Source types are visible
-        // by simple name across packages, but the reflection-based prefix walk
-        // above only sees types with a CLR representation, so a source type — which
-        // has none while binding — never resolves through it. Fall back to a
-        // simple-name lookup of the final segment, honoring the trailing arity.
-        // cs2gs fully-qualifies type references (including generic-math
-        // constraints), so this is the common shape for translated code.
-        let lastSegment = segmentTexts[totalSegments - 1]
-        // Issue #3880: the simple-name fallback below refuses to guess when two
-        // or more separately-imported packages declare the same simple name
-        // (#2455's ambiguity rule) — but here the reference is not ambiguous at
-        // all: its qualifier names the package outright. Publish that qualifier
-        // as the explicit package hint #2455 already honours for qualified
-        // CONSTRUCTION (`Pkg.Type{…}`), so `typeof(ImportedVisible.defer_)`
-        // resolves even when a second imported package also declares `defer_`.
-        // The hint is restored unconditionally: it is scoped to this one
-        // lookup, exactly as at the construction site.
-        let qualifierPackageHint = string.Join(".", segmentTexts, 0, totalSegments - 1)
-        let previousQualifierHint = $scope.SetQualifiedConstructionPackageHint(qualifierPackageHint)
-        var sourceType TypeSymbol?
-        try {
-            sourceType = LookupType(
-                lastSegment,
-                if targetArity > 0 {
-                    targetArity
-                } else {
-                    -1
-                }
-            )
-        } finally {
-            $scope.SetQualifiedConstructionPackageHint(previousQualifierHint)
-        }
-        if sourceType != nil && !object.ReferenceEquals(sourceType, TypeSymbol.Error) {
+        // Source types have no CLR representation while binding. Preserve the
+        // complete name: an enum member must not resolve as an unrelated type.
+        if $scope.TryLookupQualifiedSourceType(qualifiedName, targetArity, out var sourceType) {
             if targetArity == 0 {
                 return sourceType
             }
-            let constructed TypeSymbol? = BindAndConstructUserGenericSegment(
+            return BindAndConstructUserGenericSegment(
                 syntax,
-                sourceType,
+                sourceType!!,
                 Invariant.Required(
                     qualifiedTypeArguments,
                     "targetArity != 0 implies HasTypeArguments was true, so TypeArguments is non-null",
@@ -5341,9 +5287,6 @@ partial class Binder {
                 qualifiedIdentifier.Location,
                 syntax.DottedName
             )
-            if constructed != nil {
-                return constructed
-            }
         }
         // Could not resolve. Pinpoint the failing segment so the diagnostic is
         // actionable: if even the outermost simple name doesn't exist, report
@@ -5407,7 +5350,7 @@ partial class Binder {
             )
             return symbol?.ClrType
         }
-        let prefix = string.Join(".", segmentTexts, 0, outerLen)
+        let prefix = $scope.ExpandQualifiedTypeName(segmentTexts, outerLen)
         // A generic type's metadata name is arity-mangled (`Ns.IFoo`1`); when
         // the deepest prefix segment carries the trailing type-argument list,
         // try the mangled name first so a namespace-qualified generic type
@@ -8220,7 +8163,13 @@ partial class Binder {
                                         VerifyConvenienceInitDelegatesFirst(ctor, ctorBody, ctorBinder.Diagnostics)
                                     }
                                     let lowered = Lowerer.Lower(ctorBody, structSym)
-                                    AnalyzeFunctionBody(ctorBody, lowered, ctor.Function, ctorBinder.Diagnostics)
+                                    AnalyzeFunctionBody(
+                                        ctorBody,
+                                        lowered,
+                                        ctor.Function,
+                                        ctorBinder.Diagnostics,
+                                        ctorBinder.binderCtx.References
+                                    )
                                     return BodyBindResult(lowered, ctorBinder.Diagnostics.ToImmutableArray())
                                 }
                             )
@@ -8572,6 +8521,29 @@ partial class Binder {
                 allStructs,
                 globalScope.Interfaces
             )
+            // Inferred callees can introduce awaits in existing async functions and nested literals.
+            let lifetimeDiagnostics = DiagnosticBag()
+            let orderedFunctions = BoundProgramOrder.SortFunctions(functionBodies.ToImmutable())
+            for (function, body) in orderedFunctions {
+                RefStructAsyncLivenessAnalyzer.Analyze(
+                    body.PreEmitAnalysisBody ?? body,
+                    function,
+                    lifetimeDiagnostics,
+                    parentScope.References
+                )
+            }
+            RefStructAsyncLivenessAnalyzer.AnalyzeInitializers(
+                allStructs,
+                globalScope.Interfaces,
+                lifetimeDiagnostics,
+                parentScope.References
+            )
+            let reportedDiagnostics = HashSet[Diagnostic](diagnostics, DiagnosticBag.EquivalenceComparer)
+            for diagnostic in lifetimeDiagnostics {
+                if reportedDiagnostics.Add(diagnostic) {
+                    diagnostics.Add(diagnostic)
+                }
+            }
             // ADR-0174 D10 / GS0562: batching a rendezvous channel is correct and
             // pointless. Reported here, over the bound bodies, because the question
             // is about the receiver's declaration rather than the call.
@@ -8624,6 +8596,7 @@ partial class Binder {
                 globals,
                 allDelegates
             ){
+                OrderedFunctions = orderedFunctions,
                 Imports = globalScope.GetCumulativeImports(),
                 FriendAssemblies = globalScope.FriendAssemblies,
                 AssemblyAttributes = globalScope.AssemblyAttributes,
@@ -9006,7 +8979,13 @@ partial class Binder {
                                 !ControlFlowGraph.AllPathsReturn(lowered) {
                                 binder.Diagnostics.ReportAllPathsMustReturn(declaration.Identifier.Location)
                             }
-                            AnalyzeFunctionBody(body, lowered, function, binder.Diagnostics)
+                            AnalyzeFunctionBody(
+                                body,
+                                lowered,
+                                function,
+                                binder.Diagnostics,
+                                binder.binderCtx.References
+                            )
                             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
                         }
                     )
@@ -9064,7 +9043,13 @@ partial class Binder {
                                 .AllPathsReturn(lowered) {
                                 binder.Diagnostics.ReportAllPathsMustReturn(bodySyntax.OpenBraceToken.Location)
                             }
-                            AnalyzeFunctionBody(body, lowered, accessor, binder.Diagnostics)
+                            AnalyzeFunctionBody(
+                                body,
+                                lowered,
+                                accessor,
+                                binder.Diagnostics,
+                                binder.binderCtx.References
+                            )
                             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
                         }
                     )
@@ -9130,7 +9115,7 @@ partial class Binder {
                                 !ControlFlowGraph.AllPathsReturn(lowered) {
                                 binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation)
                             }
-                            AnalyzeFunctionBody(body, lowered, member, binder.Diagnostics)
+                            AnalyzeFunctionBody(body, lowered, member, binder.Diagnostics, binder.binderCtx.References)
                             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
                         }
                     )
@@ -9187,7 +9172,7 @@ partial class Binder {
                                 .AllPathsReturn(lowered) {
                                 binder.Diagnostics.ReportAllPathsMustReturn(structMethodDeclaration.Identifier.Location)
                             }
-                            AnalyzeFunctionBody(body, lowered, method, binder.Diagnostics)
+                            AnalyzeFunctionBody(body, lowered, method, binder.Diagnostics, binder.binderCtx.References)
                             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
                         }
                     )
@@ -9200,7 +9185,8 @@ partial class Binder {
             bound BoundStatement,
             lowered BoundBlockStatement,
             function FunctionSymbol,
-            diagnostics DiagnosticBag
+            diagnostics DiagnosticBag,
+            references ReferenceResolver
         ) {
             // Issue #4453: the protected-receiver rule reads the bound body, where
             // every receiver still has the static type the source gave it.
@@ -9211,7 +9197,13 @@ partial class Binder {
             if function.IsAsyncOrSuspending {
                 NativeSliceSuspensionAnalyzer(diagnostics).Visit(body)
             }
-            RefStructAsyncLivenessAnalyzer.Analyze(body, function, diagnostics)
+            RefStructAsyncLivenessAnalyzer.Analyze(
+                body,
+                function,
+                diagnostics,
+                references,
+                includeOperandTemporaries: false
+            )
         }
 
         /// ADR-0140 / issue #2131: binds the `shared { init { … } }`
@@ -9245,11 +9237,11 @@ partial class Binder {
                 "initBlocks is only non-empty when structDeclaration is non-null",
                 expression: "structDeclaration"
             )
-            let context = FunctionSymbol(
-                "<static-initializer>",
-                ImmutableArray[ParameterSymbol].Empty,
-                TypeSymbol.Void
-            ){IsStatic = true, StaticOwnerType = structSym, IsStaticInitializer = true}
+            let context = Invariant.Required(
+                structSym.StaticInitializerFunction,
+                "a declared static initializer has a captured lexical binding context",
+                expression: "structSym.StaticInitializerFunction"
+            )
             let previousPackage = parentScope.SetCurrentDeclaringPackage(structSym.PackageName)
             let previousTree = parentScope.SetCurrentReferencingSyntaxTree(structDeclaration.SyntaxTree)
             try {

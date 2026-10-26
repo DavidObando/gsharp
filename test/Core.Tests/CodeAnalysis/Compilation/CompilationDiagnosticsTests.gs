@@ -28,6 +28,33 @@ import Xunit
 ///
 /// A successor inherits no published state; the host gives it a new `WorkBudget` before the first query.
 open class CompilationDiagnosticsTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func AsyncPreparationFailureReturnsAnchoredDiagnostics(bodyOnly bool) {
+        const source = `package GuardDiagnostic
+import System.Threading.Tasks
+async func Read(pending Task[bool]) int32 {
+    return switch 1 {
+        case 1 when await pending: 10
+        default: 0
+    }
+}`
+        let tree = Parse("GuardDiagnostic.gs", source)
+        let compilation = Compilation(tree){IsLibrary = true}
+        let diagnostics = if bodyOnly {
+            compilation.GetBodyDiagnostics()
+        } else {
+            compilation.GetDiagnostics()
+        }
+        let diagnostic = Assert.Single(diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal("GS9998", diagnostic.Id)
+        Assert.Same(tree.Text, diagnostic.Location.Text)
+        Assert.Equal(source.IndexOf("await pending", StringComparison.Ordinal), diagnostic.Location.Span.Start)
+        Assert.Equal("await pending".Length, diagnostic.Location.Span.Length)
+        Assert.Contains("'await' inside a switch-expression 'when' guard is not yet supported", diagnostic.Message)
+    }
+
     @Fact
     func GetDiagnostics_FollowsTheOrderOfEmit_ParseThenBodyThenDocumentation() {
         let compilation = Compilation(Parse("Warnings.gs", WarningsText)){IsLibrary = true}
