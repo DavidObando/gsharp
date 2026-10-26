@@ -17,6 +17,56 @@ class Issue5260ImportedFunctionPointerDriverTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func ObliviousNamedTuples_PreservePlatformWrappersAndPointerSignatures(longTuple bool) {
+        using let fixture = CSharpFixture(ObliviousTupleContract, allowUnsafe: true)
+        let source = "import ObliviousTuples\nunsafe func Main() {\n" +
+            "    let field = Tuples.Field.Value\n    let property = Tuples.Property.Value\n" +
+            "    let box = Tuples." +
+            (
+            if longTuple {
+                "GetLong"
+            } else {
+                "Get"
+            }
+        ) +
+            "()\n    let result = box.Value\n    let pointer unmanaged[Cdecl]() -> void = result.Pointers[0]\n" +
+            "    System.Console.Write(field.Tag + property.Tag + result.Tag)\n" +
+            "    System.Console.Write(pointer == nil)\n    System.Console.Write(box == nil)\n}"
+        let consumer = Compile(fixture.DirectoryPath, "Consumer", source, fixture.AssemblyPath)
+        Assert.True(consumer.Code == 0, consumer.Diagnostics)
+        IlVerifier.Verify(consumer.Path, []string{fixture.AssemblyPath})
+        Assert.Equal(Encoding.UTF8.GetBytes("21TrueFalse"), Run(consumer.Path))
+        let tupleType = if longTuple {
+            "(A int32, B int32, C int32, D int32, E int32, F int32, G int32, Tag int32, Pointers []unmanaged[Cdecl]() -> void)"
+        } else {
+            "(Tag int32, Pointers []unmanaged[Cdecl]() -> void)"
+        }
+        let target = "Box[" + tupleType + "]"
+        let expression = if longTuple {
+            "Tuples.GetLong()"
+        } else {
+            "Tuples.Get()"
+        }
+        let rejected = Compile(
+            fixture.DirectoryPath,
+            "Rejected",
+            "import ObliviousTuples\nunsafe func Reject() {\n    let strict " + target + " = " + expression + "\n}",
+            fixture.AssemblyPath,
+            executable: false
+        )
+        Assert.NotEqual(0, rejected.Code)
+        Assert.False(File.Exists(rejected.Path))
+        let error = Assert.Single(Regex.Matches(rejected.Diagnostics, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`))
+        Assert.Equal("GS0155", error.Groups[5].Value)
+        Assert.Equal("3", error.Groups[1].Value)
+        Assert.Equal((19 + target.Length).ToString(), error.Groups[2].Value)
+        Assert.Equal("3", error.Groups[3].Value)
+        Assert.Equal((19 + target.Length + expression.Length).ToString(), error.Groups[4].Value)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func NestedPointerOverloads_KeepOrdinaryAndExpandedApplicableCandidates(expanded bool) {
         using let fixture = CSharpFixture(ReviewContract, allowUnsafe: true)
         let source = if expanded {
@@ -321,6 +371,19 @@ unsafe func Main() {
     }
 
     shared {
+        private const ObliviousTupleContract string = `#nullable disable
+namespace ObliviousTuples {
+    public class Box<T> { public T Value; }
+    public unsafe static class Tuples {
+        public static Box<(int Tag, delegate* unmanaged[Cdecl]<void>[] Pointers)> Field =
+            new() { Value = (7, new delegate* unmanaged[Cdecl]<void>[1]) };
+        public static Box<(int Tag, delegate* unmanaged[Cdecl]<void>[] Pointers)> Property => Field;
+        public static Box<(int Tag, delegate* unmanaged[Cdecl]<void>[] Pointers)> Get() => Field;
+        public static Box<(int A, int B, int C, int D, int E, int F, int G, int Tag, delegate* unmanaged[Cdecl]<void>[] Pointers)> GetLong() =>
+            new() { Value = (0, 0, 0, 0, 0, 0, 0, 7, new delegate* unmanaged[Cdecl]<void>[1]) };
+    }
+}`
+
         private const ReviewContract string = `#nullable enable
 namespace Review4 {
     public unsafe static class Ordinary {

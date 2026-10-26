@@ -108,6 +108,14 @@ shared class TupleElementNamesReader {
                     }
                 }
             }
+            case platform is PlatformTypeSymbol {
+                let applied = Apply(platform.UnderlyingType, names, &position)
+                return if object.ReferenceEquals(applied, platform.UnderlyingType) {
+                    type
+                } else {
+                    PlatformTypeSymbol.Get(applied)
+                }
+            }
             case array is ArrayTypeSymbol {
                 {
                     let applied = Apply(array.ElementType, names, &position)

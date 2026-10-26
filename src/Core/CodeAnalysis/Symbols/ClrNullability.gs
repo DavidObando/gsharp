@@ -1085,7 +1085,14 @@ shared class ClrNullability {
     /// @param flags Nullable flags in [`layoutType`](paramref) order.
     /// @returns Decoded closed type symbol.
     internal func SymbolFromLayoutFlags(actualType Type, layoutType Type, flags ImmutableArray[uint8]) TypeSymbol {
-        let projectedFlags = if ClrTypeUtilities.AreSame(actualType, layoutType) {
+        // Function-pointer FullName is nil, so name equality cannot prove matching nullable layouts.
+        let projectedFlags = if object.ReferenceEquals(actualType, layoutType) ||
+            (
+            !ContainsFunctionPointer(actualType) && !ContainsFunctionPointer(layoutType) && ClrTypeUtilities.AreSame(
+                actualType,
+                layoutType
+            )
+        ) {
             flags
         } else {
             ProjectNullableFlags(actualType, layoutType, flags)

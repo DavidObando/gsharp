@@ -8,8 +8,11 @@ import System.Linq
 import GSharp.Tests
 import Xunit
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.Tests
 import System
+import System.Collections.Generic
 
 /// ADR-0193 Phase 2 (issue #4363): signature positions that were converted
 /// with a bare `TypeSymbol.FromClrType` or an unmerged
@@ -18,6 +21,60 @@ import System
 /// with no diagnostic before — the declared `?` was dropped, so a nil
 /// value flowed into a non-null `string` unchecked.
 class Adr0193FunnelMergeTests {
+    @Theory
+    @InlineData("Field")
+    @InlineData("Property")
+    @InlineData("Return")
+    @InlineData("Parameter")
+    func FunctionPointerLayouts_AgreeWithReceiverProjectionForConstructedArguments(kind string) {
+        using let fixture = CSharpFixture(`#nullable enable
+namespace SignatureLayouts {
+    public unsafe class Managed<T> {
+        public delegate*<T?, T?> Value;
+        public delegate*<T?, T?> Property => Value;
+        public delegate*<T?, T?> Get() => Value;
+        public void Set(delegate*<T?, T?> value) { Value = value; }
+    }
+}`, allowUnsafe: true)
+        let closed = fixture.Load().GetType("SignatureLayouts.Managed`1")!!.MakeGenericType(typeof(List[string]))
+        let receiver = ImportedTypeSymbol.Get(closed)
+        let readers = switch kind {
+            case "Field": []TypeSymbol{
+                ClrNullability.GetFieldTypeSymbol(closed.GetField("Value")!!),
+                MemberLookup.GetClrFieldTypeSymbol(receiver, closed.GetField("Value")!!)
+            }
+            case "Property": []TypeSymbol{
+                ClrNullability.GetPropertyTypeSymbol(closed.GetProperty("Property")!!),
+                MemberLookup.GetClrPropertyTypeSymbol(receiver, closed.GetProperty("Property")!!)
+            }
+            case "Return": []TypeSymbol{
+                ClrNullability.GetReturnTypeSymbol(closed.GetMethod("Get")!!),
+                MemberLookup.GetClrMethodReturnTypeSymbol(receiver, closed.GetMethod("Get")!!)
+            }
+            case "Parameter": []TypeSymbol{
+                ClrNullability.GetParameterTypeSymbol(closed.GetMethod("Set")!!.GetParameters()[0]),
+                MemberLookup.GetClrMethodParameterTypeSymbol(receiver, closed.GetMethod("Set")!!, 0)
+            }
+            default: throw InvalidOperationException(kind)
+        }
+        Assert.NotEmpty(readers)
+        Assert.All(
+            readers,
+            (type TypeSymbol) -> {
+                let pointer = Assert.IsType[FunctionPointerTypeSymbol](type)
+                Assert.True(pointer.IsManaged)
+                let parameter = Assert.Single(pointer.ParameterTypes)
+                Assert.Equal(ReferenceNullabilityKind.Nullable, pointer.ReturnType.ReferenceNullability)
+                Assert.Equal(ReferenceNullabilityKind.Nullable, parameter.ReferenceNullability)
+                for position in[]TypeSymbol{pointer.ReturnType, parameter} {
+                    let element = Assert.Single(position.GetElementPositions())
+                    Assert.Equal(ReferenceNullabilityKind.NotNull, element.ReferenceNullability)
+                    Assert.Equal(typeof(string), element.ClrType)
+                }
+            }
+        )
+    }
+
     @Fact
     func PatternEnumeratorCurrentKeepsItsDeclaredNullability() {
         AssertNullableStringRejected(`import Adr0193Contracts
