@@ -134,19 +134,52 @@ class FunctionPointerTypeSymbol : TypeSymbol {
         if !changed {
             return this
         }
+        return WithSignature(parameters.MoveToImmutable(), returnType)
+    }
+
+    /// Rebuilds signature positions without changing the calling convention.
+    internal func WithSignature(
+        parameters ImmutableArray[TypeSymbol],
+        returnType TypeSymbol
+    ) FunctionPointerTypeSymbol {
         if IsManaged {
-            return GetManaged(parameters.MoveToImmutable(), returnType)
+            return GetManaged(parameters, returnType)
         }
         return if IsUnmanagedExtended {
-            GetUnmanagedExtended(
-                UnmanagedConventions,
-                UnmanagedConventionClrTypes,
-                parameters.MoveToImmutable(),
-                returnType
-            )
+            GetUnmanagedExtended(UnmanagedConventions, UnmanagedConventionClrTypes, parameters, returnType)
         } else {
-            Get(CallingConvention, parameters.MoveToImmutable(), returnType)
+            Get(CallingConvention, parameters, returnType)
         }
+    }
+
+    /// Compares ABI and signature positions using the caller's type-equivalence relation.
+    internal func SignatureEquals(other FunctionPointerTypeSymbol, equivalent(TypeSymbol, TypeSymbol) -> bool) bool {
+        if IsManaged != other.IsManaged || IsUnmanagedExtended != other.IsUnmanagedExtended || Arity != other.Arity {
+            return false
+        }
+        if !IsManaged {
+            if IsUnmanagedExtended {
+                if UnmanagedConventions.Length != other.UnmanagedConventions.Length {
+                    return false
+                }
+                for var i = 0; i < UnmanagedConventions.Length; i++ {
+                    if UnmanagedConventions[i] != other.UnmanagedConventions[i] {
+                        return false
+                    }
+                }
+            } else if CallingConvention != other.CallingConvention {
+                return false
+            }
+        }
+        if !equivalent(ReturnType, other.ReturnType) {
+            return false
+        }
+        for var i = 0; i < Arity; i++ {
+            if !equivalent(ParameterTypes[i], other.ParameterTypes[i]) {
+                return false
+            }
+        }
+        return true
     }
 
     shared {

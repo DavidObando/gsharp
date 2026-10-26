@@ -646,6 +646,8 @@ Before moving an application to a different compiler version, pin the intended S
   Import and member-reference emission preserve calling conventions, pointer types,
   and native integers, including signatures on generic receivers and inside
   array-valued generic arguments.
+  Overload checks, override matching, and named tuples preserve nested signatures.
+  Managed function-pointer signatures also keep nullable reference annotations.
 
 - Aligned VS Code and Visual Studio TextMate highlighting with website Prism
   for escaped and Unicode names, contextual intrinsics and reference/slice

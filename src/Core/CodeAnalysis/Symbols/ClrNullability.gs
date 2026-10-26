@@ -635,6 +635,19 @@ shared class ClrNullability {
         if type.IsGenericParameter {
             return 1
         }
+        if type.IsByRef {
+            return CountNullabilityBytes(type.GetElementType())
+        }
+        if type.IsPointer {
+            return 1 + CountNullabilityBytes(type.GetElementType())
+        }
+        if type.IsFunctionPointer {
+            var count = 1 + CountNullabilityBytes(type.GetFunctionPointerReturnType())
+            for parameter in type.GetFunctionPointerParameterTypes() {
+                count += CountNullabilityBytes(parameter)
+            }
+            return count
+        }
         if type.IsArray {
             return 1 +
                 CountNullabilityBytes(
@@ -754,6 +767,23 @@ shared class ClrNullability {
                     }
                 )
                 index++
+                return
+            }
+            if current.IsByRef {
+                Append(current.GetElementType()!!)
+                return
+            }
+            if current.IsPointer || current.IsFunctionPointer {
+                builder.Add(uint8(0))
+                index++
+                if current.IsPointer {
+                    Append(current.GetElementType()!!)
+                } else {
+                    Append(current.GetFunctionPointerReturnType())
+                    for parameter in current.GetFunctionPointerParameterTypes() {
+                        Append(parameter)
+                    }
+                }
                 return
             }
             if current.IsArray {
@@ -985,6 +1015,13 @@ shared class ClrNullability {
             return NullableLifting.WrapValueTypeNullable(SymbolFromFlagsOffset(nullableUnderlying, flags, offset))
         }
         let baseSymbol = TypeSymbol.FromClrType(clrType)
+        if ContainsFunctionPointer(clrType) {
+            return NullableFlagsBuilder.MergeDeclarationNullability(
+                baseSymbol,
+                clrType,
+                GetNullableFlagsForSubtree(clrType, flags, offset)
+            )
+        }
         if IsNotNullableValueTypeParameter(clrType) {
             return baseSymbol
         }
@@ -1222,6 +1259,23 @@ shared class ClrNullability {
                 )
                 return
             }
+            if actual.IsPointer && layout.IsPointer {
+                builder.Add(uint8(0))
+                layoutOffset++
+                Append(actual.GetElementType()!!, layout.GetElementType()!!)
+                return
+            }
+            if actual.IsFunctionPointer && layout.IsFunctionPointer {
+                builder.Add(uint8(0))
+                layoutOffset++
+                Append(actual.GetFunctionPointerReturnType(), layout.GetFunctionPointerReturnType())
+                let actualParameters = actual.GetFunctionPointerParameterTypes()
+                let layoutParameters = layout.GetFunctionPointerParameterTypes()
+                for var i = 0; i < actualParameters.Length; i++ {
+                    Append(actualParameters[i], layoutParameters[i])
+                }
+                return
+            }
             let actualGeneric = actual.IsGenericType && !actual.IsGenericTypeDefinition
             let layoutGeneric = layout.IsGenericType && !layout.IsGenericTypeDefinition
             if actualGeneric && layoutGeneric && ClrTypeUtilities.AreSame(
@@ -1292,6 +1346,20 @@ shared class ClrNullability {
     }
 
     private func BuildTupleTypeSymbol(clrType Type, flags ImmutableArray[uint8], offset int32) TupleTypeSymbol {
+        return MapTupleTypeSymbol(
+            clrType,
+            offset,
+            (argument Type, position int32) -> SymbolFromFlagsOffset(argument, flags, position)
+        )
+    }
+
+    /// Maps flattened tuple positions through the CLR layout, including Rest placeholders.
+    internal func MapTupleTypeSymbol(
+        clrType Type,
+        offset int32,
+        project(Type, int32) -> TypeSymbol,
+        names ImmutableArray[string?] = default(ImmutableArray[string?])
+    ) TupleTypeSymbol {
         let elements = ImmutableArray.CreateBuilder[TypeSymbol]()
         var position = offset
         let AppendElements = func (tupleType Type) {
@@ -1304,7 +1372,7 @@ shared class ClrNullability {
             }
             for var i = 0; i < directCount; i++ {
                 let argument = arguments[i]
-                elements.Add(SymbolFromFlagsOffset(argument, flags, position))
+                elements.Add(project(argument, position))
                 position += CountNullabilityBytes(argument)
             }
             if arguments.Length == 8 {
@@ -1312,7 +1380,7 @@ shared class ClrNullability {
             }
         }
         AppendElements(clrType)
-        return TupleTypeSymbol.Get(elements.ToImmutable())
+        return TupleTypeSymbol.Get(elements.ToImmutable(), names)
     }
 
     @NullabilityFunnel

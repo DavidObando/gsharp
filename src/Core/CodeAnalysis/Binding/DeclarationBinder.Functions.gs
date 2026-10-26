@@ -3145,6 +3145,15 @@ internal partial class DeclarationBinder {
             if b is NullableTypeSymbol referenceNullableB && !(a is NullableTypeSymbol) {
                 return TypeSignaturesEquivalent(a, referenceNullableB.UnderlyingType, typeParamMap)
             }
+            if a is FunctionPointerTypeSymbol || b is FunctionPointerTypeSymbol {
+                return a is FunctionPointerTypeSymbol leftPointer &&
+                    b is FunctionPointerTypeSymbol rightPointer &&
+                    leftPointer
+                    .SignatureEquals(
+                    rightPointer,
+                    (left TypeSymbol, right TypeSymbol) -> TypeSignaturesEquivalent(left, right, typeParamMap)
+                )
+            }
             let aIsSequence = SequenceTypeSymbol.TryGetEnumerableInterfaceShape(
                 a,
                 out var aSequenceDefinition,

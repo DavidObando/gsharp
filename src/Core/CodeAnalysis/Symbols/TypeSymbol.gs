@@ -1015,6 +1015,11 @@ open partial class TypeSymbol : Symbol {
             if left == nil || right == nil {
                 return false
             }
+            if left is FunctionPointerTypeSymbol || right is FunctionPointerTypeSymbol {
+                return left is FunctionPointerTypeSymbol leftPointer &&
+                    right is FunctionPointerTypeSymbol rightPointer &&
+                    leftPointer.SignatureEquals(rightPointer, AreRuntimeEquivalentIgnoringReferenceNullability)
+            }
             let leftIsSequence = SequenceTypeSymbol.TryGetEnumerableInterfaceShape(
                 left,
                 out var leftSequenceDefinition,
@@ -1147,7 +1152,11 @@ open partial class TypeSymbol : Symbol {
         /// @returns `true` when symbolic substitution must be retained.
         func RequiresSymbolicProjection(type TypeSymbol) bool -> ContainsTypeParameter(type) ||
             ContainsSameCompilationUserType(type) ||
-            ContainsReferenceNullableAnnotation(type)
+            ContainsReferenceNullableAnnotation(type) ||
+            ContainsFunctionPointer(type)
+
+        private func ContainsFunctionPointer(type TypeSymbol) bool -> type is FunctionPointerTypeSymbol ||
+            GetWrappedTypes(type).Any(ContainsFunctionPointer)
 
         /// Issue #3746 / ADR-0172: returns `true` when [`type`](paramref)
         /// carries tuple element names at any structural position. Like reference

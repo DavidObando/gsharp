@@ -1,16 +1,176 @@
 package GSharp.Compiler.Tests
 
 import GSharp.Compiler
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.Tests
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Diagnostics
 import System.IO
+import System.Runtime.InteropServices
 import System.Text
 import System.Text.RegularExpressions
 import Xunit
 
 class Issue5260ImportedFunctionPointerDriverTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func NestedPointerOverloads_KeepOrdinaryAndExpandedApplicableCandidates(expanded bool) {
+        using let fixture = CSharpFixture(ReviewContract, allowUnsafe: true)
+        let source = if expanded {
+            `import Review4
+struct Amount { var Value int32 }
+func operator implicit(value Amount) int32 -> value.Value
+func Main() { System.Console.Write(Expanded.M(Amount{Value: 1}, Amount{Value: 2})) }`
+        } else {
+            `import Review4
+func Main() { System.Console.Write(Ordinary.M(1)) }`
+        }
+        let consumer = Compile(fixture.DirectoryPath, "Consumer", source, fixture.AssemblyPath)
+        Assert.True(consumer.Code == 0, consumer.Diagnostics)
+        IlVerifier.Verify(consumer.Path, []string{fixture.AssemblyPath})
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                if expanded {
+                    "3"
+                } else {
+                    "2"
+                }
+            ),
+            Run(consumer.Path)
+        )
+    }
+
+    @Theory
+    @InlineData("Get", "unmanaged[Stdcall](nint) -> nint", "nil")
+    @InlineData("Get", "nint", "nint(0)")
+    @InlineData("GetArray", "[]?unmanaged[Stdcall](nint) -> nint", "nil")
+    func ImportedOverride_RejectsErasedFunctionPointerSignatureMatches(name string, type string, value string) {
+        using let fixture = CSharpFixture(ReviewContract, allowUnsafe: true)
+        let source = "import Review4\nunsafe class Derived : Base[int32] {\n    override func " +
+            name +
+            "() " +
+            type +
+            " { return " +
+            value +
+            " }\n}"
+        let consumer = Compile(fixture.DirectoryPath, "Rejected", source, fixture.AssemblyPath, executable: false)
+        Assert.NotEqual(0, consumer.Code)
+        Assert.False(File.Exists(consumer.Path))
+        let error = Assert.Single(Regex.Matches(consumer.Diagnostics, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`))
+        Assert.Equal("GS0185", error.Groups[5].Value)
+        Assert.Equal("3", error.Groups[1].Value)
+        Assert.Equal("19", error.Groups[2].Value)
+        Assert.Equal("3", error.Groups[3].Value)
+        Assert.Equal((19 + name.Length).ToString(), error.Groups[4].Value)
+        var expected TypeSymbol = FunctionPointerTypeSymbol.Get(
+            CallingConvention.Cdecl,
+            ImmutableArray.Create(TypeSymbol.NInt),
+            TypeSymbol.NInt
+        )
+        var actual TypeSymbol = if type == "nint" {
+            TypeSymbol.NInt
+        } else {
+            FunctionPointerTypeSymbol.Get(
+                CallingConvention.StdCall,
+                ImmutableArray.Create(TypeSymbol.NInt),
+                TypeSymbol.NInt
+            )
+        }
+        if name == "GetArray" {
+            expected = SliceTypeSymbol.Get(expected)
+            actual = SliceTypeSymbol.Get(actual)
+        }
+        Assert.False(TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(expected, actual))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func NamedTupleMerge_PreservesPointerArraysAndRestLayout(longTuple bool) {
+        using let fixture = CSharpFixture(ReviewContract, allowUnsafe: true)
+        let source = "import Review4\nunsafe func Main() {\n    let tuple = Tuples." +
+            (
+            if longTuple {
+                "GetLong"
+            } else {
+                "Get"
+            }
+        ) +
+            "().Value\n" +
+            "    let pointer unmanaged[Cdecl](int32) -> void = tuple.Pointers[0]\n" +
+            "    System.Console.Write(tuple.Tag)\n    System.Console.Write(pointer == nil)\n}"
+        let consumer = Compile(fixture.DirectoryPath, "Consumer", source, fixture.AssemblyPath)
+        Assert.True(consumer.Code == 0, consumer.Diagnostics)
+        Assert.Equal(Encoding.UTF8.GetBytes("7True"), Run(consumer.Path))
+        IlVerifier.Verify(consumer.Path, []string{fixture.AssemblyPath})
+    }
+
+    @Fact
+    func ManagedPointerNullability_PreservesDirectAndProjectedSignaturePositions() {
+        using let fixture = CSharpFixture(ReviewContract, allowUnsafe: true)
+        const source = `import Review4
+unsafe func Invoke[T](api Managed[T], value T) T {
+    let pointer = api.Value
+    return pointer(value)
+}
+unsafe func Main() {
+    let direct = Direct.Value
+    let directResult = direct()
+    let echo = Direct.Echo
+    let echoResult = echo(nil)
+    let api = Managed[string]()
+    let field = api.Value
+    let property = api.Property
+    let result = api.Get()
+    System.Console.Write(directResult == nil && echoResult == nil)
+    System.Console.Write("|")
+    System.Console.Write(field(nil) == nil && property(nil) == nil && result(nil) == nil)
+    System.Console.Write("|")
+    System.Console.Write(Invoke[int32](Managed[int32](), 7))
+}`
+        let consumer = Compile(fixture.DirectoryPath, "Consumer", source, fixture.AssemblyPath)
+        Assert.True(consumer.Code == 0, consumer.Diagnostics)
+        Assert.Equal(Encoding.UTF8.GetBytes("True|True|7"), Run(consumer.Path))
+        let producer = Compile(fixture.DirectoryPath, "Published", `package Published
+public unsafe struct Holder { public var Value *func(string?) string? }`, executable: false)
+        Assert.True(producer.Code == 0, producer.Diagnostics)
+        let roundtrip = Compile(fixture.DirectoryPath, "Roundtrip", `import Published
+func Identity(value string?) string? -> value
+unsafe func Main() {
+    var holder = Holder()
+    holder.Value = &Identity
+    let pointer = holder.Value
+    System.Console.Write(pointer(nil) == nil)
+}`, producer.Path)
+        Assert.True(roundtrip.Code == 0, roundtrip.Diagnostics)
+        Assert.Equal(Encoding.UTF8.GetBytes("True"), Run(roundtrip.Path))
+    }
+
+    @Theory
+    @InlineData("Direct.Value", "")
+    @InlineData("Managed[string]().Value", `"value"`)
+    func ManagedPointerNullability_RejectsNullableResultNarrowing(expression string, arguments string) {
+        using let fixture = CSharpFixture(ReviewContract, allowUnsafe: true)
+        let invocation = "pointer(" + arguments + ")"
+        let source = "import Review4\nunsafe func Main() {\n    let pointer = " +
+            expression +
+            "\n    let value string = " +
+            invocation +
+            "\n}"
+        let consumer = Compile(fixture.DirectoryPath, "Rejected", source, fixture.AssemblyPath)
+        Assert.NotEqual(0, consumer.Code)
+        Assert.False(File.Exists(consumer.Path))
+        let error = Assert.Single(Regex.Matches(consumer.Diagnostics, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`))
+        Assert.Equal("GS0155", error.Groups[5].Value)
+        Assert.Equal("4", error.Groups[1].Value)
+        Assert.Equal("24", error.Groups[2].Value)
+        Assert.Equal("4", error.Groups[3].Value)
+        Assert.Equal((24 + invocation.Length).ToString(), error.Groups[4].Value)
+    }
+
     @Fact
     func SeparateGSharpProducer_AssignsTheOriginalSignatureAndPreservesSourceControl() {
         using let fixture = CSharpFixture("public class DirectoryOwner {}")
@@ -161,6 +321,42 @@ unsafe func Main() {
     }
 
     shared {
+        private const ReviewContract string = `#nullable enable
+namespace Review4 {
+    public unsafe static class Ordinary {
+        public static int M(int value) => value + 1;
+        public static int M(delegate* unmanaged[Cdecl]<void>[] pointers) => -1;
+    }
+    public unsafe static class Expanded {
+        public static int M(params int[] values) => values[0] + values[1];
+        public static int M(params delegate* unmanaged[Cdecl]<void>[][] pointers) => -1;
+    }
+    public unsafe class Base<T> {
+        public virtual delegate* unmanaged[Cdecl]<nint, nint> Get() => null;
+        public virtual delegate* unmanaged[Cdecl]<nint, nint>[] GetArray() =>
+            new delegate* unmanaged[Cdecl]<nint, nint>[1];
+    }
+    public class Box<T> { public T Value = default!; }
+    public unsafe static class Tuples {
+        public static Box<(int Tag, delegate* unmanaged[Cdecl]<int, void>[] Pointers)> Get() =>
+            new() { Value = (7, new delegate* unmanaged[Cdecl]<int, void>[1]) };
+        public static Box<(int A, int B, int C, int D, int E, int F, int G, int Tag, delegate* unmanaged[Cdecl]<int, void>[] Pointers)> GetLong() =>
+            new() { Value = (0, 0, 0, 0, 0, 0, 0, 7, new delegate* unmanaged[Cdecl]<int, void>[1]) };
+    }
+    public unsafe static class Direct {
+        public static delegate*<string?> Value = &Null;
+        public static delegate*<string?, string?> Echo = &Identity;
+        public static string? Null() => null;
+        public static string? Identity(string? value) => value;
+    }
+    public unsafe class Managed<T> {
+        public delegate*<T?, T?> Value = &Identity;
+        public delegate*<T?, T?> Property => Value;
+        public delegate*<T?, T?> Get() => Value;
+        public static T? Identity(T? value) => value;
+    }
+}`
+
         private const NestedContract string = `namespace GenericPointers {
     public class Box<T> { public T Value; }
     public unsafe class Provider<T> where T : unmanaged {

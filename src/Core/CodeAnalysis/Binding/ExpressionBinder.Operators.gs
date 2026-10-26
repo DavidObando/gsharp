@@ -3558,7 +3558,7 @@ internal partial class ExpressionBinder {
                         expression: "effectiveParameterType.GetElementType()"
                     )
                 }
-                if effectiveParameterType.IsFunctionPointer || effectiveParameterType.IsPointer {
+                if ClrNullability.ContainsFunctionPointer(effectiveParameterType) || effectiveParameterType.IsPointer {
                     return false
                 }
                 return IsImplicitConstantNarrowingArgument(
@@ -3685,8 +3685,7 @@ internal partial class ExpressionBinder {
                     argIndex >= boundArguments.Count ||
                     clrParameterType == nil ||
                     clrParameterType.IsByRef ||
-                    clrParameterType.IsFunctionPointer ||
-                    clrParameterType.IsPointer {
+                    ClrNullability.ContainsFunctionPointer(clrParameterType) || clrParameterType.IsPointer {
                     return false
                 }
                 let sourceType = boundArguments[argIndex].Type
