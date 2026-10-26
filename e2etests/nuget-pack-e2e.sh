@@ -7,21 +7,36 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-WORKDIR="$(mktemp -d -t gsharp-nuget-pack-e2e.XXXXXX)"
+mkdir -p "$ROOT/out/e2e"
+WORKDIR="$(python3 -c \
+    'import sys, tempfile; print(tempfile.mkdtemp(prefix="nuget-pack-", dir=sys.argv[1]))' \
+    "$ROOT/out/e2e")" || {
+    echo "FAIL: cannot allocate NuGet pack workspace" >&2
+    exit 1
+}
 trap 'rm -rf "$WORKDIR"' EXIT
+# Keep consumer builds separate from repository build properties and SDK caches.
+printf '<Project />\n' > "$WORKDIR/Directory.Build.props"
+printf '<Project />\n' > "$WORKDIR/Directory.Build.targets"
 
-echo "==> Packing Gsharp.NET.Sdk into .nugs/"
-dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release --nologo -v:q
-mkdir -p .nugs
-cp out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg .nugs/
+echo "==> Packing Gsharp.NET.Sdk"
+dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release -graph --nologo -v:q
 
 SDK_NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg | head -1)
 VER="${SDK_NUPKG##*Gsharp.NET.Sdk.}"
 VER="${VER%.nupkg}"
 echo "    SDK version: $VER"
+python3 - "$SDK_NUPKG" <<'PY'
+import pathlib
+import sys
+import zipfile
 
-# Force fresh cache.
-rm -rf "$HOME/.nuget/packages/gsharp.net.sdk/$VER" || true
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    for name in ("Sdk/Sdk.props", "Sdk/Sdk.targets"):
+        assert archive.read(name) == (pathlib.Path("src/Sdk/Gsharp.NET.Sdk") / name).read_bytes()
+PY
+
+export NUGET_PACKAGES="$WORKDIR/nuget-cache"
 
 # ============================================================================
 # Step 1: Create a GSharp library project
@@ -47,6 +62,7 @@ cat > "$WORKDIR/MyLib/NuGet.config" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
+    <clear />
     <add key="gsharp-local" value="./packages" />
   </packageSources>
 </configuration>
@@ -121,6 +137,101 @@ fi
 echo "    lib/net10.0/MyLib.dll ✓"
 echo "    ref/net10.0/MyLib.dll ✓"
 
+# The SDK defaults to Portable PDB symbols for an ordinary library.
+python3 - "$MYLIB_NUPKG" <<'PY'
+import pathlib
+import sys
+import zipfile
+
+package = pathlib.Path(sys.argv[1])
+symbols = package.with_suffix(".snupkg")
+assert symbols.is_file(), symbols
+with zipfile.ZipFile(symbols) as archive:
+    assert archive.read("lib/net10.0/MyLib.pdb") == pathlib.Path("bin/Release/net10.0/MyLib.pdb").read_bytes()
+PY
+
+# Issue #5265: content-only projects must not attempt an empty default snupkg.
+echo "==> Checking content-only pack and explicit symbol settings"
+for CASE in absent empty optout custom legacy; do
+    CASE_DIR="$WORKDIR/content-$CASE"
+    mkdir -p "$CASE_DIR"
+    PROPERTIES="<IncludeBuildOutput>false</IncludeBuildOutput>"
+    SYMBOL_ITEM=""
+    case "$CASE" in
+        empty) : > "$CASE_DIR/Program.gs" ;;
+        optout) PROPERTIES="$PROPERTIES<IncludeSymbols>false</IncludeSymbols>" ;;
+        custom)
+            PROPERTIES="$PROPERTIES<IncludeSymbols>true</IncludeSymbols>"
+            cp bin/Release/net10.0/MyLib.pdb "$CASE_DIR/custom.pdb"
+            SYMBOL_ITEM='<None Include="custom.pdb" Pack="true" PackagePath="lib/net10.0/" />'
+            ;;
+        legacy)
+            PROPERTIES="$PROPERTIES<IncludeSymbols>true</IncludeSymbols><SymbolPackageFormat>symbols.nupkg</SymbolPackageFormat>"
+            ;;
+    esac
+    cat > "$CASE_DIR/Content.gsproj" <<EOF
+<Project Sdk="Gsharp.NET.Sdk/$VER">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    $PROPERTIES
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="payload" Pack="true" PackagePath="/" />
+    $SYMBOL_ITEM
+  </ItemGroup>
+</Project>
+EOF
+    cp NuGet.config "$CASE_DIR/NuGet.config"
+    # The source path is relative to each consumer, not to the repository.
+    ln -s "$WORKDIR/MyLib/packages" "$CASE_DIR/packages"
+    printf payload > "$CASE_DIR/payload"
+    dotnet pack "$CASE_DIR/Content.gsproj" -c Release --nologo -v:q
+    python3 - "$CASE_DIR" "$CASE" <<'PY'
+import pathlib
+import sys
+import zipfile
+import xml.etree.ElementTree as ET
+
+root = pathlib.Path(sys.argv[1])
+case = sys.argv[2]
+output = root / "bin/Release"
+package = output / "Content.1.0.0.nupkg"
+expected = {package.name}
+if case == "custom":
+    expected.add("Content.1.0.0.snupkg")
+elif case == "legacy":
+    expected.add("Content.1.0.0.symbols.nupkg")
+assert {p.name for p in output.glob("*.*nupkg")} == expected
+with zipfile.ZipFile(package) as archive:
+    assert archive.read("payload") == b"payload"
+    nuspec = ET.fromstring(archive.read("Content.nuspec"))
+    ns = {"n": nuspec.tag.split("}")[0].removeprefix("{")}
+    groups = nuspec.findall("n:metadata/n:dependencies/n:group", ns)
+    assert len(groups) == 1 and groups[0].attrib == {"targetFramework": "net10.0"}
+    assert len(groups[0]) == 0
+if case == "custom":
+    with zipfile.ZipFile(output / "Content.1.0.0.snupkg") as archive:
+        assert archive.read("lib/net10.0/custom.pdb") == (root / "custom.pdb").read_bytes()
+elif case == "legacy":
+    with zipfile.ZipFile(output / "Content.1.0.0.symbols.nupkg") as archive:
+        assert archive.read("payload") == b"payload"
+PY
+done
+
+echo "==> Checking an ordinary library's explicit symbol opt-out"
+dotnet pack -c Release --no-build --no-restore --nologo -v:q \
+    -p:IncludeSymbols=false -o "$WORKDIR/library-optout"
+python3 - "$WORKDIR/library-optout" <<'PY'
+import pathlib
+import sys
+import zipfile
+
+output = pathlib.Path(sys.argv[1])
+assert {p.name for p in output.iterdir()} == {"MyLib.1.2.3.nupkg"}
+with zipfile.ZipFile(output / "MyLib.1.2.3.nupkg") as archive:
+    assert archive.read("lib/net10.0/MyLib.dll") == pathlib.Path("bin/Release/net10.0/MyLib.dll").read_bytes()
+PY
+
 # ============================================================================
 # Step 4: Consume from a vanilla C# project
 # ============================================================================
@@ -136,6 +247,7 @@ cat > "$CSHARP_DIR/NuGet.config" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
+    <clear />
     <add key="local" value="./packages" />
   </packageSources>
 </configuration>
@@ -197,7 +309,9 @@ cat > "$FSHARP_DIR/NuGet.config" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
+    <clear />
     <add key="local" value="./packages" />
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
   </packageSources>
 </configuration>
 EOF
