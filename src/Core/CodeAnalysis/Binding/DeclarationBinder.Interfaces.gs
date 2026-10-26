@@ -395,7 +395,7 @@ internal partial class DeclarationBinder {
                     SuspendingKind.None
                 }
                 methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask || methodSyntax.IsSuspend
-                methodSymbol.IsUnsafe = methodSyntax.IsUnsafe
+                methodSymbol.IsUnsafe = binderCtx.InUnsafeContext
                 methodSymbol.TypeParameters = methodTypeParameters
                 if isStaticInterfaceMethod {
                     methodSymbol.IsStatic = true
@@ -677,6 +677,7 @@ internal partial class DeclarationBinder {
                             getterSymbol.StaticOwnerType = interfaceSymbol
                         }
                         getterSymbol.IsSpecialName = true
+                        getterSymbol.IsUnsafe = binderCtx.InUnsafeContext
                         if getAccessor?.Body != nil {
                             // Issue #1030 / #2293: a default-bodied interface
                             // property accessor (static-virtual or instance)
@@ -712,6 +713,7 @@ internal partial class DeclarationBinder {
                             setterSymbol.StaticOwnerType = interfaceSymbol
                         }
                         setterSymbol.IsSpecialName = true
+                        setterSymbol.IsUnsafe = binderCtx.InUnsafeContext
                         setterSymbol.IsInitOnlySetter = isInitOnly
                         if setAccessor?.Body != nil {
                             // Issue #1030 / #2293: default-bodied interface
@@ -795,7 +797,7 @@ internal partial class DeclarationBinder {
                     $package,
                     Accessibility.Public,
                     receiverType: interfaceSymbol
-                ){IsSpecialName = true, IsAbstract = true}
+                ){IsSpecialName = true, IsAbstract = true, IsUnsafe = binderCtx.InUnsafeContext}
                 let removeMethodSymbol = FunctionSymbol(
                     "remove_$eventName",
                     ImmutableArray.Create(ParameterSymbol("value", handlerType)),
@@ -804,7 +806,7 @@ internal partial class DeclarationBinder {
                     $package,
                     Accessibility.Public,
                     receiverType: interfaceSymbol
-                ){IsSpecialName = true, IsAbstract = true}
+                ){IsSpecialName = true, IsAbstract = true, IsUnsafe = binderCtx.InUnsafeContext}
                 eventSymbol.AddMethodSymbol = addMethodSymbol
                 eventSymbol.RemoveMethodSymbol = removeMethodSymbol
                 Binder.AttachDocumentation(eventSymbol, eventSyntax)
@@ -853,7 +855,12 @@ internal partial class DeclarationBinder {
                 "<field-initializer>",
                 ImmutableArray[ParameterSymbol].Empty,
                 TypeSymbol.Void
-            ){IsStatic = true, IsStaticInitializer = true, StaticOwnerType = interfaceSymbol}
+            ){
+                IsUnsafe = binderCtx.InUnsafeContext,
+                IsStatic = true,
+                IsStaticInitializer = true,
+                StaticOwnerType = interfaceSymbol
+            }
             setCurrentFunction(initializerContext)
             try {
                 let staticFieldsBuilder = ImmutableArray.CreateBuilder[FieldSymbol]()
