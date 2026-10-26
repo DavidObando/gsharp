@@ -184,6 +184,11 @@ def missing():
     assert "Source Link file" in result.stdout and "missing.json" in result.stdout, result.stdout
     build(path, "-p:EnableSourceLink=false", "-p:SourceLink=missing.json", "-p:DebugType=none")
     assert inspect(output(path, "dll"))["sourceLink"] is None
+    intermediate = directory / "obj/Release/net10.0/Probe.dll"
+    modified = intermediate.stat().st_mtime_ns
+    time.sleep(1.1)
+    build(path, "-p:EnableSourceLink=false", "-p:SourceLink=missing.json", "-p:DebugType=none")
+    assert intermediate.stat().st_mtime_ns == modified, "A build without debug information recompiled for an unused mapping."
 
 
 def local():

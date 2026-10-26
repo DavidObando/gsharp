@@ -16,7 +16,9 @@
                       '$(DebugType)' != '' and '$(DebugType)' != 'none' and
                       '$(SkipCompilerExecution)' != 'true' and !Exists('$(SourceLink)')"
            Text="Source Link file '$(SourceLink)' does not exist." />
-    <PropertyGroup>
+    <PropertyGroup Condition="'$(SourceLink)' != '' and
+                              '$(DebugType)' != '' and '$(DebugType)' != 'none' and
+                              '$(SkipCompilerExecution)' != 'true'">
       <MSBuildAllProjects>$(MSBuildAllProjects);$(SourceLink)</MSBuildAllProjects>
     </PropertyGroup>
   </Target>
