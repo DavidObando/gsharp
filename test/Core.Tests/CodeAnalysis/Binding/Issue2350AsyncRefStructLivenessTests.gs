@@ -11,9 +11,11 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import GSharp.Tests
+import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
+import System.Threading
 import Xunit
 
 /// Issue #2350: (cref:GSharp.Core.CodeAnalysis.Binding.RefStructAsyncLivenessAnalyzer)
@@ -26,6 +28,53 @@ import Xunit
 /// rejecting genuinely unsafe cases (live-across-suspension, capture, and
 /// unsafe finally interaction).
 open class Issue2350AsyncRefStructLivenessTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func DiagnosticsOnlyConvertsUnsupportedSpillFailureAtOriginalGuard(boundProgram bool) {
+        let source = `import System.Threading.Tasks
+async func Pick(n int32, pending Task[bool]) int32 {
+    let value = switch n {
+        case 1 when await pending: 10
+        default: 0
+    }
+    return value
+}`
+        let text = SourceText.From(source)
+        let compilation = Compilation(SyntaxTree.Parse(text))
+        let diagnostics = if boundProgram {
+            compilation.GetBoundProgram(default(CancellationToken)).Diagnostics
+        } else {
+            compilation.GetDiagnostics()
+        }
+        let diagnostic = Assert.Single(diagnostics)
+        Assert.Equal("GS9998", diagnostic.Id)
+        Assert.Contains("'await' inside a switch-expression 'when' guard is not yet supported", diagnostic.Message)
+        Assert.Same(text, diagnostic.Location.Text)
+        Assert.Equal(source.IndexOf("await pending", StringComparison.Ordinal), diagnostic.Location.Span.Start)
+        Assert.Equal("await pending".Length, diagnostic.Location.Span.Length)
+    }
+
+    @Theory
+    @InlineData("pending Task[int32]", "await pending")
+    @InlineData("ch chan[int32]", "<-ch")
+    func SpillTemporaryDiagnosticRetainsSuspensionSourceRange(parameter string, suspension string) {
+        let source = `
+import System
+import System.Threading.Tasks
+func Consume(value ReadOnlySpan[byte], extra int32) int32 -> value.Length + extra
+async func Read(PARAMETER) Task[int32] -> Consume(ReadOnlySpan[byte]([]byte{65}), SUSPENSION)
+`.Replace("PARAMETER", parameter).Replace("SUSPENSION", suspension)
+        let text = SourceText.From(source)
+        let tree = SyntaxTree.Parse(text)
+        let compilation = Compilation(tree)
+        let program = Binder.BindProgram(compilation.GlobalScope, compilation.References)
+        let diagnostic = Assert.Single(program.Diagnostics.Where((d Diagnostic) -> d.Id == "GS0219"))
+        Assert.Same(text, diagnostic.Location.Text)
+        Assert.Equal(source.IndexOf(suspension, StringComparison.Ordinal), diagnostic.Location.Span.Start)
+        Assert.Equal(suspension.Length, diagnostic.Location.Span.Length)
+    }
+
     // The exact shape reported against Oahu.Diagnostics.PipelineProbeCheck:
     // a Span[T] local is scoped to a single loop iteration and is fully
     // consumed (read) before the loop's own `await`, so its value never

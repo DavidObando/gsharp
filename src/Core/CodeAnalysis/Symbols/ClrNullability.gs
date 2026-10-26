@@ -161,11 +161,12 @@ shared class ClrNullability {
 
     @NullabilityFunnel
     private func DecodePropertyTypeSymbol(property PropertyInfo) TypeSymbol {
-        if property.PropertyType.IsByRef {
+        let propertyType = GetSignatureType(property)
+        if propertyType.IsByRef {
             // PropertyType.IsByRef guarantees that GetElementType returns the referent type.
-            return ByRefTypeSymbol.Get(GetPropertyElementTypeSymbol(property, property.PropertyType.GetElementType()!!))
+            return ByRefTypeSymbol.Get(GetPropertyElementTypeSymbol(property, propertyType.GetElementType()!!))
         }
-        let baseSymbol = TypeSymbol.FromClrType(property.PropertyType)
+        let baseSymbol = TypeSymbol.FromClrType(propertyType)
         // Properties have no dedicated `ReturnParameter` to attach
         // `[NullableAttribute]` to in C# metadata; the attribute lands on
         // the property itself. Walk the enclosing member chain via the
@@ -176,7 +177,7 @@ shared class ClrNullability {
         return TupleElementNamesReader.ApplyNames(
             ApplyReferenceNullabilityFull(
                 baseSymbol,
-                property.PropertyType,
+                propertyType,
                 property,
                 property.DeclaringType,
                 GetOpenDefinition(property)?.PropertyType
@@ -227,12 +228,13 @@ shared class ClrNullability {
 
     @NullabilityFunnel
     private func DecodeFieldTypeSymbol(field FieldInfo) TypeSymbol {
-        let baseSymbol = TypeSymbol.FromClrType(field.FieldType)
+        let fieldType = GetSignatureType(field)
+        let baseSymbol = TypeSymbol.FromClrType(fieldType)
         // ADR-0172 Phase B: surface imported tuple element names.
         return TupleElementNamesReader.ApplyNames(
             ApplyReferenceNullabilityFull(
                 baseSymbol,
-                field.FieldType,
+                fieldType,
                 field,
                 field.DeclaringType,
                 GetOpenDefinition(field)?.FieldType
@@ -265,11 +267,12 @@ shared class ClrNullability {
 
     @NullabilityFunnel
     private func DecodeReturnTypeSymbol(method MethodInfo) TypeSymbol {
+        let signatureType = GetSignatureType(method.ReturnParameter)
         // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
-        let returnType = if method.ReturnType.IsByRef {
-            method.ReturnType.GetElementType()!!
+        let returnType = if signatureType.IsByRef {
+            signatureType.GetElementType()!!
         } else {
-            method.ReturnType
+            signatureType
         }
         let baseSymbol = TypeSymbol.FromClrType(returnType)
         let definition = GetMetadataDefinition(method) as MethodInfo
@@ -309,10 +312,11 @@ shared class ClrNullability {
 
     @NullabilityFunnel
     private func DecodeParameterTypeSymbol(parameter ParameterInfo) TypeSymbol {
-        let parameterType = if parameter.ParameterType.IsByRef {
-            parameter.ParameterType.GetElementType()
+        let signatureType = GetSignatureType(parameter)
+        let parameterType = if signatureType.IsByRef {
+            signatureType.GetElementType()
         } else {
-            parameter.ParameterType
+            signatureType
         }
         // ADR-0193 §4: an indexer's parameter needs its open declaration as
         // the layout too, exactly as a method's does — without one an
@@ -631,6 +635,19 @@ shared class ClrNullability {
         if type.IsGenericParameter {
             return 1
         }
+        if type.IsByRef {
+            return CountNullabilityBytes(type.GetElementType())
+        }
+        if type.IsPointer {
+            return 1 + CountNullabilityBytes(type.GetElementType())
+        }
+        if type.IsFunctionPointer {
+            var count = 1 + CountNullabilityBytes(type.GetFunctionPointerReturnType())
+            for parameter in type.GetFunctionPointerParameterTypes() {
+                count += CountNullabilityBytes(parameter)
+            }
+            return count
+        }
         if type.IsArray {
             return 1 +
                 CountNullabilityBytes(
@@ -750,6 +767,23 @@ shared class ClrNullability {
                     }
                 )
                 index++
+                return
+            }
+            if current.IsByRef {
+                Append(current.GetElementType()!!)
+                return
+            }
+            if current.IsPointer || current.IsFunctionPointer {
+                builder.Add(uint8(0))
+                index++
+                if current.IsPointer {
+                    Append(current.GetElementType()!!)
+                } else {
+                    Append(current.GetFunctionPointerReturnType())
+                    for parameter in current.GetFunctionPointerParameterTypes() {
+                        Append(parameter)
+                    }
+                }
                 return
             }
             if current.IsArray {
@@ -933,6 +967,54 @@ shared class ClrNullability {
     @NullabilityFunnel
     internal func IsFlagNonNull(flag uint8) bool -> ClassifyFlag(flag) == ClrNullabilityState.NotAnnotated
 
+    /// Gets the declaration type with function-pointer calling conventions retained.
+    internal func GetSignatureType(declaration ICustomAttributeProvider) Type {
+        let type = switch declaration {
+            case field is FieldInfo: field.FieldType
+            case property is PropertyInfo: property.PropertyType
+            case parameter is ParameterInfo: parameter.ParameterType
+            case eventInfo is EventInfo: eventInfo.EventHandlerType ??
+                throw InvalidOperationException("An event handler type is required.")
+            default: throw ArgumentException("A field, property, parameter, or event declaration is required.")
+        }
+        if !ContainsFunctionPointer(type) {
+            return type
+        }
+        return switch declaration {
+            case field is FieldInfo: field.GetModifiedFieldType()
+            case property is PropertyInfo: property.GetModifiedPropertyType()
+            case parameter is ParameterInfo: parameter.GetModifiedParameterType()
+            case eventInfo is EventInfo: GetModifiedEventHandlerType(eventInfo)
+            default: throw ArgumentException("A field, property, parameter, or event declaration is required.")
+        }
+    }
+
+    private func GetModifiedEventHandlerType(eventInfo EventInfo) Type {
+        let accessor = eventInfo.GetAddMethod(true) ?? eventInfo.GetRemoveMethod(true)
+        if accessor == nil {
+            throw InvalidOperationException("An event handler signature requires an add or remove accessor.")
+        }
+        let parameters = accessor.GetParameters()
+        if parameters.Length != 1 {
+            throw InvalidOperationException("An event accessor must have exactly one handler parameter.")
+        }
+        return parameters[0].GetModifiedParameterType()
+    }
+
+    internal func ContainsFunctionPointer(type Type) bool {
+        if type.IsFunctionPointer || (type.HasElementType && ContainsFunctionPointer(type.GetElementType()!!)) {
+            return true
+        }
+        if type.IsGenericType {
+            for argument in type.GetGenericArguments() {
+                if ContainsFunctionPointer(argument) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     /// Constructs a (cref:TypeSymbol) for [`clrType`](paramref) by
     /// reading the nullability byte at [`offset`](paramref) within
     /// [`flags`](paramref), and (for generic or array types with further
@@ -948,6 +1030,13 @@ shared class ClrNullability {
             return NullableLifting.WrapValueTypeNullable(SymbolFromFlagsOffset(nullableUnderlying, flags, offset))
         }
         let baseSymbol = TypeSymbol.FromClrType(clrType)
+        if ContainsFunctionPointer(clrType) {
+            return NullableFlagsBuilder.MergeDeclarationNullability(
+                baseSymbol,
+                clrType,
+                GetNullableFlagsForSubtree(clrType, flags, offset)
+            )
+        }
         if IsNotNullableValueTypeParameter(clrType) {
             return baseSymbol
         }
@@ -1011,7 +1100,14 @@ shared class ClrNullability {
     /// @param flags Nullable flags in [`layoutType`](paramref) order.
     /// @returns Decoded closed type symbol.
     internal func SymbolFromLayoutFlags(actualType Type, layoutType Type, flags ImmutableArray[uint8]) TypeSymbol {
-        let projectedFlags = if ClrTypeUtilities.AreSame(actualType, layoutType) {
+        // Function-pointer FullName is nil, so name equality cannot prove matching nullable layouts.
+        let projectedFlags = if object.ReferenceEquals(actualType, layoutType) ||
+            (
+            !ContainsFunctionPointer(actualType) && !ContainsFunctionPointer(layoutType) && ClrTypeUtilities.AreSame(
+                actualType,
+                layoutType
+            )
+        ) {
             flags
         } else {
             ProjectNullableFlags(actualType, layoutType, flags)
@@ -1044,6 +1140,10 @@ shared class ClrNullability {
             }
             if NullableLifting.GetValueTypeNullableUnderlyingClr(layout) is {} layoutUnderlying {
                 layout = layoutUnderlying
+            }
+            if actual.IsByRef && layout.IsByRef {
+                Append(actual.GetElementType()!!, layout.GetElementType()!!)
+                return
             }
             if layout.IsGenericParameter {
                 let flag = layoutFlags[layoutOffset++]
@@ -1185,11 +1285,28 @@ shared class ClrNullability {
                 )
                 return
             }
+            if actual.IsPointer && layout.IsPointer {
+                builder.Add(uint8(0))
+                layoutOffset++
+                Append(actual.GetElementType()!!, layout.GetElementType()!!)
+                return
+            }
+            if actual.IsFunctionPointer && layout.IsFunctionPointer {
+                builder.Add(uint8(0))
+                layoutOffset++
+                Append(actual.GetFunctionPointerReturnType(), layout.GetFunctionPointerReturnType())
+                let actualParameters = actual.GetFunctionPointerParameterTypes()
+                let layoutParameters = layout.GetFunctionPointerParameterTypes()
+                for var i = 0; i < actualParameters.Length; i++ {
+                    Append(actualParameters[i], layoutParameters[i])
+                }
+                return
+            }
             let actualGeneric = actual.IsGenericType && !actual.IsGenericTypeDefinition
             let layoutGeneric = layout.IsGenericType && !layout.IsGenericTypeDefinition
             if actualGeneric && layoutGeneric && ClrTypeUtilities.AreSame(
-                actual.GetGenericTypeDefinition(),
-                layout.GetGenericTypeDefinition()
+                actual.UnderlyingSystemType.GetGenericTypeDefinition(),
+                layout.UnderlyingSystemType.GetGenericTypeDefinition()
             ) {
                 builder.Add(
                     if actual.IsValueType {
@@ -1255,6 +1372,20 @@ shared class ClrNullability {
     }
 
     private func BuildTupleTypeSymbol(clrType Type, flags ImmutableArray[uint8], offset int32) TupleTypeSymbol {
+        return MapTupleTypeSymbol(
+            clrType,
+            offset,
+            (argument Type, position int32) -> SymbolFromFlagsOffset(argument, flags, position)
+        )
+    }
+
+    /// Maps flattened tuple positions through the CLR layout, including Rest placeholders.
+    internal func MapTupleTypeSymbol(
+        clrType Type,
+        offset int32,
+        project(Type, int32) -> TypeSymbol,
+        names ImmutableArray[string?] = default(ImmutableArray[string?])
+    ) TupleTypeSymbol {
         let elements = ImmutableArray.CreateBuilder[TypeSymbol]()
         var position = offset
         let AppendElements = func (tupleType Type) {
@@ -1267,7 +1398,7 @@ shared class ClrNullability {
             }
             for var i = 0; i < directCount; i++ {
                 let argument = arguments[i]
-                elements.Add(SymbolFromFlagsOffset(argument, flags, position))
+                elements.Add(project(argument, position))
                 position += CountNullabilityBytes(argument)
             }
             if arguments.Length == 8 {
@@ -1275,7 +1406,7 @@ shared class ClrNullability {
             }
         }
         AppendElements(clrType)
-        return TupleTypeSymbol.Get(elements.ToImmutable())
+        return TupleTypeSymbol.Get(elements.ToImmutable(), names)
     }
 
     @NullabilityFunnel

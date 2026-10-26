@@ -119,6 +119,62 @@ Console.WriteLine("answer=${n *
 
 Malformed interpolation is reported by dedicated diagnostics: `GS0220` (non-constant alignment), `GS0221` (handler forwarding), `GS0222` (unterminated hole), `GS0223` (empty hole), `GS0224` (empty format specifier), and `GS0225` (newline in the literal portion of the string). By default an interpolated string lowers to `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler`; when its contextual target type is `IFormattable` or `FormattableString` it instead lowers to `FormattableStringFactory.Create`, deferring formatting so the caller selects the culture. See the [CLR interop reference](./clr-interop.md#interpolated-strings-and-formatting).
 
+### UTF-8 span literals (Next)
+
+An adjacent lowercase `u8"` starts a noninterpolating UTF-8 text literal.
+Its natural type is the target core library's `System.ReadOnlySpan[byte]`,
+also spelled `readonly span[byte]`.
+The identifier `u8` remains available outside this adjacent prefix.
+
+```gsharp
+let view readonly span[byte] = u8"Aé\0"
+Console.WriteLine(view.Length) // 4: 41 C3 A9 00
+let combined = (u8"A" + u8"é") + u8"\0"
+```
+
+Source scalars and decoded text escapes encode to UTF-8 without normalization
+or a BOM. Supported escapes are `\0`, `\a`, `\b`, `\f`, `\n`, `\r`,
+`\t`, `\v`, `\'`, `\"`, `\\`, `\x` with one to four hexadecimal digits,
+`\u` with exactly four digits, and `\U` with exactly eight digits.
+The complete decoded UTF-16 sequence must contain only valid scalar values.
+A high/low surrogate escape pair in one literal is valid; isolated,
+reversed, or out-of-range surrogates diagnose.
+Each literal validates independently before folding.
+Thus `u8"\uD800" + u8"\uDC00"` cannot repair either invalid operand.
+`\xFF` is text U+00FF and encodes as `C3 BF`, unlike `b"\xFF"`'s byte `FF`.
+Dollar signs, including `${...}`, are text rather than interpolation.
+Lossy source decoding, physical newlines, and raw delimiters diagnose.
+
+`+` folds only literal representations: UTF-8 literals, parentheses around
+them, and nested literal-only `+` trees.
+Variables, calls, casts, conditionals, CLR strings, and byte strings do not
+gain concatenation operators or implicit conversions.
+Adjacent literals require an explicit `+`.
+These span values are not `const`, attribute, optional-parameter, or pattern
+constants.
+
+The compiler emits deterministic private static RVA storage.
+Each complete logical byte sequence has one additional contiguous zero byte.
+`Length`, indexing, slicing, and exports exclude this hidden terminator.
+An embedded zero remains part of the logical value.
+Even the empty literal has static backing for its hidden terminator.
+Evaluation uses `RuntimeHelpers.CreateSpan[byte]` and a logical-length slice;
+it does not run an encoder or allocate a managed array.
+The descriptor remains a CLR ref struct despite the backing storage's
+assembly lifetime.
+Existing heap, capture, boxing, generic-argument, and suspension restrictions
+still apply. Reacquire a literal after an `await`; do not keep a span live
+across it.
+
+This view is neither CLR UTF-16 `string` nor arbitrary immutable `bytestring`.
+Use explicit copying APIs at mutable-array, byte-string, or native-slice
+ownership boundaries.
+Reference assemblies retain public CLR signatures but omit the private data.
+Formatter and editor tooling preserve the adjacent spelling.
+This is an unreleased compiler feature, not permission to use the syntax
+with an older SDK. cs2gs adoption follows a language release and a separate
+repository SDK-pin update.
+
 <span id="byte-string-literals-development"></span>
 
 ### Byte-string literals
@@ -778,6 +834,23 @@ The prefix `*T` is **context-sensitive**. **Outside** an `unsafe` context it den
 `stackalloc [n]T` stack-allocates a contiguous buffer of `n` elements of a blittable element type `T`, emitted as the CIL `localloc` instruction and reclaimed when the method returns. It uses **G#-style array grammar** — the bracketed count first, then the element type (`stackalloc [4]uint8`), mirroring G#'s array/slice type grammar (`[]T`, `[n]T`). It has two forms, selected by the target type exactly as the unsafe gating of `*T` falls out of context. The **safe** form is the default and needs **no** `unsafe` context: `var buf = stackalloc [4]uint8` yields a `System.Span[T]` (or `System.ReadOnlySpan[T]` when the target is one) over the allocated block, so element access is bounds-checked and `.Length` is available. The **unsafe** form is reached only inside an `unsafe` context when the target type is a `*T` unmanaged pointer (`var p *int32 = stackalloc [3]int32`), yielding the raw `localloc` pointer; outside an unsafe context no pointer target exists, so the safe `Span[T]` form is always chosen and no extra "unsafe required" diagnostic is needed. The count is a full expression (a runtime length is allowed). An optional brace-delimited **initializer** supplies the element values: `stackalloc [3]int32{1, 2, 3}` (explicit count) or the count-inferred `stackalloc []int32{1, 2, 3}` (empty brackets — the length comes from the initializer). Each initializer element must be convertible to `T`, and the values are stored into the block through the `localloc` pointer via scaled indirect writes (for both the safe `Span[T]` and unsafe `*T` forms). A count-inferred `stackalloc []T` with no initializer is rejected with `GS0411`, and an explicit `stackalloc [n]T{…}` whose constant count disagrees with the initializer length is rejected with `GS0412` (matching C#). The element type must be a blittable primitive or a pointer; a managed/non-blittable element type is rejected with `GS0399`. Without an initializer the buffer is **zero-initialised** (method bodies are emitted with `.locals init`, which zeroes `localloc` memory, matching C# safe-`stackalloc`). `stackalloc` is a contextual keyword recognised only in the `stackalloc […` shape, so it remains usable as an ordinary identifier elsewhere. `localloc` IL is *unverifiable by design* (as in C#); the emit tests assert runtime behaviour.
 
 The `fixed` statement `fixed <name> *T = <source> { … }` pins a managed buffer for the duration of its body block and binds an unmanaged pointer `<name>` of type `*T` to the buffer's first element (including span-like sources) — the G# spelling of C# `fixed (T* p = source) { … }`. The header is paren-less, consistent with G#'s other statement headers (`if`/`for`/`while`/`unsafe`), and `fixed` is a **contextual keyword** recognised only in the `fixed <ident> *…` shape, so it remains usable as an ordinary identifier elsewhere; the source expression is parsed with struct-literal suppression so the `{` that follows opens the body block rather than a composite literal. Because it produces a raw unmanaged pointer, the statement is legal **only inside an `unsafe` context** (function, `unsafe { … }` block, or unsafe type); used outside one it is rejected with `GS0400`. The **source** must be a pinnable managed buffer: a slice/array `[]T` (the cs2gs mapping of a C# `T[]`, CLR-backed by `T[]`), a `string`, a **span-like** source whose type exposes a public instance `ref T GetPinnableReference()` (canonically `System.Span[T]` / `System.ReadOnlySpan[T]`), or a **fixed-size buffer field** (`fixed p *int8 = h.B.Name { … }`, or a bare `fixed p *int8 = Name { … }` inside the declaring struct) — the G# spelling of C# `fixed (sbyte* p = Name)`, which binds `p` to the buffer's first element and keeps the buffer's containing storage pinned for the block. As in C#, a fixed-size buffer is pinnable only when it lives in *movable* storage (a class field, an array/slice element, a `ref`/`out`/`in` parameter, or a struct method's receiver); one reached through storage that cannot move (a local, a by-value parameter, or a pointer dereference `p->Name`) is rejected with `GS0507` (C#'s CS0213) and is used directly as a `*T` instead. The pointer's pointee type must match the buffer's element type (`uint16`/`char` are accepted interchangeably for `string`); any other source — or a pointee mismatch — is rejected with `GS0401`. The bound `*T` pointer is in scope **only inside the body** and is read-only. Lowering mirrors the C# compiler: a synthetic CLR **pinned local** (`.locals init ([n] T[] pinned)` for a slice/array, `string pinned` for a `string`, `T& pinned` for a span-like source or a fixed-size buffer) holds the buffer reference so the GC cannot move it; the pointer is derived as the element-0 address (`ldelema` with a null/zero-length guard for arrays — an empty buffer yields a null pointer — `RuntimeHelpers.OffsetToStringData` for strings, `call GetPinnableReference(); conv.u` for span-like sources, and `ldflda name; ldflda FixedElementField` — the address of the buffer's first element, exactly as C# emits — for a fixed-size buffer). For a span-like source the emitted MemberRef carries the real BCL signature, including `modreq(System.Runtime.InteropServices.InAttribute)` on `ReadOnlySpan[T].GetPinnableReference()`'s `ref readonly T` return, so the call binds at runtime. On block exit the pinned local is released (`ldnull; stloc` for array/string, `ldc.i4.0; conv.u; stloc` for a span-like or fixed-size buffer by-ref pin). Pinning + unmanaged-pointer dereference IL is *unverifiable by design* (as in C#); the emit tests assert runtime behaviour.
+
+For array pinning, an inferred one-dimensional CLR array with a non-nullable
+static type is equivalent to an annotated `[]T` local. No annotation or array copy
+is required. This static-type rule is not a runtime non-null guarantee.
+Array pinning keeps its null and empty-array guards.
+Rectangular and explicitly nullable arrays remain rejected.
+
+```gsharp
+import System.Text
+
+unsafe {
+    let bytes = Encoding.UTF8.GetBytes("x")
+    fixed value *uint8 = bytes {
+        System.Console.WriteLine(value[0]) // 120
+    }
+}
+```
 
 CLR `ref struct` types such as `Span[T]` and `ReadOnlySpan[T]` are consumable as stack-only values: they are indexable (`s[i]`), ref-returning members auto-dereference in rvalue position, a `[]T` slice converts implicitly to a span, and a user `ref struct X { … }` may embed a closed generic value-type field. Stack-escape violations are reported as `GS0219`; writing through a `ReadOnlySpan[T]` element is `GS0226`. The full ref-safe-to-escape analysis is deferred.
 

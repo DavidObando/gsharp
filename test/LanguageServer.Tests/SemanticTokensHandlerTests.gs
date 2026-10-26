@@ -12,6 +12,22 @@ import System.Linq
 import Xunit
 
 open class SemanticTokensHandlerTests {
+    @Theory
+    @InlineData(`u8"$name"`, 9)
+    @InlineData(`u8"é😀"`, 7)
+    func Tokenize_Utf8LiteralRangeAndFollowingIdentifier(literal string, length int32) {
+        let content = LanguageServerTestHelpers.Content(
+            "func Run() {\n    let view = " + literal + "\n    let count = view.Length\n}\n"
+        )
+        let tokens = GetTokens(content)
+        let text = FindToken(tokens, 1, 15, length)
+        Assert.NotNull(text)
+        Assert.Equal(TokenTypeIndex("String"), text!!.TokenType)
+        let reference = FindToken(tokens, 2, 16, 4)
+        Assert.NotNull(reference)
+        Assert.Equal(TokenTypeIndex("Variable"), reference!!.TokenType)
+    }
+
     @Fact
     func Tokenize_ContextualNativeProtocolHeadAndOrdinaryIdentifier() {
         let content = LanguageServerTestHelpers.Content(

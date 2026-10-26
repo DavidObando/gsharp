@@ -1831,6 +1831,7 @@ open partial class Parser {
                 SyntaxKind.NumberToken,
                 SyntaxKind.StringToken,
                 SyntaxKind.ByteStringToken,
+                SyntaxKind.Utf8StringToken,
                 SyntaxKind.OpenParenthesisToken,
                 SyntaxKind.OpenSquareBracketToken,
                 SyntaxKind.AmpersandToken,

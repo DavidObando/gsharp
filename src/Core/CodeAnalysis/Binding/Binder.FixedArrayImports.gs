@@ -115,7 +115,7 @@ partial class Binder {
 
         private func ValidateFixedArraySignature(signature TypeSymbol, abi FixedArrayAbi) bool {
             abi.ValidateSignature(signature)
-            return signature.ClrType is {} type && FixedArrayAbi.ContainsCandidate(type)
+            return FixedArrayAbi.ContainsCandidate(signature)
         }
 
         private func ValidateFixedArrayRelationships(receiver TypeSymbol, abi FixedArrayAbi) {

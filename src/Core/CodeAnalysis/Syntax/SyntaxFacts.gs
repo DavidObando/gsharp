@@ -9,6 +9,17 @@ import System.Collections.Generic
 
 /// Utility functions related to the language syntax.
 shared class SyntaxFacts {
+    internal func IsUtf8LiteralRepresentation(syntax ExpressionSyntax) bool -> switch syntax {
+        case literal is LiteralExpressionSyntax: literal.LiteralToken.Kind == SyntaxKind.Utf8StringToken
+        case parenthesized is ParenthesizedExpressionSyntax: IsUtf8LiteralRepresentation(parenthesized.Expression)
+        case binary is BinaryExpressionSyntax: binary
+            .OperatorToken
+            .Kind == SyntaxKind.PlusToken &&
+            IsUtf8LiteralRepresentation(binary.Left) &&
+            IsUtf8LiteralRepresentation(binary.Right)
+        default: false
+    }
+
     /// Determines whether a formatter may introduce a line break between two
     /// significant tokens without crossing one of G#'s newline-sensitive
     /// grammar boundaries (ADR-0179).

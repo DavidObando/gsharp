@@ -1,0 +1,44 @@
+import System
+import System.Runtime.CompilerServices
+import Utf8LiteralProof
+import Utf8Proof
+
+@MethodImpl(MethodImplOptions.NoInlining)
+func Allocate() []uint8 -> []uint8{65, 195, 169, 0}
+
+func Main() {
+    let value = Literals.Get()
+    Console.WriteLine(value.Length)
+    Console.WriteLine(Convert.ToHexString(value.ToArray()))
+    Console.WriteLine(TerminatorWitness.Hidden(value))
+    Console.WriteLine(TerminatorWitness.HasBackingReference(value))
+    let empty = Literals.Empty()
+    Console.WriteLine(empty.Length)
+    Console.WriteLine(TerminatorWitness.Hidden(empty))
+    Console.WriteLine(TerminatorWitness.HasBackingReference(empty))
+    let derived = Literals.Derived()
+    GC.Collect()
+    GC.WaitForPendingFinalizers()
+    GC.Collect()
+    Console.WriteLine(Convert.ToHexString(derived.ToArray()))
+    Console.WriteLine(Convert.ToHexString(value.ToArray()))
+    let copied = value.ToArray()
+    copied[0] = 90
+    Console.WriteLine(Convert.ToHexString(value.ToArray()))
+    var checksum = 0
+    for var i = 0; i < 100_000; i++ {
+        checksum += Literals.Get()[0]
+        checksum += Allocate()[0]
+    }
+    let before = GC.GetAllocatedBytesForCurrentThread()
+    for var i = 0; i < 100_000; i++ {
+        checksum += Literals.Get()[0]
+    }
+    Console.WriteLine(GC.GetAllocatedBytesForCurrentThread() - before)
+    let controlBefore = GC.GetAllocatedBytesForCurrentThread()
+    for var i = 0; i < 100_000; i++ {
+        checksum += Allocate()[0]
+    }
+    Console.WriteLine(GC.GetAllocatedBytesForCurrentThread() - controlBefore)
+    Console.WriteLine(checksum)
+}

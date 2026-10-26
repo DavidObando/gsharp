@@ -236,8 +236,8 @@ shared class NullableLifting {
             return nil
         }
         try {
-            if Nullable.GetUnderlyingType(type) is {} underlying {
-                return underlying
+            if Nullable.GetUnderlyingType(type.UnderlyingSystemType) != nil {
+                return type.GetGenericArguments()[0]
             }
         } catch (ArgumentException) {
             // MetadataLoadContext types cannot be passed to runtime Nullable APIs.
@@ -248,7 +248,7 @@ shared class NullableLifting {
         }
         try {
             return if string.Equals(
-                type.GetGenericTypeDefinition().FullName,
+                type.UnderlyingSystemType.GetGenericTypeDefinition().FullName,
                 "System.Nullable`1",
                 StringComparison.Ordinal
             ) {

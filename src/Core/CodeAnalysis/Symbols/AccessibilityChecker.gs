@@ -284,21 +284,33 @@ internal shared class AccessibilityChecker {
         currentFunction
     }
 
-    private func GetEnclosingClass(currentFunction FunctionSymbol?) StructSymbol? -> (
-        currentFunction?.ReceiverType as StructSymbol
-    ) ??
-        (currentFunction?.StaticOwnerType as StructSymbol) ??
-        (currentFunction?.LexicalEnclosingType as StructSymbol)
+    private func GetEnclosingClass(currentFunction FunctionSymbol?) StructSymbol? {
+        let candidates = []TypeSymbol? {
+            currentFunction?.ReceiverType,
+            currentFunction?.StaticOwnerType,
+            currentFunction?.LexicalEnclosingType
+        }
+        for candidate in candidates {
+            for var current TypeSymbol? = candidate; current != nil; current = current!!.ContainingType {
+                if current is StructSymbol enclosingClass {
+                    return enclosingClass
+                }
+            }
+        }
+        return nil
+    }
 
     /// Issue #2044: walks (cref:Symbol.ContainingType) to the
     /// outermost enclosing type, so nested types declared inside the same
     /// top-level type share `private` access to each other's members.
     private func GetTopLevelContainer(type StructSymbol?) StructSymbol? {
-        var current = type
-        while current?.ContainingType is StructSymbol parent {
-            current = parent
+        var container = type
+        for var current TypeSymbol? = type?.ContainingType; current != nil; current = current!!.ContainingType {
+            if current is StructSymbol parent {
+                container = parent
+            }
         }
-        return current
+        return container
     }
 
     private func SameDeclaringType(a StructSymbol?, b StructSymbol?) bool {
