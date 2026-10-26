@@ -5,6 +5,7 @@
 package GSharp.Compiler.Tests.Emit
 
 import GSharp.Compiler.Tests
+import GSharp.Tests
 import System
 import System.Collections.Generic
 import System.ComponentModel
@@ -53,12 +54,13 @@ func Main() {
     Console.WriteLine(a.Equals(Value(Kind.Second, Double.NaN, false)))
 }`, "ValueEquality", true)
         IlVerifier.Verify(dll)
-        let assembly = Assembly.LoadFile(dll)
+        let assembly = EmittedFixture.Load(dll)
         let type = assembly.GetType("ValueEquality.Generated", throwOnError: true)!!
         let fields = []Type{assembly.GetType("ValueEquality.Kind")!!, typeof(float64), typeof(bool)}
         AssertTypedCalls(type, fields)
         AssertTypedCalls(assembly.GetType("ValueEquality.Value", throwOnError: true)!!, fields)
         AssertOutputBytes(dll, "True\nTrue\nTrue\nFalse\nTrue\nTrue\nTrue\nFalse\nFalse\nFalse\nFalse\nFalse\n")
+        AssertNotAnImplicitReference(fixture, "ValueEquality.Kind", 30)
     }
 
     @Fact
@@ -188,7 +190,7 @@ func Main() {
                 StringComparison.Ordinal
             ).Replace("EXPECTED", expectedHash, StringComparison.Ordinal), "HashBoundary$count", true)
         IlVerifier.Verify(dll)
-        let type = Assembly.LoadFile(dll).GetType("HashBoundary.Many`1", throwOnError: true)!!.MakeGenericType(
+        let type = EmittedFixture.Load(dll).GetType("HashBoundary.Many`1", throwOnError: true)!!.MakeGenericType(
             typeof(int32)
         )
         let fields = []Type{
@@ -210,6 +212,7 @@ func Main() {
             }
         )
         AssertOutputBytes(dll, "True\nTrue\nTrue\n")
+        AssertNotAnImplicitReference(fixture, "HashBoundary.Many[int32]", 29)
     }
 
     @Fact
@@ -232,7 +235,7 @@ func Main() {
     Console.WriteLine(b.GetHashCode() == OpenAgain[int32, int64](1, 2, 3, nil, 5, 6, nil, 8, 9).GetHashCode())
 }`, "HashReuse", true)
         IlVerifier.Verify(dll)
-        let assembly = Assembly.LoadFile(dll)
+        let assembly = EmittedFixture.Load(dll)
         let repeated = HashSpecifications(assembly.GetType("HashReuse.Repeated", throwOnError: true)!!)
         Assert.Equal(9, repeated.Length)
         let integer = Assert.Single(repeated.Distinct())
@@ -288,6 +291,7 @@ func Main() {
             }
         )
         AssertOutputBytes(dll, "True\nTrue\nTrue\nTrue\n")
+        AssertNotAnImplicitReference(fixture, "HashReuse.Repeated", 26)
     }
 
     @Fact
@@ -321,6 +325,25 @@ func Main() {
     }
 
     shared {
+        private func AssertNotAnImplicitReference(
+            fixture NativeSliceLanguageTests.Fixture,
+            fieldType string,
+            endColumn int32
+        ) {
+            let (code, diagnostics) = fixture.TryCompile(
+                "package EqualityIsolation\nfunc Read(value " + fieldType + ") {}",
+                "EqualityImplicitReference",
+                false
+            )
+            Assert.NotEqual(0, code)
+            Assert.Contains(
+                "EqualityImplicitReference.gs(2,17,2,$endColumn): error GS0113:",
+                diagnostics,
+                StringComparison.Ordinal
+            )
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "EqualityImplicitReference.dll")))
+        }
+
         private func AssertOutputBytes(assembly string, expected string) {
             using let process = StartFixture(assembly)
             Assert.Equal(
