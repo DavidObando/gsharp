@@ -973,7 +973,9 @@ shared class ClrNullability {
             case field is FieldInfo: field.FieldType
             case property is PropertyInfo: property.PropertyType
             case parameter is ParameterInfo: parameter.ParameterType
-            default: throw ArgumentException("A field, property, or parameter declaration is required.")
+            case eventInfo is EventInfo: eventInfo.EventHandlerType ??
+                throw InvalidOperationException("An event handler type is required.")
+            default: throw ArgumentException("A field, property, parameter, or event declaration is required.")
         }
         if !ContainsFunctionPointer(type) {
             return type
@@ -982,8 +984,21 @@ shared class ClrNullability {
             case field is FieldInfo: field.GetModifiedFieldType()
             case property is PropertyInfo: property.GetModifiedPropertyType()
             case parameter is ParameterInfo: parameter.GetModifiedParameterType()
-            default: throw ArgumentException("A field, property, or parameter declaration is required.")
+            case eventInfo is EventInfo: GetModifiedEventHandlerType(eventInfo)
+            default: throw ArgumentException("A field, property, parameter, or event declaration is required.")
         }
+    }
+
+    private func GetModifiedEventHandlerType(eventInfo EventInfo) Type {
+        let accessor = eventInfo.GetAddMethod(true) ?? eventInfo.GetRemoveMethod(true)
+        if accessor == nil {
+            throw InvalidOperationException("An event handler signature requires an add or remove accessor.")
+        }
+        let parameters = accessor.GetParameters()
+        if parameters.Length != 1 {
+            throw InvalidOperationException("An event accessor must have exactly one handler parameter.")
+        }
+        return parameters[0].GetModifiedParameterType()
     }
 
     internal func ContainsFunctionPointer(type Type) bool {

@@ -843,7 +843,7 @@ internal shared class ExternalClrOverrideResolver {
             }
             return awaitedType != nil
         }
-        let genericDefinition = clrReturnType.GetGenericTypeDefinition()
+        let genericDefinition = clrReturnType.UnderlyingSystemType.GetGenericTypeDefinition()
         if string.Equals(genericDefinition.FullName, expectedName + "`1", StringComparison.Ordinal) {
             awaitedType = clrReturnType.GetGenericArguments()[0]
             return true

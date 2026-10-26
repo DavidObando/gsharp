@@ -3147,6 +3147,11 @@ internal partial class DeclarationBinder {
             if b is NullableTypeSymbol referenceNullableB && !(a is NullableTypeSymbol) {
                 return TypeSignaturesEquivalent(a, referenceNullableB.UnderlyingType, typeParamMap)
             }
+            if a is PointerTypeSymbol || b is PointerTypeSymbol {
+                return a is PointerTypeSymbol leftPointer &&
+                    b is PointerTypeSymbol rightPointer &&
+                    TypeSignaturesEquivalent(leftPointer.PointeeType, rightPointer.PointeeType, typeParamMap)
+            }
             if a is FunctionPointerTypeSymbol || b is FunctionPointerTypeSymbol {
                 return a is FunctionPointerTypeSymbol leftPointer &&
                     b is FunctionPointerTypeSymbol rightPointer &&

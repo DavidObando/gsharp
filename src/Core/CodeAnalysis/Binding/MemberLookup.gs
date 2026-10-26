@@ -5352,7 +5352,7 @@ internal class MemberLookup {
                 }
                 if openEvent?.EventHandlerType != nil {
                     let mapped = MapOpenClrTypeToSymbolic(
-                        openEvent!!.EventHandlerType,
+                        ClrNullability.GetSignatureType(openEvent!!),
                         openDefinition,
                         declaringTypeArguments
                     )
@@ -5371,7 +5371,11 @@ internal class MemberLookup {
         /// @returns The handler type with declaration-site nullability applied.
         @NullabilityFunnel
         internal func GetClrEventHandlerTypeSymbol(closedEvent EventInfo) TypeSymbol {
-            let handlerType = TypeSymbol.FromClrType(closedEvent.EventHandlerType)
+            var signatureType = closedEvent.EventHandlerType
+            if signatureType != nil {
+                signatureType = ClrNullability.GetSignatureType(closedEvent)
+            }
+            let handlerType = TypeSymbol.FromClrType(signatureType)
             if closedEvent.DeclaringType is not{} declaringType {
                 return handlerType
             }
@@ -5395,13 +5399,12 @@ internal class MemberLookup {
                     break
                 }
             }
-            if openEvent?.EventHandlerType is not Type handlerLayout ||
-                closedEvent.EventHandlerType is not Type closedHandler {
+            if openEvent?.EventHandlerType == nil || closedEvent.EventHandlerType == nil {
                 return handlerType
             }
             let projected = ClrNullability.SymbolFromLayoutFlags(
-                closedHandler,
-                handlerLayout,
+                ClrNullability.GetSignatureType(closedEvent),
+                ClrNullability.GetSignatureType(openEvent!!),
                 ClrNullability.ReadNullableFlags(openEvent!!, openDefinition)
             )
             return if projected is NullableTypeSymbol nullableHandler {
@@ -9543,9 +9546,10 @@ internal class MemberLookup {
             openEvent EventInfo,
             openDefinition Type
         ) TypeSymbol {
-            if openEvent.EventHandlerType is not Type handlerLayout {
+            if openEvent.EventHandlerType == nil {
                 return mapped
             }
+            let handlerLayout = ClrNullability.GetSignatureType(openEvent)
             let declarationFlags = ClrNullability.ReadNullableFlags(openEvent, openDefinition)
             let merged = NullableFlagsBuilder.MergeDeclarationNullability(mapped, handlerLayout, declarationFlags)
             return if merged is NullableTypeSymbol nullableHandler {

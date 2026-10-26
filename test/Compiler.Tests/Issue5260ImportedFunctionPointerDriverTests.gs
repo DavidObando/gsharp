@@ -19,6 +19,159 @@ import Xunit
 
 class Issue5260ImportedFunctionPointerDriverTests {
     @Theory
+    @InlineData("Get() *nint { return nil }", "Get")
+    @InlineData("Set(value *nint) {}", "Set")
+    @InlineData("Get() *unmanaged[Stdcall]() -> void { return nil }", "Get")
+    func ImportedOverride_RejectsErasedPointerWrappedSignatures(signature string, name string) {
+        using let fixture = CSharpFixture(SignatureReviewContract, allowUnsafe: true)
+        let consumer = Compile(
+            fixture.DirectoryPath,
+            "Rejected",
+            "import SignatureReview\nunsafe class Derived : PointerBase {\n    override func " + signature + "\n}",
+            fixture.AssemblyPath,
+            executable: false
+        )
+        Assert.NotEqual(0, consumer.Code)
+        Assert.False(File.Exists(consumer.Path))
+        let errors = Regex.Matches(consumer.Diagnostics, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`)
+        Assert.True(errors.Count == 1, consumer.Diagnostics)
+        let error = Assert.Single(errors)
+        Assert.Equal("GS0185", error.Groups[5].Value)
+        Assert.Equal("3", error.Groups[1].Value)
+        Assert.Equal("19", error.Groups[2].Value)
+        Assert.Equal("3", error.Groups[3].Value)
+        Assert.Equal((19 + name.Length).ToString(), error.Groups[4].Value)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedAsyncOverride_PreservesModifiedWrapperChildren(valueTask bool) {
+        using let fixture = CSharpFixture(SignatureReviewContract, allowUnsafe: true)
+        let signature = if valueTask {
+            "GetValue() ValueTask[[]unmanaged[Cdecl]() -> void]"
+        } else {
+            "Get() []unmanaged[Cdecl]() -> void"
+        }
+        let source = "import SignatureReview\nimport System.Threading.Tasks\nunsafe class Derived : AsyncBase {\n" +
+            "    override async func " +
+            signature +
+            " { return [2]unmanaged[Cdecl]() -> void{} }\n}\n" +
+            "func Main() { System.Console.Write(AsyncBase.Invoke(Derived(), " +
+            (
+            if valueTask {
+                "true"
+            } else {
+                "false"
+            }
+        ) +
+            ")) }"
+        let consumer = Compile(fixture.DirectoryPath, "Consumer", source, fixture.AssemblyPath)
+        Assert.True(consumer.Code == 0, consumer.Diagnostics)
+        IlVerifier.Verify(consumer.Path, []string{fixture.AssemblyPath})
+        Assert.Equal(Encoding.UTF8.GetBytes("2"), Run(consumer.Path))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedEvents_PreserveModifiedClosedAndSymbolicHandlerSignatures(symbolic bool) {
+        using let fixture = CSharpFixture(SignatureReviewContract, allowUnsafe: true)
+        let source = if symbolic {
+            `import SignatureReview
+struct Payload { var Value int32 }
+unsafe func Main() {
+    let events = Events[Payload]()
+    events.Instance += nil
+    events.Instance -= nil
+    System.Console.Write(Events[Payload].Adds)
+    System.Console.Write("|")
+    System.Console.Write(Events[Payload].Removes)
+}`
+        } else {
+            `import SignatureReview
+unsafe func Main() {
+    Events[int32].Changed += nil
+    Events[int32].Changed -= nil
+    System.Console.Write(Events[int32].Adds)
+    System.Console.Write("|")
+    System.Console.Write(Events[int32].Removes)
+}`
+        }
+        let consumer = Compile(fixture.DirectoryPath, "Consumer", source, fixture.AssemblyPath)
+        Assert.True(consumer.Code == 0, consumer.Diagnostics)
+        IlVerifier.Verify(consumer.Path, []string{fixture.AssemblyPath})
+        Assert.Equal(Encoding.UTF8.GetBytes("1|1"), Run(consumer.Path))
+    }
+
+    @Theory
+    @InlineData("Store.Index()", 1)
+    @InlineData("^Store.Index()", 1)
+    @InlineData("Store.Index(), Store.Index()", 2)
+    func ImportedRefIndexer_PreservesSignatureAndEvaluatesTheWriteOnce(index string, indices int32) {
+        using let fixture = CSharpFixture(RefIndexerContract, allowUnsafe: true)
+        let source = `import RefIndexers
+unsafe func Main() {
+    let before = Store.Instance[0] == nil
+    Store.Reset()
+    Store.Target()[` + index + `] = Store.Expected
+    let getters = Store.Gets
+    let after = Store.Instance[0] == Store.Expected
+    System.Console.Write(before)
+    System.Console.Write("|")
+    System.Console.Write(after)
+    System.Console.Write("|")
+    System.Console.Write(Store.Targets)
+    System.Console.Write("|")
+    System.Console.Write(Store.Indices)
+    System.Console.Write("|")
+    System.Console.Write(getters)
+}`
+        let consumer = Compile(fixture.DirectoryPath, "Consumer", source, fixture.AssemblyPath)
+        Assert.True(consumer.Code == 0, consumer.Diagnostics)
+        // ILVerify rejects ref-loaded function pointers, including equivalent Roslyn output (ADR-0122).
+        Assert.Equal(Encoding.UTF8.GetBytes("True|True|1|" + indices.ToString() + "|1"), Run(consumer.Path))
+    }
+
+    @Fact
+    func ImportedRefIndexer_ProjectsTheConstructedReceiverSignature() {
+        using let fixture = CSharpFixture(RefIndexerContract, allowUnsafe: true)
+        let consumer = Compile(fixture.DirectoryPath, "Consumer", `import RefIndexers
+unsafe func Main() {
+    let store = GenericStore[uint32]()
+    store[0] = cast[unmanaged[Cdecl](*uint32, nuint) -> *uint32](nint(0))
+    System.Console.Write(store[0] == nil)
+}`, fixture.AssemblyPath)
+        Assert.True(consumer.Code == 0, consumer.Diagnostics)
+        // ILVerify rejects ref-loaded function pointers, including equivalent Roslyn output (ADR-0122).
+        Assert.Equal(Encoding.UTF8.GetBytes("True"), Run(consumer.Path))
+    }
+
+    @Fact
+    func ImportedRefIndexer_RejectsADifferentCallingConvention() {
+        using let fixture = CSharpFixture(RefIndexerContract, allowUnsafe: true)
+        let expression = "cast[unmanaged[Stdcall](nint, uint64, *Callbacks) -> void](nint(0))"
+        let prefix = "    Store.Instance[0] = "
+        let consumer = Compile(
+            fixture.DirectoryPath,
+            "Rejected",
+            "import RefIndexers\nunsafe func Reject() {\n" + prefix + expression + "\n}",
+            fixture.AssemblyPath,
+            executable: false
+        )
+        Assert.NotEqual(0, consumer.Code)
+        Assert.False(File.Exists(consumer.Path))
+        let errors = Regex.Matches(consumer.Diagnostics, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`)
+        Assert.True(errors.Count == 1, consumer.Diagnostics)
+        let error = Assert.Single(errors)
+        Assert.Equal("GS0156", error.Groups[5].Value)
+        Assert.Equal("3", error.Groups[1].Value)
+        Assert.Equal((prefix.Length + 1).ToString(), error.Groups[2].Value)
+        Assert.Equal("3", error.Groups[3].Value)
+        Assert.Equal((prefix.Length + 1 + expression.Length).ToString(), error.Groups[4].Value)
+    }
+
+    @Theory
     @InlineData("FunctionPointer")
     @InlineData("Pointer")
     @InlineData("Order")
@@ -452,6 +605,63 @@ unsafe func Main() {
     }
 
     shared {
+        private const SignatureReviewContract string = `#nullable enable
+using System;
+using System.Threading.Tasks;
+namespace SignatureReview {
+    public unsafe class PointerBase {
+        public virtual delegate* unmanaged[Cdecl]<void>* Get() => null;
+        public virtual void Set(delegate* unmanaged[Cdecl]<void>* value) { }
+    }
+    public unsafe class AsyncBase {
+        public virtual Task<delegate* unmanaged[Cdecl]<void>[]> Get() =>
+            Task.FromResult(new delegate* unmanaged[Cdecl]<void>[1]);
+        public virtual ValueTask<delegate* unmanaged[Cdecl]<void>[]> GetValue() =>
+            new(new delegate* unmanaged[Cdecl]<void>[1]);
+        public static int Invoke(AsyncBase target, bool valueTask) =>
+            valueTask ? target.GetValue().GetAwaiter().GetResult().Length :
+                target.Get().GetAwaiter().GetResult().Length;
+    }
+    public unsafe class Events<T> where T : unmanaged {
+        public static int Adds, Removes;
+        public static event Action<delegate* unmanaged[Cdecl]<void>[]>? Changed {
+            add { Adds++; } remove { Removes++; }
+        }
+        public event Action<delegate* unmanaged[Cdecl]<T*, void>[]>? Instance {
+            add { Adds++; } remove { Removes++; }
+        }
+    }
+}`
+
+        private const RefIndexerContract string = `#nullable enable
+using System;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+namespace RefIndexers {
+    public struct Callbacks { public nint UserData; }
+    public unsafe class Store {
+        private delegate* unmanaged[Cdecl]<nint, ulong, Callbacks*, void> slot;
+        public static Store Instance { get; } = new();
+        public static int Targets, Indices, Gets;
+        public static Store Target() { Targets++; return Instance; }
+        public static int Index() { Indices++; return 1; }
+        public static void Reset() { Targets = Indices = Gets = 0; }
+        public static delegate* unmanaged[Cdecl]<nint, ulong, Callbacks*, void> Expected => &Destroy;
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Destroy(nint device, ulong pool, Callbacks* callbacks) { }
+        public ref delegate* unmanaged[Cdecl]<nint, ulong, Callbacks*, void> this[int index]
+        { get { Gets++; return ref slot; } }
+        public ref delegate* unmanaged[Cdecl]<nint, ulong, Callbacks*, void> this[Index index]
+        { get { Gets++; return ref slot; } }
+        public ref delegate* unmanaged[Cdecl]<nint, ulong, Callbacks*, void> this[int first, int second]
+        { get { Gets++; return ref slot; } }
+    }
+    public unsafe class GenericStore<T> where T : unmanaged {
+        private delegate* unmanaged[Cdecl]<T*, nuint, T*> slot;
+        public ref delegate* unmanaged[Cdecl]<T*, nuint, T*> this[int index] => ref slot;
+    }
+}`
+
         private const ObliviousTupleContract string = `#nullable disable
 namespace ObliviousTuples {
     public class Box<T> { public T Value; }
