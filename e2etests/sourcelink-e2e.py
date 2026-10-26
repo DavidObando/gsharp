@@ -313,9 +313,10 @@ def stage1_package():
             "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
         }
     produced = fixture.pack_stage1(plan)
+    version = module.package_version(produced)
     directory, path, revision, source = repository("stage1-consumer")
     path.write_text(
-        '<Project Sdk="Gsharp.NET.Sdk/0.0.0-sourcelink-test"><PropertyGroup>'
+        f'<Project Sdk="Gsharp.NET.Sdk/{version}"><PropertyGroup>'
         '<TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType>'
         '<DebugType>portable</DebugType></PropertyGroup></Project>'
     )
