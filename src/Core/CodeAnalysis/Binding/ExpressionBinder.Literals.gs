@@ -2010,13 +2010,8 @@ internal partial class ExpressionBinder {
         }
         let seenFieldNames = HashSet[string]()
         var inits = ImmutableArray.CreateBuilder[BoundFieldInitializer]()
-        let definition = structSymbol!!.Definition ?? structSymbol
         let callsDataConstructor = structSymbol!!.UsesConstructorOwnedDataConstruction
-        let callsPrimary = if structSymbol!!.IsClass {
-            structSymbol!!.ClrType == nil && definition!!.IsData && definition!!.HasDeclaredPrimaryConstructor
-        } else {
-            structSymbol!!.HasDataConstructionPrimary
-        }
+        let callsPrimary = BoundStructLiteralExpression.UsesPrimaryConstructor(structSymbol!!)
         if !BoundStructLiteralExpression.ValidateDataConstructor(
             structSymbol!!,
             Diagnostics,

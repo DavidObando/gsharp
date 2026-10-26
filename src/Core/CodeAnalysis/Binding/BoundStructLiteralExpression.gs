@@ -90,15 +90,7 @@ class BoundStructLiteralExpression : BoundExpression {
 
     internal prop CallsPrimaryConstructor bool -> !IsZeroInitialization &&
         CopySource == nil &&
-        (
-        if StructType.IsClass {
-            StructType.ClrType == nil &&
-                (StructType.Definition ?? StructType).IsData &&
-                (StructType.Definition ?? StructType).HasDeclaredPrimaryConstructor
-        } else {
-            StructType.HasDataConstructionPrimary
-        }
-    )
+        UsesPrimaryConstructor(StructType)
 
     /// Checks imported value-type stores after every construction path selects its initializers.
     internal func ValidateInitializerWrites(diagnostics DiagnosticBag, anchor SyntaxNode?) {
@@ -174,6 +166,12 @@ class BoundStructLiteralExpression : BoundExpression {
     }
 
     shared {
+        internal func UsesPrimaryConstructor(type StructSymbol) bool -> if type.IsClass {
+            type.ClrType == nil && (type.Definition ?? type).HasDeclaredPrimaryConstructor
+        } else {
+            type.HasDataConstructionPrimary
+        }
+
         internal func CanWriteInitializerField(type StructSymbol, field FieldSymbol) bool -> !field.IsReadOnly ||
             (type.ClrType == nil && (!type.IsData || type.IsClass))
 
