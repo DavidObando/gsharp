@@ -134,22 +134,112 @@ class FunctionPointerTypeSymbol : TypeSymbol {
         if !changed {
             return this
         }
+        return WithSignature(parameters.MoveToImmutable(), returnType)
+    }
+
+    /// Rebuilds signature positions without changing the calling convention.
+    internal func WithSignature(
+        parameters ImmutableArray[TypeSymbol],
+        returnType TypeSymbol
+    ) FunctionPointerTypeSymbol {
         if IsManaged {
-            return GetManaged(parameters.MoveToImmutable(), returnType)
+            return GetManaged(parameters, returnType)
         }
         return if IsUnmanagedExtended {
-            GetUnmanagedExtended(
-                UnmanagedConventions,
-                UnmanagedConventionClrTypes,
-                parameters.MoveToImmutable(),
-                returnType
-            )
+            GetUnmanagedExtended(UnmanagedConventions, UnmanagedConventionClrTypes, parameters, returnType)
         } else {
-            Get(CallingConvention, parameters.MoveToImmutable(), returnType)
+            Get(CallingConvention, parameters, returnType)
         }
     }
 
+    /// Compares ABI and signature positions using the caller's type-equivalence relation.
+    internal func SignatureEquals(other FunctionPointerTypeSymbol, equivalent(TypeSymbol, TypeSymbol) -> bool) bool {
+        if IsManaged != other.IsManaged || IsUnmanagedExtended != other.IsUnmanagedExtended || Arity != other.Arity {
+            return false
+        }
+        if !IsManaged {
+            if IsUnmanagedExtended {
+                if UnmanagedConventions.Length != other.UnmanagedConventions.Length {
+                    return false
+                }
+                for var i = 0; i < UnmanagedConventions.Length; i++ {
+                    if UnmanagedConventions[i] != other.UnmanagedConventions[i] {
+                        return false
+                    }
+                }
+            } else if CallingConvention != other.CallingConvention {
+                return false
+            }
+        }
+        if !equivalent(ReturnType, other.ReturnType) {
+            return false
+        }
+        for var i = 0; i < Arity; i++ {
+            if !equivalent(ParameterTypes[i], other.ParameterTypes[i]) {
+                return false
+            }
+        }
+        return true
+    }
+
     shared {
+        /// Maps a modified CLR signature through the caller's type projection, preserving its calling convention.
+        internal func FromClrSignature(type Type, project(Type) -> TypeSymbol) FunctionPointerTypeSymbol {
+            let parameters = ImmutableArray.CreateBuilder[TypeSymbol]()
+            for parameter in type.GetFunctionPointerParameterTypes() {
+                parameters.Add(project(parameter))
+            }
+            let returnType = type.GetFunctionPointerReturnType()
+            let result = project(returnType)
+            if !type.IsUnmanagedFunctionPointer {
+                return GetManaged(parameters.ToImmutable(), result)
+            }
+            // An unmodified Type omits calling conventions, including legacy Cdecl. Do not infer a default ABI.
+            if object.ReferenceEquals(type, type.UnderlyingSystemType) {
+                throw InvalidOperationException(
+                    "An unmanaged function pointer requires a modified CLR signature type; received ${type.GetType().FullName}."
+                )
+            }
+            const Prefix = "System.Runtime.CompilerServices.CallConv"
+            let conventions = type.GetFunctionPointerCallingConventions()
+            var extended = false
+            for modifier in returnType.GetOptionalCustomModifiers() {
+                extended |= modifier.FullName?.StartsWith(Prefix, StringComparison.Ordinal) == true
+            }
+            // Reflection lists custom modifiers from the inside out. Source symbols and metadata emission use blob order.
+            if extended {
+                Array.Reverse(conventions)
+            }
+            let names = ImmutableArray.CreateBuilder[string](conventions.Length)
+            for convention in conventions {
+                let name = convention.FullName
+                if name == nil || !name.StartsWith(Prefix, StringComparison.Ordinal) {
+                    throw InvalidOperationException(
+                        "A function pointer has an unknown CLR calling convention '${name ?? "<null>"}'."
+                    )
+                }
+                names.Add(name.Substring(Prefix.Length))
+            }
+            if conventions.Length == 1 && !extended {
+                let legacy CallingConvention? = switch names[0] {
+                    case "Cdecl": CallingConvention.Cdecl
+                    case "Stdcall": CallingConvention.StdCall
+                    case "Thiscall": CallingConvention.ThisCall
+                    case "Fastcall": CallingConvention.FastCall
+                    default: nil
+                }
+                if legacy is {} callingConvention {
+                    return Get(callingConvention, parameters.ToImmutable(), result)
+                }
+            }
+            return GetUnmanagedExtended(
+                names.MoveToImmutable(),
+                ImmutableArray.CreateRange(conventions),
+                parameters.ToImmutable(),
+                result
+            )
+        }
+
         private let Cache ConcurrentDictionary[string, FunctionPointerTypeSymbol] = ConcurrentDictionary[
             string,
             FunctionPointerTypeSymbol

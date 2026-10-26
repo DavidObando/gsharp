@@ -1259,7 +1259,7 @@ internal class ImportedMemberRefFactory {
             field
         }
         let sigBlob = BlobBuilder()
-        this.signatures.EncodeClrType(BlobEncoder(sigBlob).FieldSignature(), openField.FieldType)
+        this.signatures.EncodeClrType(BlobEncoder(sigBlob).FieldSignature(), ClrNullability.GetSignatureType(openField))
         let handle = this
             .emitCtx
             .MetadataRows
@@ -1288,7 +1288,7 @@ internal class ImportedMemberRefFactory {
         this.signatures.EncodeTypeSymbol(BlobEncoder(parentBlob).TypeSpecificationSignature(), symbolicView)
         let parent = this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
         let sigBlob = BlobBuilder()
-        this.signatures.EncodeClrType(BlobEncoder(sigBlob).FieldSignature(), openField.FieldType)
+        this.signatures.EncodeClrType(BlobEncoder(sigBlob).FieldSignature(), ClrNullability.GetSignatureType(openField))
         return this
             .emitCtx
             .MetadataRows
@@ -1315,7 +1315,7 @@ internal class ImportedMemberRefFactory {
             throw InvalidOperationException("Open generic type '${openType.FullName}' has no field '$fieldName'.")
         let parent = this.GetTypeHandleForMember(closedGenericType)
         let sigBlob = BlobBuilder()
-        this.signatures.EncodeClrType(BlobEncoder(sigBlob).FieldSignature(), openField.FieldType)
+        this.signatures.EncodeClrType(BlobEncoder(sigBlob).FieldSignature(), ClrNullability.GetSignatureType(openField))
         let handle = this
             .emitCtx
             .MetadataRows
@@ -1443,7 +1443,7 @@ internal class ImportedMemberRefFactory {
         let openField = openType.GetField(fieldName, BindingFlags.Instance | BindingFlags.Public) ??
             throw InvalidOperationException("Open ValueTuple type has no field '$fieldName'.")
         let sigBlob = BlobBuilder()
-        this.signatures.EncodeClrType(BlobEncoder(sigBlob).FieldSignature(), openField.FieldType)
+        this.signatures.EncodeClrType(BlobEncoder(sigBlob).FieldSignature(), ClrNullability.GetSignatureType(openField))
         return this
             .emitCtx
             .MetadataRows

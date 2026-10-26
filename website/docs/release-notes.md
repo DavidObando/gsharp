@@ -134,6 +134,28 @@ The entries below are newer than v0.5.212. Published features and migration note
   Rejected overload probes do not contribute insertion coverage. Native compilations bypass global/body caches pending coherent synthesis replay. Imported optional parameters preserve presence; uninitialized interface fields receive storage/access checks. Distinct nominal storage identity, abstract member markers and static-field nullability preserve implementation/ref nominal dispatch.
   Body-local negative probes no longer mutate shared operation method tables during coverage planning. Bodyless nominal methods/accessors receive declaration validation and accessor feature markers preserve valid implementation/ref calls.
 
+- **Imported function-pointer fields keep their CLR signature** (issue #5260).
+  Assignments from matching source signatures now compile.
+  Import and member-reference emission preserve calling conventions, pointer types,
+  and native integers, including signatures on generic receivers and inside
+  array-valued generic arguments.
+  Overload checks, override matching, and named tuples preserve nested signatures.
+  Managed function-pointer signatures also keep nullable reference annotations.
+  Byref signature readers retain pointee annotations without making nested
+  generic arguments nullable. Tuple-name metadata traverses pointer children and
+  function-pointer returns before parameters, so later named tuple elements keep
+  their positions across assembly boundaries.
+
+- **Imported function-pointer signatures survive ref indexers, events, and async overrides** (issue #5260).
+  Signature readers retain modified CLR metadata and receiver substitutions.
+  Override checks also distinguish pointer-wrapped signatures and calling conventions.
+
+- **Imported CLR event overrides retain nested function-pointer signatures** (issue #5260).
+  Override matching reads modified accessor metadata for closed and symbolic receivers.
+
+- **Imported CLR tuple overrides use structural signature matching** (issue #5260).
+  Tuple shapes retain nested function-pointer conventions, symbolic elements, and fixed-array lengths.
+
 - **Reflection probes no longer use exceptions as the not-applicable answer** (issue #5123, part of #2189). Probes that asked `System.Type` questions a `TypeBuilderInstantiation` or a `MetadataLoadContext` method cannot answer (`GetMethod`, `GetMethods`, `GetInterfaces`, `IsEnum`, `IsByRefLike`, `IsAssignableFrom`, `GetBaseDefinition`, `TypeBuilder.GetMethod`, and `MakeGenericType` across reflection contexts) now test the condition first; the `catch` stays as the last resort. A Core compile raised 4,791 first-chance exceptions before and 84 after (46 of them the unresolved transitive references and unloadable forwarded types of the reference set). Implementation, PDB, reference assembly, XML documentation and diagnostics are byte-identical.
 - **The remaining first-chance exceptions of a Core compile are gone** (issue #5157, part of #2189). Inference bounds, method slots, member enumeration over a type still being defined, unresolved transitive references, the control flow graph of an unflattened function-literal body and `IsByRefLike` over an emit array type now test the condition before asking; the `catch` stays as the last resort. A Core compile raises 0 first-chance exceptions, down from 71 on the previous commit. One observable difference: two inference bounds where one is a generic instantiation of a type still being defined are compared by the by-name classifier instead of dropping the candidate. Implementation, PDB, reference assembly, XML documentation and diagnostics of the Core compile are byte-identical.
 

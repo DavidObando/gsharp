@@ -1876,7 +1876,31 @@ internal class MemberLookup {
             if openClr == nil {
                 return TypeSymbol.Error
             }
-            if openClr.IsGenericParameter {
+            if openClr.IsFunctionPointer {
+                return FunctionPointerTypeSymbol.FromClrSignature(
+                    openClr,
+                    (type Type) -> MapOpenClrTypeToSymbolic(
+                        type,
+                        openDefinition,
+                        typeArguments,
+                        openMethodDefinition,
+                        methodTypeArguments
+                    )
+                )
+            }
+            if openClr.IsPointer {
+                return PointerTypeSymbol.Get(
+                    MapOpenClrTypeToSymbolic(
+                        openClr.GetElementType(),
+                        openDefinition,
+                        typeArguments,
+                        openMethodDefinition,
+                        methodTypeArguments
+                    )
+                )
+            }
+            let currentOpenClr = openClr.UnderlyingSystemType
+            if currentOpenClr.IsGenericParameter {
                 // Type-level parameter (declared on a generic type): map through
                 // the receiver/container's symbolic TypeArguments.
                 //
@@ -1898,8 +1922,8 @@ internal class MemberLookup {
                 // `StackUnexpected`. Require `IsGenericTypeParameter` (equivalently
                 // `DeclaringMethod == null`) so a method-level parameter always
                 // falls through to its own (method-scoped) substitution below.
-                let declaring Type? = if openClr.IsGenericTypeParameter {
-                    openClr.DeclaringType
+                let declaring Type? = if currentOpenClr.IsGenericTypeParameter {
+                    currentOpenClr.DeclaringType
                 } else {
                     default(Type?)
                 }
@@ -1916,7 +1940,7 @@ internal class MemberLookup {
                         )
                     }
                     if ClrTypeUtilities.AreSame(declaringDef, openDefinition) {
-                        let pos = openClr.GenericParameterPosition
+                        let pos = currentOpenClr.GenericParameterPosition
                         if uint32(pos) < uint32(typeArguments.Length) {
                             return typeArguments[pos]
                         }
@@ -1928,14 +1952,14 @@ internal class MemberLookup {
                 // declaring type, issue #2375 follow-up above) — so substitute via
                 // the parallel method-type-args slot whenever `DeclaringMethod` is
                 // present, regardless of `DeclaringType`.
-                if openClr.DeclaringMethod != nil && !methodTypeArguments.IsDefaultOrEmpty {
+                if currentOpenClr.DeclaringMethod != nil && !methodTypeArguments.IsDefaultOrEmpty {
                     if openMethodDefinition == nil || object.ReferenceEquals(
-                        openClr.DeclaringMethod,
+                        currentOpenClr.DeclaringMethod,
                         openMethodDefinition
                     ) ||
-                        openClr.DeclaringMethod!!.MetadataToken == openMethodDefinition
+                        currentOpenClr.DeclaringMethod!!.MetadataToken == openMethodDefinition
                         .MetadataToken {
-                        let pos = openClr.GenericParameterPosition
+                        let pos = currentOpenClr.GenericParameterPosition
                         if uint32(pos) < uint32(methodTypeArguments.Length) {
                             let mapped TypeSymbol? = methodTypeArguments[pos]
                             if mapped != nil {
@@ -1944,9 +1968,9 @@ internal class MemberLookup {
                         }
                     }
                 }
-                return TypeSymbol.FromClrType(openClr)
+                return TypeSymbol.FromClrType(currentOpenClr)
             }
-            if openClr.IsArray && openClr.GetArrayRank() > 1 {
+            if currentOpenClr.IsArray && currentOpenClr.GetArrayRank() > 1 {
                 let mappedElement = MapOpenClrTypeToSymbolic(
                     openClr.GetElementType(),
                     openDefinition,
@@ -1954,7 +1978,7 @@ internal class MemberLookup {
                     openMethodDefinition,
                     methodTypeArguments
                 )
-                return RectangularArrayTypeSymbol.Get(mappedElement, openClr.GetArrayRank())
+                return RectangularArrayTypeSymbol.Get(mappedElement, currentOpenClr.GetArrayRank())
             }
             // Issue #794: an open generic type's instance member can return an
             // array of an open parameter (e.g. `List<T>.ToArray()` → `T[]`). The
@@ -1963,7 +1987,7 @@ internal class MemberLookup {
             // sees the symbolic projection rather than the erased `object[]`.
             // Issue #833 extends the recursion to method-level parameters so
             // `Enumerable.ToArray[T](IEnumerable[T]) → T[]` surfaces as `[]T`.
-            if openClr.IsArray && openClr.GetArrayRank() == 1 {
+            if currentOpenClr.IsArray && currentOpenClr.GetArrayRank() == 1 {
                 let openElement = openClr.GetElementType()
                 let mappedElement = MapOpenClrTypeToSymbolic(
                     openElement,
@@ -1979,7 +2003,9 @@ internal class MemberLookup {
                 // symbolic slice here the call's return would collapse to the
                 // erased `object[]` and fail to convert to `[]Foo` (GS0155). Mirror
                 // the generic-type branch below, which already honours #903.
-                if TypeSymbol.RequiresSymbolicProjection(mappedElement) ||
+                if TypeSymbol.RequiresSymbolicProjection(mappedElement) || ClrNullability.ContainsFunctionPointer(
+                    openClr
+                ) ||
                     (
                     openElement?.ContainsGenericParameters == true &&
                         mappedElement
@@ -1988,12 +2014,12 @@ internal class MemberLookup {
                 ) {
                     return SliceTypeSymbol.Get(mappedElement)
                 }
-                return TypeSymbol.FromClrType(openClr)
+                return TypeSymbol.FromClrType(currentOpenClr)
             }
             // Issue #794: a managed pointer return (e.g. `List<T>.this[int]` on
             // `Span<T>`) reports `IsByRef`. Recurse on the pointee and wrap with
             // `ByRefTypeSymbol` to mirror the open-shape's contract.
-            if openClr.IsByRef {
+            if currentOpenClr.IsByRef {
                 let openPointee = openClr.GetElementType()
                 let mappedPointee = MapOpenClrTypeToSymbolic(
                     openPointee,
@@ -2002,7 +2028,9 @@ internal class MemberLookup {
                     openMethodDefinition,
                     methodTypeArguments
                 )
-                if TypeSymbol.RequiresSymbolicProjection(mappedPointee) ||
+                if TypeSymbol.RequiresSymbolicProjection(mappedPointee) || ClrNullability.ContainsFunctionPointer(
+                    openClr
+                ) ||
                     (
                     openPointee?.ContainsGenericParameters == true &&
                         mappedPointee
@@ -2011,7 +2039,7 @@ internal class MemberLookup {
                 ) {
                     return ByRefTypeSymbol.Get(mappedPointee)
                 }
-                return TypeSymbol.FromClrType(openClr)
+                return TypeSymbol.FromClrType(currentOpenClr)
             }
             // Issue #2391: keep substituted Nullable<T> positions in the
             // canonical G# nullable shape. The generic reconstruction below is
@@ -2020,7 +2048,7 @@ internal class MemberLookup {
             // ImportedTypeSymbol for System.Nullable<Color>. The matching return
             // position was then distinct from the source Color? symbol even
             // though both came from the same receiver substitution.
-            if NullableLifting.IsValueTypeNullableClr(openClr) {
+            if NullableLifting.IsValueTypeNullableClr(currentOpenClr) {
                 let openUnderlying = openClr.GetGenericArguments()[0]
                 let mappedUnderlying = MapOpenClrTypeToSymbolic(
                     openUnderlying,
@@ -2031,10 +2059,12 @@ internal class MemberLookup {
                 )
                 return NullableLifting.WrapValueTypeNullable(mappedUnderlying)
             }
-            if openClr.IsGenericType {
+            if currentOpenClr.IsGenericType {
                 let openArgs = openClr.GetGenericArguments()
                 let symbolic = ImmutableArray.CreateBuilder[TypeSymbol](openArgs.Length)
-                var anyParam = openClr.IsGenericTypeDefinition && !typeArguments.IsDefaultOrEmpty
+                let hasFunctionPointers = ClrNullability.ContainsFunctionPointer(openClr)
+                var anyParam = hasFunctionPointers ||
+                    (currentOpenClr.IsGenericTypeDefinition && !typeArguments.IsDefaultOrEmpty)
                 for a in openArgs {
                     let mapped = MapOpenClrTypeToSymbolic(
                         a,
@@ -2072,7 +2102,7 @@ internal class MemberLookup {
                         anyParam = true
                     }
                 }
-                let openDef = openClr.GetGenericTypeDefinition()
+                let openDef = currentOpenClr.GetGenericTypeDefinition()
                 if !anyParam {
                     return TypeSymbol.FromClrType(openClr)
                 }
@@ -2109,8 +2139,11 @@ internal class MemberLookup {
                 // erase to `object`; concrete leaves keep their CLR identity, matching
                 // the selector parameter's erasure and keeping both shapes aligned.
                 let symbolicArgs = symbolic.ToImmutable()
-                let erasedClosed = TryBuildErasedClosedGeneric(openDef, openParams, symbolicArgs, contextObject) ??
-                    openClr
+                let erasedClosed = if hasFunctionPointers && !currentOpenClr.ContainsGenericParameters {
+                    currentOpenClr
+                } else {
+                    TryBuildErasedClosedGeneric(openDef, openParams, symbolicArgs, contextObject) ?? currentOpenClr
+                }
                 return ImportedTypeSymbol.GetConstructed(erasedClosed, openDef, symbolicArgs)
             }
             return TypeSymbol.FromClrType(openClr)
@@ -4999,7 +5032,11 @@ internal class MemberLookup {
                 if openParameters != nil && parameterIndex < openParameters.Length {
                     let openParameter = openParameters[parameterIndex]
                     return NullableFlagsBuilder.MergeDeclarationNullability(
-                        MapOpenClrTypeToSymbolic(openParameter.ParameterType, openDefinition, declaringTypeArguments),
+                        MapOpenClrTypeToSymbolic(
+                            ClrNullability.GetSignatureType(openParameter),
+                            openDefinition,
+                            declaringTypeArguments
+                        ),
                         openParameter.ParameterType,
                         ClrNullability.ReadNullableFlags(openParameter, openIndexer)
                     )
@@ -5040,7 +5077,7 @@ internal class MemberLookup {
                 openDefinition != nil {
                 let openProperty PropertyInfo? = FindOpenIndexerDefinition(openDefinition, closedProperty)
                 if openProperty != nil {
-                    let openPropertyType = openProperty.PropertyType
+                    let openPropertyType = ClrNullability.GetSignatureType(openProperty)
                     let projectionType = if openPropertyType.IsByRef {
                         Invariant.Required(
                             openPropertyType.GetElementType(),
@@ -5210,7 +5247,11 @@ internal class MemberLookup {
                 openDefinition != nil {
                 let openField FieldInfo? = openDefinition.GetField(closedField.Name, AllFields)
                 if openField != nil {
-                    let mapped = MapOpenClrTypeToSymbolic(openField.FieldType, openDefinition, declaringTypeArguments)
+                    let mapped = MapOpenClrTypeToSymbolic(
+                        ClrNullability.GetSignatureType(openField),
+                        openDefinition,
+                        declaringTypeArguments
+                    )
                     let declarationFlags = ClrNullability.ReadNullableFlags(openField, openDefinition)
                     return NullableFlagsBuilder.MergeDeclarationNullability(
                         mapped,
@@ -5242,10 +5283,10 @@ internal class MemberLookup {
             var valueType Type
             switch openMember {
                 case property is PropertyInfo {
-                    valueType = property.PropertyType
+                    valueType = ClrNullability.GetSignatureType(property)
                 }
                 case field is FieldInfo {
-                    valueType = field.FieldType
+                    valueType = ClrNullability.GetSignatureType(field)
                 }
                 default {
                     return TypeSymbol.Error
@@ -5311,7 +5352,7 @@ internal class MemberLookup {
                 }
                 if openEvent?.EventHandlerType != nil {
                     let mapped = MapOpenClrTypeToSymbolic(
-                        openEvent!!.EventHandlerType,
+                        ClrNullability.GetSignatureType(openEvent!!),
                         openDefinition,
                         declaringTypeArguments
                     )
@@ -5330,7 +5371,11 @@ internal class MemberLookup {
         /// @returns The handler type with declaration-site nullability applied.
         @NullabilityFunnel
         internal func GetClrEventHandlerTypeSymbol(closedEvent EventInfo) TypeSymbol {
-            let handlerType = TypeSymbol.FromClrType(closedEvent.EventHandlerType)
+            var signatureType = closedEvent.EventHandlerType
+            if signatureType != nil {
+                signatureType = ClrNullability.GetSignatureType(closedEvent)
+            }
+            let handlerType = TypeSymbol.FromClrType(signatureType)
             if closedEvent.DeclaringType is not{} declaringType {
                 return handlerType
             }
@@ -5354,13 +5399,12 @@ internal class MemberLookup {
                     break
                 }
             }
-            if openEvent?.EventHandlerType is not Type handlerLayout ||
-                closedEvent.EventHandlerType is not Type closedHandler {
+            if openEvent?.EventHandlerType == nil || closedEvent.EventHandlerType == nil {
                 return handlerType
             }
             let projected = ClrNullability.SymbolFromLayoutFlags(
-                closedHandler,
-                handlerLayout,
+                ClrNullability.GetSignatureType(closedEvent),
+                ClrNullability.GetSignatureType(openEvent!!),
                 ClrNullability.ReadNullableFlags(openEvent!!, openDefinition)
             )
             return if projected is NullableTypeSymbol nullableHandler {
@@ -5434,7 +5478,7 @@ internal class MemberLookup {
                     // platform-wrapped by-ref for `GetPinnableReference()`, which
                     // the reader-agreement test found disagreeing with every
                     // sibling reader.
-                    let openReturnType = openMethod.ReturnType
+                    let openReturnType = ClrNullability.GetSignatureType(openMethod.ReturnParameter)
                     let returnLayout = if openReturnType.IsByRef {
                         Invariant.Required(
                             openReturnType.GetElementType(),
@@ -5575,7 +5619,7 @@ internal class MemberLookup {
                     // nullability byte), which is why the flags are merged after
                     // peeling and before re-wrapping.
                     let openParameter = openParameters[parameterIndex]
-                    let openParameterType = openParameter.ParameterType
+                    let openParameterType = ClrNullability.GetSignatureType(openParameter)
                     let parameterFlags = ClrNullability.ReadNullableFlags(openParameter, openMethod)
                     if openParameterType.IsByRef {
                         let pointeeType = Invariant.Required(
@@ -5895,7 +5939,7 @@ internal class MemberLookup {
             typeArguments ImmutableArray[TypeSymbol],
             methodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?])
         ) TypeSymbol {
-            let openReturn = openMethod.ReturnType
+            let openReturn = ClrNullability.GetSignatureType(openMethod.ReturnParameter)
             let layout = if openReturn.IsByRef {
                 Invariant.Required(
                     openReturn.GetElementType(),
@@ -5947,7 +5991,7 @@ internal class MemberLookup {
             openMethod MethodInfo? = nil,
             methodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?])
         ) TypeSymbol {
-            let openType = openParameter.ParameterType
+            let openType = ClrNullability.GetSignatureType(openParameter)
             let layout = if openType.IsByRef {
                 Invariant.Required(
                     openType.GetElementType(),
@@ -6015,7 +6059,7 @@ internal class MemberLookup {
             openMethod MethodInfo? = nil,
             methodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?])
         ) TypeSymbol {
-            let openType = openParameter.ParameterType
+            let openType = ClrNullability.GetSignatureType(openParameter)
             let layout = if openType.IsByRef {
                 Invariant.Required(
                     openType.GetElementType(),
@@ -9502,9 +9546,10 @@ internal class MemberLookup {
             openEvent EventInfo,
             openDefinition Type
         ) TypeSymbol {
-            if openEvent.EventHandlerType is not Type handlerLayout {
+            if openEvent.EventHandlerType == nil {
                 return mapped
             }
+            let handlerLayout = ClrNullability.GetSignatureType(openEvent)
             let declarationFlags = ClrNullability.ReadNullableFlags(openEvent, openDefinition)
             let merged = NullableFlagsBuilder.MergeDeclarationNullability(mapped, handlerLayout, declarationFlags)
             return if merged is NullableTypeSymbol nullableHandler {

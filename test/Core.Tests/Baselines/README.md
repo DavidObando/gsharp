@@ -249,3 +249,19 @@ All eleven final images repeat full-PE-identically, match independent literal
 stdout, and pass unsuppressed ILVerify. The other 155 hash entries, including
 five known-null entries, and 150 per-table entries are unchanged by this
 follow-up. Inventory, digest policy, and acceptance rules are unchanged.
+
+The #5260 function-pointer nullability layout changes only
+`samples/PInvokeFunctionPointer.gs`. The canonical flag builder now includes
+the function-pointer boundary's oblivious byte, so `native_dlsym` has a return
+parameter carrying `NullableAttribute(0)`. Its new attribute TypeRef and
+constructor MemberRef relocate later tokens; the return Param row also moves
+later MethodDef parameter-list starts. These account for all four changed
+companion fingerprints, including the raw method-body bytes.
+
+All seven method signature blobs remain identical, including `native_dlsym`'s
+unmanaged Cdecl function-pointer return. Resolved instructions, locals, stack
+limits, exception regions, P/Invoke contracts and the delegate's Cdecl
+attribute are unchanged. Reviewed old and new images repeat byte-for-byte,
+pass unsuppressed IL verification and print the same `1`, `-1`, `0` lines
+without invoking either native declaration. The other sample entries,
+known-null entries, inventory and hashing policy are unchanged.

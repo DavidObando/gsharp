@@ -5743,32 +5743,7 @@ internal partial class ExpressionBinder {
 
                 }
             }
-            // ADR-0056 §2: a closed ref-returning indexer (e.g. `ReadOnlySpan[int32]`
-            // / `Span[int32]`) reports its element as `int32&`. Surface it as a
-            // `ByRefTypeSymbol` over the pointee so the read auto-dereferences (§1)
-            // and the emitter loads through the managed pointer.
-            let propertyType = closedIndexer.PropertyType
-            if propertyType.IsByRef {
-                // Issue #1701: route the by-ref element through the same
-                // nullability-aware helper as the non-byref path below (instead
-                // of a raw FromClrType) so a hypothetical `ref T?` indexer
-                // element keeps its `[NullableAttribute]` metadata instead of
-                // silently erasing to non-null.
-                return ByRefTypeSymbol.Get(
-                    ClrNullability.GetPropertyElementTypeSymbol(closedIndexer, propertyType.GetElementType()!!)
-                )
-            }
-            // Issue #1627 (surfaced regression fix): honour the indexer's
-            // `[NullableAttribute]`/`[NullableContextAttribute]` metadata (and
-            // the #1354 "unannotated imported reference type defaults to
-            // nullable" rule) the same way every other property/parameter read
-            // does via `ClrNullability`. Without this, a plain
-            // `TypeSymbol.FromClrType(propertyType)` erased a genuinely nullable
-            // indexer element (e.g. `JsonNode?` for `JsonNode.this[string]`) to
-            // its non-nullable form; the classification fix at
-            // `Conversion.Classify` now correctly rejects an incoming `S?` value
-            // against that spuriously non-nullable target instead of silently
-            // dropping the `?` via the #521 leak.
+            // Symbolic receivers were projected above. Preserve the remaining closed signature's array surface and modifiers.
             return ClrNullability.GetPropertyTypeSymbol(closedIndexer)
         }
 
@@ -5779,20 +5754,10 @@ internal partial class ExpressionBinder {
         // `ClrType` is null during binding) typed as `T` instead of erasing to
         // `object`.
         private func ResolveIndexerElementType(targetType TypeSymbol, indexer PropertyInfo) TypeSymbol {
-            if targetType is NullabilityAnnotatedTypeSymbol annot && annot.ClrType is Type {
-                return annot.GetTypeArgumentSymbolForClrType(indexer.PropertyType)
-            }
             if targetType is ImportedTypeSymbol imported {
                 return MapErasedIndexerElementType(imported, indexer)
             }
-            let propertyType = indexer.PropertyType
-            if propertyType.IsByRef {
-                // Issue #1701: same nullability-aware routing as MapErasedIndexerElementType.
-                return ByRefTypeSymbol.Get(
-                    ClrNullability.GetPropertyElementTypeSymbol(indexer, propertyType.GetElementType()!!)
-                )
-            }
-            return ClrNullability.GetPropertyTypeSymbol(indexer)
+            return MemberLookup.GetClrPropertyTypeSymbol(targetType, indexer, projectOnlyWhenSymbolicallyRequired: true)
         }
 
         // ADR-0118 / issue #944: locate a user-declared indexer member on a (possibly

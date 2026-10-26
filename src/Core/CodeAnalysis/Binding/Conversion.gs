@@ -52,7 +52,8 @@ class Conversion {
         Slice,
         FixedArray,
         Rectangular,
-        Map
+        Map,
+        Tuple
     }
 
     /// The three ways a single pair of corresponding type arguments can relate
@@ -3445,7 +3446,7 @@ class Conversion {
             // it. That is a separate defect in the projection path, tracked
             // rather than fixed here; this gate is correct on its own terms and
             // holds whether or not the projection is corrected.
-            if UnwrapPlatformAndNullable(from) is {ClrType: {IsValueType: true}} {
+            if IsValueTypeLikeFrom(UnwrapPlatformAndNullable(from)) {
                 return false
             }
             if !TryGetPlatformArgumentPairs(from, to, out var fromArguments, out var toArguments) {
@@ -4210,6 +4211,10 @@ class Conversion {
                 case map_ is MapTypeSymbol {
                     elements = ImmutableArray.Create(map_.KeyType, map_.ValueType)
                     return CompositeContainerKind.Map
+                }
+                case TupleTypeSymbol {
+                    elements = type.GetElementPositions()
+                    return CompositeContainerKind.Tuple
                 }
                 case annotated is NullabilityAnnotatedTypeSymbol when IsSingleDimensionArray(
                     annotated.ClrType,

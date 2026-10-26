@@ -3578,6 +3578,9 @@ internal partial class ExpressionBinder {
                         expression: "effectiveParameterType.GetElementType()"
                     )
                 }
+                if ClrNullability.ContainsFunctionPointer(effectiveParameterType) || effectiveParameterType.IsPointer {
+                    return false
+                }
                 return IsImplicitConstantNarrowingArgument(
                     boundArguments[argIndex],
                     TypeSymbol.FromClrTypeWithoutNullability(
@@ -3624,15 +3627,14 @@ internal partial class ExpressionBinder {
                     return nil
                 }
                 let sourceType = boundArguments[argIndex].Type
-                var nativeTarget = TypeSymbol.FromClrTypeWithoutNullability(
-                    clrParameterType,
-                    NullabilityFreeReason.IdentityComparison
-                )
+                var nativeTarget = ClrNullability.GetParameterTypeSymbol(parameter)
+                if parameter.ParameterType.IsArray && !ClrTypeUtilities.AreSame(
+                    parameter.ParameterType,
+                    clrParameterType
+                ) {
+                    nativeTarget = nativeTarget.GetElementPositions()[0]
+                }
                 if NativeProtocolOperations.GetProtocol(nativeTarget) != nil {
-                    nativeTarget = ClrNullability.GetParameterTypeSymbol(parameter)
-                    if parameter.ParameterType.IsArray && !clrParameterType.IsArray {
-                        nativeTarget = GetArraySliceElementType(nativeTarget) ?? nativeTarget
-                    }
                     return if nativeConversions?.ClassifyArgumentConversion(sourceType, nativeTarget)
                         .IsImplicit == true {
                         if sourceType == nativeTarget {
@@ -3648,13 +3650,8 @@ internal partial class ExpressionBinder {
                     !DeclaresImplicitOperator(sourceType) {
                     return nil
                 }
-                let targetType TypeSymbol? = TypeSymbol.FromClrTypeWithoutNullability(
-                    clrParameterType,
-                    NullabilityFreeReason.IdentityComparison
-                )
-                if targetType == nil {
-                    return nil
-                }
+                // ADR-0193: applicability compares bare shapes; argument lowering retains declaration nullability.
+                let targetType = nativeTarget.StripToBareShape()
                 let standard = Conversion.ClassifyNonStructural(sourceType, targetType)
                 if standard.IsIdentity {
                     return ClrOverloadResolution.ImplicitConversionKind.Identity
@@ -3707,7 +3704,8 @@ internal partial class ExpressionBinder {
                 if argIndex < 0 ||
                     argIndex >= boundArguments.Count ||
                     clrParameterType == nil ||
-                    clrParameterType.IsByRef {
+                    clrParameterType.IsByRef ||
+                    ClrNullability.ContainsFunctionPointer(clrParameterType) || clrParameterType.IsPointer {
                     return false
                 }
                 let sourceType = boundArguments[argIndex].Type
