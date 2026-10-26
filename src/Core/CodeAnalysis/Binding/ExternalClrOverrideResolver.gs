@@ -212,7 +212,7 @@ internal shared class ExternalClrOverrideResolver {
                 continue
             }
             sawName = true
-            if !TypeMatches(eventInfo.EventHandlerType, handlerType, typeSubstitutions) {
+            if !TypeMatches(ClrNullability.GetSignatureType(eventInfo), handlerType, typeSubstitutions) {
                 continue
             }
             if (add != nil && (!add.IsVirtual || add.IsFinal)) ||

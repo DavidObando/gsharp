@@ -5743,12 +5743,8 @@ internal partial class ExpressionBinder {
 
                 }
             }
-            // Preserve modified signatures and declaration annotations through the receiver-aware reader.
-            return MemberLookup.GetClrPropertyTypeSymbol(
-                target,
-                closedIndexer,
-                projectOnlyWhenSymbolicallyRequired: true
-            )
+            // Symbolic receivers were projected above. Preserve the remaining closed signature's array surface and modifiers.
+            return ClrNullability.GetPropertyTypeSymbol(closedIndexer)
         }
 
         // Issue #1301: resolve the element type of a closed indexer against the

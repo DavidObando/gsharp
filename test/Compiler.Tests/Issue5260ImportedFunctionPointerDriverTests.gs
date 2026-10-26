@@ -19,6 +19,83 @@ import Xunit
 
 class Issue5260ImportedFunctionPointerDriverTests {
     @Theory
+    @InlineData("Virtual")
+    @InlineData("Closed")
+    @InlineData("Symbolic")
+    func ImportedEventOverride_PreservesModifiedHandlerAndVirtualDispatch(kind string) {
+        using let fixture = CSharpFixture(EventOverrideContract, allowUnsafe: true)
+        let baseType = switch kind {
+            case "Virtual": "VirtualBase"
+            case "Closed": "AbstractBase[uint32]"
+            case "Symbolic": "AbstractBase[Payload]"
+            default: throw ArgumentException(kind)
+        }
+        let parameter = switch kind {
+            case "Virtual": ""
+            case "Closed": "*uint32"
+            default: "*Payload"
+        }
+        let source = "import EventOverrides\nimport System\n" +
+            (
+            if kind == "Symbolic" {
+                "struct Payload { var Value uint32 }\n"
+            } else {
+                ""
+            }
+        ) +
+            "unsafe class Derived : " +
+            baseType +
+            ` {
+    var Adds int32
+    var Removes int32
+    override event Changed Action[[]unmanaged[Cdecl](` +
+            parameter +
+            `) -> void] {
+        add { Adds += 1 }
+        remove { Removes += 1 }
+    }
+}
+func Main() {
+    let value = Derived()
+    value.Exercise()
+    System.Console.Write(value.Adds)
+    System.Console.Write("|")
+    System.Console.Write(value.Removes)
+}`
+        let consumer = Compile(fixture.DirectoryPath, "Consumer", source, fixture.AssemblyPath)
+        Assert.True(consumer.Code == 0, consumer.Diagnostics)
+        let first = File.ReadAllBytes(consumer.Path)
+        let repeat = Compile(fixture.DirectoryPath, "Consumer", source, fixture.AssemblyPath)
+        Assert.True(repeat.Code == 0, repeat.Diagnostics)
+        Assert.Equal(first, File.ReadAllBytes(repeat.Path))
+        IlVerifier.Verify(consumer.Path, []string{fixture.AssemblyPath})
+        Assert.Equal(Encoding.UTF8.GetBytes("1|1"), Run(consumer.Path))
+    }
+
+    @Fact
+    func ImportedEventOverride_RejectsADifferentCallingConvention() {
+        using let fixture = CSharpFixture(EventOverrideContract, allowUnsafe: true)
+        let consumer = Compile(fixture.DirectoryPath, "Rejected", `import EventOverrides
+import System
+unsafe class Derived : VirtualBase {
+    override event Changed Action[[]unmanaged[Stdcall]() -> void] {
+        add { }
+        remove { }
+    }
+}`, fixture.AssemblyPath, executable: false)
+        Assert.NotEqual(0, consumer.Code)
+        Assert.False(File.Exists(consumer.Path))
+        let errors = Regex.Matches(consumer.Diagnostics, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`)
+        Assert.True(errors.Count == 1, consumer.Diagnostics)
+        let error = Assert.Single(errors)
+        Assert.Equal("GS0185", error.Groups[5].Value)
+        Assert.Equal("4", error.Groups[1].Value)
+        Assert.Equal("20", error.Groups[2].Value)
+        Assert.Equal("4", error.Groups[3].Value)
+        Assert.Equal("27", error.Groups[4].Value)
+    }
+
+    @Theory
     @InlineData("Get() *nint { return nil }", "Get")
     @InlineData("Set(value *nint) {}", "Set")
     @InlineData("Get() *unmanaged[Stdcall]() -> void { return nil }", "Get")
@@ -605,6 +682,27 @@ unsafe func Main() {
     }
 
     shared {
+        private const EventOverrideContract string = `#nullable enable
+using System;
+namespace EventOverrides {
+    public unsafe class VirtualBase {
+        public virtual event Action<delegate* unmanaged[Cdecl]<void>[]>? Changed {
+            add { } remove { }
+        }
+        public void Exercise() {
+            Changed += null;
+            Changed -= null;
+        }
+    }
+    public unsafe abstract class AbstractBase<T> where T : unmanaged {
+        public abstract event Action<delegate* unmanaged[Cdecl]<T*, void>[]>? Changed;
+        public void Exercise() {
+            Changed += null;
+            Changed -= null;
+        }
+    }
+}`
+
         private const SignatureReviewContract string = `#nullable enable
 using System;
 using System.Threading.Tasks;
