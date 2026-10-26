@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 The entries below are newer than v0.5.212. Published features and migration notes follow in the release section.
 
+- **Duplicate labels report source errors instead of a compiler exception** (issue #5288). A repeated `goto` label now reports located `GS0470` diagnostics without reusing the first declaration's control-flow target. Parser recovery from a reserved `range` identifier also preserves its source diagnostics instead of reporting `GS9998` for a repeated initializer name. `range` remains reserved.
+
 - **Method-wide `using` bindings in async functions no longer cause exponential analysis work** (issue #5258). Repeated definite-assignment probes of nested cleanup regions caused the growth, not async disposal lowering. The per-analysis region cache from #5287 also corrects this case. Regression tests now bound region-analysis work for twenty distinct bindings and check lifetime, single evaluation, LIFO disposal, exception propagation and deterministic output. Cleanup scopes and async suspension behavior are unchanged.
 
 - **Inline constructor callbacks retain their array parameters** (issue #5261). Lambda signature adaptation now rewrites array-assignment targets to the adapter's parameter, as it already rewrites parameter reads. An inline callback passed to an imported constructor no longer fails with `GS9998` for a missing parameter slot. Captured state and operand evaluation order remain unchanged.
