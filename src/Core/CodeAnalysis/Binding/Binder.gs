@@ -1031,7 +1031,7 @@ partial class Binder {
             ) {
                 child.Diagnostics.ReportAllPathsMustReturn(method.Declaration!!.Identifier.Location)
             }
-            AnalyzeFunctionBody(body, lowered, method, child.Diagnostics)
+            AnalyzeFunctionBody(body, lowered, method, child.Diagnostics, child.binderCtx.References)
             Diagnostics.AddRange(child.Diagnostics.ToImmutableArray())
             methodBodies[method] = lowered
         }
@@ -8220,7 +8220,13 @@ partial class Binder {
                                         VerifyConvenienceInitDelegatesFirst(ctor, ctorBody, ctorBinder.Diagnostics)
                                     }
                                     let lowered = Lowerer.Lower(ctorBody, structSym)
-                                    AnalyzeFunctionBody(ctorBody, lowered, ctor.Function, ctorBinder.Diagnostics)
+                                    AnalyzeFunctionBody(
+                                        ctorBody,
+                                        lowered,
+                                        ctor.Function,
+                                        ctorBinder.Diagnostics,
+                                        ctorBinder.binderCtx.References
+                                    )
                                     return BodyBindResult(lowered, ctorBinder.Diagnostics.ToImmutableArray())
                                 }
                             )
@@ -8572,6 +8578,29 @@ partial class Binder {
                 allStructs,
                 globalScope.Interfaces
             )
+            // Inferred callees can introduce awaits in existing async functions and nested literals.
+            let lifetimeDiagnostics = DiagnosticBag()
+            let orderedFunctions = BoundProgramOrder.SortFunctions(functionBodies.ToImmutable())
+            for (function, body) in orderedFunctions {
+                RefStructAsyncLivenessAnalyzer.Analyze(
+                    body.PreEmitAnalysisBody ?? body,
+                    function,
+                    lifetimeDiagnostics,
+                    parentScope.References
+                )
+            }
+            RefStructAsyncLivenessAnalyzer.AnalyzeInitializers(
+                allStructs,
+                globalScope.Interfaces,
+                lifetimeDiagnostics,
+                parentScope.References
+            )
+            let reportedDiagnostics = HashSet[Diagnostic](diagnostics, DiagnosticBag.EquivalenceComparer)
+            for diagnostic in lifetimeDiagnostics {
+                if reportedDiagnostics.Add(diagnostic) {
+                    diagnostics.Add(diagnostic)
+                }
+            }
             // ADR-0174 D10 / GS0562: batching a rendezvous channel is correct and
             // pointless. Reported here, over the bound bodies, because the question
             // is about the receiver's declaration rather than the call.
@@ -8624,6 +8653,7 @@ partial class Binder {
                 globals,
                 allDelegates
             ){
+                OrderedFunctions = orderedFunctions,
                 Imports = globalScope.GetCumulativeImports(),
                 FriendAssemblies = globalScope.FriendAssemblies,
                 AssemblyAttributes = globalScope.AssemblyAttributes,
@@ -9006,7 +9036,13 @@ partial class Binder {
                                 !ControlFlowGraph.AllPathsReturn(lowered) {
                                 binder.Diagnostics.ReportAllPathsMustReturn(declaration.Identifier.Location)
                             }
-                            AnalyzeFunctionBody(body, lowered, function, binder.Diagnostics)
+                            AnalyzeFunctionBody(
+                                body,
+                                lowered,
+                                function,
+                                binder.Diagnostics,
+                                binder.binderCtx.References
+                            )
                             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
                         }
                     )
@@ -9064,7 +9100,13 @@ partial class Binder {
                                 .AllPathsReturn(lowered) {
                                 binder.Diagnostics.ReportAllPathsMustReturn(bodySyntax.OpenBraceToken.Location)
                             }
-                            AnalyzeFunctionBody(body, lowered, accessor, binder.Diagnostics)
+                            AnalyzeFunctionBody(
+                                body,
+                                lowered,
+                                accessor,
+                                binder.Diagnostics,
+                                binder.binderCtx.References
+                            )
                             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
                         }
                     )
@@ -9130,7 +9172,7 @@ partial class Binder {
                                 !ControlFlowGraph.AllPathsReturn(lowered) {
                                 binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation)
                             }
-                            AnalyzeFunctionBody(body, lowered, member, binder.Diagnostics)
+                            AnalyzeFunctionBody(body, lowered, member, binder.Diagnostics, binder.binderCtx.References)
                             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
                         }
                     )
@@ -9187,7 +9229,7 @@ partial class Binder {
                                 .AllPathsReturn(lowered) {
                                 binder.Diagnostics.ReportAllPathsMustReturn(structMethodDeclaration.Identifier.Location)
                             }
-                            AnalyzeFunctionBody(body, lowered, method, binder.Diagnostics)
+                            AnalyzeFunctionBody(body, lowered, method, binder.Diagnostics, binder.binderCtx.References)
                             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
                         }
                     )
@@ -9200,7 +9242,8 @@ partial class Binder {
             bound BoundStatement,
             lowered BoundBlockStatement,
             function FunctionSymbol,
-            diagnostics DiagnosticBag
+            diagnostics DiagnosticBag,
+            references ReferenceResolver
         ) {
             // Issue #4453: the protected-receiver rule reads the bound body, where
             // every receiver still has the static type the source gave it.
@@ -9211,7 +9254,13 @@ partial class Binder {
             if function.IsAsyncOrSuspending {
                 NativeSliceSuspensionAnalyzer(diagnostics).Visit(body)
             }
-            RefStructAsyncLivenessAnalyzer.Analyze(body, function, diagnostics)
+            RefStructAsyncLivenessAnalyzer.Analyze(
+                body,
+                function,
+                diagnostics,
+                references,
+                includeOperandTemporaries: false
+            )
         }
 
         /// ADR-0140 / issue #2131: binds the `shared { init { … } }`
