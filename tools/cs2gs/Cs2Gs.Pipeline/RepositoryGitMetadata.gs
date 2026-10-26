@@ -12,21 +12,23 @@ internal shared class RepositoryGitMetadata {
         let prefix = ProcessRunner.Run("git", []string{"-C", source, "rev-parse", "--show-prefix"}, source)
         if prefix.ExitCode == 0 && prefix.Stdout.Trim().Length == 0 {
             let head = ProcessRunner.Run("git", []string{"-C", source, "rev-parse", "--verify", "HEAD"}, source)
+            Directory.CreateDirectory(destination)
             Run(
                 []string{
                     "clone",
                     "--quiet",
                     "--origin=origin",
-                    "--no-checkout",
+                    "--mirror",
                     "--no-hardlinks",
                     "--dissociate",
                     "--",
                     source,
-                    destination
+                    Path.Combine(destination, ".git")
                 },
                 source
             )
-            Run([]string{"-C", destination, "remote", "remove", "origin"}, destination)
+            Run([]string{"-C", destination, "config", "core.bare", "false"}, destination)
+            Run([]string{"-C", destination, "config", "--remove-section", "remote.origin"}, destination)
             for remote in Run([]string{"-C", source, "remote"}, source).Split(
                 '\n',
                 StringSplitOptions.RemoveEmptyEntries

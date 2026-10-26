@@ -17,11 +17,13 @@ A link to the source Git directory would also link mutable repository state.
 
 ## Decision
 
-Create an independent Git clone before copying or translating repository files.
+Create an independent `--mirror` Git clone in the destination's `.git` directory.
+Set `core.bare` to `false` before copying or translating repository files.
 Use no checkout, no hard links, and no borrowed objects.
-Keep the source commit graph and HEAD.
+Keep the source commit graph, HEAD, branches, tags, and remote-tracking refs.
 Keep source fetch and push URLs instead of the local clone path.
 Use an explicit clone remote name, independent of user configuration.
+Remove only its temporary configuration, not the source refs.
 Do not create a translation commit or change the source version settings.
 The translated files form uncommitted working-tree changes.
 
@@ -48,6 +50,8 @@ This change does not supply missing ancestors.
 
 Driver tests compare original and migrated version output bytes.
 They cover a source repository, a linked working tree, and an archive.
+Git sources include a feature branch and separate local and remote baselines.
+The tests also compare the source and mirror ref output bytes.
 The destination sits inside a different repository.
 
 ## Alternatives considered

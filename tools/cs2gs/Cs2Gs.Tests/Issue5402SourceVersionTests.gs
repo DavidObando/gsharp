@@ -68,11 +68,22 @@ class Issue5402SourceVersionTests : IDisposable {
             Git(source, "remote", "add", sourceRemote, "https://example.invalid/source-version.git")
             Git(source, "config", "remote.publish.pushurl", "https://example.invalid/publish-version.git")
             Commit(source)
+            Git(source, "branch", "version-baseline")
+            Git(source, "update-ref", "refs/remotes/origin/version-baseline", "HEAD")
             File.WriteAllText(Path.Combine(source, "history.txt"), "version height must include this commit")
             Commit(source)
+            Git(source, "checkout", "--quiet", "-b", "feature/source-version")
         }
         let sourceHead = if hasHistory {
-            Git(source, "rev-parse", "HEAD").Trim()
+            Git(
+                source,
+                "rev-parse",
+                if kind == "worktree" {
+                    "HEAD^"
+                } else {
+                    "HEAD"
+                }
+            ).Trim()
         } else {
             string.Empty
         }
@@ -138,6 +149,9 @@ class Issue5402SourceVersionTests : IDisposable {
         Assert.Equal(expected, Encoding.UTF8.GetBytes(migrated))
         if hasHistory {
             Assert.Equal(sourceHead, Git(mirror, "rev-parse", "HEAD").Trim())
+            let sourceRefs = GitRefs(checkout)
+            Assert.NotEmpty(sourceRefs)
+            Assert.Equal(sourceRefs, GitRefs(mirror))
             Assert.Equal(
                 Git(checkout, "remote", "get-url", sourceRemote),
                 Git(mirror, "remote", "get-url", sourceRemote)
@@ -155,6 +169,7 @@ class Issue5402SourceVersionTests : IDisposable {
         RepositoryMirror.Prepare(checkout, secondMirror)
         if hasHistory {
             Assert.Equal(sourceHead, Git(secondMirror, "rev-parse", "HEAD").Trim())
+            Assert.Equal(GitRefs(checkout), GitRefs(secondMirror))
         }
         Assert.Equal(
             File.ReadAllBytes(Path.Combine(checkout, "version.json")),
@@ -235,6 +250,10 @@ class Issue5402SourceVersionTests : IDisposable {
         }
 
         private func Git(directory string, arguments ...string) string -> Run("git", directory, arguments)
+
+        private func GitRefs(directory string)[]byte -> Encoding.UTF8.GetBytes(
+            Git(directory, "for-each-ref", "--sort=refname", "--format=%(refname) %(objectname)")
+        )
 
         private func Run(file string, directory string, arguments ...string) string {
             let result = ProcessRunner.Run(file, arguments, directory, TimeSpan.FromMinutes(5))
