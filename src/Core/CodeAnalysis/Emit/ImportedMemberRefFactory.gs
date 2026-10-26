@@ -836,11 +836,9 @@ internal class ImportedMemberRefFactory {
             "TryNormalizeToSymbolicContainer only reports success with an open definition, and the interface re-targeting above keeps one",
             expression: "openDefinition"
         )
-        let symbolicView = ImportedTypeSymbol.GetConstructed(
-            openContainer.MakeGenericType(this.GetErasedObjectArgs(openContainer)),
-            openContainer,
-            typeArguments
-        )
+        // The encoder uses the open definition and symbolic arguments, not a placeholder CLR construction.
+        // Placeholder arguments can violate constraints such as TDelegate : Delegate.
+        let symbolicView = ImportedTypeSymbol.GetConstructed(openContainer, openContainer, typeArguments)
         let parentBlob = BlobBuilder()
         this.signatures.EncodeTypeSymbol(BlobEncoder(parentBlob).TypeSpecificationSignature(), symbolicView)
         let parent = this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
@@ -885,54 +883,6 @@ internal class ImportedMemberRefFactory {
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob)
         )
         return true
-    }
-
-    // Issue #821: choose the right erased `object` for an open generic
-    // definition's MakeGenericType call. The open def may live in a
-    // MetadataLoadContext (reference-pack assemblies); passing a live
-    // `typeof(object)` to its MakeGenericType raises ArgumentException with
-    // "type was not loaded by the MetadataLoadContext that loaded the
-    // generic type or method." Use `emitCtx.CoreObjectType`, which is the
-    // System.Object resolved through the active reference context, when the
-    // open def lives outside the host runtime.
-    private func GetErasedObjectArgs(openDefinition Type)[]Type {
-        let parameters = openDefinition.GetGenericArguments()
-        let result = [parameters.Length]Type
-        let coreObject = ChooseErasedObjectType(openDefinition)
-        for var i = 0; i < parameters.Length; i++ {
-            // Issue #806: a generic parameter with the `struct`
-            // constraint cannot be closed with `System.Object`
-            // (MakeGenericType throws ArgumentException). Use a
-            // BCL value-type placeholder (`int32`) so the
-            // symbolic-container path can construct the closed
-            // type purely for parent-TypeSpec encoding. The
-            // closed type's identity is irrelevant beyond the
-            // open definition's reflection metadata.
-            let p = parameters[i]
-            if (p.GenericParameterAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 {
-                result[i] = ChooseErasedValueTypeType(openDefinition)
-            } else {
-                result[i] = coreObject
-            }
-        }
-        return result
-    }
-
-    private func ChooseErasedValueTypeType(openDefinition Type) Type {
-        let hostInt = typeof(int32)
-        if openDefinition?.Assembly == hostInt.Assembly {
-            return hostInt
-        }
-        return this.emitCtx.CoreInt32Type ?? hostInt
-    }
-
-    private func ChooseErasedObjectType(openDefinition Type) Type {
-        // Same context as the open def → cheap path.
-        let hostObject = typeof(object)
-        if openDefinition?.Assembly == hostObject.Assembly {
-            return hostObject
-        }
-        return this.emitCtx.CoreObjectType
     }
 
     /// Phase 4 emit parity: get a MemberRef for a CLR instance constructor.
@@ -1333,11 +1283,7 @@ internal class ImportedMemberRefFactory {
             throw InvalidOperationException(
             "Open generic type '${openDefinition.FullName}' has no field '${field.Name}'."
         )
-        let symbolicView = ImportedTypeSymbol.GetConstructed(
-            openDefinition.MakeGenericType(this.GetErasedObjectArgs(openDefinition)),
-            openDefinition,
-            typeArguments
-        )
+        let symbolicView = ImportedTypeSymbol.GetConstructed(openDefinition, openDefinition, typeArguments)
         let parentBlob = BlobBuilder()
         this.signatures.EncodeTypeSymbol(BlobEncoder(parentBlob).TypeSpecificationSignature(), symbolicView)
         let parent = this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))

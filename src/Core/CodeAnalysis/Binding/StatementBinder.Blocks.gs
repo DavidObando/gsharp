@@ -2055,19 +2055,12 @@ internal partial class StatementBinder {
                     Diagnostics.ReportFixedBufferAlreadyFixed(syntax.PinnedSource.Location, bufferAccess.Field.Name)
                 }
                 source = MakeFixedBufferElementReference(bufferAccess)
-            } else if source.Type is SliceTypeSymbol sliceType {
-                // Slice-pin form (`[]T`, the cs2gs mapping of C# `T[]`): the
-                // CLR backing is a single-dimensional array `T[]`, so we pin
-                // the array reference (`T[] pinned`) and derive `&a[0]` via
-                // `ldelema` — exactly as C# does for `fixed (T* p = arr)`.
+            } else if ExpressionBinder.GetArraySliceElementType(source.Type) is {} arrayElement {
+                // This query covers []T, [N]T, and imported CLR arrays.
+                // All use the same pinned-local and ldelema path.
                 pinKind = FixedPinKind.Array
-                elementType = sliceType.ElementType
-                pinnedUnderlying = sliceType
-            } else if source.Type is ArrayTypeSymbol arrayType {
-                // Fixed-size array form (`[N]T`), also CLR-backed by `T[]`.
-                pinKind = FixedPinKind.Array
-                elementType = arrayType.ElementType
-                pinnedUnderlying = arrayType
+                elementType = arrayElement
+                pinnedUnderlying = source.Type
             } else if source.Type == TypeSymbol.String {
                 // String-pin form: pin the `string` reference itself
                 // (`string pinned`) and derive the char-data pointer via

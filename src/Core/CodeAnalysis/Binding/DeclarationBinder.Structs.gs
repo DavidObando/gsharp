@@ -1482,7 +1482,7 @@ internal partial class DeclarationBinder {
                         SuspendingKind.None
                     }
                     methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask || methodSyntax.IsSuspend
-                    methodSymbol.IsUnsafe = methodSyntax.IsUnsafe || syntax.IsUnsafe
+                    methodSymbol.IsUnsafe = binderCtx.InUnsafeContext
                     // Issue #2834: an in-body compound-assignment operator
                     // (`public func operator +=(n int32)`) is an ordinary
                     // instance method plus `specialname`, matching the shape
@@ -2147,7 +2147,11 @@ internal partial class DeclarationBinder {
                             receiverType: structSymbol,
                             isOpen: isVirtual || isOverride,
                             isOverride: isOverride
-                        ){IsAbstract = isExplicitAbstract, OverriddenMethod = overriddenProperty?.GetterSymbol}
+                        ){
+                            IsUnsafe = binderCtx.InUnsafeContext,
+                            IsAbstract = isExplicitAbstract,
+                            OverriddenMethod = overriddenProperty?.GetterSymbol
+                        }
                         // Issue #3879: the by-ref return lives on the ACCESSOR
                         // symbol as well as the property. The getter's body is
                         // bound with this symbol as its enclosing function, so
@@ -2179,7 +2183,11 @@ internal partial class DeclarationBinder {
                             receiverType: structSymbol,
                             isOpen: isVirtual || isOverride,
                             isOverride: isOverride
-                        ){IsAbstract = isExplicitAbstract, OverriddenMethod = overriddenProperty?.SetterSymbol}
+                        ){
+                            IsUnsafe = binderCtx.InUnsafeContext,
+                            IsAbstract = isExplicitAbstract,
+                            OverriddenMethod = overriddenProperty?.SetterSymbol
+                        }
                         setterSymbol.IsInitOnlySetter = isInitOnly
                         setterSymbol.ExternalOverriddenMethod = propertySymbol.ExternalOverriddenSetter
                         propertySymbol.SetterSymbol = setterSymbol
@@ -2368,7 +2376,11 @@ internal partial class DeclarationBinder {
                     receiverType: structSymbol,
                     isOpen: isVirtual || isOverride,
                     isOverride: isOverride
-                ){IsSpecialName = true, ExternalOverriddenMethod = eventSymbol.ExternalOverriddenAddMethod}
+                ){
+                    IsUnsafe = binderCtx.InUnsafeContext,
+                    IsSpecialName = true,
+                    ExternalOverriddenMethod = eventSymbol.ExternalOverriddenAddMethod
+                }
                 eventSymbol.RemoveMethodSymbol = FunctionSymbol(
                     "remove_$eventName",
                     ImmutableArray.Create(handlerParam),
@@ -2379,7 +2391,11 @@ internal partial class DeclarationBinder {
                     receiverType: structSymbol,
                     isOpen: isVirtual || isOverride,
                     isOverride: isOverride
-                ){IsSpecialName = true, ExternalOverriddenMethod = eventSymbol.ExternalOverriddenRemoveMethod}
+                ){
+                    IsUnsafe = binderCtx.InUnsafeContext,
+                    IsSpecialName = true,
+                    ExternalOverriddenMethod = eventSymbol.ExternalOverriddenRemoveMethod
+                }
                 // Issue #257: create raise method symbol if raise accessor is present.
                 if eventSyntax.Accessors.Any((a EventAccessorSyntax) -> a.IsRaise) {
                     var raiseParams = ImmutableArray[ParameterSymbol].Empty
@@ -2400,7 +2416,11 @@ internal partial class DeclarationBinder {
                         receiverType: structSymbol,
                         isOpen: isVirtual || isOverride,
                         isOverride: isOverride
-                    ){IsSpecialName = true, ExternalOverriddenMethod = eventSymbol.ExternalOverriddenRaiseMethod}
+                    ){
+                        IsUnsafe = binderCtx.InUnsafeContext,
+                        IsSpecialName = true,
+                        ExternalOverriddenMethod = eventSymbol.ExternalOverriddenRaiseMethod
+                    }
                 }
                 // Bind annotations
                 if !eventSyntax.Annotations.IsDefaultOrEmpty {
@@ -2427,6 +2447,18 @@ internal partial class DeclarationBinder {
         fieldBinding StructFieldBindingResult,
         memberBinding StructMemberBindingContext
     ) {
+        if syntax.SharedBlock is {} sharedBlock && !sharedBlock.InitBlocks.IsDefaultOrEmpty {
+            structSymbol.StaticInitializerFunction = FunctionSymbol(
+                "<static-initializer>",
+                ImmutableArray[ParameterSymbol].Empty,
+                TypeSymbol.Void
+            ){
+                IsUnsafe = binderCtx.InUnsafeContext,
+                IsStatic = true,
+                StaticOwnerType = structSymbol,
+                IsStaticInitializer = true
+            }
+        }
         BindStructSharedFields(syntax, structSymbol, fieldBinding, memberBinding)
         BindStructSharedMethods(syntax, $package, structSymbol, memberBinding)
         BindStructSharedProperties(syntax, $package, structSymbol, memberBinding)
@@ -2769,7 +2801,7 @@ internal partial class DeclarationBinder {
                         SuspendingKind.None
                     }
                     methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask || methodSyntax.IsSuspend
-                    methodSymbol.IsUnsafe = methodSyntax.IsUnsafe || syntax.IsUnsafe
+                    methodSymbol.IsUnsafe = binderCtx.InUnsafeContext
                     if !methodSyntax.Annotations.IsDefaultOrEmpty {
                         let methodAttributes = BindAttributes(
                             methodSyntax.Annotations,
@@ -3055,6 +3087,7 @@ internal partial class DeclarationBinder {
                             receiverType: default(TypeSymbol?)
                         )
                         getterSymbol.IsStatic = true
+                        getterSymbol.IsUnsafe = binderCtx.InUnsafeContext
                         getterSymbol.StaticOwnerType = structSymbol
                         // Issue #3879: see the instance path — the accessor
                         // symbol carries the ref-kind so the body binder and
@@ -3075,6 +3108,7 @@ internal partial class DeclarationBinder {
                             receiverType: default(TypeSymbol?)
                         )
                         setterSymbol.IsStatic = true
+                        setterSymbol.IsUnsafe = binderCtx.InUnsafeContext
                         setterSymbol.StaticOwnerType = structSymbol
                         propertySymbol.SetterSymbol = setterSymbol
                         propertySymbol.SetterBodySyntax = setAccessor.Body
@@ -3171,7 +3205,7 @@ internal partial class DeclarationBinder {
                     $package,
                     eventAccessibility,
                     receiverType: default(TypeSymbol?)
-                ){IsSpecialName = true}
+                ){IsSpecialName = true, IsUnsafe = binderCtx.InUnsafeContext}
                 eventSymbol.AddMethodSymbol!!.IsStatic = true
                 eventSymbol.AddMethodSymbol!!.StaticOwnerType = structSymbol
                 eventSymbol.RemoveMethodSymbol = FunctionSymbol(
@@ -3182,7 +3216,7 @@ internal partial class DeclarationBinder {
                     $package,
                     eventAccessibility,
                     receiverType: default(TypeSymbol?)
-                ){IsSpecialName = true}
+                ){IsSpecialName = true, IsUnsafe = binderCtx.InUnsafeContext}
                 eventSymbol.RemoveMethodSymbol!!.IsStatic = true
                 eventSymbol.RemoveMethodSymbol!!.StaticOwnerType = structSymbol
                 // Issue #257: create raise method symbol if raise accessor is present.
@@ -3203,7 +3237,7 @@ internal partial class DeclarationBinder {
                         $package,
                         eventAccessibility,
                         receiverType: default(TypeSymbol?)
-                    ){IsSpecialName = true}
+                    ){IsSpecialName = true, IsUnsafe = binderCtx.InUnsafeContext}
                     eventSymbol.RaiseMethodSymbol!!.IsStatic = true
                     eventSymbol.RaiseMethodSymbol!!.StaticOwnerType = structSymbol
                 }
@@ -3292,6 +3326,7 @@ internal partial class DeclarationBinder {
         // members remain out of scope (a field initializer has no `this`), so
         // genuine instance-member references are still rejected below (GS0377).
         let fieldInitScope = $scope
+        let fieldInitUnsafeContext = binderCtx.InUnsafeContext
         let fieldInitConstInitializers = pendingConstInitializers
         let fieldInitSharedConstInitializers = pendingSharedConstInitializers
         let fieldInitStaticInitializers = pendingStaticFieldInitializers
@@ -3303,6 +3338,7 @@ internal partial class DeclarationBinder {
         let fieldInitPackageName = $package.Name
         pendingFieldInitializerBindings.Add(
             () -> {
+                using let unsafeContext = binderCtx.PushUnsafeContext(fieldInitUnsafeContext)
                 let savedFieldInitScope = $scope
                 let savedFieldInitTypeParameters = binderCtx.CurrentTypeParameters
                 let savedFieldInitFunction = getCurrentFunction()

@@ -2906,6 +2906,24 @@ internal class LambdaBinder {
             }
         }
 
+        protected override func RewriteIndexAssignmentExpression(node BoundIndexAssignmentExpression) BoundExpression {
+            if node.TargetExpression != nil {
+                return base.RewriteIndexAssignmentExpression(node)
+            }
+            let rewritten = cast[BoundIndexAssignmentExpression](base.RewriteIndexAssignmentExpression(node))
+            // Array stores read their target from a raw symbol, not a variable-expression child.
+            if rewritten.Target is {} target && this.replacementMap.TryGetValue(target, out var replacement) {
+                return BoundIndexAssignmentExpression.WithExpressionTarget(
+                    rewritten.Syntax,
+                    replacement,
+                    rewritten.Indices,
+                    rewritten.Value,
+                    rewritten.Type
+                )
+            }
+            return rewritten
+        }
+
         // Issue #2861: BoundTreeRewriter treats a function literal as a leaf,
         // so a nested lambda keeps reading — and keeps listing in its
         // CapturedVariables — the ORIGINAL parameter symbol that the adapter
