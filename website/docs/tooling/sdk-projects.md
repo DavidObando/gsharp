@@ -246,6 +246,7 @@ The SDK enables symbol packages by default when `IncludeBuildOutput` is true. Th
 For content-only packages, set `IncludeBuildOutput` to `false`; the SDK then leaves symbol packaging disabled by default.
 An explicit `IncludeSymbols` value takes precedence. Set it to `false` to omit symbols from a library package,
 or to `true` when a content-only package supplies its own symbol files. `SymbolPackageFormat` remains configurable.
+It selects the format only when `IncludeSymbols` is `true`; it does not enable symbol packaging.
 
 ## Multiple packages in one project
 

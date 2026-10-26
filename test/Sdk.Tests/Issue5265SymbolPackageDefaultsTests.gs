@@ -98,7 +98,11 @@ class Issue5265SymbolPackageDefaultsTests : IDisposable {
             throw TimeoutException("SDK property evaluation timed out.")
         }
         Task.WaitAll(stdout, stderr)
-        Assert.True(process.ExitCode == 0, stdout.Result + stderr.Result)
+        let exitCode = process.ExitCode
+        Assert.True(
+            exitCode == 0,
+            "SDK property evaluation exited $exitCode.\nstdout:\n${stdout.Result}\nstderr:\n${stderr.Result}"
+        )
         using let result = JsonDocument.Parse(stdout.Result)
         let properties = result.RootElement.GetProperty("Properties")
         Assert.Equal(expectedBuildOutput, properties.GetProperty("IncludeBuildOutput").GetString())
