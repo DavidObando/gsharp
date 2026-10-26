@@ -19,7 +19,7 @@ class BoundProgram {
     }
     internal prop NativeProtocolOperations ImmutableDictionary[TypeSymbol, NativeProtocolOperations] ->
     NativeProtocols?.Operations ?? ImmutableDictionary[TypeSymbol, NativeProtocolOperations].Empty
-    private let orderedFunctions Lazy[ImmutableArray[KeyValuePair[FunctionSymbol, BoundBlockStatement]]]
+    private var orderedFunctions Lazy[ImmutableArray[KeyValuePair[FunctionSymbol, BoundBlockStatement]]]
 
     /// Initializes a new instance of the (cref:BoundProgram) class.
     /// @param entryPointPackage The entry-point package; its name is exposed via (cref:PackageName) for
@@ -271,9 +271,15 @@ class BoundProgram {
 
     /// Gets the functions in (cref:SymbolSourceOrderComparer) order. The sort runs
     /// once per program and is shared by every pass that walks it.
-    internal prop OrderedFunctions ImmutableArray[
-        KeyValuePair[FunctionSymbol, BoundBlockStatement]
-    ] -> orderedFunctions.Value
+    /// The binder supplies its already sorted post-inference view.
+    internal prop OrderedFunctions ImmutableArray[KeyValuePair[FunctionSymbol, BoundBlockStatement]] {
+        get {
+            return orderedFunctions.Value
+        }
+        init {
+            orderedFunctions = Lazy[ImmutableArray[KeyValuePair[FunctionSymbol, BoundBlockStatement]]](() -> value)
+        }
+    }
 
     /// Gets the synthesized or explicit entry-point function for this program,
     /// or null when the compilation produces a library. The body of the entry
