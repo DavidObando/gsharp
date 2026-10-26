@@ -46,22 +46,28 @@ open class Issue605AwaitUsingLetEmitTests {
         Assert.True(cancellation.IsCancellationRequested)
     }
 
-    @Fact
-    func CompileAndRunBytes_TimeoutReportsBothStreamsAndStopsChild() {
+    @Theory
+    @InlineData("\n")
+    @InlineData("\r\n")
+    func CompileAndRunBytes_TimeoutReportsBothStreamsAndStopsChild(outputNewLine string) {
+        let source = `import System
+import System.Threading
+Console.Write("timeout-stdoutPAYLOAD_NEWLINE")
+Console.Error.Write("timeout-stderrPAYLOAD_NEWLINE")
+Thread.Sleep(Timeout.Infinite)`.Replace("PAYLOAD_NEWLINE", outputNewLine.Replace("\r", "\\r").Replace("\n", "\\n"))
         let exception = Assert.ThrowsAny[XunitException](
             func () object? {
-                return CompileAndRunBytes(`import System
-import System.Threading
-Console.Write("timeout-stdout")
-Console.Error.Write("timeout-stderr")
-Thread.Sleep(Timeout.Infinite)`, timeoutMilliseconds: 2_000)
+                return CompileAndRunBytes(source, timeoutMilliseconds: 2_000)
             }
         )
         Assert.Contains("timed out after 2000 ms", exception.Message, StringComparison.Ordinal)
         Assert.Contains("kill requested; exited=True", exception.Message, StringComparison.Ordinal)
         Assert.Contains("stdout capture=RanToCompletion; stderr capture=RanToCompletion", exception.Message)
-        Assert.Contains("stdout:${Environment.NewLine}timeout-stdout", exception.Message, StringComparison.Ordinal)
-        Assert.Contains("stderr:${Environment.NewLine}timeout-stderr", exception.Message, StringComparison.Ordinal)
+        Assert.EndsWith(
+            "\nstdout:\ntimeout-stdout$outputNewLine\nstderr:\ntimeout-stderr$outputNewLine",
+            exception.Message,
+            StringComparison.Ordinal
+        )
         let pid = int32.Parse(exception.Message.Split("pid=", StringSplitOptions.None)[1].Split(';')[0])
         try {
             using let child = Process.GetProcessById(pid)
