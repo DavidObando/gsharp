@@ -16,6 +16,38 @@ import Xunit
 
 /// Binder and bound-tree coverage for issue #3351.
 class Issue3351IsPatternBindingTests {
+    @Theory
+    @InlineData("Missing.TextInput{}")
+    @InlineData("Missing.TextInput()")
+    func InvalidQualifiedConstruction_DoesNotResolveByFinalName(construction string) {
+        let source = `package Repro
+class TextInput { }
+let item = ` + construction
+        let diagnostic = Assert.Single(Bind(source))
+        Assert.Equal("GS0157", diagnostic.Id)
+        Assert.Equal("Missing", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.Equal(source.IndexOf("Missing", StringComparison.Ordinal), diagnostic.Location.Span.Start)
+        Assert.Equal(7, diagnostic.Location.Span.Length)
+    }
+
+    @Theory
+    @InlineData("let matched = value is Role.TextInput text", "Role")
+    @InlineData("let matched = value is Role.TextInput {}", "Role")
+    @InlineData("let matched = value is Missing.TextInput text", "Missing")
+    @InlineData("let item Missing.TextInput = TextInput{}", "Missing")
+    func InvalidQualifiedType_DoesNotResolveByFinalName(statement string, qualifier string) {
+        let source = `package Repro
+enum Role { TextInput, Other }
+class TextInput { }
+let value object = TextInput{}
+` + statement
+        let diagnostic = Assert.Single(Bind(source))
+        Assert.Equal("GS0113", diagnostic.Id)
+        Assert.Equal(qualifier, diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.Equal(source.LastIndexOf(qualifier, StringComparison.Ordinal), diagnostic.Location.Span.Start)
+        Assert.Equal(qualifier.Length, diagnostic.Location.Span.Length)
+    }
+
     @Fact
     func IsExpression_BindsThroughPatternBinderWithBooleanResult() {
         const Source = "let value object = \"hello\"\nlet matched = value is string { Length: > 0 } and not nil"

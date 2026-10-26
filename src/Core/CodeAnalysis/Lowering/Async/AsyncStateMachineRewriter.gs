@@ -19,6 +19,13 @@ import System.Linq
 /// relax (cref:AsyncEmitPrecheck) yet; later slices consume the returned
 /// plans to build the kickoff stub and `MoveNext` body.
 shared class AsyncStateMachineRewriter {
+    // Liveness diagnostics and emission must see the same explicit and implicit suspension points.
+    internal func PrepareBody(body BoundBlockStatement, references ReferenceResolver?) BoundBlockStatement {
+        let channelAwaited = ChannelOperationRewriter.Rewrite(body, references)
+        let exhRewritten = AsyncExceptionHandlerRewriter.Rewrite(channelAwaited)
+        return SpillSequenceSpiller.Rewrite(exhRewritten)
+    }
+
     private class AwaitStateCollector : BoundTreeWalker {
         private let allocator ResumableStateAllocator = ResumableStateAllocator()
         private let states ImmutableDictionary[BoundAwaitExpression, int32].Builder = ImmutableDictionary.CreateBuilder[
@@ -75,12 +82,7 @@ shared class AsyncStateMachineRewriter {
                 continue
             }
             let ordinal = AllocateTypeOrdinal(program, function, ordinalsByScopeAndName)
-            // ADR-0174 D4: channel operations park the state machine, not a thread.
-            let channelAwaited = ChannelOperationRewriter.Rewrite(pair.Value, references)
-            // Lift awaits out of catch/finally handlers before spilling.
-            let exhRewritten = AsyncExceptionHandlerRewriter.Rewrite(channelAwaited)
-            // Run the spill spiller to lift sub-expression awaits to statement top-level.
-            let spilledBody = SpillSequenceSpiller.Rewrite(exhRewritten)
+            let spilledBody = PrepareBody(pair.Value, references)
             // Eliminate ref locals (byref pointers) that cannot be hoisted into
             // state-machine fields. Inlines operand expressions at each use site.
             let refHoisted = RefInitializationHoister.Rewrite(spilledBody)
@@ -135,9 +137,7 @@ shared class AsyncStateMachineRewriter {
         let key = (packageName ?? string.Empty) + ":" + function.Name
         ordinalsByScopeAndName.TryGetValue(key, out var ordinal)
         ordinalsByScopeAndName[key] = ordinal + 1
-        let channelAwaited = ChannelOperationRewriter.Rewrite(body, references)
-        let exhRewritten = AsyncExceptionHandlerRewriter.Rewrite(channelAwaited)
-        let spilledBody = SpillSequenceSpiller.Rewrite(exhRewritten)
+        let spilledBody = PrepareBody(body, references)
         let refHoisted = RefInitializationHoister.Rewrite(spilledBody)
         let stateMachine SynthesizedStateMachineType? = AsyncStateMachineTypeBuilder.Build(
             function,

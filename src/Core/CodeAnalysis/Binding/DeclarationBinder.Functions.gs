@@ -283,7 +283,7 @@ internal partial class DeclarationBinder {
                     receiverType: default(TypeSymbol?)
                 )
                 function.TypeParameters = typeParameters
-                function.IsUnsafe = syntax.IsUnsafe
+                function.IsUnsafe = binderCtx.InUnsafeContext
                 function.ReturnRefKind = returnRefKind
                 function.IsStatic = true
                 function.StaticOwnerType = methodReceiverStruct
@@ -333,7 +333,7 @@ internal partial class DeclarationBinder {
                 SuspendingKind.None
             }
             function.AsyncReturnsValueTask = typeIsValueTask || syntax.IsSuspend
-            function.IsUnsafe = syntax.IsUnsafe
+            function.IsUnsafe = binderCtx.InUnsafeContext
             function.ReturnRefKind = returnRefKind
             // Issue #2834: the receiver-clause compound-assignment operator
             // stays an ordinary instance method (see above) but must still
@@ -387,7 +387,7 @@ internal partial class DeclarationBinder {
             SuspendingKind.None
         }
         function.AsyncReturnsValueTask = typeIsValueTask || syntax.IsSuspend
-        function.IsUnsafe = syntax.IsUnsafe
+        function.IsUnsafe = binderCtx.InUnsafeContext
         function.ReturnRefKind = returnRefKind
         Binder.AttachDocumentation(function, syntax)
         function.SetAttributes(functionAttributes)
@@ -1040,6 +1040,7 @@ internal partial class DeclarationBinder {
         functionAttributes ImmutableArray[BoundAttribute],
         declaringType StructSymbol? = nil
     ) {
+        using let unsafeContext = binderCtx.PushUnsafeContext(syntax.IsUnsafe)
         let isExplicit = syntax.ConversionIsExplicit
         let opName = if isExplicit {
             "op_Explicit"
@@ -1106,6 +1107,7 @@ internal partial class DeclarationBinder {
             accessibility,
             receiverType: default(TypeSymbol?)
         )
+        function.IsUnsafe = binderCtx.InUnsafeContext
         function.IsStatic = true
         function.StaticOwnerType = owner
         function.IsSpecialName = true

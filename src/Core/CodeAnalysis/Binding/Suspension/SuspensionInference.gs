@@ -157,10 +157,6 @@ internal shared class SuspensionInference {
                 SyntaxAnchoringWalker.Anchor(rewritten, function.Declaration)
                 bodies[function] = rewritten
             }
-            if newlySuspending.Contains(function) {
-                // The async-only analyses ran while this body was still plain.
-                RefStructAsyncLivenessAnalyzer.Analyze(rewritten.PreEmitAnalysisBody ?? rewritten, function, bag)
-            }
         }
         for type in structs {
             if type.BaseConstructorInitializer is {} primaryBaseInitializer {
