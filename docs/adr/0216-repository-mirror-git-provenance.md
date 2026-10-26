@@ -24,6 +24,8 @@ Keep the source commit graph, HEAD, branches, tags, and remote-tracking refs.
 Keep source fetch and push URLs instead of the local clone path.
 Use an explicit clone remote name, independent of user configuration.
 Remove only its temporary configuration, not the source refs.
+When HEAD exists, read its tree into the index without updating working files.
+Leave the index empty for an unborn source repository.
 Do not create a translation commit or change the source version settings.
 The translated files form uncommitted working-tree changes.
 
@@ -52,6 +54,8 @@ Driver tests compare original and migrated version output bytes.
 They cover a source repository, a linked working tree, and an archive.
 Git sources include a feature branch and separate local and remote baselines.
 The tests also compare the source and mirror ref output bytes.
+They check the HEAD file inventory, an empty staged diff, and unchanged working bytes.
+An unborn source case checks that index setup does not require a commit.
 The destination sits inside a different repository.
 
 ## Alternatives considered

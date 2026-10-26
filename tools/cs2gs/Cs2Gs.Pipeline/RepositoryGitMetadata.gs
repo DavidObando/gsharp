@@ -57,6 +57,7 @@ internal shared class RepositoryGitMetadata {
                 if !string.Equals(head.Stdout.Trim(), clonedHead.Trim(), StringComparison.Ordinal) {
                     throw InvalidOperationException("The source Git commit changed while the mirror was created.")
                 }
+                Run([]string{"-C", destination, "read-tree", "HEAD"}, destination)
             }
             return
         }

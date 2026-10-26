@@ -39,6 +39,7 @@ class Issue5402SourceVersionTests : IDisposable {
     @InlineData("repository")
     @InlineData("worktree")
     @InlineData("archive")
+    @InlineData("unborn")
     async func Migrate_PreservesVersionOutputBytesInsideAnotherRepository(kind string) {
         let source = Path.Combine(this.root, "source")
         Directory.CreateDirectory(source)
@@ -57,16 +58,20 @@ class Issue5402SourceVersionTests : IDisposable {
             "System.Console.WriteLine(ThisAssembly.AssemblyInformationalVersion);"
         )
         File.WriteAllText(Path.Combine(source, "version.json"), "{\"version\":\"2.3\"}")
-        let hasHistory = kind != "archive"
+        File.WriteAllBytes(Path.Combine(source, "payload.bin"), []byte{0, 255, 13, 10})
+        let hasRepository = kind != "archive"
+        let hasHistory = hasRepository && kind != "unborn"
         let sourceRemote = if kind == "repository" {
             "origin"
         } else {
             "upstream"
         }
-        if hasHistory {
+        if hasRepository {
             Git(source, "init", "--quiet")
             Git(source, "remote", "add", sourceRemote, "https://example.invalid/source-version.git")
             Git(source, "config", "remote.publish.pushurl", "https://example.invalid/publish-version.git")
+        }
+        if hasHistory {
             Commit(source)
             Git(source, "branch", "version-baseline")
             Git(source, "update-ref", "refs/remotes/origin/version-baseline", "HEAD")
@@ -96,6 +101,8 @@ class Issue5402SourceVersionTests : IDisposable {
             Git(source, "worktree", "add", "--quiet", "--detach", checkout, sourceHead)
             Assert.True(File.Exists(Path.Combine(checkout, ".git")))
         }
+        let payload = []byte{255, 0, 10, 13, 42}
+        File.WriteAllBytes(Path.Combine(checkout, "payload.bin"), payload)
         Run("dotnet", checkout, "build", "VersionProbe.csproj", "-c", "Release", "-graph")
         let original = Run(
             "dotnet",
@@ -147,8 +154,15 @@ class Issue5402SourceVersionTests : IDisposable {
         let expected = Encoding.UTF8.GetBytes(original)
         Assert.NotEmpty(expected)
         Assert.Equal(expected, Encoding.UTF8.GetBytes(migrated))
+        Assert.False(File.Exists(Path.Combine(mirror, "Program.cs")))
+        Assert.NotEmpty(File.ReadAllBytes(Path.Combine(mirror, "Program.gs")))
+        Assert.Equal(payload, File.ReadAllBytes(Path.Combine(mirror, "payload.bin")))
+        Assert.Empty(Git(mirror, "diff", "--cached", "--name-only"))
         if hasHistory {
             Assert.Equal(sourceHead, Git(mirror, "rev-parse", "HEAD").Trim())
+            let tracked = Encoding.UTF8.GetBytes(Git(checkout, "ls-tree", "-r", "--name-only", "-z", "HEAD"))
+            Assert.NotEmpty(tracked)
+            Assert.Equal(tracked, Encoding.UTF8.GetBytes(Git(mirror, "ls-files", "-z")))
             let sourceRefs = GitRefs(checkout)
             Assert.NotEmpty(sourceRefs)
             Assert.Equal(sourceRefs, GitRefs(mirror))
@@ -164,6 +178,9 @@ class Issue5402SourceVersionTests : IDisposable {
                 1,
                 ProcessRunner.Run("git", []string{"config", "--get-all", "remote.publish.url"}, mirror).ExitCode
             )
+        } else {
+            Assert.Empty(Git(mirror, "ls-files", "-z"))
+            Assert.NotEqual(0, ProcessRunner.Run("git", []string{"rev-parse", "--verify", "HEAD"}, mirror).ExitCode)
         }
         let secondMirror = Path.Combine(host, "second-mirror")
         RepositoryMirror.Prepare(checkout, secondMirror)
@@ -175,6 +192,8 @@ class Issue5402SourceVersionTests : IDisposable {
             File.ReadAllBytes(Path.Combine(checkout, "version.json")),
             File.ReadAllBytes(Path.Combine(secondMirror, "version.json"))
         )
+        Assert.Equal(payload, File.ReadAllBytes(Path.Combine(secondMirror, "payload.bin")))
+        Assert.False(File.Exists(Path.Combine(secondMirror, "Program.cs")))
     }
 
     @Fact
