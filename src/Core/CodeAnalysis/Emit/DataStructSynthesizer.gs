@@ -1072,7 +1072,7 @@ internal class DataStructSynthesizer {
 
     /// Issue #410 / ADR-0029: emits
     /// `public bool Equals(Name other)` that compares fields in source
-    /// declaration order via `EqualityComparer<T>.Default.Equals`,
+    /// declaration order via `EqualityComparer[T].Default.Equals`,
     /// short-circuiting on the first inequality without boxing field operands.
     /// @returns The MethodDef handle of the emitted method, so callers can
     /// reference it from other synthesized members.
