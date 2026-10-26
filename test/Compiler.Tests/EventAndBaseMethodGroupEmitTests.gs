@@ -5,15 +5,23 @@
 package GSharp.Compiler.Tests
 
 import GSharp.Compiler
+import GSharp.Tests
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
+import System.Collections.Concurrent
 import System.Collections.Generic
+import System.ComponentModel
 import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Reflection
+import System.Reflection.Emit
 import System.Text
+import System.Threading
+import System.Threading.Tasks
 import Xunit
+import Xunit.Sdk
 
 /// Three gaps the review of PR #4380 (base-call forwarders) found, each
 /// compiled with gsc, verified with ILVerify and run, and where the shape has
@@ -29,6 +37,502 @@ import Xunit
 /// - issue #4394: subscribing to an event the subscriber cannot reach compiled; the reachable cells of
 /// the access matrix must still run.
 open class EventAndBaseMethodGroupEmitTests {
+    @Fact
+    func Issue5270_ExactOverrideForwardingRepro_UsesNonvirtualBaseAccessors() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        const source = `import System
+
+open class Parent {
+    open event Changed Action?
+}
+
+class Child : Parent {
+    override event Changed Action? {
+        add { base.Changed += value }
+        remove { base.Changed -= value }
+    }
+}`
+        let dll = fixture.Compile(source, "base-event-repro", false, "/deterministic+", "/debug:none")
+        let first = File.ReadAllBytes(dll)
+        fixture.Compile(source, "base-event-repro", false, "/deterministic+", "/debug:none")
+        Assert.Equal(first, File.ReadAllBytes(dll))
+        IlVerifier.Verify(dll)
+        AssertBaseEventCalls(dll)
+    }
+
+    @Fact
+    func Issue5270_AbstractBaseEvent_RejectsCallsWithLocatedDiagnosticsAndNoImage() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`using System;
+namespace Contracts;
+public abstract class Parent {
+    public abstract event Action? Changed;
+}`, "AbstractEventContract")
+        let (code, diagnostics) = fixture.TryCompile(`import Contracts
+import System
+class Child : Parent {
+    override event Changed Action? {
+        add { base.Changed += value }
+        remove { base.Changed -= value }
+    }
+}`, "abstract-base-event", false, "/reference:" + library)
+        Assert.NotEqual(0, code)
+        Assert.Contains("abstract-base-event.gs(5,20,5,27): error GS0413:", diagnostics, StringComparison.Ordinal)
+        Assert.Contains("abstract-base-event.gs(6,23,6,30): error GS0413:", diagnostics, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "abstract-base-event.dll")))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5270_BaseEvent_PreservesDispatchAndEvaluationOrder(imported bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        const sourceBase = `open class Parent {
+    private event handlers Action[string]?
+    open event Changed Action[string]? {
+        add {
+            Console.Write("A")
+            handlers += value
+        }
+        remove {
+            Console.Write("R")
+            handlers -= value
+        }
+    }
+    func Fire(value string) { handlers?.Invoke(value) }
+}
+`
+        let library = if imported {
+            fixture.CompileCSharp(`using System;
+namespace Contracts;
+public class Parent<T> {
+    private event Action<T>? handlers;
+    public virtual event Action<T>? Changed {
+        add { Console.Write("A"); handlers += value; }
+        remove { Console.Write("R"); handlers -= value; }
+    }
+    public void Fire(T value) { handlers?.Invoke(value); }
+}`, "BaseEventContract")
+        } else {
+            string.Empty
+        }
+        let parentType = if imported {
+            "Parent[string]"
+        } else {
+            "Parent"
+        }
+        let source = "import System\n" +
+            (
+            if imported {
+                "import Contracts\n"
+            } else {
+                sourceBase
+            }
+        ) +
+            `
+class Child : PARENT {
+    override event Changed Action[string]? {
+        add {
+            Console.Write("a")
+            base.Changed += value
+        }
+        remove {
+            Console.Write("r")
+            base.Changed -= value
+        }
+    }
+    func Direct(h Action[string]?) {
+        base.Changed += h
+        base.Changed -= h
+    }
+}
+func Pick(c Child) Child {
+    Console.Write("x")
+    return c
+}
+func Handler() Action[string] {
+    Console.Write("h")
+    return func(text string) { Console.Write(text) }
+}
+func Main() {
+    let c = Child()
+    let p PARENT = c
+    let h = Handler()
+    Pick(c).Changed += h
+    p.Changed += nil
+    c.Fire("F")
+    Pick(c).Changed -= h
+    c.Fire("F")
+    c.Direct(nil)
+}`
+        let program = source.Replace("PARENT", parentType, StringComparison.Ordinal)
+        let references = if imported {
+            []string{library}
+        } else {
+            Array.Empty[string]()
+        }
+        let options = []string{"/deterministic+", "/debug:none"}.Concat(
+            references.Select((path string) -> "/reference:" + path)
+        )
+            .ToArray()
+        let dll = fixture.Compile(program, "base-event-runtime", true, options)
+        let image = File.ReadAllBytes(dll)
+        fixture.Compile(program, "base-event-runtime", true, options)
+        Assert.Equal(image, File.ReadAllBytes(dll))
+        IlVerifier.Verify(dll, references)
+        AssertBaseEventCalls(dll)
+        Assert.Equal(Encoding.UTF8.GetBytes("hxaAaAFxrRAR"), RunBaseEventBytes(dll))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5270_LiftedBaseEvents_VerifyAndPreserveDispatch(imported bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        const sourceBase = `open class Parent {
+    private event handlers Action[Item]?
+    open event Changed Action[Item]? {
+        add {
+            Console.Write("A")
+            handlers += value
+        }
+        remove {
+            Console.Write("R")
+            handlers -= value
+        }
+    }
+    func Fire(value Item) { handlers?.Invoke(value) }
+}
+`
+        let library = if imported {
+            fixture.CompileCSharp(`using System;
+namespace LiftedContracts;
+public class Parent<T> {
+    private event Action<T>? handlers;
+    public virtual event Action<T>? Changed {
+        add { Console.Write("A"); handlers += value; }
+        remove { Console.Write("R"); handlers -= value; }
+    }
+    public void Fire(T value) { handlers?.Invoke(value); }
+}`, "LiftedBaseEventContract")
+        } else {
+            string.Empty
+        }
+        let source = "import System\nimport System.Threading.Tasks\n" +
+            (
+            if imported {
+                "import LiftedContracts\n"
+            } else {
+                sourceBase
+            }
+        ) +
+            `
+class Item {}
+class Child : PARENT {
+    override event Changed Action[Item]? {
+        add {
+            Console.Write("a")
+            base.Changed += value
+        }
+        remove {
+            Console.Write("r")
+            base.Changed -= value
+        }
+    }
+    func Once(h Action[Item]) Action[Item] {
+        Console.Write("h")
+        return h
+    }
+    func Closures(h Action[Item]) {
+        let add = func() { base.Changed += Once(h) }
+        let remove = func() { base.Changed -= Once(h) }
+        add()
+        Fire(Item())
+        remove()
+        Fire(Item())
+    }
+    async func Async(h Action[Item]) {
+        await Task.Yield()
+        base.Changed += Once(h)
+        Fire(Item())
+        await Task.Yield()
+        base.Changed -= Once(h)
+        Fire(Item())
+    }
+    func Iter(h Action[Item]) sequence[int32] {
+        base.Changed += Once(h)
+        Fire(Item())
+        yield 1
+        base.Changed -= Once(h)
+        Fire(Item())
+        yield 2
+    }
+}
+func Main() {
+    let c = Child()
+    let h Action[Item] = func(value Item) { Console.Write("F") }
+    c.Closures(h)
+    c.Async(h).GetAwaiter().GetResult()
+    for n in c.Iter(h) { Console.Write(n) }
+    c.Changed += h
+    c.Fire(Item())
+    c.Changed -= h
+    c.Fire(Item())
+}`
+        let program = source.Replace(
+            "PARENT",
+            if imported {
+                "Parent[Item]"
+            } else {
+                "Parent"
+            },
+            StringComparison.Ordinal
+        )
+        let references = if imported {
+            []string{library}
+        } else {
+            Array.Empty[string]()
+        }
+        let options = []string{"/deterministic+", "/debug:none"}.Concat(
+            references.Select((path string) -> "/reference:" + path)
+        )
+            .ToArray()
+        let dll = fixture.Compile(program, "lifted-base-events", true, options)
+        let image = File.ReadAllBytes(dll)
+        fixture.Compile(program, "lifted-base-events", true, options)
+        Assert.Equal(image, File.ReadAllBytes(dll))
+        IlVerifier.Verify(dll, references)
+        let assembly = EmittedFixture.Load(dll)
+        let child = assembly.GetTypes().Single((type Type) -> type.Name == "Child")
+        let item = assembly.GetTypes().Single((type Type) -> type.Name == "Item")
+        let forwarders = child
+            .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+            .Where((method MethodInfo) -> method.Name.StartsWith("<>n__", StringComparison.Ordinal))
+            .ToArray()
+        Assert.Equal(6, forwarders.Length)
+        Assert.NotEmpty(forwarders)
+        Assert.All(
+            forwarders,
+            func (method MethodInfo) {
+                Assert.True(method.IsPrivate)
+                Assert.False(method.IsVirtual)
+                let parameter = Assert.Single(method.GetParameters())
+                Assert.Equal(item, Assert.Single(parameter.ParameterType.GetGenericArguments()))
+                let call = Assert.Single(
+                    IlInstructionReader
+                        .Read(method.GetMethodBody()!!.GetILAsByteArray()!!)
+                        .Where(
+                        (instruction IlInstruction) -> instruction.OpCode == OpCodes.Call ||
+                            instruction.OpCode == OpCodes.Callvirt
+                    )
+                        .Where(
+                        (instruction IlInstruction) -> method.Module.ResolveMethod(
+                            instruction.MetadataToken!!
+                        )!!.Name is "add_Changed" or
+                            "remove_Changed"
+                    )
+                )
+                Assert.Equal(OpCodes.Call, call.OpCode)
+                Assert.Equal(child.BaseType, method.Module.ResolveMethod(call.MetadataToken!!)!!.DeclaringType)
+            }
+        )
+        Assert.Equal(Encoding.UTF8.GetBytes("hAFhRhAFhRhAF1hR2aAFrR"), RunBaseEventBytes(dll))
+    }
+
+    private func AssertBaseEventCalls(dll string) {
+        let assembly = EmittedFixture.Load(dll)
+        let child = assembly.GetTypes().Single((type Type) -> type.Name == "Child")
+        for name in[]string{"add_Changed", "remove_Changed"} {
+            let method = child.GetMethod(name)!!
+            let calls = IlInstructionReader
+                .Read(method.GetMethodBody()!!.GetILAsByteArray()!!)
+                .Where(
+                (instruction IlInstruction) -> instruction.OpCode == OpCodes.Call ||
+                    instruction.OpCode == OpCodes.Callvirt
+            )
+                .Where(
+                (instruction IlInstruction) -> method.Module.ResolveMethod(instruction.MetadataToken!!)!!.Name == name
+            )
+                .ToArray()
+            let call = Assert.Single(calls)
+            Assert.Equal(OpCodes.Call, call.OpCode)
+            let target = method.Module.ResolveMethod(call.MetadataToken!!)!!
+            Assert.Equal(child.BaseType, target.DeclaringType)
+        }
+    }
+
+    private func RunBaseEventBytes(dll string)[]uint8 {
+        let start = ProcessStartInfo("dotnet"){
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(dll)!!
+        }
+        start.ArgumentList.Add(dll)
+        using let process = Process.Start(start) ?? throw InvalidOperationException("could not start dotnet")
+        return ReadBaseEventBytes(process, 30_000, out _, out _)
+    }
+
+    private func ReadBaseEventBytes(
+        process Process,
+        timeoutMilliseconds int32,
+        out stdout Task,
+        out stderr Task
+    )[]uint8 {
+        let output = ConcurrentQueue[uint8]()
+        let error = ConcurrentQueue[uint8]()
+        let failures = List[string]()
+        using let cancellation = CancellationTokenSource()
+        stdout = PumpBaseEventBytes(process.StandardOutput.BaseStream, output, cancellation.Token)
+        stderr = PumpBaseEventBytes(process.StandardError.BaseStream, error, cancellation.Token)
+        let drains = Task.WhenAll(stdout, stderr)
+        for task in[]Task{stdout, stderr, drains} {
+            let _ = task.ContinueWith((completed Task) -> completed.Exception, TaskContinuationOptions.OnlyOnFaulted)
+        }
+        try {
+            if !process.WaitForExit(timeoutMilliseconds) {
+                failures.Add("base event program timed out")
+            } else if process.ExitCode != 0 {
+                failures.Add("base event program exited with code ${process.ExitCode}")
+            }
+        } catch (ex Exception) when ex is InvalidOperationException || ex is Win32Exception {
+            failures.Add("process wait: $ex")
+        } finally {
+            try {
+                if !process.HasExited {
+                    process.Kill(entireProcessTree: true)
+                }
+            } catch (ex Exception) when ex is InvalidOperationException || ex is Win32Exception {
+                failures.Add("process termination: $ex")
+            }
+            try {
+                if !process.WaitForExit(5_000) {
+                    failures.Add("child did not exit after termination")
+                }
+            } catch (ex Exception) when ex is InvalidOperationException || ex is Win32Exception {
+                failures.Add("termination wait: $ex")
+            }
+            if !WaitBaseEventPumps(drains, failures) {
+                failures.Add("output pipes did not close")
+                try {
+                    cancellation.Cancel()
+                } catch (ex AggregateException) {
+                    failures.Add("pipe cancellation: ${ex.Flatten()}")
+                }
+                for stream in[]Stream{process.StandardOutput.BaseStream, process.StandardError.BaseStream} {
+                    try {
+                        stream.Dispose()
+                    } catch (ex Exception) when ex is IOException || ex is ObjectDisposedException {
+                        failures.Add("pipe close: $ex")
+                    }
+                }
+                if !WaitBaseEventPumps(drains, failures) {
+                    failures.Add("output tasks remain pending after cancellation and pipe closure")
+                }
+            }
+        }
+        if failures.Count > 0 || !error.IsEmpty {
+            throw XunitException(
+                string.Join(Environment.NewLine, failures) +
+                    "\nstdout task: ${stdout.Status}\n${stdout.Exception}\nstderr task: ${stderr.Status}\n${stderr.Exception}" +
+                    "\nstdout:\n${Encoding.UTF8.GetString(output.ToArray())}\nstderr:\n${Encoding.UTF8.GetString(error.ToArray())}"
+            )
+        }
+        return output.ToArray()
+    }
+
+    private func WaitBaseEventPumps(drains Task, failures List[string]) bool {
+        try {
+            return drains.Wait(5_000)
+        } catch (ex AggregateException) {
+            failures.Add("output tasks: ${ex.Flatten()}")
+            return true
+        }
+    }
+
+    private async func PumpBaseEventBytes(
+        stream Stream,
+        output ConcurrentQueue[uint8],
+        cancellation CancellationToken
+    ) {
+        let buffer = [1024]uint8
+        while true {
+            let count = await stream.ReadAsync(buffer.AsMemory(), cancellation)
+            if count == 0 {
+                return
+            }
+            for var i = 0; i < count; i++ {
+                output.Enqueue(buffer[i])
+            }
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5270_StalledChild_ReportsPartialOutputAndObservesBothPipes(pipeFault bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`import System
+import System.Threading
+Console.Write("partial-out")
+Console.Out.Flush()
+Console.Error.Write("ready\npartial-error")
+Console.Error.Flush()
+Thread.Sleep(Timeout.Infinite)`, "base-event-stalled", true)
+        let start = ProcessStartInfo("dotnet"){
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        }
+        start.ArgumentList.Add(dll)
+        using let process = Process.Start(start) ?? throw InvalidOperationException("could not start dotnet")
+        var stdout = Task.CompletedTask
+        var stderr = Task.CompletedTask
+        try {
+            let ready = [6]uint8
+            let readyRead = process.StandardError.BaseStream.ReadExactlyAsync(ready.AsMemory()).AsTask()
+            let _ = readyRead.ContinueWith(
+                (completed Task) -> completed.Exception,
+                TaskContinuationOptions.OnlyOnFaulted
+            )
+            readyRead.WaitAsync(TimeSpan.FromSeconds(30)).GetAwaiter().GetResult()
+            Assert.Equal(Encoding.UTF8.GetBytes("ready\n"), ready)
+            if pipeFault {
+                process.StandardOutput.BaseStream.Dispose()
+                process.StandardError.BaseStream.Dispose()
+            }
+            let failure = Assert.Throws[XunitException](
+                func () object? {
+                    return ReadBaseEventBytes(process, 100, out stdout, out stderr)
+                }
+            )
+            Assert.True(process.HasExited)
+            Assert.True(stdout.IsCompleted)
+            Assert.True(stderr.IsCompleted)
+            Assert.Contains("base event program timed out", failure.Message, StringComparison.Ordinal)
+            if pipeFault {
+                Assert.NotNull(stdout.Exception)
+                Assert.NotNull(stderr.Exception)
+                Assert.Contains("stdout task: Faulted\n${stdout.Exception}", failure.Message, StringComparison.Ordinal)
+                Assert.Contains("stderr task: Faulted\n${stderr.Exception}", failure.Message, StringComparison.Ordinal)
+                Assert.Contains("ObjectDisposedException", failure.Message, StringComparison.Ordinal)
+            } else {
+                Assert.True(stdout.IsCompletedSuccessfully)
+                Assert.True(stderr.IsCompletedSuccessfully)
+                Assert.Contains(
+                    "stdout:\npartial-out\nstderr:\npartial-error",
+                    failure.Message,
+                    StringComparison.Ordinal
+                )
+            }
+        } finally {
+            if !process.HasExited {
+                process.Kill(entireProcessTree: true)
+                Assert.True(process.WaitForExit(5_000))
+            }
+        }
+    }
+
     /// Issue #4433: a function literal passed directly to a delegate parameter
     /// on a constructed user-generic receiver must use the receiver-substituted
     /// target, not the open declaration's erased delegate shape.

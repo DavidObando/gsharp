@@ -8,16 +8,216 @@ import GSharp.Compiler
 import GSharp.Compiler.Tests
 import System
 import System.Collections.Generic
+import System.ComponentModel
 import System.Diagnostics
 import System.IO
+import System.IO.Pipes
 import System.Linq
+import System.Text
+import System.Threading
+import System.Threading.Tasks
 import Xunit
+import Xunit.Sdk
 
 /// Issue #605: `await using let` support for types implementing
 /// `IAsyncDisposable`. Tests cover user-defined G# classes, CLR types,
 /// mixed IDisposable + IAsyncDisposable, exception safety, return semantics,
 /// and negative diagnostics (outside async, async-only with sync using).
 open class Issue605AwaitUsingLetEmitTests {
+    @Fact
+    func DeleteTemporaryDirectory_PreservesPrimaryAndReportsCleanupFailure() {
+        let directory = Directory.CreateTempSubdirectory("gs_issue605_cleanup_").FullName
+        let file = Path.Combine(directory, "not-a-directory")
+        using let cleanupOutput = StringWriter()
+        let previousError = Console.Error
+        var completed = false
+        try {
+            File.WriteAllText(file, "fixture")
+            let expectedCleanup = Assert.ThrowsAny[IOException](
+                func () {
+                    Directory.Delete(file, recursive: true)
+                }
+            )
+            let cleanup = Assert.ThrowsAny[IOException](
+                func () {
+                    DeleteTemporaryDirectory(file, preserveFailure: false)
+                }
+            )
+            Assert.Equal(expectedCleanup.GetType(), cleanup.GetType())
+            Assert.Equal(expectedCleanup.Message, cleanup.Message)
+            Assert.Contains(file, cleanup.Message, StringComparison.Ordinal)
+            let primaryMessage = "timed out after 2000 ms\nstdout:\npartial\r\nstderr:\nerror\r\n"
+            let primary = XunitException(primaryMessage)
+            Console.SetError(cleanupOutput)
+            let observed = Assert.Throws[XunitException](
+                func () {
+                    try {
+                        throw primary
+                    } finally {
+                        DeleteTemporaryDirectory(file, preserveFailure: true)
+                    }
+                }
+            )
+            Assert.Same(primary, observed)
+            Assert.Equal(Encoding.UTF8.GetBytes(primaryMessage), Encoding.UTF8.GetBytes(observed.Message))
+            Assert.StartsWith(
+                "Temporary directory cleanup failed for '$file': ${expectedCleanup.GetType().FullName}: ${expectedCleanup.Message}",
+                cleanupOutput.ToString(),
+                StringComparison.Ordinal
+            )
+            Assert.True(File.Exists(file))
+            completed = true
+        } finally {
+            Console.SetError(previousError)
+            DeleteTemporaryDirectory(directory, preserveFailure: !completed)
+        }
+    }
+
+    @Fact
+    func ObserveCaptures_FaultedCopiesPreservePrimaryAndBothErrors() {
+        using let outputPipe = AnonymousPipeServerStream(PipeDirection.Out)
+        using let errorPipe = AnonymousPipeServerStream(PipeDirection.Out)
+        outputPipe.DisposeLocalCopyOfClientHandle()
+        errorPipe.DisposeLocalCopyOfClientHandle()
+        using let outputSource = MemoryStream([]uint8{1})
+        using let errorSource = MemoryStream([]uint8{2})
+        let outputCopy = outputSource.CopyToAsync(outputPipe)
+        let errorCopy = errorSource.CopyToAsync(errorPipe)
+        let captures = Task.WhenAll([]Task{outputCopy, errorCopy})
+        using let cancellation = CancellationTokenSource()
+        let primary = "timed out after 2000 ms"
+        let failure = ObserveCaptures(captures, cancellation, primary)
+        Assert.True(outputCopy.IsFaulted)
+        Assert.True(errorCopy.IsFaulted)
+        let errors = Assert.IsType[AggregateException](captures.Exception)
+        Assert.Equal(2, errors.InnerExceptions.Count)
+        Assert.Equal(primary + "; output capture failed: $errors", failure)
+        Assert.True(cancellation.IsCancellationRequested)
+    }
+
+    @Theory
+    @InlineData("\n")
+    @InlineData("\r\n")
+    func CompileAndRunBytes_TimeoutReportsBothStreamsAndStopsChild(outputNewLine string) {
+        let source = `import System
+import System.Threading
+Console.Write("timeout-stdoutPAYLOAD_NEWLINE")
+Console.Error.Write("timeout-stderrPAYLOAD_NEWLINE")
+Thread.Sleep(Timeout.Infinite)`.Replace("PAYLOAD_NEWLINE", outputNewLine.Replace("\r", "\\r").Replace("\n", "\\n"))
+        let exception = Assert.ThrowsAny[XunitException](
+            func () object? {
+                return CompileAndRunBytes(source, timeoutMilliseconds: 2_000)
+            }
+        )
+        Assert.Contains("timed out after 2000 ms", exception.Message, StringComparison.Ordinal)
+        Assert.Contains("kill requested; exited=True", exception.Message, StringComparison.Ordinal)
+        Assert.Contains("stdout capture=RanToCompletion; stderr capture=RanToCompletion", exception.Message)
+        Assert.EndsWith(
+            "\nstdout:\ntimeout-stdout$outputNewLine\nstderr:\ntimeout-stderr$outputNewLine",
+            exception.Message,
+            StringComparison.Ordinal
+        )
+        let pid = int32.Parse(exception.Message.Split("pid=", StringSplitOptions.None)[1].Split(';')[0])
+        try {
+            using let child = Process.GetProcessById(pid)
+            Assert.True(child.HasExited, "Timed-out child $pid is still running.")
+        } catch (ArgumentException) { }
+    }
+
+    @Fact
+    func AwaitUsingLet_AsyncValueTaskDisposeAsync_ExactTopLevelRepro() {
+        let source = `import System
+import System.Threading.Tasks
+class Resource : IAsyncDisposable {
+    async func DisposeAsync() ValueTask {
+        await Task.Delay(1)
+    }
+}
+await using let resource = Resource()`
+        Assert.Equal([]uint8{}, CompileAndRunBytes(source))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func AwaitUsingLet_AsyncValueTaskDisposeAsync_AwaitsLifoCleanupOnce(fail bool) {
+        let source = `import System
+import System.Threading.Tasks
+
+class Resource : IDisposable, IAsyncDisposable {
+    var Name string = ""
+    let Started TaskCompletionSource[bool] = TaskCompletionSource[bool]()
+    let Release TaskCompletionSource[bool] = TaskCompletionSource[bool]()
+
+    func Dispose() {
+        Console.Write("wrong-sync;")
+    }
+
+    async func DisposeAsync() ValueTask {
+        Console.Write("begin:" + Name + ";")
+        Started.SetResult(true)
+        await Release.Task
+        Console.Write("end:" + Name + ";")
+    }
+}
+
+func Acquire(resource Resource) Resource {
+    Console.Write("acquire:" + resource.Name + ";")
+    return resource
+}
+
+async func Exercise(outer Resource, inner Resource, fail bool) int32 {
+    await using let first = Acquire(outer)
+    defer Console.Write("defer;")
+    await using let second = Acquire(inner)
+    Console.Write("body;")
+    if fail {
+        throw InvalidOperationException("body")
+    }
+    return 7
+}
+
+let outer = Resource()
+outer.Name = "outer"
+let inner = Resource()
+inner.Name = "inner"
+let pending = Exercise(outer, inner, FAIL)
+if !inner.Started.Task.IsCompleted {
+    throw InvalidOperationException("inner cleanup did not start")
+}
+Console.Write("pending:" + pending.IsCompleted.ToString() + ";")
+inner.Release.SetResult(true)
+await outer.Started.Task
+Console.Write("outer-pending:" + pending.IsCompleted.ToString() + ";")
+outer.Release.SetResult(true)
+try {
+    Console.Write("result:" + (await pending).ToString() + ";")
+} catch (ex InvalidOperationException) {
+    Console.Write("caught:" + ex.Message + ";")
+}`
+        let tail = if fail {
+            "caught:body;"
+        } else {
+            "result:7;"
+        }
+        let expected = "acquire:outer;acquire:inner;body;begin:inner;pending:False;" +
+            "end:inner;defer;begin:outer;outer-pending:False;end:outer;" +
+            tail
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(expected),
+            CompileAndRunBytes(
+                source.Replace(
+                    "FAIL",
+                    if fail {
+                        "true"
+                    } else {
+                        "false"
+                    }
+                )
+            )
+        )
+    }
+
     @Fact
     func AwaitUsingLet_UserClassImplementsIAsyncDisposable_DisposeAsyncCalledAtScopeExit() {
         let source = `package Probe
@@ -226,57 +426,162 @@ test()`
     }
 
     shared {
-        private func CompileAndRun(source string) string {
-            let tempDir = Directory.CreateTempSubdirectory("gs_issue605_").FullName
+        private func ObserveCaptures(
+            captures Task,
+            captureCancellation CancellationTokenSource,
+            failure string
+        ) string {
+            let failures = List[string]()
+            if failure.Length > 0 {
+                failures.Add(failure)
+            }
+            let cleanupTimeout = TimeSpan.FromSeconds(5)
             try {
-                let srcPath = Path.Combine(tempDir, "test.gs")
-                let outPath = Path.Combine(tempDir, "test.dll")
-                File.WriteAllText(srcPath, source)
-                let args = []string{"/out:" + outPath, "/target:exe", "/targetframework:net10.0", srcPath}
-                using let compileOut = StringWriter()
-                using let compileErr = StringWriter()
-                let prevOut = Console.Out
-                let prevErr = Console.Error
-                Console.SetOut(compileOut)
-                Console.SetError(compileErr)
-                var compileExit int32
-                try {
-                    compileExit = Program.Main(args)
-                } finally {
-                    Console.SetOut(prevOut)
-                    Console.SetError(prevErr)
+                if Task.WhenAny(captures, Task.Delay(cleanupTimeout)).GetAwaiter().GetResult() != captures {
+                    failures.Add("output streams did not close within ${cleanupTimeout.TotalMilliseconds} ms")
+                    captureCancellation.Cancel()
+                    if Task.WhenAny(captures, Task.Delay(cleanupTimeout)).GetAwaiter().GetResult() != captures {
+                        let _ = captures.ContinueWith(
+                            (task Task) -> task.Exception,
+                            TaskContinuationOptions.OnlyOnFaulted
+                        )
+                        failures.Add("output capture did not stop after cancellation")
+                        return string.Join("; ", failures)
+                    }
                 }
-                Assert.True(compileExit == 0, (`gsc failed:
+                if captures.IsFaulted {
+                    failures.Add("output capture failed: ${captures.Exception}")
+                } else if captures.IsCanceled {
+                    failures.Add("output capture cancelled")
+                }
+                return string.Join("; ", failures)
+            } finally {
+                captureCancellation.Cancel()
+            }
+        }
+
+        private func CompileAndRun(source string) string -> Encoding
+            .UTF8
+            .GetString(CompileAndRunBytes(source))
+            .ReplaceLineEndings(Environment.NewLine)
+
+        private func CompileAndRunBytes(source string, timeoutMilliseconds int32 = 30_000)[]uint8 {
+            let tempDir = Directory.CreateTempSubdirectory("gs_issue605_").FullName
+            var completed = false
+            try {
+                let output = CompileAndRunBytesInDirectory(tempDir, source, timeoutMilliseconds)
+                completed = true
+                return output
+            } finally {
+                DeleteTemporaryDirectory(tempDir, preserveFailure: !completed)
+            }
+        }
+
+        private func DeleteTemporaryDirectory(directory string, preserveFailure bool) {
+            try {
+                Directory.Delete(directory, recursive: true)
+            } catch (ex Exception) when ex is IOException || ex is UnauthorizedAccessException {
+                if !preserveFailure {
+                    rethrow
+                }
+                Console.Error.WriteLine("Temporary directory cleanup failed for '$directory': $ex")
+            }
+        }
+
+        private func CompileAndRunBytesInDirectory(tempDir string, source string, timeoutMilliseconds int32)[]uint8 {
+            let srcPath = Path.Combine(tempDir, "test.gs")
+            let outPath = Path.Combine(tempDir, "test.dll")
+            File.WriteAllText(srcPath, source)
+            let args = []string{"/out:" + outPath, "/target:exe", "/targetframework:net10.0", srcPath}
+            using let compileOut = StringWriter()
+            using let compileErr = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(compileOut)
+            Console.SetError(compileErr)
+            var compileExit int32
+            try {
+                compileExit = Program.Main(args)
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            Assert.True(compileExit == 0, (`gsc failed:
 stdout:
 ` + "$compileOut" + `
 stderr:
 ` + "$compileErr"))
-                IlVerifier.Verify(outPath)
-                let psi = ProcessStartInfo("dotnet"){
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    WorkingDirectory = tempDir
+            IlVerifier.Verify(outPath)
+            let psi = ProcessStartInfo("dotnet"){
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                WorkingDirectory = tempDir
+            }
+            psi.ArgumentList.Add("exec")
+            psi.ArgumentList.Add("--runtimeconfig")
+            psi.ArgumentList.Add(Path.ChangeExtension(outPath, ".runtimeconfig.json"))
+            psi.ArgumentList.Add(outPath)
+            using let proc = Process.Start(psi) ?? throw InvalidOperationException("Failed to start dotnet exec")
+            using let stdout = MemoryStream()
+            using let stderr = MemoryStream()
+            using let captureCancellation = CancellationTokenSource()
+            let outputCopy = proc.StandardOutput.BaseStream.CopyToAsync(stdout, captureCancellation.Token)
+            let errorCopy = proc.StandardError.BaseStream.CopyToAsync(stderr, captureCancellation.Token)
+            let captures = Task.WhenAll([]Task{outputCopy, errorCopy})
+            var failure = string.Empty
+            try {
+                if !proc.WaitForExit(timeoutMilliseconds) {
+                    failure = "timed out after $timeoutMilliseconds ms"
                 }
-                psi.ArgumentList.Add("exec")
-                psi.ArgumentList.Add("--runtimeconfig")
-                psi.ArgumentList.Add(Path.ChangeExtension(outPath, ".runtimeconfig.json"))
-                psi.ArgumentList.Add(outPath)
-                using let proc = Process.Start(psi) ?? throw InvalidOperationException("Failed to start dotnet exec")
-                let stdout = proc.StandardOutput.ReadToEnd()
-                let stderr = proc.StandardError.ReadToEnd()
-                Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out")
-                Assert.True(proc.ExitCode == 0, (`exited ` + "${proc.ExitCode}" + `
-stdout:
-` + "$stdout" + `
-stderr:
-` + "$stderr"))
-                return stdout.ReplaceLineEndings(Environment.NewLine)
             } finally {
                 try {
-                    Directory.Delete(tempDir, recursive: true)
-                } catch { }
+                    if !proc.HasExited {
+                        failure += "; kill requested"
+                        try {
+                            proc.Kill(entireProcessTree: true)
+                        } catch (InvalidOperationException) when proc.HasExited {
+                            failure += "; exited before kill"
+                        } catch (ex Win32Exception) {
+                            failure += "; kill failed: " + ex.Message
+                        }
+                        failure += "; exited=${proc.WaitForExit(5_000)}"
+                    }
+                } finally {
+                    failure = ObserveCaptures(captures, captureCancellation, failure)
+                }
             }
+            let exit = if proc.HasExited {
+                proc.ExitCode.ToString()
+            } else {
+                "<still-running>"
+            }
+            let output = if outputCopy.IsCompleted {
+                Encoding.UTF8.GetString(stdout.ToArray())
+            } else {
+                "<unavailable: output capture did not stop>"
+            }
+            let error = if errorCopy.IsCompleted {
+                Encoding.UTF8.GetString(stderr.ToArray())
+            } else {
+                "<unavailable: error capture did not stop>"
+            }
+            Assert.True(
+                failure.Length == 0 && proc.ExitCode == 0,
+                (
+                    "dotnet exec $failure; pid=${proc.Id}; exit=$exit; " +
+                        "stdout capture=${outputCopy.Status}; stderr capture=${errorCopy.Status}" +
+                        `
+stdout:
+` +
+                        output +
+                        `
+stderr:
+` +
+                        error
+                )
+            )
+            return stdout.ToArray()
         }
 
         private func CompileAndRunWithSiblingCs(gsSource string, csHelper string) string {
