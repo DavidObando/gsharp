@@ -3608,8 +3608,11 @@ internal partial class ExpressionBinder {
                 }
                 let sourceType = boundArguments[argIndex].Type
                 var nativeTarget = ClrNullability.GetParameterTypeSymbol(parameter)
-                if parameter.ParameterType.IsArray && !clrParameterType.IsArray {
-                    nativeTarget = GetArraySliceElementType(nativeTarget) ?? nativeTarget
+                if parameter.ParameterType.IsArray && !ClrTypeUtilities.AreSame(
+                    parameter.ParameterType,
+                    clrParameterType
+                ) {
+                    nativeTarget = nativeTarget.GetElementPositions()[0]
                 }
                 if NativeProtocolOperations.GetProtocol(nativeTarget) != nil {
                     return if nativeConversions?.ClassifyArgumentConversion(sourceType, nativeTarget)
@@ -3627,10 +3630,8 @@ internal partial class ExpressionBinder {
                     !DeclaresImplicitOperator(sourceType) {
                     return nil
                 }
-                let targetType TypeSymbol? = nativeTarget
-                if targetType == nil {
-                    return nil
-                }
+                // ADR-0193: applicability compares bare shapes; argument lowering retains declaration nullability.
+                let targetType = nativeTarget.StripToBareShape()
                 let standard = Conversion.ClassifyNonStructural(sourceType, targetType)
                 if standard.IsIdentity {
                     return ClrOverloadResolution.ImplicitConversionKind.Identity

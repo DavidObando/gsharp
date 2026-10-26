@@ -188,7 +188,6 @@ open partial class TypeSymbol : Symbol {
         /// (cref:FromClrTypeWithoutNullability), which names why.
         @NullabilityFunnel
         func FromClrType(clrType Type?) TypeSymbol {
-            var clrType = clrType
             if clrType == nil {
                 return TypeSymbol.Void
             }
@@ -198,16 +197,19 @@ open partial class TypeSymbol : Symbol {
             if clrType.IsPointer {
                 return PointerTypeSymbol.Get(FromClrType(clrType.GetElementType()))
             }
-            clrType = clrType.UnderlyingSystemType
+            let currentClrType = clrType.UnderlyingSystemType
             // Phase 3.C.5 / ADR-0001: surface CLR value-type nullability
             // (`Nullable<T>` aka `T?` in C#) as a GSharp `NullableTypeSymbol`
             // wrapping the underlying. Reference-type nullability driven by
             // `[NullableAttribute]` byte arrays is a follow-up.
-            if NullableLifting.GetValueTypeNullableUnderlyingClr(clrType) is {} nullableUnderlying {
+            if NullableLifting.GetValueTypeNullableUnderlyingClr(currentClrType) is {} nullableUnderlying {
                 return NullableLifting.WrapValueTypeNullable(FromClrType(nullableUnderlying))
             }
-            if clrType.IsArray && clrType.GetArrayRank() > 1 {
-                return RectangularArrayTypeSymbol.Get(FromClrType(clrType.GetElementType()), clrType.GetArrayRank())
+            if currentClrType.IsArray && currentClrType.GetArrayRank() > 1 {
+                return RectangularArrayTypeSymbol.Get(
+                    FromClrType(currentClrType.GetElementType()),
+                    currentClrType.GetArrayRank()
+                )
             }
             // Issue #1922: a `System.ValueTuple<...>`/`System.Tuple<...>` CLR type
             // reaching here (e.g. the element type of `for x in list` over an
@@ -217,12 +219,12 @@ open partial class TypeSymbol : Symbol {
             // binders (deconstruction, member access) recognize it as a tuple.
             // Issue #2750: canonical Rest-chained arity-8+ shapes are flattened
             // back into the source-level positional tuple symbol.
-            if TryGetTupleTypeSymbol(clrType, out var tupleTypeSymbol) {
+            if TryGetTupleTypeSymbol(currentClrType, out var tupleTypeSymbol) {
                 return tupleTypeSymbol
             }
             // Compare by FullName so types loaded from a MetadataLoadContext (carrying the
             // target framework's identity) still map onto the built-in primitive symbols.
-            let fullName = clrType.FullName
+            let fullName = currentClrType.FullName
             switch fullName {
                 case "System.Boolean" {
                     return Bool
@@ -279,7 +281,7 @@ open partial class TypeSymbol : Symbol {
                     return TypeSymbol.Void
                 }
             }
-            return ImportedTypeSymbol.Get(clrType)
+            return ImportedTypeSymbol.Get(currentClrType)
         }
 
         /// Issue #367: returns `true` when [`type`](paramref) denotes a

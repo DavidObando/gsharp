@@ -1845,7 +1845,6 @@ internal class MemberLookup {
             openMethodDefinition MethodInfo?,
             methodTypeArguments ImmutableArray[TypeSymbol?]
         ) TypeSymbol {
-            var openClr = openClr
             if openClr == nil {
                 return TypeSymbol.Error
             }
@@ -1872,8 +1871,8 @@ internal class MemberLookup {
                     )
                 )
             }
-            openClr = openClr.UnderlyingSystemType
-            if openClr.IsGenericParameter {
+            let currentOpenClr = openClr.UnderlyingSystemType
+            if currentOpenClr.IsGenericParameter {
                 // Type-level parameter (declared on a generic type): map through
                 // the receiver/container's symbolic TypeArguments.
                 //
@@ -1895,8 +1894,8 @@ internal class MemberLookup {
                 // `StackUnexpected`. Require `IsGenericTypeParameter` (equivalently
                 // `DeclaringMethod == null`) so a method-level parameter always
                 // falls through to its own (method-scoped) substitution below.
-                let declaring Type? = if openClr.IsGenericTypeParameter {
-                    openClr.DeclaringType
+                let declaring Type? = if currentOpenClr.IsGenericTypeParameter {
+                    currentOpenClr.DeclaringType
                 } else {
                     default(Type?)
                 }
@@ -1913,7 +1912,7 @@ internal class MemberLookup {
                         )
                     }
                     if ClrTypeUtilities.AreSame(declaringDef, openDefinition) {
-                        let pos = openClr.GenericParameterPosition
+                        let pos = currentOpenClr.GenericParameterPosition
                         if uint32(pos) < uint32(typeArguments.Length) {
                             return typeArguments[pos]
                         }
@@ -1925,14 +1924,14 @@ internal class MemberLookup {
                 // declaring type, issue #2375 follow-up above) — so substitute via
                 // the parallel method-type-args slot whenever `DeclaringMethod` is
                 // present, regardless of `DeclaringType`.
-                if openClr.DeclaringMethod != nil && !methodTypeArguments.IsDefaultOrEmpty {
+                if currentOpenClr.DeclaringMethod != nil && !methodTypeArguments.IsDefaultOrEmpty {
                     if openMethodDefinition == nil || object.ReferenceEquals(
-                        openClr.DeclaringMethod,
+                        currentOpenClr.DeclaringMethod,
                         openMethodDefinition
                     ) ||
-                        openClr.DeclaringMethod!!.MetadataToken == openMethodDefinition
+                        currentOpenClr.DeclaringMethod!!.MetadataToken == openMethodDefinition
                         .MetadataToken {
-                        let pos = openClr.GenericParameterPosition
+                        let pos = currentOpenClr.GenericParameterPosition
                         if uint32(pos) < uint32(methodTypeArguments.Length) {
                             let mapped TypeSymbol? = methodTypeArguments[pos]
                             if mapped != nil {
@@ -1941,17 +1940,17 @@ internal class MemberLookup {
                         }
                     }
                 }
-                return TypeSymbol.FromClrType(openClr)
+                return TypeSymbol.FromClrType(currentOpenClr)
             }
-            if openClr.IsArray && openClr.GetArrayRank() > 1 {
+            if currentOpenClr.IsArray && currentOpenClr.GetArrayRank() > 1 {
                 let mappedElement = MapOpenClrTypeToSymbolic(
-                    openClr.GetElementType(),
+                    currentOpenClr.GetElementType(),
                     openDefinition,
                     typeArguments,
                     openMethodDefinition,
                     methodTypeArguments
                 )
-                return RectangularArrayTypeSymbol.Get(mappedElement, openClr.GetArrayRank())
+                return RectangularArrayTypeSymbol.Get(mappedElement, currentOpenClr.GetArrayRank())
             }
             // Issue #794: an open generic type's instance member can return an
             // array of an open parameter (e.g. `List<T>.ToArray()` → `T[]`). The
@@ -1960,8 +1959,8 @@ internal class MemberLookup {
             // sees the symbolic projection rather than the erased `object[]`.
             // Issue #833 extends the recursion to method-level parameters so
             // `Enumerable.ToArray[T](IEnumerable[T]) → T[]` surfaces as `[]T`.
-            if openClr.IsArray && openClr.GetArrayRank() == 1 {
-                let openElement = openClr.GetElementType()
+            if currentOpenClr.IsArray && currentOpenClr.GetArrayRank() == 1 {
+                let openElement = currentOpenClr.GetElementType()
                 let mappedElement = MapOpenClrTypeToSymbolic(
                     openElement,
                     openDefinition,
@@ -1985,13 +1984,13 @@ internal class MemberLookup {
                 ) {
                     return SliceTypeSymbol.Get(mappedElement)
                 }
-                return TypeSymbol.FromClrType(openClr)
+                return TypeSymbol.FromClrType(currentOpenClr)
             }
             // Issue #794: a managed pointer return (e.g. `List<T>.this[int]` on
             // `Span<T>`) reports `IsByRef`. Recurse on the pointee and wrap with
             // `ByRefTypeSymbol` to mirror the open-shape's contract.
-            if openClr.IsByRef {
-                let openPointee = openClr.GetElementType()
+            if currentOpenClr.IsByRef {
+                let openPointee = currentOpenClr.GetElementType()
                 let mappedPointee = MapOpenClrTypeToSymbolic(
                     openPointee,
                     openDefinition,
@@ -2008,7 +2007,7 @@ internal class MemberLookup {
                 ) {
                     return ByRefTypeSymbol.Get(mappedPointee)
                 }
-                return TypeSymbol.FromClrType(openClr)
+                return TypeSymbol.FromClrType(currentOpenClr)
             }
             // Issue #2391: keep substituted Nullable<T> positions in the
             // canonical G# nullable shape. The generic reconstruction below is
@@ -2017,8 +2016,8 @@ internal class MemberLookup {
             // ImportedTypeSymbol for System.Nullable<Color>. The matching return
             // position was then distinct from the source Color? symbol even
             // though both came from the same receiver substitution.
-            if NullableLifting.IsValueTypeNullableClr(openClr) {
-                let openUnderlying = openClr.GetGenericArguments()[0]
+            if NullableLifting.IsValueTypeNullableClr(currentOpenClr) {
+                let openUnderlying = currentOpenClr.GetGenericArguments()[0]
                 let mappedUnderlying = MapOpenClrTypeToSymbolic(
                     openUnderlying,
                     openDefinition,
@@ -2028,10 +2027,10 @@ internal class MemberLookup {
                 )
                 return NullableLifting.WrapValueTypeNullable(mappedUnderlying)
             }
-            if openClr.IsGenericType {
-                let openArgs = openClr.GetGenericArguments()
+            if currentOpenClr.IsGenericType {
+                let openArgs = currentOpenClr.GetGenericArguments()
                 let symbolic = ImmutableArray.CreateBuilder[TypeSymbol](openArgs.Length)
-                var anyParam = openClr.IsGenericTypeDefinition && !typeArguments.IsDefaultOrEmpty
+                var anyParam = currentOpenClr.IsGenericTypeDefinition && !typeArguments.IsDefaultOrEmpty
                 for a in openArgs {
                     let mapped = MapOpenClrTypeToSymbolic(
                         a,
@@ -2069,9 +2068,9 @@ internal class MemberLookup {
                         anyParam = true
                     }
                 }
-                let openDef = openClr.GetGenericTypeDefinition()
+                let openDef = currentOpenClr.GetGenericTypeDefinition()
                 if !anyParam {
-                    return TypeSymbol.FromClrType(openClr)
+                    return TypeSymbol.FromClrType(currentOpenClr)
                 }
                 // Construct the type-erased closed shape (`<object, object, …>`) so
                 // the resulting symbol mirrors the existing convention used by
@@ -2107,10 +2106,10 @@ internal class MemberLookup {
                 // the selector parameter's erasure and keeping both shapes aligned.
                 let symbolicArgs = symbolic.ToImmutable()
                 let erasedClosed = TryBuildErasedClosedGeneric(openDef, openParams, symbolicArgs, contextObject) ??
-                    openClr
+                    currentOpenClr
                 return ImportedTypeSymbol.GetConstructed(erasedClosed, openDef, symbolicArgs)
             }
-            return TypeSymbol.FromClrType(openClr)
+            return TypeSymbol.FromClrType(currentOpenClr)
         }
 
         /// Issue #833: structural unification that recovers the symbolic
