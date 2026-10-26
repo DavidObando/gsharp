@@ -639,6 +639,9 @@ class StructSymbol : TypeSymbol {
         }
     }
 
+    /// Gets or sets the static initializer's function, including its captured lexical unsafe context.
+    internal prop StaticInitializerFunction FunctionSymbol?
+
     /// Gets a value indicating whether the type declares a `shared { init { … } }` static-initializer block
     /// (ADR-0140 / issue #2131). Such a type must not be marked `beforefieldinit`.
     prop HasStaticInitializerBlock bool -> !StaticInitializerStatements.IsDefaultOrEmpty
