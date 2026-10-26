@@ -1055,6 +1055,20 @@ internal partial class ExpressionBinder {
         allowProtectedInherited bool = false
     ) bool {
         result = nil
+        if receiver.Type is InterfaceSymbol interfaceReceiver &&
+            TryBindInterfaceImportedBaseInstanceCall(
+            receiver,
+            interfaceReceiver,
+            methodName,
+            arguments,
+            ce,
+            out result,
+            explicitTypeArgs,
+            typeArgSymbols,
+            argumentNames
+        ) {
+            return true
+        }
         if importedBaseClr == nil {
             return false
         }
@@ -1135,25 +1149,12 @@ internal partial class ExpressionBinder {
         argumentNames ImmutableArray[string] = default(ImmutableArray[string])
     ) bool {
         result = nil
-        let clrBases = MemberLookup.GetTransitiveClrBaseInterfaces(interfaceSymbol)
-        if clrBases.Count == 0 {
-            return false
-        }
-        let candidates = List[MethodInfo]()
-        for clrBase in clrBases {
-            for m in ClrTypeUtilities.SafeGetMethods(clrBase, BindingFlags.Instance | BindingFlags.Public) {
-                if string.Equals(m.Name, methodName, StringComparison.Ordinal) && !MemberLookup.HasSameSignature(
-                    candidates,
-                    m
-                ) {
-                    candidates.Add(m)
-                }
-            }
-        }
-        if candidates.Count == 0 {
-            return false
-        }
-        if clrBases[0] is not{} importedBaseClr {
+        let candidates = MemberLookup.GetInterfaceImportedBaseInstanceMethods(
+            interfaceSymbol,
+            methodName,
+            out var importedBaseClr
+        )
+        if candidates.Count == 0 || importedBaseClr == nil {
             return false
         }
         return TryResolveAndBindClrInstanceCall(

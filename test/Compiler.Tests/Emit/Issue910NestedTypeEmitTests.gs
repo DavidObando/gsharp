@@ -426,6 +426,78 @@ reader.Run()`, "InterfacePrecedence5262", true)
     }
 
     @Fact
+    func InheritedClrInterfaceCallsBeatEnclosingCallbacks() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let executable = fixture.Compile(`import System
+class Outer {
+    shared { let Dispose Action = func() { Console.Write("O") } }
+    interface Nested : IDisposable { func Run() { Dispose() } }
+}
+class Implementation : Outer.Nested { func Dispose() { Console.Write("D") } }
+let reader Outer.Nested = Implementation()
+reader.Run()
+Outer.Dispose()`, "InheritedInterfaceCall5262", true)
+        IlVerifier.Verify(executable)
+        Assert.Equal(Encoding.UTF8.GetBytes("DO"), fixture.RunBytes(executable))
+    }
+
+    @Fact
+    func TransitiveGenericClrInterfaceCallsMatchQualifiedDispatch() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace ImportedInterfaces5262;
+public interface IReader<T> { T Read(); }
+public interface ITransitive<T> : IReader<T> { }`, "ImportedInterfaces5262")
+        let executable = fixture.Compile(`import System
+import ImportedInterfaces5262
+class Outer {
+    shared { let Read () -> int32 = func() int32 { return 99 } }
+    interface Nested : ITransitive[int32] {
+        func Bare() int32 { return Read() }
+        func Qualified() int32 { return this.Read() }
+    }
+}
+class Implementation : Outer.Nested { func Read() int32 { return 42 } }
+let reader Outer.Nested = Implementation()
+Console.Write(reader.Qualified())
+Console.Write("|")
+Console.Write(reader.Bare())`, "GenericInterfaceCall5262", true, "/r:" + contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal(Encoding.UTF8.GetBytes("42|42"), fixture.RunBytes(executable))
+    }
+
+    @Fact
+    func InheritedStaticInterfacePropertiesDoNotHideEnclosingFields() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let executable = fixture.Compile(`import System
+interface Base { shared { prop Value int32 { get { return 9 } } } }
+class Outer {
+    shared { let Value int32 = 1 }
+    interface Nested : Base { func Read() int32 { return Value } }
+}
+class Implementation : Outer.Nested {}
+let reader Outer.Nested = Implementation()
+Console.Write(reader.Read())`, "InheritedInterfaceProperty5262", true)
+        IlVerifier.Verify(executable)
+        Assert.Equal(Encoding.UTF8.GetBytes("1"), fixture.RunBytes(executable))
+    }
+
+    @Fact
+    func DeclaredStaticInterfacePropertyDoesNotBecomeAnInstanceReadOrOuterField() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`class Outer {
+    shared { let Value int32 = 1 }
+    interface Nested {
+        shared { prop Value int32 { get { return 3 } } }
+        func Read() int32 { return Value }
+    }
+}`, "DeclaredInterfaceProperty5262", false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("DeclaredInterfaceProperty5262.gs(5,36,5,41): error GS0125:", output, StringComparison.Ordinal)
+        Assert.Equal(1, output.Split(": error ", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "DeclaredInterfaceProperty5262.dll")))
+    }
+
+    @Fact
     func SourceExplicitMethodsDoNotHideOuterCallbacksOrOrdinaryPrivateMethods() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let executable = fixture.Compile(`package SourceExplicit5262

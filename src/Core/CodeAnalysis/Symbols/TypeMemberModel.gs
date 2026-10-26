@@ -369,7 +369,7 @@ shared class TypeMemberModel {
                     iface
                 }
                 for p in propertyOwner.Properties {
-                    if !p.IsIndexer && p.Name == name {
+                    if !p.IsStatic && !p.IsIndexer && p.Name == name {
                         property = p
                         declaringType = iface
                         return true
@@ -852,11 +852,7 @@ shared class TypeMemberModel {
         }
     }
 
-    /// ADR-0112 P0: enumerates an interface's members for completion. Interfaces
-    /// have no base-chain modeling here, so this surfaces the interface's own
-    /// instance properties/events/methods plus static methods, honoring the
-    /// query. (InterfaceSymbol does not currently model static
-    /// properties/events; see the ADR-0112 P0 addendum.)
+    /// Enumerates interface members with the query's inheritance and static/instance filters.
     private func EnumerateInterfaceMembers(interfaceSymbol InterfaceSymbol, query MemberQuery) sequence[Symbol] {
         // Issue #1006: include inherited base-interface members when the query
         // permits inherited lookup.
@@ -867,9 +863,11 @@ shared class TypeMemberModel {
         }
         for iface in interfaces {
             iface.EnsureMembersResolved()
-            if (query.Kinds & MemberKinds.Property) != 0 && query.IncludeInstance {
+            if (query.Kinds & MemberKinds.Property) != 0 {
                 for p in iface.Properties {
-                    yield p
+                    if IncludesStaticness(p.IsStatic, query) {
+                        yield p
+                    }
                 }
             }
             if (query.Kinds & MemberKinds.Event) != 0 && query.IncludeInstance {
@@ -989,9 +987,9 @@ shared class TypeMemberModel {
             cast[IEnumerable[InterfaceSymbol]]([]InterfaceSymbol{interfaceSymbol})
         } {
             iface.EnsureMembersResolved()
-            if (query.Kinds & MemberKinds.Property) != 0 && query.IncludeInstance {
+            if (query.Kinds & MemberKinds.Property) != 0 {
                 for p in iface.Properties {
-                    if p.Name == name {
+                    if p.Name == name && IncludesStaticness(p.IsStatic, query) {
                         return p
                     }
                 }
@@ -1013,6 +1011,12 @@ shared class TypeMemberModel {
             }
         }
         return nil
+    }
+
+    private func IncludesStaticness(isStatic bool, query MemberQuery) bool -> if isStatic {
+        query.IncludeStatic
+    } else {
+        query.IncludeInstance
     }
 
     private func TryFirst[T Symbol](

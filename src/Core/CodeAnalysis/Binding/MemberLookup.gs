@@ -90,7 +90,11 @@ internal class MemberLookup {
                 iface.GetStaticField(name) != nil || iface.GetPrivateMethods(name)
                     .Length != 0 ||
                     iface
-                    .GetStaticPrivateMethods(name).Length != 0
+                    .GetStaticPrivateMethods(name).Length != 0 || GetInterfaceImportedBaseInstanceMethods(
+                    iface,
+                    name,
+                    out _
+                ).Count != 0
             ) {
                 return current
             }
@@ -1429,6 +1433,34 @@ internal class MemberLookup {
         func GetTransitiveClrBaseInterfaces(interfaceSymbol InterfaceSymbol) IReadOnlyList[
             Type
         ] -> ClrTypeUtilities.GetTransitiveClrBaseInterfaces(interfaceSymbol)
+
+        /// Collects the imported interface overloads shared by lexical hiding and call resolution.
+        /// @param interfaceSymbol The source interface receiver.
+        /// @param name The ordinary method name.
+        /// @param representativeBase The first imported base, retained for diagnostic context.
+        /// @returns The public instance overloads, deduplicated by CLR signature.
+        internal func GetInterfaceImportedBaseInstanceMethods(
+            interfaceSymbol InterfaceSymbol,
+            name string,
+            out representativeBase Type?
+        ) IReadOnlyList[MethodInfo] {
+            let clrBases = GetTransitiveClrBaseInterfaces(interfaceSymbol)
+            representativeBase = if clrBases.Count == 0 {
+                nil
+            } else {
+                clrBases[0]
+            }
+            let candidates = List[MethodInfo]()
+            for clrBase in clrBases {
+                for method in ClrTypeUtilities.SafeGetMethods(clrBase, BindingFlags.Instance | BindingFlags.Public) {
+                    if string.Equals(method.Name, name, StringComparison.Ordinal) &&
+                        !HasSameSignature(candidates, method) {
+                        candidates.Add(method)
+                    }
+                }
+            }
+            return candidates
+        }
 
         /// Issue #1181: returns whether [`candidate`](paramref) already has a
         /// same-name, same-parameter-types entry in [`existing`](paramref)

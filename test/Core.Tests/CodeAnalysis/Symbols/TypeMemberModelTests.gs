@@ -207,6 +207,39 @@ open class TypeMemberModelTests {
     }
 
     @Fact
+    func InterfacePropertyQueriesSeparateInheritedInstanceAndDeclaredStaticMembers() {
+        let tree = SyntaxTree.Parse(SourceText.From(`interface Base {
+    prop Inherited int32 { get; }
+    shared { prop BaseStatic int32 { get { return 9 } } }
+}
+interface Child : Base {
+    prop Local int32 { get; }
+    shared { prop Declared int32 { get { return 3 } } }
+}`))
+        let compilation = Compilation(tree)
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation))
+        let child = compilation.GlobalScope.Interfaces.Single((s InterfaceSymbol) -> s.Name == "Child")
+        Assert.Null(TypeMemberModel.LookupMember(child, "BaseStatic", MemberQuery.Instance()))
+        Assert.Null(TypeMemberModel.LookupMember(child, "Declared", MemberQuery.Instance()))
+        Assert.NotNull(TypeMemberModel.LookupMember(child, "Declared", MemberQuery.Static()))
+        Assert.Null(TypeMemberModel.LookupMember(child, "BaseStatic", MemberQuery.Static()))
+        Assert.Equal(
+            []string{"Local", "Inherited"},
+            TypeMemberModel
+                .EnumerateMembers(child, MemberQuery.Instance(MemberKinds.Property))
+                .Select((m Symbol) -> m.Name)
+                .ToArray()
+        )
+        Assert.Equal(
+            []string{"Declared"},
+            TypeMemberModel
+                .EnumerateMembers(child, MemberQuery.Static(MemberKinds.Property))
+                .Select((m Symbol) -> m.Name)
+                .ToArray()
+        )
+    }
+
+    @Fact
     func EnumerateMembers_Enum_SurfacesMembers() {
         let color = GetEnum("Color")
         let names = TypeMemberModel.EnumerateMembers(color, MemberQuery.All).Select((m Symbol) -> m.Name).ToHashSet()
