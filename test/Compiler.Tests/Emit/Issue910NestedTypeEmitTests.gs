@@ -466,6 +466,75 @@ Console.Write(reader.Bare())`, "GenericInterfaceCall5262", true, "/r:" + contrac
     }
 
     @Fact
+    func ImplicitImportedInterfaceCallsPreserveExplicitClrTypeArguments() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace GenericInterface5262;
+public interface IKind { string Kind<T>(T value) => typeof(T).Name; }
+public class Reader { public string Kind<T>(T value) => typeof(T).Name; }`, "GenericInterface5262")
+        let executable = fixture.Compile(`import System
+import GenericInterface5262
+class Outer {
+    shared { let Kind (object) -> string = func(value object) string { return "Outer" } }
+    interface Nested : IKind {
+        func Bare() string { return Kind[object]("x") }
+        func Qualified() string { return this.Kind[object]("x") }
+        func Inferred() string { return Kind("x") }
+    }
+}
+class Implementation : Outer.Nested {}
+class ClassControl : Reader {
+    func Bare() string { return Kind[object]("x") }
+    func Qualified() string { return this.Kind[object]("x") }
+}
+let reader Outer.Nested = Implementation()
+Console.Write(reader.Qualified())
+Console.Write("|")
+Console.Write(reader.Bare())
+Console.Write("|")
+Console.Write(reader.Inferred())
+Console.Write("|")
+Console.Write(ClassControl().Bare())
+Console.Write("|")
+Console.Write(ClassControl().Qualified())`, "ClrArguments5262", true, "/r:" + contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal(Encoding.UTF8.GetBytes("Object|Object|String|Object|Object"), fixture.RunBytes(executable))
+    }
+
+    @Fact
+    func ImplicitImportedInterfaceCallsPreserveExplicitSymbolicTypeArguments() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace GenericInterface5262;
+public interface IKind { string Kind<T>(T value) => typeof(T).Name; }
+public class Reader { public string Kind<T>(T value) => typeof(T).Name; }`, "GenericInterface5262")
+        let executable = fixture.Compile(`import System
+import GenericInterface5262
+open class Marker {}
+class Derived : Marker {}
+class Outer {
+    shared { let Kind (object) -> string = func(value object) string { return "Outer" } }
+    interface Nested : IKind {
+        func Bare(value Derived) string { return Kind[Marker](value) }
+        func Qualified(value Derived) string { return this.Kind[Marker](value) }
+    }
+}
+class Implementation : Outer.Nested {}
+class ClassControl : Reader {
+    func Bare(value Derived) string { return Kind[Marker](value) }
+    func Qualified(value Derived) string { return this.Kind[Marker](value) }
+}
+let reader Outer.Nested = Implementation()
+Console.Write(reader.Qualified(Derived()))
+Console.Write("|")
+Console.Write(reader.Bare(Derived()))
+Console.Write("|")
+Console.Write(ClassControl().Bare(Derived()))
+Console.Write("|")
+Console.Write(ClassControl().Qualified(Derived()))`, "SymbolicArguments5262", true, "/r:" + contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal(Encoding.UTF8.GetBytes("Marker|Marker|Marker|Marker"), fixture.RunBytes(executable))
+    }
+
+    @Fact
     func InheritedStaticInterfacePropertiesDoNotHideEnclosingFields() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let executable = fixture.Compile(`import System

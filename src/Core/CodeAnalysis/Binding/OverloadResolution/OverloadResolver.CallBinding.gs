@@ -1173,43 +1173,6 @@ internal partial class OverloadResolver {
                         argumentNames
                     )
                 }
-                // Issue #1136: a bare (implicit-`this`) call such as `GetType()`
-                // inside an instance method must resolve as `this.GetType()`
-                // against the universally-inherited System.Object members when
-                // no sibling user method matches. Falls back to typeof(object)
-                // (or the explicit imported base if present); the helper returns
-                // false for any name Object does not define, so the GS0130 path
-                // below still fires for genuinely undefined functions.
-                // Issue #2210: walk the transitive G# base-class chain (issue
-                // #1582's helper) rather than only `implicitReceiverStruct`'s
-                // own ImportedBaseType, so an unqualified call to a method
-                // inherited from a metadata base reached through one or more
-                // G#-defined base classes resolves — matching the qualified
-                // `this.Method(...)` path and G#-defined-base behavior.
-                if !TryResolveImplicitInheritedTypeArguments(
-                    syntax.TypeArgumentList,
-                    out var inheritedClrTypeArgs,
-                    out var inheritedTypeArgSymbols
-                ) {
-                    return BoundErrorExpression(nil)
-                }
-                let implicitBaseClr = ExpressionBinder.GetInheritedClrBaseType(implicitReceiverStruct) ?? typeof(object)
-                let implicitReceiverExpr = BoundVariableExpression(nil, effThis)
-                // The callback uses null to mean that no explicit type arguments were supplied.
-                if tryBindInheritedClrInstanceCall(
-                    implicitReceiverExpr,
-                    implicitBaseClr,
-                    syntax.Identifier.ValueText,
-                    boundArguments.ToImmutable(),
-                    syntax,
-                    out var implicitInheritedCall,
-                    inheritedClrTypeArgs,
-                    inheritedTypeArgSymbols,
-                    argumentNames,
-                    true
-                ) {
-                    return implicitInheritedCall!!
-                }
             }
             // ADR-0085 / ADR-0090 implicit `this` inside an interface default
             // method body. The body's enclosing function is a DIM whose
@@ -1249,26 +1212,35 @@ internal partial class OverloadResolver {
                         argumentNames
                     )
                 }
-                // Issue #2600: an interface default method's implicit `this`
-                // also exposes System.Object members. This is the bare-call
-                // counterpart of the qualified interface-receiver fallback
-                // from issue #2304 and applies in every expression context,
-                // including interpolation holes.
-                let implicitObjectReceiver = BoundVariableExpression(nil, effThis)
+            }
+            if effThis != nil && (effThis.Type is StructSymbol || effThis.Type is InterfaceSymbol) {
+                if !TryResolveImplicitInheritedTypeArguments(
+                    syntax.TypeArgumentList,
+                    out var inheritedClrTypeArgs,
+                    out var inheritedTypeArgSymbols
+                ) {
+                    return BoundErrorExpression(nil)
+                }
+                let implicitBaseClr = if effThis.Type is StructSymbol inheritedReceiver {
+                    ExpressionBinder.GetInheritedClrBaseType(inheritedReceiver) ?? typeof(object)
+                } else {
+                    typeof(object)
+                }
+                let implicitReceiverExpr = BoundVariableExpression(nil, effThis)
                 // The callback uses null to mean that no explicit type arguments were supplied.
                 if tryBindInheritedClrInstanceCall(
-                    implicitObjectReceiver,
-                    typeof(object),
+                    implicitReceiverExpr,
+                    implicitBaseClr,
                     syntax.Identifier.ValueText,
                     boundArguments.ToImmutable(),
                     syntax,
-                    out var implicitObjectCall,
-                    nil,
-                    default(ImmutableArray[TypeSymbol]),
+                    out var implicitInheritedCall,
+                    inheritedClrTypeArgs,
+                    inheritedTypeArgSymbols,
                     argumentNames,
-                    false
+                    effThis.Type is StructSymbol
                 ) {
-                    return implicitObjectCall!!
+                    return implicitInheritedCall!!
                 }
             }
             // ADR-0089 / ADR-0090: implicit static-self dispatch inside a

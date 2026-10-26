@@ -83,6 +83,7 @@ Members inside `shared` inherit the same accessibility modifier rules as regular
 - Source method barriers use ordinary overload lookup and exclude explicit-interface implementations.
 - Lexical lookup starts at the function's type owner, including interfaces. Interface-local members and inherited instance members precede enclosing shared state.
 - Interface CLR method barriers and implicit calls share the imported-base overload query. Interface property queries distinguish static from instance members; inherited static properties do not hide enclosing fields.
+- Implicit inherited class and interface calls share explicit type-argument resolution. Both CLR and symbolic arguments are preserved; omission permits inference.
 
 ### 6. Type-level access from GSharp
 
