@@ -272,7 +272,7 @@ internal shared class MagicCollectionZeroValue {
     /// @param clrType The nested struct field's own reflected CLR type.
     /// @returns The synthesized nested struct literal, or `null` when it carries no marker or no field of
     /// it can be reconstructed.
-    private func TrySynthesizeEmptyInstanceForImportedStruct(clrType Type?) BoundExpression? {
+    private func TrySynthesizeEmptyInstanceForImportedStruct(clrType Type?, syntax SyntaxNode? = nil) BoundExpression? {
         if clrType == nil || !ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var magicFieldKinds) {
             return nil
         }
@@ -330,7 +330,7 @@ internal shared class MagicCollectionZeroValue {
             return nil
         }
         return BoundStructLiteralExpression(
-            nil,
+            syntax,
             nestedStruct,
             inits.ToImmutable(),
             copySource: nil,
@@ -403,6 +403,9 @@ internal shared class MagicCollectionZeroValue {
                 )
             }
             case structType is StructSymbol when !structType.IsClass && !structType.IsInline {
+                if structType.ClrType is {} imported {
+                    return TrySynthesizeEmptyInstanceForImportedStruct(imported, syntax)
+                }
                 return TrySynthesizeStructFieldDefaults(syntax, structType, visiting, needsZeroCache)
             }
             default {

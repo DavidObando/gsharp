@@ -106,80 +106,20 @@ internal shared class InitializationPlanner {
         }
         let plans = program.Initializers.ToBuilder()
         let functions = program.Functions.ToBuilder()
-        let types = program.Structs.ToBuilder()
         for type in program.Structs {
-            if type.ClrType == nil &&
-                type.IsData &&
-                !type.HasDeclaredPrimaryConstructor &&
-                !type.IsClass &&
-                !type.IsInline &&
-                !type
-                .NeedsSynthesizedValueStructDefaultCtor {
-                // A nested host retains private access without triggering the struct's static constructor.
-                let host = types.FirstOrDefault(
-                    (candidate StructSymbol) -> candidate.ContainingType == type &&
-                        candidate.Name == ImportedAssemblySemantics.FieldInitializerHostName
-                ) ??
-                    StructSymbol(
-                    ImportedAssemblySemantics.FieldInitializerHostName,
-                    ImmutableArray[FieldSymbol].Empty,
-                    Accessibility.Public,
-                    declaration: nil,
-                    type.PackageName,
-                    isData: false,
-                    isInline: false,
-                    isClass: true
-                )
-                host.SetContainingType(type)
-                let methods = host.StaticMethods.ToBuilder()
-                for field in type.Fields {
-                    if !(field.Declaration is FieldDeclarationSyntax{Initializer: not nil}) ||
-                        !type
-                        .InstanceFieldInitializers
-                        .TryGetValue(field, out var expression) {
-                        continue
-                    }
-                    let name = ImportedAssemblySemantics.GetFieldInitializerMethodName(field.Name)
-                    // Imported literals need the expression, not an authored constructor
-                    // or an initializer for a field that the literal explicitly supplies.
-                    let function = methods.FirstOrDefault((method FunctionSymbol) -> method.Name == name) ??
-                        FunctionSymbol(
-                        name,
-                        ImmutableArray[ParameterSymbol].Empty,
-                        field.Type,
-                        declaration: nil,
-                        program.Packages.First((package_ PackageSymbol) -> package_.Name == type.PackageName),
-                        Accessibility.Public
-                    ){IsStatic = true, IsSpecialName = true, StaticOwnerType = host}
-                    if functions.ContainsKey(function) {
-                        continue
-                    }
-                    if !methods.Contains(function) {
-                        methods.Add(function)
-                    }
-                    functions.Add(
-                        function,
-                        BoundBlockStatement(
-                            expression.Syntax,
-                            ImmutableArray.Create[BoundStatement](BoundReturnStatement(expression.Syntax, expression))
-                        )
-                    )
-                }
-                if methods.Count > 0 {
-                    host.SetStaticMethods(methods.ToImmutable())
-                    if !types.Contains(host) {
-                        types.Add(host)
-                    }
-                }
-            }
             let fields = type.InstanceFieldInitializers.Values
             let primary = type.BaseConstructorInitializer?.Arguments ?? ImmutableArray[BoundExpression].Empty
             if (
-                type.ExplicitConstructor == nil ||
+                type.HasSynthesizedDataConstructor ||
+                    type.ExplicitConstructor == nil ||
                     type.HasPrimaryConstructor ||
                     type.NeedsSynthesizedValueStructDefaultCtor
             ) &&
-                (type.NeedsSynthesizedValueStructDefaultCtor || HasRequest(fields.Concat(primary))) {
+                (
+                type.UsesConstructorOwnedDataConstruction ||
+                    type.NeedsSynthesizedValueStructDefaultCtor ||
+                    HasRequest(fields.Concat(primary))
+            ) {
                 let function = OwnerFunction(program, type, type.PrimaryConstructorParameters, isStatic: false)
                 plans[(type, false)] = InstancePlan(type, function, primary, Empty(), primaryStores: true)
             }
@@ -190,7 +130,10 @@ internal shared class InitializationPlanner {
                     continue
                 }
                 let arguments = constructor.BaseInitializer?.Arguments ?? ImmutableArray[BoundExpression].Empty
-                if !type.HasPrimaryConstructor && !HasRequest(fields.Concat(arguments)) && !HasRequest(body) {
+                if !type.UsesConstructorOwnedDataConstruction &&
+                    !type.HasPrimaryConstructor &&
+                    !HasRequest(fields.Concat(arguments)) &&
+                    !HasRequest(body) {
                     continue
                 }
                 plans[(constructor.Function, false)] = if constructor.IsConvenience {
@@ -296,7 +239,7 @@ internal shared class InitializationPlanner {
             functions.ToImmutable(),
             program.EntryPoint,
             program.Statement,
-            types.ToImmutable(),
+            program.Structs,
             program.Interfaces,
             program.Enums,
             program.Globals,
@@ -324,6 +267,18 @@ internal shared class InitializationPlanner {
             "instance initialization has its constructor receiver",
             expression: "function.ThisParameter"
         )
+        if owner.UsesConstructorOwnedDataConstruction {
+            for field in owner.Fields {
+                if MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(field.Declaration, owner, field) is {} zero {
+                    statements.Add(
+                        BoundExpressionStatement(
+                            field.Declaration,
+                            BoundFieldAssignmentExpression(field.Declaration, receiver, owner, field, zero)
+                        )
+                    )
+                }
+            }
+        }
         // Authored constructors have their own parameter scope; declaration
         // initializers read primary inputs from the already-owned storage.
         var storedPrimaryInputs PrimaryStorageRewriter? = nil
@@ -372,6 +327,10 @@ internal shared class InitializationPlanner {
         }
         for field in owner.Fields {
             if owner.InstanceFieldInitializers.TryGetValue(field, out var expression) {
+                if owner.UsesConstructorOwnedDataConstruction &&
+                    field.Declaration is FieldDeclarationSyntax{Initializer: nil} {
+                    continue
+                }
                 let assignment = BoundExpressionStatement(
                     expression.Syntax,
                     BoundFieldAssignmentExpression(expression.Syntax, receiver, owner, field, expression)

@@ -5,6 +5,7 @@
 package GSharp.Interpreter.Tests
 
 import GSharp.Repl.Engine
+import System.Text
 import Xunit
 
 /// Issue #3329 (part of #3163, discovered while verifying #3319): a struct
@@ -15,6 +16,50 @@ import Xunit
 /// a cross-submission `StructSymbol`'s type/ctor token, unlike
 /// `BoundDefaultExpression`/`initobj`, which already handles it.
 class Issue3329CrossCellStructLiteralReplTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedDataStruct_SameAndCrossCellPhases(crossCell bool) {
+        using let engine = EmittedSessionEngine()
+        const declarations = `class Effects {
+    shared {
+        public var Trace string = ""
+        public func Mark(mark string, value int32) int32 {
+            Trace = Trace + mark
+            return value
+        }
+    }
+}
+data struct S {
+    public var X int32 = Effects.Mark("D", 7)
+}
+data struct P(A int32, B int32 = 5) {
+    public var X int32 = Effects.Mark("D", 7)
+}
+`
+        const use = `let first = S{X: Effects.Mark("E", 9)}
+let firstTrace = Effects.Trace + ":" + first.X.ToString()
+Effects.Trace = ""
+let second = P{A: Effects.Mark("A", 3), X: Effects.Mark("E", 9)}
+let secondTrace = Effects.Trace + ":" + second.A.ToString() + "/" + second.B.ToString() + "/" + second.X.ToString()
+Effects.Trace = ""
+let copied = first with{X = Effects.Mark("C", 8)}
+let raw = default(S)
+firstTrace + "|" + secondTrace + "|" + Effects.Trace + ":" + copied.X.ToString() + "/" + raw.X.ToString()`
+        if crossCell {
+            AssertOk(engine, declarations)
+        }
+        let result = engine.Evaluate(
+            if crossCell {
+                use
+            } else {
+                declarations + use
+            }
+        )
+        Assert.False(result.HasError, string.Join("; ", result.Diagnostics))
+        Assert.Equal(Encoding.UTF8.GetBytes("DE:9|ADE:3/0/9|C:8/0"), Encoding.UTF8.GetBytes(cast[string](result.Value)))
+    }
+
     @Fact
     func CrossCell_BareDeclaration_InitobjOnly_Works() {
         // Control case: no BoundStructLiteralExpression node at all — pure

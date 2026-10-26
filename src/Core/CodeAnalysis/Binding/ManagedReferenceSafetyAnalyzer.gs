@@ -87,6 +87,16 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                 )
             }
             case literal is BoundStructLiteralExpression {
+                if literal.CallsDataConstructor {
+                    BoundStructLiteralExpression.ValidateDataConstructor(
+                        literal.StructType,
+                        this.diagnostics,
+                        this.initializerAnchor ?? literal.Syntax ?? this.expressionAnchor,
+                        nil,
+                        canAccessInternal: false,
+                        checkAccessibility: false
+                    )
+                }
                 literal.ValidateInitializerWrites(this.diagnostics, this.initializerAnchor ?? this.expressionAnchor)
                 if literal.CopySource == nil {
                     this.CheckConstruction(
@@ -407,6 +417,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         // not the primary initialization path. Its uses are checked below with
         // zero provenance, without crediting ordinary declared initializers.
         if (type.ExplicitConstructors.IsDefaultOrEmpty && type.IsClass) ||
+            type.HasSynthesizedDataConstructor ||
             (
             type.NeedsSynthesizedValueStructDefaultCtor &&
                 !type.ValueStructDefaultCtorIsZeroInitialization &&
@@ -591,6 +602,12 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
             )
             return
         }
+        if type.ClrType != nil &&
+            node is BoundStructLiteralExpression{CallsDataConstructor: true} &&
+            type.GetDataConstructionConstructor() != nil {
+            // Imported constructor bodies own their fields. This traversal still checks caller arguments and later stores.
+            return
+        }
         let explicitPath = explicitConstructor ||
             (
             type.ExplicitConstructors.Any((c ConstructorSymbol) -> c.Parameters.IsEmpty) &&
@@ -628,6 +645,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         if explicitPath ||
             type.IsClass ||
             callsPrimary ||
+            node is BoundStructLiteralExpression{CallsDataConstructor: true} ||
             (type.NeedsSynthesizedValueStructDefaultCtor && !type.ValueStructDefaultCtorIsZeroInitialization) {
             for field in type.Fields {
                 let declaredField FieldSymbol? = type.GetDefinitionField(field)

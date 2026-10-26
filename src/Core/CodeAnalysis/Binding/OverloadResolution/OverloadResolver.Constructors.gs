@@ -33,13 +33,11 @@ internal partial class OverloadResolver {
         if bound is BoundConstructorCallExpression ctorCall &&
             ctorCall
             .StructType
-            .IsClass &&
-            ctorCall
-            .StructType
             .ClrType != nil &&
             ctorCall
             .StructType
-            .IsData {
+            .IsData &&
+            (ctorCall.StructType.IsClass || ctorCall.StructType.UsesConstructorOwnedDataConstruction) {
             return LowerImportedDataClassConstruction(ctorCall)
         }
         return bound
@@ -66,7 +64,18 @@ internal partial class OverloadResolver {
         // Issue #306: a class declaring an explicit `init(...)` constructor is
         // constructed against that constructor's parameter list rather than a
         // primary-constructor parameter list.
-        if !classType.EffectiveExplicitConstructors.IsDefaultOrEmpty {
+        if !classType
+            .EffectiveExplicitConstructors
+            .IsDefaultOrEmpty &&
+            !(
+            classType.HasSynthesizedDataConstructor &&
+                classType
+                .PrimaryConstructorParameters
+                .IsEmpty &&
+                syntax
+                .Arguments
+                .Count == 0
+        ) {
             return BindExplicitConstructorCallExpression(syntax, classType)
         }
         // Issue #343: pre-validate named-argument layout (positional precedes

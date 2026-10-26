@@ -1,6 +1,6 @@
 # ADR-0214: Constructor-owned data struct construction
 
-- **Status**: Proposed
+- **Status**: Accepted (maintainer approval on October 26, 2026)
 - **Date**: 2026-10-25
 - **Revised**: 2026-10-26
 - **Phase**: Language semantics and cross-assembly construction
@@ -8,9 +8,9 @@
 
 ## Status and scope
 
-This document proposes behavior. It does not describe a completed correction or an approved compatibility contract.
+The maintainer approved the full policy and implementation on October 26, 2026, at 09:34 PDT: "Policy approved, proceed implementation of 5349".
 
-The maintainer approved the constructor-owned direction. The detailed policies below remain proposed for review.
+This decision is accepted. Implementation and validation remain in progress. Approval alone does not fix either issue or establish test results.
 
 This revision replaces the per-field public-helper proposal previously recorded in this ADR. The helper implementation in PR #5349 is obsolete. It must be removed and replaced before that PR can merge. Its historical tests do not prove the design below.
 
@@ -44,7 +44,7 @@ G# retains its existing primary-member brace binding, described below. G# readon
 
 [ADR-0029](0029-data-struct-synthesized-members.md) and [ADR-0199](0199-data-types-synthesize-the-csharp-record-abi.md) remain the basis for other synthesized members. This proposal does not expand their property or deconstruction contracts.
 
-## Proposed construction phases
+## Construction phases
 
 Resolve the constructor and classify all entries before execution. Use the same ownership decision for source and imported types.
 
@@ -250,9 +250,9 @@ Run strict, unsuppressed IL verification on every positive producer and consumer
 4. Complete the acceptance matrix with real driver and metadata witnesses.
 5. Update normative specification and release notes only when implementation and validation support them.
 
-The current revision is documentation only. Neither #5296 nor #5364 is fixed by this revision. PR #5349 must remain draft and must not merge with the obsolete helper implementation.
+PR #5349 must remain draft until the replacement implementation and its acceptance witnesses are complete. It must not merge with the obsolete helper implementation.
 
-The remaining review decision is whether to adopt this complete constructor policy. It includes authored parameterless bodies, legacy-producer rejection, preserved G# brace-zero inputs, and the stated readonly limits. No public per-field helper ABI approval is requested.
+The complete policy is approved. It includes authored parameterless bodies, legacy-producer rejection, preserved G# brace-zero inputs, and the stated readonly limits. No public per-field helper ABI approval is requested.
 
 ## Alternatives not selected
 

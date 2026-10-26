@@ -1609,6 +1609,14 @@ internal class UserTokenResolver {
         // ResolveUserCtorTokenForDefault (issue #810) and
         // ResolveConstructedBaseParameterlessCtorToken (issue #1055).
         let ctorKey = structType.Definition ?? structType
+        if !ctorKey.IsClass && ctorKey.IsData && !ctorKey.HasDataConstructionPrimary {
+            let explicitDefault = ctorKey.EffectiveExplicitConstructors.FirstOrDefault(
+                (candidate ConstructorSymbol) -> candidate.Parameters.IsEmpty
+            )
+            if explicitDefault != nil {
+                return this.ResolveUserCtorTokenForExplicit(structType, explicitDefault)
+            }
+        }
         if !this.cache.ClassPrimaryCtorHandles.TryGetValue(ctorKey, out var primaryDef) {
             if ctorKey.HasDeclaredPrimaryConstructor && ctorKey.PrimaryConstructorParameters.IsEmpty {
                 return this.ResolveUserCtorTokenForDefault(structType)

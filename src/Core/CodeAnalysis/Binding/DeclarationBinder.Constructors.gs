@@ -985,7 +985,8 @@ internal partial class DeclarationBinder {
         // collisions between two user-declared init overloads. Value structs
         // reuse that signature validation without adding a source overload.
         var synthesizedPrimary ConstructorSymbol? = nil
-        if structSymbol.HasPrimaryConstructor {
+        if structSymbol.HasPrimaryConstructor ||
+            (structSymbol.UsesConstructorOwnedDataConstruction && structSymbol.HasDeclaredPrimaryConstructor) {
             synthesizedPrimary = SynthesizePrimaryConstructor(structSymbol, $package)
         }
         // ADR-0063 §9: bind every declared init(...) constructor. Duplicate

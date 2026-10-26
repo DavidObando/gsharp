@@ -7,11 +7,18 @@ package GSharp.Compiler.Tests.Emit
 import GSharp.Compiler
 import GSharp.Compiler.Tests
 import GSharp.Core.Tests
+import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Collections.Generic
 import System.Diagnostics
 import System.IO
+import System.Linq
 import System.Reflection
+import System.Reflection.Emit
+import System.Reflection.Metadata
+import System.Reflection.Metadata.Ecma335
+import System.Reflection.PortableExecutable
 import Xunit
 
 /// Issue #3329 — a struct literal (`S{}`) for a struct type declared in
@@ -28,6 +35,624 @@ import Xunit
 /// which is more convenient to drive from a test than a REPL session and
 /// confirms the fix is not REPL-specific.
 open class Issue3329CrossAssemblyStructLiteralEmitTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedDataStruct_EmptyPrimaryParity(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(`package constructor5296
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Next() int32 {
+            Trace = Trace + "I"
+            return 1
+        }
+    }
+}
+public data struct S() {
+    public var X int32 = Effects.Next()
+}`, "constructor5296", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let consumer = fixture.Compile(`import constructor5296
+import System
+data struct Local() {
+    public var X int32 = Effects.Next()
+}
+let local = Local{}
+Console.WriteLine(local.X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let imported = S{}
+Console.WriteLine(imported.X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let localOverride = Local{X: 9}
+Console.WriteLine(localOverride.X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let importedOverride = S{X: 9}
+Console.WriteLine(importedOverride.X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let ordinary = S()
+Console.WriteLine(ordinary.X.ToString() + ":" + Effects.Trace)`, "consumer", executable: true, "/r:" + selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("1:I\n1:I\n9:I\n9:I\n1:I\n"), fixture.RunBytes(consumer))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedDataStruct_DefaultOverrideAndExpressionTree(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(`package phases5296
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Value(mark string, value int32) int32 {
+            Trace = Trace + mark
+            return value
+        }
+    }
+}
+public data struct S {
+    public var X int32 = Effects.Value("D", 7)
+}
+public data struct Plain {
+    public var X int32 = 7
+}
+public data struct Primary(A int32, B int32 = 5) {
+    public var X int32 = Effects.Value("D", 7)
+}`, "phases5296", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let consumer = fixture.Compile(`import phases5296
+import System
+import System.Linq.Expressions
+data struct Local {
+    public var X int32 = Effects.Value("D", 7)
+}
+let local = Local{X: Effects.Value("E", 9)}
+Console.WriteLine(Effects.Trace + ":" + local.X.ToString())
+Effects.Trace = ""
+let imported = S{X: Effects.Value("E", 9)}
+Console.WriteLine(Effects.Trace + ":" + imported.X.ToString())
+Effects.Trace = ""
+let tree Expression[Func[S]] = () -> S{}
+Console.WriteLine("tree:" + Effects.Trace)
+let compiled = tree.Compile()
+let fromTree = compiled()
+Console.WriteLine(Effects.Trace + ":" + fromTree.X.ToString())
+let literalTree Expression[Func[Plain]] = () -> Plain{}
+let literalFactory = literalTree.Compile()
+Console.WriteLine(literalFactory().X)
+Effects.Trace = ""
+let overrideTree Expression[Func[S]] = () -> S{X: Effects.Value("E", 9)}
+Console.WriteLine("tree:" + Effects.Trace)
+Console.WriteLine(overrideTree.Compile()().X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let primaryTree Expression[Func[Primary]] = () -> Primary{B: Effects.Value("Q", 2), A: Effects.Value("A", 3), X: Effects.Value("E", 9)}
+Console.WriteLine("tree:" + Effects.Trace)
+let primary = primaryTree.Compile()()
+Console.WriteLine(Effects.Trace + ":" + primary.A.ToString() + "/" + primary.B.ToString() + "/" + primary.X.ToString())
+Effects.Trace = ""
+let rawTree Expression[Func[S]] = () -> default(S)
+Console.WriteLine(rawTree.Compile()().X.ToString() + ":" + Effects.Trace)`, "consumer", executable: true, "/r:" +
+                selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes("DE:9\nDE:9\ntree:\nD:7\n7\ntree:\n9:DE\ntree:\nQADE:3/2/9\n0:\n"),
+            fixture.RunBytes(consumer)
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedDataStruct_ReadonlyDefaultsAndConstructorUseAnchors(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(`package readonly5296
+public data struct R {
+    public let X int32 = 7
+}`, "readonly5296", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let consumer = fixture.Compile(`import readonly5296
+class Holder {
+    public var Value R = R{}
+}
+let first = Holder{}
+let second = Holder{}
+System.Console.WriteLine(first.Value.X)
+System.Console.WriteLine(second.Value.X)`, "consumer", executable: true, "/r:" + selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("7\n7\n"), fixture.RunBytes(consumer))
+        let (code, output) = fixture.TryCompile(`import readonly5296
+let x = R{X: 9}`, "rejected", executable: true, "/r:" + selected)
+        Assert.True(code != 0, output)
+        Assert.True(output.Contains("rejected.gs(2,11,2,12): error GS0127:", StringComparison.Ordinal), output)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
+        let rejectedReference = Path.Combine(fixture.Directory, "anchored.ref.dll")
+        let (anchorCode, anchorOutput) = fixture.TryCompile(`import readonly5296
+class Holder {
+    public var Value R = R{X: 9}
+}
+let first = Holder{}
+let second = Holder{}`, "anchored", executable: true, "/r:" + selected, "/refout:" + rejectedReference)
+        Assert.True(anchorCode != 0, anchorOutput)
+        for location in[]string{"(3,28,3,29)", "(5,13,5,19)", "(6,14,6,20)"} {
+            Assert.True(
+                anchorOutput.Contains("anchored.gs" + location + ": error GS0127:", StringComparison.Ordinal),
+                anchorOutput
+            )
+        }
+        Assert.Equal(3, anchorOutput.Split("error GS0127:", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "anchored.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        AssertOrdinaryConstructorMetadata(producer, "R")
+        AssertOrdinaryConstructorMetadata(reference, "R")
+        AssertConstructorStores(consumer, "readonly5296", "R", "X")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedDataStruct_PrimaryAuthoredAndGenericPhases(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(`package policy5296
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Mark(mark string, value int32) int32 {
+            Trace = Trace + mark
+            return value
+        }
+    }
+}
+public data struct Primary(A int32, B int32 = 5) {
+    public var X int32 = Effects.Mark("D", 7)
+}
+public data struct Authored {
+    public var X int32 = Effects.Mark("D", 7)
+    public init() {
+        Effects.Trace = Effects.Trace + "B"
+        X = 8
+    }
+    public convenience init(value int32) {
+        init()
+        X = value
+    }
+}
+public data struct Overloaded {
+    public var X int32 = Effects.Mark("D", 7)
+    public init(unused int32) {
+        Effects.Trace = Effects.Trace + "P"
+        X = 99
+    }
+}
+public data struct EmptyPrimary() {
+    public var X int32 = Effects.Mark("D", 7)
+    public init(unused int32) {
+        Effects.Trace = Effects.Trace + "P"
+        X = 99
+    }
+}
+public data struct Private[T] {
+    private var Hidden int32 = Effects.Mark("H", 3)
+    public var X int32 = Effects.Mark("D", 7)
+    public func ReadHidden() int32 -> Hidden
+}
+public data struct Generic[T](Value T) {
+    public var X int32 = Effects.Mark("D", 7)
+}`, "policy5296", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let consumer = fixture.Compile(`import policy5296
+import System
+let first = Primary{A: Effects.Mark("A", 3), X: Effects.Mark("E", 9)}
+Console.WriteLine(Effects.Trace + ":" + first.A.ToString() + "/" + first.B.ToString() + "/" + first.X.ToString())
+Effects.Trace = ""
+let reversed = Primary{B: Effects.Mark("Q", 2), A: Effects.Mark("A", 1), X: Effects.Mark("E", 9)}
+Console.WriteLine(Effects.Trace + ":" + reversed.A.ToString() + "/" + reversed.B.ToString() + "/" + reversed.X.ToString())
+Effects.Trace = ""
+let ordinary = Primary(3)
+Console.WriteLine(Effects.Trace + ":" + ordinary.A.ToString() + "/" + ordinary.B.ToString() + "/" + ordinary.X.ToString())
+Effects.Trace = ""
+let authored = Authored{X: Effects.Mark("E", 9)}
+Console.WriteLine(Effects.Trace + ":" + authored.X.ToString())
+Effects.Trace = ""
+Console.WriteLine(Authored().X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+Console.WriteLine(Authored(5).X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+Console.WriteLine(Overloaded{}.X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+Console.WriteLine(Overloaded().X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+Console.WriteLine(Overloaded(1).X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+Console.WriteLine(EmptyPrimary{}.X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+Console.WriteLine(EmptyPrimary().X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let hidden = Private[int32]{X: Effects.Mark("E", 9)}
+Console.WriteLine(Effects.Trace + ":" + hidden.ReadHidden().ToString() + "/" + hidden.X.ToString())
+Effects.Trace = ""
+func Make[T](value T) int32 {
+    let item = Generic[T]{Value: value, X: Effects.Mark("E", 9)}
+    return item.X
+}
+Console.WriteLine(Make[int32](42).ToString() + ":" + Effects.Trace)`, "consumer", executable: true, "/r:" + selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(
+            System
+                .Text
+                .Encoding
+                .UTF8
+                .GetBytes(
+                "ADE:3/0/9\nQADE:1/2/9\nD:3/5/7\nDBE:9\n8:DB\n5:DB\n7:D\n7:D\n99:DP\n7:D\n7:D\nHDE:3/9\n9:DE\n"
+            ),
+            fixture.RunBytes(consumer)
+        )
+        AssertOrdinaryConstructorMetadata(producer, "Overloaded")
+        AssertOrdinaryConstructorMetadata(reference, "Overloaded")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedDataStruct_ThrowingDefaultsAndStaticInitialization(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(`package throws5296
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Mark(mark string, value int32) int32 {
+            Trace = Trace + mark
+            return value
+        }
+        public func Fail() int32 {
+            Trace = Trace + "D"
+            throw System.InvalidOperationException("default")
+        }
+    }
+}
+public data struct Throwing {
+    public var X int32 = Effects.Fail()
+}
+public data struct Static {
+    public var X int32 = Effects.Mark("D", 7)
+    shared { init { Effects.Trace = Effects.Trace + "S" } }
+}
+public data struct StaticPrimary(A int32) {
+    public var X int32 = Effects.Mark("D", 7)
+    shared { init { Effects.Trace = Effects.Trace + "S" } }
+}`, "throws5296", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let consumer = fixture.Compile(`import throws5296
+import System
+try {
+    let value = Throwing{X: Effects.Mark("E", 9)}
+    Console.WriteLine(value.X)
+} catch (error InvalidOperationException) {
+    Console.WriteLine(Effects.Trace + ":" + error.Message)
+}
+Effects.Trace = ""
+let first = Static{X: Effects.Mark("E", 9)}
+Console.WriteLine(Effects.Trace + ":" + first.X.ToString())
+Effects.Trace = ""
+let second = StaticPrimary{A: Effects.Mark("A", 1), X: Effects.Mark("E", 9)}
+Console.WriteLine(Effects.Trace + ":" + second.X.ToString())`, "consumer", executable: true, "/r:" + selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("D:default\nSDE:9\nASDE:9\n"), fixture.RunBytes(consumer))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedDataStruct_CSharpConsumerAndDeterministicMetadata(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        const source = `package native5296
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Mark(mark string, value int32) int32 {
+            Trace = Trace + mark
+            return value
+        }
+    }
+}
+public data struct S {
+    public var X int32 = Effects.Mark("D", 7)
+    private var Hidden int32 = 3
+    public func ReadHidden() int32 -> Hidden
+}
+public data struct Empty {}
+public data struct Readonly {
+    public let X int32 = 7
+}
+public data struct Generic[T](Value T, Other int32 = 5) {
+    public var X int32 = Effects.Mark("D", 7)
+}`
+        let producer = fixture.Compile(source, "native5296", executable: false, "/refout:" + reference)
+        let firstImplementation = File.ReadAllBytes(producer)
+        let firstReference = File.ReadAllBytes(reference)
+        fixture.Compile(source, "native5296", executable: false, "/refout:" + reference)
+        Assert.Equal(firstImplementation, File.ReadAllBytes(producer))
+        Assert.Equal(firstReference, File.ReadAllBytes(reference))
+        IlVerifier.Verify(producer)
+        AssertOrdinaryConstructorMetadata(producer, "S")
+        AssertOrdinaryConstructorMetadata(reference, "S")
+        AssertOrdinaryConstructorMetadata(producer, "Empty")
+        AssertOrdinaryConstructorMetadata(reference, "Empty")
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let native = fixture.CompileCSharp(`using native5296;
+namespace Native5296Consumer;
+public static class NativeConsumer {
+    public static string Run() {
+        Effects.Trace = "";
+        var first = new S { X = Effects.Mark("E", 9) };
+        var trace = Effects.Trace + ":" + first.X + "/" + first.ReadHidden();
+        Effects.Trace = "";
+        var second = new Generic<int>(3) { X = Effects.Mark("E", 9) };
+        trace += "\n" + Effects.Trace + ":" + second.Value + "/" + second.Other + "/" + second.X;
+        Effects.Trace = "";
+        var raw = default(S);
+        var array = new S[1];
+        return trace + "\n" + raw.X + "/" + array[0].X + ":" + Effects.Trace + "\n" + new Readonly().X;
+    }
+}`, "NativeConsumer", selected)
+        IlVerifier.Verify(native, []string{producer})
+        let consumer = fixture.Compile(`import Native5296Consumer
+System.Console.WriteLine(NativeConsumer.Run())`, "consumer", executable: true, "/r:" + selected, "/r:" + native)
+        IlVerifier.Verify(consumer, []string{producer, native})
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("DE:9/3\nDE:3/5/9\n0/0:\n7\n"), fixture.RunBytes(consumer))
+        let rejected = CSharpCompilation.Create(
+            "rejected",
+            []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(`using native5296;
+public static class Bad {
+    public static Readonly Run() => new Readonly { X = 9 };
+}`, path: "rejected.cs")},
+            cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))
+                .Split(Path.PathSeparator)
+                .Append(selected)
+                .Select((path string) -> MetadataReference.CreateFromFile(path)),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        using let image = MemoryStream()
+        let rejection = rejected.Emit(image)
+        Assert.False(rejection.Success)
+        let error = Assert.Single(
+            rejection.Diagnostics.Where(
+                (diagnostic Microsoft.CodeAnalysis.Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error
+            )
+        )
+        Assert.Equal("CS0191", error.Id)
+        let location = error.Location.GetLineSpan()
+        Assert.Equal("rejected.cs", location.Path)
+        Assert.Equal(2, location.StartLinePosition.Line)
+        Assert.Equal(51, location.StartLinePosition.Character)
+        Assert.Equal(52, location.EndLinePosition.Character)
+        Assert.Equal(0, image.Length)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedDataStruct_AuthoredAccessibilityAndFriendMetadata(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(`package access5296
+@assembly:InternalsVisibleTo("consumer")
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Mark(mark string, value int32) int32 {
+            Trace = Trace + mark
+            return value
+        }
+    }
+}
+public data struct Secret {
+    public var X int32 = Effects.Mark("D", 7)
+    private init() {
+        Effects.Trace = Effects.Trace + "B"
+        X = 8
+    }
+    shared { public func Create() Secret -> Secret{} }
+}
+public data struct Friend {
+    public var X int32 = Effects.Mark("D", 7)
+    internal func init() {
+        Effects.Trace = Effects.Trace + "B"
+        X = 8
+    }
+}`, "access5296", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let consumer = fixture.Compile(`import access5296
+import System
+let own = Secret.Create()
+Console.WriteLine(Effects.Trace + ":" + own.X.ToString())
+Effects.Trace = ""
+let friend = Friend{}
+Console.WriteLine(Effects.Trace + ":" + friend.X.ToString())`, "consumer", executable: true, "/assemblyname:consumer", "/r:" +
+                selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("DB:8\nDB:8\n"), fixture.RunBytes(consumer))
+        let rejectedReference = Path.Combine(fixture.Directory, "rejected.ref.dll")
+        let (code, output) = fixture.TryCompile(`import access5296
+let bad = Secret{}`, "rejected", executable: true, "/r:" + selected, "/refout:" + rejectedReference)
+        Assert.True(code != 0, output)
+        Assert.True(output.Contains("rejected.gs(2,11,2,17): error GS0267:", StringComparison.Ordinal), output)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedDataStruct_LegacyMissingConstructorAndForeignZero(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        const declarations = `namespace legacy5296;
+public struct Legacy { public int X; }
+public record struct Foreign(int X = 17) { public int Y = 3; }
+public record struct Authored {
+    public int X = 7;
+    public Authored() { X = 8; }
+}`
+        let probe = fixture.CompileCSharp(declarations, "Probe")
+        var legacyToken = 0
+        {
+            using let stream = File.OpenRead(probe)
+            using let pe = PEReader(stream)
+            let reader = pe.GetMetadataReader()
+            legacyToken = MetadataTokens.GetToken(
+                Assert.Single(
+                    reader.TypeDefinitions,
+                    (handle TypeDefinitionHandle) -> reader.GetString(reader.GetTypeDefinition(handle).Name) == "Legacy"
+                )
+            )
+        }
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.CompileCSharpWithReference(
+            "[assembly: System.Reflection.AssemblyMetadata(\"GSharp.TypeSemantics\", \"" + legacyToken.ToString(
+                System.Globalization.CultureInfo.InvariantCulture
+            ) +
+                "|struct|1||closed\")]\n" +
+                declarations,
+            "legacy5296",
+            reference
+        )
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let rejectedReference = Path.Combine(fixture.Directory, "rejected.ref.dll")
+        let (code, output) = fixture.TryCompile(`import legacy5296
+let bad = Legacy{}`, "rejected", executable: true, "/r:" + selected, "/refout:" + rejectedReference)
+        Assert.True(code != 0, output)
+        Assert.True(output.Contains("rejected.gs(2,11,2,17): error GS0267:", StringComparison.Ordinal), output)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        let consumer = fixture.Compile(`import legacy5296
+import System
+let empty = Foreign{}
+let supplied = Foreign{X: 9}
+let ordinary = Foreign(3)
+Console.WriteLine(empty.X.ToString() + "/" + empty.Y.ToString())
+Console.WriteLine(supplied.X.ToString() + "/" + supplied.Y.ToString())
+Console.WriteLine(ordinary.X.ToString() + "/" + ordinary.Y.ToString())
+Console.WriteLine(Authored{}.X)`, "consumer", executable: true, "/r:" + selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("0/0\n9/0\n3/3\n8\n"), fixture.RunBytes(consumer))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedDataStruct_ProjectionCopyAndNestedZeroPhases(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(`package storage5296
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Mark(mark string, value int32) int32 {
+            Trace = Trace + mark
+            return value
+        }
+    }
+}
+public data struct Child {
+    public var X int32 = Effects.Mark("N", 7)
+    public var Items []int32
+}
+public data struct Target {
+    public var A int32
+    public var B int32
+    public var X int32 = Effects.Mark("D", 7)
+    public var Nested Child
+}
+public data struct Positional(A int32) {
+    public var X int32 = Effects.Mark("D", 7)
+}`, "storage5296", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let consumer = fixture.Compile(`import storage5296
+import System
+data struct Source {
+    public var A int32
+    public var B int32
+    public var X int32
+    public var Nested Child
+}
+let source = Source{A: 3, X: 7}
+let first Target = source
+Console.WriteLine(Effects.Trace + ":" + first.A.ToString() + "/" + first.X.ToString() + "/" + first.Nested.X.ToString() + "/" + first.Nested.Items.Length.ToString())
+Effects.Trace = ""
+let second = Target{...source, X: Effects.Mark("E", 9), B: Effects.Mark("B", 2)}
+Console.WriteLine(Effects.Trace + ":" + second.A.ToString() + "/" + second.X.ToString() + "/" + second.B.ToString())
+Effects.Trace = ""
+let third Positional = source
+Console.WriteLine(Effects.Trace + ":" + third.A.ToString() + "/" + third.X.ToString())
+Effects.Trace = ""
+let copied = first with{X = Effects.Mark("E", 8)}
+let copiedAgain = first.copy(X: Effects.Mark("C", 9))
+Console.WriteLine(Effects.Trace + ":" + copied.X.ToString() + "/" + copiedAgain.X.ToString() + "/" + first.X.ToString())
+Effects.Trace = ""
+var bare Target
+let raw = default(Target)
+let array = [1]Target{}
+Console.WriteLine(bare.X.ToString() + "/" + bare.Nested.X.ToString() + "/" + bare.Nested.Items.Length.ToString())
+Console.WriteLine(raw.X.ToString() + "/" + array[0].X.ToString() + ":" + Effects.Trace)`, "consumer", executable: true, "/r:" +
+                selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes("D:3/7/0/0\nDEB:3/9/2\nD:3/7\nEC:8/9/7\n0/0/0\n0/0:\n"),
+            fixture.RunBytes(consumer)
+        )
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)
@@ -70,9 +695,7 @@ data struct LocalNonPrimary {
 let local = LocalPrimary{X: Effects.Next("E", 9)}
 Console.WriteLine(Effects.Trace + ":" + local.X.ToString())
 Effects.Trace = ""
-let explicit = Effects.Next("E", 9)
-var imported = EmptyPrimary()
-imported.X = explicit
+let imported = EmptyPrimary{X: Effects.Next("E", 9)}
 Console.WriteLine(Effects.Trace + ":" + imported.X.ToString())
 Effects.Trace = ""
 Console.WriteLine(LocalPrimary{}.X)
@@ -91,8 +714,8 @@ Console.WriteLine(NonPrimary{}.X)
 Console.WriteLine(Effects.Trace)`, "consumer", executable: true, "/r:" + selected)
         IlVerifier.Verify(consumer, []string{producer})
         Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("EI:9\nEI:9\n1\nI\n1\nI\nE:9\nE:9\n1\nI\n"),
-            System.Text.Encoding.UTF8.GetBytes(fixture.Run(consumer))
+            System.Text.Encoding.UTF8.GetBytes("IE:9\nIE:9\n1\nI\n1\nI\nIE:9\nIE:9\n1\nI\n"),
+            fixture.RunBytes(consumer)
         )
         let assembly = EmittedFixture.Load(producer)
         for name in[]string{"EmptyPrimary", "Primary"} {
@@ -100,7 +723,9 @@ Console.WriteLine(Effects.Trace)`, "consumer", executable: true, "/r:" + selecte
             Assert.Null(type!!.GetNestedType("<>FieldInitializers", BindingFlags.Public))
         }
         let nonPrimary = assembly.GetType("i5296primary.NonPrimary", throwOnError: true)
-        Assert.NotNull(nonPrimary!!.GetNestedType("<>FieldInitializers", BindingFlags.Public))
+        Assert.Null(nonPrimary!!.GetNestedType("<>FieldInitializers", BindingFlags.Public))
+        AssertOrdinaryConstructorMetadata(producer, "NonPrimary")
+        AssertOrdinaryConstructorMetadata(reference, "NonPrimary")
     }
 
     @Theory
@@ -133,18 +758,19 @@ public data struct MutableOuter {
         let rejectedReference = Path.Combine(fixture.Directory, "rejected.ref.dll")
         let (code, output) = fixture.TryCompile(`import i5296anchors
 class Holder {
-    public var Value Outer = Outer{}
+    public var Value Outer
 }
 let first = Holder{}
 let second = Holder{}`, "rejected", executable: true, "/r:" + selected, "/refout:" + rejectedReference)
         Assert.True(code != 0, output)
-        for location in[]string{"(3,30,3,35)", "(5,13,5,19)", "(6,14,6,20)"} {
+        for location in[]string{"(3,5,3,27)", "(5,13,5,19)", "(6,14,6,20)"} {
             Assert.True(output.Contains("rejected.gs" + location + ": error GS0127:", StringComparison.Ordinal), output)
         }
         Assert.Equal(3, output.Split("error GS0127:", StringSplitOptions.None).Length - 1)
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
         Assert.False(File.Exists(rejectedReference))
         let consumer = fixture.Compile(`import i5296anchors
+System.Console.WriteLine(Outer{}.Child.Count())
 class Holder {
     public var Value MutableOuter = MutableOuter{}
 }
@@ -153,16 +779,13 @@ System.Console.WriteLine(omitted.Value.Child.Items.Length)
 let supplied = Holder{Value: MutableOuter{Child: MutableItems{Items: []int32{1, 2}}}}
 System.Console.WriteLine(supplied.Value.Child.Items.Length)`, "control", executable: true, "/r:" + selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("0\n2\n"),
-            System.Text.Encoding.UTF8.GetBytes(fixture.Run(consumer))
-        )
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("0\n0\n2\n"), fixture.RunBytes(consumer))
     }
 
     @Theory
     @InlineData(false)
     @InlineData(true)
-    func ImportedDataStruct_ReadonlyProjectionRejectsExternalWrites(useReferenceAssembly bool) {
+    func ImportedDataStruct_ReadonlyProjectionUsesOwningConstructor(useReferenceAssembly bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
         let producer = fixture.Compile(`package i5296projection
@@ -180,19 +803,15 @@ public data struct Mutable {
         } else {
             producer
         }
-        let rejectedReference = Path.Combine(fixture.Directory, "rejected.ref.dll")
-        let (code, output) = fixture.TryCompile(`import i5296projection
+        let projected = fixture.Compile(`import i5296projection
 data struct Source { public var A int32 }
 let source = Source{A: 3}
 let target Target = source
-System.Console.WriteLine(target.X)`, "rejected", executable: true, "/r:" + selected, "/refout:" + rejectedReference)
-        if code == 0 {
-            IlVerifier.Verify(Path.Combine(fixture.Directory, "rejected.dll"), []string{producer})
-        }
-        Assert.True(code != 0, output)
-        Assert.Contains("rejected.gs(4,21,4,27): error GS0127:", output, StringComparison.Ordinal)
-        Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
-        Assert.False(File.Exists(rejectedReference))
+System.Console.WriteLine(target.A)
+System.Console.WriteLine(target.X)`, "projected", executable: true, "/r:" + selected)
+        IlVerifier.Verify(projected, []string{producer})
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("3\n7\n"), fixture.RunBytes(projected))
+        AssertConstructorStores(projected, "i5296projection", "Target", "X")
         let consumer = fixture.Compile(`import i5296projection
 data struct Source {
     public var A int32
@@ -204,10 +823,7 @@ System.Console.WriteLine(target.A)
 System.Console.WriteLine(target.X)
 System.Console.WriteLine(default(Target).X)`, "control", executable: true, "/r:" + selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("3\n9\n0\n"),
-            System.Text.Encoding.UTF8.GetBytes(fixture.Run(consumer))
-        )
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("3\n9\n0\n"), fixture.RunBytes(consumer))
     }
 
     @Theory
@@ -277,78 +893,34 @@ let value = Basket{Items: []int32{}}`, "NonFriend", executable: true, "/assembly
     @InlineData(false)
     @InlineData(true)
     func ImportedDataStruct_ReadonlyInitializerRejectsExternalWrites(useReferenceAssembly bool) {
-        const library = `package i5296readonly
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(`package i5296readonly
 public data struct Readonly {
     public let X int32 = 7
-}`
-        let directory = Directory.CreateDirectory(
-            Path.Combine(AppContext.BaseDirectory, "gs_5296_readonly_" + Guid.NewGuid().ToString("N"))
-        )
-            .FullName
-        try {
-            let producer = Path.Combine(directory, "i5296readonly.dll")
-            let reference = Path.Combine(directory, "reference.dll")
-            let producerSource = Path.Combine(directory, "library.gs")
-            let consumerSource = Path.Combine(directory, "consumer.gs")
-            let consumer = Path.Combine(directory, "consumer.dll")
-            File.WriteAllText(producerSource, library)
-            Compile([]string{"/target:library", "/out:" + producer, "/refout:" + reference, producerSource})
-            IlVerifier.Verify(producer)
-            for (literal, location) in[](Literal string, Location string){
-                ("Readonly{}", "(2,13,2,21)"),
-                ("Readonly{X: 9}", "(2,22,2,23)")
-            } {
-                File.WriteAllText(
-                    consumerSource,
-                    "import i5296readonly\nlet value = " + literal + "\nSystem.Console.WriteLine(value.X)"
-                )
-                let rejected = TryCompile(
-                    []string{
-                        "/target:exe",
-                        "/out:" + consumer,
-                        "/r:" +
-                            (
-                            if useReferenceAssembly {
-                                reference
-                            } else {
-                                producer
-                            }
-                        ),
-                        consumerSource
-                    }
-                )
-                if rejected.Code == 0 {
-                    IlVerifier.Verify(consumer, []string{producer})
-                }
-                Assert.NotEqual(0, rejected.Code)
-                Assert.True(
-                    rejected.Output.Contains("consumer.gs" + location + ": error GS0127:", StringComparison.Ordinal),
-                    rejected.Output
-                )
-                Assert.False(File.Exists(consumer), rejected.Output)
-            }
-            Assert.Equal(
-                System.Text.Encoding.UTF8.GetBytes("0" + Environment.NewLine),
-                System
-                    .Text
-                    .Encoding
-                    .UTF8
-                    .GetBytes(
-                    CompileAndRun(
-                        "import i5296readonly\nSystem.Console.WriteLine(default(Readonly).X)",
-                        library,
-                        "i5296readonly",
-                        useReferenceAssembly
-                    )
-                )
-            )
-        } finally {
-            Directory.Delete(directory, recursive: true)
+}`, "i5296readonly", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
         }
+        let consumer = fixture.Compile(`import i5296readonly
+System.Console.WriteLine(Readonly{}.X)
+System.Console.WriteLine(default(Readonly).X)`, "consumer", executable: true, "/r:" + selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("7\n0\n"), fixture.RunBytes(consumer))
+        let rejectedReference = Path.Combine(fixture.Directory, "rejected.ref.dll")
+        let (code, output) = fixture.TryCompile(`import i5296readonly
+let value = Readonly{X: 9}`, "rejected", executable: true, "/r:" + selected, "/refout:" + rejectedReference)
+        Assert.True(code != 0, output)
+        Assert.True(output.Contains("rejected.gs(2,22,2,23): error GS0127:", StringComparison.Ordinal), output)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
     }
 
     @Fact
-    func ImportedDataStruct_MixedInitializersUseCollectionZerosNotDeclarationValues() {
+    func ImportedDataStruct_MixedInitializersUseConstructorDefaultsBeforeOrderedPopulation() {
         const expression = "Basket{Tag: 0, 1, Items: Effects.ExplicitItems()}"
         const library = `package i5296mixed
 public class Effects {
@@ -388,17 +960,18 @@ Effects.Trace = ""
 let imported = ` + expression + `
 Console.WriteLine(Effects.Trace + ":" + imported.Tag.ToString() + "," + imported.Items.Length.ToString())`
         Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("AE:1,3\nAE:1,3\n".ReplaceLineEndings(Environment.NewLine)),
-            System.Text.Encoding.UTF8.GetBytes(CompileAndRun(source, library, "i5296mixed"))
+            System.Text.Encoding.UTF8.GetBytes("DAE:3,3\nDAE:3,3\n"),
+            CompileAndRunExact(source, library, "i5296mixed")
         )
     }
 
     @Theory
     @InlineData(false)
     @InlineData(true)
-    func ImportedDataStruct_ConstantInitializerDoesNotTriggerStaticConstructor(throws bool) {
+    func ImportedDataStruct_ConstantInitializerUsesOrdinaryStaticConstructor(throws bool) {
         let initialization = if throws {
-            `throw System.InvalidOperationException("unexpected static initialization")`
+            `System.Console.Write("S")
+        throw System.InvalidOperationException("expected static initialization")`
         } else {
             `System.Console.Write("S")`
         }
@@ -407,11 +980,31 @@ Console.WriteLine(Effects.Trace + ":" + imported.Tag.ToString() + "," + imported
         let library = "package i5296static\npublic data struct Imported {\n" + members + "\n}"
         let source = "import i5296static\ndata struct Local {\n" + members + `
 }
-System.Console.WriteLine(Local{}.Value)
-System.Console.WriteLine(Imported{}.Value)`
+try {
+    System.Console.WriteLine(Local{}.Value)
+} catch (error System.TypeInitializationException) {
+    System.Console.WriteLine(error.InnerException?.Message)
+}
+try {
+    System.Console.WriteLine(Imported{}.Value)
+} catch (error System.TypeInitializationException) {
+    System.Console.WriteLine(error.InnerException?.Message)
+}`
         Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("1\n1\n".ReplaceLineEndings(Environment.NewLine)),
-            System.Text.Encoding.UTF8.GetBytes(CompileAndRun(source, library, "i5296static"))
+            System
+                .Text
+                .Encoding
+                .UTF8
+                .GetBytes(
+                (
+                    if throws {
+                        "Sexpected static initialization\nSexpected static initialization\n"
+                    } else {
+                        "S1\nS1\n"
+                    }
+                )
+            ),
+            CompileAndRunExact(source, library, "i5296static")
         )
     }
 
@@ -438,8 +1031,8 @@ Console.WriteLine(PropertyGrid{Layout: Layout.Compact}.LabelWidth)
 Console.WriteLine(SettingsLayoutInput{}.SidebarWidth)
 Console.WriteLine(PropertyGrid{Layout: Layout.Compact, LabelWidth: 160}.LabelWidth)`
         Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("160\n160\n180\n160\n".ReplaceLineEndings(Environment.NewLine)),
-            System.Text.Encoding.UTF8.GetBytes(CompileAndRun(source, library, "i5296defaults", useReferenceAssembly))
+            System.Text.Encoding.UTF8.GetBytes("160\n160\n180\n160\n"),
+            CompileAndRunExact(source, library, "i5296defaults", useReferenceAssembly)
         )
     }
 
@@ -484,14 +1077,8 @@ let array = [1]Imported{}
 Console.WriteLine(array[0].A)
 Console.WriteLine(Effects.Trace.Length)`
         Assert.Equal(
-            System
-                .Text
-                .Encoding
-                .UTF8
-                .GetBytes(
-                "XAB:1,2,9\nXAB:1,2,9\nABC:1,2,3\nXYZ:7,8,9\n0\n0\n0\n".ReplaceLineEndings(Environment.NewLine)
-            ),
-            System.Text.Encoding.UTF8.GetBytes(CompileAndRun(source, library, "i5296order"))
+            System.Text.Encoding.UTF8.GetBytes("ABCX:1,2,9\nABCX:1,2,9\nABC:1,2,3\nABCXYZ:7,8,9\n0\n0\n0\n"),
+            CompileAndRunExact(source, library, "i5296order")
         )
     }
 
@@ -792,6 +1379,116 @@ System.Console.WriteLine(value.Counts.Count)`)
     }
 
     shared {
+        private func CompileAndRunExact(
+            source string,
+            library string,
+            libraryName string,
+            useReferenceAssembly bool = false
+        )[]uint8 {
+            using let fixture = NativeSliceLanguageTests.Fixture()
+            let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+            let producer = fixture.Compile(library, libraryName, executable: false, "/refout:" + reference)
+            IlVerifier.Verify(producer)
+            let consumer = fixture.Compile(
+                source,
+                "consumer",
+                executable: true,
+                "/r:" +
+                    (
+                    if useReferenceAssembly {
+                        reference
+                    } else {
+                        producer
+                    }
+                )
+            )
+            IlVerifier.Verify(consumer, []string{producer})
+            return fixture.RunBytes(consumer)
+        }
+
+        private func AssertOrdinaryConstructorMetadata(path string, typeName string) {
+            using let stream = File.OpenRead(path)
+            using let pe = PEReader(stream)
+            let reader = pe.GetMetadataReader()
+            Assert.NotEmpty(reader.TypeDefinitions)
+            for handle in reader.TypeDefinitions {
+                let type = reader.GetTypeDefinition(handle)
+                Assert.NotEqual("<>FieldInitializers", reader.GetString(type.Name))
+                for methodHandle in type.GetMethods() {
+                    Assert.False(
+                        reader.GetString(reader.GetMethodDefinition(methodHandle).Name).StartsWith(
+                            "<>fieldInitializer$",
+                            StringComparison.Ordinal
+                        )
+                    )
+                }
+            }
+            let target = reader.GetTypeDefinition(
+                Assert.Single(
+                    reader.TypeDefinitions,
+                    (handle TypeDefinitionHandle) -> reader.GetString(reader.GetTypeDefinition(handle).Name) == typeName
+                )
+            )
+            let constructors = target
+                .GetMethods()
+                .Select((handle MethodDefinitionHandle) -> reader.GetMethodDefinition(handle))
+                .Where(
+                (method MethodDefinition) -> reader.GetString(method.Name) == ".ctor" &&
+                    (method.Attributes & MethodAttributes.MemberAccessMask) == MethodAttributes.Public
+            )
+                .Where(
+                (method MethodDefinition) -> {
+                    var signature = reader.GetBlobReader(method.Signature)
+                    signature.ReadSignatureHeader()
+                    return signature.ReadCompressedInteger() == 0
+                }
+            )
+                .ToArray()
+            Assert.Single(constructors)
+        }
+
+        private func AssertConstructorStores(path string, ns string, typeName string, readonlyField string) {
+            using let stream = File.OpenRead(path)
+            using let pe = PEReader(stream)
+            let reader = pe.GetMetadataReader()
+            var constructorCalls = 0
+            for handle in reader.MethodDefinitions {
+                let method = reader.GetMethodDefinition(handle)
+                if method.RelativeVirtualAddress == 0 {
+                    continue
+                }
+                let bytes = pe.GetMethodBody(method.RelativeVirtualAddress).GetILBytes()!!
+                for instruction in IlInstructionReader.Read(bytes) {
+                    if instruction.OpCode != OpCodes.Newobj && instruction.OpCode != OpCodes.Stfld {
+                        continue
+                    }
+                    let token = BitConverter.ToInt32(bytes, instruction.Offset + instruction.OpCode.Size)
+                    let target = MetadataTokens.EntityHandle(token)
+                    if target.Kind != HandleKind.MemberReference {
+                        continue
+                    }
+                    let member = reader.GetMemberReference(cast[MemberReferenceHandle](target))
+                    if member.Parent.Kind != HandleKind.TypeReference {
+                        continue
+                    }
+                    let owner = reader.GetTypeReference(cast[TypeReferenceHandle](member.Parent))
+                    if reader.GetString(owner.Namespace) != ns || reader.GetString(owner.Name) != typeName {
+                        continue
+                    }
+                    if instruction.OpCode == OpCodes.Newobj {
+                        Assert.Equal(".ctor", reader.GetString(member.Name))
+                        var signature = reader.GetBlobReader(member.Signature)
+                        signature.ReadSignatureHeader()
+                        Assert.Equal(0, signature.ReadCompressedInteger())
+                        constructorCalls++
+                    } else {
+                        Assert.NotEqual(readonlyField, reader.GetString(member.Name))
+                    }
+                }
+            }
+            Assert.Equal(1, constructorCalls)
+        }
+
         private func CompileAndRun(
             source string,
             library string? = nil,

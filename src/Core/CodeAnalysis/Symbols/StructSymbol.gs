@@ -881,7 +881,86 @@ class StructSymbol : TypeSymbol {
 
     /// Gets a value indicating whether the compiler-owned value-struct default constructor initializes only
     /// sound zero values.
-    internal prop ValueStructDefaultCtorIsZeroInitialization bool -> !IsClass && IsData && HasDeclaredPrimaryConstructor
+    internal prop ValueStructDefaultCtorIsZeroInitialization bool -> UsesConstructorOwnedDataConstruction
+
+    internal prop UsesConstructorOwnedDataConstruction bool -> !IsClass && IsData && !IsInline
+
+    /// Gets whether ordinary data construction needs a compiler-owned public constructor.
+    internal prop HasSynthesizedDataConstructor bool -> UsesConstructorOwnedDataConstruction &&
+        (
+        HasDeclaredPrimaryConstructor || !EffectiveExplicitConstructors.Any(
+            (constructor ConstructorSymbol) -> constructor.Parameters.IsEmpty
+        )
+    )
+
+    /// Gets whether existing G# metadata assigns brace inputs to a primary constructor.
+    internal prop HasDataConstructionPrimary bool -> UsesConstructorOwnedDataConstruction &&
+        (
+        if ClrType == nil {
+            HasDeclaredPrimaryConstructor
+        } else {
+            ImportedAssemblySemantics.TryGetTypeSemantics(ClrType, out var semantics) &&
+                !semantics!!
+                .PrimaryConstructorParameterNames
+                .IsDefaultOrEmpty
+        }
+    )
+
+    /// Selects the ordinary imported constructor from the existing G# primary signature.
+    internal func GetDataConstructionConstructor() ConstructorInfo? {
+        if ClrType is not{} importedType {
+            return nil
+        }
+        let parameters = if HasDataConstructionPrimary {
+            PrimaryConstructorParameters
+        } else {
+            ImmutableArray[ParameterSymbol].Empty
+        }
+        if ImportedAssemblySemantics.TryGetTypeSemantics(importedType, out var semantics) &&
+            semantics!!
+            .PrimaryConstructorParameterNames
+            .Length != parameters.Length {
+            return nil
+        }
+        let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+        let fields = ClrTypeUtilities.SafeGetFields(importedType, flags)
+        let expectedTypes = ImmutableArray.CreateBuilder[Type](parameters.Length)
+        for var i = 0; i < parameters.Length; i++ {
+            let tokens = semantics!!.PrimaryConstructorParameterFieldTokens
+            let field = if !tokens.IsDefaultOrEmpty && i < tokens.Length && tokens[i] != 0 {
+                fields.FirstOrDefault((candidate FieldInfo) -> candidate.MetadataToken == tokens[i])
+            } else {
+                fields.FirstOrDefault((candidate FieldInfo) -> candidate.Name == parameters[i].Name)
+            }
+            let physicalType = field?.FieldType ?? ClrTypeUtilities.SafeGetProperty(
+                importedType,
+                parameters[i].Name,
+                flags
+            )
+                ?.PropertyType
+            if physicalType == nil {
+                return nil
+            }
+            expectedTypes.Add(physicalType)
+        }
+        for constructor in ClrTypeUtilities.SafeGetConstructors(importedType, flags) {
+            let actual = constructor.GetParameters()
+            if actual.Length != parameters.Length {
+                continue
+            }
+            var matches = true
+            for var i = 0; i < actual.Length; i++ {
+                if !ClrTypeUtilities.AreSame(expectedTypes[i], actual[i].ParameterType) {
+                    matches = false
+                    break
+                }
+            }
+            if matches {
+                return constructor
+            }
+        }
+        return nil
+    }
 
     /// Gets a value indicating whether a positional data struct needs an in-type collection-zero helper.
     internal prop NeedsValueStructZeroHelper bool -> ValueStructDefaultCtorIsZeroInitialization && Fields.Any(
@@ -994,12 +1073,20 @@ class StructSymbol : TypeSymbol {
         ClrType == nil &&
             !IsClass &&
             !IsInline &&
-            !InstanceFieldInitializers.IsEmpty &&
             (
-            IsGenericDefinition || HasPrimaryConstructor || !CollectEnclosingTypeParameters(this).IsDefaultOrEmpty ||
-                InstanceFieldInitializers
-                .Keys
-                .Any((member FieldSymbol) -> member.Accessibility != Accessibility.Public)
+            if IsData {
+                NeedsValueStructZeroHelper
+            } else {
+                !InstanceFieldInitializers.IsEmpty &&
+                    (
+                    IsGenericDefinition || HasPrimaryConstructor || !CollectEnclosingTypeParameters(
+                        this
+                    ).IsDefaultOrEmpty ||
+                        InstanceFieldInitializers
+                        .Keys
+                        .Any((member FieldSymbol) -> member.Accessibility != Accessibility.Public)
+                )
+            }
         )
     }
 

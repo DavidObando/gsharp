@@ -624,30 +624,6 @@ class ImportedTypeSymbol : TypeSymbol {
             aggregate.SetMethods(BuildMethods(type, aggregate, includeInternal))
             aggregate.SetStaticMethods(BuildStaticMethods(type, aggregate, includeInternal))
             let instanceInitBuilder = ImmutableDictionary.CreateBuilder[FieldSymbol, BoundExpression]()
-            // ADR-0214 retains arbitrary initializer expressions in their declaring assembly.
-            // The literal binder selects omitted fields without changing evaluation order.
-            if semantics!!.IsValueType && type.GetNestedType(
-                ImportedAssemblySemantics.FieldInitializerHostName,
-                BindingFlags.Public
-            ) is {} initializerHost {
-                for field in aggregate.Fields {
-                    let initializer = initializerHost.GetMethod(
-                        ImportedAssemblySemantics.GetFieldInitializerMethodName(field.Name),
-                        BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly,
-                        binder: nil,
-                        Type.EmptyTypes,
-                        modifiers: nil
-                    )
-                    if initializer != nil {
-                        instanceInitBuilder[field] = BoundClrStaticCallExpression(
-                            nil,
-                            initializer,
-                            field.Type,
-                            ImmutableArray[BoundExpression].Empty
-                        )
-                    }
-                }
-            }
             // Issue #3329: a value struct's ADR-0159 magic-collection field zero
             // value is normally recorded on the DECLARING compilation's own
             // StructSymbol.InstanceFieldInitializers (DeclarationBinder.Structs.cs)

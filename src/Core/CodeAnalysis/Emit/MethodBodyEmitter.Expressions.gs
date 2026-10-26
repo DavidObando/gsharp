@@ -1280,6 +1280,25 @@ internal partial class MethodBodyEmitter {
         if literal.CopySource != nil {
             this.EmitExpression(literal.CopySource)
             this.il.StoreLocal(slot)
+        } else if literal.CallsDataConstructor {
+            if literal.StructType.ClrType != nil && literal.StructType.GetDataConstructionConstructor() == nil {
+                this.il.LoadLocalAddress(slot)
+                this.il.OpCode(ILOpCode.Initobj)
+                this.il.Token(typeDef)
+            } else {
+                if callsPrimary {
+                    this.EmitStructLiteralPrimaryArguments(literal, primaryValues)
+                }
+                let constructor = literal.StructType.GetDataConstructionConstructor()
+                let token = if constructor != nil {
+                    this.outer.memberRefs.GetCtorReference(constructor)
+                } else {
+                    this.outer.userTokens.ResolveUserCtorTokenForPrimary(literal.StructType)
+                }
+                this.il.OpCode(ILOpCode.Newobj)
+                this.il.Token(token)
+                this.il.StoreLocal(slot)
+            }
         } else if callsPrimary {
             this.il.LoadLocalAddress(slot)
             this.il.OpCode(ILOpCode.Initobj)
@@ -1292,7 +1311,7 @@ internal partial class MethodBodyEmitter {
         // ldloca slot; initobj typedef — zero-initializes the value type —
         // or, for a #3219 struct, ldloca slot; call .ctor() (which zeroes and
         // runs the declared initializers in-type).
-        if literal.CopySource == nil && !callsPrimary {
+        if literal.CopySource == nil && !callsPrimary && !literal.CallsDataConstructor {
             this.il.LoadLocalAddress(slot)
             if usesOwningInitializerConstructor {
                 for var marker = 0; marker < structDefinition.LiteralInitializerMarkerCount; marker++ {
@@ -1307,15 +1326,7 @@ internal partial class MethodBodyEmitter {
         }
         // For each initializer: ldloca slot; <emit value>; stfld fieldHandle.
         for init in literal.Initializers {
-            if literal.IsZeroInitialization &&
-                structDefinition.ValueStructDefaultCtorIsZeroInitialization &&
-                usesOwningInitializerConstructor &&
-                init.Field is {} zeroField &&
-                MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(
-                literal.Syntax,
-                literal.StructType,
-                zeroField
-            ) != nil {
+            if literal.IsInTypeZeroInitializer(init) {
                 // Skip only the definition-owned zero stores that actually ran.
                 continue
             }

@@ -664,10 +664,15 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 this.TranslateExpression(structLiteral.CopySource, parameterMap)
             }
         }
-        if structLiteral.CallsPrimaryConstructor {
+        if structLiteral.CallsPrimaryConstructor || structLiteral.CallsDataConstructor {
             let arguments = ImmutableArray.CreateBuilder[BoundExpression]()
             let consumed = HashSet[BoundFieldInitializer]()
-            for parameter in structLiteral.StructType.PrimaryConstructorParameters {
+            let parameters = if structLiteral.CallsPrimaryConstructor {
+                structLiteral.StructType.PrimaryConstructorParameters
+            } else {
+                ImmutableArray[ParameterSymbol].Empty
+            }
+            for parameter in parameters {
                 let initializer = Invariant.Required(
                     structLiteral.GetPrimaryArgument(parameter.Name),
                     "primary literal arguments, including defaults, are prepared during binding",
@@ -841,9 +846,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
         let markerCount = literal.StructType.LiteralInitializerMarkerCount
-        if literal.IsZeroInitialization &&
-            literal.StructType is {IsData: true, IsClass: false, HasDeclaredPrimaryConstructor: true} &&
-            markerCount == 0 {
+        if literal.IsZeroInitialization && literal.StructType is {IsData: true, IsClass: false} && markerCount == 0 {
             return this.BuildZeroStorageStructLiteralExpression(literal, parameterMap)
         }
         var construction BoundExpression
@@ -1048,7 +1051,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         // Only property-based anonymous objects carry the NewExpression.Members
         // contract. Named positional data types can also have properties without
         // fields, including properties that hide inherited members.
-        if constructor.StructType.Definition!!.HasAnonymousConstructorMembers {
+        if (constructor.StructType.Definition ?? constructor.StructType).HasAnonymousConstructorMembers {
             let membersArray = BuildMemberInfoArray(
                 constructor.StructType,
                 constructor.StructType.PrimaryConstructorParameters

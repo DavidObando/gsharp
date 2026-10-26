@@ -41,15 +41,16 @@ class BoundStructLiteralExpression : BoundExpression {
         StructType = structType
         CopySource = copySource
         IsZeroInitialization = isZeroInitialization
-        Initializers = if CallsPrimaryConstructor {
-            PreparePrimaryArguments(
-                syntax,
-                structType,
-                initializers.Where((initializer BoundFieldInitializer) -> !initializer.IsDeclarationInitializer)
-                    .ToImmutableArray()
-            )
+        let explicitInitializers = if CallsDataConstructor || CallsPrimaryConstructor {
+            initializers.Where((initializer BoundFieldInitializer) -> !initializer.IsDeclarationInitializer)
+                .ToImmutableArray()
         } else {
             initializers
+        }
+        Initializers = if CallsPrimaryConstructor {
+            PreparePrimaryArguments(syntax, structType, explicitInitializers)
+        } else {
+            explicitInitializers
         }
     }
 
@@ -76,11 +77,28 @@ class BoundStructLiteralExpression : BoundExpression {
     override prop Type TypeSymbol -> StructType
     override prop Kind BoundNodeKind -> BoundNodeKind.StructLiteralExpression
 
+    internal prop CallsDataConstructor bool -> !IsZeroInitialization &&
+        CopySource == nil &&
+        StructType.UsesConstructorOwnedDataConstruction
+
+    internal func IsInTypeZeroInitializer(initializer BoundFieldInitializer) bool -> IsZeroInitialization &&
+        StructType.ClrType == nil &&
+        (StructType.Definition ?? StructType).ValueStructDefaultCtorIsZeroInitialization &&
+        (StructType.Definition ?? StructType).NeedsSynthesizedValueStructDefaultCtor &&
+        initializer.Field is {} field &&
+        MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(Syntax, StructType, field) != nil
+
     internal prop CallsPrimaryConstructor bool -> !IsZeroInitialization &&
         CopySource == nil &&
-        StructType.ClrType == nil &&
-        (StructType.Definition ?? StructType).IsData &&
-        (StructType.Definition ?? StructType).HasDeclaredPrimaryConstructor
+        (
+        if StructType.IsClass {
+            StructType.ClrType == nil &&
+                (StructType.Definition ?? StructType).IsData &&
+                (StructType.Definition ?? StructType).HasDeclaredPrimaryConstructor
+        } else {
+            StructType.HasDataConstructionPrimary
+        }
+    )
 
     /// Checks imported value-type stores after every construction path selects its initializers.
     internal func ValidateInitializerWrites(diagnostics DiagnosticBag, anchor SyntaxNode?) {
@@ -90,10 +108,12 @@ class BoundStructLiteralExpression : BoundExpression {
         }
         for initializer in Initializers {
             if initializer.Field is not{} field ||
-                CanWriteInitializerField(initializer.FieldDeclaringType ?? StructType, field) {
+                CanWriteInitializerField(initializer.FieldDeclaringType ?? StructType, field) ||
+                IsInTypeZeroInitializer(initializer) ||
+                (CallsPrimaryConstructor && GetPrimaryMember(StructType, field.Name) == field) {
                 continue
             }
-            let syntax = Syntax ?? anchor
+            let syntax = anchor ?? Syntax
             let location = if syntax is StructLiteralExpressionSyntax literal {
                 literal
                     .Initializers
@@ -155,7 +175,58 @@ class BoundStructLiteralExpression : BoundExpression {
 
     shared {
         internal func CanWriteInitializerField(type StructSymbol, field FieldSymbol) bool -> !field.IsReadOnly ||
-            type.ClrType == nil
+            (type.ClrType == nil && (!type.IsData || type.IsClass))
+
+        internal func ValidateDataConstructor(
+            type StructSymbol,
+            diagnostics DiagnosticBag,
+            syntax SyntaxNode?,
+            currentFunction FunctionSymbol?,
+            canAccessInternal bool,
+            checkAccessibility bool = true
+        ) bool {
+            if !type.UsesConstructorOwnedDataConstruction {
+                return true
+            }
+            var valid = true
+            if type.ClrType is {} imported {
+                let constructor = type.GetDataConstructionConstructor()
+                valid = if constructor != nil {
+                    !checkAccessibility ||
+                        constructor.IsPublic ||
+                        (canAccessInternal && (constructor.IsAssembly || constructor.IsFamilyOrAssembly))
+                } else {
+                    !ImportedAssemblySemantics.TryGetTypeSemantics(imported, out _) &&
+                        !type.HasDataConstructionPrimary &&
+                        !ClrTypeUtilities
+                        .SafeGetConstructors(
+                        imported,
+                        System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.NonPublic
+                    )
+                        .Any((candidate System.Reflection.ConstructorInfo) -> candidate.GetParameters().Length == 0)
+                }
+            } else if !type.HasDataConstructionPrimary {
+                let constructor = type.EffectiveExplicitConstructors.FirstOrDefault(
+                    (candidate ConstructorSymbol) -> candidate.Parameters.IsEmpty
+                )
+                valid = !checkAccessibility || constructor == nil || AccessibilityChecker.IsAccessible(
+                    constructor.Function.Accessibility,
+                    type,
+                    currentFunction
+                )
+            }
+            if !valid {
+                let location = if syntax is StructLiteralExpressionSyntax literal {
+                    literal.TypeIdentifier.Location
+                } else {
+                    syntax?.Location ?? default(TextLocation)
+                }
+                diagnostics.ReportNoApplicableOverload(location, type.Name)
+            }
+            return valid
+        }
 
         internal func PreparePrimaryArguments(
             syntax SyntaxNode?,

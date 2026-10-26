@@ -323,6 +323,7 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         if target is BoundStructLiteralExpression{StructType: {IsClass: false}} literal &&
+            !literal.CallsDataConstructor &&
             !(literal.StructType.Definition ?? literal.StructType)
             .NeedsSynthesizedValueStructDefaultCtor {
             let initializers = literal.Initializers.ToBuilder()
@@ -1180,6 +1181,23 @@ internal partial class ExpressionBinder {
         // `with`/copy. Generalize the check to both kinds (drop the
         // `IsClass`-only restriction) so a data class AND a data struct both
         // resolve construction through the one semantic aggregate.
+        if syntax.Arguments.Count == 0 && ImportedTypeSymbol.TryCreateSemanticAggregate(
+            resolvedClrType,
+            $scope.References,
+            out var zeroAggregate
+        ) &&
+            zeroAggregate is {IsData: true, IsClass: false, HasDataConstructionPrimary: false} zeroData &&
+            !BoundStructLiteralExpression
+            .ValidateDataConstructor(
+            zeroData,
+            Diagnostics,
+            syntax,
+            this.function,
+            binderCtx.References.CanAccessInternalMembers(resolvedClrType.Assembly)
+        ) {
+            result = BoundErrorExpression(syntax)
+            return true
+        }
         if openGenericDefinition == nil && ImportedTypeSymbol.TryCreateSemanticAggregate(
             resolvedClrType,
             $scope.References,

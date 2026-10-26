@@ -398,12 +398,17 @@ internal shared class StructuralProjectionPlanner {
         out failure string?
     ) StructuralProjectionConstruction? {
         failure = nil
-        if target.HasPrimaryConstructor {
+        if target.HasDataConstructionPrimary ||
+            (!target.UsesConstructorOwnedDataConstruction && target.HasPrimaryConstructor) {
             parameters = target
                 .PrimaryConstructorParameters
                 .Select((parameter ParameterSymbol) -> (parameter, parameter.Type))
                 .ToImmutableArray()
             return StructuralProjectionConstruction(StructuralProjectionConstructionKind.UserPrimary, userType: target)
+        }
+        if target.UsesConstructorOwnedDataConstruction {
+            parameters = ImmutableArray[(ParameterSymbol, TypeSymbol)].Empty
+            return StructuralProjectionConstruction(StructuralProjectionConstructionKind.UserDefault, userType: target)
         }
         let explicitConstructors = target.EffectiveExplicitConstructors
         if !explicitConstructors.IsDefaultOrEmpty {

@@ -1125,7 +1125,6 @@ internal class ReflectionMetadataEmitter {
                 method,
                 containingType
             ),
-            this.typeDefEmitter.EmitValueStructDefaultConstructor,
             this.userTokens.ResolveUserInstanceMethodToken,
             this.customAttrEncoder.EmitMethodNullability,
             this.memberRefs.GetCtorReference,
@@ -2174,7 +2173,7 @@ internal class ReflectionMetadataEmitter {
                 methodRow += structSynthesizedRows
                 // Native positional data construction invokes a real primary
                 // constructor, including anonymous-class literal backing types.
-                if s.HasDeclaredPrimaryConstructor {
+                if s.HasSynthesizedDataConstructor {
                     classPrimaryCtorRows[s] = methodRow
                     methodRow++
                 }
@@ -2259,8 +2258,7 @@ internal class ReflectionMetadataEmitter {
             // parameterless .ctor as the struct's last row. ClassCtorHandles
             // doubles as the default-ctor registry ResolveUserCtorTokenForDefault
             // consults for constructed-generic MemberRef parenting.
-            if needsSynthesizedDefaultCtor &&
-                (!(s.IsData && s.HasDeclaredPrimaryConstructor) || s.NeedsValueStructZeroHelper) {
+            if needsSynthesizedDefaultCtor && (!s.IsData || s.NeedsValueStructZeroHelper) {
                 let initializerCtor = MetadataTokens.MethodDefinitionHandle(methodRow++)
                 if s.HasPrimaryConstructor && !s.ValueStructDefaultCtorIsZeroInitialization {
                     this.cache.ClassPrimaryCtorHandles[s] = initializerCtor
@@ -2652,10 +2650,8 @@ internal class ReflectionMetadataEmitter {
                 }
             } else if s.IsInline && structFirstMethodRows.TryGetValue(s, out var inlineCtorRow) {
                 this.cache.ClassPrimaryCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(inlineCtorRow)
-            } else if s.IsData && s.HasDeclaredPrimaryConstructor && classPrimaryCtorRows.TryGetValue(
-                s,
-                out var dataPrimaryCtorRow
-            ) {
+            }
+            if s.HasSynthesizedDataConstructor && classPrimaryCtorRows.TryGetValue(s, out var dataPrimaryCtorRow) {
                 this.cache.ClassPrimaryCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(dataPrimaryCtorRow)
             }
         }
@@ -3502,7 +3498,7 @@ internal class ReflectionMetadataEmitter {
             // so the early-out below must not skip a struct whose only row is
             // that ctor.
             let emitsSynthesizedDefaultCtor = ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(s) &&
-                (!(s.IsData && s.HasDeclaredPrimaryConstructor) || s.NeedsValueStructZeroHelper)
+                (!s.IsData || s.NeedsValueStructZeroHelper)
             if s
                 .Methods
                 .IsDefaultOrEmpty &&
