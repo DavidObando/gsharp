@@ -22,6 +22,48 @@ import System.Collections.Generic
 /// value flowed into a non-null `string` unchecked.
 class Adr0193FunnelMergeTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ByRefFunctionPointerLayouts_PreservePointeeAndConstructedArgumentNullability(constructed bool) {
+        using let fixture = CSharpFixture(`#nullable enable
+namespace SignatureLayouts {
+    public unsafe class Managed<T> {
+        public delegate*<ref T?, ref string> Value;
+    }
+}`, allowUnsafe: true)
+        let argument = if constructed {
+            typeof(List[string])
+        } else {
+            typeof(string)
+        }
+        let closed = fixture.Load().GetType("SignatureLayouts.Managed`1")!!.MakeGenericType(argument)
+        let field = closed.GetField("Value")!!
+        let readers = []TypeSymbol{
+            ClrNullability.GetFieldTypeSymbol(field),
+            MemberLookup.GetClrFieldTypeSymbol(ImportedTypeSymbol.Get(closed), field)
+        }
+        Assert.NotEmpty(readers)
+        Assert.All(
+            readers,
+            (type TypeSymbol) -> {
+                let pointer = Assert.IsType[FunctionPointerTypeSymbol](type)
+                Assert.True(pointer.IsManaged)
+                let result = Assert.IsType[ByRefTypeSymbol](pointer.ReturnType).PointeeType
+                Assert.Equal(typeof(string), result.ClrType)
+                Assert.Equal(ReferenceNullabilityKind.NotNull, result.ReferenceNullability)
+                let parameter = Assert.IsType[ByRefTypeSymbol](Assert.Single(pointer.ParameterTypes)).PointeeType
+                Assert.Equal(argument, parameter.ClrType)
+                Assert.Equal(ReferenceNullabilityKind.Nullable, parameter.ReferenceNullability)
+                if constructed {
+                    let element = Assert.Single(parameter.GetElementPositions())
+                    Assert.Equal(typeof(string), element.ClrType)
+                    Assert.Equal(ReferenceNullabilityKind.NotNull, element.ReferenceNullability)
+                }
+            }
+        )
+    }
+
+    @Theory
     @InlineData("Field")
     @InlineData("Property")
     @InlineData("Return")

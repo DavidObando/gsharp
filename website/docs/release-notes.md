@@ -648,6 +648,10 @@ Before moving an application to a different compiler version, pin the intended S
   array-valued generic arguments.
   Overload checks, override matching, and named tuples preserve nested signatures.
   Managed function-pointer signatures also keep nullable reference annotations.
+  Byref signature readers retain pointee annotations without making nested
+  generic arguments nullable. Tuple-name metadata traverses pointer children and
+  function-pointer returns before parameters, so later named tuple elements keep
+  their positions across assembly boundaries.
 
 - Aligned VS Code and Visual Studio TextMate highlighting with website Prism
   for escaped and Unicode names, contextual intrinsics and reference/slice

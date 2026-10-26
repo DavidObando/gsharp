@@ -8,12 +8,90 @@ import System.Collections.Generic
 import System.Collections.Immutable
 import System.Diagnostics
 import System.IO
+import System.Linq
+import System.Reflection
+import System.Runtime.CompilerServices
 import System.Runtime.InteropServices
 import System.Text
 import System.Text.RegularExpressions
 import Xunit
 
 class Issue5260ImportedFunctionPointerDriverTests {
+    @Theory
+    @InlineData("FunctionPointer")
+    @InlineData("Pointer")
+    @InlineData("Order")
+    func NestedTupleNames_ConsumePointerChildrenBeforeLaterSiblings(kind string) {
+        using let fixture = CSharpFixture(NestedTupleContract, allowUnsafe: true)
+        let consumer = Compile(
+            fixture.DirectoryPath,
+            "Consumer",
+            "import NestedTuples\nunsafe func Main() {\n    let value = Tuples." +
+                kind +
+                "()\n    System.Console.Write(value.Tail.First)\n    System.Console.Write(\"|\")\n" +
+                "    System.Console.Write(value.Tail.Second)\n}",
+            fixture.AssemblyPath
+        )
+        Assert.True(consumer.Code == 0, consumer.Diagnostics)
+        IlVerifier.Verify(consumer.Path, []string{fixture.AssemblyPath})
+        Assert.Equal(Encoding.UTF8.GetBytes("11|22"), Run(consumer.Path))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func NestedTupleNames_EmitFunctionPointerReturnBeforeParameters(hasReturnTuple bool) {
+        using let fixture = CSharpFixture(NestedTupleContract, allowUnsafe: true)
+        let signature = if hasReturnTuple {
+            "(Pointers []unmanaged[Cdecl]((ArgA int32, ArgB int32)) -> (RetA int32, RetB int32), Tail (First int32, Second int32))"
+        } else {
+            "(Pointers []unmanaged[Cdecl]((Second int32, First int32)) -> void, Tail (First int32, Second int32))"
+        }
+        let producer = Compile(
+            fixture.DirectoryPath,
+            "Forwarder",
+            "package Forwarder\nimport NestedTuples\npublic unsafe func Get() " +
+                signature +
+                " -> Tuples." +
+                (
+                if hasReturnTuple {
+                    "Order"
+                } else {
+                    "FunctionPointer"
+                }
+            ) +
+                "()",
+            fixture.AssemblyPath,
+            executable: false
+        )
+        Assert.True(producer.Code == 0, producer.Diagnostics)
+        let method = Assembly
+            .LoadFile(producer.Path)
+            .GetTypes()
+            .SelectMany((type Type) -> type.GetMethods(BindingFlags.Public | BindingFlags.Static))
+            .Single((method MethodInfo) -> method.Name == "Get")
+        let names = Assert.IsType[TupleElementNamesAttribute](
+            Attribute.GetCustomAttribute(method.ReturnParameter, typeof(TupleElementNamesAttribute))
+        )
+        let expected = if hasReturnTuple {
+            []string? {"Pointers", "Tail", "RetA", "RetB", "ArgA", "ArgB", "First", "Second"}
+        } else {
+            []string? {"Pointers", "Tail", "Second", "First", "First", "Second"}
+        }
+        Assert.Equal(expected, names.TransformNames)
+        let consumer = Compile(fixture.DirectoryPath, "Consumer", `import Forwarder
+unsafe func Main() {
+    let value = Get()
+    System.Console.Write(value.Tail.First)
+    System.Console.Write("|")
+    System.Console.Write(value.Tail.Second)
+}`, producer.Path)
+        Assert.True(consumer.Code == 0, consumer.Diagnostics)
+        IlVerifier.Verify(producer.Path, []string{fixture.AssemblyPath})
+        IlVerifier.Verify(consumer.Path, []string{fixture.AssemblyPath, producer.Path})
+        Assert.Equal(Encoding.UTF8.GetBytes("11|22"), Run(consumer.Path))
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)
@@ -417,6 +495,18 @@ namespace Review4 {
         public delegate*<T?, T?> Property => Value;
         public delegate*<T?, T?> Get() => Value;
         public static T? Identity(T? value) => value;
+    }
+}`
+
+        private const NestedTupleContract string = `#nullable enable
+namespace NestedTuples {
+    public static unsafe class Tuples {
+        public static (delegate* unmanaged[Cdecl]<(int Second, int First), void>[] Pointers,
+            (int First, int Second) Tail) FunctionPointer() => (null!, (11, 22));
+        public static ((int Second, int First)*[] Pointers,
+            (int First, int Second) Tail) Pointer() => (null!, (11, 22));
+        public static (delegate* unmanaged[Cdecl]<(int ArgA, int ArgB), (int RetA, int RetB)>[] Pointers,
+            (int First, int Second) Tail) Order() => (null!, (11, 22));
     }
 }`
 

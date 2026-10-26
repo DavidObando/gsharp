@@ -1126,6 +1126,10 @@ shared class ClrNullability {
             if NullableLifting.GetValueTypeNullableUnderlyingClr(layout) is {} layoutUnderlying {
                 layout = layoutUnderlying
             }
+            if actual.IsByRef && layout.IsByRef {
+                Append(actual.GetElementType()!!, layout.GetElementType()!!)
+                return
+            }
             if layout.IsGenericParameter {
                 let flag = layoutFlags[layoutOffset++]
                 // ADR-0186 §2's open-type-parameter carve-out, applied to the
