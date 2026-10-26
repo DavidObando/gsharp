@@ -1752,7 +1752,7 @@ abstract class BoundTreeRewriter {
             node.ConstrainedReceiverTypeParameter,
             node.ConstrainedInterfaceType,
             node.EventContainingType
-        )
+        ){IsNonVirtualBaseCall = node.IsNonVirtualBaseCall}
     }
 
     /// Rewrites a user-defined event subscription expression (ADR-0052).
@@ -1776,7 +1776,7 @@ abstract class BoundTreeRewriter {
             handler,
             node.IsAdd,
             node.EventType
-        )
+        ){IsNonVirtualBaseCall = node.IsNonVirtualBaseCall}
     }
 
     /// Rewrites a CLR binary operator call (Stream C).

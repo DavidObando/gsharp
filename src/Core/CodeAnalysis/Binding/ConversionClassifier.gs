@@ -3092,7 +3092,8 @@ internal class ConversionClassifier {
                 nil,
                 receiver,
                 userDisposeAsync!!,
-                ImmutableArray[BoundExpression].Empty
+                ImmutableArray[BoundExpression].Empty,
+                getMethodGroupObservableReturnType(userDisposeAsync!!, userDisposeAsync!!.Type)
             )
             return BoundAwaitExpression(nil, call, TypeSymbol.Void)
         }
