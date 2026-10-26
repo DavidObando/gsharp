@@ -59,6 +59,12 @@ The SDK maps standard .NET debug properties to the same compiler flags.
 
 Use `<DebugType>embedded</DebugType>` and `<EmbedAllSources>true</EmbedAllSources>` only when you deliberately want a self-contained debug artifact. Embedding source is off by default because it places raw source bytes in the symbol data.
 
+### Source Link
+
+The SDK uses standard .NET Source Link generation for supported Git hosts. The PDB contains commit-specific source URLs without source file contents. Use the [SDK publishing instructions](./sdk-projects.md#source-link) to distribute repository metadata and matching symbols.
+
+The debugger must support Source Link and permit source downloads. The referenced commit must contain the source bytes that match the PDB hash. Source Link does not make a private repository public.
+
 ## Source matching requirements
 
 Debuggers bind breakpoints by matching PDB document names and hashes to files on disk. The compiler therefore loads source files through absolute paths before building syntax trees, so Portable PDB document names are rooted. A relative document name can cause `vsdbg` and CoreCLR debugging to open a phantom tab instead of the source file.

@@ -1,4 +1,7 @@
 <Project>
+  <Import Project="$(MSBuildThisFileDirectory)../src/Sdk/Gsharp.NET.Sdk/build/Gsharp.NET.SourceLink.targets"
+          Condition="'$(_GsharpSourceLinkTargetsImported)' != 'true'" />
+
    <!-- Disable test targets for non-test projects -->
   <Import Project="$(MSBuildThisFileDirectory)notest.targets" Condition="'$(IsTestProject)' != 'true'" />
 

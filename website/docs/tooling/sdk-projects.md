@@ -160,6 +160,43 @@ The SDK uses the standard .NET property names where possible.
 </PropertyGroup>
 ```
 
+### Source Link
+
+The .NET SDK supplies Source Link generation for supported Git hosts. G# writes the generated mapping into portable or embedded PDBs. No additional package is necessary for the standard providers.
+
+Use these properties for a library that you intend to publish:
+
+```xml
+<PropertyGroup>
+  <DebugType>portable</DebugType>
+  <Deterministic>true</Deterministic>
+  <PublishRepositoryUrl>true</PublishRepositoryUrl>
+  <IncludeSymbols>true</IncludeSymbols>
+  <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+</PropertyGroup>
+```
+
+Build from a Git checkout with the intended remote URL. Publish the referenced commit before you publish the package. Use `dotnet pack` to produce the package and its symbol package.
+
+The package manifest records the repository URL and commit. The PDB maps source documents to commit-specific URLs. Incremental builds update the PDB when the mapping changes.
+
+Set `EnableSourceLink=false` to disable automatic mapping generation. A local repository without remote metadata still produces ordinary debug symbols. Source Link does not upload files or embed source bytes.
+
+For an explicit mapping, disable automatic generation and set `SourceLink` to your JSON file:
+
+```xml
+<PropertyGroup>
+  <EnableSourceLink>false</EnableSourceLink>
+  <SourceLink>sourcelink.json</SourceLink>
+</PropertyGroup>
+```
+
+The SDK reports an error if this file is missing and compilation requests debug information. The compiler preserves the JSON bytes. The mapping must match the absolute document paths in the PDB.
+
+Source embedding remains a separate `EmbedAllSources` option. G# does not implement selective embedding through `EmbedUntrackedSources`. Do not enable source embedding unless you intend to distribute those source files.
+
+See the [Microsoft guidance](https://learn.microsoft.com/en-us/dotnet/standard/library-guidance/sourcelink) and the [Source Link documentation](https://github.com/dotnet/sourcelink#using-source-link-in-net-projects).
+
 ## Generated sources: resx and Roslyn generators
 
 The 0.4 SDK has two build-time generated-source paths.

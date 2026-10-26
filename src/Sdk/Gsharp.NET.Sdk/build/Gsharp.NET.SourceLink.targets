@@ -1,0 +1,23 @@
+<Project>
+  <PropertyGroup>
+    <_GsharpSourceLinkTargetsImported>true</_GsharpSourceLinkTargetsImported>
+  </PropertyGroup>
+
+  <!-- The standard targets set this hook only when Source Link targets are imported. -->
+  <Target Name="_GsharpGenerateSourceLink"
+          BeforeTargets="_GsharpPrepareSourceLink"
+          DependsOnTargets="GenerateSourceLinkFile"
+          Condition="'$(Language)' == 'Gsharp' and '$(_GenerateSourceLinkFileBeforeTargets)' != ''" />
+
+  <Target Name="_GsharpPrepareSourceLink"
+          BeforeTargets="_GsharpCreateCoreCompileInputsCache;CoreCompile"
+          Condition="'$(Language)' == 'Gsharp'">
+    <Error Condition="'$(SourceLink)' != '' and
+                      '$(DebugType)' != '' and '$(DebugType)' != 'none' and
+                      '$(SkipCompilerExecution)' != 'true' and !Exists('$(SourceLink)')"
+           Text="Source Link file '$(SourceLink)' does not exist." />
+    <PropertyGroup>
+      <MSBuildAllProjects>$(MSBuildAllProjects);$(SourceLink)</MSBuildAllProjects>
+    </PropertyGroup>
+  </Target>
+</Project>
