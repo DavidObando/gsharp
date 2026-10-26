@@ -2178,19 +2178,19 @@
       "rows=3 sha256=C9A641ECB294B56F"
     ],
     "MemberRef": [
-      "rows=10 sha256=8C7603E56758834B"
+      "rows=11 sha256=A5A94298E785270A"
     ],
     "MethodBodies": [
-      "rows=7 sha256=746B63B15CB5A297"
+      "rows=7 sha256=C3A7A996F0BDB2AF"
     ],
     "MethodDef": [
-      "rows=7 sha256=A3583A029FAD28CD"
+      "rows=7 sha256=BAD0AF1DE98C9648"
     ],
     "TypeDef": [
       "rows=3 sha256=81DE1D5B515BA73C"
     ],
     "TypeRef": [
-      "rows=10 sha256=D71145D39176B934"
+      "rows=11 sha256=0BC71E82B711A7B5"
     ]
   },
   "samples/PInvokeLibraryImport.gs": {
