@@ -332,6 +332,72 @@ Outer().Run()`, "StaticVisibility5262", true, "/r:" + contract)
     }
 
     @Fact
+    func ImportedDefaultMethodsHideOuterCallbacksUsingInheritedCallCandidates() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace DefaultMethods5262;
+public interface IReader { int Read() => 2; }
+public interface ITransitive : IReader { }
+public class Reader : ITransitive { }
+public interface IValue<T> { T Echo(T value) => value; }
+public class GenericReader<T> : IValue<T> { }
+public interface IExplicit { int Read(); }
+public class ExplicitReader : IExplicit { int IExplicit.Read() => 6; }`, "DefaultMethods5262")
+        let executable = fixture.Compile(`package DefaultLookup5262
+import System
+import DefaultMethods5262
+class Plain : Reader { func Pick() int32 -> Read() }
+class Outer {
+    shared {
+        let Read () -> int32 = func() int32 { return 1 }
+        let Echo (int32) -> int32 = func(value int32) int32 { return 99 }
+    }
+    class Inner : Reader { func Pick() int32 -> Read() }
+    class Generic : GenericReader[int32] { func Pick() int32 -> Echo(7) }
+    class Declared : Reader {
+        func Read() int32 -> 3
+        func Pick() int32 -> Read()
+    }
+    class Explicit : ExplicitReader { func Pick() int32 -> Read() }
+    class Parameter : Reader { func Pick(Read () -> int32) int32 -> Read() }
+    func Run() {
+        Console.Write(Inner().Pick())
+        Console.Write("|")
+        Console.Write(Generic().Pick())
+        Console.Write("|")
+        Console.Write(Declared().Pick())
+        Console.Write("|")
+        Console.Write(Explicit().Pick())
+        Console.Write("|")
+        Console.Write(Parameter().Pick(func() int32 { return 8 }))
+    }
+}
+Console.Write(Plain().Pick())
+Console.Write("|")
+Outer().Run()`, "DefaultLookup5262", true, "/r:" + contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal(Encoding.UTF8.GetBytes("2|2|7|3|1|8"), fixture.RunBytes(executable))
+    }
+
+    @Fact
+    func ImportedDefaultMethodsDoNotAcquireAReceiverInSharedBody() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace SharedDefault5262;
+public interface IReader { int Read() => 2; }
+public class Reader : IReader { }`, "SharedDefault5262")
+        let (code, output) = fixture.TryCompile(`import SharedDefault5262
+class Outer {
+    shared { let Read () -> int32 = func() int32 { return 1 } }
+    class Inner : Reader {
+        shared { func Pick() int32 -> Read() }
+    }
+}`, "SharedDefaultLookup5262", false, "/r:" + contract)
+        Assert.NotEqual(0, code)
+        Assert.Contains("SharedDefaultLookup5262.gs(5,39,5,43): error GS0130:", output, StringComparison.Ordinal)
+        Assert.Equal(1, output.Split(": error ", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "SharedDefaultLookup5262.dll")))
+    }
+
+    @Fact
     func ImplicitObjectMethodDoesNotAcquireAReceiverInSharedBody() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let (code, output) = fixture.TryCompile(`package ObjectStatic5262

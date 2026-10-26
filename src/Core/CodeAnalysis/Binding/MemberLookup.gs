@@ -86,7 +86,11 @@ internal class MemberLookup {
                 return current
             }
             const flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
-            if ClrTypeUtilities.SafeGetMethods(clrBase, flags).Any(
+            if SafeGetMethodsIncludingSelfAndInterfaces(clrBase, name).Count != 0 || ClrTypeUtilities.SafeGetMethods(
+                clrBase,
+                flags
+            )
+                .Any(
                 (method MethodInfo) -> ClrTypeUtilities.EmittedMemberNameMatches(method, name) &&
                     ClrMemberVisibility.IsVisibleFromDerived(method, canAccessInternals(method.DeclaringType))
             ) {
