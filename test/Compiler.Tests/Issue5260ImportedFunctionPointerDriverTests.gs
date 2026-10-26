@@ -35,6 +35,55 @@ class Issue5260ImportedFunctionPointerDriverTests {
     }
 
     @Fact
+    func RoslynProducer_PreservesFunctionPointersInsideGenericArrayArguments() {
+        using let fixture = CSharpFixture(NestedContract, allowUnsafe: true)
+        const source = `import GenericPointers
+struct Payload { var Value int32 }
+unsafe func Main() {
+    let holder = Provider[Payload].Create()
+    let field unmanaged[Cdecl](*Payload, nuint) -> *Payload = holder.Values.Value[0]
+    let property unmanaged[Cdecl](*Payload, nuint) -> *Payload = holder.Property.Value[0]
+    let result unmanaged[Cdecl](*Payload, nuint) -> *Payload = Provider[Payload].Get().Value[0]
+    System.Console.Write(field == nil)
+    System.Console.Write("|")
+    System.Console.Write(property == nil)
+    System.Console.Write("|")
+    System.Console.Write(result == nil)
+}`
+        let consumer = Compile(fixture.DirectoryPath, "Consumer", source, fixture.AssemblyPath)
+        Assert.True(consumer.Code == 0, consumer.Diagnostics)
+        Assert.Equal(Encoding.UTF8.GetBytes("True|True|True"), Run(consumer.Path))
+        let image = File.ReadAllBytes(consumer.Path)
+        Assert.NotEmpty(image)
+        let repeated = Compile(fixture.DirectoryPath, "Consumer", source, fixture.AssemblyPath)
+        Assert.True(repeated.Code == 0, repeated.Diagnostics)
+        Assert.Equal(image, File.ReadAllBytes(repeated.Path))
+    }
+
+    @Theory
+    @InlineData("unmanaged[Stdcall](*Payload, nuint) -> *Payload")
+    @InlineData("unmanaged[Cdecl](*Payload, nint) -> *Payload")
+    func ImportedGenericArray_RejectsDifferentAbiOrSignatureWithAnExactDiagnostic(type string) {
+        using let fixture = CSharpFixture(NestedContract, allowUnsafe: true)
+        let expression = "Provider[Payload].Get().Value[0]"
+        let source = "import GenericPointers\nstruct Payload { var Value int32 }\nunsafe func Main() {\n    let target " +
+            type +
+            " = " +
+            expression +
+            "\n}"
+        let consumer = Compile(fixture.DirectoryPath, "Rejected", source, fixture.AssemblyPath)
+        Assert.NotEqual(0, consumer.Code)
+        Assert.False(File.Exists(consumer.Path))
+        let errors = Regex.Matches(consumer.Diagnostics, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+): ([^\r\n]*)`)
+        let error = Assert.Single(errors)
+        Assert.Equal("4", error.Groups[1].Value)
+        Assert.Equal((19 + type.Length).ToString(), error.Groups[2].Value)
+        Assert.Equal("4", error.Groups[3].Value)
+        Assert.Equal((19 + type.Length + expression.Length).ToString(), error.Groups[4].Value)
+        Assert.Equal("GS0156", error.Groups[5].Value)
+    }
+
+    @Fact
     func RoslynProducer_ProjectsAnOverrideSignatureWithoutAnInternalError() {
         using let fixture = CSharpFixture(Contract, assemblyName: "Contracts", allowUnsafe: true)
         const source = `import Contracts
@@ -112,6 +161,17 @@ unsafe func Main() {
     }
 
     shared {
+        private const NestedContract string = `namespace GenericPointers {
+    public class Box<T> { public T Value; }
+    public unsafe class Provider<T> where T : unmanaged {
+        public Box<delegate* unmanaged[Cdecl]<T*, nuint, T*>[]> Values;
+        public Box<delegate* unmanaged[Cdecl]<T*, nuint, T*>[]> Property => Values;
+        public static Provider<T> Create() => new Provider<T> { Values = Get() };
+        public static Box<delegate* unmanaged[Cdecl]<T*, nuint, T*>[]> Get() =>
+            new Box<delegate* unmanaged[Cdecl]<T*, nuint, T*>[]> { Value = new delegate* unmanaged[Cdecl]<T*, nuint, T*>[1] };
+    }
+}`
+
         private const Producer string = `package Fixture
 import System.Runtime.InteropServices
 @StructLayout(LayoutKind.Sequential)

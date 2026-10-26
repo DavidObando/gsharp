@@ -1944,7 +1944,7 @@ internal class MemberLookup {
             }
             if currentOpenClr.IsArray && currentOpenClr.GetArrayRank() > 1 {
                 let mappedElement = MapOpenClrTypeToSymbolic(
-                    currentOpenClr.GetElementType(),
+                    openClr.GetElementType(),
                     openDefinition,
                     typeArguments,
                     openMethodDefinition,
@@ -1960,7 +1960,7 @@ internal class MemberLookup {
             // Issue #833 extends the recursion to method-level parameters so
             // `Enumerable.ToArray[T](IEnumerable[T]) → T[]` surfaces as `[]T`.
             if currentOpenClr.IsArray && currentOpenClr.GetArrayRank() == 1 {
-                let openElement = currentOpenClr.GetElementType()
+                let openElement = openClr.GetElementType()
                 let mappedElement = MapOpenClrTypeToSymbolic(
                     openElement,
                     openDefinition,
@@ -1975,7 +1975,9 @@ internal class MemberLookup {
                 // symbolic slice here the call's return would collapse to the
                 // erased `object[]` and fail to convert to `[]Foo` (GS0155). Mirror
                 // the generic-type branch below, which already honours #903.
-                if TypeSymbol.RequiresSymbolicProjection(mappedElement) ||
+                if TypeSymbol.RequiresSymbolicProjection(mappedElement) || ClrNullability.ContainsFunctionPointer(
+                    openClr
+                ) ||
                     (
                     openElement?.ContainsGenericParameters == true &&
                         mappedElement
@@ -1990,7 +1992,7 @@ internal class MemberLookup {
             // `Span<T>`) reports `IsByRef`. Recurse on the pointee and wrap with
             // `ByRefTypeSymbol` to mirror the open-shape's contract.
             if currentOpenClr.IsByRef {
-                let openPointee = currentOpenClr.GetElementType()
+                let openPointee = openClr.GetElementType()
                 let mappedPointee = MapOpenClrTypeToSymbolic(
                     openPointee,
                     openDefinition,
@@ -1998,7 +2000,9 @@ internal class MemberLookup {
                     openMethodDefinition,
                     methodTypeArguments
                 )
-                if TypeSymbol.RequiresSymbolicProjection(mappedPointee) ||
+                if TypeSymbol.RequiresSymbolicProjection(mappedPointee) || ClrNullability.ContainsFunctionPointer(
+                    openClr
+                ) ||
                     (
                     openPointee?.ContainsGenericParameters == true &&
                         mappedPointee
@@ -2017,7 +2021,7 @@ internal class MemberLookup {
             // position was then distinct from the source Color? symbol even
             // though both came from the same receiver substitution.
             if NullableLifting.IsValueTypeNullableClr(currentOpenClr) {
-                let openUnderlying = currentOpenClr.GetGenericArguments()[0]
+                let openUnderlying = openClr.GetGenericArguments()[0]
                 let mappedUnderlying = MapOpenClrTypeToSymbolic(
                     openUnderlying,
                     openDefinition,
@@ -2028,9 +2032,11 @@ internal class MemberLookup {
                 return NullableLifting.WrapValueTypeNullable(mappedUnderlying)
             }
             if currentOpenClr.IsGenericType {
-                let openArgs = currentOpenClr.GetGenericArguments()
+                let openArgs = openClr.GetGenericArguments()
                 let symbolic = ImmutableArray.CreateBuilder[TypeSymbol](openArgs.Length)
-                var anyParam = currentOpenClr.IsGenericTypeDefinition && !typeArguments.IsDefaultOrEmpty
+                let hasFunctionPointers = ClrNullability.ContainsFunctionPointer(openClr)
+                var anyParam = hasFunctionPointers ||
+                    (currentOpenClr.IsGenericTypeDefinition && !typeArguments.IsDefaultOrEmpty)
                 for a in openArgs {
                     let mapped = MapOpenClrTypeToSymbolic(
                         a,
@@ -2070,7 +2076,7 @@ internal class MemberLookup {
                 }
                 let openDef = currentOpenClr.GetGenericTypeDefinition()
                 if !anyParam {
-                    return TypeSymbol.FromClrType(currentOpenClr)
+                    return TypeSymbol.FromClrType(openClr)
                 }
                 // Construct the type-erased closed shape (`<object, object, …>`) so
                 // the resulting symbol mirrors the existing convention used by
@@ -2105,11 +2111,14 @@ internal class MemberLookup {
                 // erase to `object`; concrete leaves keep their CLR identity, matching
                 // the selector parameter's erasure and keeping both shapes aligned.
                 let symbolicArgs = symbolic.ToImmutable()
-                let erasedClosed = TryBuildErasedClosedGeneric(openDef, openParams, symbolicArgs, contextObject) ??
+                let erasedClosed = if hasFunctionPointers && !currentOpenClr.ContainsGenericParameters {
                     currentOpenClr
+                } else {
+                    TryBuildErasedClosedGeneric(openDef, openParams, symbolicArgs, contextObject) ?? currentOpenClr
+                }
                 return ImportedTypeSymbol.GetConstructed(erasedClosed, openDef, symbolicArgs)
             }
-            return TypeSymbol.FromClrType(currentOpenClr)
+            return TypeSymbol.FromClrType(openClr)
         }
 
         /// Issue #833: structural unification that recovers the symbolic

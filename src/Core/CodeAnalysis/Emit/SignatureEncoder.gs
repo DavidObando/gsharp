@@ -711,7 +711,7 @@ internal class SignatureEncoder {
                     break
                 }
                 if type.IsConstructedGenericType {
-                    let openDef = type.GetGenericTypeDefinition()
+                    let openDef = type.UnderlyingSystemType.GetGenericTypeDefinition()
                     let typeArgs = type.GetGenericArguments()
                     let genericInst = encoder.GenericInstantiation(
                         this.outer.memberRefs.GetTypeReference(openDef),

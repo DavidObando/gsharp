@@ -163,7 +163,9 @@ class FunctionPointerTypeSymbol : TypeSymbol {
             }
             // An unmodified Type omits calling conventions, including legacy Cdecl. Do not infer a default ABI.
             if object.ReferenceEquals(type, type.UnderlyingSystemType) {
-                throw InvalidOperationException("An unmanaged function pointer requires a modified CLR signature type.")
+                throw InvalidOperationException(
+                    "An unmanaged function pointer requires a modified CLR signature type; received ${type.GetType().FullName}."
+                )
             }
             const Prefix = "System.Runtime.CompilerServices.CallConv"
             let conventions = type.GetFunctionPointerCallingConventions()
@@ -179,7 +181,9 @@ class FunctionPointerTypeSymbol : TypeSymbol {
             for convention in conventions {
                 let name = convention.FullName
                 if name == nil || !name.StartsWith(Prefix, StringComparison.Ordinal) {
-                    throw InvalidOperationException("A function pointer has an unknown CLR calling convention.")
+                    throw InvalidOperationException(
+                        "A function pointer has an unknown CLR calling convention '${name ?? "<null>"}'."
+                    )
                 }
                 names.Add(name.Substring(Prefix.Length))
             }

@@ -956,8 +956,19 @@ shared class ClrNullability {
         }
     }
 
-    private func ContainsFunctionPointer(type Type) bool -> type.IsFunctionPointer ||
-        (type.HasElementType && ContainsFunctionPointer(type.GetElementType()!!))
+    internal func ContainsFunctionPointer(type Type) bool {
+        if type.IsFunctionPointer || (type.HasElementType && ContainsFunctionPointer(type.GetElementType()!!)) {
+            return true
+        }
+        if type.IsGenericType {
+            for argument in type.GetGenericArguments() {
+                if ContainsFunctionPointer(argument) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
 
     /// Constructs a (cref:TypeSymbol) for [`clrType`](paramref) by
     /// reading the nullability byte at [`offset`](paramref) within
@@ -1214,8 +1225,8 @@ shared class ClrNullability {
             let actualGeneric = actual.IsGenericType && !actual.IsGenericTypeDefinition
             let layoutGeneric = layout.IsGenericType && !layout.IsGenericTypeDefinition
             if actualGeneric && layoutGeneric && ClrTypeUtilities.AreSame(
-                actual.GetGenericTypeDefinition(),
-                layout.GetGenericTypeDefinition()
+                actual.UnderlyingSystemType.GetGenericTypeDefinition(),
+                layout.UnderlyingSystemType.GetGenericTypeDefinition()
             ) {
                 builder.Add(
                     if actual.IsValueType {

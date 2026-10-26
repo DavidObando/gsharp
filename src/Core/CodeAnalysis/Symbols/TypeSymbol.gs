@@ -202,14 +202,17 @@ open partial class TypeSymbol : Symbol {
             // (`Nullable<T>` aka `T?` in C#) as a GSharp `NullableTypeSymbol`
             // wrapping the underlying. Reference-type nullability driven by
             // `[NullableAttribute]` byte arrays is a follow-up.
-            if NullableLifting.GetValueTypeNullableUnderlyingClr(currentClrType) is {} nullableUnderlying {
+            if NullableLifting.GetValueTypeNullableUnderlyingClr(clrType) is {} nullableUnderlying {
                 return NullableLifting.WrapValueTypeNullable(FromClrType(nullableUnderlying))
             }
             if currentClrType.IsArray && currentClrType.GetArrayRank() > 1 {
                 return RectangularArrayTypeSymbol.Get(
-                    FromClrType(currentClrType.GetElementType()),
+                    FromClrType(clrType.GetElementType()),
                     currentClrType.GetArrayRank()
                 )
+            }
+            if currentClrType.IsArray && ClrNullability.ContainsFunctionPointer(clrType) {
+                return SliceTypeSymbol.Get(FromClrType(clrType.GetElementType()))
             }
             // Issue #1922: a `System.ValueTuple<...>`/`System.Tuple<...>` CLR type
             // reaching here (e.g. the element type of `for x in list` over an
@@ -219,8 +222,19 @@ open partial class TypeSymbol : Symbol {
             // binders (deconstruction, member access) recognize it as a tuple.
             // Issue #2750: canonical Rest-chained arity-8+ shapes are flattened
             // back into the source-level positional tuple symbol.
-            if TryGetTupleTypeSymbol(currentClrType, out var tupleTypeSymbol) {
+            if TryGetTupleTypeSymbol(clrType, out var tupleTypeSymbol) {
                 return tupleTypeSymbol
+            }
+            if currentClrType.IsConstructedGenericType && ClrNullability.ContainsFunctionPointer(clrType) {
+                let arguments = ImmutableArray.CreateBuilder[TypeSymbol]()
+                for argument in clrType.GetGenericArguments() {
+                    arguments.Add(FromClrType(argument))
+                }
+                return ImportedTypeSymbol.GetConstructed(
+                    currentClrType,
+                    currentClrType.GetGenericTypeDefinition(),
+                    arguments.ToImmutable()
+                )
             }
             // Compare by FullName so types loaded from a MetadataLoadContext (carrying the
             // target framework's identity) still map onto the built-in primitive symbols.
@@ -1717,7 +1731,7 @@ open partial class TypeSymbol : Symbol {
             if !clrType.IsGenericType || clrType.IsGenericTypeDefinition {
                 return false
             }
-            let definitionName = clrType.GetGenericTypeDefinition().FullName
+            let definitionName = clrType.UnderlyingSystemType.GetGenericTypeDefinition().FullName
             let isValueTuple = definitionName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true
             let isReferenceTuple = definitionName?.StartsWith("System.Tuple`", StringComparison.Ordinal) == true
             if !isValueTuple && !isReferenceTuple {
