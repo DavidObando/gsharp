@@ -61,6 +61,79 @@ internal class MemberLookup {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
     }
 
+    /// Finds the nearest lexical type with a named member, including visible imported base members.
+    /// @param type The innermost lexical type.
+    /// @param name The source member name.
+    /// @returns The lexical lookup owner, or null when no member exists.
+    internal func FindLexicalMemberOwner(type TypeSymbol, name string) TypeSymbol? {
+        CompilationMeasurements.Count("binding.lexical-member-owner.queries")
+        let matches Func[Symbol, bool] = (member Symbol) -> member.Name == name &&
+            member is not PropertySymbol{IsIndexer: true}
+        const dataMembers = MemberKinds.Field | MemberKinds.Property | MemberKinds.Event
+        for var current TypeSymbol? = type; current != nil; current = current!!.ContainingType {
+            if TypeMemberModel.EnumerateMembers(current, MemberQuery.Instance(dataMembers)).Any(matches) ||
+                TypeMemberModel
+                .EnumerateMembers(current, MemberQuery.Static(dataMembers)).Any(matches) || TypeMemberModel.GetMethods(
+                current,
+                name,
+                MemberQuery.Instance(MemberKinds.Method)
+            )
+                .Length != 0 ||
+                TypeMemberModel
+                .GetMethods(current, name, MemberQuery.Static(MemberKinds.Method))
+                .Length != 0 ||
+                TypeMemberModel.TryGetStaticField(current, name, out _) {
+                return current
+            }
+            if current is InterfaceSymbol iface &&
+                (
+                iface.GetStaticField(name) != nil || iface.GetPrivateMethods(name)
+                    .Length != 0 ||
+                    iface
+                    .GetStaticPrivateMethods(name)
+                    .Length != 0 ||
+                    GetInterfaceImportedBaseInstanceDataMember(iface, name, dataMembers) != nil ||
+                    GetInterfaceImportedBaseInstanceMethods(iface, name, out _).Count != 0
+            ) {
+                return current
+            }
+            if current is not StructSymbol && current is not InterfaceSymbol {
+                continue
+            }
+            let clrBase = if current is StructSymbol currentStruct {
+                ExpressionBinder.GetInheritedClrBaseType(currentStruct) ?? typeof(object)
+            } else {
+                typeof(object)
+            }
+            if SafeGetMethodsIncludingSelfAndInterfaces(clrBase, name).Count != 0 {
+                return current
+            }
+            if current is not StructSymbol {
+                continue
+            }
+            let canAccessInternals = (owner Type?) -> binderCtx.References.CanAccessInternalMembers(owner?.Assembly)
+            if ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrBase, name, canAccessInternals) != nil ||
+                ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, name, canAccessInternals) != nil {
+                return current
+            }
+            const flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+            if ClrTypeUtilities.SafeGetMethods(clrBase, flags).Any(
+                (method MethodInfo) -> ClrTypeUtilities.EmittedMemberNameMatches(method, name) &&
+                    ClrMemberVisibility.IsVisibleFromDerived(method, canAccessInternals(method.DeclaringType))
+            ) {
+                return current
+            }
+            let eventInfo = ClrTypeUtilities.SafeGetEvent(clrBase, name, flags)
+            if eventInfo != nil && ClrMemberVisibility.IsVisibleFromDerived(
+                eventInfo.GetAddMethod(nonPublic: true),
+                canAccessInternals(eventInfo.DeclaringType)
+            ) {
+                return current
+            }
+        }
+        return nil
+    }
+
     internal enum SymbolicInferenceBoundKind {
         Exact,
         Lower,
@@ -1359,6 +1432,85 @@ internal class MemberLookup {
         func GetTransitiveClrBaseInterfaces(interfaceSymbol InterfaceSymbol) IReadOnlyList[
             Type
         ] -> ClrTypeUtilities.GetTransitiveClrBaseInterfaces(interfaceSymbol)
+
+        /// Finds the imported interface property shared by lexical hiding and member access.
+        /// @param interfaceSymbol The source interface receiver.
+        /// @param name The ordinary property name.
+        /// @param requireReadable Whether candidates require a getter instead of serving as lexical barriers.
+        /// @returns The public instance property, excluding indexers, or null.
+        internal func GetInterfaceImportedBaseInstanceProperty(
+            interfaceSymbol InterfaceSymbol,
+            name string,
+            requireReadable bool = false
+        ) PropertyInfo? -> GetInterfaceImportedBaseInstanceDataMember(
+            interfaceSymbol,
+            name,
+            MemberKinds.Property,
+            requireReadable
+        ) as PropertyInfo
+
+        /// Finds imported instance data members using the ordinary property and event readers.
+        /// @param interfaceSymbol The source interface receiver.
+        /// @param name The ordinary member name.
+        /// @param kinds The data-member kinds to admit.
+        /// @param requireReadableProperty Whether property candidates require a getter.
+        /// @returns The visible instance member, excluding indexers, or null.
+        internal func GetInterfaceImportedBaseInstanceDataMember(
+            interfaceSymbol InterfaceSymbol,
+            name string,
+            kinds MemberKinds,
+            requireReadableProperty bool = false
+        ) MemberInfo? {
+            for clrBase in GetTransitiveClrBaseInterfaces(interfaceSymbol) {
+                if (kinds & MemberKinds.Property) != 0 {
+                    let property = ClrTypeUtilities.SafeGetProperty(
+                        clrBase,
+                        name,
+                        BindingFlags.Public | BindingFlags.Instance
+                    )
+                    if property != nil && property.GetIndexParameters()
+                        .Length == 0 &&
+                        (!requireReadableProperty || property.CanRead) {
+                        return property
+                    }
+                }
+                if (kinds & MemberKinds.Event) != 0 {
+                    let eventInfo = SafeGetEventIncludingSelfAndInterfaces(clrBase, name)
+                    if eventInfo != nil {
+                        return eventInfo
+                    }
+                }
+            }
+            return nil
+        }
+
+        /// Collects the imported interface overloads shared by lexical hiding and call resolution.
+        /// @param interfaceSymbol The source interface receiver.
+        /// @param name The ordinary method name.
+        /// @param representativeBase The first imported base, retained for diagnostic context.
+        /// @returns The public instance overloads, deduplicated by CLR signature.
+        internal func GetInterfaceImportedBaseInstanceMethods(
+            interfaceSymbol InterfaceSymbol,
+            name string,
+            out representativeBase Type?
+        ) IReadOnlyList[MethodInfo] {
+            let clrBases = GetTransitiveClrBaseInterfaces(interfaceSymbol)
+            representativeBase = if clrBases.Count == 0 {
+                nil
+            } else {
+                clrBases[0]
+            }
+            let candidates = List[MethodInfo]()
+            for clrBase in clrBases {
+                for method in ClrTypeUtilities.SafeGetMethods(clrBase, BindingFlags.Instance | BindingFlags.Public) {
+                    if ClrTypeUtilities.EmittedMemberNameMatches(method, name) &&
+                        !HasSameSignature(candidates, method) {
+                        candidates.Add(method)
+                    }
+                }
+            }
+            return candidates
+        }
 
         /// Issue #1181: returns whether [`candidate`](paramref) already has a
         /// same-name, same-parameter-types entry in [`existing`](paramref)

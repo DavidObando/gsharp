@@ -1061,20 +1061,20 @@ internal partial class ExpressionBinder {
                     // InterfaceImpl row to each imported base interface, so a
                     // CLR member access on it is verifiable.
                     let ifaceMemberName = ne.IdentifierToken.ValueText
-                    for clrBaseIface in MemberLookup.GetTransitiveClrBaseInterfaces(ifaceSym) {
-                        let clrProp PropertyInfo? = ClrTypeUtilities.SafeGetProperty(
-                            clrBaseIface,
-                            ifaceMemberName,
-                            BindingFlags.Public | BindingFlags.Instance
+                    let clrProp = MemberLookup.GetInterfaceImportedBaseInstanceProperty(
+                        ifaceSym,
+                        ifaceMemberName,
+                        requireReadable: true
+                    )
+                    if clrProp != nil {
+                        return BoundClrPropertyAccessExpression(
+                            nil,
+                            receiver,
+                            clrProp,
+                            GetInheritedClrMemberType(receiver.Type, clrProp)
                         )
-                        if clrProp != nil && clrProp.GetIndexParameters().Length == 0 && clrProp.CanRead {
-                            return BoundClrPropertyAccessExpression(
-                                nil,
-                                receiver,
-                                clrProp,
-                                GetInheritedClrMemberType(receiver.Type, clrProp)
-                            )
-                        }
+                    }
+                    for clrBaseIface in MemberLookup.GetTransitiveClrBaseInterfaces(ifaceSym) {
                         let clrFld FieldInfo? = ClrTypeUtilities.SafeGetField(
                             clrBaseIface,
                             ifaceMemberName,

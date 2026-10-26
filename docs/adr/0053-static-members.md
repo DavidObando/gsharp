@@ -77,8 +77,16 @@ Members inside `shared` inherit the same accessibility modifier rules as regular
 - Inside a shared body, `this` is not available. Attempting to reference `this` or instance members produces a diagnostic.
 - Other static members of the same type are accessible by simple name (no `TypeName.` prefix required).
 - Static members are accessed from outside via `TypeName.member` — reusing the existing `ImportedClassSymbol`-style accessor resolution path extended to user-defined types.
-- Bare static-member access (no `TypeName.` prefix) is allowed from **both** shared and instance method bodies of the enclosing type. Lookup is own-type only — inherited static members must be qualified with `Base.X` (symmetric with the qualified-access paths, which also do not walk the inheritance chain for statics today). If an instance member or parameter shadows a same-named static member, the instance member / parameter wins.
+- Bare static-member access (no `TypeName.` prefix) is allowed from **both** shared and instance method bodies of the enclosing type. Static state lookup visits lexical enclosing types from the innermost type outward, including private fields (issue #5262). It does not inherit static members: inherited static members must be qualified with `Base.X`. Parameters and nearer members hide outer static state, including declared shared members and visible inherited instance members. The inherited-member barrier includes implicit `System.Object` methods when no imported base is declared. Imported method names use the canonical CLR source-name mapping. A hidden outer instance member does not acquire an implicit receiver.
 - Compound assignment (`+=` / `-=`) on `TypeName.StaticField` and `TypeName.StaticProp` is supported wherever simple assignment is. For static properties, compound assignment requires both a getter and a setter; otherwise the binder reports `GS0127` (cannot assign) and the expression is rejected.
+- Imported method barriers include default interface methods from the canonical inherited-call candidate query.
+- Source method barriers use ordinary overload lookup and exclude explicit-interface implementations.
+- Lexical lookup starts at the function's type owner, including interfaces. Interface-local members and inherited instance members precede enclosing shared state.
+- Interface CLR method barriers and implicit calls share the imported-base overload query. Interface property queries distinguish static from instance members; inherited static properties do not hide enclosing fields.
+- Implicit inherited class and interface calls share explicit type-argument resolution. Both CLR and symbolic arguments are preserved; omission permits inference.
+- Imported interface property hiding and bare/qualified reads share the inherited-property query. Unsupported imported-property writes fail instead of mutating enclosing fields. Interface method candidates use canonical collision-aware CLR name matching.
+- Constructed interface data-member enumeration and lookup use their canonical definition symbols, retaining projected methods. Imported instance data-member admission includes events; unsupported event operations diagnose rather than binding enclosing delegate storage.
+- Imported interface reads skip write-only candidates inside the shared inherited-property query. Lexical admission still recognizes unreadable properties as barriers.
 
 ### 6. Type-level access from GSharp
 

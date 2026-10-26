@@ -1926,7 +1926,7 @@ internal partial class ExpressionBinder {
     /// @param name The bare identifier text.
     /// @param receiver The effective `this` receiver on success.
     /// @param interfaceType The enclosing interface the receiver is typed as, on success.
-    /// @returns `true` when the enclosing interface declares an instance property of that name.
+    /// @returns `true` when the enclosing interface declares or inherits an instance property of that name.
     private func TryResolveInterfaceInstancePropertyByBareName(
         name string,
         @NotNullWhen(true) out receiver BoundExpression?,
@@ -1940,7 +1940,8 @@ internal partial class ExpressionBinder {
         }
         // ADR-0118 / issue #944: an indexer has the CLR name `Item` but is never
         // reachable by bare name — only through `this[i]`.
-        if !TypeMemberModel.TryGetProperty(thisInterface, name, out var property, out _) || property!!.IsIndexer {
+        if (!TypeMemberModel.TryGetProperty(thisInterface, name, out var property, out _) || property!!.IsIndexer) &&
+            MemberLookup.GetInterfaceImportedBaseInstanceProperty(thisInterface, name) == nil {
             return false
         }
         receiver = BoundVariableExpression(nil, effThis!!)

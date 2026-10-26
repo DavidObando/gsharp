@@ -674,25 +674,44 @@ partial class Binder {
             //         func Bump() { CallCount += 1 }    // bare access OK
             //     }
             //
-            // resolves without requiring `TypeName.` prefix. Static members
-            // are exposed for the enclosing type only (no base-class walk) —
-            // this is consistent with the qualified `Type.StaticMember`
-            // paths (BindUserTypeStaticMemberAccess, BindFieldAssignmentExpression)
-            // which also do not walk inheritance for statics today.
+            // Resolve lexical owners from the innermost type outward (#5262).
+            // Keep each member's declaring owner and do not inherit static members.
             //
             // Shadowing precedence (enforced by paramNames/seenMembers):
             //   parameter > instance member > static member.
-            let ownerStruct StructSymbol? = (function.StaticOwnerType as StructSymbol) ??
-                (function.ReceiverType as StructSymbol)
-            if ownerStruct != nil {
-                if !ownerStruct.StaticFields.IsDefaultOrEmpty {
-                    for fld in ownerStruct.StaticFields {
-                        if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) {
+            let lexicalOwner = function.StaticOwnerType ?? function.ReceiverType
+            // Reserve hidden names too. A nearer member hides every farther lexical candidate.
+            for var owner = lexicalOwner; owner != nil; owner = owner!!.ContainingType {
+                let isOuterOwner = !object.ReferenceEquals(owner, lexicalOwner)
+                if owner is InterfaceSymbol ownerInterface {
+                    for field in ownerInterface.StaticFields.Concat(ownerInterface.ConstFields) {
+                        if paramNames.Contains(field.Name) || !seenMembers.Add(field.Name) ||
+                            (
+                            isOuterOwner && !object.ReferenceEquals(
+                                memberLookup.FindLexicalMemberOwner(lexicalOwner!!, field.Name),
+                                ownerInterface
+                            )
+                        ) {
                             continue
                         }
-                        if seenMembers.Add(fld.Name) {
-                            $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
+                        $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerInterface, field))
+                    }
+                }
+                if owner is not StructSymbol ownerStruct {
+                    continue
+                }
+                if !ownerStruct.StaticFields.IsDefaultOrEmpty {
+                    for fld in ownerStruct.StaticFields {
+                        if paramNames.Contains(fld.Name) || !seenMembers.Add(fld.Name) ||
+                            (
+                            isOuterOwner && !object.ReferenceEquals(
+                                memberLookup.FindLexicalMemberOwner(lexicalOwner!!, fld.Name),
+                                ownerStruct
+                            )
+                        ) {
+                            continue
                         }
+                        $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
                     }
                 }
                 // Issue #948: const fields are static for bare-name resolution
@@ -700,22 +719,30 @@ partial class Binder {
                 // as the compile-time constant value by the emitter/interpreter.
                 if !ownerStruct.ConstFields.IsDefaultOrEmpty {
                     for fld in ownerStruct.ConstFields {
-                        if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) {
+                        if paramNames.Contains(fld.Name) || !seenMembers.Add(fld.Name) ||
+                            (
+                            isOuterOwner && !object.ReferenceEquals(
+                                memberLookup.FindLexicalMemberOwner(lexicalOwner!!, fld.Name),
+                                ownerStruct
+                            )
+                        ) {
                             continue
                         }
-                        if seenMembers.Add(fld.Name) {
-                            $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
-                        }
+                        $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
                     }
                 }
                 if !ownerStruct.StaticProperties.IsDefaultOrEmpty {
                     for prop in ownerStruct.StaticProperties {
-                        if paramNames.Contains(prop.Name) || seenMembers.Contains(prop.Name) {
+                        if paramNames.Contains(prop.Name) || !seenMembers.Add(prop.Name) ||
+                            (
+                            isOuterOwner && !object.ReferenceEquals(
+                                memberLookup.FindLexicalMemberOwner(lexicalOwner!!, prop.Name),
+                                ownerStruct
+                            )
+                        ) {
                             continue
                         }
-                        if seenMembers.Add(prop.Name) {
-                            $scope.TryDeclareVariable(ImplicitStaticPropertyVariableSymbol(ownerStruct, prop))
-                        }
+                        $scope.TryDeclareVariable(ImplicitStaticPropertyVariableSymbol(ownerStruct, prop))
                     }
                 }
                 // Issue #3907 / #3911: expose a field-like STATIC event of the
@@ -739,51 +766,23 @@ partial class Binder {
                 // ADR-0052's "Static events on user types" follow-up entry is
                 // amended accordingly.
                 //
-                // Scoped to the enclosing type with no base-class walk, which
-                // is what every other static path here does (see the note on
-                // the static-field block above). A bare `Ticked += handler`
+                // A bare `Ticked += handler`
                 // still routes to the event-subscription path, which
                 // BindBareEventOrCompoundAssignment checks before it consults
                 // this variable.
                 if !ownerStruct.StaticEvents.IsDefaultOrEmpty {
                     for evt in ownerStruct.StaticEvents {
                         if !evt.IsFieldLike || evt.BackingField == nil || paramNames.Contains(evt.Name) ||
-                            seenMembers.Contains(evt.Name) {
-                            continue
-                        }
-                        if seenMembers.Add(evt.Name) {
-                            $scope.TryDeclareVariable(
-                                ImplicitStaticFieldVariableSymbol(ownerStruct, evt.BackingField!!)
+                            !seenMembers.Add(evt.Name) ||
+                            (
+                            isOuterOwner && !object.ReferenceEquals(
+                                memberLookup.FindLexicalMemberOwner(lexicalOwner!!, evt.Name),
+                                ownerStruct
                             )
-                        }
-                    }
-                }
-            }
-            // ADR-0089 / issue #1030: expose interface static *state* by bare
-            // name inside the owning interface's static members (static
-            // methods, default-bodied static property accessors). The owner is
-            // an InterfaceSymbol, so `ownerStruct` is null above; resolve the
-            // interface owner separately and inject its static + const fields.
-            let ownerInterface InterfaceSymbol? = function.StaticOwnerType as InterfaceSymbol
-            if ownerInterface != nil {
-                if !ownerInterface.StaticFields.IsDefaultOrEmpty {
-                    for fld in ownerInterface.StaticFields {
-                        if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) {
+                        ) {
                             continue
                         }
-                        if seenMembers.Add(fld.Name) {
-                            $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerInterface, fld))
-                        }
-                    }
-                }
-                if !ownerInterface.ConstFields.IsDefaultOrEmpty {
-                    for fld in ownerInterface.ConstFields {
-                        if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) {
-                            continue
-                        }
-                        if seenMembers.Add(fld.Name) {
-                            $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerInterface, fld))
-                        }
+                        $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, evt.BackingField!!))
                     }
                 }
             }
