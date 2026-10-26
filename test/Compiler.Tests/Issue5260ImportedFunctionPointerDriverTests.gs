@@ -3,6 +3,7 @@ package GSharp.Compiler.Tests
 import GSharp.Compiler
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.Tests
+import GSharp.Tests
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
@@ -65,8 +66,10 @@ class Issue5260ImportedFunctionPointerDriverTests {
             executable: false
         )
         Assert.True(producer.Code == 0, producer.Diagnostics)
-        let method = Assembly
-            .LoadFile(producer.Path)
+        let producerAssembly = EmittedFixture.Load(producer.Path)
+        Assert.True(producerAssembly.IsCollectible)
+        Assert.Empty(producerAssembly.Location)
+        let method = producerAssembly
             .GetTypes()
             .SelectMany((type Type) -> type.GetMethods(BindingFlags.Public | BindingFlags.Static))
             .Single((method MethodInfo) -> method.Name == "Get")
