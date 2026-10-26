@@ -372,7 +372,7 @@ internal shared class ExternalClrOverrideResolver {
                 baseMethod,
                 canonicalMethodArguments
             )
-            if !DeclarationBinder.TypeSignaturesEquivalent(derivedType, baseType) {
+            if !DeclarationBinder.ConformanceSignaturesEquivalent(derivedType, baseType) {
                 return false
             }
         }
@@ -625,7 +625,7 @@ internal shared class ExternalClrOverrideResolver {
     private func GetReflectionBaseType(importedBase TypeSymbol?) Type? -> if importedBase is ImportedTypeSymbol{
         OpenDefinition: not nil
     } imported &&
-        imported.HasSubstitutableTypeArgument {
+        (imported.HasSubstitutableTypeArgument || TypeSymbol.ContainsFixedLengthArray(imported)) {
         imported.OpenDefinition
     } else {
         importedBase?.ClrType
@@ -633,7 +633,8 @@ internal shared class ExternalClrOverrideResolver {
 
     private func GetSymbolicTypeArguments(importedBase TypeSymbol?) ImmutableArray[
         TypeSymbol
-    ] -> if importedBase is ImportedTypeSymbol{OpenDefinition: not nil, HasSubstitutableTypeArgument: true} imported {
+    ] -> if importedBase is ImportedTypeSymbol{OpenDefinition: not nil} imported &&
+        (imported.HasSubstitutableTypeArgument || TypeSymbol.ContainsFixedLengthArray(imported)) {
         imported.TypeArguments
     } else {
         ImmutableArray[TypeSymbol].Empty
@@ -892,13 +893,9 @@ internal shared class ExternalClrOverrideResolver {
                 openMethodDefinition,
                 methodTypeArguments
             )
-            if DeclarationBinder.TypeSignaturesEquivalent(substituted, type) {
+            if DeclarationBinder.ConformanceSignaturesEquivalent(substituted, type) {
                 return true
             }
-        }
-        let effectiveClrType Type? = NullableLifting.GetEffectiveClrType(type)
-        if effectiveClrType != nil && clrType != nil {
-            return ClrTypeUtilities.AreSame(clrType, effectiveClrType)
         }
         return false
     }

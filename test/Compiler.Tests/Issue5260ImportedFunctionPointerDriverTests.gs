@@ -19,6 +19,107 @@ import Xunit
 
 class Issue5260ImportedFunctionPointerDriverTests {
     @Theory
+    @InlineData("Return", "42")
+    @InlineData("LongReturn", "42")
+    @InlineData("Parameter", "12")
+    @InlineData("Symbolic", "12")
+    @InlineData("Nullable", "12")
+    func ImportedTupleOverride_PreservesStructuralSignatureAndDispatch(kind string, expected string) {
+        using let fixture = CSharpFixture(TupleOverrideContract, allowUnsafe: true)
+        let declaration = switch kind {
+            case "Return": `unsafe class Derived : Base {
+    override func Get() (Pointers []unmanaged[Cdecl]() -> void, Tag int32) -> Base.Create()
+}`
+            case "LongReturn": `unsafe class Derived : Base {
+    override func GetLong() (Pointers []unmanaged[Cdecl]() -> void, A int32, B int32, C int32, D int32, E int32, F int32, Tag int32) -> Base.CreateLong()
+}`
+            case "Parameter": `unsafe class Derived : Base {
+    override func Read(value (Pointers []unmanaged[Cdecl]() -> void, Tag int32)) int32 -> value.Tag + 1
+}`
+            case "Nullable": `class Derived : GenericBase[string?] {
+    override func Read(value (First string?, Tag int32)) int32 -> value.Tag + 1
+}`
+            default: `struct Payload { var Value uint32 }
+class Derived : GenericBase[Payload] {
+    override func Read(value (First Payload, Tag int32)) int32 -> value.Tag + 1
+}`
+        }
+        let exercise = switch kind {
+            case "Return": "ExerciseGet"
+            case "LongReturn": "ExerciseLong"
+            case "Parameter": "ExerciseRead"
+            default: "Exercise"
+        }
+        let source = "import TupleOverrides\n" +
+            declaration +
+            "\nfunc Main() { System.Console.Write(Derived()." +
+            exercise +
+            "()) }"
+        let consumer = Compile(fixture.DirectoryPath, "Consumer", source, fixture.AssemblyPath)
+        Assert.True(consumer.Code == 0, consumer.Diagnostics)
+        let first = File.ReadAllBytes(consumer.Path)
+        let repeat = Compile(fixture.DirectoryPath, "Consumer", source, fixture.AssemblyPath)
+        Assert.True(repeat.Code == 0, repeat.Diagnostics)
+        Assert.Equal(first, File.ReadAllBytes(repeat.Path))
+        IlVerifier.Verify(consumer.Path, []string{fixture.AssemblyPath})
+        Assert.Equal(Encoding.UTF8.GetBytes(expected), Run(consumer.Path))
+        if kind == "Parameter" {
+            let rejected = Compile(fixture.DirectoryPath, "Rejected", `import TupleOverrides
+unsafe class Derived : Base {
+    override func Read(value (Pointers []unmanaged[Stdcall]() -> void, Tag int32)) int32 -> value.Tag
+}`, fixture.AssemblyPath, executable: false)
+            Assert.NotEqual(0, rejected.Code)
+            Assert.False(File.Exists(rejected.Path))
+            let errors = Regex.Matches(rejected.Diagnostics, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`)
+            Assert.True(errors.Count == 1, rejected.Diagnostics)
+            let error = Assert.Single(errors)
+            Assert.Equal("GS0185", error.Groups[5].Value)
+            Assert.Equal("3", error.Groups[1].Value)
+            Assert.Equal("19", error.Groups[2].Value)
+            Assert.Equal("3", error.Groups[3].Value)
+            Assert.Equal("23", error.Groups[4].Value)
+        }
+    }
+
+    @Fact
+    func ImportedTupleOverride_PreservesTheReceiversFixedArrayLength() {
+        using let fixture = CSharpFixture(TupleOverrideContract, allowUnsafe: true)
+        let source = `import TupleOverrides
+class Derived : GenericBase[[3]int32] {
+    override func Read(value (First [3]int32, Tag int32)) int32 -> value.Tag + 1
+}
+func Main() { System.Console.Write(Derived().Exercise()) }`
+        for type in[]string{"[3]int32", "[]int32"} {
+            let consumer = Compile(
+                fixture.DirectoryPath,
+                "Consumer",
+                source.Replace("[3]int32", type),
+                fixture.AssemblyPath
+            )
+            Assert.True(consumer.Code == 0, consumer.Diagnostics)
+            IlVerifier.Verify(consumer.Path, []string{fixture.AssemblyPath})
+            Assert.Equal(Encoding.UTF8.GetBytes("12"), Run(consumer.Path))
+        }
+        let rejected = Compile(
+            fixture.DirectoryPath,
+            "Rejected",
+            source.Replace("First [3]int32", "First [4]int32"),
+            fixture.AssemblyPath,
+            executable: false
+        )
+        Assert.NotEqual(0, rejected.Code)
+        Assert.False(File.Exists(rejected.Path))
+        let errors = Regex.Matches(rejected.Diagnostics, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`)
+        Assert.True(errors.Count == 1, rejected.Diagnostics)
+        let error = Assert.Single(errors)
+        Assert.Equal("GS0185", error.Groups[5].Value)
+        Assert.Equal("3", error.Groups[1].Value)
+        Assert.Equal("19", error.Groups[2].Value)
+        Assert.Equal("3", error.Groups[3].Value)
+        Assert.Equal("23", error.Groups[4].Value)
+    }
+
+    @Theory
     @InlineData("Virtual")
     @InlineData("Closed")
     @InlineData("Symbolic")
@@ -682,6 +783,28 @@ unsafe func Main() {
     }
 
     shared {
+        private const TupleOverrideContract string = `#nullable enable
+namespace TupleOverrides {
+    public unsafe class Base {
+        public virtual (delegate* unmanaged[Cdecl]<void>[] Pointers, int Tag) Get() =>
+            (new delegate* unmanaged[Cdecl]<void>[1], 7);
+        public virtual (delegate* unmanaged[Cdecl]<void>[] Pointers, int A, int B, int C, int D, int E, int F, int Tag) GetLong() =>
+            (new delegate* unmanaged[Cdecl]<void>[1], 1, 2, 3, 4, 5, 6, 7);
+        public virtual int Read((delegate* unmanaged[Cdecl]<void>[] Pointers, int Tag) value) => value.Tag;
+        public int ExerciseGet() => Get().Tag;
+        public int ExerciseLong() => GetLong().Tag;
+        public int ExerciseRead() => Read((new delegate* unmanaged[Cdecl]<void>[1], 11));
+        public static (delegate* unmanaged[Cdecl]<void>[] Pointers, int Tag) Create() =>
+            (new delegate* unmanaged[Cdecl]<void>[1], 42);
+        public static (delegate* unmanaged[Cdecl]<void>[] Pointers, int A, int B, int C, int D, int E, int F, int Tag) CreateLong() =>
+            (new delegate* unmanaged[Cdecl]<void>[1], 1, 2, 3, 4, 5, 6, 42);
+    }
+    public class GenericBase<T> {
+        public virtual int Read((T First, int Tag) value) => value.Tag;
+        public int Exercise() => Read((default!, 11));
+    }
+}`
+
         private const EventOverrideContract string = `#nullable enable
 using System;
 namespace EventOverrides {

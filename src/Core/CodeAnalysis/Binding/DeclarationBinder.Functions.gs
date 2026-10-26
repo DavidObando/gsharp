@@ -3179,6 +3179,11 @@ internal partial class DeclarationBinder {
                     ClrTypeUtilities.AreSame(aSequenceDefinition, bSequenceDefinition) &&
                     TypeSignaturesEquivalent(aSequenceElement, bSequenceElement, typeParamMap)
             }
+            let aIsTuple = TupleTypeSymbol.TryGetTupleShape(a, out var aTupleElements)
+            let bIsTuple = TupleTypeSymbol.TryGetTupleShape(b, out var bTupleElements)
+            if aIsTuple || bIsTuple {
+                return aIsTuple && bIsTuple && TypeArgumentsEquivalent(aTupleElements, bTupleElements, typeParamMap)
+            }
             if a is StructSymbol sa && b is StructSymbol sb {
                 return object.ReferenceEquals(sa.Definition, sb.Definition) &&
                     TypeArgumentsEquivalent(sa.TypeArguments, sb.TypeArguments, typeParamMap)
@@ -3267,9 +3272,6 @@ internal partial class DeclarationBinder {
                             TypeArgumentsEquivalent(fa.ParameterTypes, fb.ParameterTypes, typeParamMap) &&
                             TypeSignaturesEquivalent(fa.ReturnType, fb.ReturnType, typeParamMap)
                     }
-                    case {Item1: ta is TupleTypeSymbol, Item2: tb is TupleTypeSymbol} {
-                        return TypeArgumentsEquivalent(ta.ElementTypes, tb.ElementTypes, typeParamMap)
-                    }
                     case {Item1: ma is MapTypeSymbol, Item2: mb is MapTypeSymbol} {
                         return TypeSignaturesEquivalent(ma.KeyType, mb.KeyType, typeParamMap) &&
                             TypeSignaturesEquivalent(ma.ValueType, mb.ValueType, typeParamMap)
@@ -3284,7 +3286,13 @@ internal partial class DeclarationBinder {
             // (e.g. a primitive supplied as a concrete type argument such as the
             // `int32` in `ISeq[int32]`). Type parameters keep an absent ClrType so
             // distinct parameters are never wrongly equated here.
-            return a.ClrType != nil && b.ClrType != nil && a.ClrType == b.ClrType
+            // Conformance spans runtime and metadata-load contexts. Exact storage checks keep their existing identity rule.
+            return a.ClrType != nil &&
+                b.ClrType != nil &&
+                (
+                a.ClrType == b.ClrType ||
+                    (conformanceMatchingDepth > 0 && ClrTypeUtilities.AreSame(a.ClrType, b.ClrType))
+            )
         }
 
         private func TypeArgumentsEquivalent(
