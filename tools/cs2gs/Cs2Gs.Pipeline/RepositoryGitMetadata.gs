@@ -8,10 +8,12 @@ import System.Linq
 
 /// Keeps mirror version calculations separate from the destination's parent repository.
 internal shared class RepositoryGitMetadata {
+    private let RepositoryEnvironmentVariables[]string = ReadRepositoryEnvironmentVariables()
+
     internal func Prepare(source string, destination string) {
-        let prefix = ProcessRunner.Run("git", []string{"-C", source, "rev-parse", "--show-prefix"}, source)
+        let prefix = Git([]string{"-C", source, "rev-parse", "--show-prefix"}, source)
         if prefix.ExitCode == 0 && prefix.Stdout.Trim().Length == 0 {
-            let head = ProcessRunner.Run("git", []string{"-C", source, "rev-parse", "--verify", "HEAD"}, source)
+            let head = Git([]string{"-C", source, "rev-parse", "--verify", "HEAD"}, source)
             Directory.CreateDirectory(destination)
             Run(
                 []string{
@@ -36,11 +38,7 @@ internal shared class RepositoryGitMetadata {
                 let name = remote.TrimEnd('\r')
                 for suffix in[]string{"url", "pushurl"} {
                     let key = "remote." + name + "." + suffix
-                    let configured = ProcessRunner.Run(
-                        "git",
-                        []string{"-C", source, "config", "--null", "--get-all", key},
-                        source
-                    )
+                    let configured = Git([]string{"-C", source, "config", "--null", "--get-all", key}, source)
                     if configured.TimedOut || (configured.ExitCode != 0 && configured.ExitCode != 1) {
                         throw InvalidOperationException("Cannot read source remote URLs: " + configured.Output)
                     }
@@ -78,10 +76,31 @@ internal shared class RepositoryGitMetadata {
     }
 
     private func Run(arguments[]string, workingDirectory string) string {
-        let result = ProcessRunner.Run("git", arguments, workingDirectory, TimeSpan.FromMinutes(5))
+        let result = Git(arguments, workingDirectory)
         if result.ExitCode != 0 {
             throw InvalidOperationException("Cannot prepare mirror Git metadata: " + result.Output)
         }
         return result.Stdout
+    }
+
+    private func Git(arguments[]string, workingDirectory string) ProcessRunResult -> ProcessRunner.Run(
+        "git",
+        arguments,
+        workingDirectory,
+        TimeSpan.FromMinutes(5),
+        removedEnvironment: RepositoryEnvironmentVariables
+    )
+
+    private func ReadRepositoryEnvironmentVariables()[]string {
+        let result = ProcessRunner.Run("git", []string{"rev-parse", "--local-env-vars"})
+        if result.TimedOut || result.ExitCode != 0 {
+            throw InvalidOperationException("Cannot read repository-local Git environment names: " + result.Output)
+        }
+        return result
+            .Stdout
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select((name string) -> name.TrimEnd('\r'))
+            .Concat([]string{"GIT_NAMESPACE", "GIT_QUARANTINE_PATH"})
+            .ToArray()
     }
 }

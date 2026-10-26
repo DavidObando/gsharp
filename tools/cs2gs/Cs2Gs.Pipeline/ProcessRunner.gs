@@ -34,14 +34,23 @@ shared class ProcessRunner {
     /// @param timeout The maximum wall-clock time to wait before killing the process tree; defaults to
     /// (cref:DefaultTimeout).
     /// @param environment Environment variables to set or override for the child process.
+    /// @param removedEnvironment Environment variables to remove from the child process.
     /// @returns The exit code, captured output, and whether the run timed out.
     func Run(
         fileName string,
         arguments IReadOnlyList[string],
         workingDirectory string? = nil,
         timeout TimeSpan? = nil,
-        environment IReadOnlyDictionary[string, string]? = nil
-    ) ProcessRunResult -> RunAsync(fileName, arguments, workingDirectory, timeout, environment: environment)
+        environment IReadOnlyDictionary[string, string]? = nil,
+        removedEnvironment IReadOnlyList[string]? = nil
+    ) ProcessRunResult -> RunAsync(
+        fileName,
+        arguments,
+        workingDirectory,
+        timeout,
+        environment: environment,
+        removedEnvironment: removedEnvironment
+    )
         .GetAwaiter().GetResult()
 
     /// The async form of (cref:Run); see its remarks for behavior.
@@ -52,6 +61,7 @@ shared class ProcessRunner {
     /// (cref:DefaultTimeout).
     /// @param cancellationToken A token that, when canceled, also kills the process tree early.
     /// @param environment Environment variables to set or override for the child process.
+    /// @param removedEnvironment Environment variables to remove from the child process.
     /// @returns The exit code, captured output, and whether the run timed out.
     async func RunAsync(
         fileName string,
@@ -59,7 +69,8 @@ shared class ProcessRunner {
         workingDirectory string? = nil,
         timeout TimeSpan? = nil,
         cancellationToken CancellationToken = default(CancellationToken),
-        environment IReadOnlyDictionary[string, string]? = nil
+        environment IReadOnlyDictionary[string, string]? = nil,
+        removedEnvironment IReadOnlyList[string]? = nil
     ) ProcessRunResult {
         if string.IsNullOrEmpty(fileName) {
             throw ArgumentException("File name must be supplied.", "fileName")
@@ -85,6 +96,11 @@ shared class ProcessRunner {
         if environment != nil {
             for (name, value) in environment {
                 psi.Environment[name] = value
+            }
+        }
+        if removedEnvironment != nil {
+            for name in removedEnvironment {
+                psi.Environment.Remove(name)
             }
         }
         using let process = Process{StartInfo: psi}

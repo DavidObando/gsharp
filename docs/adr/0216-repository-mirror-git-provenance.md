@@ -26,6 +26,10 @@ Use an explicit clone remote name, independent of user configuration.
 Remove only its temporary configuration, not the source refs.
 When HEAD exists, read its tree into the index without updating working files.
 Leave the index empty for an unborn source repository.
+Run all metadata Git commands without repository-local environment redirects.
+Use Git's own local-variable catalogue, plus namespace and quarantine variables.
+Keep global Git configuration and discovery settings.
+Remove variables only from each child process, not from the caller.
 Do not create a translation commit or change the source version settings.
 The translated files form uncommitted working-tree changes.
 
@@ -56,6 +60,8 @@ Git sources include a feature branch and separate local and remote baselines.
 The tests also compare the source and mirror ref output bytes.
 They check the HEAD file inventory, an empty staged diff, and unchanged working bytes.
 An unborn source case checks that index setup does not require a commit.
+An ambient source-index case checks exact index bytes and staged inventory.
+Another case checks repository, object-store, namespace, and quarantine redirects.
 The destination sits inside a different repository.
 
 ## Alternatives considered

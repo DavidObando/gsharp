@@ -5,6 +5,7 @@ package Cs2Gs.Tests
 import Cs2Gs.Cli
 import Cs2Gs.Pipeline
 import System
+import System.Collections.Generic
 import System.IO
 import System.Linq
 import System.Text
@@ -40,6 +41,7 @@ class Issue5402SourceVersionTests : IDisposable {
     @InlineData("worktree")
     @InlineData("archive")
     @InlineData("unborn")
+    @InlineData("source-index")
     async func Migrate_PreservesVersionOutputBytesInsideAnotherRepository(kind string) {
         let source = Path.Combine(this.root, "source")
         Directory.CreateDirectory(source)
@@ -120,23 +122,54 @@ class Issue5402SourceVersionTests : IDisposable {
         let compiler = Path.Combine(repo, "out", "bin", "Release", "Compiler", "gsc.dll")
         Assert.True(File.Exists(compiler), "Build the compiler before this driver test.")
         Assert.NotNull(GsharpTestProjectRunner.ResolveLocalSdkPackage(repo))
-        let exit = await Program.Main(
-            []string{
-                "migrate",
-                "--corpus",
-                checkout,
-                "--out",
-                mirror,
-                "--artifacts",
-                artifacts,
-                "--gsc",
-                compiler,
-                "--config",
-                "Release",
-                "--stop-after",
-                "compile"
+        let sourceIndex = Path.Combine(checkout, ".git", "index")
+        if kind == "source-index" {
+            Git(checkout, "add", "payload.bin")
+        }
+        let indexBefore = if kind == "source-index" {
+            File.ReadAllBytes(sourceIndex)
+        } else {
+            []byte{}
+        }
+        let stagedBefore = if kind == "source-index" {
+            Git(checkout, "diff", "--cached", "--raw", "-z")
+        } else {
+            string.Empty
+        }
+        let previousIndex = Environment.GetEnvironmentVariable("GIT_INDEX_FILE")
+        var exit = -1
+        try {
+            if kind == "source-index" {
+                Assert.NotEmpty(stagedBefore)
+                Environment.SetEnvironmentVariable("GIT_INDEX_FILE", sourceIndex)
             }
-        )
+            exit = await Program.Main(
+                []string{
+                    "migrate",
+                    "--corpus",
+                    checkout,
+                    "--out",
+                    mirror,
+                    "--artifacts",
+                    artifacts,
+                    "--gsc",
+                    compiler,
+                    "--config",
+                    "Release",
+                    "--stop-after",
+                    "compile"
+                }
+            )
+            if kind == "source-index" {
+                Assert.Equal(sourceIndex, Environment.GetEnvironmentVariable("GIT_INDEX_FILE"))
+            }
+        } finally {
+            Environment.SetEnvironmentVariable("GIT_INDEX_FILE", previousIndex)
+        }
+        if kind == "source-index" {
+            Assert.Equal(indexBefore, File.ReadAllBytes(sourceIndex))
+            Assert.Equal(stagedBefore, Git(checkout, "diff", "--cached", "--raw", "-z"))
+        }
         Assert.Equal(0, exit)
         let run = Directory.GetFiles(artifacts, "run.json", SearchOption.AllDirectories).Single()
         let appArtifacts = Path.Combine(
@@ -194,6 +227,51 @@ class Issue5402SourceVersionTests : IDisposable {
         )
         Assert.Equal(payload, File.ReadAllBytes(Path.Combine(secondMirror, "payload.bin")))
         Assert.False(File.Exists(Path.Combine(secondMirror, "Program.cs")))
+    }
+
+    @Fact
+    func Prepare_DoesNotUseAmbientRepositoryRedirects() {
+        let source = Path.Combine(this.root, "redirect-source")
+        Directory.CreateDirectory(source)
+        File.WriteAllText(Path.Combine(source, "version.json"), "{\"version\":\"2.3\"}")
+        Git(source, "init", "--quiet")
+        Git(source, "remote", "add", "origin", "https://example.invalid/source-version.git")
+        Commit(source)
+        let sourceHead = Git(source, "rev-parse", "HEAD")
+        let host = this.CreateHost()
+        let hostConfig = File.ReadAllBytes(Path.Combine(host, ".git", "config"))
+        let hostIndex = File.ReadAllBytes(Path.Combine(host, ".git", "index"))
+        let mirror = Path.Combine(host, "redirect-mirror")
+        let variables = Dictionary[string, string]()
+        variables.Add("GIT_DIR", Path.Combine(host, ".git"))
+        variables.Add("GIT_COMMON_DIR", Path.Combine(host, ".git"))
+        variables.Add("GIT_WORK_TREE", host)
+        variables.Add("GIT_INDEX_FILE", Path.Combine(host, ".git", "index"))
+        variables.Add("GIT_OBJECT_DIRECTORY", Path.Combine(host, ".git", "objects"))
+        variables.Add("GIT_ALTERNATE_OBJECT_DIRECTORIES", Path.Combine(host, ".git", "objects"))
+        variables.Add("GIT_NAMESPACE", "caller")
+        variables.Add("GIT_QUARANTINE_PATH", Path.Combine(host, ".git", "objects", "quarantine"))
+        let previous = Dictionary[string, string?](StringComparer.Ordinal)
+        for (name, value) in variables {
+            previous[name] = Environment.GetEnvironmentVariable(name)
+            Environment.SetEnvironmentVariable(name, value)
+        }
+        try {
+            RepositoryMirror.Prepare(source, mirror)
+            for (name, value) in variables {
+                Assert.Equal(value, Environment.GetEnvironmentVariable(name))
+            }
+        } finally {
+            for (name, value) in previous {
+                Environment.SetEnvironmentVariable(name, value)
+            }
+        }
+        Assert.Equal(hostConfig, File.ReadAllBytes(Path.Combine(host, ".git", "config")))
+        Assert.Equal(hostIndex, File.ReadAllBytes(Path.Combine(host, ".git", "index")))
+        Assert.Equal(sourceHead, Git(mirror, "rev-parse", "HEAD"))
+        Assert.Equal(GitRefs(source), GitRefs(mirror))
+        Assert.NotEmpty(Git(mirror, "ls-files"))
+        Assert.Empty(Git(mirror, "diff", "--cached", "--name-only"))
     }
 
     @Fact
