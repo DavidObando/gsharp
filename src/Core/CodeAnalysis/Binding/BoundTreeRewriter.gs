@@ -313,6 +313,9 @@ abstract class BoundTreeRewriter {
     /// @returns The rewritten expression.
     protected open func RewriteExpression(node BoundExpression) BoundExpression {
         switch node.Kind {
+            case BoundNodeKind.Utf8StringExpression {
+                return node
+            }
             case BoundNodeKind.ErrorExpression {
                 return RewriteErrorExpression(cast[BoundErrorExpression](node))
             }

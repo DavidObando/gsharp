@@ -1,0 +1,16 @@
+package Utf8LiteralProof
+
+import System.Runtime.CompilerServices
+
+public class Literals {
+    shared {
+        @MethodImpl(MethodImplOptions.NoInlining)
+        public func Get() readonly span[byte] -> u8"A" + u8"é\0"
+
+        @MethodImpl(MethodImplOptions.NoInlining)
+        public func Empty() readonly span[byte] -> u8""
+
+        @MethodImpl(MethodImplOptions.NoInlining)
+        public func Derived() readonly span[byte] -> Get().Slice(1, 2)
+    }
+}

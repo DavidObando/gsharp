@@ -8521,29 +8521,7 @@ partial class Binder {
                 allStructs,
                 globalScope.Interfaces
             )
-            // Inferred callees can introduce awaits in existing async functions and nested literals.
-            let lifetimeDiagnostics = DiagnosticBag()
             let orderedFunctions = BoundProgramOrder.SortFunctions(functionBodies.ToImmutable())
-            for (function, body) in orderedFunctions {
-                RefStructAsyncLivenessAnalyzer.Analyze(
-                    body.PreEmitAnalysisBody ?? body,
-                    function,
-                    lifetimeDiagnostics,
-                    parentScope.References
-                )
-            }
-            RefStructAsyncLivenessAnalyzer.AnalyzeInitializers(
-                allStructs,
-                globalScope.Interfaces,
-                lifetimeDiagnostics,
-                parentScope.References
-            )
-            let reportedDiagnostics = HashSet[Diagnostic](diagnostics, DiagnosticBag.EquivalenceComparer)
-            for diagnostic in lifetimeDiagnostics {
-                if reportedDiagnostics.Add(diagnostic) {
-                    diagnostics.Add(diagnostic)
-                }
-            }
             // ADR-0174 D10 / GS0562: batching a rendezvous channel is correct and
             // pointless. Reported here, over the bound bodies, because the question
             // is about the receiver's declaration rather than the call.
@@ -8572,6 +8550,14 @@ partial class Binder {
                 // `func Main()` keeps its own body and the (empty) statement block.
                 statement = inferredEntryBody
             }
+            RefStructAsyncLivenessAnalyzer.AnalyzeProgram(
+                orderedFunctions,
+                statement,
+                allStructs,
+                globalScope.Interfaces,
+                diagnostics,
+                parentScope.References
+            )
             // Issue #3501 A2: union the ref-kind delegates synthesized while
             // binding top-level statements (already in globalScope.Delegates via
             // BindGlobalScope) with those synthesized while binding

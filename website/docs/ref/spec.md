@@ -119,6 +119,62 @@ Console.WriteLine("answer=${n *
 
 Malformed interpolation is reported by dedicated diagnostics: `GS0220` (non-constant alignment), `GS0221` (handler forwarding), `GS0222` (unterminated hole), `GS0223` (empty hole), `GS0224` (empty format specifier), and `GS0225` (newline in the literal portion of the string). By default an interpolated string lowers to `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler`; when its contextual target type is `IFormattable` or `FormattableString` it instead lowers to `FormattableStringFactory.Create`, deferring formatting so the caller selects the culture. See the [CLR interop reference](./clr-interop.md#interpolated-strings-and-formatting).
 
+### UTF-8 span literals (Next)
+
+An adjacent lowercase `u8"` starts a noninterpolating UTF-8 text literal.
+Its natural type is the target core library's `System.ReadOnlySpan[byte]`,
+also spelled `readonly span[byte]`.
+The identifier `u8` remains available outside this adjacent prefix.
+
+```gsharp
+let view readonly span[byte] = u8"Aé\0"
+Console.WriteLine(view.Length) // 4: 41 C3 A9 00
+let combined = (u8"A" + u8"é") + u8"\0"
+```
+
+Source scalars and decoded text escapes encode to UTF-8 without normalization
+or a BOM. Supported escapes are `\0`, `\a`, `\b`, `\f`, `\n`, `\r`,
+`\t`, `\v`, `\'`, `\"`, `\\`, `\x` with one to four hexadecimal digits,
+`\u` with exactly four digits, and `\U` with exactly eight digits.
+The complete decoded UTF-16 sequence must contain only valid scalar values.
+A high/low surrogate escape pair in one literal is valid; isolated,
+reversed, or out-of-range surrogates diagnose.
+Each literal validates independently before folding.
+Thus `u8"\uD800" + u8"\uDC00"` cannot repair either invalid operand.
+`\xFF` is text U+00FF and encodes as `C3 BF`, unlike `b"\xFF"`'s byte `FF`.
+Dollar signs, including `${...}`, are text rather than interpolation.
+Lossy source decoding, physical newlines, and raw delimiters diagnose.
+
+`+` folds only literal representations: UTF-8 literals, parentheses around
+them, and nested literal-only `+` trees.
+Variables, calls, casts, conditionals, CLR strings, and byte strings do not
+gain concatenation operators or implicit conversions.
+Adjacent literals require an explicit `+`.
+These span values are not `const`, attribute, optional-parameter, or pattern
+constants.
+
+The compiler emits deterministic private static RVA storage.
+Each complete logical byte sequence has one additional contiguous zero byte.
+`Length`, indexing, slicing, and exports exclude this hidden terminator.
+An embedded zero remains part of the logical value.
+Even the empty literal has static backing for its hidden terminator.
+Evaluation uses `RuntimeHelpers.CreateSpan[byte]` and a logical-length slice;
+it does not run an encoder or allocate a managed array.
+The descriptor remains a CLR ref struct despite the backing storage's
+assembly lifetime.
+Existing heap, capture, boxing, generic-argument, and suspension restrictions
+still apply. Reacquire a literal after an `await`; do not keep a span live
+across it.
+
+This view is neither CLR UTF-16 `string` nor arbitrary immutable `bytestring`.
+Use explicit copying APIs at mutable-array, byte-string, or native-slice
+ownership boundaries.
+Reference assemblies retain public CLR signatures but omit the private data.
+Formatter and editor tooling preserve the adjacent spelling.
+This is an unreleased compiler feature, not permission to use the syntax
+with an older SDK. cs2gs adoption follows a language release and a separate
+repository SDK-pin update.
+
 <span id="byte-string-literals-development"></span>
 
 ### Byte-string literals

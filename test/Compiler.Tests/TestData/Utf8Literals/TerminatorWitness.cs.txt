@@ -1,0 +1,21 @@
+using System;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
+namespace Utf8Proof;
+
+/// <summary>Observes static literal backing storage.</summary>
+public static class TerminatorWitness
+{
+    /// <summary>Reads the backing byte beyond the logical view.</summary>
+    /// <param name="value">The static-backed view.</param>
+    /// <returns>The physical terminator byte.</returns>
+    public static byte Hidden(ReadOnlySpan<byte> value)
+        => Unsafe.Add(ref MemoryMarshal.GetReference(value), value.Length);
+
+    /// <summary>Checks whether the view has a backing reference.</summary>
+    /// <param name="value">The static-backed view.</param>
+    /// <returns>Whether a backing reference exists.</returns>
+    public static bool HasBackingReference(ReadOnlySpan<byte> value)
+        => !Unsafe.IsNullRef(ref MemoryMarshal.GetReference(value));
+}

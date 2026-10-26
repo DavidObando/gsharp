@@ -277,6 +277,7 @@ UnsignedShiftRightEqualsToken
 UnsignedShiftRightToken
 UsingKeyword
 UsingStatement
+Utf8StringToken
 VarKeyword
 VarPattern
 VariableDeclaration
@@ -388,6 +389,7 @@ TypeParameterConstructionExpression
 TypePattern
 UnaryExpression
 UserInstanceCallExpression
+Utf8StringExpression
 VariableDeclaration
 VariableExpression
 YieldStatement

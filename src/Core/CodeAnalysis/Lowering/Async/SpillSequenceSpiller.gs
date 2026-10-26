@@ -1077,6 +1077,7 @@ shared class SpillSequenceSpiller {
                     return SpillConditionalAddress(condAddr)
                 }
                 case BoundLiteralExpression,
+                BoundUtf8StringExpression,
                 BoundVariableExpression,
                 BoundDefaultExpression,
                 BoundTypeParameterConstructionExpression,
@@ -2792,6 +2793,7 @@ shared class SpillSequenceSpiller {
                 (type.ClrType is {IsArray: true} clrArray && clrArray.GetArrayRank() > 1)
 
             private func CanDeferAcrossLift(expression BoundExpression) bool -> expression is BoundLiteralExpression ||
+                expression is BoundUtf8StringExpression ||
                 expression is BoundDefaultExpression
 
             private func Trivial(value BoundExpression) BoundSpillSequenceExpression {

@@ -708,6 +708,27 @@ internal partial class ExpressionBinder {
     }
 
     private func BindLiteralExpression(syntax LiteralExpressionSyntax) BoundExpression {
+        if syntax.LiteralToken.Kind == SyntaxKind.Utf8StringToken {
+            if !ClrSpanTypes.TryResolveUtf8Literal(
+                $scope.References!!,
+                out var spanType,
+                out var createSpan,
+                out var slice
+            ) {
+                Diagnostics.ReportInvalidUtf8StringLiteral(
+                    syntax.Location,
+                    "UTF-8 literals require canonical ReadOnlySpan<byte>, RuntimeHelpers.CreateSpan<byte>, and Slice(int32,int32)"
+                )
+                return BoundErrorExpression(syntax)
+            }
+            return BoundUtf8StringExpression(
+                syntax,
+                cast[ImmutableArray[uint8]](syntax.Value!!),
+                TypeSymbol.FromClrTypeWithoutNullability(spanType, NullabilityFreeReason.ResolvedTypeName),
+                createSpan,
+                slice
+            )
+        }
         if syntax.LiteralToken.Kind == SyntaxKind.ByteStringToken {
             if !ByteStringTypes.TryResolveDefinition($scope.References!!, out var byteStringType) {
                 Diagnostics.ReportByteStringRuntime(syntax.Location)

@@ -9,6 +9,13 @@ import Xunit
 
 open class HighlightTests {
     @Fact
+    func Markup_Utf8String_UsesOneStringColorWithoutInterpolation() {
+        let markup = Highlight.Markup(`u8"$name ${unclosed"`)
+        Assert.Contains("u8\"", markup)
+        Assert.Equal(1, markup.Split("[/]").Length - 1)
+    }
+
+    @Fact
     func Markup_PlainString_UsesSingleStringColor() {
         let markup = Highlight.Markup("\"hello\"")
         // One color tag opens for the whole literal, not one per fragment.

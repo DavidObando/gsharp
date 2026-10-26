@@ -40,6 +40,12 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// Reports a missing or incompatible immutable-byte-string runtime.
     func ReportByteStringRuntime(location TextLocation) -> Report(location, DiagnosticDescriptors.ByteStringRuntime)
 
+    internal func ReportInvalidUtf8StringLiteral(location TextLocation, reason string) -> Report(
+        location,
+        DiagnosticDescriptors.InvalidUtf8StringLiteral,
+        reason
+    )
+
     /// Reports a number literal as invalid.
     /// @param location The text location where the error was found.
     /// @param text Text found in the source document.

@@ -31,6 +31,51 @@ import System.Reflection
 /// `MethodDebugInformation` row per `MethodDef`, and at least one
 /// visible sequence point anchored at the expected source line.
 open class PortablePdbEmitTests {
+    @Theory
+    @InlineData("let value = <-ch")
+    @InlineData("let value = await Task.FromResult(20)")
+    func AsyncSpill_DiagnosticOriginDoesNotAddVisibleSteppingStops(suspension string) {
+        let source = `package main
+import System.Threading.Tasks
+async func Pipe(ch chan[int32]) int32 {
+    ` + suspension + `
+    return value + 1
+}
+func main() {}
+`
+        let text = SourceText.From(source, "suspension.gs")
+        let compilation = Compilation(SyntaxTree.Parse(text)){
+            DebugInformation = DebugInformationOptions{Format: DebugInformationFormat.Portable}
+        }
+        using let peStream = MemoryStream()
+        using let pdbStream = MemoryStream()
+        let result = compilation.Emit(peStream, pdbStream, nil)
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select((d Diagnostic) -> d.Message)))
+        peStream.Position = 0
+        using let pe = PEReader(peStream)
+        let metadata = pe.GetMetadataReader()
+        let method = Assert.Single(
+            metadata.MethodDefinitions,
+            (handle MethodDefinitionHandle) -> metadata.GetString(
+                metadata.GetMethodDefinition(handle).Name
+            ) == "MoveNext"
+        )
+        pdbStream.Position = 0
+        using let provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+        let points = provider
+            .GetMetadataReader()
+            .GetMethodDebugInformation(MetadataTokens.MethodDebugInformationHandle(MetadataTokens.GetRowNumber(method)))
+            .GetSequencePoints()
+            .ToArray()
+        Assert.NotEmpty(points)
+        let suspensionLine = text.GetLineIndex(source.IndexOf(suspension, StringComparison.Ordinal)) + 1
+        Assert.Single(
+            points.Where((point MetadataSequencePoint) -> !point.IsHidden && point.StartLine == suspensionLine)
+        )
+        let returnLine = text.GetLineIndex(source.IndexOf("return value", StringComparison.Ordinal)) + 1
+        Assert.Contains(points, (point MetadataSequencePoint) -> !point.IsHidden && point.StartLine == returnLine)
+    }
+
     @Fact
     func PdbStream_IsEmpty_WhenFormatIsNone() {
         using let peStream = MemoryStream()
