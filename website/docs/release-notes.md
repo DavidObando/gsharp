@@ -16,6 +16,10 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 The entries below are newer than v0.5.212. Published features and migration notes follow in the release section.
 
+- **Qualified package components keep their complete names** (issue #5396). A later component can match an unrelated source or imported type name. Qualified constructions and shared member access now use the complete package prefix. This corrects translated Oahu token references. The translator code stays unchanged.
+
+- **Bank the three nightly applications** (issue #5396). Record Oahu, Code Exploder, and GSharp after complete validation. A later failure on `main` receives one `P0` label through the existing issue classifier. Project selection and stage floors stay unchanged.
+
 - **Source class literals retain primary initialization** (issue #5361). Inferred and explicit generic literals now call the primary constructor, so declaration initializers run in their owning scope. Explicit member overrides retain source evaluation order and run once.
 
 - Check ref-like liveness after suspension inference across function bodies, top-level statements, field initializers, static initializer statements, and base-constructor arguments. Include nested async lambdas. Convert typed spill failures into source-located diagnostics. Keep synthesized-temporary diagnostics stable when inference renumbers spills. Reuse cached function-literal lowering across analyses. Complete deferred operand checks after inference, including unchanged bodies. Preserve exact diagnostic counts and safe parked-channel literal evaluation. Do not suggest unsupported operators for mixed adjacent literals. Recover unsupported triple-quoted forms as one rejected UTF-8 token. Resolve the required literal helper from the target reference set. Part of #5332 and #5328.

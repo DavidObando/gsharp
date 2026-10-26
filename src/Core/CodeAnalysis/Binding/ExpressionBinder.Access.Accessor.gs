@@ -3060,11 +3060,11 @@ internal partial class ExpressionBinder {
     }
 
     /// Whether [`segment`](paramref) is a pure namespace/package prefix component.
-    /// Source types and imported CLR classes prevent peeling.
     /// Import aliases prevent peeling unless they target source packages.
     /// Leading segments also exclude values, predefined type aliases, and type parameters.
     /// Check import aliases before canonical lookup because namespace targets do not name types.
-    /// Canonical lookup applies only to unaliased leading segments; later components already belong to a package.
+    /// Later components use the complete prefix through (cref:IsQualifiedSourceTypeBoundary).
+    /// A simple name from another package must not stop the qualified lookup.
     /// Namespace aliases use source lookup to avoid recursive namespace resolution.
     /// Source ambiguity does not exclude an independently resolved CLR receiver.
     /// Exact lookup retains the complete prefix when binding the source type.
@@ -3084,9 +3084,8 @@ internal partial class ExpressionBinder {
     /// @param isLeadingSegment Whether [`segment`](paramref) is the first segment being peeled from
     /// the chain (as opposed to a later, already-committed continuation).
     /// @returns Whether the segment is a pure namespace/package prefix.
-    private func IsNamespacePrefixSegment(segment string, isLeadingSegment bool = true) bool -> (
-        !isLeadingSegment || !($scope.TryLookupSymbol(segment) is VariableSymbol)
-    ) &&
+    private func IsNamespacePrefixSegment(segment string, isLeadingSegment bool = true) bool -> !isLeadingSegment ||
+        !($scope.TryLookupSymbol(segment) is VariableSymbol) &&
         !(
         $scope.TryLookupImport(segment, out var import_) && import_!!.IsAlias && !$scope.TryMatchSourcePackagePrefix(
             import_!!.Target,
@@ -3094,7 +3093,7 @@ internal partial class ExpressionBinder {
         )
     ) &&
         (
-        if isLeadingSegment && !(import_ is ImportSymbol aliasImport && aliasImport.IsAlias) {
+        if !(import_ is ImportSymbol aliasImport && aliasImport.IsAlias) {
             lookupType(segment) == nil
         } else {
             !binderCtx.TryLookupSourceType($scope, segment, preferredArity: -1, getCurrentFunction(), out _, out _)
