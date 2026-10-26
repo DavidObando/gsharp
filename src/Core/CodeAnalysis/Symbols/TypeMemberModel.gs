@@ -863,15 +863,18 @@ shared class TypeMemberModel {
         }
         for iface in interfaces {
             iface.EnsureMembersResolved()
+            // Constructed interfaces project methods but retain data symbols on their definition.
+            let declaration = iface.Definition ?? iface
+            declaration.EnsureMembersResolved()
             if (query.Kinds & MemberKinds.Property) != 0 {
-                for p in iface.Properties {
+                for p in declaration.Properties {
                     if IncludesStaticness(p.IsStatic, query) {
                         yield p
                     }
                 }
             }
             if (query.Kinds & MemberKinds.Event) != 0 && query.IncludeInstance {
-                for e in iface.Events {
+                for e in declaration.Events {
                     yield e
                 }
             }
@@ -979,35 +982,9 @@ shared class TypeMemberModel {
     }
 
     private func LookupInterfaceMember(interfaceSymbol InterfaceSymbol, name string, query MemberQuery) Symbol? {
-        // Issue #1006: walk this interface together with its transitive base
-        // interfaces so members inherited from an extended interface resolve.
-        for iface in if query.IncludeInherited {
-            interfaceSymbol.SelfAndAllBaseInterfaces()
-        } else {
-            cast[IEnumerable[InterfaceSymbol]]([]InterfaceSymbol{interfaceSymbol})
-        } {
-            iface.EnsureMembersResolved()
-            if (query.Kinds & MemberKinds.Property) != 0 {
-                for p in iface.Properties {
-                    if p.Name == name && IncludesStaticness(p.IsStatic, query) {
-                        return p
-                    }
-                }
-            }
-            if (query.Kinds & MemberKinds.Event) != 0 && query.IncludeInstance {
-                for e in iface.Events {
-                    if e.Name == name {
-                        return e
-                    }
-                }
-            }
-            if (query.Kinds & MemberKinds.Method) != 0 {
-                if query.IncludeInstance && iface.TryGetMethod(name, out var method) {
-                    return method!!
-                }
-                if query.IncludeStatic && iface.TryGetStaticMethod(name, out var staticMethod) {
-                    return staticMethod!!
-                }
+        for member in EnumerateInterfaceMembers(interfaceSymbol, query) {
+            if member.Name == name {
+                return member
             }
         }
         return nil

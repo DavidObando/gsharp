@@ -92,7 +92,7 @@ internal class MemberLookup {
                     iface
                     .GetStaticPrivateMethods(name)
                     .Length != 0 ||
-                    GetInterfaceImportedBaseInstanceProperty(iface, name) != nil ||
+                    GetInterfaceImportedBaseInstanceDataMember(iface, name, dataMembers) != nil ||
                     GetInterfaceImportedBaseInstanceMethods(iface, name, out _).Count != 0
             ) {
                 return current
@@ -1440,15 +1440,38 @@ internal class MemberLookup {
         internal func GetInterfaceImportedBaseInstanceProperty(
             interfaceSymbol InterfaceSymbol,
             name string
-        ) PropertyInfo? {
+        ) PropertyInfo? -> GetInterfaceImportedBaseInstanceDataMember(
+            interfaceSymbol,
+            name,
+            MemberKinds.Property
+        ) as PropertyInfo
+
+        /// Finds imported instance data members using the ordinary property and event readers.
+        /// @param interfaceSymbol The source interface receiver.
+        /// @param name The ordinary member name.
+        /// @param kinds The data-member kinds to admit.
+        /// @returns The visible instance member, excluding indexers, or null.
+        internal func GetInterfaceImportedBaseInstanceDataMember(
+            interfaceSymbol InterfaceSymbol,
+            name string,
+            kinds MemberKinds
+        ) MemberInfo? {
             for clrBase in GetTransitiveClrBaseInterfaces(interfaceSymbol) {
-                let property = ClrTypeUtilities.SafeGetProperty(
-                    clrBase,
-                    name,
-                    BindingFlags.Public | BindingFlags.Instance
-                )
-                if property != nil && property.GetIndexParameters().Length == 0 {
-                    return property
+                if (kinds & MemberKinds.Property) != 0 {
+                    let property = ClrTypeUtilities.SafeGetProperty(
+                        clrBase,
+                        name,
+                        BindingFlags.Public | BindingFlags.Instance
+                    )
+                    if property != nil && property.GetIndexParameters().Length == 0 {
+                        return property
+                    }
+                }
+                if (kinds & MemberKinds.Event) != 0 {
+                    let eventInfo = SafeGetEventIncludingSelfAndInterfaces(clrBase, name)
+                    if eventInfo != nil {
+                        return eventInfo
+                    }
                 }
             }
             return nil

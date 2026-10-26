@@ -466,6 +466,74 @@ Console.Write(reader.Bare())`, "GenericInterfaceCall5262", true, "/r:" + contrac
     }
 
     @Fact
+    func ConstructedSourceInterfacePropertiesKeepTheirOwnerBeforeEnclosingState() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace ConstructedProperties5262;
+public interface IValue<T> { T Value { get; set; } }
+public static class Bridge { public static int Read(IValue<int> item) => item.Value; }`, "ConstructedProperties5262")
+        let executable = fixture.Compile(`import System
+import ConstructedProperties5262
+interface IBox[T] {
+    prop Value T { get; set; }
+}
+class Outer {
+    shared { var Value int32 = 1 }
+    interface Nested : IBox[int32] {
+        func Bare() int32 { return Value }
+        func Qualified() int32 { return this.Value }
+        func Write() { Value = 4 }
+        func Compound() { Value += 3 }
+    }
+    func Read() int32 -> Value
+}
+class Implementation : Outer.Nested, IValue[int32] {
+    prop Value int32 { get; set; }
+}
+let implementation = Implementation()
+let item Outer.Nested = implementation
+item.Value = 2
+Console.Write(Bridge.Read(implementation))
+Console.Write("|")
+Console.Write(item.Bare())
+Console.Write("|")
+item.Write()
+Console.Write(item.Qualified())
+Console.Write("|")
+Console.Write(Outer().Read())
+Console.Write("|")
+item.Compound()
+Console.Write(item.Qualified())
+Console.Write("|")
+Console.Write(Outer().Read())`, "ConstructedSourceProperty5262", true, "/r:" + contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal(Encoding.UTF8.GetBytes("2|2|4|1|7|1"), fixture.RunBytes(executable))
+    }
+
+    @Fact
+    func UnsupportedInheritedInterfaceEventsCannotBindEnclosingDelegateStorage() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace ImportedEvents5262;
+public interface IEvents { event System.Action Changed; }`, "ImportedEvents5262")
+        let (code, output) = fixture.TryCompile(`import System
+import ImportedEvents5262
+class Outer {
+    shared { var Changed Action? }
+    interface Nested : IEvents {
+        func Attach(handler Action) { Changed += handler }
+        func Detach(handler Action) { Changed -= handler }
+        func Read() Action? { return Changed }
+        func Write(handler Action) { Changed = handler }
+    }
+}`, "RejectedImportedEvent5262", false, "/r:" + contract)
+        Assert.NotEqual(0, code)
+        Assert.Contains("RejectedImportedEvent5262.gs(6,39,6,46): error GS0125", output)
+        Assert.Contains("RejectedImportedEvent5262.gs(7,39,7,46): error GS0125", output)
+        Assert.Contains("RejectedImportedEvent5262.gs(8,38,8,45): error GS0125", output)
+        Assert.Contains("RejectedImportedEvent5262.gs(9,38,9,45): error GS0125", output)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "RejectedImportedEvent5262.dll")))
+    }
+
+    @Fact
     func InheritedClrInterfacePropertiesPrecedeEnclosingSharedFields() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let contract = fixture.CompileCSharp(`namespace ImportedProperties5262;

@@ -207,6 +207,32 @@ open class TypeMemberModelTests {
     }
 
     @Fact
+    func ConstructedInterfaceDataMembersShareCanonicalLookupAndEnumeration() {
+        let tree = SyntaxTree.Parse(SourceText.From(`import System
+interface IBox[T] {
+    prop Value T { get; set; }
+    event Changed Action
+}
+interface Child : IBox[int32] { }`))
+        let compilation = Compilation(tree)
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation))
+        let child = compilation.GlobalScope.Interfaces.Single((s InterfaceSymbol) -> s.Name == "Child")
+        let constructed = child.BaseInterfaces.Single()
+        Assert.True(TypeMemberModel.TryGetPropertyWithOwner(constructed, "Value", out var property, out _))
+        Assert.True(TypeMemberModel.TryGetEvent(constructed, "Changed", out var eventSymbol))
+        Assert.Equal(
+            []Symbol{property, eventSymbol},
+            TypeMemberModel.EnumerateMembers(
+                constructed,
+                MemberQuery.Instance(MemberKinds.Property | MemberKinds.Event)
+            )
+                .ToArray()
+        )
+        Assert.Same(property, TypeMemberModel.LookupMember(constructed, "Value", MemberQuery.Instance()))
+        Assert.Same(eventSymbol, TypeMemberModel.LookupMember(constructed, "Changed", MemberQuery.Instance()))
+    }
+
+    @Fact
     func InterfacePropertyQueriesSeparateInheritedInstanceAndDeclaredStaticMembers() {
         let tree = SyntaxTree.Parse(SourceText.From(`interface Base {
     prop Inherited int32 { get; }

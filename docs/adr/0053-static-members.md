@@ -85,6 +85,7 @@ Members inside `shared` inherit the same accessibility modifier rules as regular
 - Interface CLR method barriers and implicit calls share the imported-base overload query. Interface property queries distinguish static from instance members; inherited static properties do not hide enclosing fields.
 - Implicit inherited class and interface calls share explicit type-argument resolution. Both CLR and symbolic arguments are preserved; omission permits inference.
 - Imported interface property hiding and bare/qualified reads share the inherited-property query. Unsupported imported-property writes fail instead of mutating enclosing fields. Interface method candidates use canonical collision-aware CLR name matching.
+- Constructed interface data-member enumeration and lookup use their canonical definition symbols, retaining projected methods. Imported instance data-member admission includes events; unsupported event operations diagnose rather than binding enclosing delegate storage.
 
 ### 6. Type-level access from GSharp
 
