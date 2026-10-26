@@ -191,6 +191,113 @@ class Issue5271ReferenceAssemblyPackTests : IDisposable {
         }
     }
 
+    @Fact
+    func OutputCaptureTimeout_AfterRootExit_PreservesBothTailsWithoutTermination() {
+        let ready = Path.Combine(directory, "holder.ready")
+        let pidFile = ready + ".pid"
+        File.WriteAllText(Path.Combine(directory, "PipeHolder.proj"), `<Project>
+  <UsingTask TaskName="Hold" TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup><Ready ParameterType="System.String" Required="true" /></ParameterGroup>
+    <Task><Code Type="Fragment" Language="cs"><![CDATA[
+      System.Console.Out.Write("stdout tail");
+      System.Console.Out.Flush();
+      System.Console.Error.Write("stderr tail");
+      System.Console.Error.Flush();
+      System.IO.File.WriteAllText(Ready, "ready");
+      System.Threading.Thread.Sleep(60000);
+    ]]></Code></Task>
+  </UsingTask>
+  <UsingTask TaskName="Launch" TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <ProjectFile ParameterType="System.String" Required="true" />
+      <Ready ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task><Code Type="Fragment" Language="cs"><![CDATA[
+      var start = new System.Diagnostics.ProcessStartInfo("dotnet",
+          "msbuild \"" + ProjectFile + "\" -t:Hold -p:Ready=\"" + Ready + "\" -nr:false -nologo -v:q") {
+          UseShellExecute = false
+      };
+      using (var child = System.Diagnostics.Process.Start(start)) {
+          if (child == null) throw new System.Exception("Cannot start owned pipe holder.");
+          System.IO.File.WriteAllText(Ready + ".pid", child.Id.ToString());
+          if (!System.Threading.SpinWait.SpinUntil(() => System.IO.File.Exists(Ready), 10000))
+              throw new System.Exception("Owned pipe holder did not become ready.");
+      }
+    ]]></Code></Task>
+  </UsingTask>
+  <Target Name="Hold"><Hold Ready="$(Ready)" /></Target>
+  <Target Name="Launch"><Launch ProjectFile="$(MSBuildThisFileFullPath)" Ready="$(Ready)" /></Target>
+</Project>`)
+        let start = ProcessStartInfo("dotnet"){
+            WorkingDirectory = directory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        }
+        start.Environment["TMPDIR"] = directory
+        start.Environment["TEMP"] = directory
+        start.Environment["TMP"] = directory
+        for argument in[]string{
+            "msbuild",
+            "PipeHolder.proj",
+            "-t:Launch",
+            "-nr:false",
+            "-nologo",
+            "-v:q",
+            "-p:Ready=$ready"
+        } {
+            start.ArgumentList.Add(argument)
+        }
+        using let process = Process.Start(start) ?? throw InvalidOperationException("Cannot start pipe-holder fixture.")
+        try {
+            Assert.True(process.WaitForExit(10000), "The fixture root did not exit.")
+            Assert.Equal(0, process.ExitCode)
+            Assert.True(File.Exists(pidFile), "The owned pipe holder was not recorded.")
+            var terminated = false
+            let elapsed = Stopwatch.StartNew()
+            let error = Assert.Throws[IOException](
+                () -> CompleteProcess(
+                    process,
+                    120000,
+                    (owned Process) -> {
+                        terminated = true
+                        owned.Kill(entireProcessTree: true)
+                    }
+                )
+            )
+            Assert.Contains("output capture timed out after process exit", error.Message)
+            Assert.Contains("stdout tail", error.Message)
+            Assert.Contains("stderr tail", error.Message)
+            Assert.False(terminated, "A capture deadline must not terminate an already-exited root.")
+            Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(15), "Output capture exceeded its deadline.")
+        } finally {
+            if File.Exists(pidFile) {
+                try {
+                    using let holder = Process.GetProcessById(int32.Parse(File.ReadAllText(pidFile)))
+                    if !holder.HasExited {
+                        try {
+                            holder.Kill(entireProcessTree: true)
+                        } catch (InvalidOperationException) {
+                            Assert.True(holder.HasExited)
+                        }
+                    }
+                    Assert.True(holder.WaitForExit(5000), "The owned pipe holder survived cleanup.")
+                } catch (ArgumentException) {
+                    // The precisely identified fixture child already exited.
+
+                }
+            }
+            try {
+                process.Kill(entireProcessTree: true)
+            } catch (InvalidOperationException) {
+                Assert.True(process.HasExited)
+            }
+            Assert.True(process.WaitForExit(5000), "The fixture root survived cleanup.")
+        }
+    }
+
     shared {
         private func CompleteProcess(
             process Process,
@@ -205,7 +312,7 @@ class Issue5271ReferenceAssemblyPackTests : IDisposable {
                 ReadOutput(process.StandardError, stderr, stop.Token)
             )
             let exited = process.WaitForExit(timeoutMilliseconds)
-            if !exited || !CompletesWithin(readers, 5000) {
+            if !exited {
                 let failures = List[Exception]()
                 try {
                     if terminate == nil {
@@ -242,6 +349,15 @@ class Issue5271ReferenceAssemblyPackTests : IDisposable {
                     "The metadata-only pack fixture timed out. Child exited: $stopped; pipes drained: $drained.\n" +
                         "stdout:\n${Snapshot(stdout)}\nstderr:\n${Snapshot(stderr)}",
                     cause
+                )
+            }
+            if !CompletesWithin(readers, 5000) {
+                stop.Cancel()
+                let settled = CompletesWithin(readers, 1000)
+                throw IOException(
+                    "Pack output capture timed out after process exit. Readers stopped: $settled.\n" +
+                        "stdout:\n${Snapshot(stdout)}\nstderr:\n${Snapshot(stderr)}",
+                    readers.Exception
                 )
             }
             if readers.IsFaulted || readers.IsCanceled {
