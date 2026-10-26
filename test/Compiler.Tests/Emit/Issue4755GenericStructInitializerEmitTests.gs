@@ -5,12 +5,15 @@
 package GSharp.Compiler.Tests.Emit
 
 import System
+import System.Collections.Concurrent
+import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Linq.Expressions
 import System.Reflection
 import System.Text
+import System.Threading.Tasks
 import GSharp.Tests
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
@@ -20,6 +23,57 @@ import GSharp.Compiler
 import GSharp.Compiler.Tests
 
 class Issue4755GenericStructInitializerEmitTests {
+    @Fact
+    func Issue5361_DriverTimeoutReapsRealChildAndRetainsRawPartialOutput() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let image = fixture.Compile(`package Timeout5361
+import System
+import System.IO
+import System.Threading
+File.WriteAllText("child.pid", Environment.ProcessId.ToString())
+let stdout = Console.OpenStandardOutput()
+stdout.WriteByte(uint8(255))
+stdout.WriteByte(uint8(0))
+stdout.Flush()
+Console.Error.Write("partial-error")
+Console.Error.Flush()
+if !File.Exists("exit-now") { Thread.Sleep(60000) }
+`, "timeout-child", true)
+        IlVerifier.Verify(image)
+        let exitFlag = Path.Combine(fixture.Directory, "exit-now")
+        File.WriteAllText(exitFlag, "")
+        Assert.Equal([]uint8{255, 0}, RunDriverBytes(image, fixture.Directory))
+        File.Delete(exitFlag)
+        var child Process? = nil
+        try {
+            let failure = Record.Exception(
+                () -> {
+                    let _ = RunDriverBytes(image, fixture.Directory, 5000, 5000)
+                }
+            )
+            let pid = int32.Parse(File.ReadAllText(Path.Combine(fixture.Directory, "child.pid")))
+            try {
+                child = Process.GetProcessById(pid)
+            } catch (ArgumentException) {
+                child = nil
+            }
+            Assert.True(child == nil || child.HasExited, "timed-out child $pid remains alive")
+            let aggregate = Assert.IsType[AggregateException](failure)
+            Assert.Contains(aggregate.InnerExceptions, (error Exception) -> error is TimeoutException)
+            Assert.Contains("streams settled=True", aggregate.Message)
+            Assert.Contains("stdout(base64)=/wA=", aggregate.Message)
+            Assert.Contains("stderr(base64)=cGFydGlhbC1lcnJvcg==", aggregate.Message)
+        } finally {
+            if child != nil {
+                using let cleanup = child
+                if !cleanup.HasExited {
+                    cleanup.Kill(entireProcessTree: true)
+                    Assert.True(cleanup.WaitForExit(5000), "timeout witness cleanup could not confirm child exit")
+                }
+            }
+        }
+    }
+
     @Fact
     func Issue5361_InferredClassLiteralRunsDeclarationInitializerThroughDriver() {
         using let fixture = NativeSliceLanguageTests.Fixture()
@@ -2124,7 +2178,12 @@ class Api {
     }
 
     shared {
-        private func RunDriverBytes(image string, directory string)[]uint8 {
+        private func RunDriverBytes(
+            image string,
+            directory string,
+            timeoutMilliseconds int32 = 30_000,
+            graceMilliseconds int32 = 10_000
+        )[]uint8 {
             let start = ProcessStartInfo("dotnet"){
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
@@ -2133,16 +2192,87 @@ class Api {
             }
             start.ArgumentList.Add(image)
             using let process = Process.Start(start)!!
-            using let stdout = MemoryStream()
-            let output = process.StandardOutput.BaseStream.CopyToAsync(stdout)
-            let error = process.StandardError.ReadToEndAsync()
-            if !process.WaitForExit(30_000) {
-                process.Kill(entireProcessTree: true)
-                Assert.Fail("class literal driver witness timed out")
+            let stdout = ConcurrentQueue[uint8]()
+            let stderr = ConcurrentQueue[uint8]()
+            let output = Task.Run(
+                () -> {
+                    CaptureDriverBytes(process.StandardOutput.BaseStream, stdout)
+                }
+            )
+            let error = Task.Run(
+                () -> {
+                    CaptureDriverBytes(process.StandardError.BaseStream, stderr)
+                }
+            )
+            let captures = Task.WhenAll(output, error)
+            let failures = List[Exception]()
+            let timedOut = !process.WaitForExit(timeoutMilliseconds)
+            var exited = !timedOut
+            var exitRace = false
+            if timedOut {
+                failures.Add(TimeoutException("class literal driver witness timed out after $timeoutMilliseconds ms"))
+                try {
+                    process.Kill(entireProcessTree: true)
+                } catch (failure InvalidOperationException) {
+                    // #5380: keep captured process checks in catch bodies until the released compiler supports filters.
+                    if process.HasExited {
+                        exitRace = true
+                    } else {
+                        failures.Add(failure)
+                    }
+                } catch (failure Exception) {
+                    failures.Add(failure)
+                }
+                try {
+                    exited = process.WaitForExit(graceMilliseconds)
+                } catch (failure Exception) {
+                    failures.Add(failure)
+                }
+                if !exited {
+                    failures.Add(TimeoutException("child termination remains unconfirmed after $graceMilliseconds ms"))
+                }
             }
-            output.GetAwaiter().GetResult()
-            Assert.True(process.ExitCode == 0, error.GetAwaiter().GetResult())
-            return stdout.ToArray()
+            var settled = false
+            try {
+                settled = captures.Wait(graceMilliseconds)
+            } catch (AggregateException) {
+                settled = captures.IsCompleted
+            }
+            if !settled {
+                failures.Add(TimeoutException("redirected streams did not settle after $graceMilliseconds ms"))
+                let _ = captures.ContinueWith((task Task) -> task.Exception, TaskContinuationOptions.OnlyOnFaulted)
+            }
+            for task in[]Task{output, error} {
+                if task.Exception is {} failure {
+                    failures.AddRange(failure.Flatten().InnerExceptions)
+                }
+                if !settled {
+                    let _ = task.ContinueWith((failed Task) -> failed.Exception, TaskContinuationOptions.OnlyOnFaulted)
+                }
+            }
+            // Concurrent byte queues permit raw snapshots without reading or disposing an actively written buffer.
+            let stdoutBytes = stdout.ToArray()
+            let stderrBytes = stderr.ToArray()
+            if failures.Count != 0 {
+                throw AggregateException(
+                    "driver capture: pid=${process.Id}; child exited=$exited; exit race=$exitRace; streams settled=$settled; " +
+                        "stdout(base64)=${Convert.ToBase64String(stdoutBytes)}; " +
+                        "stderr(base64)=${Convert.ToBase64String(stderrBytes)}",
+                    failures
+                )
+            }
+            Assert.True(process.ExitCode == 0, Encoding.UTF8.GetString(stderrBytes))
+            return stdoutBytes
+        }
+
+        private func CaptureDriverBytes(stream Stream, bytes ConcurrentQueue[uint8]) {
+            while true {
+                let value = stream.ReadByte()
+                if value < 0 {
+                    return
+                }
+                bytes.Enqueue(uint8(value))
+            }
         }
 
         private func AssertNativeConsumer(
