@@ -298,12 +298,16 @@ import System
 import System.Threading
 func Main() {
     Console.Write("partial")
+    Console.Out.Flush()
+    Console.Error.WriteLine("ready")
     Thread.Sleep(Timeout.Infinite)
 }`, "EqualityTimeout", true)
         IlVerifier.Verify(dll)
         using let process = StartFixture(dll)
         try {
-            let error = Assert.Throws[InvalidOperationException](() -> ReadOutputBytes(process))
+            using let startup = CancellationTokenSource(30_000)
+            Assert.Equal("ready", process.StandardError.ReadLineAsync(startup.Token).AsTask().GetAwaiter().GetResult())
+            let error = Assert.Throws[InvalidOperationException](() -> ReadOutputBytes(process, 0))
             Assert.True(process.HasExited, "The timed-out child is still running.")
             Assert.StartsWith("Equality fixture timed out.", error.Message, StringComparison.Ordinal)
             Assert.Contains("Child terminated: True.", error.Message, StringComparison.Ordinal)
@@ -337,13 +341,13 @@ func Main() {
             return Process.Start(start) ?? throw InvalidOperationException("Failed to start fixture.")
         }
 
-        private func ReadOutputBytes(process Process)[]uint8 {
+        private func ReadOutputBytes(process Process, timeoutMilliseconds int32 = 30_000)[]uint8 {
             using let output = MemoryStream()
             using let cancellation = CancellationTokenSource()
             let stdout = process.StandardOutput.BaseStream.CopyToAsync(output, cancellation.Token)
             let stderr = process.StandardError.ReadToEndAsync(cancellation.Token)
             let reads = Task.WhenAll([]Task{stdout, stderr})
-            if !process.WaitForExit(30_000) {
+            if !process.WaitForExit(timeoutMilliseconds) {
                 let message = StringBuilder("Equality fixture timed out.")
                 try {
                     process.Kill(entireProcessTree: true)
