@@ -1436,25 +1436,30 @@ internal class MemberLookup {
         /// Finds the imported interface property shared by lexical hiding and member access.
         /// @param interfaceSymbol The source interface receiver.
         /// @param name The ordinary property name.
+        /// @param requireReadable Whether candidates require a getter instead of serving as lexical barriers.
         /// @returns The public instance property, excluding indexers, or null.
         internal func GetInterfaceImportedBaseInstanceProperty(
             interfaceSymbol InterfaceSymbol,
-            name string
+            name string,
+            requireReadable bool = false
         ) PropertyInfo? -> GetInterfaceImportedBaseInstanceDataMember(
             interfaceSymbol,
             name,
-            MemberKinds.Property
+            MemberKinds.Property,
+            requireReadable
         ) as PropertyInfo
 
         /// Finds imported instance data members using the ordinary property and event readers.
         /// @param interfaceSymbol The source interface receiver.
         /// @param name The ordinary member name.
         /// @param kinds The data-member kinds to admit.
+        /// @param requireReadableProperty Whether property candidates require a getter.
         /// @returns The visible instance member, excluding indexers, or null.
         internal func GetInterfaceImportedBaseInstanceDataMember(
             interfaceSymbol InterfaceSymbol,
             name string,
-            kinds MemberKinds
+            kinds MemberKinds,
+            requireReadableProperty bool = false
         ) MemberInfo? {
             for clrBase in GetTransitiveClrBaseInterfaces(interfaceSymbol) {
                 if (kinds & MemberKinds.Property) != 0 {
@@ -1463,7 +1468,9 @@ internal class MemberLookup {
                         name,
                         BindingFlags.Public | BindingFlags.Instance
                     )
-                    if property != nil && property.GetIndexParameters().Length == 0 {
+                    if property != nil && property.GetIndexParameters()
+                        .Length == 0 &&
+                        (!requireReadableProperty || property.CanRead) {
                         return property
                     }
                 }

@@ -466,6 +466,64 @@ Console.Write(reader.Bare())`, "GenericInterfaceCall5262", true, "/r:" + contrac
     }
 
     @Fact
+    func ReadableInheritedPropertiesSkipWriteOnlyCandidatesWithoutLosingLexicalBarriers() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`using System;
+namespace Readable5262;
+public interface IWriteOnly { int Value { set; } }
+public interface IStatic { static int Value => 9; }
+public interface IReadable<T> { T Value { get; } }
+public class Both : IWriteOnly, IStatic, IReadable<int> {
+    private int stored = 2;
+    public int Value { get { Console.Write("G"); return stored; } set { stored = value; } }
+}
+public static class Bridge { public static int Read(IReadable<int> item) => item.Value; }`, "ReadableContract5262")
+        let executable = fixture.Compile(`import System
+import Readable5262
+class Outer {
+    shared { var Value int32 = 1 }
+    interface Nested : IWriteOnly, IStatic, IReadable[int32] {
+        func Bare() int32 { return Value }
+        func Qualified() int32 { return this.Value }
+    }
+    func Read() int32 -> Value
+}
+class Implementation : Both, Outer.Nested {}
+func Select(item Outer.Nested) Outer.Nested {
+    Console.Write("S")
+    return item
+}
+let item Outer.Nested = Implementation()
+Console.Write(Bridge.Read(item))
+Console.Write("|")
+Console.Write(item.Bare())
+Console.Write("|")
+Console.Write(item.Qualified())
+Console.Write("|")
+Console.Write(Select(item).Value)
+Console.Write("|")
+Console.Write(Outer().Read())`, "ReadableSelection5262", true, "/r:" + contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal(Encoding.UTF8.GetBytes("G2|G2|G2|SG2|1"), fixture.RunBytes(executable))
+        let (code, output) = fixture.TryCompile(`import Readable5262
+class Outer {
+    shared { var Value int32 = 1 }
+    interface Nested : IWriteOnly {
+        func Bare() int32 { return Value }
+        func Qualified() int32 { return this.Value }
+        func Write() { Value = 4 }
+        func Compound() { Value += 3 }
+    }
+}`, "UnreadableBarrier5262", false, "/r:" + contract)
+        Assert.NotEqual(0, code)
+        Assert.Contains("UnreadableBarrier5262.gs(5,36,5,41): error GS0158", output)
+        Assert.Contains("UnreadableBarrier5262.gs(6,46,6,51): error GS0158", output)
+        Assert.Contains("UnreadableBarrier5262.gs(7,24,7,29): error GS0125", output)
+        Assert.Contains("UnreadableBarrier5262.gs(8,27,8,32): error GS0125", output)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "UnreadableBarrier5262.dll")))
+    }
+
+    @Fact
     func ConstructedSourceInterfacePropertiesKeepTheirOwnerBeforeEnclosingState() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let contract = fixture.CompileCSharp(`namespace ConstructedProperties5262;
