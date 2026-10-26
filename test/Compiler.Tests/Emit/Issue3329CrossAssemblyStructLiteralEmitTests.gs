@@ -258,6 +258,8 @@ public data struct Private[T] {
 }
 public data struct Generic[T](Value T) {
     public var X int32 = Effects.Mark("D", 7)
+}
+public data struct Required(Value managed[int32]) {
 }`, "policy5296", executable: false, "/refout:" + reference)
         IlVerifier.Verify(producer)
         let selected = if useReferenceAssembly {
@@ -267,6 +269,15 @@ public data struct Generic[T](Value T) {
         }
         let consumer = fixture.Compile(`import policy5296
 import System
+func Make[T](value T) int32 {
+    let item = Generic[T]{Value: value, X: Effects.Mark("E", 9)}
+    return item.X
+}
+func RequiredControl() int32 {
+    var input = 42
+    let required = Required{Value: managed(input)}
+    return *required.Value
+}
 let first = Primary{A: Effects.Mark("A", 3), X: Effects.Mark("E", 9)}
 Console.WriteLine(Effects.Trace + ":" + first.A.ToString() + "/" + first.B.ToString() + "/" + first.X.ToString())
 Effects.Trace = ""
@@ -296,11 +307,8 @@ Effects.Trace = ""
 let hidden = Private[int32]{X: Effects.Mark("E", 9)}
 Console.WriteLine(Effects.Trace + ":" + hidden.ReadHidden().ToString() + "/" + hidden.X.ToString())
 Effects.Trace = ""
-func Make[T](value T) int32 {
-    let item = Generic[T]{Value: value, X: Effects.Mark("E", 9)}
-    return item.X
-}
-Console.WriteLine(Make[int32](42).ToString() + ":" + Effects.Trace)`, "consumer", executable: true, "/r:" + selected)
+Console.WriteLine(Make[int32](42).ToString() + ":" + Effects.Trace)
+Console.WriteLine(RequiredControl())`, "consumer", executable: true, "/r:" + selected)
         IlVerifier.Verify(consumer, []string{producer})
         Assert.Equal(
             System
@@ -308,12 +316,31 @@ Console.WriteLine(Make[int32](42).ToString() + ":" + Effects.Trace)`, "consumer"
                 .Encoding
                 .UTF8
                 .GetBytes(
-                "ADE:3/0/9\nQADE:1/2/9\nD:3/5/7\nDBE:9\n8:DB\n5:DB\n7:D\n7:D\n99:DP\n7:D\n7:D\nHDE:3/9\n9:DE\n"
+                "ADE:3/0/9\nQADE:1/2/9\nD:3/5/7\nDBE:9\n8:DB\n5:DB\n7:D\n7:D\n99:DP\n7:D\n7:D\nHDE:3/9\n9:DE\n42\n"
             ),
             fixture.RunBytes(consumer)
         )
         AssertOrdinaryConstructorMetadata(producer, "Overloaded")
         AssertOrdinaryConstructorMetadata(reference, "Overloaded")
+        let rejectedReference = Path.Combine(fixture.Directory, "required.ref.dll")
+        let (code, output) = fixture.TryCompile(`import policy5296
+let bad = Required{}`, "required", executable: true, "/r:" + selected, "/refout:" + rejectedReference)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("required.gs(2,11,2,21): error GS0604:", StringComparison.Ordinal), output)
+        Assert.Equal(1, output.Split("error GS0604:", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "required.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        let duplicateReference = Path.Combine(fixture.Directory, "duplicate.ref.dll")
+        let (duplicateCode, duplicateOutput) = fixture.TryCompile(`data struct Duplicate() {
+    public init() {}
+}`, "duplicate", executable: false, "/refout:" + duplicateReference)
+        Assert.NotEqual(0, duplicateCode)
+        Assert.True(
+            duplicateOutput.Contains("duplicate.gs(2,12,2,16): error GS0284:", StringComparison.Ordinal),
+            duplicateOutput
+        )
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "duplicate.dll")))
+        Assert.False(File.Exists(duplicateReference))
     }
 
     @Theory

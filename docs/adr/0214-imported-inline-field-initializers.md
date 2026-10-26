@@ -10,9 +10,9 @@
 
 The maintainer approved the full policy and implementation on October 26, 2026, at 09:34 PDT: "Policy approved, proceed implementation of 5349".
 
-This decision is accepted. Implementation and validation remain in progress. Approval alone does not fix either issue or establish test results.
+This decision is accepted. PR #5349 implements it. Its validation and review must finish before merge. Approval alone does not establish test results.
 
-This revision replaces the per-field public-helper proposal previously recorded in this ADR. The helper implementation in PR #5349 is obsolete. It must be removed and replaced before that PR can merge. Its historical tests do not prove the design below.
+This revision replaces the per-field public-helper proposal previously recorded in this ADR. PR #5349 removes that implementation. Its historical helper tests do not prove the constructor-owned model.
 
 The scope is fresh `data struct` construction, including literals and structural projections. It includes ordinary constructor calls where they share this construction plan. It does not change class inheritance, plain-struct semantics, constant fields, or static-field declaration rules.
 
@@ -24,7 +24,7 @@ The scope is fresh `data struct` construction, including literals and structural
 
 The previous proposal exported each declaration expression from a public nested helper host. It preserved omitted-only initialization. That design added a public compiler protocol and left constructor ownership inconsistent.
 
-This proposal deliberately replaces omitted-only semantics with constructor-owned semantics. It is a language behavior change, not an implementation refactor.
+This decision deliberately replaces omitted-only semantics with constructor-owned semantics. It is a language behavior change, not an implementation refactor.
 
 ## C# basis and G# boundaries
 
@@ -42,7 +42,7 @@ Alignment means ordinary constructor ownership, constructor-before-member phases
 
 G# retains its existing primary-member brace binding, described below. G# readonly `let` fields remain fields. They do not become C# record `init` properties.
 
-[ADR-0029](0029-data-struct-synthesized-members.md) and [ADR-0199](0199-data-types-synthesize-the-csharp-record-abi.md) remain the basis for other synthesized members. This proposal does not expand their property or deconstruction contracts.
+[ADR-0029](0029-data-struct-synthesized-members.md) and [ADR-0199](0199-data-types-synthesize-the-csharp-record-abi.md) remain the basis for other synthesized members. This decision does not expand their property or deconstruction contracts.
 
 ## Construction phases
 
@@ -130,7 +130,7 @@ The existing producer already emits a constructor for this case. A corrected con
 
 ## Compatibility changes
 
-The old omitted-only path skipped a declaration initializer when the caller supplied that field. The proposed path executes the declaration initializer, then overwrites its value.
+The old omitted-only path skipped a declaration initializer when the caller supplied that field. The constructor-owned path executes the declaration initializer, then overwrites its value.
 
 This can add allocations, observable side effects, and exceptions. A throwing default prevents evaluation of post-construction values, even when the caller supplies an override.
 
@@ -138,7 +138,7 @@ For a nonprimary mutable `X` whose default appends `D`, `T{X: Effects.Value("E",
 
 Some existing constructor-owned literals stage explicit values before construction. Their phase order also changes. Historical `EI` expectations cannot establish the new `IE` contract.
 
-Authored parameterless bodies now run. The old restriction against calling them preserved the old literal model; it is not part of this proposal.
+Authored parameterless bodies now run. The old restriction against calling them preserved the old literal model; it is not part of this decision.
 
 Use the normal CLR static-initialization contract of the selected constructor. An explicit declaring-type static constructor can now run where the old literal used only `initobj` and field stores. A constant instance initializer does not justify suppressing that trigger.
 
@@ -185,7 +185,7 @@ Structural projection creates a fresh target. Capture its source once. Read cons
 
 Raw `default(T)`, `initobj`, and zero-initialized array elements remain zero. They do not call the constructor or replay declaration expressions. Existing `GS0604` rejection of illegal managed-reference defaults remains in force.
 
-Bare declarations and existing sound-zero-only helpers retain their ADR-0159 behavior. In particular, they must not start replaying arbitrary scalar declaration defaults. This proposal removes the per-field helper protocol, not every existing collection-zero helper.
+Bare declarations and existing sound-zero-only helpers retain their ADR-0159 behavior. In particular, they must not start replaying arbitrary scalar declaration defaults. This decision removes the per-field helper protocol, not every existing collection-zero helper.
 
 `with` and `.copy` remain value copy/update operations under [ADR-0032](0032-data-struct-ergonomics.md). They capture their source once and do not call a fresh-construction constructor or replay declaration initializers. Their existing update legality remains unchanged.
 
@@ -209,9 +209,9 @@ The emitted program, REPL, and supported expression-tree lowering must select th
 
 Emit constructors and their metadata deterministically. Use declaration and stable signature order, never hash iteration order. Repeated compilation of the same input must preserve constructor selection, member order, and emitted bytes.
 
-## Acceptance matrix for later implementation
+## Acceptance matrix
 
-These are required future witnesses, not results from the helper implementation.
+These witnesses are required. The PR records their commands and results. Historical helper results do not satisfy this matrix.
 
 Use [ADR-0154](0154-test-oracle-strength.md) for every new or changed behavior test. Demonstrate a genuine unfixed or buildable product-mutant RED, then fixed GREEN. Record exact commands, bytes, diagnostic IDs, filenames, and spans.
 
@@ -244,7 +244,7 @@ Run strict, unsuppressed IL verification on every positive producer and consumer
 
 ## Delivery and review gates
 
-1. Review this proposed behavior and its compatibility changes. Approval of the direction does not approve every table entry.
+1. Apply the complete policy approved on October 26, 2026. Review the implementation against each table entry.
 2. Remove the superseded helper implementation. Replace it with the shared constructor-owned construction path.
 3. Replace obsolete omitted-only test expectations. Preserve historical RED evidence without presenting it as proof of the new model.
 4. Complete the acceptance matrix with real driver and metadata witnesses.
