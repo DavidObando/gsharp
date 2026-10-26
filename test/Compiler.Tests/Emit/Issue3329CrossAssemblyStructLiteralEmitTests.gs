@@ -564,6 +564,7 @@ public data struct S[T](Value T) {
         Effects.Trace = Effects.Trace + "A"
     }
 }
+public data struct Empty[T]() { public var X int32 = Effects.Mark("D", 7) }
 public func Local() int32 -> S[int32]{Value: 5}.Value
 public func LocalTree() int32 {
     let tree Expression[Func[S[int32]]] = () -> S[int32]{Value: Effects.Mark("V", 8)}
@@ -579,11 +580,19 @@ public func LocalGenericTree[T](value T) T {
 public func LocalAuthoredTree() int32 {
     let tree Expression[Func[S[int32]]] = () -> S[int32](other: 12)
     return tree.Compile()().Value
+}
+public func ErasedTree[T]() Expression[Func[object]] {
+    let factory () -> Expression[Func[object]] = () -> () -> Empty[T]{}
+    return factory()
 }`
         const source = `import collision5296
 import System
 import System.Linq.Expressions
 func Make[T](value T) T -> S[T]{Value: value}.Value
+func ImportedErasedTree[T]() Expression[Func[object]] {
+    let factory () -> Expression[Func[object]] = () -> () -> Empty[T]{}
+    return factory()
+}
 Console.WriteLine(Local().ToString() + ":" + Effects.Trace)
 Effects.Trace = ""
 let first = S[int32]{Value: Effects.Mark("V", 5)}
@@ -605,9 +614,15 @@ Effects.Trace = ""
 Console.WriteLine(LocalAuthoredTree().ToString() + ":" + Effects.Trace)
 Effects.Trace = ""
 let authoredTree Expression[Func[S[int32]]] = () -> S[int32](other: 12)
-Console.WriteLine(authoredTree.Compile()().Value.ToString() + ":" + Effects.Trace)`
+Console.WriteLine(authoredTree.Compile()().Value.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+Console.WriteLine(ErasedTree[int32]().Compile()().GetType().Name + ":" + Effects.Trace)
+Effects.Trace = ""
+Console.WriteLine(ImportedErasedTree[int32]().Compile()().GetType().Name + ":" + Effects.Trace)`
         Assert.Equal(
-            ExpectedConsoleBytes("5:D\n5:VD\n9:VD\n6:D\n8:VD\nfactory:\n7:VD\n10:D\n0:DA\n0:DA\n"),
+            ExpectedConsoleBytes(
+                "5:D\n5:VD\n9:VD\n6:D\n8:VD\nfactory:\n7:VD\n10:D\n0:DA\n0:DA\nEmpty`1:D\nEmpty`1:D\n"
+            ),
             CompileAndRunExact(source, library, "collision5296", useReferenceAssembly)
         )
     }
