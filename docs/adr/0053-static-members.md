@@ -81,6 +81,7 @@ Members inside `shared` inherit the same accessibility modifier rules as regular
 - Compound assignment (`+=` / `-=`) on `TypeName.StaticField` and `TypeName.StaticProp` is supported wherever simple assignment is. For static properties, compound assignment requires both a getter and a setter; otherwise the binder reports `GS0127` (cannot assign) and the expression is rejected.
 - Imported method barriers include default interface methods from the canonical inherited-call candidate query.
 - Source method barriers use ordinary overload lookup and exclude explicit-interface implementations.
+- Lexical lookup starts at the function's type owner, including interfaces. Interface-local and inherited members precede enclosing shared state.
 
 ### 6. Type-level access from GSharp
 

@@ -679,13 +679,27 @@ partial class Binder {
             //
             // Shadowing precedence (enforced by paramNames/seenMembers):
             //   parameter > instance member > static member.
-            let lexicalOwner StructSymbol? = (function.StaticOwnerType as StructSymbol) ??
-                (function.ReceiverType as StructSymbol)
+            let lexicalOwner = function.StaticOwnerType ?? function.ReceiverType
             // Reserve hidden names too. A nearer member hides every farther lexical candidate.
-            for var ownerStruct = lexicalOwner;
-                ownerStruct != nil;
-                ownerStruct = ownerStruct!!.ContainingType as StructSymbol {
-                let isOuterOwner = !object.ReferenceEquals(ownerStruct, lexicalOwner)
+            for var owner = lexicalOwner; owner != nil; owner = owner!!.ContainingType {
+                let isOuterOwner = !object.ReferenceEquals(owner, lexicalOwner)
+                if owner is InterfaceSymbol ownerInterface {
+                    for field in ownerInterface.StaticFields.Concat(ownerInterface.ConstFields) {
+                        if paramNames.Contains(field.Name) || !seenMembers.Add(field.Name) ||
+                            (
+                            isOuterOwner && !object.ReferenceEquals(
+                                memberLookup.FindLexicalMemberOwner(lexicalOwner!!, field.Name),
+                                ownerInterface
+                            )
+                        ) {
+                            continue
+                        }
+                        $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerInterface, field))
+                    }
+                }
+                if owner is not StructSymbol ownerStruct {
+                    continue
+                }
                 if !ownerStruct.StaticFields.IsDefaultOrEmpty {
                     for fld in ownerStruct.StaticFields {
                         if paramNames.Contains(fld.Name) || !seenMembers.Add(fld.Name) ||
@@ -769,34 +783,6 @@ partial class Binder {
                             continue
                         }
                         $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, evt.BackingField!!))
-                    }
-                }
-            }
-            // ADR-0089 / issue #1030: expose interface static *state* by bare
-            // name inside the owning interface's static members (static
-            // methods, default-bodied static property accessors). The owner is
-            // an InterfaceSymbol, so `ownerStruct` is null above; resolve the
-            // interface owner separately and inject its static + const fields.
-            let ownerInterface InterfaceSymbol? = function.StaticOwnerType as InterfaceSymbol
-            if ownerInterface != nil {
-                if !ownerInterface.StaticFields.IsDefaultOrEmpty {
-                    for fld in ownerInterface.StaticFields {
-                        if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) {
-                            continue
-                        }
-                        if seenMembers.Add(fld.Name) {
-                            $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerInterface, fld))
-                        }
-                    }
-                }
-                if !ownerInterface.ConstFields.IsDefaultOrEmpty {
-                    for fld in ownerInterface.ConstFields {
-                        if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) {
-                            continue
-                        }
-                        if seenMembers.Add(fld.Name) {
-                            $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerInterface, fld))
-                        }
                     }
                 }
             }

@@ -65,12 +65,12 @@ internal class MemberLookup {
     /// @param type The innermost lexical type.
     /// @param name The source member name.
     /// @returns The lexical lookup owner, or null when no member exists.
-    internal func FindLexicalMemberOwner(type StructSymbol, name string) StructSymbol? {
+    internal func FindLexicalMemberOwner(type TypeSymbol, name string) TypeSymbol? {
         CompilationMeasurements.Count("binding.lexical-member-owner.queries")
         let matches Func[Symbol, bool] = (member Symbol) -> member.Name == name &&
             member is not PropertySymbol{IsIndexer: true}
         const dataMembers = MemberKinds.Field | MemberKinds.Property | MemberKinds.Event
-        for var current StructSymbol? = type; current != nil; current = current!!.ContainingType as StructSymbol {
+        for var current TypeSymbol? = type; current != nil; current = current!!.ContainingType {
             if TypeMemberModel.EnumerateMembers(current, MemberQuery.Instance(dataMembers)).Any(matches) ||
                 TypeMemberModel
                 .EnumerateMembers(current, MemberQuery.Static(dataMembers)).Any(matches) || TypeMemberModel.GetMethods(
@@ -85,18 +85,36 @@ internal class MemberLookup {
                 TypeMemberModel.TryGetStaticField(current, name, out _) {
                 return current
             }
-            let clrBase = ExpressionBinder.GetInheritedClrBaseType(current) ?? typeof(object)
+            if current is InterfaceSymbol iface &&
+                (
+                iface.GetStaticField(name) != nil || iface.GetPrivateMethods(name)
+                    .Length != 0 ||
+                    iface
+                    .GetStaticPrivateMethods(name).Length != 0
+            ) {
+                return current
+            }
+            if current is not StructSymbol && current is not InterfaceSymbol {
+                continue
+            }
+            let clrBase = if current is StructSymbol currentStruct {
+                ExpressionBinder.GetInheritedClrBaseType(currentStruct) ?? typeof(object)
+            } else {
+                typeof(object)
+            }
+            if SafeGetMethodsIncludingSelfAndInterfaces(clrBase, name).Count != 0 {
+                return current
+            }
+            if current is not StructSymbol {
+                continue
+            }
             let canAccessInternals = (owner Type?) -> binderCtx.References.CanAccessInternalMembers(owner?.Assembly)
             if ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrBase, name, canAccessInternals) != nil ||
                 ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, name, canAccessInternals) != nil {
                 return current
             }
             const flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
-            if SafeGetMethodsIncludingSelfAndInterfaces(clrBase, name).Count != 0 || ClrTypeUtilities.SafeGetMethods(
-                clrBase,
-                flags
-            )
-                .Any(
+            if ClrTypeUtilities.SafeGetMethods(clrBase, flags).Any(
                 (method MethodInfo) -> ClrTypeUtilities.EmittedMemberNameMatches(method, name) &&
                     ClrMemberVisibility.IsVisibleFromDerived(method, canAccessInternals(method.DeclaringType))
             ) {

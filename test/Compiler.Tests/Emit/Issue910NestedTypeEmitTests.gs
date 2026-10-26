@@ -332,6 +332,100 @@ Outer().Run()`, "StaticVisibility5262", true, "/r:" + contract)
     }
 
     @Fact
+    func NestedInterfaceBodiesUseEnclosingSharedStorage() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let executable = fixture.Compile(`package InterfaceStorage5262
+import System
+class Outer {
+    shared {
+        private let Value int32 = 1
+        private var Counter int32 = 0
+        prop Total int32 { get; set; }
+        private var Changed Action? = func() { Console.Write("C") }
+        event Ticked Action?
+        func Raise() { Ticked?() }
+        func Dump() {
+            Console.Write(Counter)
+            Console.Write("|")
+            Console.Write(Total)
+        }
+    }
+    interface Nested {
+        func Read() int32 { return Value }
+        func Change(handler Action) {
+            Counter += 2
+            Total = Counter + Value
+            Total += 2
+            Changed += handler
+            Changed?()
+            Changed -= handler
+            Ticked += handler
+            Outer.Raise()
+            Ticked -= handler
+            Outer.Raise()
+        }
+    }
+}
+class Implementation : Outer.Nested {}
+let reader Outer.Nested = Implementation()
+Console.Write(reader.Read())
+Console.Write("|")
+reader.Change(func() { Console.Write("H") })
+Console.Write("|")
+Outer.Dump()`, "InterfaceStorage5262", true)
+        IlVerifier.Verify(executable)
+        Assert.Equal(Encoding.UTF8.GetBytes("1|CHH|2|5"), fixture.RunBytes(executable))
+    }
+
+    @Fact
+    func NestedInterfacesKeepLocalAndInheritedNamesBeforeEnclosingState() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let executable = fixture.Compile(`package InterfacePrecedence5262
+import System
+interface BaseReader { func Read() int32 { return 2 } }
+class Outer {
+    shared {
+        private let Marker int32 = 1
+        let Value int32 = 9
+        let Read () -> int32 = func() int32 { return 8 }
+        let Hidden () -> int32 = func() int32 { return 8 }
+        let GetType () -> Type = func() Type { return typeof(string) }
+    }
+    interface Nested : BaseReader {
+        shared { let Value int32 = 3 }
+        private func Hidden() int32 { return 5 }
+        func Run() {
+            Console.Write(Marker)
+            Console.Write("|")
+            Console.Write(Value)
+            Console.Write("|")
+            Console.Write(Read())
+            Console.Write("|")
+            Console.Write(Hidden())
+            Console.Write("|")
+            Console.Write(GetType().Name)
+        }
+    }
+}
+class Implementation : Outer.Nested {}
+let reader Outer.Nested = Implementation()
+reader.Run()`, "InterfacePrecedence5262", true)
+        IlVerifier.Verify(executable)
+        Assert.Equal(Encoding.UTF8.GetBytes("1|3|2|5|Implementation"), fixture.RunBytes(executable))
+        let (code, output) = fixture.TryCompile(`class Outer {
+    shared { let Read () -> int32 = func() int32 { return 1 } }
+    interface Nested {
+        func Read(value int32) int32 { return value }
+        func Pick() int32 { return Read() }
+    }
+}`, "InterfaceNameBarrier5262", false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("InterfaceNameBarrier5262.gs(5,36,5,42): error GS0144:", output, StringComparison.Ordinal)
+        Assert.Equal(1, output.Split(": error ", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "InterfaceNameBarrier5262.dll")))
+    }
+
+    @Fact
     func SourceExplicitMethodsDoNotHideOuterCallbacksOrOrdinaryPrivateMethods() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let executable = fixture.Compile(`package SourceExplicit5262
