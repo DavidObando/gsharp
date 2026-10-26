@@ -49,8 +49,10 @@ import System.Reflection.Metadata.Ecma335
 /// - `EmitDataStructEqualityOperator`
 /// - `EmitDataStructDeconstruct`
 ///
-/// Plus three helpers used exclusively by the methods above and the
-/// per-emit (cref:StandaloneSignatureHandle) they cache:
+/// Four helpers support the methods above. Only GetHashCodeLocalSignature
+/// caches a per-emit (cref:StandaloneSignatureHandle), for the fold local.
+/// The hash helpers use MetadataRowInterner to intern MethodSpec rows.
+/// The interner keys each row by its method and encoded type arguments.
 ///
 /// - `FinishInlineBody`
 /// - `GetHashCodeCombineSpec`
