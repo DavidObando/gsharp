@@ -581,6 +581,51 @@ func Main() {
     }
 
     @Theory
+    @InlineData(`"A"`, `u8"B"`, 20, 25)
+    @InlineData(`u8"A"`, `"B"`, 22, 25)
+    @InlineData(`b"A"`, `u8"B"`, 21, 26)
+    @InlineData(`u8"A"`, `b"B"`, 22, 26)
+    @InlineData(`u8"A"`, `u8"B"`, 22, 27)
+    @InlineData(`(u8"A")`, `u8"B"`, 24, 29)
+    func AdjacentLiteralDiagnosticsDoNotSuggestUnsupportedConcatenation(
+        first string,
+        second string,
+        column int32,
+        endColumn int32
+    ) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(
+            "package Utf8Adjacency\nfunc Main() {\n    let value = " + first + second + "\n}",
+            "Utf8Adjacency",
+            true
+        )
+        Assert.NotEqual(0, code)
+        Assert.Contains("error GS0632:", output, StringComparison.Ordinal)
+        Assert.Contains(
+            ".gs(3," + column.ToString() + ",3," + endColumn.ToString() + ")",
+            output,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "Adjacent literals are not concatenated; separate the expressions.",
+            output,
+            StringComparison.Ordinal
+        )
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Utf8Adjacency.dll")))
+        let separated = fixture.Compile(
+            "package Utf8Separated\nimport System\nfunc Main() {\n    let first = " +
+                first +
+                "\n    let second = " +
+                second +
+                "\n    Console.WriteLine(first.Length)\n    Console.WriteLine(second.Length)\n}",
+            "Utf8Separated",
+            true
+        )
+        Assert.Equal("1\n1\n", fixture.Run(separated))
+    }
+
+    @Theory
     @InlineData("let a = u8\"A\"\nlet value = a + u8\"B\"", "GS0129", 4)
     @InlineData(`let value = cast[readonly span[byte]](u8"A") + u8"B"`, "GS0129", 3)
     @InlineData(`let value = (if true { u8"A" } else { u8"B" }) + u8"C"`, "GS0129", 3)

@@ -743,7 +743,7 @@ open partial class Parser {
                 .StartLine {
                 Diagnostics.ReportInvalidUtf8StringLiteral(
                     Current.Location,
-                    "Adjacent literals are not concatenated; use + between UTF-8 literal representations."
+                    "Adjacent literals are not concatenated; separate the expressions."
                 )
             }
         }

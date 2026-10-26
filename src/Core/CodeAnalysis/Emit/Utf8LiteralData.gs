@@ -79,7 +79,7 @@ internal class Utf8LiteralData {
     }
 
     func GetField(literal BoundUtf8StringExpression) FieldDefinitionHandle ->
-    this.fields[Convert.ToHexString(literal.Bytes.AsSpan()) + "00"]
+    this.fields[Utf8LiteralData.ComputeKey(literal.Bytes)]
 
     func Emit(metadata MetadataBuilder, objectType EntityHandle, valueType EntityHandle) {
         if this.blobs.Count == 0 {
@@ -135,6 +135,10 @@ internal class Utf8LiteralData {
         }
     }
 
+    shared {
+        private func ComputeKey(bytes ImmutableArray[uint8]) string -> Convert.ToHexString(bytes.AsSpan()) + "00"
+    }
+
     private class Collector : BoundTreeWalker {
         private let blobs SortedDictionary[string, ImmutableArray[uint8]]
 
@@ -144,7 +148,7 @@ internal class Utf8LiteralData {
 
         override func VisitExpression(node BoundExpression?) {
             if node is BoundUtf8StringExpression literal {
-                let key = Convert.ToHexString(literal.Bytes.AsSpan()) + "00"
+                let key = Utf8LiteralData.ComputeKey(literal.Bytes)
                 if !this.blobs.ContainsKey(key) {
                     this.blobs.Add(key, literal.Bytes)
                 }
