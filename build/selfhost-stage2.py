@@ -3259,6 +3259,8 @@ class Controller:
                 "src/Sdk/Gsharp.NET.Sdk/build/Gsharp.NET.Current.Sdk.targets",
             "build/Gsharp.NET.Core.Sdk.targets":
                 "src/Sdk/Gsharp.NET.Sdk/build/Gsharp.NET.Core.Sdk.targets",
+            "build/Gsharp.NET.SourceLink.targets":
+                "src/Sdk/Gsharp.NET.Sdk/build/Gsharp.NET.SourceLink.targets",
             "build/Gsharp.File.xaml": "src/Sdk/Gsharp.NET.Sdk/build/Gsharp.File.xaml",
             "build/Gsharp.CollectedPackageReference.xaml":
                 "src/Sdk/Gsharp.NET.Sdk/build/Gsharp.CollectedPackageReference.xaml",
