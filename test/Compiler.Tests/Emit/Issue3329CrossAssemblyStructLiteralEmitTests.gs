@@ -81,6 +81,58 @@ for item in Stream[Local]() {
     @InlineData(true, false)
     @InlineData(false, true)
     @InlineData(true, true)
+    func ConstructorOwnedReview_SourceOwnedNestedReadonlyZeros(useReferenceAssembly bool, readonlyParent bool) {
+        let library = `package sourceownedzero5296
+import System
+import System.Linq.Expressions
+public class Effects {
+    shared {
+        public var Count int32
+        public func Next() int32 {
+            Count += 1
+            return 7
+        }
+    }
+}
+data struct Child { public let Items []int32 }
+data struct Parent {
+    OWNER_FIELD Value Child
+    public var X int32 = Effects.Next()
+    public prop Length int32 { get { return Value.Items.Length } }
+}
+data struct Box(Value Parent)
+public func Run() string {
+    var bare Parent
+    let first = bare.Length.ToString() + "/" + bare.X.ToString() + "/" + Effects.Count.ToString()
+    let tree Expression[Func[Box]] = () -> Box{}
+    let nested = tree.Compile()()
+    let second = nested.Value.Length.ToString() + "/" + nested.Value.X.ToString() + "/" + Effects.Count.ToString()
+    let fresh = Parent{}
+    return first + "\n" + second + "\n" + fresh.Length.ToString() + "/" + fresh.X.ToString() + "/" + Effects.Count.ToString()
+}`.Replace(
+            "OWNER_FIELD",
+            if readonlyParent {
+                "public let"
+            } else {
+                "private var"
+            }
+        )
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes("0/0/0\n0/0/0\n0/7/1" + Environment.NewLine),
+            CompileAndRunExact(
+                "import sourceownedzero5296\nSystem.Console.WriteLine(Run())",
+                library,
+                "sourceownedzero5296",
+                useReferenceAssembly
+            )
+        )
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
     func ConstructorOwnedReview_ReifiedNestedGenericCopies(useReferenceAssembly bool, isClass bool) {
         let library = `package reifiedcopy5296
 import System.Collections.Generic

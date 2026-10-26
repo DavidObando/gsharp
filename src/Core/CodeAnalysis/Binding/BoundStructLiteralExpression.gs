@@ -29,13 +29,23 @@ class BoundStructLiteralExpression : BoundExpression {
         init(syntax, structType, initializers, copySource, false)
     }
 
-    init(
+    convenience init(
+        syntax SyntaxNode?,
+        structType StructSymbol,
+        initializers ImmutableArray[BoundFieldInitializer],
+        copySource BoundExpression?,
+        isZeroInitialization bool
+    ) {
+        init(syntax, structType, initializers, copySource, isZeroInitialization, nil)
+    }
+
+    internal init(
         syntax SyntaxNode?,
         structType StructSymbol,
         initializers ImmutableArray[BoundFieldInitializer],
         copySource BoundExpression?,
         isZeroInitialization bool,
-        resultType TypeSymbol? = nil
+        resultType TypeSymbol?
     ) : base(syntax) {
         if copySource != nil && (!structType.IsData || !initializers.IsEmpty) {
             throw ArgumentException("A copy literal must be a data type without member initializers.", "copySource")

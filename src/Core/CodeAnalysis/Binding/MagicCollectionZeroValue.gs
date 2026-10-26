@@ -189,13 +189,16 @@ internal shared class MagicCollectionZeroValue {
         if value is not BoundStructLiteralExpression literal {
             return true
         }
+        // IsInTypeZeroInitializer queries this probe when it selects a helper.
+        // Source stores belong to the prospective helper; imported stores remain external.
         return literal.Initializers.All(
             (initializer BoundFieldInitializer) ->
             (
-                initializer.Field == nil || BoundStructLiteralExpression.CanWriteInitializerField(
-                    literal.StructType,
-                    initializer.Field
-                )
+                literal
+                    .StructType
+                    .ClrType == nil ||
+                    initializer.Field == nil ||
+                    BoundStructLiteralExpression.CanWriteInitializerField(literal.StructType, initializer.Field)
             ) &&
                 CanInitializeZeroValue(initializer.Value)
         )
