@@ -335,6 +335,78 @@ Outer().Run()`, "StaticVisibility5262", true, "/r:" + contract)
     }
 
     @Fact
+    func ImplicitObjectMethodDoesNotAcquireAReceiverInSharedBody() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`package ObjectStatic5262
+import System
+class Outer {
+    shared { let GetType Func[Type] = func() Type { return typeof(string) } }
+    class Inner {
+        shared { func Read() string -> GetType().Name }
+    }
+}`, "ObjectStatic5262", false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("ObjectStatic5262.gs(6,40,6,47): error GS0130:", output, StringComparison.Ordinal)
+        Assert.Equal(1, output.Split(": error ", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "ObjectStatic5262.dll")))
+    }
+
+    @Fact
+    func ImplicitObjectMethodsHideOuterCallbacksWithoutHidingUnrelatedState() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let executable = fixture.Compile(`package ObjectControls5262
+import System
+open class Base {}
+class Plain {
+    func Read() string -> GetType().Name
+}
+class Outer {
+    shared {
+        private let GetType Func[Type] = func() Type { return typeof(string) }
+        private let ToString Func[string] = func() string { return "outer" }
+        private let Unique Func[Type] = func() Type { return typeof(int64) }
+    }
+    class Implicit {
+        func Read() string -> GetType().Name
+        func TextMatchesType() bool -> ToString() == GetType().FullName
+        func ReadOuter() string -> Unique().Name
+    }
+    class Source : Base {
+        func Read() string -> GetType().Name
+    }
+    class Imported : Exception {
+        func Read() string -> GetType().Name
+    }
+    class Declared {
+        func GetType() Type -> typeof(int32)
+        func Read() string -> GetType().Name
+    }
+    func Run() {
+        let value = Implicit()
+        Console.Write(value.Read())
+        Console.Write("|")
+        Console.Write(value.TextMatchesType())
+        Console.Write("|")
+        Console.Write(Source().Read())
+        Console.Write("|")
+        Console.Write(Imported().Read())
+        Console.Write("|")
+        Console.Write(Declared().Read())
+        Console.Write("|")
+        Console.Write(value.ReadOuter())
+    }
+}
+Console.Write(Plain().Read())
+Console.Write("|")
+Outer().Run()`, "ObjectControls5262", true)
+        IlVerifier.Verify(executable)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("Plain|Implicit|True|Source|Imported|Int32|Int64"),
+            fixture.RunBytes(executable)
+        )
+    }
+
+    @Fact
     func SelectedLexicalDelegateFieldKeepsCompoundWritesAwayFromInheritedEvents() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let executable = fixture.Compile(`package SelectedField5262

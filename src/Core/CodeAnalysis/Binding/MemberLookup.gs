@@ -79,9 +79,7 @@ internal class MemberLookup {
             ) {
                 return current
             }
-            if ExpressionBinder.GetInheritedClrBaseType(current) is not{} clrBase {
-                continue
-            }
+            let clrBase = ExpressionBinder.GetInheritedClrBaseType(current) ?? typeof(object)
             let canAccessInternals = (owner Type?) -> binderCtx.References.CanAccessInternalMembers(owner?.Assembly)
             if ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrBase, name, canAccessInternals) != nil ||
                 ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, name, canAccessInternals) != nil {
