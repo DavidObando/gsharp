@@ -225,6 +225,22 @@ cut-over: `main` is G# source and CI compiles it directly, so there is no C# to 
 per PR. The nightly `cs2gs-apps-nightly` workflow translates the C# line
 (`cs2gs/csharp-0.4`), Oahu and Code Exploder instead. The history is in git (v0.4.1270).
 
+#### Banked nightly applications
+
+`apps-nightly-banked.json` records application legs that have passed the complete
+nightly pipeline. Use the result file's `app` identity, not a project path.
+Each identity protects all projects in that application leg.
+
+Bank an application only after every project has `succeeded: true`,
+`unverified: false`, and all four stages have passed.
+Keep the run, source commit, and verified project inventory in the banking PR.
+A translate-only result is not complete validation, even if its summary says green.
+
+The gate files regressions on `main` with one `P0` label for banked applications.
+Other failed applications get `P1`.
+An existing issue keeps its higher priority.
+Banking does not change project selection, stage floors, or required PR checks.
+
 ### `report` — regenerate a report from an existing run
 
 ```sh

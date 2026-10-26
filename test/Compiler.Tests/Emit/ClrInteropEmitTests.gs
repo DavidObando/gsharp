@@ -273,6 +273,8 @@ func Main() {
     @Theory
     @InlineData("string")
     @InlineData("T")
+    @InlineData("Store")
+    @InlineData("Console")
     func QualifiedPackage_NonLeadingTypeName_PreservesConstructionAndGenericReceiver(component string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let declarations = Path.Combine(fixture.Directory, "package5267.gs")
