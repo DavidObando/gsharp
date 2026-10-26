@@ -142,6 +142,7 @@ public static class Trace {
     public static string? Next() { Updates++; return null; }
 }
 public record struct Box<T>(T Value) {
+    public int Extra;
     public object Anchor = Trace.Anchor();
     private readonly object hidden = new object();
     public object Hidden() => hidden;
@@ -164,6 +165,8 @@ public class Api {
         public func Sugar(original Box[string?]) Box[string?] ->
             Receive(original).copy(Value: Trace.Next())
         public func Empty(original Box[string?]) Box[string?] -> original with{}
+        public func Field[T any](original Box[T]) Box[T] -> original with { Extra = 1 }
+        public func FieldSugar[T any](original Box[T]) Box[T] -> original.copy(Extra: 1)
         public func FromContract() bool {
             let copy = Oracle.Original() with { Value = nil }
             return copy.Value == nil
@@ -198,6 +201,15 @@ public static class Probe {
         var empty = CopyApi5405.Api.Empty(original);
         if (empty.Value != "payload" || !ReferenceEquals(empty.Hidden(), hidden)
             || Trace.Constructions != 1) throw new Exception("Empty copy reconstructed storage.");
+        foreach (var changed in new[] { CopyApi5405.Api.Field(original), CopyApi5405.Api.FieldSugar(original) })
+            if (changed.Extra != 1 || original.Extra != 0 || changed.Value != "payload"
+                || !ReferenceEquals(changed.Hidden(), hidden) || Trace.Constructions != 1)
+                throw new Exception("Open reference-type field copy changed storage.");
+        foreach (var changed in new[] {
+            CopyApi5405.Api.Field(default(Box<int>)), CopyApi5405.Api.FieldSugar(default(Box<int>))
+        })
+            if (changed.Extra != 1 || changed.Value != 0 || Trace.Constructions != 1)
+                throw new Exception("Open value-type field copy changed storage.");
         var native = Oracle.Copy(original);
         if (native.Value != null || !ReferenceEquals(native.Anchor, anchor)
             || !ReferenceEquals(native.Hidden(), hidden) || Trace.Constructions != 1)
@@ -218,6 +230,72 @@ public static class Probe {
             "copy-only|nullable|identity|once",
             assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil)
         )
+    }
+
+    @Theory
+    @InlineData("Value", false)
+    @InlineData("Value", true)
+    @InlineData("Fixed", false)
+    @InlineData("Fixed", true)
+    func ImportedNullableGenericCopy_PrefersNearestFieldOverInheritedProperty(member string, useReference bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "Contract.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`namespace CopyMembers5405;
+public record Base {
+    public int Value { get; set; } = 41;
+    public int Fixed { get; } = 42;
+    public int Other = 43;
+}
+public record Derived<T>(T Payload) : Base {
+    public new int Value;
+    public new int Fixed;
+    public new int Other { get; set; }
+}`, "Contract", reference)
+        let api = fixture.Compile((`package CopyMembersApi5405
+import CopyMembers5405
+public class Api {
+    shared {
+        public func With(value Derived[string?]) Derived[string?] -> value with { MEMBER = 9 }
+        public func Sugar(value Derived[string?]) Derived[string?] -> value.copy(MEMBER: 9)
+        public func Property(value Derived[string?]) Derived[string?] -> value with { Other = 11 }
+        public func PropertySugar(value Derived[string?]) Derived[string?] -> value.copy(Other: 11)
+    }
+}
+`).Replace(
+                "MEMBER",
+                member
+            ), "Api", executable: false, "/assemblyname:Api", "/r:" +
+                if useReference {
+                reference
+            } else {
+                contract
+            })
+        let caller = fixture.CompileCSharp((`using CopyMembers5405;
+using CopyMembersApi5405;
+using System;
+public static class Probe {
+    public static bool Run() {
+        var original = new Derived<string?>(null);
+        var expected = original with { MEMBER = 9 };
+        foreach (var changed in new[] { Api.With(original), Api.Sugar(original) }) {
+            if (changed.MEMBER != expected.MEMBER || original.MEMBER != 0
+                || ((Base)changed).MEMBER != ((Base)original).MEMBER
+                || ReferenceEquals(changed, original) || changed.Payload != null)
+                throw new Exception("Copy did not select the nearest field.");
+        }
+        foreach (var changed in new[] { Api.Property(original), Api.PropertySugar(original) }) {
+            if (changed.Other != 11 || original.Other != 0 || ((Base)changed).Other != 43)
+                throw new Exception("A farther field replaced the nearest property.");
+        }
+        return true;
+    }
+}
+`).Replace("MEMBER", member), "Caller", contract, api)
+        IlVerifier.Verify(contract)
+        IlVerifier.Verify(api, []string{contract})
+        IlVerifier.Verify(caller, []string{contract, api})
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        Assert.Equal(true, assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
     }
 
     @Theory
