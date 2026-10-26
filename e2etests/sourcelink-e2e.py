@@ -2,6 +2,7 @@
 """Check Source Link through dotnet build and real Portable PDB metadata."""
 
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -71,6 +73,16 @@ def build(path, *properties, success=True):
         "dotnet", "build", path, "-c", "Release", "--nologo", "-v:q",
         "-nr:false", *properties, success=success,
     )
+
+
+def package_sources(directory, *feeds):
+    config = ET.Element("configuration")
+    sources = ET.SubElement(config, "packageSources")
+    ET.SubElement(sources, "clear")
+    for index, feed in enumerate(feeds):
+        ET.SubElement(sources, "add", key=f"local{index}", value=str(feed))
+    ET.SubElement(sources, "add", key="nuget.org", value="https://api.nuget.org/v3/index.json")
+    ET.ElementTree(config).write(directory / "NuGet.config", encoding="unicode")
 
 
 def inspect(path):
@@ -249,6 +261,81 @@ def native():
         print(f"native/JIT {suffix}: {hashlib.sha256(content).hexdigest()}", flush=True)
 
 
+def stage1_package():
+    package = max(
+        (ROOT / "out/bin/Release/nupkgs").glob("Gsharp.NET.Sdk.[0-9]*.nupkg"),
+        key=lambda item: item.stat().st_mtime_ns,
+    )
+    sys.path.insert(0, str(ROOT / "build"))
+    spec = importlib.util.spec_from_file_location("sourcelink_stage2", ROOT / "build/selfhost-stage2.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    class PublishedFixture(module.Controller):
+        def __init__(self):
+            # Reuse real published bytes. Test packing without sandbox certification.
+            self.bootstrap = package
+            self.stage1 = ROOT
+            self.mutable = WORK / "stage1-repack"
+            self.args = SimpleNamespace(stage1_version="0.0.0-sourcelink-test")
+            self.accepted_build_outputs = {"stage-1": {}}
+
+        def publish_project(self, project_path, plan, destination):
+            prefix = {
+                "src/Compiler/Compiler.gsproj": "tools/compiler/",
+                "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.gsproj": "tools/formatter/",
+                "tools/gsgen/Gsgen.Cli/Gsgen.Cli.gsproj": "tools/gsgen/",
+                "src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj": "tools/extensions/",
+            }[project_path]
+            with zipfile.ZipFile(package) as archive:
+                for name in archive.namelist():
+                    normalized = module.packer.entry_name(name)
+                    if normalized.startswith(prefix) and not normalized.endswith("/"):
+                        target = destination / normalized[len(prefix):]
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(archive.read(name))
+
+    fixture = PublishedFixture()
+    projects = {
+        "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj": "Gsharp.NET.Sdk",
+        "src/Sdk/Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.gsproj": "Gsharp.HotReload.Runtime",
+        "src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj": "Gsharp.Runtime.Channels",
+        "src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj": "Gsharp.Runtime.Values",
+    }
+    plan = {"isolated": {}}
+    for project_path, name in projects.items():
+        target = ROOT / f"out/bin/Release/{name}/{name}.dll"
+        plan["isolated"][project_path] = {"effectiveProperties": {
+            "OutDir": str(target.parent), "TargetName": name, "TargetExt": ".dll",
+        }}
+        fixture.accepted_build_outputs["stage-1"][str(target)] = {
+            "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+        }
+    produced = fixture.pack_stage1(plan)
+    directory, path, revision, source = repository("stage1-consumer")
+    path.write_text(
+        '<Project Sdk="Gsharp.NET.Sdk/0.0.0-sourcelink-test"><PropertyGroup>'
+        '<TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType>'
+        '<DebugType>portable</DebugType></PropertyGroup></Project>'
+    )
+    package_sources(directory, produced.parent, package.parent)
+    previous = ENV.get("NUGET_PACKAGES")
+    ENV["NUGET_PACKAGES"] = str(WORK / "stage1-packages")
+    try:
+        build(path, "-p:GsharpUseReadyToRunCompiler=false")
+    finally:
+        if previous is None:
+            ENV.pop("NUGET_PACKAGES")
+        else:
+            ENV["NUGET_PACKAGES"] = previous
+    with zipfile.ZipFile(produced) as archive:
+        assert archive.read("build/Gsharp.NET.SourceLink.targets") == (
+            ROOT / "src/Sdk/Gsharp.NET.Sdk/build/Gsharp.NET.SourceLink.targets"
+        ).read_bytes()
+    check_source(inspect(output(path, "pdb")), directory, revision, source)
+
+
 INSPECTOR = r"""
 using System;
 using System.Collections.Generic;
@@ -305,6 +392,10 @@ Console.WriteLine(JsonSerializer.Serialize(new { sourceLink, documents, sequence
 
 
 def main():
+    tests = (incremental, manual, missing, local, native, stage1_package)
+    selected = set(sys.argv[1:])
+    if selected - {test.__name__ for test in tests}:
+        raise SystemExit("Unknown Source Link test group.")
     WORK.mkdir(parents=True)
     scratch = WORK / "scratch"
     scratch.mkdir()
@@ -318,12 +409,7 @@ def main():
             assert "build/Gsharp.NET.SourceLink.targets" in archive.namelist()
         configuration["msbuild-sdks"]["Gsharp.NET.Sdk"] = version
         ENV["NUGET_PACKAGES"] = str(WORK / "packages")
-        config = ET.Element("configuration")
-        sources = ET.SubElement(config, "packageSources")
-        ET.SubElement(sources, "clear")
-        ET.SubElement(sources, "add", key="local", value=str(package.parent))
-        ET.SubElement(sources, "add", key="nuget.org", value="https://api.nuget.org/v3/index.json")
-        ET.ElementTree(config).write(WORK / "NuGet.config", encoding="unicode")
+        package_sources(WORK, package.parent)
         print(f"packed SDK: {package.name}", flush=True)
     else:
         print("source-target SDK with released compiler:", configuration["msbuild-sdks"]["Gsharp.NET.Sdk"], flush=True)
@@ -339,11 +425,13 @@ def main():
     (helper / "Program.cs").write_text(INSPECTOR)
     run("dotnet", "build", helper / "inspect.csproj", "-c", "Release", "--nologo", "-v:q", "-nr:false")
     failures = []
-    for test in (incremental, manual, missing, local, native):
+    for test in tests:
+        if selected and test.__name__ not in selected:
+            continue
         try:
             test()
             print(f"PASS: {test.__name__}", flush=True)
-        except (AssertionError, subprocess.SubprocessError, StopIteration) as error:
+        except (AssertionError, subprocess.SubprocessError, StopIteration, RuntimeError) as error:
             failures.append(test.__name__)
             print(f"FAIL: {test.__name__}: {error}", flush=True)
     if failures:

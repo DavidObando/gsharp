@@ -61,3 +61,6 @@ The Python driver also supports the SDK targets with the released compiler for a
 The test reads real PDB records, resolves document URLs, and compares SHA-256 hashes with Git source bytes.
 It checks automatic and explicit mappings, incremental builds, symbol packages, opt-out, local repositories, and embedded PDBs.
 It also compares native compiler output with JIT-only output.
+The test invokes the stage-1 package builder with existing published artifacts.
+It verifies the new target in that package and builds a consumer through the resulting SDK.
+This package check does not run optional stage-2 certification.
