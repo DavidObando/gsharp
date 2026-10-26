@@ -217,3 +217,21 @@ flow analysis sees every initializer's assignments. Only its `MethodBodies`
 digest changes; all metadata-table digests and the other 159 sample entries
 remain unchanged. The nullable-binding emit tests verify the control flow,
 stdout and IL. The sample inventory and hashing policy are unchanged.
+
+The #5274 field-typed equality and hashing repair changes eleven of the 163
+sample hashes: `DataStruct`, `DataStructErgonomics`, `PatternSwitch`,
+`PrimaryCtorVariadic`, `Records`, `ReifiedGenerics`, `SliceLinqUntypedLambda`,
+`SwitchExpression`, `WebsiteData`, `WebsiteKotlin`, and `WebsiteSwift`.
+Genuine before/after compiler images reproduce the old and new hashes.
+Only their 22 synthesized typed `Equals` and `GetHashCode` bodies change:
+field comparisons use `EqualityComparer[T].Default`, and `HashCode.Combine`
+is specialized to the ordered field types rather than `object`.
+Existing reference identities and all method contracts are unchanged; the
+other 149 decoded methods, their locals and exception regions are identical.
+The added references identify the canonical comparer owner in
+`System.Collections`; generic fields retain their `!0` type argument.
+Changed body sizes also relocate subsequent method RVAs. Both image banks
+are full-PE deterministic across repeated emissions, produce the independently
+expected stdout, and pass unsuppressed ILVerify. The other 152 hash entries,
+including five known-null entries, and the other 147 per-table entries remain
+unchanged. Neither sample inventory nor golden acceptance rules change.

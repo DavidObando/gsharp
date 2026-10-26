@@ -49,6 +49,13 @@ Inside `AsyncStateMachineRewriter.Rewrite`, the bound body is transformed throug
 4. **`AsyncCaptureWalker`** — walks the rewritten body to compute the hoist set (locals and parameters that live across await points).
 5. **State-machine rewriter** — synthesizes the `IAsyncStateMachine` struct, builder field, state field, hoisted-local fields, and the `MoveNext()` body. The **MoveNext body rewriter** is a sub-pass that converts each `await` into a yield/resume pair with state transitions, and inserts sequence-point markers.
 
+Method-wide cleanup creates nested protected regions before this pipeline.
+Definite-assignment analysis reuses diagnostics-free region probes through its
+per-analysis cache (#5287). This also prevents exponential work for many
+method-wide `using` bindings (#5258); it does not flatten their cleanup scopes.
+Opt-in `CompilationMeasurements` counters `definite-assignment.region-analyses`
+and `definite-assignment.region-replays` distinguish actual analyses from reused probes.
+
 Task-observable functions use `AsyncTaskMethodBuilder` (generic when needed). An explicit `async func ... void` uses `AsyncVoidMethodBuilder`, emits a CLR `void` kickoff method, and has no builder `Task` property; omitted-return `async func ...` continues to emit `Task`.
 
 ### Sync and async iterators
