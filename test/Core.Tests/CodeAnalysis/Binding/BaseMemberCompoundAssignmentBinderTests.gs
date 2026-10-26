@@ -455,10 +455,7 @@ class Derived : Base {
     }
 
     @Fact
-    func BaseEventSubscription_VirtualEvent_KeepsPreviousDiagnostic() {
-        // A virtual event would need its base accessors called non-virtually;
-        // that is not supported, so the shape is not intercepted and reports
-        // what it reported before.
+    func BaseEventSubscription_VirtualEvent_Binds() {
         const source = `import System
 
 open class Base {
@@ -471,7 +468,8 @@ class Derived : Base {
     }
 }`
         let result = EmittedOracle.Evaluate(source)
-        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0125")
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal(string.Empty, result.Output)
     }
 
     shared {

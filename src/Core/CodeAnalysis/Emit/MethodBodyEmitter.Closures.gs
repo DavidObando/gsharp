@@ -556,7 +556,7 @@ internal partial class MethodBodyEmitter {
             this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(accessor, subscription.ConstrainedInterfaceType))
         } else {
             this.il.OpCode(
-                if isStatic || receiverIsValueType {
+                if isStatic || receiverIsValueType || subscription.IsNonVirtualBaseCall {
                     ILOpCode.Call
                 } else {
                     ILOpCode.Callvirt
@@ -636,8 +636,13 @@ internal partial class MethodBodyEmitter {
                     .outer
                     .userTokens
                     .ResolveUserInstanceMethodToken(instanceOwner, accessorMethodSymbol, accessorHandle)
-                // Issue #4312: a reference receiver is always `callvirt`.
-                this.il.OpCode(InstanceAccessorOpCode(node.Receiver!!))
+                this.il.OpCode(
+                    if node.IsNonVirtualBaseCall {
+                        ILOpCode.Call
+                    } else {
+                        InstanceAccessorOpCode(node.Receiver!!)
+                    }
+                )
                 this.il.Token(accessorToken)
                 return
             }
@@ -660,7 +665,7 @@ internal partial class MethodBodyEmitter {
             // Issue #4312: a static accessor is `call`; an instance accessor follows
             // the receiver, not the event's own `virtual`/`override` modifiers.
             this.il.OpCode(
-                if node.Receiver == nil {
+                if node.Receiver == nil || node.IsNonVirtualBaseCall {
                     ILOpCode.Call
                 } else {
                     InstanceAccessorOpCode(node.Receiver)

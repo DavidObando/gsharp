@@ -55,6 +55,11 @@ class BoundEventSubscriptionExpression : BoundExpression {
         get;
     }
 
+    internal prop IsNonVirtualBaseCall bool {
+        get;
+        init;
+    }
+
     override prop Type TypeSymbol -> TypeSymbol.Void
     override prop Kind BoundNodeKind -> BoundNodeKind.EventSubscriptionExpression
 }
