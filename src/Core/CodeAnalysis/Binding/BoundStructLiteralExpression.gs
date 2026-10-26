@@ -77,9 +77,7 @@ class BoundStructLiteralExpression : BoundExpression {
 
     internal prop CallsPrimaryConstructor bool -> !IsZeroInitialization &&
         CopySource == nil &&
-        StructType.ClrType == nil &&
-        (StructType.Definition ?? StructType).IsData &&
-        (StructType.Definition ?? StructType).HasDeclaredPrimaryConstructor
+        UsesPrimaryConstructor(StructType)
 
     internal func GetPrimaryArgument(name string) BoundFieldInitializer? {
         let member = GetPrimaryMember(StructType, name)
@@ -123,6 +121,10 @@ class BoundStructLiteralExpression : BoundExpression {
     }
 
     shared {
+        internal func UsesPrimaryConstructor(type StructSymbol) bool -> type.ClrType == nil &&
+            (type.IsClass || (type.Definition ?? type).IsData) &&
+            (type.Definition ?? type).HasDeclaredPrimaryConstructor
+
         internal func PreparePrimaryArguments(
             syntax SyntaxNode?,
             type StructSymbol,

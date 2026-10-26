@@ -2010,10 +2010,7 @@ internal partial class ExpressionBinder {
         }
         let seenFieldNames = HashSet[string]()
         var inits = ImmutableArray.CreateBuilder[BoundFieldInitializer]()
-        let definition = structSymbol!!.Definition ?? structSymbol
-        let callsPrimary = structSymbol!!.ClrType == nil &&
-            definition!!.IsData &&
-            definition!!.HasDeclaredPrimaryConstructor
+        let callsPrimary = BoundStructLiteralExpression.UsesPrimaryConstructor(structSymbol!!)
         let orderedInitializers List[StructLiteralOrderedStep]? = if hasContentElement || syntax.Initializers.Any(
             (initializer FieldInitializerSyntax) -> (
                 initializer.Value is CollectionInitializerExpressionSyntax and {Target: nil}
