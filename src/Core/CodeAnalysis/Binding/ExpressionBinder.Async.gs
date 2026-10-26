@@ -532,8 +532,7 @@ internal partial class ExpressionBinder {
         ) {
             receiverClrType = staticImportedOverride!!.ClassType
             flags = BindingFlags.Public | BindingFlags.Static
-        } else if (accessor.LeftPart is IndexExpressionSyntax || accessor.LeftPart is GenericNameExpressionSyntax) &&
-            TryResolveConstructedGenericTypeReceiver(
+        } else if TryResolveConstructedGenericTypeReceiver(
             accessor.LeftPart,
             out var ctorStruct,
             out var ctorInterface,
