@@ -2659,6 +2659,12 @@ internal partial class ExpressionBinder {
                 }
             }
             if commonUnderlying != nil {
+                // Adapted constants can bind directly, especially `T? ?? constant`.
+                // Try that shape before lifting a non-null fallback to `T?` (#5395).
+                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type)
+                if boundOperator != nil {
+                    return boundOperator
+                }
                 let commonNullable = NullableTypeSymbol.Get(commonUnderlying)
                 let lifted BoundBinaryOperator? = BoundBinaryOperator.Bind(operatorKind, commonNullable, commonNullable)
                 if lifted != nil {
