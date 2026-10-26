@@ -6500,7 +6500,8 @@ internal class MemberLookup {
                 return GetProjectionReceiverImportedType(platform.UnderlyingType)
             }
             let imported ImportedTypeSymbol? = GetImportedTypeSymbol(type)
-            let receiverClr Type? = imported?.ClrType
+            // Semantic aggregates retain their CLR shape under the same annotation wrapper.
+            let receiverClr Type? = imported?.ClrType ?? (type as NullabilityAnnotatedTypeSymbol)?.ClrType
             if type is NullabilityAnnotatedTypeSymbol annotated &&
                 receiverClr != nil &&
                 receiverClr.IsGenericType &&

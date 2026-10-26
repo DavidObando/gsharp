@@ -1487,7 +1487,7 @@ internal partial class ExpressionBinder {
         }
         if classSymbol == nil &&
             methodName == "copy" &&
-            (hasNamedArguments || (receiver?.Type is StructSymbol copyStruct && copyStruct.IsData)) {
+            (hasNamedArguments || (receiver != nil && GetDataCopyType(receiver.Type) != nil)) {
             if TryGetCopyOverrides(ce, out var overrides) {
                 // classSymbol == null here (outer condition): every
                 // BindAccessorCall(receiver: null, ...) call site in the

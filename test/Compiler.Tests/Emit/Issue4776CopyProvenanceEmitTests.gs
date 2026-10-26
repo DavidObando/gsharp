@@ -10,6 +10,7 @@ import System.IO
 import System.Linq
 import System.Linq.Expressions
 import System.Reflection
+import System.Text
 import GSharp.Core.Tests
 import GSharp.Tests
 import Microsoft.CodeAnalysis
@@ -23,6 +24,202 @@ import GSharp.Compiler.Tests
 import GSharp.Core.CodeAnalysis
 
 class Issue4776CopyProvenanceEmitTests {
+    @Theory
+    @InlineData("source")
+    @InlineData("implementation")
+    @InlineData("reference")
+    func NullableGenericCopy_PreservesArgumentsAcrossSourceAndImportedRepresentations(representation string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        const declaration = `public data struct S[T](Value T)
+public class Factory {
+    shared {
+        public func NonNull() S[string] -> S[string]{Value: "nonnull"}
+        public func Optional() S[int32?] -> S[int32?]{Value: nil}
+        public func Nullable() S[string?] -> S[string?]{Value: nil}
+    }
+}`
+        var prefix = declaration
+        var references = []string{}
+        if representation != "source" {
+            let reference = Path.Combine(fixture.Directory, "Producer.ref.dll")
+            let producer = fixture.Compile(
+                "package NullableCopy5405\n" + declaration,
+                "Producer",
+                executable: false,
+                "/assemblyname:Producer",
+                "/refout:" + reference
+            )
+            IlVerifier.Verify(producer)
+            references = []string{
+                "/r:" + if representation == "reference" {
+                    reference
+                } else {
+                    producer
+                }
+            }
+            prefix = "import NullableCopy5405"
+        }
+        let image = fixture.Compile("import System\nimport System.Collections.Generic\n" + prefix + `
+let original = S[string?]{Value: nil}
+let copy = original with{}
+Console.WriteLine(copy.Value == nil)
+let changed = original with { Value = "payload" }
+Console.WriteLine(changed.Value == "payload")
+let cleared = changed.copy(Value: nil)
+Console.WriteLine(cleared.Value == nil)
+Console.WriteLine(original.Value == nil)
+`, "Consumer", executable: true, references)
+        let dependencies = if representation == "source" {
+            []string{}
+        } else {
+            []string{Path.Combine(fixture.Directory, "Producer.dll")}
+        }
+        IlVerifier.Verify(image, dependencies)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("True" + Environment.NewLine, 4))),
+            fixture.RunBytes(image)
+        )
+        let controls = []string{`let original = Factory.NonNull()
+Console.WriteLine(original.copy().Value == "nonnull")`, `let original = S[List[string?]]{Value: List[string?]()}
+original.Value.Add(nil)
+let copy = original with{}
+Console.WriteLine(copy.Value[0] == nil)`, `let original = Factory.Optional()
+Console.WriteLine(original.copy().Value == nil)`, `let original = S[(Text string?, Number int32)]{Value: (Text: nil, Number: 7)}
+let copy = original with{}
+Console.WriteLine(copy.Value.Text == nil && copy.Value.Number == 7)`, `let original = Factory.Nullable()
+let copy = original with { Value = nil }
+Console.WriteLine(copy.copy().Value == nil)`}
+        for var index = 0; index < controls.Length; index++ {
+            let control = fixture.Compile(
+                "import System\nimport System.Collections.Generic\n" + prefix + "\n" + controls[index],
+                "Control" + index.ToString(),
+                executable: true,
+                references
+            )
+            IlVerifier.Verify(control, dependencies)
+            Assert.Equal(Encoding.UTF8.GetBytes("True" + Environment.NewLine), fixture.RunBytes(control))
+        }
+    }
+
+    @Theory
+    @InlineData("with{}")
+    @InlineData(".copy()")
+    func NullableGenericCopy_RejectsNarrowingWithoutAnImage(operation string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let producer = fixture.Compile(
+            "package NullableCopy5405\npublic data struct S[T](Value T)",
+            "Producer",
+            executable: false,
+            "/assemblyname:Producer"
+        )
+        let reference = Path.Combine(fixture.Directory, "Narrowing.ref.dll")
+        let (code, output) = fixture.TryCompile(
+            "import NullableCopy5405\nlet original = S[string?]{Value: nil}\nlet copy = original " +
+                operation +
+                "\nlet required string = copy.Value",
+            "Narrowing",
+            executable: true,
+            "/r:" + producer,
+            "/refout:" + reference
+        )
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("Narrowing.gs(4,23,4,33): error GS0155", StringComparison.Ordinal), output)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Narrowing.dll")))
+        Assert.False(File.Exists(reference))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedNullableGenericCopy_PreservesStorageAndRunsOnlyExplicitUpdates(useReference bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "Contract.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`namespace CopyContract5405;
+public static class Trace {
+    public static int Constructions, Receivers, Updates;
+    public static object Anchor() { Constructions++; return new object(); }
+    public static string? Next() { Updates++; return null; }
+}
+public record struct Box<T>(T Value) {
+    public object Anchor = Trace.Anchor();
+    private readonly object hidden = new object();
+    public object Hidden() => hidden;
+}
+public static class Oracle {
+    public static Box<string?> Copy(Box<string?> original) =>
+        original with { Value = Trace.Next() };
+    public static Box<string?> Original() => new(null);
+}`, "Contract", reference)
+        let api = fixture.Compile(`package CopyApi5405
+import CopyContract5405
+public class Api {
+    shared {
+        public func Receive(original Box[string?]) Box[string?] {
+            Trace.Receivers++
+            return original
+        }
+        public func Copy(original Box[string?]) Box[string?] ->
+            Receive(original) with { Value = Trace.Next() }
+        public func Sugar(original Box[string?]) Box[string?] ->
+            Receive(original).copy(Value: Trace.Next())
+        public func Empty(original Box[string?]) Box[string?] -> original with{}
+        public func FromContract() bool {
+            let copy = Oracle.Original() with { Value = nil }
+            return copy.Value == nil
+        }
+    }
+}
+`, "Api", executable: false, "/assemblyname:Api", "/r:" +
+                if useReference {
+                reference
+            } else {
+                contract
+            })
+        let caller = fixture.CompileCSharp(`using CopyContract5405;
+using System;
+public static class Probe {
+    public static string Run() {
+        var original = new Box<string?>("payload");
+        var anchor = original.Anchor;
+        var hidden = original.Hidden();
+        foreach (var copy in new Func<Box<string?>, Box<string?>>[] {
+            CopyApi5405.Api.Copy, CopyApi5405.Api.Sugar
+        }) {
+            Trace.Receivers = Trace.Updates = 0;
+            var changed = copy(original);
+            if (changed.Value != null || original.Value != "payload"
+                || !ReferenceEquals(changed.Anchor, anchor) || !ReferenceEquals(changed.Hidden(), hidden)
+                || Trace.Constructions != 1 || Trace.Receivers != 1 || Trace.Updates != 1)
+                throw new Exception("Copy changed storage or replayed construction.");
+            changed.Anchor = new object();
+            if (!ReferenceEquals(original.Anchor, anchor)) throw new Exception("Copy aliases original storage.");
+        }
+        var empty = CopyApi5405.Api.Empty(original);
+        if (empty.Value != "payload" || !ReferenceEquals(empty.Hidden(), hidden)
+            || Trace.Constructions != 1) throw new Exception("Empty copy reconstructed storage.");
+        var native = Oracle.Copy(original);
+        if (native.Value != null || !ReferenceEquals(native.Anchor, anchor)
+            || !ReferenceEquals(native.Hidden(), hidden) || Trace.Constructions != 1)
+            throw new Exception("Native copy oracle disagrees.");
+        if (!CopyApi5405.Api.FromContract() || Trace.Constructions != 2)
+            throw new Exception("Annotated return lost nullability or reconstructed storage.");
+        var fresh = new Box<string?>(null);
+        if (Trace.Constructions != 3 || ReferenceEquals(fresh.Anchor, anchor))
+            throw new Exception("Fresh construction control did not execute.");
+        return "copy-only|nullable|identity|once";
+    }
+}`, "Caller", contract, api)
+        IlVerifier.Verify(contract)
+        IlVerifier.Verify(api, []string{contract})
+        IlVerifier.Verify(caller, []string{contract, api})
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        Assert.Equal(
+            "copy-only|nullable|identity|once",
+            assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil)
+        )
+    }
+
     @Theory
     @InlineData("int", "42")
     @InlineData("string", "\"payload\"")

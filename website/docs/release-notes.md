@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 The entries below are newer than v0.5.212. Published features and migration notes follow in the release section.
 
+- **Imported generic data copies keep nullable type arguments** (issue #5405). `with` and `.copy(...)` retain the receiver's type arguments during copying and member updates. A copy does not call constructors or repeat declaration initializers. Nullable values remain nullable after copying.
+
 - **Source Link mappings stay current in incremental builds** (issue #5404). The SDK tracks generated and explicit mapping files before compilation. Missing explicit files now cause an SDK error when compilation requests debug information. Consumer projects and repository builds use the same target. The SDK guide now describes repository metadata, symbol packages, and source-disclosure limits. Source embedding remains opt-in.
 
 - **Qualified package components keep their complete names** (issue #5396). A later component can match an unrelated source or imported type name. Qualified constructions and shared member access now use the complete package prefix. This corrects translated Oahu token references. The translator code stays unchanged.
