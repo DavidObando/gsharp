@@ -928,6 +928,21 @@ open partial class TypeSymbol : Symbol {
             return false
         }
 
+        /// Returns whether a type structurally contains a non-emittable `never` slot.
+        /// @param type The type to inspect.
+        /// @returns `true` when any wrapped type is (cref:Never).
+        internal func ContainsNeverType(type TypeSymbol) bool {
+            if type == Never {
+                return true
+            }
+            for inner in GetWrappedTypes(type) {
+                if ContainsNeverType(inner) {
+                    return true
+                }
+            }
+            return false
+        }
+
         /// Compares runtime type identity while ignoring nullable-reference
         /// annotations, which are metadata-only and do not change a CLR signature.
         /// Nullable value types and every other structural distinction remain
