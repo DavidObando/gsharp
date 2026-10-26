@@ -12600,7 +12600,8 @@ partial class Binder {
         private func InferTypeArgumentsCore(
             parameterType TypeSymbol,
             argumentType TypeSymbol,
-            substitution Dictionary[TypeParameterSymbol, TypeSymbol]
+            substitution Dictionary[TypeParameterSymbol, TypeSymbol],
+            boundKind MemberLookup.SymbolicInferenceBoundKind = MemberLookup.SymbolicInferenceBoundKind.Lower
         ) {
             if parameterType is TypeParameterSymbol tp {
                 // Issue #1531: `void` is never a valid type argument, so a type
@@ -12612,22 +12613,17 @@ partial class Binder {
                 // `(...)->void` overload (spurious GS0266). Skipping the binding
                 // leaves the type parameter un-inferred, so the candidate is
                 // rejected and the `(...)->void` overload wins unambiguously.
-                if argumentType == TypeSymbol.Void || TypeSymbol.ContainsNullLiteralType(argumentType) {
+                // A nested throw-only result supplies no emittable type argument (issue #5273).
+                if argumentType == TypeSymbol.Void || TypeSymbol.ContainsNeverType(argumentType) ||
+                    TypeSymbol.ContainsNullLiteralType(argumentType) {
                     return
                 }
-                // Join compatible nullable-reference evidence across arguments.
-                // The post-substitution applicability check still rejects genuine
-                // type conflicts.
-                if substitution.TryGetValue(tp, out var existing) {
-                    substitution[tp] = (MemberLookup.MergeInferredTypeArgument(existing, argumentType) ?? existing)
-                } else {
-                    substitution[tp] = argumentType
-                }
+                MemberLookup.InferSourceTypeArgument(substitution, tp, argumentType, boundKind)
                 return
             }
             let importedParameterType ImportedTypeSymbol? = parameterType as ImportedTypeSymbol
             if importedParameterType != nil && importedParameterType.HasTypeParameterArgument {
-                InferImportedTypeArguments(importedParameterType, argumentType, substitution)
+                InferImportedTypeArguments(importedParameterType, argumentType, substitution, boundKind)
                 return
             }
             if parameterType is NullableTypeSymbol pn {
@@ -12644,10 +12640,16 @@ partial class Binder {
                     } else {
                         argumentType
                     },
-                    substitution
+                    substitution,
+                    boundKind
                 )
             } else if parameterType is SliceTypeSymbol ps && argumentType is SliceTypeSymbol asym {
-                InferTypeArgumentsCore(ps.ElementType, asym.ElementType, substitution)
+                InferTypeArgumentsCore(
+                    ps.ElementType,
+                    asym.ElementType,
+                    substitution,
+                    MemberLookup.SymbolicInferenceBoundKind.Exact
+                )
             } else if parameterType is ChannelTypeSymbol pc && ChannelTypeSymbol.TryGetChannelShape(
                 argumentType,
                 out var argumentElement,
@@ -12660,9 +12662,19 @@ partial class Binder {
                 // inferred either way. Without this, `merge(a, b)` cannot infer its
                 // element and every generic channel function has to be called with
                 // an explicit type argument.
-                InferTypeArgumentsCore(pc.ElementType, argumentElement!!, substitution)
+                InferTypeArgumentsCore(
+                    pc.ElementType,
+                    argumentElement!!,
+                    substitution,
+                    MemberLookup.SymbolicInferenceBoundKind.Exact
+                )
             } else if parameterType is ArrayTypeSymbol pa && argumentType is ArrayTypeSymbol aa {
-                InferTypeArgumentsCore(pa.ElementType, aa.ElementType, substitution)
+                InferTypeArgumentsCore(
+                    pa.ElementType,
+                    aa.ElementType,
+                    substitution,
+                    MemberLookup.SymbolicInferenceBoundKind.Exact
+                )
                 // #611 intentional asymmetry: a fixed-array `[N]T` does NOT unify
                 // against a slice parameter `[]T` (or vice versa). In Go, explicit
                 // slicing is required to produce a slice from a fixed-length array.
@@ -12672,14 +12684,25 @@ partial class Binder {
 
             } else if parameterType is RectangularArrayTypeSymbol pr &&
                 argumentType is RectangularArrayTypeSymbol ar &&
-                pr.Rank == ar.Rank {
-                InferTypeArgumentsCore(pr.ElementType, ar.ElementType, substitution)
+                pr.Rank == ar
+                .Rank {
+                InferTypeArgumentsCore(
+                    pr.ElementType,
+                    ar.ElementType,
+                    substitution,
+                    MemberLookup.SymbolicInferenceBoundKind.Exact
+                )
             } else if parameterType is TupleTypeSymbol parameterTuple &&
                 argumentType is TupleTypeSymbol argumentTuple &&
                 parameterTuple.Arity == argumentTuple
                 .Arity {
                 for var i = 0; i < parameterTuple.Arity; i++ {
-                    InferTypeArgumentsCore(parameterTuple.ElementTypes[i], argumentTuple.ElementTypes[i], substitution)
+                    InferTypeArgumentsCore(
+                        parameterTuple.ElementTypes[i],
+                        argumentTuple.ElementTypes[i],
+                        substitution,
+                        boundKind
+                    )
                 }
             } else if parameterType is SequenceTypeSymbol pseq {
                 // Issue #773 / ADR-0084 §L2: an extension declared as
@@ -12689,13 +12712,13 @@ partial class Binder {
                 // or any CLR type that implements `IEnumerable<U>`.
                 switch argumentType {
                     case aseq is SequenceTypeSymbol {
-                        InferTypeArgumentsCore(pseq.ElementType, aseq.ElementType, substitution)
+                        InferTypeArgumentsCore(pseq.ElementType, aseq.ElementType, substitution, boundKind)
                     }
                     case asl is SliceTypeSymbol {
-                        InferTypeArgumentsCore(pseq.ElementType, asl.ElementType, substitution)
+                        InferTypeArgumentsCore(pseq.ElementType, asl.ElementType, substitution, boundKind)
                     }
                     case aarr is ArrayTypeSymbol {
-                        InferTypeArgumentsCore(pseq.ElementType, aarr.ElementType, substitution)
+                        InferTypeArgumentsCore(pseq.ElementType, aarr.ElementType, substitution, boundKind)
                     }
                     default {
                         let openIEnumerable = typeof(System.Collections.Generic.IEnumerable[_])
@@ -12706,7 +12729,7 @@ partial class Binder {
                             out _
                         ) &&
                             sequenceArguments.Length == 1 {
-                            InferTypeArgumentsCore(pseq.ElementType, sequenceArguments[0], substitution)
+                            InferTypeArgumentsCore(pseq.ElementType, sequenceArguments[0], substitution, boundKind)
                         }
                     }
                 }
@@ -12714,7 +12737,7 @@ partial class Binder {
                 // Mirror of the synchronous-sequence inference for `async sequence[T]`.
                 switch argumentType {
                     case aaseq is AsyncSequenceTypeSymbol {
-                        InferTypeArgumentsCore(paseq.ElementType, aaseq.ElementType, substitution)
+                        InferTypeArgumentsCore(paseq.ElementType, aaseq.ElementType, substitution, boundKind)
                     }
                     default {
                         let openIAsyncEnumerable = typeof(System.Collections.Generic.IAsyncEnumerable[_])
@@ -12725,7 +12748,12 @@ partial class Binder {
                             out _
                         ) &&
                             asyncSequenceArguments.Length == 1 {
-                            InferTypeArgumentsCore(paseq.ElementType, asyncSequenceArguments[0], substitution)
+                            InferTypeArgumentsCore(
+                                paseq.ElementType,
+                                asyncSequenceArguments[0],
+                                substitution,
+                                boundKind
+                            )
                         }
                     }
                 }
@@ -12740,9 +12768,14 @@ partial class Binder {
                 // e.g. `f func(T) U` matched against `func(int32) bool` yields
                 // T -> int32, U -> bool.
                 for var i = 0; i < pf.ParameterTypes.Length; i++ {
-                    InferTypeArgumentsCore(pf.ParameterTypes[i], af.ParameterTypes[i], substitution)
+                    InferTypeArgumentsCore(
+                        pf.ParameterTypes[i],
+                        af.ParameterTypes[i],
+                        substitution,
+                        MemberLookup.ReverseInferenceBoundKind(boundKind)
+                    )
                 }
-                InferTypeArgumentsCore(pf.ReturnType, af.ReturnType, substitution)
+                InferTypeArgumentsCore(pf.ReturnType, af.ReturnType, substitution, boundKind)
             } else if TryGetUserGenericArguments(parameterType, out var userParamDef, out var userParamArgs) &&
                 userParamArgs
                 .Any(TypeSymbol.ContainsTypeParameter) {
@@ -12757,8 +12790,18 @@ partial class Binder {
                 if TryFindUserGenericArguments(argumentType, userParamDef!!, out var userArgArgs) &&
                     userParamArgs.Length == userArgArgs
                     .Length {
+                    let parameters = switch userParamDef {
+                        case structure is StructSymbol: structure.TypeParameters
+                        case iface is InterfaceSymbol: iface.TypeParameters
+                        default: ImmutableArray[TypeParameterSymbol].Empty
+                    }
                     for var i = 0; i < userParamArgs.Length; i++ {
-                        InferTypeArgumentsCore(userParamArgs[i], userArgArgs[i], substitution)
+                        InferTypeArgumentsCore(
+                            userParamArgs[i],
+                            userArgArgs[i],
+                            substitution,
+                            MemberLookup.GetNestedInferenceBoundKind(parameters[i].Variance, boundKind)
+                        )
                     }
                 }
             }
@@ -12767,19 +12810,34 @@ partial class Binder {
         private func InferImportedTypeArguments(
             parameterType ImportedTypeSymbol,
             argumentType TypeSymbol,
-            substitution Dictionary[TypeParameterSymbol, TypeSymbol]
+            substitution Dictionary[TypeParameterSymbol, TypeSymbol],
+            boundKind MemberLookup.SymbolicInferenceBoundKind
         ) {
+            // A lambda's CLR delegate can be unavailable across reflection contexts.
+            // Infer from its symbolic signature instead of its CLR projection.
+            if argumentType is FunctionTypeSymbol && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
+                parameterType,
+                out var parameterFunction
+            ) {
+                InferTypeArgumentsCore(parameterFunction!!, argumentType, substitution, boundKind)
+                return
+            }
             var foundProjection = false
-            if parameterType.OpenDefinition != nil &&
+            if parameterType.OpenDefinition is {} openDefinition &&
                 TryFindUniqueGenericProjection(
                 argumentType,
-                parameterType.OpenDefinition,
+                openDefinition,
                 out var mappedArguments,
                 out foundProjection
             ) {
                 if mappedArguments.Length == parameterType.TypeArguments.Length {
                     for var i = 0; i < parameterType.TypeArguments.Length; i++ {
-                        InferTypeArgumentsCore(parameterType.TypeArguments[i], mappedArguments[i], substitution)
+                        InferTypeArgumentsCore(
+                            parameterType.TypeArguments[i],
+                            mappedArguments[i],
+                            substitution,
+                            MemberLookup.GetNestedInferenceBoundKind(openDefinition, i, boundKind)
+                        )
                     }
                 }
                 return
@@ -12795,7 +12853,7 @@ partial class Binder {
                 } else {
                     (cast[ArrayTypeSymbol](argumentType)).ElementType
                 }
-                InferTypeArgumentsCore(parameterType.TypeArguments[0], elementType, substitution)
+                InferTypeArgumentsCore(parameterType.TypeArguments[0], elementType, substitution, boundKind)
             }
         }
 
