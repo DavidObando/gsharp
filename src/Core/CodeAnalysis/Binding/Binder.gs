@@ -8563,8 +8563,7 @@ partial class Binder {
             // bodies were bound against, or a references-less compilation would
             // bind channel operations yet never colour the functions around them.
             let inferenceBinders = Dictionary[FunctionSymbol, Binder]()
-            let originalFunctionBodies = functionBodies.ToImmutable()
-            let inferredFunctions = SuspensionInference.Run(
+            SuspensionInference.Run(
                 functionBodies,
                 globalScope.EntryPoint,
                 parentScope.References,
@@ -8579,6 +8578,7 @@ partial class Binder {
                 allStructs,
                 globalScope.Interfaces
             )
+            let orderedFunctions = BoundProgramOrder.SortFunctions(functionBodies.ToImmutable())
             // ADR-0174 D10 / GS0562: batching a rendezvous channel is correct and
             // pointless. Reported here, over the bound bodies, because the question
             // is about the receiver's declaration rather than the call.
@@ -8608,9 +8608,7 @@ partial class Binder {
                 statement = inferredEntryBody
             }
             RefStructAsyncLivenessAnalyzer.AnalyzeProgram(
-                functionBodies,
-                originalFunctionBodies,
-                inferredFunctions,
+                orderedFunctions,
                 statement,
                 allStructs,
                 globalScope.Interfaces,
@@ -8641,6 +8639,7 @@ partial class Binder {
                 globals,
                 allDelegates
             ){
+                OrderedFunctions = orderedFunctions,
                 Imports = globalScope.GetCumulativeImports(),
                 FriendAssemblies = globalScope.FriendAssemblies,
                 AssemblyAttributes = globalScope.AssemblyAttributes,
@@ -9241,7 +9240,13 @@ partial class Binder {
             if function.IsAsyncOrSuspending {
                 NativeSliceSuspensionAnalyzer(diagnostics).Visit(body)
             }
-            RefStructAsyncLivenessAnalyzer.Analyze(body, function, diagnostics, references)
+            RefStructAsyncLivenessAnalyzer.Analyze(
+                body,
+                function,
+                diagnostics,
+                references,
+                includeOperandTemporaries: false
+            )
         }
 
         /// ADR-0140 / issue #2131: binds the `shared { init { … } }`
