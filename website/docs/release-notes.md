@@ -641,6 +641,10 @@ Before moving an application to a different compiler version, pin the intended S
 
 ### Fixed
 
+- **Imported function-pointer fields keep their CLR signature** (issue #5260).
+  Assignments from matching source signatures now compile.
+  Import and member-reference emission preserve calling conventions, pointer types, and native integers, including signatures on generic receivers.
+
 - Aligned VS Code and Visual Studio TextMate highlighting with website Prism
   for escaped and Unicode names, contextual intrinsics and reference/slice
   vocabulary, numeric and character literals, and nested string interpolation.

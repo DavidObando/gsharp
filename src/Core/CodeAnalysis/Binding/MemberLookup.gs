@@ -1845,9 +1845,34 @@ internal class MemberLookup {
             openMethodDefinition MethodInfo?,
             methodTypeArguments ImmutableArray[TypeSymbol?]
         ) TypeSymbol {
+            var openClr = openClr
             if openClr == nil {
                 return TypeSymbol.Error
             }
+            if openClr.IsFunctionPointer {
+                return FunctionPointerTypeSymbol.FromClrSignature(
+                    openClr,
+                    (type Type) -> MapOpenClrTypeToSymbolic(
+                        type,
+                        openDefinition,
+                        typeArguments,
+                        openMethodDefinition,
+                        methodTypeArguments
+                    )
+                )
+            }
+            if openClr.IsPointer {
+                return PointerTypeSymbol.Get(
+                    MapOpenClrTypeToSymbolic(
+                        openClr.GetElementType(),
+                        openDefinition,
+                        typeArguments,
+                        openMethodDefinition,
+                        methodTypeArguments
+                    )
+                )
+            }
+            openClr = openClr.UnderlyingSystemType
             if openClr.IsGenericParameter {
                 // Type-level parameter (declared on a generic type): map through
                 // the receiver/container's symbolic TypeArguments.
@@ -4971,7 +4996,11 @@ internal class MemberLookup {
                 if openParameters != nil && parameterIndex < openParameters.Length {
                     let openParameter = openParameters[parameterIndex]
                     return NullableFlagsBuilder.MergeDeclarationNullability(
-                        MapOpenClrTypeToSymbolic(openParameter.ParameterType, openDefinition, declaringTypeArguments),
+                        MapOpenClrTypeToSymbolic(
+                            ClrNullability.GetSignatureType(openParameter),
+                            openDefinition,
+                            declaringTypeArguments
+                        ),
                         openParameter.ParameterType,
                         ClrNullability.ReadNullableFlags(openParameter, openIndexer)
                     )
@@ -5012,7 +5041,7 @@ internal class MemberLookup {
                 openDefinition != nil {
                 let openProperty PropertyInfo? = FindOpenIndexerDefinition(openDefinition, closedProperty)
                 if openProperty != nil {
-                    let openPropertyType = openProperty.PropertyType
+                    let openPropertyType = ClrNullability.GetSignatureType(openProperty)
                     let projectionType = if openPropertyType.IsByRef {
                         Invariant.Required(
                             openPropertyType.GetElementType(),
@@ -5182,7 +5211,11 @@ internal class MemberLookup {
                 openDefinition != nil {
                 let openField FieldInfo? = openDefinition.GetField(closedField.Name, AllFields)
                 if openField != nil {
-                    let mapped = MapOpenClrTypeToSymbolic(openField.FieldType, openDefinition, declaringTypeArguments)
+                    let mapped = MapOpenClrTypeToSymbolic(
+                        ClrNullability.GetSignatureType(openField),
+                        openDefinition,
+                        declaringTypeArguments
+                    )
                     let declarationFlags = ClrNullability.ReadNullableFlags(openField, openDefinition)
                     return NullableFlagsBuilder.MergeDeclarationNullability(
                         mapped,
@@ -5214,10 +5247,10 @@ internal class MemberLookup {
             var valueType Type
             switch openMember {
                 case property is PropertyInfo {
-                    valueType = property.PropertyType
+                    valueType = ClrNullability.GetSignatureType(property)
                 }
                 case field is FieldInfo {
-                    valueType = field.FieldType
+                    valueType = ClrNullability.GetSignatureType(field)
                 }
                 default {
                     return TypeSymbol.Error
@@ -5406,7 +5439,7 @@ internal class MemberLookup {
                     // platform-wrapped by-ref for `GetPinnableReference()`, which
                     // the reader-agreement test found disagreeing with every
                     // sibling reader.
-                    let openReturnType = openMethod.ReturnType
+                    let openReturnType = ClrNullability.GetSignatureType(openMethod.ReturnParameter)
                     let returnLayout = if openReturnType.IsByRef {
                         Invariant.Required(
                             openReturnType.GetElementType(),
@@ -5547,7 +5580,7 @@ internal class MemberLookup {
                     // nullability byte), which is why the flags are merged after
                     // peeling and before re-wrapping.
                     let openParameter = openParameters[parameterIndex]
-                    let openParameterType = openParameter.ParameterType
+                    let openParameterType = ClrNullability.GetSignatureType(openParameter)
                     let parameterFlags = ClrNullability.ReadNullableFlags(openParameter, openMethod)
                     if openParameterType.IsByRef {
                         let pointeeType = Invariant.Required(
@@ -5867,7 +5900,7 @@ internal class MemberLookup {
             typeArguments ImmutableArray[TypeSymbol],
             methodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?])
         ) TypeSymbol {
-            let openReturn = openMethod.ReturnType
+            let openReturn = ClrNullability.GetSignatureType(openMethod.ReturnParameter)
             let layout = if openReturn.IsByRef {
                 Invariant.Required(
                     openReturn.GetElementType(),
@@ -5919,7 +5952,7 @@ internal class MemberLookup {
             openMethod MethodInfo? = nil,
             methodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?])
         ) TypeSymbol {
-            let openType = openParameter.ParameterType
+            let openType = ClrNullability.GetSignatureType(openParameter)
             let layout = if openType.IsByRef {
                 Invariant.Required(
                     openType.GetElementType(),
@@ -5987,7 +6020,7 @@ internal class MemberLookup {
             openMethod MethodInfo? = nil,
             methodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?])
         ) TypeSymbol {
-            let openType = openParameter.ParameterType
+            let openType = ClrNullability.GetSignatureType(openParameter)
             let layout = if openType.IsByRef {
                 Invariant.Required(
                     openType.GetElementType(),

@@ -161,11 +161,12 @@ shared class ClrNullability {
 
     @NullabilityFunnel
     private func DecodePropertyTypeSymbol(property PropertyInfo) TypeSymbol {
-        if property.PropertyType.IsByRef {
+        let propertyType = GetSignatureType(property)
+        if propertyType.IsByRef {
             // PropertyType.IsByRef guarantees that GetElementType returns the referent type.
-            return ByRefTypeSymbol.Get(GetPropertyElementTypeSymbol(property, property.PropertyType.GetElementType()!!))
+            return ByRefTypeSymbol.Get(GetPropertyElementTypeSymbol(property, propertyType.GetElementType()!!))
         }
-        let baseSymbol = TypeSymbol.FromClrType(property.PropertyType)
+        let baseSymbol = TypeSymbol.FromClrType(propertyType)
         // Properties have no dedicated `ReturnParameter` to attach
         // `[NullableAttribute]` to in C# metadata; the attribute lands on
         // the property itself. Walk the enclosing member chain via the
@@ -176,7 +177,7 @@ shared class ClrNullability {
         return TupleElementNamesReader.ApplyNames(
             ApplyReferenceNullabilityFull(
                 baseSymbol,
-                property.PropertyType,
+                propertyType,
                 property,
                 property.DeclaringType,
                 GetOpenDefinition(property)?.PropertyType
@@ -227,12 +228,13 @@ shared class ClrNullability {
 
     @NullabilityFunnel
     private func DecodeFieldTypeSymbol(field FieldInfo) TypeSymbol {
-        let baseSymbol = TypeSymbol.FromClrType(field.FieldType)
+        let fieldType = GetSignatureType(field)
+        let baseSymbol = TypeSymbol.FromClrType(fieldType)
         // ADR-0172 Phase B: surface imported tuple element names.
         return TupleElementNamesReader.ApplyNames(
             ApplyReferenceNullabilityFull(
                 baseSymbol,
-                field.FieldType,
+                fieldType,
                 field,
                 field.DeclaringType,
                 GetOpenDefinition(field)?.FieldType
@@ -265,11 +267,12 @@ shared class ClrNullability {
 
     @NullabilityFunnel
     private func DecodeReturnTypeSymbol(method MethodInfo) TypeSymbol {
+        let signatureType = GetSignatureType(method.ReturnParameter)
         // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
-        let returnType = if method.ReturnType.IsByRef {
-            method.ReturnType.GetElementType()!!
+        let returnType = if signatureType.IsByRef {
+            signatureType.GetElementType()!!
         } else {
-            method.ReturnType
+            signatureType
         }
         let baseSymbol = TypeSymbol.FromClrType(returnType)
         let definition = GetMetadataDefinition(method) as MethodInfo
@@ -309,10 +312,11 @@ shared class ClrNullability {
 
     @NullabilityFunnel
     private func DecodeParameterTypeSymbol(parameter ParameterInfo) TypeSymbol {
-        let parameterType = if parameter.ParameterType.IsByRef {
-            parameter.ParameterType.GetElementType()
+        let signatureType = GetSignatureType(parameter)
+        let parameterType = if signatureType.IsByRef {
+            signatureType.GetElementType()
         } else {
-            parameter.ParameterType
+            signatureType
         }
         // ADR-0193 §4: an indexer's parameter needs its open declaration as
         // the layout too, exactly as a method's does — without one an
@@ -932,6 +936,28 @@ shared class ClrNullability {
     /// @returns `true` only for `1` (not-annotated).
     @NullabilityFunnel
     internal func IsFlagNonNull(flag uint8) bool -> ClassifyFlag(flag) == ClrNullabilityState.NotAnnotated
+
+    /// Gets the declaration type with function-pointer calling conventions retained.
+    internal func GetSignatureType(declaration ICustomAttributeProvider) Type {
+        let type = switch declaration {
+            case field is FieldInfo: field.FieldType
+            case property is PropertyInfo: property.PropertyType
+            case parameter is ParameterInfo: parameter.ParameterType
+            default: throw ArgumentException("A field, property, or parameter declaration is required.")
+        }
+        if !ContainsFunctionPointer(type) {
+            return type
+        }
+        return switch declaration {
+            case field is FieldInfo: field.GetModifiedFieldType()
+            case property is PropertyInfo: property.GetModifiedPropertyType()
+            case parameter is ParameterInfo: parameter.GetModifiedParameterType()
+            default: throw ArgumentException("A field, property, or parameter declaration is required.")
+        }
+    }
+
+    private func ContainsFunctionPointer(type Type) bool -> type.IsFunctionPointer ||
+        (type.HasElementType && ContainsFunctionPointer(type.GetElementType()!!))
 
     /// Constructs a (cref:TypeSymbol) for [`clrType`](paramref) by
     /// reading the nullability byte at [`offset`](paramref) within

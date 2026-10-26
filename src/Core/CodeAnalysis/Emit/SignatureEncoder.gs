@@ -453,11 +453,7 @@ internal class SignatureEncoder {
             // SignatureCallingConvention.Unmanaged (0x09) with the
             // CallConv{Name} types as return-type modopts in source order —
             // byte-identical to csc's `delegate* unmanaged[...]<...>`.
-            let fnPtrConvention = if fnPtr.IsUnmanagedExtended {
-                SignatureCallingConvention.Unmanaged
-            } else {
-                MapToSignatureCallingConvention(fnPtr.CallingConvention)
-            }
+            let fnPtrConvention = FunctionPointerCallingConvention(fnPtr)
             let fnPtrSig = encoder.FunctionPointer(fnPtrConvention, FunctionPointerAttributes.None, 0)
             fnPtrSig.Parameters(fnPtr.ParameterTypes.Length, out var fnRetEnc, out var fnParamsEnc)
             this.EncodeCallConvModifiers(fnRetEnc, fnPtr)
@@ -534,17 +530,7 @@ internal class SignatureEncoder {
     /// @param fnPtr The function-pointer type to sign.
     /// @returns A standalone signature handle for `calli`.
     internal func GetFunctionPointerCallSiteSignature(fnPtr FunctionPointerTypeSymbol) StandaloneSignatureHandle {
-        let convention = if fnPtr.IsManaged {
-            SignatureCallingConvention.Default
-        } else {
-            (
-                if fnPtr.IsUnmanagedExtended {
-                    SignatureCallingConvention.Unmanaged
-                } else {
-                    MapToSignatureCallingConvention(fnPtr.CallingConvention)
-                }
-            )
-        }
+        let convention = FunctionPointerCallingConvention(fnPtr)
         let sigBlob = BlobBuilder()
         let sig = BlobEncoder(sigBlob).MethodSignature(convention, 0, isInstanceMethod: false)
         sig.Parameters(fnPtr.ParameterTypes.Length, out var retEnc, out var paramsEnc)
@@ -603,6 +589,19 @@ internal class SignatureEncoder {
     }
 
     internal func EncodeClrType(encoder SignatureTypeEncoder, type Type?) {
+        if type is {IsFunctionPointer: true} functionPointer {
+            this.EncodeTypeSymbol(
+                encoder,
+                FunctionPointerTypeSymbol.FromClrSignature(
+                    functionPointer,
+                    (position Type) -> TypeSymbol.FromClrTypeWithoutNullability(
+                        position,
+                        NullabilityFreeReason.TypeStructure
+                    )
+                )
+            )
+            return
+        }
         // ADR-0060 §13 / migration: same as EncodeTypeSymbol — a CLR `T&` (Type.IsByRef)
         // cannot be encoded into a SignatureTypeEncoder slot. Callers must arrange the
         // byref form via the parent encoder. Detect and fail loudly so the previously
@@ -762,7 +761,7 @@ internal class SignatureEncoder {
         for modifier in parameter.GetOptionalCustomModifiers() {
             modifiers.AddModifier(this.outer.memberRefs.GetTypeReference(modifier), isOptional: true)
         }
-        let type = parameter.ParameterType
+        let type = ClrNullability.GetSignatureType(parameter)
         // IsByRef guarantees reflection supplies the parameter's element type.
         this.EncodeClrType(
             encoder.Type(isByRef: type.IsByRef),
@@ -775,6 +774,10 @@ internal class SignatureEncoder {
     }
 
     internal func EncodeReturnClr(encoder ReturnTypeEncoder, returnParameter ParameterInfo, type Type?) {
+        var type = type
+        if type != nil {
+            type = ClrNullability.GetSignatureType(returnParameter)
+        }
         if type?.FullName == "System.Void" {
             // Issue #522: a void return may still carry required custom
             // modifiers — most notably C# 9 init-only property setters emit
@@ -1101,6 +1104,17 @@ internal class SignatureEncoder {
     }
 
     shared {
+        private func FunctionPointerCallingConvention(pointer FunctionPointerTypeSymbol) SignatureCallingConvention {
+            if pointer.IsManaged {
+                return SignatureCallingConvention.Default
+            }
+            return if pointer.IsUnmanagedExtended {
+                SignatureCallingConvention.Unmanaged
+            } else {
+                MapToSignatureCallingConvention(pointer.CallingConvention)
+            }
+        }
+
         private func MapToSignatureCallingConvention(convention CallingConvention) SignatureCallingConvention {
             return switch convention {
                 case CallingConvention.Cdecl: SignatureCallingConvention.CDecl

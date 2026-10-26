@@ -102,7 +102,7 @@ internal shared class ExternalClrOverrideResolver {
                 .Length != typeParameters.Length ||
                 !ParametersMatch(methodParameters, parameters, typeSubstitutions, method, methodTypeArguments) ||
                 !ReturnMatches(
-                method.ReturnType,
+                ClrNullability.GetSignatureType(method.ReturnParameter),
                 returnType,
                 returnRefKind,
                 typeSubstitutions,
@@ -167,14 +167,15 @@ internal shared class ExternalClrOverrideResolver {
             // property could never match, because `T&` never equals `T`).
             // A mismatch falls through to the `sawName` arm below, which is the
             // signature-mismatch diagnostic rather than "no base to override".
-            let externalIsByRef = property.PropertyType?.IsByRef == true
+            let signatureType = ClrNullability.GetSignatureType(property)
+            let externalIsByRef = signatureType.IsByRef
             if RefCapabilities.GetReturnRefKind(property) != returnRefKind {
                 continue
             }
             let comparablePropertyType = if externalIsByRef {
-                property.PropertyType.GetElementType()
+                signatureType.GetElementType()
             } else {
-                property.PropertyType
+                signatureType
             }
             if !ParametersMatch(property.GetIndexParameters(), indexParameters, typeSubstitutions) ||
                 !PropertyTypeMatches(comparablePropertyType, propertyType, hasSetter, typeSubstitutions) {
@@ -358,14 +359,14 @@ internal shared class ExternalClrOverrideResolver {
             // annotations alone — so both sides are projected unmerged and
             // compared as shapes.
             let derivedType = MemberLookup.MapOpenClrTypeToSymbolic(
-                derivedParameters[i].ParameterType,
+                ClrNullability.GetSignatureType(derivedParameters[i]),
                 derivedSubstitution.OpenDefinition,
                 derivedSubstitution.TypeArguments,
                 derived,
                 canonicalMethodArguments
             )
             let baseType = MemberLookup.MapOpenClrTypeToSymbolic(
-                baseParameters[i].ParameterType,
+                ClrNullability.GetSignatureType(baseParameters[i]),
                 baseSubstitution.OpenDefinition,
                 baseSubstitution.TypeArguments,
                 baseMethod,
@@ -749,7 +750,7 @@ internal shared class ExternalClrOverrideResolver {
         }
         for var i = 0; i < clrParameters.Length; i++ {
             let clrParameter = clrParameters[i]
-            var clrType = clrParameter.ParameterType
+            var clrType = ClrNullability.GetSignatureType(clrParameter)
             var clrRefKind = RefKind.None
             if clrType.IsByRef {
                 clrRefKind = if clrParameter.IsOut {

@@ -3558,6 +3558,9 @@ internal partial class ExpressionBinder {
                         expression: "effectiveParameterType.GetElementType()"
                     )
                 }
+                if effectiveParameterType.IsFunctionPointer || effectiveParameterType.IsPointer {
+                    return false
+                }
                 return IsImplicitConstantNarrowingArgument(
                     boundArguments[argIndex],
                     TypeSymbol.FromClrTypeWithoutNullability(
@@ -3604,15 +3607,11 @@ internal partial class ExpressionBinder {
                     return nil
                 }
                 let sourceType = boundArguments[argIndex].Type
-                var nativeTarget = TypeSymbol.FromClrTypeWithoutNullability(
-                    clrParameterType,
-                    NullabilityFreeReason.IdentityComparison
-                )
+                var nativeTarget = ClrNullability.GetParameterTypeSymbol(parameter)
+                if parameter.ParameterType.IsArray && !clrParameterType.IsArray {
+                    nativeTarget = GetArraySliceElementType(nativeTarget) ?? nativeTarget
+                }
                 if NativeProtocolOperations.GetProtocol(nativeTarget) != nil {
-                    nativeTarget = ClrNullability.GetParameterTypeSymbol(parameter)
-                    if parameter.ParameterType.IsArray && !clrParameterType.IsArray {
-                        nativeTarget = GetArraySliceElementType(nativeTarget) ?? nativeTarget
-                    }
                     return if nativeConversions?.ClassifyArgumentConversion(sourceType, nativeTarget)
                         .IsImplicit == true {
                         if sourceType == nativeTarget {
@@ -3628,10 +3627,7 @@ internal partial class ExpressionBinder {
                     !DeclaresImplicitOperator(sourceType) {
                     return nil
                 }
-                let targetType TypeSymbol? = TypeSymbol.FromClrTypeWithoutNullability(
-                    clrParameterType,
-                    NullabilityFreeReason.IdentityComparison
-                )
+                let targetType TypeSymbol? = nativeTarget
                 if targetType == nil {
                     return nil
                 }
@@ -3687,7 +3683,9 @@ internal partial class ExpressionBinder {
                 if argIndex < 0 ||
                     argIndex >= boundArguments.Count ||
                     clrParameterType == nil ||
-                    clrParameterType.IsByRef {
+                    clrParameterType.IsByRef ||
+                    clrParameterType.IsFunctionPointer ||
+                    clrParameterType.IsPointer {
                     return false
                 }
                 let sourceType = boundArguments[argIndex].Type

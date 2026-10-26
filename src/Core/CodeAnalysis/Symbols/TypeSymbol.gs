@@ -188,18 +188,23 @@ open partial class TypeSymbol : Symbol {
         /// (cref:FromClrTypeWithoutNullability), which names why.
         @NullabilityFunnel
         func FromClrType(clrType Type?) TypeSymbol {
+            var clrType = clrType
             if clrType == nil {
                 return TypeSymbol.Void
             }
+            if clrType.IsFunctionPointer {
+                return FunctionPointerTypeSymbol.FromClrSignature(clrType, FromClrType)
+            }
+            if clrType.IsPointer {
+                return PointerTypeSymbol.Get(FromClrType(clrType.GetElementType()))
+            }
+            clrType = clrType.UnderlyingSystemType
             // Phase 3.C.5 / ADR-0001: surface CLR value-type nullability
             // (`Nullable<T>` aka `T?` in C#) as a GSharp `NullableTypeSymbol`
             // wrapping the underlying. Reference-type nullability driven by
             // `[NullableAttribute]` byte arrays is a follow-up.
             if NullableLifting.GetValueTypeNullableUnderlyingClr(clrType) is {} nullableUnderlying {
                 return NullableLifting.WrapValueTypeNullable(FromClrType(nullableUnderlying))
-            }
-            if clrType.IsPointer {
-                return PointerTypeSymbol.Get(FromClrType(clrType.GetElementType()))
             }
             if clrType.IsArray && clrType.GetArrayRank() > 1 {
                 return RectangularArrayTypeSymbol.Get(FromClrType(clrType.GetElementType()), clrType.GetArrayRank())
