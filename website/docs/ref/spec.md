@@ -1149,7 +1149,7 @@ class Foo {
 }
 ```
 
-The semantics match C#:
+Constructor-owned field initialization follows these rules. Value-type literals also have the current exceptions described below:
 
 * An **instance** field initializer (`let`/`var x T = expr`) runs as part of
   **every** instance constructor, **before** the constructor body, in textual
@@ -1182,20 +1182,20 @@ The semantics match C#:
   whose substituted type requires a non-null managed-reference slot (including
   nested aggregates and nonempty fixed arrays) reports `GS0604`, just like an
   explicit `default` of that type. Nullable handles remain legal defaults.
-  Other public-only, non-generic literals retain inline
+  Other source-local public-only, non-generic literals retain inline
   initialization for omitted fields when they have no declared primary
-  constructor, including data structs imported from a
-  separately compiled G# assembly. Explicitly supplied fields skip their inline
-  initializers in these literals. Construction, including structural projection,
-  that requires external initializer writes to imported read-only fields reports
-  `GS0127` rather than emit unverifiable IL. Friend-visible internal collection
-  fields retain the same mandatory zero initialization before ordered population.
-  Braces do not execute an authored
+  constructor. Explicitly supplied fields skip their inline initializers in
+  these literals. The published compiler has cross-assembly gaps in this behavior:
+  [#5296](https://github.com/DavidObando/gsharp/issues/5296) covers omitted declaration
+  defaults, and [#5364](https://github.com/DavidObando/gsharp/issues/5364) covers
+  imported empty-primary constructor selection. Braces do not execute an authored
   constructor body; calling `T(...)` still does. Compiler-owned initialization
   remains distinct when an authored parameterless constructor exists. Braced
   member/content population runs after primary inputs and declaration
   initializers. Raw `default(T)` and array element
   zero-initialization do not invoke these constructors.
+
+**Proposed change, not implemented:** A constructor-owned data struct model is under design review for #5296 and #5364. It would run declaration defaults and an accessible authored parameterless constructor before caller member assignments, even when the caller overrides a default. This is a behavior change: allocations, effects, exceptions, and static-initialization timing can change. The current omitted-only literal rules above remain distinct from this proposal. The experimental per-field helper implementation is superseded and is not the proposed public contract.
 
 ## Expressions
 
