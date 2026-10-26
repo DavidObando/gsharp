@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 The entries below are newer than v0.5.212. Published features and migration notes follow in the release section.
 
+- **Numeric coalescing keeps non-null fallback results unwrapped** (issue #5395). Expressions such as `cast[uint64](selected?.OSThreadId ?? 0)` now produce valid IL. Constant adaptation retries ordinary operator binding before nullable lifting. Null and present values retain their numeric values, signedness, and evaluation count. Nullable fallbacks and lifted arithmetic retain their nullable results.
+
 - **Source class literals retain primary initialization** (issue #5361). Inferred and explicit generic literals now call the primary constructor, so declaration initializers run in their owning scope. Explicit member overrides retain source evaluation order and run once.
 
 - Check ref-like liveness after suspension inference across function bodies, top-level statements, field initializers, static initializer statements, and base-constructor arguments. Include nested async lambdas. Convert typed spill failures into source-located diagnostics. Keep synthesized-temporary diagnostics stable when inference renumbers spills. Reuse cached function-literal lowering across analyses. Complete deferred operand checks after inference, including unchanged bodies. Preserve exact diagnostic counts and safe parked-channel literal evaluation. Do not suggest unsupported operators for mixed adjacent literals. Recover unsupported triple-quoted forms as one rejected UTF-8 token. Resolve the required literal helper from the target reference set. Part of #5332 and #5328.
