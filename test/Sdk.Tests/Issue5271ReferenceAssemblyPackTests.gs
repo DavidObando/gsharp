@@ -35,7 +35,7 @@ class Issue5271ReferenceAssemblyPackTests : IDisposable {
     func Dispose() -> Directory.Delete(directory, recursive: true)
 
     @Fact
-    func Pack_UsesEachInnerBuildsEffectiveFramework_ForReferenceAndLibraryPaths() {
+    func Pack_UsesEachInnerBuildEffectiveFramework_ForReferenceAndLibraryPaths() {
         let document = XDocument.Parse(Project)
         let root = document.Root ?? throw InvalidOperationException("The fixture has no root.")
         let properties = root.Elements("PropertyGroup").Last()
