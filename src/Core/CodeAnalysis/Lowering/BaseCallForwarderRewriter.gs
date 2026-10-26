@@ -9,7 +9,6 @@ import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Symbols
 import System.Collections.Generic
 import System.Collections.Immutable
-import System.Linq
 import System.Reflection
 import System.Runtime.CompilerServices
 
@@ -328,24 +327,40 @@ shared class BaseCallForwarderRewriter {
             this.ordinalByClass[this.classDef] = ordinal + 1
             // A handler literal can have a structural function type. The
             // forwarder needs the event's declared delegate signature.
-            let parameterTypes = switch node {
-                case call is BoundBaseClassCallExpression:
-                call.Arguments.Select((argument BoundExpression) -> argument.Type).ToImmutableArray()
-                case subscription is BoundEventSubscriptionExpression:
-                ImmutableArray.Create(subscription.EventType)
-                case subscription is BoundClrEventSubscriptionExpression:
-                ImmutableArray.Create(
-                    if subscription.EventContainingType != nil {
-                        MemberLookup.GetClrEventHandlerTypeSymbol(subscription.EventContainingType, subscription.Event)
-                    } else {
-                        MemberLookup.GetClrEventHandlerTypeSymbol(subscription.Event)
+            let parameters = ImmutableArray.CreateBuilder[ParameterSymbol](
+                if node is BoundBaseClassCallExpression baseCall {
+                    baseCall.Arguments.Length
+                } else {
+                    1
+                }
+            )
+            switch node {
+                case call is BoundBaseClassCallExpression {
+                    for argument in call.Arguments {
+                        parameters.Add(ParameterSymbol("value", argument.Type))
                     }
-                )
-                default: throw InvalidOperationException("Unsupported base accessor forwarder.")
-            }
-            let parameters = ImmutableArray.CreateBuilder[ParameterSymbol](parameterTypes.Length)
-            for parameterType in parameterTypes {
-                parameters.Add(ParameterSymbol("value", parameterType))
+                }
+                case subscription is BoundEventSubscriptionExpression {
+                    parameters.Add(ParameterSymbol("value", subscription.EventType))
+                }
+                case subscription is BoundClrEventSubscriptionExpression {
+                    parameters.Add(
+                        ParameterSymbol(
+                            "value",
+                            if subscription.EventContainingType != nil {
+                                MemberLookup.GetClrEventHandlerTypeSymbol(
+                                    subscription.EventContainingType,
+                                    subscription.Event
+                                )
+                            } else {
+                                MemberLookup.GetClrEventHandlerTypeSymbol(subscription.Event)
+                            }
+                        )
+                    )
+                }
+                default {
+                    throw InvalidOperationException("Unsupported base accessor forwarder node '${node.Kind}'.")
+                }
             }
             let parameterArray = parameters.ToImmutable()
             let forwarder = FunctionSymbol(
@@ -404,7 +419,7 @@ shared class BaseCallForwarderRewriter {
                     subscription.ConstrainedInterfaceType,
                     subscription.EventContainingType
                 ){IsNonVirtualBaseCall = subscription.IsNonVirtualBaseCall}
-                default: throw InvalidOperationException("Unsupported base accessor forwarder.")
+                default: throw InvalidOperationException("Unsupported base accessor forwarder node '${node.Kind}'.")
             }
             this.forwarderBodies[forwarder] = CreateForwarderBody(forwarder, innerCall, node.Type)
             return forwarder
