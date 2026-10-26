@@ -235,3 +235,17 @@ are full-PE deterministic across repeated emissions, produce the independently
 expected stdout, and pass unsuppressed ILVerify. The other 152 hash entries,
 including five known-null entries, and the other 147 per-table entries remain
 unchanged. Neither sample inventory nor golden acceptance rules change.
+
+The #5274 operator-consistency follow-up changes eight of those eleven
+sample hashes. Their sixteen struct equality/inequality operators now call
+the existing typed `Equals` once, with inequality negating its result.
+The 22 typed equality/hash bodies and the other 133 decoded methods are
+unchanged by this follow-up; the complete repair changes 38 of 171 methods
+against main. Generic operators retain their self-instantiated receiver
+and parameter signatures. No reference identities are added: four samples
+drop the now-unused static `object.Equals(object, object)` member reference;
+the remaining reference changes only reorder existing rows.
+All eleven final images repeat full-PE-identically, match independent literal
+stdout, and pass unsuppressed ILVerify. The other 155 hash entries, including
+five known-null entries, and 150 per-table entries are unchanged by this
+follow-up. Inventory, digest policy, and acceptance rules are unchanged.

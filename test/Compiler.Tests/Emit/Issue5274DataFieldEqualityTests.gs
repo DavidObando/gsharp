@@ -140,6 +140,104 @@ func Main() {
         )
     }
 
+    @Fact
+    func EmittedStructOperators_UseTypedEquality_ForCustomFieldsAndClosedGenerics() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`using System;
+namespace Contracts;
+public struct Token : IEquatable<Token> {
+    public int Value;
+    public static string Trace = "";
+    public bool Equals(Token other) {
+        Trace += Value.ToString() + ",";
+        return Value % 10 == other.Value % 10;
+    }
+    public override bool Equals(object? other) => false;
+    public override int GetHashCode() => Value % 10;
+}`, "Contracts")
+        let dll = fixture.Compile(`package OperatorEquality
+import Contracts
+public data struct Mixed[T](Value T, Missing int32?, Text string?, First Token, Second Token)
+public data struct Empty[T]()
+`, "OperatorEquality", false, "/r:" + contract)
+        IlVerifier.Verify(dll, []string{contract})
+        let consumer = fixture.CompileCSharp(`using System;
+using Contracts;
+using OperatorEquality;
+namespace NativeOperatorCaller;
+public static class Consumer {
+    public static void Run() {
+        var a = new Mixed<int>(7, null, null, new Token { Value = 11 }, new Token { Value = 22 });
+        var b = new Mixed<int>(7, null, null, new Token { Value = 21 }, new Token { Value = 32 });
+        var different = new Mixed<int>(7, null, null, new Token { Value = 12 }, new Token { Value = 22 });
+        Token.Trace = "";
+        Console.WriteLine(a == b);
+        Console.WriteLine(Token.Trace);
+        Token.Trace = "";
+        Console.WriteLine(a != b);
+        Console.WriteLine(Token.Trace);
+        Token.Trace = "";
+        Console.WriteLine(a == different);
+        Console.WriteLine(Token.Trace);
+        Token.Trace = "";
+        Console.WriteLine(a != different);
+        Console.WriteLine(Token.Trace);
+        var firstDifferent = new Mixed<int>(8, null, null, new Token { Value = 11 }, new Token { Value = 22 });
+        Token.Trace = "";
+        Console.WriteLine(a == firstDifferent);
+        Console.WriteLine(a != firstDifferent);
+        Console.WriteLine(Token.Trace);
+        var t = new Mixed<Token>(new Token { Value = 11 }, null, null, new Token { Value = 11 }, new Token { Value = 22 });
+        var u = new Mixed<Token>(new Token { Value = 21 }, null, null, new Token { Value = 21 }, new Token { Value = 32 });
+        var v = new Mixed<Token>(new Token { Value = 12 }, null, null, new Token { Value = 11 }, new Token { Value = 22 });
+        Token.Trace = "";
+        Console.WriteLine(t == u);
+        Console.WriteLine(Token.Trace);
+        Token.Trace = "";
+        Console.WriteLine(t != u);
+        Console.WriteLine(Token.Trace);
+        Token.Trace = "";
+        Console.WriteLine(t == v);
+        Console.WriteLine(Token.Trace);
+        Token.Trace = "";
+        Console.WriteLine(t != v);
+        Console.WriteLine(Token.Trace);
+        Console.WriteLine(new Empty<int>() == new Empty<int>());
+        Console.WriteLine(new Empty<int>() != new Empty<int>());
+    }
+}`, "NativeOperatorCaller", contract, dll)
+        IlVerifier.Verify(consumer, []string{contract, dll})
+        let driver = fixture.Compile(`package OperatorDriver
+import NativeOperatorCaller
+func Main() { Consumer.Run() }
+`, "OperatorDriver", true, "/r:" + consumer)
+        IlVerifier.Verify(driver, []string{contract, dll, consumer})
+        using let process = StartFixture(driver)
+        let output = ReadOutputBytes(process)
+        let expected = Encoding.UTF8.GetBytes(
+            "True\n11,22,\nFalse\n11,22,\nFalse\n11,\nTrue\n11,\nFalse\nTrue\n\nTrue\n11,11,22,\nFalse\n11,11,22,\nFalse\n11,\nTrue\n11,\nTrue\nFalse\n"
+                .Replace("\n", Environment.NewLine, StringComparison.Ordinal)
+        )
+        Assert.True(expected.SequenceEqual(output), "Operator stdout bytes: " + Convert.ToHexString(output))
+        let assemblies = EmittedFixture.LoadTogether(contract, dll)
+        let token = assemblies[0].GetType("Contracts.Token", throwOnError: true)!!
+        let mixed = assemblies[1].GetType("OperatorEquality.Mixed`1", throwOnError: true)!!
+        let empty = assemblies[1].GetType("OperatorEquality.Empty`1", throwOnError: true)!!
+        for type in[]Type{
+            mixed.MakeGenericType(typeof(int32)),
+            mixed.MakeGenericType(token),
+            empty.MakeGenericType(typeof(int32))
+        } {
+            let equals = type.GetMethod("Equals", []Type{type}) ??
+                throw InvalidOperationException("Missing typed Equals.")
+            for name in[]string{"op_Equality", "op_Inequality"} {
+                let op = type.GetMethod(name, []Type{type, type}) ??
+                    throw InvalidOperationException("Missing emitted operator.")
+                Assert.Equal(equals, Assert.Single(CallsWithoutBoxing(op)))
+            }
+        }
+    }
+
     @Theory
     @InlineData(8)
     @InlineData(9)

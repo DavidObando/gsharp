@@ -575,9 +575,10 @@ internal class DataStructSynthesizer {
         }
         this.cache.DataStructOpEqualityHandles[structSym] = this.EmitDataStructEqualityOperator(
             structSym,
+            equalsTypedHandle,
             isInequality: false
         )
-        this.EmitDataStructEqualityOperator(structSym, isInequality: true)
+        this.EmitDataStructEqualityOperator(structSym, equalsTypedHandle, isInequality: true)
         // Issue #2363 / ADR-0029: `Deconstruct` is skipped entirely for a
         // data class/struct with no logical members — there is nothing to deconstruct, and
         // a `Deconstruct()` overload with zero `out` parameters would be
@@ -1692,21 +1693,23 @@ internal class DataStructSynthesizer {
     /// Issue #410 / ADR-0029: emits
     /// `public static bool op_Equality(Name left, Name right)` (or
     /// `op_Inequality` when [`isInequality`](paramref) is true).
-    /// Both delegate to (cref:EmitDataStructEqualsTyped) via
-    /// `Object.Equals(object, object)` on every field — equivalent to
-    /// calling `left.Equals(right)`, but avoids needing the
-    /// MethodDef handle for `Equals(Name)` ahead of time.
+    /// Both call typed `Equals`. Value types use a direct call;
+    /// classes preserve null-aware virtual dispatch.
     /// @returns The MethodDef handle of the emitted operator.
-    private func EmitDataStructEqualityOperator(structSym StructSymbol, isInequality bool) MethodDefinitionHandle {
+    private func EmitDataStructEqualityOperator(
+        structSym StructSymbol,
+        equalsTypedHandle MethodDefinitionHandle,
+        isInequality bool
+    ) MethodDefinitionHandle {
         let il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
         if !this.emitCtx.MetadataOnly {
-            let retFalse = il.DefineLabel()
             // Issue #2228: both operands of a data-class op_Equality are
             // references and either may be null (record-class semantics:
             // null == null is true; null == non-null is false) — a data
             // struct's operands are values and never null, so this whole
             // block is struct-N/A.
             if structSym.IsClass {
+                let retFalse = il.DefineLabel()
                 let leftNotNull = il.DefineLabel()
                 let bothNull = il.DefineLabel()
                 il.LoadArgument(0)
@@ -1745,35 +1748,14 @@ internal class DataStructSynthesizer {
                 )
                 il.OpCode(ILOpCode.Ret)
             } else {
-                for field in GetSynthesisFields(structSym) {
-                    let fieldHandle = this.resolveUserFieldToken(structSym, field)
-                    il.LoadArgumentAddress(0)
-                    il.OpCode(ILOpCode.Ldfld)
-                    il.Token(fieldHandle)
-                    this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
-                    il.LoadArgumentAddress(1)
-                    il.OpCode(ILOpCode.Ldfld)
-                    il.Token(fieldHandle)
-                    this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
-                    il.Call(this.wellKnown.GetObjectStaticEqualsReference())
-                    il.Branch(ILOpCode.Brfalse, retFalse)
+                il.LoadArgumentAddress(0)
+                il.LoadArgument(1)
+                il.OpCode(ILOpCode.Call)
+                il.Token(this.ResolveEqualsTypedToken(structSym, equalsTypedHandle))
+                if isInequality {
+                    il.LoadConstantI4(0)
+                    il.OpCode(ILOpCode.Ceq)
                 }
-                il.LoadConstantI4(
-                    if isInequality {
-                        0
-                    } else {
-                        1
-                    }
-                )
-                il.OpCode(ILOpCode.Ret)
-                il.MarkLabel(retFalse)
-                il.LoadConstantI4(
-                    if isInequality {
-                        1
-                    } else {
-                        0
-                    }
-                )
                 il.OpCode(ILOpCode.Ret)
             }
         }
@@ -1924,7 +1906,7 @@ internal class DataStructSynthesizer {
     }
 
     /// ADR-0087 §3 R3: resolves the right token for the call to
-    /// `Equals(StructType)` from `Equals(object)`. Returns
+    /// `Equals(StructType)` from synthesized members. Returns
     /// the bare MethodDef for a non-generic data struct; for a generic
     /// data struct returns a MemberRef parented at the self-instantiation
     /// TypeSpec.
