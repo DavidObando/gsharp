@@ -10,6 +10,28 @@ import Xunit
 
 class Utf8StringLexerTests {
     @Theory
+    @InlineData("u8\"\"\"text\"\"\" next")
+    @InlineData("u8\"\"\"\ntext\n\"\"\" next")
+    @InlineData("u8\"\"\"\r\ntext\r\n\"\"\" next")
+    @InlineData("u8\"\"\"\"\"\" next")
+    func UnsupportedMultilineFormRecoversAsOneRejectedUtf8Token(source string) {
+        let tokens = SyntaxTree
+            .ParseTokens(source, out var diagnostics)
+            .Where((token SyntaxToken) -> token.Kind != SyntaxKind.WhitespaceToken)
+            .ToArray()
+        let diagnostic = Assert.Single(diagnostics)
+        Assert.Equal("GS0632", diagnostic.Id)
+        Assert.Equal(0, diagnostic.Location.Span.Start)
+        Assert.Equal(5, diagnostic.Location.Span.Length)
+        Assert.Equal(2, tokens.Length)
+        Assert.Equal(SyntaxKind.Utf8StringToken, tokens[0].Kind)
+        Assert.Equal(source.IndexOf(" next", StringComparison.Ordinal), tokens[0].Span.Length)
+        Assert.Empty(cast[ImmutableArray[uint8]](tokens[0].Value!!))
+        Assert.Equal(SyntaxKind.IdentifierToken, tokens[1].Kind)
+        Assert.Equal("next", tokens[1].Text)
+    }
+
+    @Theory
     @InlineData(`u8"\uD800"`, 3, 6)
     @InlineData(`u8"\uDC00"`, 3, 6)
     @InlineData(`u8"\U00110000"`, 3, 10)

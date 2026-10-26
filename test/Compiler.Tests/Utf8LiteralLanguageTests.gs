@@ -13,6 +13,25 @@ import Xunit
 
 class Utf8LiteralLanguageTests {
     @Theory
+    @InlineData("u8\"\"\"A\"\"\"")
+    @InlineData("u8\"\"\"\nA\n\"\"\"")
+    func UnsupportedMultilineFormReportsOnlyTheOriginalDriverDiagnostic(literal string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(
+            "package Utf8MultilineRecovery\nfunc Main() {\n    let value = " + literal + "\n    let next = 1\n}",
+            "Utf8MultilineRecovery",
+            true
+        )
+        Assert.NotEqual(0, code)
+        let diagnostic = Assert.Single(
+            output.Split('\n').Where((line string) -> line.Contains(": error ", StringComparison.Ordinal))
+        )
+        Assert.Contains(".gs(3,17,3,22): error GS0632:", diagnostic, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Utf8MultilineRecovery.dll")))
+    }
+
+    @Theory
     @InlineData(1)
     @InlineData(2)
     func MixedInferredAndExplicitAwaitsPreserveExactTemporaryDiagnosticCounts(count int32) {

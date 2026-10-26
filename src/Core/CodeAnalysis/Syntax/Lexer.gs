@@ -613,6 +613,20 @@ class Lexer {
                 TextLocation(text, TextSpan(start, 5)),
                 "Raw and multiline UTF-8 delimiters are not supported; use ordinary quoted text escapes."
             )
+            position += 5
+            while position < end {
+                if Current == '"' && Lookahead == '"' && Peek(2) == '"' {
+                    position += 3
+                    while Current == '"' {
+                        position++
+                    }
+                    break
+                }
+                position++
+            }
+            kind = SyntaxKind.Utf8StringToken
+            value = ImmutableArray[uint8].Empty
+            return
         }
         if !text.IsEncodingValid {
             Diagnostics.ReportInvalidUtf8StringLiteral(
