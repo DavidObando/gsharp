@@ -466,6 +466,93 @@ Console.Write(reader.Bare())`, "GenericInterfaceCall5262", true, "/r:" + contrac
     }
 
     @Fact
+    func InheritedClrInterfacePropertiesPrecedeEnclosingSharedFields() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace ImportedProperties5262;
+public interface IValue { int Value { get; set; } }
+public interface IDerived : IValue { }`, "ImportedProperties5262")
+        let executable = fixture.Compile(`import System
+import ImportedProperties5262
+class Outer {
+    shared { var Value int32 = 1 }
+    interface Nested : IDerived {
+        func Bare() int32 { return Value }
+        func Qualified() int32 { return this.Value }
+        func Chained() string { return Value.ToString() }
+    }
+    func Read() int32 -> Value
+}
+class Implementation : Outer.Nested {
+    var stored int32 = 2
+    prop Value int32 {
+        get -> stored
+        set { stored = value }
+    }
+}
+let item Outer.Nested = Implementation()
+Console.Write(item.Qualified())
+Console.Write("|")
+Console.Write(item.Bare())
+Console.Write("|")
+Console.Write(item.Chained())
+Console.Write("|")
+Console.Write(Outer().Read())`, "ImportedProperty5262", true, "/r:" + contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal(Encoding.UTF8.GetBytes("2|2|2|1"), fixture.RunBytes(executable))
+    }
+
+    @Fact
+    func UnsupportedImportedInterfacePropertyWritesCannotMutateEnclosingFields() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace ImportedProperties5262;
+public interface IValue { int Value { get; set; } }`, "ImportedProperties5262")
+        let (code, output) = fixture.TryCompile(`import ImportedProperties5262
+class Outer {
+    shared { var Value int32 = 1 }
+    interface Nested : IValue {
+        func Write() { Value = 4 }
+        func Compound() { Value += 4 }
+    }
+}`, "RejectedImportedProperty5262", false, "/r:" + contract)
+        Assert.NotEqual(0, code)
+        Assert.Contains("RejectedImportedProperty5262.gs(5,24,5,29): error GS0125", output)
+        Assert.Contains("RejectedImportedProperty5262.gs(6,27,6,32): error GS0125", output)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "RejectedImportedProperty5262.dll")))
+    }
+
+    @Fact
+    func ImportedInterfaceCallsUseCanonicalEscapedNamesAndCollisionRules() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace EscapedMembers5262;
+public interface IKeywords {
+    int @return() => 2;
+    int return_() => 3;
+}
+public class Keywords {
+    public int @return() => 2;
+    public int return_() => 3;
+}`, "EscapedMembers5262")
+        let executable = fixture.Compile(`import System
+import EscapedMembers5262
+class Outer {
+    shared { let return__ () -> int32 = func() int32 { return 1 } }
+    interface Nested : IKeywords {
+        func Bare() int32 { return return__() }
+        func Collision() int32 { return return_() }
+    }
+}
+class Implementation : Outer.Nested {}
+let item Outer.Nested = Implementation()
+Console.Write(Keywords().return__())
+Console.Write("|")
+Console.Write(item.Bare())
+Console.Write("|")
+Console.Write(item.Collision())`, "EscapedInterfaceCall5262", true, "/r:" + contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal(Encoding.UTF8.GetBytes("2|2|3"), fixture.RunBytes(executable))
+    }
+
+    @Fact
     func ImplicitImportedInterfaceCallsPreserveExplicitClrTypeArguments() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let contract = fixture.CompileCSharp(`namespace GenericInterface5262;

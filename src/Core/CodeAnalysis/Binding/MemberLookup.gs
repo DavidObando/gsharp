@@ -90,11 +90,10 @@ internal class MemberLookup {
                 iface.GetStaticField(name) != nil || iface.GetPrivateMethods(name)
                     .Length != 0 ||
                     iface
-                    .GetStaticPrivateMethods(name).Length != 0 || GetInterfaceImportedBaseInstanceMethods(
-                    iface,
-                    name,
-                    out _
-                ).Count != 0
+                    .GetStaticPrivateMethods(name)
+                    .Length != 0 ||
+                    GetInterfaceImportedBaseInstanceProperty(iface, name) != nil ||
+                    GetInterfaceImportedBaseInstanceMethods(iface, name, out _).Count != 0
             ) {
                 return current
             }
@@ -1434,6 +1433,27 @@ internal class MemberLookup {
             Type
         ] -> ClrTypeUtilities.GetTransitiveClrBaseInterfaces(interfaceSymbol)
 
+        /// Finds the imported interface property shared by lexical hiding and member access.
+        /// @param interfaceSymbol The source interface receiver.
+        /// @param name The ordinary property name.
+        /// @returns The public instance property, excluding indexers, or null.
+        internal func GetInterfaceImportedBaseInstanceProperty(
+            interfaceSymbol InterfaceSymbol,
+            name string
+        ) PropertyInfo? {
+            for clrBase in GetTransitiveClrBaseInterfaces(interfaceSymbol) {
+                let property = ClrTypeUtilities.SafeGetProperty(
+                    clrBase,
+                    name,
+                    BindingFlags.Public | BindingFlags.Instance
+                )
+                if property != nil && property.GetIndexParameters().Length == 0 {
+                    return property
+                }
+            }
+            return nil
+        }
+
         /// Collects the imported interface overloads shared by lexical hiding and call resolution.
         /// @param interfaceSymbol The source interface receiver.
         /// @param name The ordinary method name.
@@ -1453,7 +1473,7 @@ internal class MemberLookup {
             let candidates = List[MethodInfo]()
             for clrBase in clrBases {
                 for method in ClrTypeUtilities.SafeGetMethods(clrBase, BindingFlags.Instance | BindingFlags.Public) {
-                    if string.Equals(method.Name, name, StringComparison.Ordinal) &&
+                    if ClrTypeUtilities.EmittedMemberNameMatches(method, name) &&
                         !HasSameSignature(candidates, method) {
                         candidates.Add(method)
                     }
