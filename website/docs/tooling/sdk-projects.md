@@ -242,11 +242,13 @@ When `ProduceReferenceAssembly` is true, the SDK asks `gsc` for `/refout:<path>`
 dotnet pack -c Release
 ```
 
-The SDK enables symbol packages by default when `IncludeBuildOutput` is true. The default format is `snupkg`.
+The SDK defaults `IncludeSymbols` to the evaluated `IncludeBuildOutput` value during normal project imports.
+The default symbol-package format is `snupkg`.
 For content-only packages, set `IncludeBuildOutput` to `false`; the SDK then leaves symbol packaging disabled by default.
 An explicit `IncludeSymbols` value takes precedence. Set it to `false` to omit symbols from a library package,
 or to `true` when a content-only package supplies its own symbol files. `SymbolPackageFormat` remains configurable.
 It selects the format only when `IncludeSymbols` is `true`; it does not enable symbol packaging.
+These properties configure NuGet packing (`dotnet pack`), not PDB generation during builds.
 
 ## Multiple packages in one project
 
