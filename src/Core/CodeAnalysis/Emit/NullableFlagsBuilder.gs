@@ -127,6 +127,16 @@ internal shared class NullableFlagsBuilder {
             if NullableLifting.GetValueTypeNullableUnderlyingClr(layout) is {} nullableUnderlying {
                 return Merge(projected, nullableUnderlying)
             }
+            if layout.IsByRef {
+                let element = layout.GetElementType()!!
+                return ByRefTypeSymbol.Get(
+                    if projected is ByRefTypeSymbol byRef {
+                        Merge(byRef.PointeeType, element)
+                    } else {
+                        ReadConcretePosition(element)
+                    }
+                )
+            }
             if layout.IsGenericParameter {
                 // Issue #3705 family 2 — the ONE carve-out from the #1354 rule,
                 // and it is principled rather than pragmatic.
@@ -189,6 +199,20 @@ internal shared class NullableFlagsBuilder {
                     projected
                 }
             }
+            if layout.IsFunctionPointer && projected is FunctionPointerTypeSymbol pointer {
+                position++
+                let returnType = Merge(pointer.ReturnType, layout.GetFunctionPointerReturnType())
+                let layouts = layout.GetFunctionPointerParameterTypes()
+                let parameters = ImmutableArray.CreateBuilder[TypeSymbol](layouts.Length)
+                for var i = 0; i < layouts.Length; i++ {
+                    parameters.Add(Merge(pointer.ParameterTypes[i], layouts[i]))
+                }
+                return pointer.WithSignature(parameters.MoveToImmutable(), returnType)
+            }
+            if layout.IsPointer && projected is PointerTypeSymbol pointer {
+                position++
+                return PointerTypeSymbol.Get(Merge(pointer.PointeeType, layout.GetElementType()!!))
+            }
             if layout.IsArray {
                 // Issues #4402/#4449: FromClrType represents a concrete array
                 // as an imported CLR type, not one of the symbolic array
@@ -229,6 +253,25 @@ internal shared class NullableFlagsBuilder {
             if isClosedGeneric {
                 let nullable NullableTypeSymbol? = projected as NullableTypeSymbol
                 let core = nullable?.UnderlyingType ?? projected
+                if core is TupleTypeSymbol tuple {
+                    let start = position
+                    var index = 0
+                    let merged = ClrNullability.MapTupleTypeSymbol(
+                        layout,
+                        start,
+                        (argument Type, offset int32) -> {
+                            position = offset
+                            return Merge(tuple.ElementTypes[index++], argument)
+                        },
+                        tuple.ElementNames
+                    )
+                    position = start + ClrNullability.CountNullabilityBytes(layout)
+                    return if nullable != nil {
+                        NullabilityImportRule.RestorePeeledNullable(merged)
+                    } else {
+                        merged
+                    }
+                }
                 // The corresponding concrete ValueTuple shape is a
                 // TupleTypeSymbol, so the ImportedTypeSymbol-only recursion
                 // below cannot carry its element flags.
@@ -261,7 +304,7 @@ internal shared class NullableFlagsBuilder {
                         }
                         merged = ImportedTypeSymbol.GetConstructed(
                             importedClr,
-                            imported.OpenDefinition ?? layout.GetGenericTypeDefinition(),
+                            imported.OpenDefinition ?? layout.UnderlyingSystemType.GetGenericTypeDefinition(),
                             arguments.MoveToImmutable()
                         )
                     } else {
@@ -391,6 +434,19 @@ internal shared class NullableFlagsBuilder {
             // encoder level via `isByRef: true`; the nullability byte set is
             // that of the pointee T.
             Append(byRef.PointeeType, builder)
+            return
+        }
+        if type is FunctionPointerTypeSymbol pointer {
+            builder.Add(Oblivious)
+            Append(pointer.ReturnType, builder)
+            for parameter in pointer.ParameterTypes {
+                Append(parameter, builder)
+            }
+            return
+        }
+        if type is PointerTypeSymbol pointer {
+            builder.Add(Oblivious)
+            Append(pointer.PointeeType, builder)
             return
         }
         if type is ArrayTypeSymbol arr {
@@ -703,6 +759,19 @@ internal shared class NullableFlagsBuilder {
             return
         }
         if clrType.IsByRef {
+            AppendClrType(clrType.GetElementType(), builder)
+            return
+        }
+        if clrType.IsFunctionPointer {
+            builder.Add(Oblivious)
+            AppendClrType(clrType.GetFunctionPointerReturnType(), builder)
+            for parameter in clrType.GetFunctionPointerParameterTypes() {
+                AppendClrType(parameter, builder)
+            }
+            return
+        }
+        if clrType.IsPointer {
+            builder.Add(Oblivious)
             AppendClrType(clrType.GetElementType(), builder)
             return
         }

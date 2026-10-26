@@ -60,24 +60,19 @@ class NullabilityAnnotatedTypeSymbol : TypeSymbol {
         for var i = 0; i < argIndex; i++ {
             offset += ClrNullability.CountNullabilityBytes(args[i])
         }
-        var derived = ClrNullability.SymbolFromFlagsOffset(args[argIndex], NullableFlags, offset)
         // ADR-0172: the flags-derived argument is rebuilt from the CLR shape,
         // which cannot carry tuple element names. When the wrapped symbolic
         // base holds a named tuple at this position, transfer its names.
         if BaseType is ImportedTypeSymbol{TypeArguments: {IsDefaultOrEmpty: false}} symbolicBase &&
             uint32(argIndex) < uint32(symbolicBase.TypeArguments.Length) {
             let symbolicArgument = symbolicBase.TypeArguments[argIndex]
-            derived = if TypeSymbol.ContainsNamedTupleElements(symbolicArgument) {
-                TransferTupleNames(symbolicArgument, derived)
-            } else {
-                NullableFlagsBuilder.MergeDeclarationNullability(
-                    symbolicArgument,
-                    args[argIndex],
-                    ClrNullability.GetNullableFlagsForSubtree(args[argIndex], NullableFlags, offset)
-                )
-            }
+            return NullableFlagsBuilder.MergeDeclarationNullability(
+                symbolicArgument,
+                args[argIndex],
+                ClrNullability.GetNullableFlagsForSubtree(args[argIndex], NullableFlags, offset)
+            )
         }
-        return derived
+        return ClrNullability.SymbolFromFlagsOffset(args[argIndex], NullableFlags, offset)
     }
 
     /// Searches the outer type's generic arguments or array element for one whose

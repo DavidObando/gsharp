@@ -12,6 +12,7 @@ import System.Collections
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
+import System.Runtime.CompilerServices
 
 /// Represents a collection of code analysis diagnostics information.
 partial class DiagnosticBag : IEnumerable[Diagnostic] {
@@ -126,6 +127,19 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                 .End
         )
             .ToList()
+        return SuppressDuplicateDiagnostics(existing, bind)
+    }
+
+    /// Suppresses exact existing reports during a whole-program analysis rerun.
+    /// @typeparam T The operation result.
+    /// @param bind The analysis operation.
+    /// @returns The operation result.
+    internal func SuppressDuplicateDiagnostics[T](bind() -> T) T -> SuppressDuplicateDiagnostics(
+        diagnostics.ToList(),
+        bind
+    )
+
+    private func SuppressDuplicateDiagnostics[T](existing List[Diagnostic], bind() -> T) T {
         if existing.Count == 0 {
             return bind()
         }
@@ -291,6 +305,23 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     }
 
     shared {
+        internal let EquivalenceComparer IEqualityComparer[Diagnostic] = EqualityComparer[Diagnostic].Create(
+            (left Diagnostic?, right Diagnostic?) -> object.ReferenceEquals(left, right) ||
+                (left != nil && right != nil && AreEquivalent(left, right)),
+            (diagnostic Diagnostic) -> HashCode.Combine(
+                diagnostic.Id,
+                diagnostic.Severity,
+                diagnostic.Message,
+                if diagnostic.Location.Text is {} text {
+                    RuntimeHelpers.GetHashCode(text)
+                } else {
+                    0
+                },
+                diagnostic.Location.Span.Start,
+                diagnostic.Location.Span.Length
+            )
+        )
+
         private func AreEquivalent(left Diagnostic, right Diagnostic) bool {
             return left.Id == right.Id &&
                 left.Severity == right.Severity &&

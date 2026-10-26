@@ -1,0 +1,74 @@
+{
+  "status": "Independent complete-set finite-policy matrix passes. Policy and feature PR CI/review remain separate; no merge or general certification claim.",
+  "replaces_incomplete_matrix": "certification-policy-838838bfa.json",
+  "producer_record": {
+    "file": "certification-record.json",
+    "sha256": "3f771dae1755225ae3fd2fa2225933a6e937f7e16da65fd933dd931177721add",
+    "product_sha256": "d8093a176ac3bbebc3022adabd7f7ba4fa9ab02436142386b5de26981a1ab3cc",
+    "source_and_runtime_evidence": "Original frozen compiler/input/IL/RVA/JIT/NativeAOT/allocation/GC/terminator record remains unchanged."
+  },
+  "shared_policy": {
+    "pull_request": "#5331",
+    "commit": "42e23b7ccdf23c5f861c7921f78a6f2061fd06ce",
+    "source_sha256": "88bcda7901287fc32bf598e8785a185034ac96d276a5d1c9acfaa1d51508f848",
+    "adapter_sha256": "6610e3b50f2dbd8e31afa833d09d9a0ca2c1cb3d8f163f3538ddf2a9c30c1c59",
+    "integrated_owner_commits": [
+      {"original": "838838bfacfd10902a17b9d7ab18d0d4c976b43e", "cherry_pick": "ecf289c47"},
+      {"original": "42e23b7ccdf23c5f861c7921f78a6f2061fd06ce", "cherry_pick": "86e0f3aca"}
+    ],
+    "scope": "One authoritative shared matcher; exact complete unique approved diagnostic sets: runtime pair, product triple, original research singleton.",
+    "upstream": "dotnet/runtime#129030"
+  },
+  "actual_tool_matrix": {
+    "tool": "Pinned dotnet-ilverify 10.0.8; full runtime 10.0.12 references; actual whole-image invocation.",
+    "raw_exit": 2,
+    "stderr": "",
+    "images": [
+      {"name": "product", "sha256": "d8093a176ac3bbebc3022adabd7f7ba4fa9ab02436142386b5de26981a1ab3cc", "accepted": 3, "unexpected": 0, "policy_exit": 0},
+      {"name": "original research", "sha256": "38b57be6d6b8abd3be70316b48c3abb6371bccaf28e6fa6ee6188b005f557bbe", "accepted": 1, "unexpected": 0, "policy_exit": 0},
+      {"name": "wrong terminator", "sha256": "75b83d49cc590259517ff6acb0da789963a03067df29fb7f197e3a8507066e30", "accepted": 0, "unexpected": 3, "policy_exit": 1},
+      {"name": "wrong logical length", "sha256": "76e42a11cfb213225873e4bf2355f709408e944472ddcddd6e23843f32ee788d", "accepted": 0, "unexpected": 3, "policy_exit": 1},
+      {"name": "renamed method", "sha256": "2ac391f9962fbeab0f17fc63a6949c6d3dfde8e133b50d8f1209a97f564931fd", "accepted": 0, "unexpected": 3, "policy_exit": 1},
+      {"name": "genuine byref-to-local, never executed", "sha256": "3fdf8253f9829667022268c6c9185dcfe00ffc8218b30711c6b9500258e80b87", "accepted": 0, "unexpected": 1, "policy_exit": 1},
+      {"name": "audited F1 runtime", "sha256": "f1e498650b3c4502fb28a2b2b520705621e854df020532772c495bf966693f2a", "accepted": 2, "unexpected": 0, "policy_exit": 0}
+    ],
+    "additional_unadmitted_runtime_control": {
+      "sha256": "990355a2705915c79039aa80b60314fde4a7b845b9caef0e9fa138b0f1436f17",
+      "meaning": "The standalone adapter's packaged SDK runtime dependency is not the audited F1 image and correctly does not receive its certificate.",
+      "raw_exit": 2,
+      "accepted": 0,
+      "unexpected": 2,
+      "policy_exit": 1
+    }
+  },
+  "report_controls": {
+    "policy_exit": 1,
+    "original_seven": [
+      "Wrong PE path", "Missing error with unchanged summary", "Duplicate error with unchanged summary",
+      "Wrong return offset", "Wrong message", "Unrecognized output", "Product-shaped report forged for actual byref PE"
+    ],
+    "all_self_consistent_proper_subsets": [
+      "Get", "Empty", "Derived", "Get+Empty", "Get+Derived", "Empty+Derived",
+      "Only Slice<T>.AsSpan", "Only ReadOnlySlice<T>.AsSpan"
+    ],
+    "subset_behavior": "Complete=False, accepted=0; every supplied diagnostic remains unexpected.",
+    "count_matched_duplicates": ["Product triple with repeated Get and missing Derived", "Runtime pair with one method repeated"],
+    "duplicate_behavior": "Complete=False, accepted=0, unexpected=1 explicit malformed-or-duplicate diagnostic; original raw report retained.",
+    "count": 17
+  },
+  "integrated_validation": {
+    "source_head": "86e0f3aca49983e488bbb6d9a1729bb4228a6e68",
+    "bootstrap": "Unchanged published Gsharp.NET.Sdk 0.5.212",
+    "build": "Release graph passed with zero warnings/errors.",
+    "tests": "230 passed: 152 native literal/span/bytestring/slice cases plus 78 authoritative verifier-policy cases.",
+    "native_suspension": "Completion-source gates guarantee incomplete awaits; literal-only deferral mutant fails while readonly-ref control passes; safe spiller restored byte-for-byte.",
+    "separate_existing_issue": "#5332: published .212 nonliteral span temporary loss; no arbitrary-span deferral workaround."
+  },
+  "limits": [
+    "Product raw verification still has exactly three approved known exceptions, not strict unsuppressed success.",
+    "No admission for future compiler outputs, arbitrary byrefs, unsafe returns or diagnostic categories.",
+    "The new async and readonly-byte-ref outputs pass complete raw verification without exceptions.",
+    "F1/F2/alias/documentation dependency heads were not changed.",
+    "No merge, release, SDK-pin change, translator adoption or Go-family admission."
+  ]
+}

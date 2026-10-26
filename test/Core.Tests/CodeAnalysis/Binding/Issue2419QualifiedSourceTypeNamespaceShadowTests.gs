@@ -42,7 +42,7 @@ open class Issue2419QualifiedSourceTypeNamespaceShadowTests {
         // `private const Json string = ".json"`, and separately constructs
         // `Oahu.Audible.Json.Author{...}` — the const's simple name ("Json")
         // collides with the namespace's terminal package segment.
-        const source = `package Oahu.Core
+        const source = `package Oahu.Audible.Json
 import Oahu.Audible.Json
 
 class Author {

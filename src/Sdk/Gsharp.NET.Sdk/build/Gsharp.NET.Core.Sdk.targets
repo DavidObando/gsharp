@@ -772,6 +772,11 @@
        This target is referenced from TargetsForTfmSpecificContentInPackage. -->
   <Target Name="_GsharpGetRefAssemblyForPack"
           Condition=" '$(ProduceReferenceAssembly)' == 'true' ">
+    <!-- Use the effective framework identity, as NuGet does for lib/<tfm>/. -->
+    <GetNuGetShortFolderName TargetFrameworkMoniker="$(TargetFrameworkMoniker)"
+                            TargetPlatformMoniker="$(TargetPlatformMoniker)">
+      <Output TaskParameter="NuGetShortFolderName" PropertyName="_GsharpPackTargetFramework" />
+    </GetNuGetShortFolderName>
     <ItemGroup>
       <!-- Issue #1672: use the SDK-computed $(TargetRefPath) instead of
            reconstructing the obj/ layout by string concatenation, so pack
@@ -779,7 +784,7 @@
            IntermediateOutputPath (see build/gsharp.build.props), UseArtifactsOutput,
            or a non-default MSBuildProjectExtensionsPath. -->
       <TfmSpecificPackageFile Include="$(TargetRefPath)"
-                              PackagePath="ref/$(TargetFramework)/" />
+                              PackagePath="ref/$(_GsharpPackTargetFramework)/" />
     </ItemGroup>
   </Target>
 

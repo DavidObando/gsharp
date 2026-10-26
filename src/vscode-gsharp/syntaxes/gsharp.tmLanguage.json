@@ -49,10 +49,18 @@
     },
     "strings": {
       "patterns": [
+        { "include": "#utf8-string" },
         { "include": "#byte-string" },
         { "include": "#interpreted-string" },
         { "include": "#raw-string" }
       ]
+    },
+    "utf8-string": {
+      "name": "string.quoted.utf8.gsharp",
+      "begin": "(?<![\\w$])u8\"",
+      "end": "\"|(?=$)",
+      "applyEndPatternLast": true,
+      "patterns": [{ "include": "#string-escape" }]
     },
     "byte-string": {
       "name": "string.quoted.byte.gsharp",

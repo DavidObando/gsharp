@@ -1489,6 +1489,9 @@ func (node BoundNode) WriteTo(writer IndentedTextWriter) {
         case BoundNodeKind.LiteralExpression {
             BoundNodePrinter.WriteLiteralExpression(cast[BoundLiteralExpression](node), writer)
         }
+        case BoundNodeKind.Utf8StringExpression {
+            writer.Write("u8:" + System.Convert.ToHexString(cast[BoundUtf8StringExpression](node).Bytes.AsSpan()))
+        }
         case BoundNodeKind.VariableExpression {
             BoundNodePrinter.WriteVariableExpression(cast[BoundVariableExpression](node), writer)
         }

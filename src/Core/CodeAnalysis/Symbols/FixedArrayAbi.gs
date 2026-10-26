@@ -107,13 +107,24 @@ internal class FixedArrayAbi {
         if depth >= MaxDepth {
             throw InvalidDataException("fixed-array signature exceeds the metadata complexity limit")
         }
+        let core = type.StripToBareShape()
+        if core is ByRefTypeSymbol byRef {
+            ValidateSignatureCore(byRef.PointeeType, depth + 1)
+            return
+        }
         let positions = type.GetElementPositions()
         var shape = type.ClrType
         if shape?.IsByRef == true {
             shape = shape!!.GetElementType()
         }
         shape = NullableLifting.GetValueTypeNullableUnderlyingClr(shape) ?? shape
-        if (shape?.IsPointer == true || shape?.IsFunctionPointer == true) && ContainsCandidate(shape!!) {
+        if (
+            core is PointerTypeSymbol or
+                FunctionPointerTypeSymbol ||
+                shape?.IsPointer == true ||
+                shape?.IsFunctionPointer == true
+        ) &&
+            ContainsCandidate(type) {
             throw InvalidDataException("fixed-array contracts behind unmanaged pointers are unsupported")
         }
         if IsCandidate(shape) {
@@ -144,6 +155,16 @@ internal class FixedArrayAbi {
     }
 
     shared {
+        internal func ContainsCandidate(type TypeSymbol) bool -> ContainsCandidateCore(type, 0)
+
+        private func ContainsCandidateCore(type TypeSymbol, depth int32) bool {
+            if depth >= MaxDepth {
+                throw InvalidDataException("fixed-array signature exceeds the metadata complexity limit")
+            }
+            return (type.ClrType is {} shape && ContainsCandidateCore(shape, depth)) || TypeSymbol.GetWrappedTypes(type)
+                .Any((position TypeSymbol) -> ContainsCandidateCore(position, depth + 1))
+        }
+
         internal func ContainsCandidate(type Type) bool -> ContainsCandidateCore(type, 0)
 
         private func ContainsCandidateCore(type Type, depth int32) bool {

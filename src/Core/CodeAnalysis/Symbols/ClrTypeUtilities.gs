@@ -1591,8 +1591,8 @@ func (self Type?) IsSameAs(other Type?) bool {
     // generic with a leaf-FullName-matchable type argument.
     if self.IsGenericType && other.IsGenericType && !self.IsGenericTypeDefinition && !other.IsGenericTypeDefinition {
         if !string.Equals(
-            self.GetGenericTypeDefinition().FullName,
-            other.GetGenericTypeDefinition().FullName,
+            self.UnderlyingSystemType.GetGenericTypeDefinition().FullName,
+            other.UnderlyingSystemType.GetGenericTypeDefinition().FullName,
             StringComparison.Ordinal
         ) {
             return false

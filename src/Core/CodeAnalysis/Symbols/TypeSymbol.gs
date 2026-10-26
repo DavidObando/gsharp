@@ -191,6 +191,13 @@ open partial class TypeSymbol : Symbol {
             if clrType == nil {
                 return TypeSymbol.Void
             }
+            if clrType.IsFunctionPointer {
+                return FunctionPointerTypeSymbol.FromClrSignature(clrType, FromClrType)
+            }
+            if clrType.IsPointer {
+                return PointerTypeSymbol.Get(FromClrType(clrType.GetElementType()))
+            }
+            let currentClrType = clrType.UnderlyingSystemType
             // Phase 3.C.5 / ADR-0001: surface CLR value-type nullability
             // (`Nullable<T>` aka `T?` in C#) as a GSharp `NullableTypeSymbol`
             // wrapping the underlying. Reference-type nullability driven by
@@ -198,11 +205,14 @@ open partial class TypeSymbol : Symbol {
             if NullableLifting.GetValueTypeNullableUnderlyingClr(clrType) is {} nullableUnderlying {
                 return NullableLifting.WrapValueTypeNullable(FromClrType(nullableUnderlying))
             }
-            if clrType.IsPointer {
-                return PointerTypeSymbol.Get(FromClrType(clrType.GetElementType()))
+            if currentClrType.IsArray && currentClrType.GetArrayRank() > 1 {
+                return RectangularArrayTypeSymbol.Get(
+                    FromClrType(clrType.GetElementType()),
+                    currentClrType.GetArrayRank()
+                )
             }
-            if clrType.IsArray && clrType.GetArrayRank() > 1 {
-                return RectangularArrayTypeSymbol.Get(FromClrType(clrType.GetElementType()), clrType.GetArrayRank())
+            if currentClrType.IsArray && ClrNullability.ContainsFunctionPointer(clrType) {
+                return SliceTypeSymbol.Get(FromClrType(clrType.GetElementType()))
             }
             // Issue #1922: a `System.ValueTuple<...>`/`System.Tuple<...>` CLR type
             // reaching here (e.g. the element type of `for x in list` over an
@@ -215,9 +225,20 @@ open partial class TypeSymbol : Symbol {
             if TryGetTupleTypeSymbol(clrType, out var tupleTypeSymbol) {
                 return tupleTypeSymbol
             }
+            if currentClrType.IsConstructedGenericType && ClrNullability.ContainsFunctionPointer(clrType) {
+                let arguments = ImmutableArray.CreateBuilder[TypeSymbol]()
+                for argument in clrType.GetGenericArguments() {
+                    arguments.Add(FromClrType(argument))
+                }
+                return ImportedTypeSymbol.GetConstructed(
+                    currentClrType,
+                    currentClrType.GetGenericTypeDefinition(),
+                    arguments.ToImmutable()
+                )
+            }
             // Compare by FullName so types loaded from a MetadataLoadContext (carrying the
             // target framework's identity) still map onto the built-in primitive symbols.
-            let fullName = clrType.FullName
+            let fullName = currentClrType.FullName
             switch fullName {
                 case "System.Boolean" {
                     return Bool
@@ -274,7 +295,14 @@ open partial class TypeSymbol : Symbol {
                     return TypeSymbol.Void
                 }
             }
-            return ImportedTypeSymbol.Get(clrType)
+            // Delegated declarations retain their metadata providers; CLR modified signatures require their underlying identity.
+            return ImportedTypeSymbol.Get(
+                if clrType is System.Reflection.TypeDelegator {
+                    clrType
+                } else {
+                    currentClrType
+                }
+            )
         }
 
         /// Issue #367: returns `true` when [`type`](paramref) denotes a
@@ -928,6 +956,21 @@ open partial class TypeSymbol : Symbol {
             return false
         }
 
+        /// Returns whether a type structurally contains a non-emittable `never` slot.
+        /// @param type The type to inspect.
+        /// @returns `true` when any wrapped type is (cref:Never).
+        internal func ContainsNeverType(type TypeSymbol) bool {
+            if type == Never {
+                return true
+            }
+            for inner in GetWrappedTypes(type) {
+                if ContainsNeverType(inner) {
+                    return true
+                }
+            }
+            return false
+        }
+
         /// Compares runtime type identity while ignoring nullable-reference
         /// annotations, which are metadata-only and do not change a CLR signature.
         /// Nullable value types and every other structural distinction remain
@@ -993,6 +1036,11 @@ open partial class TypeSymbol : Symbol {
             }
             if left == nil || right == nil {
                 return false
+            }
+            if left is FunctionPointerTypeSymbol || right is FunctionPointerTypeSymbol {
+                return left is FunctionPointerTypeSymbol leftPointer &&
+                    right is FunctionPointerTypeSymbol rightPointer &&
+                    leftPointer.SignatureEquals(rightPointer, AreRuntimeEquivalentIgnoringReferenceNullability)
             }
             let leftIsSequence = SequenceTypeSymbol.TryGetEnumerableInterfaceShape(
                 left,
@@ -1126,7 +1174,11 @@ open partial class TypeSymbol : Symbol {
         /// @returns `true` when symbolic substitution must be retained.
         func RequiresSymbolicProjection(type TypeSymbol) bool -> ContainsTypeParameter(type) ||
             ContainsSameCompilationUserType(type) ||
-            ContainsReferenceNullableAnnotation(type)
+            ContainsReferenceNullableAnnotation(type) ||
+            ContainsFunctionPointer(type)
+
+        private func ContainsFunctionPointer(type TypeSymbol) bool -> type is FunctionPointerTypeSymbol ||
+            GetWrappedTypes(type).Any(ContainsFunctionPointer)
 
         /// Issue #3746 / ADR-0172: returns `true` when [`type`](paramref)
         /// carries tuple element names at any structural position. Like reference
@@ -1710,7 +1762,7 @@ open partial class TypeSymbol : Symbol {
             if !clrType.IsGenericType || clrType.IsGenericTypeDefinition {
                 return false
             }
-            let definitionName = clrType.GetGenericTypeDefinition().FullName
+            let definitionName = clrType.UnderlyingSystemType.GetGenericTypeDefinition().FullName
             let isValueTuple = definitionName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true
             let isReferenceTuple = definitionName?.StartsWith("System.Tuple`", StringComparison.Ordinal) == true
             if !isValueTuple && !isReferenceTuple {

@@ -84,6 +84,12 @@ internal shared class TupleElementNamesBuilder {
                 }
                 Append(function.ReturnType, builder, &anyName)
             }
+            case pointer is FunctionPointerTypeSymbol {
+                Append(pointer.ReturnType, builder, &anyName)
+                for parameter in pointer.ParameterTypes {
+                    Append(parameter, builder, &anyName)
+                }
+            }
             case StructSymbol{TypeArguments: {IsDefaultOrEmpty: false}} aggregate {
                 for argument in aggregate.TypeArguments {
                     Append(argument, builder, &anyName)
@@ -92,6 +98,11 @@ internal shared class TupleElementNamesBuilder {
             case ImportedTypeSymbol{TypeArguments: {IsDefaultOrEmpty: false}} imported {
                 for argument in imported.TypeArguments {
                     Append(argument, builder, &anyName)
+                }
+            }
+            case PointerTypeSymbol, ByRefTypeSymbol, PlatformTypeSymbol, NullabilityAnnotatedTypeSymbol {
+                for child in TypeSymbol.GetWrappedTypes(type) {
+                    Append(child, builder, &anyName)
                 }
             }
             default { }

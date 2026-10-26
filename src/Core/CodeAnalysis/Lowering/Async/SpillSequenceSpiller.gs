@@ -827,7 +827,7 @@ shared class SpillSequenceSpiller {
                                     clrEventSub.ConstrainedReceiverTypeParameter,
                                     clrEventSub.ConstrainedInterfaceType,
                                     clrEventSub.EventContainingType
-                                )
+                                ){IsNonVirtualBaseCall = clrEventSub.IsNonVirtualBaseCall}
                             }
                         )
                     }
@@ -845,7 +845,7 @@ shared class SpillSequenceSpiller {
                                 clrEventSub.ConstrainedReceiverTypeParameter,
                                 clrEventSub.ConstrainedInterfaceType,
                                 clrEventSub.EventContainingType
-                            )
+                            ){IsNonVirtualBaseCall = clrEventSub.IsNonVirtualBaseCall}
                         }
                     )
                 }
@@ -863,7 +863,7 @@ shared class SpillSequenceSpiller {
                                     handler,
                                     eventSub.IsAdd,
                                     eventSub.EventType
-                                )
+                                ){IsNonVirtualBaseCall = eventSub.IsNonVirtualBaseCall}
                             }
                         )
                     }
@@ -880,7 +880,7 @@ shared class SpillSequenceSpiller {
                                 handler,
                                 eventSub.IsAdd,
                                 eventSub.EventType
-                            )
+                            ){IsNonVirtualBaseCall = eventSub.IsNonVirtualBaseCall}
                         }
                     )
                 }
@@ -1077,6 +1077,7 @@ shared class SpillSequenceSpiller {
                     return SpillConditionalAddress(condAddr)
                 }
                 case BoundLiteralExpression,
+                BoundUtf8StringExpression,
                 BoundVariableExpression,
                 BoundDefaultExpression,
                 BoundTypeParameterConstructionExpression,
@@ -1128,7 +1129,12 @@ shared class SpillSequenceSpiller {
                 innerSpill = SpillExpression(awaitExpr.Expression)
                 innerExpr = innerSpill.Value
             }
-            let awaitNode = BoundAwaitExpression(nil, innerExpr, awaitExpr.Type, awaitExpr.AwaiterTypeSymbol)
+            let awaitNode = BoundAwaitExpression(
+                awaitExpr.Syntax,
+                innerExpr,
+                awaitExpr.Type,
+                awaitExpr.AwaiterTypeSymbol
+            )
             awaitExpr.CopyImplicitCompletionTo(awaitNode)
             let locals = ImmutableArray.CreateBuilder[LocalVariableSymbol]()
             let sideEffects = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -2787,6 +2793,7 @@ shared class SpillSequenceSpiller {
                 (type.ClrType is {IsArray: true} clrArray && clrArray.GetArrayRank() > 1)
 
             private func CanDeferAcrossLift(expression BoundExpression) bool -> expression is BoundLiteralExpression ||
+                expression is BoundUtf8StringExpression ||
                 expression is BoundDefaultExpression
 
             private func Trivial(value BoundExpression) BoundSpillSequenceExpression {

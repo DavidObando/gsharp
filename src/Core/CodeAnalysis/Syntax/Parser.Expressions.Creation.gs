@@ -1735,6 +1735,7 @@ open partial class Parser {
             return kind == SyntaxKind.NumberToken ||
                 kind == SyntaxKind.StringToken ||
                 kind == SyntaxKind.ByteStringToken ||
+                kind == SyntaxKind.Utf8StringToken ||
                 kind == SyntaxKind.InterpolatedStringToken ||
                 kind == SyntaxKind.TrueKeyword ||
                 kind == SyntaxKind.FalseKeyword ||

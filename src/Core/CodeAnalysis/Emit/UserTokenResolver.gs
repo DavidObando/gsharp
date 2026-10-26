@@ -1820,7 +1820,11 @@ internal class UserTokenResolver {
         // ADR-0193 Phase 2: [NullabilityFunnel] on purpose. This is the IL
         // stack type of the symbolic-container MemberRef, which decides only
         // the erasure widening; IL carries no reference nullability.
-        substitutedReturn = MemberLookup.MapOpenClrTypeToSymbolic(openProp.PropertyType, openDef, typeArguments)
+        substitutedReturn = MemberLookup.MapOpenClrTypeToSymbolic(
+            ClrNullability.GetSignatureType(openProp),
+            openDef,
+            typeArguments
+        )
         if substitutedReturn == nil || substitutedReturn == TypeSymbol.Error {
             return false
         }
@@ -1889,7 +1893,7 @@ internal class UserTokenResolver {
         if openMethod == nil {
             return false
         }
-        let openReturn Type? = openMethod.ReturnType
+        let openReturn Type? = ClrNullability.GetSignatureType(openMethod.ReturnParameter)
         if openReturn == nil || openReturn.IsSameAs(typeof(Void)) {
             return false
         }
@@ -1960,7 +1964,7 @@ internal class UserTokenResolver {
         } else {
             method.GetGenericMethodDefinition()
         }
-        let openReturn Type? = openMethod.ReturnType
+        let openReturn Type? = ClrNullability.GetSignatureType(openMethod.ReturnParameter)
         if openReturn == nil || openReturn.IsSameAs(typeof(Void)) {
             return false
         }

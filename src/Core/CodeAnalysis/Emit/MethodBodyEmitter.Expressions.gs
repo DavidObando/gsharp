@@ -38,6 +38,17 @@ internal partial class MethodBodyEmitter {
             this.currentNode = expression
         }
         switch expression {
+            case utf8 is BoundUtf8StringExpression {
+                this.il.OpCode(ILOpCode.Ldtoken)
+                this.il.Token(this.outer.utf8Data.GetField(utf8))
+                this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(utf8.CreateSpan))
+                let slot = this.receiverSpillSlots[utf8]
+                this.il.StoreLocal(slot)
+                this.il.LoadLocalAddress(slot)
+                this.il.LoadConstantI4(0)
+                this.il.LoadConstantI4(utf8.Bytes.Length)
+                this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(utf8.Slice))
+            }
             case literal is BoundLiteralExpression {
                 this.EmitLiteral(literal)
             }

@@ -67,8 +67,10 @@ CLR ref-safety rules still apply.
 Readonly element stores report `GS0226`.
 Ordinary heap fields, closure capture, and locals live across an `await` remain restricted.
 A local consumed before suspension is permitted.
-This alias prerequisite does not implement `u8"..."` or UTF-8 literal addition.
-Those features and later cs2gs adoption remain tracked by #5242 and #5218.
+The subsequent native literal slice adds [`u8"..."`](./spec.md#utf-8-span-literals-next)
+and literal-only UTF-8 addition with the same CLR identity.
+It does not make spans heap-storable or safe across suspension.
+Later cs2gs adoption remains tracked by #5242 and #5218.
 
 ## Members and overloads
 

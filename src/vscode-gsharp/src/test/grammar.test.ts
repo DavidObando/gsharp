@@ -134,6 +134,20 @@ function repositoryMatchStrings(section: string): string[] {
 }
 
 describe('gsharp.tmLanguage.json', () => {
+  it('keeps UTF-8 strings adjacent, text-escaped and non-interpolating', () => {
+    const utf8 = grammar.repository['utf8-string'];
+    const prefix = new RegExp(utf8.begin);
+    expect(prefix.exec('u8"$name${unclosed"')?.index).toBe(0);
+    for (const spelling of ['au8"x"', '$u8"x"', 'U8"x"', 'u8 "x"']) {
+      expect(prefix.test(spelling)).toBe(false);
+    }
+    expect(utf8.patterns).toEqual([{include: '#string-escape'}]);
+    const escape = new RegExp(grammar.repository['string-escape'].patterns[0].match);
+    expect(escape.exec('\\xF')?.[0]).toBe('\\xF');
+    expect(escape.exec('\\xFFFF0')?.[0]).toBe('\\xFFFF');
+    expect(escape.exec('\\U0001F600')?.[0]).toBe('\\U0001F600');
+  });
+
   it('keeps byte strings non-interpolating with an adjacent unescaped prefix', () => {
     const bytes = grammar.repository['byte-string'];
     const prefix = new RegExp(bytes.begin);

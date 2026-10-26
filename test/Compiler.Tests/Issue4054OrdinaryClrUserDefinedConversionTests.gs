@@ -5,6 +5,7 @@
 package GSharp.Compiler.Tests
 
 import GSharp.Compiler
+import GSharp.Core.Tests
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
@@ -19,6 +20,77 @@ import Xunit
 /// Issue #4054: same-compilation user-defined implicit conversions participate
 /// in ordinary imported CLR method applicability and ranking.
 open class Issue4054OrdinaryClrUserDefinedConversionTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ObliviousExpandedParamsPreservesTheOrdinaryUserConversion(arrayElement bool) {
+        let parameterType = if arrayElement {
+            "double[][]"
+        } else {
+            "double[]"
+        }
+        let sum = if arrayElement {
+            "values[0][0] + values[1][0]"
+        } else {
+            "values[0] + values[1]"
+        }
+        using let fixture = CSharpFixture(
+            "#nullable disable\nnamespace ParamsInterop {\n" +
+                "public static class Targets { public static double Sum(params " +
+                parameterType +
+                " values) => " +
+                sum +
+                "; }\n}"
+        )
+        let resultType = if arrayElement {
+            "[]float64"
+        } else {
+            "float64"
+        }
+        let result = if arrayElement {
+            "[]float64{value.Value}"
+        } else {
+            "value.Value"
+        }
+        let source = "import System\nimport ParamsInterop\nstruct Amount { var Value float64 }\n" +
+            "func operator implicit(value Amount) " +
+            resultType +
+            " -> " +
+            result +
+            "\nfunc Main() { Console.Write(Targets.Sum(Amount{Value: 1.25}, Amount{Value: 2.75})) }\n"
+        let appPath = Path.Combine(fixture.DirectoryPath, "App.dll")
+        let log = Compile(
+            fixture.DirectoryPath,
+            "App.gs",
+            source,
+            appPath,
+            "/target:exe",
+            "/reference:" + fixture.AssemblyPath
+        )
+        Assert.True(File.Exists(appPath), log)
+        Assert.Empty(ErrorIds(log))
+        IlVerifier.Verify(appPath, []string{fixture.AssemblyPath})
+        let start = ProcessStartInfo("dotnet"){
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = fixture.DirectoryPath
+        }
+        start.ArgumentList.Add(appPath)
+        using let process = Process.Start(start)!!
+        let stderr = process.StandardError.ReadToEndAsync()
+        using let stdout = MemoryStream()
+        let readOutput = process.StandardOutput.BaseStream.CopyToAsync(stdout)
+        if !process.WaitForExit(RunTimeout) {
+            process.Kill(entireProcessTree: true)
+            process.WaitForExit()
+            Assert.Fail("ordinary params consumer timed out")
+        }
+        readOutput.GetAwaiter().GetResult()
+        Assert.True(process.ExitCode == 0, stderr.GetAwaiter().GetResult())
+        Assert.Equal(Encoding.UTF8.GetBytes("4"), stdout.ToArray())
+    }
+
     @Theory
     @MemberData("SuccessfulCalls")
     func AUserDefinedImplicitConversionParticipatesInAnOrdinaryClrCall(
