@@ -222,7 +222,16 @@ Console.WriteLine(qualified.Value)`
         const library = `package overload5296
 public data struct Primary(A int32) {
     public init(text string) { A = 9 }
-}`
+}
+public data struct Optional {
+    public var A int32 = 1
+    public init(value int32 = 5) { A = value }
+}
+public data struct PrimaryOptional(A int32 = 5) {
+    public init() { A = 7 }
+}
+public func SourceOptionalDefaults() int32 ->
+    Optional().A * 100 + PrimaryOptional().A * 10 + PrimaryOptional{}.A`
         const source = `import overload5296
 import System
 data struct Local(A int32) {
@@ -231,9 +240,16 @@ data struct Local(A int32) {
 Console.WriteLine(Local(1).A)
 Console.WriteLine(Primary(2).A)
 Console.WriteLine(Local("x").A)
-Console.WriteLine(Primary("x").A)`
+Console.WriteLine(Primary("x").A)
+Console.WriteLine(Optional().A)
+Console.WriteLine(Optional(6).A)
+Console.WriteLine(Optional{}.A)
+Console.WriteLine(PrimaryOptional().A)
+Console.WriteLine(PrimaryOptional(6).A)
+Console.WriteLine(PrimaryOptional{}.A)
+Console.WriteLine(SourceOptionalDefaults())`
         Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("1\n2\n8\n9\n"),
+            System.Text.Encoding.UTF8.GetBytes("1\n2\n8\n9\n1\n6\n1\n7\n6\n0\n170\n"),
             CompileAndRunExact(source, library, "overload5296", useReferenceAssembly)
         )
     }

@@ -1276,12 +1276,17 @@ Constructor-owned field initialization follows these rules. Plain struct literal
 * Source and imported data structs use the same construction phases.
   The ordinary constructor and existing primary mapping form the cross-assembly contract.
   A legacy G# producer without the required constructor reports `GS0267`; recompile that producer and its consumer.
+  An omitted nonnullable array input also reports `GS0267` when required primary collection shape metadata is missing.
+  An explicit primary value remains legal; nullable omission remains null.
+  Select the primary constructor on the open generic definition, then map that same method to the closed type.
   A foreign type without G# primary metadata uses its accessible parameterless constructor or its implicit zero path.
   Field names do not authorize selection of an unrelated parameterized constructor.
   Implementation and reference assemblies expose the same constructor contract.
 * Data struct constructors may initialize their own readonly `let` fields.
   Caller writes to those fields report located `GS0127` diagnostics and produce no image.
   A primary input stored inside the constructor is legal.
+  Sound-zero-only initialization cannot bypass readonly storage with external writes or replay a fresh constructor.
+  If no legal sound-zero path exists, report located `GS0127` without an image.
   Fields remain CLR `InitOnly` fields; they do not become C# record `init` properties.
   C# consumers use `new S()` or `new S { X = 9 }` for legal mutable overrides.
 * Plain **struct** literals retain their existing initialization model.
