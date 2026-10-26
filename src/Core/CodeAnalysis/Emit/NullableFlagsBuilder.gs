@@ -127,6 +127,16 @@ internal shared class NullableFlagsBuilder {
             if NullableLifting.GetValueTypeNullableUnderlyingClr(layout) is {} nullableUnderlying {
                 return Merge(projected, nullableUnderlying)
             }
+            if layout.IsByRef {
+                let element = layout.GetElementType()!!
+                return ByRefTypeSymbol.Get(
+                    if projected is ByRefTypeSymbol byRef {
+                        Merge(byRef.PointeeType, element)
+                    } else {
+                        ReadConcretePosition(element)
+                    }
+                )
+            }
             if layout.IsGenericParameter {
                 // Issue #3705 family 2 — the ONE carve-out from the #1354 rule,
                 // and it is principled rather than pragmatic.

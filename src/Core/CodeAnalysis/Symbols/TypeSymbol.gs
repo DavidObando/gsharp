@@ -295,7 +295,14 @@ open partial class TypeSymbol : Symbol {
                     return TypeSymbol.Void
                 }
             }
-            return ImportedTypeSymbol.Get(currentClrType)
+            // Delegated declarations retain their metadata providers; CLR modified signatures require their underlying identity.
+            return ImportedTypeSymbol.Get(
+                if clrType is System.Reflection.TypeDelegator {
+                    clrType
+                } else {
+                    currentClrType
+                }
+            )
         }
 
         /// Issue #367: returns `true` when [`type`](paramref) denotes a
