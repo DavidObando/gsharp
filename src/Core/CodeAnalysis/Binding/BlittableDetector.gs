@@ -39,7 +39,7 @@ internal class BlittableDetector {
     /// @returns `true` when blittable.
     func IsBlittable(type TypeSymbol?) bool {
         return type != nil &&
-            IsBlittableImpl(type, HashSet[StructSymbol](ReferenceEqualityComparer.Instance), unmanaged: false)
+            IsBlittableImpl(type, HashSet[TypeSymbol](ReferenceEqualityComparer.Instance), unmanaged: false)
     }
 
     /// Issue #1336. Returns `true` when [`type`](paramref) is an
@@ -55,10 +55,10 @@ internal class BlittableDetector {
     /// @returns `true` when unmanaged.
     func IsUnmanaged(type TypeSymbol?) bool {
         return type != nil &&
-            IsBlittableImpl(type, HashSet[StructSymbol](ReferenceEqualityComparer.Instance), unmanaged: true)
+            IsBlittableImpl(type, HashSet[TypeSymbol](ReferenceEqualityComparer.Instance), unmanaged: true)
     }
 
-    private func IsBlittableImpl(type TypeSymbol?, visiting HashSet[StructSymbol], unmanaged bool) bool {
+    private func IsBlittableImpl(type TypeSymbol?, visiting HashSet[TypeSymbol], unmanaged bool) bool {
         if type == nil || type == TypeSymbol.Error {
             // Already reported as a separate diagnostic; don't double-fire.
             return true
@@ -76,7 +76,7 @@ internal class BlittableDetector {
         return result
     }
 
-    private func ClassifyImpl(type TypeSymbol, visiting HashSet[StructSymbol], unmanaged bool) bool {
+    private func ClassifyImpl(type TypeSymbol, visiting HashSet[TypeSymbol], unmanaged bool) bool {
         if type is NullableTypeSymbol {
             return false
         }
@@ -99,15 +99,13 @@ internal class BlittableDetector {
         if TypeSymbol.IsByRefLike(type) {
             return false
         }
-        if type is ByRefTypeSymbol byRef {
-            // A pointer is blittable regardless of its pointee (the
-            // pointer value is just an address-sized integer at runtime).
-            return byRef.PointeeType != nil
+        if type is ByRefTypeSymbol {
+            return false
         }
         // Issue #1336: a raw unmanaged pointer (`*T`) and an enum are unmanaged
         // (and blittable — a pointer is an address-sized integer, an enum is
         // its integral underlying type).
-        if type is PointerTypeSymbol {
+        if type is PointerTypeSymbol or FunctionPointerTypeSymbol {
             return true
         }
         if type is EnumSymbol {
@@ -118,21 +116,24 @@ internal class BlittableDetector {
                 return false
             }
             if structSym.ClrType is {} importedClr {
-                return IsImportedValueType(importedClr, HashSet[Type](), unmanaged)
+                return IsImportedValueType(type, importedClr, visiting, unmanaged)
             }
             return IsBlittableStruct(structSym, visiting, unmanaged)
         }
         let clr Type? = type.ClrType
+        if clr?.IsPointer == true || clr?.IsFunctionPointer == true || clr?.IsEnum == true {
+            return true
+        }
         if clr?.IsGenericParameter == true || clr?.ContainsGenericParameters == true {
             return false
         }
         if clr != nil && clr.IsValueType {
-            return IsImportedValueType(clr, HashSet[Type](), unmanaged)
+            return IsImportedValueType(type, clr, visiting, unmanaged)
         }
         return false
     }
 
-    private func IsBlittableStruct(structSym StructSymbol, visiting HashSet[StructSymbol], unmanaged bool) bool {
+    private func IsBlittableStruct(structSym StructSymbol, visiting HashSet[TypeSymbol], unmanaged bool) bool {
         // ADR-0093 §4: a class is blittable only when it carries an
         // explicit @StructLayout annotation and every field is blittable.
         // The default class layout is Auto, which is not P/Invoke-portable.
@@ -148,6 +149,8 @@ internal class BlittableDetector {
             if layout.Layout != LayoutKind.Sequential && layout.Layout != LayoutKind.Explicit {
                 return false
             }
+        } else if !unmanaged && structSym.LayoutMetadata?.Layout == LayoutKind.Auto {
+            return false
         }
         // Recursive value layouts are invalid. Pointer recursion never reaches
         // this guard because pointers classify as address-sized leaves above.
@@ -156,7 +159,7 @@ internal class BlittableDetector {
         }
         try {
             for field in structSym.Fields {
-                if !IsBlittableImpl(field.Type, visiting, unmanaged) {
+                if field.Type is StructSymbol{IsClass: true} || !IsBlittableImpl(field.Type, visiting, unmanaged) {
                     return false
                 }
             }
@@ -166,7 +169,56 @@ internal class BlittableDetector {
         }
     }
 
+    private func IsImportedValueType(symbol TypeSymbol, type Type, visiting HashSet[TypeSymbol], unmanaged bool) bool {
+        var added = false
+        try {
+            if !type.IsValueType ||
+                type.IsByRef ||
+                type.IsGenericParameter ||
+                type.ContainsGenericParameters ||
+                (symbol is ImportedTypeSymbol imported && imported.HasTypeParameterArgument) {
+                return false
+            }
+            if !unmanaged && !type.IsLayoutSequential && !type.IsExplicitLayout {
+                return false
+            }
+            added = visiting.Add(symbol)
+            if !added {
+                return false
+            }
+            let fields = type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            for field in fields {
+                let fieldType = MemberLookup.GetClrFieldTypeSymbol(symbol, field)
+                if fieldType is StructSymbol{IsClass: true} || !IsBlittableImpl(fieldType, visiting, unmanaged) {
+                    return false
+                }
+            }
+            return true
+        } catch {
+            return false
+        } finally {
+            if added {
+                visiting.Remove(symbol)
+            }
+        }
+    }
+
     shared {
+        /// Identifies aggregate value types without treating primitives, enums, or nullable values as structs.
+        /// @param type The candidate type.
+        /// @returns Whether the type has a value-struct layout.
+        internal func IsValueStruct(type TypeSymbol?) bool {
+            return type != nil &&
+                type is not NullableTypeSymbol &&
+                type is not EnumSymbol &&
+                (
+                type is StructSymbol{IsClass: false} ||
+                    (
+                    type.ClrType is {IsValueType: true, IsPrimitive: false, IsEnum: false} && type != TypeSymbol.Decimal
+                )
+            )
+        }
+
         /// ADR-0122 §4 / issue #1034. Returns `true` when [`type`](paramref)
         /// is a legal unmanaged-pointer pointee that is a <em>blittable user/value
         /// struct</em> (e.g. `*Point`). A pointer to a struct is legal only when
@@ -180,58 +232,12 @@ internal class BlittableDetector {
             if type == nil {
                 return false
             }
-            let isValueStruct = (type is StructSymbol && type.IsClass == false) ||
-                (!(type is StructSymbol) && type.ClrType is {IsValueType: true})
+            let isValueStruct = (type is StructSymbol{IsClass: false}) ||
+                (type is not StructSymbol && type.ClrType is {IsValueType: true})
             if !isValueStruct {
                 return false
             }
             return BlittableDetector().IsBlittable(type)
-        }
-
-        private func IsImportedValueType(type Type?, visiting HashSet[Type], unmanaged bool) bool {
-            var added = false
-            try {
-                if type == nil || type.IsByRef || ClrTypeUtilities.IsByRefLike(type) ||
-                    type.IsGenericParameter ||
-                    type.ContainsGenericParameters {
-                    return false
-                }
-                if type.IsPointer || type.IsFunctionPointer || type.IsEnum {
-                    return true
-                }
-                let symbol = TypeSymbol.FromClrTypeWithoutNullability(type, NullabilityFreeReason.IdentityComparison)
-                if IsBlittablePrimitive(symbol) || (unmanaged && IsUnmanagedOnlyPrimitive(symbol)) {
-                    return true
-                }
-                if IsKnownNonBlittablePrimitive(symbol) || !type.IsValueType {
-                    return false
-                }
-                // C# excludes Nullable<T> from the unmanaged-type set. It is also
-                // non-blittable because its layout contains a bool discriminator.
-                if type.IsGenericType && type.GetGenericTypeDefinition().FullName == "System.Nullable`1" {
-                    return false
-                }
-                if !unmanaged && !type.IsLayoutSequential && !type.IsExplicitLayout {
-                    return false
-                }
-                added = visiting.Add(type)
-                if !added {
-                    return false
-                }
-                let fields = type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                for field in fields {
-                    if !IsImportedValueType(field.FieldType, visiting, unmanaged) {
-                        return false
-                    }
-                }
-                return true
-            } catch {
-                return false
-            } finally {
-                if added && type != nil {
-                    visiting.Remove(type)
-                }
-            }
         }
 
         private func IsUnmanagedOnlyPrimitive(type TypeSymbol) bool {

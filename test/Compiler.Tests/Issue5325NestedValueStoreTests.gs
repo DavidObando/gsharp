@@ -16,12 +16,16 @@ class Issue5325NestedValueStoreTests {
     @InlineData("implementation", true)
     @InlineData("reference", false)
     @InlineData("reference", true)
+    @InlineData("canonical", true)
     func NestedStoresKeepSelectedStorageAndValueSnapshots(mode string, generic bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         var declarations = Declarations(generic)
         var imports = string.Empty
         var references = []string{}
-        if mode != "source" {
+        if mode == "canonical" {
+            declarations = string.Empty
+            imports = "import Gsharp.Values.FixedArrays.V1"
+        } else if mode != "source" {
             let referenceDirectory = Path.Combine(fixture.Directory, "ref")
             Directory.CreateDirectory(referenceDirectory)
             let reference = Path.Combine(referenceDirectory, "StoreForeign.dll")
@@ -31,8 +35,8 @@ class Issue5325NestedValueStoreTests {
                 false,
                 "/refout:" + reference
             )
-            IlVerifier.Verify(implementation)
-            IlVerifier.Verify(reference)
+            VerifyStrict(implementation)
+            VerifyStrict(reference)
             references = []string{
                 if mode == "reference" {
                     reference
@@ -102,7 +106,9 @@ func Main() {
             StringComparison.Ordinal
         ).Replace(
             "PAIR",
-            if generic {
+            if mode == "canonical" {
+                "Branch[int32, Leaf[int32], Leaf[int32]]"
+            } else if generic {
                 "Pair[int32]"
             } else {
                 "Pair"
@@ -115,7 +121,7 @@ func Main() {
             true,
             references.Select((path string) -> "/reference:" + path).ToArray()
         )
-        IlVerifier.Verify(dll, references)
+        VerifyStrict(dll, references)
         Assert.Equal(
             Encoding.UTF8.GetBytes("3\n4\n50\n3\n51\n10\n51\n51\n99\n3\n20\n21\n6\n3\n30\n31\n7\n31\n"),
             Encoding.UTF8.GetBytes(fixture.Run(dll))
@@ -140,7 +146,7 @@ struct Pair { var Left Cell }`
         var references = []string{}
         if imported {
             let library = fixture.Compile("package StoreEffects\n" + declarations, "StoreEffects", false)
-            IlVerifier.Verify(library)
+            VerifyStrict(library)
             references = []string{library}
             header = "import StoreEffects"
         }
@@ -189,7 +195,7 @@ Console.WriteLine(frames[0].Left.Item)`).Replace(
                 header,
                 StringComparison.Ordinal
             ), "effects", true, references.Select((path string) -> "/reference:" + path).ToArray())
-        IlVerifier.Verify(dll, references)
+        VerifyStrict(dll, references)
         Assert.Equal(
             Encoding.UTF8.GetBytes("1\n1\n1\n10\n0\n1\nrhs\nbounds\n4\n4\n1\n1\n"),
             Encoding.UTF8.GetBytes(fixture.Run(dll))
@@ -229,6 +235,19 @@ import System.Threading.Tasks
     }
 
     shared {
+        private func VerifyStrict(path string, references ...string) {
+            var report = string.Empty
+            IlVerifier.Verify(
+                path,
+                references,
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+
         private func Declarations(generic bool) string -> if generic {
             `struct Cell[T] { var Item T }
 struct Pair[T] { var Left Cell[T]
