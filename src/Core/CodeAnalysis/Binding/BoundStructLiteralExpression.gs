@@ -10,6 +10,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
+import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
 
@@ -33,7 +34,8 @@ class BoundStructLiteralExpression : BoundExpression {
         structType StructSymbol,
         initializers ImmutableArray[BoundFieldInitializer],
         copySource BoundExpression?,
-        isZeroInitialization bool
+        isZeroInitialization bool,
+        resultType TypeSymbol? = nil
     ) : base(syntax) {
         if copySource != nil && (!structType.IsData || !initializers.IsEmpty) {
             throw ArgumentException("A copy literal must be a data type without member initializers.", "copySource")
@@ -41,6 +43,7 @@ class BoundStructLiteralExpression : BoundExpression {
         StructType = structType
         CopySource = copySource
         IsZeroInitialization = isZeroInitialization
+        ResultType = resultType
         let explicitInitializers = if CallsDataConstructor || CallsPrimaryConstructor {
             initializers.Where((initializer BoundFieldInitializer) -> !initializer.IsDeclarationInitializer)
                 .ToImmutableArray()
@@ -74,7 +77,11 @@ class BoundStructLiteralExpression : BoundExpression {
         get;
     }
 
-    override prop Type TypeSymbol -> StructType
+    internal prop ResultType TypeSymbol? {
+        get;
+    }
+
+    override prop Type TypeSymbol -> ResultType ?? StructType
     override prop Kind BoundNodeKind -> BoundNodeKind.StructLiteralExpression
 
     internal prop CallsDataConstructor bool -> !IsZeroInitialization &&
@@ -172,8 +179,9 @@ class BoundStructLiteralExpression : BoundExpression {
             type.HasDataConstructionPrimary
         }
 
-        internal func CanWriteInitializerField(type StructSymbol, field FieldSymbol) bool -> !field.IsReadOnly ||
-            (type.ClrType == nil && (!type.IsData || type.IsClass))
+        internal func CanWriteInitializerField(type StructSymbol, field FieldSymbol) bool ->
+        !(type.ClrType != nil && field.Accessibility == Accessibility.Private) &&
+            (!field.IsReadOnly || (type.ClrType == nil && (!type.IsData || type.IsClass)))
 
         internal func ValidateDataConstructor(
             type StructSymbol,
@@ -181,7 +189,8 @@ class BoundStructLiteralExpression : BoundExpression {
             syntax SyntaxNode?,
             currentFunction FunctionSymbol?,
             canAccessInternal bool,
-            checkAccessibility bool = true
+            checkAccessibility bool = true,
+            suppliedPrimaryInputs IEnumerable[string]? = nil
         ) bool {
             if !type.UsesConstructorOwnedDataConstruction {
                 return true
@@ -205,15 +214,21 @@ class BoundStructLiteralExpression : BoundExpression {
                     )
                         .Any((candidate System.Reflection.ConstructorInfo) -> candidate.GetParameters().Length == 0)
                 }
-                if valid && type.HasDataConstructionPrimary && syntax is StructLiteralExpressionSyntax literal {
-                    for parameter in type.PrimaryConstructorParameters {
-                        let supplied = literal.Initializers.Any(
-                            (initializer FieldInitializerSyntax) -> initializer
-                                .FieldIdentifier
-                                .ValueText == parameter.Name &&
-                                initializer.Value is not CollectionInitializerExpressionSyntax{Target: nil}
+                if valid &&
+                    type.HasDataConstructionPrimary &&
+                    (suppliedPrimaryInputs != nil || syntax is StructLiteralExpressionSyntax) {
+                    let suppliedNames = suppliedPrimaryInputs ??
+                        (
+                        cast[StructLiteralExpressionSyntax](syntax)
+                            .Initializers
+                            .Where(
+                            (initializer FieldInitializerSyntax) ->
+                            initializer.Value is not CollectionInitializerExpressionSyntax{Target: nil}
                         )
-                        if !supplied &&
+                            .Select((initializer FieldInitializerSyntax) -> initializer.FieldIdentifier.ValueText)
+                    )
+                    for parameter in type.PrimaryConstructorParameters {
+                        if !suppliedNames.Contains(parameter.Name) &&
                             parameter
                             .Type
                             .ReferenceNullability == ReferenceNullabilityKind.NotNull &&
@@ -221,7 +236,7 @@ class BoundStructLiteralExpression : BoundExpression {
                             .Type
                             .ClrType
                             ?.IsArray == true &&
-                            MagicCollectionZeroValue.TrySynthesizePrimaryArgument(literal, type, parameter) == nil {
+                            MagicCollectionZeroValue.TrySynthesizePrimaryArgument(syntax, type, parameter) == nil {
                             valid = false
                             break
                         }

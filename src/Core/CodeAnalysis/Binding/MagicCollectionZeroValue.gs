@@ -191,7 +191,12 @@ internal shared class MagicCollectionZeroValue {
         }
         return literal.Initializers.All(
             (initializer BoundFieldInitializer) ->
-            (literal.StructType.ClrType == nil || initializer.Field == nil || !initializer.Field.IsReadOnly) &&
+            (
+                initializer.Field == nil || BoundStructLiteralExpression.CanWriteInitializerField(
+                    literal.StructType,
+                    initializer.Field
+                )
+            ) &&
                 CanInitializeZeroValue(initializer.Value)
         )
     }
@@ -259,7 +264,10 @@ internal shared class MagicCollectionZeroValue {
         // recursion, but walks reflected metadata instead of a bound
         // StructSymbol.
         if string.Equals(markerKind, "struct", StringComparison.Ordinal) {
-            return TrySynthesizeEmptyInstanceForImportedStruct(fieldInfo.FieldType)
+            return TrySynthesizeEmptyInstanceForImportedStruct(
+                fieldType?.ClrType ?? fieldInfo.FieldType,
+                receiverType: fieldType
+            )
         }
         var type TypeSymbol
         if string.Equals(markerKind, "map", StringComparison.Ordinal) {
@@ -328,9 +336,18 @@ internal shared class MagicCollectionZeroValue {
     /// @param clrType The nested struct field's own reflected CLR type.
     /// @returns The synthesized nested struct literal, or `null` when it carries no marker or no field of
     /// it can be reconstructed.
-    private func TrySynthesizeEmptyInstanceForImportedStruct(clrType Type?, syntax SyntaxNode? = nil) BoundExpression? {
+    private func TrySynthesizeEmptyInstanceForImportedStruct(
+        clrType Type?,
+        syntax SyntaxNode? = nil,
+        receiverType TypeSymbol? = nil
+    ) BoundExpression? {
         if clrType == nil || !ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var magicFieldKinds) {
             return nil
+        }
+        let ownerType = if receiverType != nil {
+            MemberLookup.GetProjectionReceiverImportedType(receiverType) ?? receiverType.StripToBareShape()
+        } else {
+            nil
         }
         let bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
         let fieldBuilder = ImmutableArray.CreateBuilder[FieldSymbol]()
@@ -342,7 +359,11 @@ internal shared class MagicCollectionZeroValue {
             fieldBuilder.Add(
                 FieldSymbol(
                     field.Name,
-                    ClrNullability.GetFieldTypeSymbol(field).StripToBareShape(),
+                    if ownerType != nil {
+                        MemberLookup.GetClrFieldTypeSymbol(ownerType, field)
+                    } else {
+                        ClrNullability.GetFieldTypeSymbol(field)
+                    },
                     if field.IsPublic {
                         Accessibility.Public
                     } else {
@@ -367,15 +388,19 @@ internal shared class MagicCollectionZeroValue {
             baseClass: nil,
             clrType: clrType
         )
-        let fieldsByName = nestedStruct.Fields.ToDictionary((f FieldSymbol) -> f.Name, StringComparer.Ordinal)
         var inits ImmutableArray[BoundFieldInitializer].Builder? = nil
-        for (fieldName, kind) in magicFieldKinds!! {
-            if !fieldsByName.TryGetValue(fieldName, out var fieldSymbol) ||
-                fieldSymbol.Accessibility != Accessibility.Public ||
-                !reflectedFields.TryGetValue(fieldName, out var reflectedField) {
+        for fieldSymbol in nestedStruct.Fields {
+            if !magicFieldKinds!!.TryGetValue(fieldSymbol.Name, out var kind) || !reflectedFields.TryGetValue(
+                fieldSymbol.Name,
+                out var reflectedField
+            ) {
                 continue
             }
-            let zeroValue BoundExpression? = TrySynthesizeEmptyInstanceFromMarker(reflectedField, kind)
+            let zeroValue BoundExpression? = TrySynthesizeEmptyInstanceFromMarker(
+                reflectedField,
+                kind,
+                fieldSymbol.Type
+            )
             if zeroValue == nil {
                 continue
             }
@@ -390,7 +415,8 @@ internal shared class MagicCollectionZeroValue {
             nestedStruct,
             inits.ToImmutable(),
             copySource: nil,
-            isZeroInitialization: true
+            isZeroInitialization: true,
+            resultType: ownerType
         )
     }
 
@@ -460,9 +486,12 @@ internal shared class MagicCollectionZeroValue {
             }
             case structType is StructSymbol when !structType.IsClass && !structType.IsInline {
                 if structType.ClrType is {} imported {
-                    return TrySynthesizeEmptyInstanceForImportedStruct(imported, syntax)
+                    return TrySynthesizeEmptyInstanceForImportedStruct(imported, syntax, structType)
                 }
                 return TrySynthesizeStructFieldDefaults(syntax, structType, visiting, needsZeroCache)
+            }
+            case importedType is ImportedTypeSymbol when importedType.Type.IsValueType {
+                return TrySynthesizeEmptyInstanceForImportedStruct(importedType.Type, syntax, importedType)
             }
             default {
                 return nil

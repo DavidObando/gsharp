@@ -1168,7 +1168,11 @@ internal partial class MethodBodyEmitter {
         // that R0/R1 erasure required (`box T` before stfld) is dropped:
         // the field's signature is VAR(idx) and resolves to the correct
         // concrete type at the construction site.
-        let typeDef = this.outer.userTokens.ResolveUserTypeToken(literal.StructType)
+        let typeDef = if literal.ResultType != nil {
+            this.outer.memberRefs.GetElementTypeToken(literal.Type)
+        } else {
+            this.outer.userTokens.ResolveUserTypeToken(literal.StructType)
+        }
         let isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(literal.StructType)
         let structDefinition = literal.StructType.Definition ?? literal.StructType
         let callsPrimary = literal.CallsPrimaryConstructor
@@ -1275,11 +1279,11 @@ internal partial class MethodBodyEmitter {
                 if init.FieldDeclaringType != nil {
                     fieldHandle = this.ResolveStructLiteralFieldToken(literal, init)
                 } else if isGeneric || literal.StructType.ClrType != nil {
-                    fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField)
+                    fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField, literal.Type)
                 } else if this.outer.cache.StructFieldDefs.TryGetValue(initField, out var defHandle) {
                     fieldHandle = defHandle
                 } else {
-                    fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField)
+                    fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField, literal.Type)
                 }
                 this.il.OpCode(ILOpCode.Dup)
                 this.EmitExpression(init.Value)
@@ -1395,7 +1399,7 @@ internal partial class MethodBodyEmitter {
             if init.FieldDeclaringType != nil {
                 fieldHandle = this.ResolveStructLiteralFieldToken(literal, init)
             } else if isGeneric || literal.StructType.ClrType != nil {
-                fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField)
+                fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField, literal.Type)
             } else if this.outer.cache.StructFieldDefs.TryGetValue(initField, out var defHandle) {
                 fieldHandle = defHandle
             } else {

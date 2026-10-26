@@ -3364,7 +3364,13 @@ internal class ConversionClassifier {
                 .UserType!!.ClrType is {} constructorType &&
                 binderCtx
                 .References
-                .CanAccessInternalMembers(constructorType.Assembly)
+                .CanAccessInternalMembers(constructorType.Assembly),
+            suppliedPrimaryInputs: resolvedPlan
+                .ConstructorSlots
+                .Where(
+                (slot StructuralProjectionSlot) -> slot.Source != nil || explicitNames?.Contains(slot.Name) == true
+            )
+                .Select((slot StructuralProjectionSlot) -> slot.Name)
         ) {
             return BoundErrorExpression(expression.Syntax)
         }

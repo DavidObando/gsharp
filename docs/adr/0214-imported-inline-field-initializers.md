@@ -220,6 +220,10 @@ Preserve the selected constructor and its constructed receiver during expression
 
 Resolve a projection's target type before checking omitted constructor inputs. Reconstruct collection shape from existing metadata and use receiver-aware element types.
 
+Use the completed bound projection to identify supplied constructor inputs. Source syntax provides diagnostic locations, not the target's input inventory.
+
+Recursive sound-zero values retain their constructed imported owner through lowering, local slots, field references, and expression trees. Do not substitute erased metadata types.
+
 Emit constructors and their metadata deterministically. Use declaration and stable signature order, never hash iteration order. Repeated compilation of the same input must preserve constructor selection, member order, and emitted bytes.
 
 ## Acceptance matrix

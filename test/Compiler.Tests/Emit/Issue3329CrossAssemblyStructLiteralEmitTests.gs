@@ -38,6 +38,181 @@ open class Issue3329CrossAssemblyStructLiteralEmitTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func ConstructorOwnedReview_RecursiveSymbolicCollectionZeros(useReferenceAssembly bool) {
+        const library = `package recursive5296
+public data struct Child[T] {
+    public var Items []T
+    public var Fixed [2]T
+    public var X int32 = 7
+}
+public data struct Middle[T] { public var Value Child[T] }
+public data struct Direct[T](Value Child[T])
+public data struct Box[T](Value Middle[T]) { public var Other int32 }`
+        const source = `import recursive5296
+import System
+import System.Threading.Tasks
+data struct Local { public var X int32 }
+func Lengths[T]() int32 {
+    let first = Direct[T]{}
+    let second = Box[T]{}
+    return first.Value.Items.Length + first.Value.Fixed.Length * 10 + second.Value.Value.Fixed.Length * 100 + second.Value.Value.X * 1000
+}
+async func Make[T]() Box[T] -> Box[T]{Other: await Task.FromResult(3)}
+func Stream[T]() sequence[Box[T]] { yield Box[T]{} }
+let value = recursive5296.Box[Local]{}
+Console.WriteLine(value.Value.Value.Items.Length)
+Console.WriteLine(value.Value.Value.Fixed.Length)
+Console.WriteLine(value.Value.Value.X)
+Console.WriteLine(Lengths[Local]())
+Console.WriteLine(Lengths[int32]())
+let awaited = Make[Local]().GetAwaiter().GetResult()
+Console.WriteLine(awaited.Other + awaited.Value.Value.Items.Length)
+for item in Stream[Local]() {
+    Console.WriteLine(item.Value.Value.Fixed.Length)
+}`
+        Assert.Equal(
+            ExpectedConsoleBytes("0\n2\n0\n220\n220\n3\n2\n"),
+            CompileAndRunExact(source, library, "recursive5296", useReferenceAssembly)
+        )
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func ConstructorOwnedReview_ReifiedNestedGenericCopies(useReferenceAssembly bool, isClass bool) {
+        let library = `package reifiedcopy5296
+import System.Collections.Generic
+public class Effects {
+    shared {
+        public var Count int32
+        public func Next() int32 {
+            Count += 1
+            return Count
+        }
+    }
+}
+public data DECLARATION_KIND S[T](Value T) { public var X int32 = Effects.Next() }
+public data struct Holder[T] {
+    public var Value S[List[int32]] = S[List[int32]]{Value: List[int32]()}
+}`.Replace(
+            "DECLARATION_KIND",
+            if isClass {
+                "class"
+            } else {
+                "struct"
+            },
+            StringComparison.Ordinal
+        )
+        const source = `import reifiedcopy5296
+import System
+let holder = Holder[string?]{}
+let original = holder.Value
+let copied = original with{}
+Console.WriteLine(copied.Value.Count)
+Console.WriteLine(copied.X)
+Console.WriteLine(Effects.Count)
+original.Value.Add(4)
+Console.WriteLine(copied.Value[0])`
+        Assert.Equal(
+            ExpectedConsoleBytes("0\n1\n1\n4\n"),
+            CompileAndRunExact(source, library, "reifiedcopy5296", useReferenceAssembly)
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedReview_PrivateNestedSoundZeroRejected(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(`package privatezero5296
+public data struct Child[T] { public var Items []T }
+public data struct Middle[T](Value Child[T])
+public data struct Box[T](Value Middle[T])`, "privatezero5296", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let rejectedReference = Path.Combine(fixture.Directory, "rejected.ref.dll")
+        let (code, output) = fixture.TryCompile(
+            "import privatezero5296\nlet bad = Box[int32]{}",
+            "rejected",
+            executable: true,
+            "/r:" + selected,
+            "/refout:" + rejectedReference
+        )
+        Assert.NotEqual(0, code)
+        Assert.Contains("rejected.gs(2,11,2,14): error GS0127:", output)
+        Assert.Equal(1, output.Split("error GS0127:", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedReview_AuthoredSourceLiteralTrees(useReferenceAssembly bool) {
+        const library = `package authoredtree5296
+import System
+import System.Linq.Expressions
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Mark(mark string, value int32) int32 {
+            Trace = Trace + mark
+            return value
+        }
+    }
+}
+public data struct S {
+    public var X int32 = Effects.Mark("D", 7)
+    public init() {
+        Effects.Trace = Effects.Trace + "B"
+        X += 1
+    }
+}
+public data struct Stored {
+    private var Items []int32
+    public var X int32 = Effects.Mark("D", 7)
+    public prop Length int32 { get { return Items.Length } }
+    public init() {
+        Effects.Trace = Effects.Trace + "B"
+        X += 1
+    }
+}
+public func Run() string {
+    Effects.Trace = ""
+    let first Expression[Func[S]] = () -> S{}
+    let before = Effects.Trace
+    let value = first.Compile()()
+    let result = before + ":" + Effects.Trace + ":" + value.X.ToString()
+    Effects.Trace = ""
+    let second Expression[Func[S]] = () -> S{X: Effects.Mark("E", 9)}
+    let other = second.Compile()()
+    let middle = ":" + Effects.Trace + ":" + other.X.ToString()
+    Effects.Trace = ""
+    let third Expression[Func[Stored]] = () -> Stored{}
+    let stored = third.Compile()()
+    return result + "\n" + middle + "\n" + stored.Length.ToString() + ":" + Effects.Trace + ":" + stored.X.ToString()
+}`
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes(":DB:8\n:DBE:9\n0:DB:8" + Environment.NewLine),
+            CompileAndRunExact(
+                "import authoredtree5296\nSystem.Console.WriteLine(Run())",
+                library,
+                "authoredtree5296",
+                useReferenceAssembly
+            )
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func ConstructorOwnedReview_RequiredOrdinaryArguments(useReferenceAssembly bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
@@ -1141,9 +1316,18 @@ let bad = Secret{}`, "rejected", executable: true, "/r:" + selected, "/refout:" 
     }
 
     @Theory
-    @InlineData(false)
-    @InlineData(true)
-    func ConstructorOwnedDataStruct_LegacyMissingConstructorAndForeignZero(useReferenceAssembly bool) {
+    @InlineData(false, 0)
+    @InlineData(true, 0)
+    @InlineData(false, 1)
+    @InlineData(true, 1)
+    @InlineData(false, 2)
+    @InlineData(true, 2)
+    @InlineData(false, 3)
+    @InlineData(true, 3)
+    func ConstructorOwnedDataStruct_LegacyMissingConstructorAndForeignZero(
+        useReferenceAssembly bool,
+        projection int32
+    ) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         const declarations = `#nullable enable
 namespace legacy5296;
@@ -1154,11 +1338,13 @@ public record struct Foreign(int X = 17) { public int Y = 3; }
 public record struct Authored {
     public int X = 7;
     public Authored() { X = 8; }
-}`
+}
+public record struct GenericCollection<T>(T[] Items);`
         let probe = fixture.CompileCSharp(declarations, "Probe")
         var legacyToken = 0
         var collectionToken = 0
         var nullableCollectionToken = 0
+        var genericCollectionToken = 0
         {
             using let stream = File.OpenRead(probe)
             using let pe = PEReader(stream)
@@ -1185,6 +1371,14 @@ public record struct Authored {
                     ) == "NullableCollection"
                 )
             )
+            genericCollectionToken = MetadataTokens.GetToken(
+                Assert.Single(
+                    reader.TypeDefinitions,
+                    (handle TypeDefinitionHandle) -> reader.GetString(
+                        reader.GetTypeDefinition(handle).Name
+                    ) == "GenericCollection`1"
+                )
+            )
         }
         let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
         let producer = fixture.CompileCSharpWithReference(
@@ -1197,6 +1391,9 @@ public record struct Authored {
                 "|struct|1|Items:0|closed\")]\n" +
                 "[assembly: System.Reflection.AssemblyMetadata(\"GSharp.TypeSemantics\", \"" +
                 nullableCollectionToken.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                "|struct|1|Items:0|closed\")]\n" +
+                "[assembly: System.Reflection.AssemblyMetadata(\"GSharp.TypeSemantics\", \"" +
+                genericCollectionToken.ToString(System.Globalization.CultureInfo.InvariantCulture) +
                 "|struct|1|Items:0|closed\")]\n" +
                 declarations,
             "legacy5296",
@@ -1227,6 +1424,40 @@ let bad = Collection{}`, "rejectedcollection", executable: true, "/r:" +
         Assert.Equal(1, collectionOutput.Split("error GS0267:", StringSplitOptions.None).Length - 1)
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejectedcollection.dll")))
         Assert.False(File.Exists(rejectedCollectionReference))
+        let projectedSource = switch projection {
+            case 1: `
+data struct FilledSource { public var Items []int32 = []int32{6} }
+let implicitValue Collection = FilledSource{}
+Console.WriteLine(implicitValue.Items[0])
+func Convert() Collection -> FilledSource{}
+Console.WriteLine(Convert().Items[0])`
+            case 2: `
+let generic = GenericCollection[int32]{...original}
+Console.WriteLine(generic.Items[0])
+func Supply() Source {
+    Console.WriteLine("R")
+    return Source{Items: []int32{8}}
+}
+let qualified = legacy5296.GenericCollection[int32]{...Supply()}
+Console.WriteLine(qualified.Items[0])
+let replacement = legacy5296.GenericCollection[int32]{...Supply(), Items: []int32{6}}
+Console.WriteLine(replacement.Items[0])`
+            case 3: `
+data struct Local(Value int32)
+data struct GenericSource[T](Items []T)
+func Project[T](value T) int32 {
+    let source = GenericSource[T]{Items: []T{value}}
+    let target = GenericCollection[T]{...source}
+    return target.Items.Length
+}
+let source = GenericSource[Local]{Items: []Local{Local{Value: 4}}}
+let generic = GenericCollection[Local]{...source}
+Console.WriteLine(generic.Items[0].Value)
+let qualified = legacy5296.GenericCollection[Local]{...source}
+Console.WriteLine(qualified.Items[0].Value)
+Console.WriteLine(Project[Local](Local{Value: 7}))`
+            default: ""
+        }
         let consumer = fixture.Compile(`import legacy5296
 import System
 let empty = Foreign{}
@@ -1244,10 +1475,19 @@ let original = Source{Items: []int32{4}}
 let projected = Collection{...original}
 Console.WriteLine(projected.Items.Length.ToString() + "/" + projected.Items[0].ToString())
 let overridden = Collection{...original, Items: []int32{8}}
-Console.WriteLine(overridden.Items.Length.ToString() + "/" + overridden.Items[0].ToString())`, "consumer", executable: true, "/r:" +
+Console.WriteLine(overridden.Items.Length.ToString() + "/" + overridden.Items[0].ToString())` + projectedSource, "consumer", executable: true, "/r:" +
                 selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(ExpectedConsoleBytes("0/0\n9/0\n3/3\n8\n1/3\nTrue\n1/4\n1/8\n"), fixture.RunBytes(consumer))
+        let projectedOutput = switch projection {
+            case 1: "6\n6\n"
+            case 2: "4\nR\n8\nR\n6\n"
+            case 3: "4\n4\n1\n"
+            default: ""
+        }
+        Assert.Equal(
+            ExpectedConsoleBytes("0/0\n9/0\n3/3\n8\n1/3\nTrue\n1/4\n1/8\n" + projectedOutput),
+            fixture.RunBytes(consumer)
+        )
     }
 
     @Theory

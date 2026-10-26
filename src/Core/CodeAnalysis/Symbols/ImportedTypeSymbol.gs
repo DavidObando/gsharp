@@ -483,7 +483,9 @@ class ImportedTypeSymbol : TypeSymbol {
             }
             let annotated NullabilityAnnotatedTypeSymbol? = unwrapped as NullabilityAnnotatedTypeSymbol
             let baseType = annotated?.BaseType ?? unwrapped
-            if !(baseType is ImportedTypeSymbol) ||
+            // The CLR-keyed aggregate cannot retain unreified generic arguments.
+            if baseType is not ImportedTypeSymbol || TypeSymbol.ContainsTypeParameter(baseType) ||
+                TypeSymbol.ContainsSameCompilationUserType(baseType) ||
                 !TryCreateSemanticAggregate(clrType, references, out var aggregate) {
                 return type
             }
@@ -649,7 +651,11 @@ class ImportedTypeSymbol : TypeSymbol {
                     }
                     let reflectedField FieldInfo? = type.GetField(fieldName, bindingFlags)
                     let zeroValue BoundExpression? = if reflectedField != nil {
-                        MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(reflectedField, kind)
+                        MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(
+                            reflectedField,
+                            kind,
+                            fieldSymbol.Type
+                        )
                     } else {
                         default(BoundExpression?)
                     }

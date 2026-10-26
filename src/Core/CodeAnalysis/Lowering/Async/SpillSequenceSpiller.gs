@@ -2522,7 +2522,9 @@ shared class SpillSequenceSpiller {
                             nil,
                             structLiteral.StructType,
                             structLiteral.Initializers,
-                            source
+                            source,
+                            structLiteral.IsZeroInitialization,
+                            structLiteral.ResultType
                         )
                     }
                 )
@@ -2552,7 +2554,8 @@ shared class SpillSequenceSpiller {
                 } else {
                     spilledValues[0]
                 },
-                structLiteral.IsZeroInitialization
+                structLiteral.IsZeroInitialization,
+                structLiteral.ResultType
             )
             return BoundSpillSequenceExpression(nil, locals.ToImmutable(), sideEffects.ToImmutable(), value)
         }

@@ -1728,7 +1728,11 @@ internal partial class ExpressionBinder {
                     ) {
                         structSymbol = importedAggregate
                     } else {
-                        return BindImportedTypeLiteralExpression(syntax, importedCandidate.ClassType)
+                        return BindImportedTypeLiteralExpression(
+                            syntax,
+                            importedCandidate.ClassType,
+                            resolveTypeOnly: resolveTypeOnly
+                        )
                     }
                 } else if syntax.TypeArgumentList != nil &&
                     hasImportedCandidate &&
@@ -1788,7 +1792,8 @@ internal partial class ExpressionBinder {
                                 closedImportedType,
                                 importedCandidate.ClassType,
                                 literalSymbolicArguments
-                            )
+                            ),
+                            resolveTypeOnly
                         )
                     }
                     if ImportedTypeSymbol.TryCreateSemanticAggregate(
@@ -1796,9 +1801,13 @@ internal partial class ExpressionBinder {
                         $scope.References,
                         out var importedAggregate
                     ) {
-                        return BindStructLiteralExpression(syntax, importedAggregate)
+                        return BindStructLiteralExpression(syntax, importedAggregate, resolveTypeOnly: resolveTypeOnly)
                     }
-                    return BindImportedTypeLiteralExpression(syntax, closedImportedType)
+                    return BindImportedTypeLiteralExpression(
+                        syntax,
+                        closedImportedType,
+                        resolveTypeOnly: resolveTypeOnly
+                    )
                 } else if !typeNameAmbiguous &&
                     syntax.TypeArgumentList == nil &&
                     lookupType(typeName) is TypeParameterSymbol tpLiteral {
@@ -2480,7 +2489,8 @@ internal partial class ExpressionBinder {
     private func BindStructuralSpreadLiteral(
         syntax StructLiteralExpressionSyntax,
         resolvedDefinition StructSymbol?,
-        enclosingTypeArguments ImmutableArray[TypeSymbol]
+        enclosingTypeArguments ImmutableArray[TypeSymbol],
+        resolvedTarget TypeSymbol? = nil
     ) BoundExpression {
         let emptyTargetSyntax = StructLiteralExpressionSyntax(
             syntax.SyntaxTree,
@@ -2496,12 +2506,16 @@ internal partial class ExpressionBinder {
                 .SeparatedSyntaxList[StructLiteralElementSyntax](ImmutableArray[SyntaxNode].Empty),
             syntax.CloseBraceToken
         ){TypeArgumentList = syntax.TypeArgumentList}
-        let boundTarget = BindStructLiteralExpression(
-            emptyTargetSyntax,
-            resolvedDefinition,
-            enclosingTypeArguments,
-            resolveTypeOnly: true
-        )
+        let boundTarget = if resolvedTarget != nil {
+            cast[BoundExpression](BoundDefaultExpression(emptyTargetSyntax, resolvedTarget))
+        } else {
+            BindStructLiteralExpression(
+                emptyTargetSyntax,
+                resolvedDefinition,
+                enclosingTypeArguments,
+                resolveTypeOnly: true
+            )
+        }
         let spreadExpression = Invariant.Required(
             syntax.SpreadExpression,
             "a structural spread has a source expression",
@@ -2602,8 +2616,28 @@ internal partial class ExpressionBinder {
     private func BindImportedTypeLiteralExpression(
         syntax StructLiteralExpressionSyntax,
         clrType Type,
-        resultTypeOverride TypeSymbol? = nil
-    ) BoundExpression -> if clrType.IsValueType {
+        resultTypeOverride TypeSymbol? = nil,
+        resolveTypeOnly bool = false
+    ) BoundExpression -> if resolveTypeOnly {
+        BoundDefaultExpression(
+            syntax,
+            resultTypeOverride ?? TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
+        )
+    } else if syntax.SpreadExpression != nil {
+        BindStructuralSpreadLiteral(
+            syntax,
+            resolvedDefinition: nil,
+            enclosingTypeArguments: default(ImmutableArray[TypeSymbol]),
+            resolvedTarget: resultTypeOverride ??
+                (
+                if ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, $scope.References, out var aggregate) {
+                    cast[TypeSymbol](aggregate!!)
+                } else {
+                    TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
+                }
+            )
+        )
+    } else if clrType.IsValueType {
         BindImportedValueTypeLiteralExpression(syntax, clrType, resultTypeOverride)
     } else {
         BindImportedClassLiteralExpression(syntax, clrType, resultTypeOverride)
@@ -2995,7 +3029,15 @@ internal partial class ExpressionBinder {
                 continue
             }
             let field FieldInfo? = clrType.GetField(fieldName, BindingFlags.Public | BindingFlags.Instance)
-            let zeroValue BoundExpression? = MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(field, kind)
+            let zeroValue BoundExpression? = if field != nil {
+                MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(
+                    field,
+                    kind,
+                    MemberLookup.GetClrFieldTypeSymbol(receiver.Type, field)
+                )
+            } else {
+                nil
+            }
             if field == nil ||
                 zeroValue == nil ||
                 !TryGetWritableClrMember(field, receiver.Type, out _, out var fieldType, out var writable) ||
@@ -4144,7 +4186,8 @@ internal partial class ExpressionBinder {
             ) {
                 return MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(
                     clrType.GetField(field.Name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
-                    kind
+                    kind,
+                    field.Type
                 )
             }
             return nil

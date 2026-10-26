@@ -855,7 +855,11 @@ internal class UserTokenResolver {
     /// For a non-generic type returns the bare `FieldDef`; for a
     /// user-declared generic type returns a `MemberRef` parented
     /// at the constructed (or self-) `TypeSpec`.
-    internal func ResolveFieldToken(containingType StructSymbol, field FieldSymbol) EntityHandle {
+    internal func ResolveFieldToken(
+        containingType StructSymbol,
+        field FieldSymbol,
+        receiverType TypeSymbol? = nil
+    ) EntityHandle {
         if ReflectionMetadataEmitter.IsUserGenericTypeReference(containingType) {
             return this.GetUserStructFieldRef(containingType, field)
         }
@@ -865,7 +869,7 @@ internal class UserTokenResolver {
                 BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic
             )
             if importedField != nil {
-                return this.memberRefs.GetFieldReference(importedField)
+                return this.memberRefs.GetFieldReference(importedField, receiverType ?? containingType)
             }
         }
         if this.cache.StructFieldDefs.TryGetValue(field, out fieldHandle) {
@@ -1600,6 +1604,9 @@ internal class UserTokenResolver {
             return this.ResolveUserCtorTokenForExplicit(call.StructType, call.SelectedConstructor)
         }
         let definition = call.StructType.Definition ?? call.StructType
+        if call.StructType.UsesConstructorOwnedDataConstruction {
+            return this.ResolveUserCtorTokenForPrimary(call.StructType)
+        }
         if this.cache.ClassPrimaryCtorHandles.ContainsKey(definition) {
             return this.ResolveUserCtorTokenForPrimary(call.StructType)
         }

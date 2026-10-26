@@ -94,7 +94,10 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                         this.initializerAnchor ?? literal.Syntax ?? this.expressionAnchor,
                         nil,
                         canAccessInternal: false,
-                        checkAccessibility: false
+                        checkAccessibility: false,
+                        suppliedPrimaryInputs: literal.Initializers.Select(
+                            (initializer BoundFieldInitializer) -> initializer.MemberName
+                        )
                     )
                 }
                 literal.ValidateInitializerWrites(this.diagnostics, this.initializerAnchor ?? this.expressionAnchor)

@@ -862,14 +862,14 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 literal.Syntax,
                 ExpressionNewTypeMethod,
                 NewExpressionTypeSymbol,
-                ImmutableArray.Create[BoundExpression](CreateTypeOf(literal.StructType))
+                ImmutableArray.Create[BoundExpression](CreateTypeOf(literal.Type))
             )
         } else {
             // Literal-only initializers have an assembly-only Boolean marker
             // signature distinct from every authored constructor.
             let constructor = BoundImportedInstanceCallExpression(
                 literal.Syntax,
-                CreateTypeOf(literal.StructType),
+                CreateTypeOf(literal.Type),
                 TypeGetConstructorWithBindingFlagsMethod,
                 ReflectionConstructorInfoTypeSymbol,
                 ImmutableArray.Create[BoundExpression](
@@ -950,7 +950,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             literal.Syntax,
             ExpressionDefaultMethod,
             ExpressionTypeSymbol,
-            ImmutableArray.Create[BoundExpression](CreateTypeOf(literal.StructType))
+            ImmutableArray.Create[BoundExpression](CreateTypeOf(literal.Type))
         )
         if literal.Initializers.IsDefaultOrEmpty {
             return defaultValue
@@ -964,7 +964,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 ExpressionParameterMethod,
                 ParameterExpressionTypeSymbol,
                 ImmutableArray.Create[BoundExpression](
-                    CreateTypeOf(literal.StructType),
+                    CreateTypeOf(literal.Type),
                     BoundLiteralExpression(nil, string.Empty, TypeSymbol.String)
                 )
             )

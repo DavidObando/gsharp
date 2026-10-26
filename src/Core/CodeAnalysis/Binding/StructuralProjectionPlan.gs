@@ -522,13 +522,14 @@ internal shared class StructuralProjectionPlanner {
         }
         let constructorSlots = ImmutableArray.CreateBuilder[StructuralProjectionSlot](constructorParameters.Length)
         let targetNames = HashSet[string](StringComparer.Ordinal)
-        for parameter in constructorParameters {
+        for var parameterIndex = 0; parameterIndex < constructorParameters.Length; parameterIndex++ {
+            let parameter = constructorParameters[parameterIndex]
             let parameterName = parameter.Name
             if string.IsNullOrEmpty(parameterName) {
                 failure = "Type '$target' has a constructor parameter without a name."
                 return false
             }
-            let parameterType = ClrNullability.GetParameterTypeSymbol(parameter)
+            let parameterType = MemberLookup.GetClrMethodParameterTypeSymbol(target, constructor!!, parameterIndex)
             targetNames.Add(parameterName)
             if explicitNames?.Contains(parameterName) != true && !sourceMembers.ContainsKey(parameterName) &&
                 parameter
@@ -558,7 +559,7 @@ internal shared class StructuralProjectionPlanner {
             if property.GetIndexParameters().Length != 0 || setter == nil || !targetNames.Add(property.Name) {
                 continue
             }
-            let propertyType = ClrNullability.GetPropertyTypeSymbol(property)
+            let propertyType = MemberLookup.GetClrPropertyTypeSymbol(target, property)
             if !TryCreateSlot(
                 property.Name,
                 propertyType,
@@ -580,7 +581,7 @@ internal shared class StructuralProjectionPlanner {
             if field.IsStatic || field.IsLiteral || field.IsInitOnly || !targetNames.Add(field.Name) {
                 continue
             }
-            let fieldType = ClrNullability.GetFieldTypeSymbol(field)
+            let fieldType = MemberLookup.GetClrFieldTypeSymbol(target, field)
             if !TryCreateSlot(field.Name, fieldType, sourceMembers, explicitNames, strict, out var slot, out failure) {
                 return false
             }

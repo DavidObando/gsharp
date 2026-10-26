@@ -1045,7 +1045,7 @@ internal class ReflectionMetadataEmitter {
             this.customAttrEncoder.NextParameterHandle,
             this.memberRefs.GetTypeReference,
             this.memberRefs.GetTypeHandleForMember,
-            this.userTokens.ResolveFieldToken,
+            (owner StructSymbol, field FieldSymbol) -> this.userTokens.ResolveFieldToken(owner, field),
             this.customAttrEncoder.EmitNullableAttributeOnProperty,
             this.customAttrEncoder.EmitNullableAttributeOnEvent,
             this.customAttrEncoder.EmitMethodNullability,
@@ -1119,7 +1119,7 @@ internal class ReflectionMetadataEmitter {
             this.customAttrEncoder.NextParameterHandle,
             this.typeDefEmitter.AddPrimaryCtorParameters,
             this.userTokens.ResolveUserTypeToken,
-            this.userTokens.ResolveFieldToken,
+            (owner StructSymbol, field FieldSymbol) -> this.userTokens.ResolveFieldToken(owner, field),
             this.userTokens.GetUserStructMethodRef,
             (method MethodInfo, containingType TypeSymbol) -> this.memberRefs.GetMethodEntityHandle(
                 method,
@@ -1163,7 +1163,7 @@ internal class ReflectionMetadataEmitter {
             this.signatures.EncodeTypeSymbol,
             this.signatures.EncodeClrType,
             this.userTokens.GetStructTypeToken,
-            this.userTokens.ResolveFieldToken,
+            (owner StructSymbol, field FieldSymbol) -> this.userTokens.ResolveFieldToken(owner, field),
             this.functions.BuildMoveNextBodyBytes
         )
     }
