@@ -55,10 +55,8 @@ class BoundFunctionLiteralExpression : BoundExpression {
     override prop Type TypeSymbol -> FunctionType
     override prop Kind BoundNodeKind -> BoundNodeKind.FunctionLiteralExpression
 
-    /// Gets or sets the evaluator's lazily lowered body. Concurrent first use
-    /// may compute equivalent bodies; `Lower` allocates a fresh
-    /// `Lowerer` per call and holds no static state, so either cached value
-    /// is safe.
+    /// Gets or sets the analysis body produced by (cref:BodyFacts.LowerLambdaBody).
+    /// Rewritten literals have a new body and start with an empty slot.
     internal prop LoweredBody BoundBlockStatement?
 
     /// Gets or sets the enclosing method/type type parameter this GENERIC
