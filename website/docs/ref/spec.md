@@ -835,6 +835,23 @@ The prefix `*T` is **context-sensitive**. **Outside** an `unsafe` context it den
 
 The `fixed` statement `fixed <name> *T = <source> { … }` pins a managed buffer for the duration of its body block and binds an unmanaged pointer `<name>` of type `*T` to the buffer's first element (including span-like sources) — the G# spelling of C# `fixed (T* p = source) { … }`. The header is paren-less, consistent with G#'s other statement headers (`if`/`for`/`while`/`unsafe`), and `fixed` is a **contextual keyword** recognised only in the `fixed <ident> *…` shape, so it remains usable as an ordinary identifier elsewhere; the source expression is parsed with struct-literal suppression so the `{` that follows opens the body block rather than a composite literal. Because it produces a raw unmanaged pointer, the statement is legal **only inside an `unsafe` context** (function, `unsafe { … }` block, or unsafe type); used outside one it is rejected with `GS0400`. The **source** must be a pinnable managed buffer: a slice/array `[]T` (the cs2gs mapping of a C# `T[]`, CLR-backed by `T[]`), a `string`, a **span-like** source whose type exposes a public instance `ref T GetPinnableReference()` (canonically `System.Span[T]` / `System.ReadOnlySpan[T]`), or a **fixed-size buffer field** (`fixed p *int8 = h.B.Name { … }`, or a bare `fixed p *int8 = Name { … }` inside the declaring struct) — the G# spelling of C# `fixed (sbyte* p = Name)`, which binds `p` to the buffer's first element and keeps the buffer's containing storage pinned for the block. As in C#, a fixed-size buffer is pinnable only when it lives in *movable* storage (a class field, an array/slice element, a `ref`/`out`/`in` parameter, or a struct method's receiver); one reached through storage that cannot move (a local, a by-value parameter, or a pointer dereference `p->Name`) is rejected with `GS0507` (C#'s CS0213) and is used directly as a `*T` instead. The pointer's pointee type must match the buffer's element type (`uint16`/`char` are accepted interchangeably for `string`); any other source — or a pointee mismatch — is rejected with `GS0401`. The bound `*T` pointer is in scope **only inside the body** and is read-only. Lowering mirrors the C# compiler: a synthetic CLR **pinned local** (`.locals init ([n] T[] pinned)` for a slice/array, `string pinned` for a `string`, `T& pinned` for a span-like source or a fixed-size buffer) holds the buffer reference so the GC cannot move it; the pointer is derived as the element-0 address (`ldelema` with a null/zero-length guard for arrays — an empty buffer yields a null pointer — `RuntimeHelpers.OffsetToStringData` for strings, `call GetPinnableReference(); conv.u` for span-like sources, and `ldflda name; ldflda FixedElementField` — the address of the buffer's first element, exactly as C# emits — for a fixed-size buffer). For a span-like source the emitted MemberRef carries the real BCL signature, including `modreq(System.Runtime.InteropServices.InAttribute)` on `ReadOnlySpan[T].GetPinnableReference()`'s `ref readonly T` return, so the call binds at runtime. On block exit the pinned local is released (`ldnull; stloc` for array/string, `ldc.i4.0; conv.u; stloc` for a span-like or fixed-size buffer by-ref pin). Pinning + unmanaged-pointer dereference IL is *unverifiable by design* (as in C#); the emit tests assert runtime behaviour.
 
+For array pinning, an inferred one-dimensional CLR array with a non-nullable
+static type is equivalent to an annotated `[]T` local. No annotation or array copy
+is required. This static-type rule is not a runtime non-null guarantee.
+Array pinning keeps its null and empty-array guards.
+Rectangular and explicitly nullable arrays remain rejected.
+
+```gsharp
+import System.Text
+
+unsafe {
+    let bytes = Encoding.UTF8.GetBytes("x")
+    fixed value *uint8 = bytes {
+        System.Console.WriteLine(value[0]) // 120
+    }
+}
+```
+
 CLR `ref struct` types such as `Span[T]` and `ReadOnlySpan[T]` are consumable as stack-only values: they are indexable (`s[i]`), ref-returning members auto-dereference in rvalue position, a `[]T` slice converts implicitly to a span, and a user `ref struct X { … }` may embed a closed generic value-type field. Stack-escape violations are reported as `GS0219`; writing through a `ReadOnlySpan[T]` element is `GS0226`. The full ref-safe-to-escape analysis is deferred.
 
 ## Declarations and scope

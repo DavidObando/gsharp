@@ -73,7 +73,8 @@ internal partial class StatementBinder {
     private func DefineUserLabel(labelName string, location TextLocation) BoundLabel {
         if !binderCtx.DefinedUserLabels.Add(labelName) {
             Diagnostics.ReportDuplicateGotoLabel(location, labelName)
-            return binderCtx.UserLabels[labelName]
+            // Keep each recovered declaration distinct without changing the canonical goto target.
+            return BoundLabel(labelName)
         }
         userLabelHandlerRegions[labelName] = exceptionHandlerRegions.Reverse().ToImmutableArray()
         let wasReachable = currentStatementListFallsThrough
