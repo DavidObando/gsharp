@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 The entries below are newer than v0.5.212. Published features and migration notes follow in the release section.
 
+- **`await using` awaits a source-defined async `ValueTask` disposer** (issue #5259). Cleanup now uses the observable return type of `async func DisposeAsync() ValueTask`, rather than its logical `void` result. This removes `GS9998` at top level and in async functions. Cleanup keeps its block-scoped LIFO order and waits for disposal before returning or propagating an exception. Non-async and imported `ValueTask` disposers are unchanged.
+
 - **Duplicate labels report source errors instead of a compiler exception** (issue #5288). A repeated `goto` label now reports located `GS0470` diagnostics without reusing the first declaration's control-flow target. Parser recovery from a reserved `range` identifier also preserves its source diagnostics instead of reporting `GS9998` for a repeated initializer name. `range` remains reserved.
 
 - **Method-wide `using` bindings in async functions no longer cause exponential analysis work** (issue #5258). Repeated definite-assignment probes of nested cleanup regions caused the growth, not async disposal lowering. The per-analysis region cache from #5287 also corrects this case. Regression tests now bound region-analysis work for twenty distinct bindings and check lifetime, single evaluation, LIFO disposal, exception propagation and deterministic output. Cleanup scopes and async suspension behavior are unchanged.
