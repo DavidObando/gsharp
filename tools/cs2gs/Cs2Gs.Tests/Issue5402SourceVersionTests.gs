@@ -15,15 +15,23 @@ import Xunit
 class Issue5402SourceVersionTests : IDisposable {
     private let root string = Path.Combine(AppContext.BaseDirectory, "source-version-" + Guid.NewGuid().ToString("N"))
     private let previousCeiling string? = Environment.GetEnvironmentVariable("GIT_CEILING_DIRECTORIES")
+    private let previousGlobalConfig string? = Environment.GetEnvironmentVariable("GIT_CONFIG_GLOBAL")
 
     init() {
         Directory.CreateDirectory(this.root)
+        let globalConfig = Path.Combine(this.root, "global.gitconfig")
+        File.WriteAllText(globalConfig, "[clone]\n    defaultRemoteName = source-copy\n")
+        Environment.SetEnvironmentVariable("GIT_CONFIG_GLOBAL", globalConfig)
         Environment.SetEnvironmentVariable("GIT_CEILING_DIRECTORIES", this.root)
         Git(this.root, "init", "--quiet")
     }
 
     func Dispose() {
         Environment.SetEnvironmentVariable("GIT_CEILING_DIRECTORIES", this.previousCeiling)
+        Environment.SetEnvironmentVariable("GIT_CONFIG_GLOBAL", this.previousGlobalConfig)
+        for file in Directory.EnumerateFiles(this.root, "*", SearchOption.AllDirectories) {
+            File.SetAttributes(file, FileAttributes.Normal)
+        }
         Directory.Delete(this.root, recursive: true)
     }
 
@@ -58,6 +66,7 @@ class Issue5402SourceVersionTests : IDisposable {
         if hasHistory {
             Git(source, "init", "--quiet")
             Git(source, "remote", "add", sourceRemote, "https://example.invalid/source-version.git")
+            Git(source, "config", "remote.publish.pushurl", "https://example.invalid/publish-version.git")
             Commit(source)
             File.WriteAllText(Path.Combine(source, "history.txt"), "version height must include this commit")
             Commit(source)
@@ -133,6 +142,14 @@ class Issue5402SourceVersionTests : IDisposable {
                 Git(checkout, "remote", "get-url", sourceRemote),
                 Git(mirror, "remote", "get-url", sourceRemote)
             )
+            Assert.Equal(
+                Git(checkout, "remote", "get-url", "--push", "publish"),
+                Git(mirror, "remote", "get-url", "--push", "publish")
+            )
+            Assert.Equal(
+                1,
+                ProcessRunner.Run("git", []string{"config", "--get-all", "remote.publish.url"}, mirror).ExitCode
+            )
         }
         let secondMirror = Path.Combine(host, "second-mirror")
         RepositoryMirror.Prepare(checkout, secondMirror)
@@ -155,7 +172,7 @@ class Issue5402SourceVersionTests : IDisposable {
         RepositoryMirror.Prepare(archive, mirror)
         let result = ProcessRunner.Run("git", []string{"rev-parse", "--verify", "HEAD"}, mirror)
         Assert.NotEqual(0, result.ExitCode)
-        Assert.Equal(mirror, Git(mirror, "rev-parse", "--show-toplevel").Trim())
+        Assert.Equal(Path.GetFullPath(mirror), Path.GetFullPath(Git(mirror, "rev-parse", "--show-toplevel").Trim()))
     }
 
     @Fact

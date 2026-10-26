@@ -46,7 +46,7 @@ to a separate artifacts root. The original timestamped per-app layout remains
 available through `--diagnostic-run` for corpus gap discovery, ledger gating,
 and CI compatibility.
 
-Repository mirrors keep independent source Git history ([ADR-0214](0214-repository-mirror-git-provenance.md)).
+Repository mirrors keep independent source Git history ([ADR-0216](0216-repository-mirror-git-provenance.md)).
 This prevents version tasks from using a repository above the destination.
 Supply the Git working-tree root, not a source subdirectory.
 An archive mirror gets an empty Git repository to prevent parent-history discovery.

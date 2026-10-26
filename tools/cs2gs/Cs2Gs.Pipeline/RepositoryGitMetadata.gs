@@ -4,6 +4,7 @@ package Cs2Gs.Pipeline
 
 import System
 import System.IO
+import System.Linq
 
 /// Keeps mirror version calculations separate from the destination's parent repository.
 internal shared class RepositoryGitMetadata {
@@ -15,6 +16,7 @@ internal shared class RepositoryGitMetadata {
                 []string{
                     "clone",
                     "--quiet",
+                    "--origin=origin",
                     "--no-checkout",
                     "--no-hardlinks",
                     "--dissociate",
@@ -29,15 +31,23 @@ internal shared class RepositoryGitMetadata {
                 '\n',
                 StringSplitOptions.RemoveEmptyEntries
             ) {
-                let name = remote.Trim()
-                for url in Run([]string{"-C", source, "config", "--get-all", "remote." + name + ".url"}, source).Split(
-                    '\n',
-                    StringSplitOptions.RemoveEmptyEntries
-                ) {
-                    Run(
-                        []string{"-C", destination, "config", "--add", "remote." + name + ".url", url.TrimEnd('\r')},
-                        destination
+                let name = remote.TrimEnd('\r')
+                for suffix in[]string{"url", "pushurl"} {
+                    let key = "remote." + name + "." + suffix
+                    let configured = ProcessRunner.Run(
+                        "git",
+                        []string{"-C", source, "config", "--null", "--get-all", key},
+                        source
                     )
+                    if configured.TimedOut || (configured.ExitCode != 0 && configured.ExitCode != 1) {
+                        throw InvalidOperationException("Cannot read source remote URLs: " + configured.Output)
+                    }
+                    if configured.ExitCode == 1 {
+                        continue
+                    }
+                    for url in configured.Stdout.Split('\0').SkipLast(1) {
+                        Run([]string{"-C", destination, "config", "--add", key, url}, destination)
+                    }
                 }
             }
             if head.ExitCode == 0 {

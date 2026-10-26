@@ -1,4 +1,4 @@
-# ADR-0214: Repository mirror Git provenance
+# ADR-0216: Repository mirror Git provenance
 
 - **Status**: Accepted
 - **Date**: 2026-10-26
@@ -20,7 +20,8 @@ A link to the source Git directory would also link mutable repository state.
 Create an independent Git clone before copying or translating repository files.
 Use no checkout, no hard links, and no borrowed objects.
 Keep the source commit graph and HEAD.
-Keep source remote URLs instead of the local clone path.
+Keep source fetch and push URLs instead of the local clone path.
+Use an explicit clone remote name, independent of user configuration.
 Do not create a translation commit or change the source version settings.
 The translated files form uncommitted working-tree changes.
 
