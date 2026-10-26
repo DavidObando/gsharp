@@ -738,7 +738,7 @@ internal partial class OverloadResolver {
                 // members are auto-properties, not plain fields — fall back
                 // to a settable property with the same name.
                 if TypeMemberModel.TryGetProperty(classType, parameters[i].Name, out var property) &&
-                    property!!.HasSetter {
+                    (property!!.HasSetter || classType.UsesConstructorOwnedDataConstruction) {
                     fieldInitializers.Add(BoundFieldInitializer(property!!, finalArguments[i]))
                 }
             }
@@ -2300,7 +2300,7 @@ internal partial class OverloadResolver {
                     continue
                 }
                 if TypeMemberModel.TryGetProperty(classType, parameters[i].Name, out var property) &&
-                    property!!.HasSetter {
+                    (property!!.HasSetter || classType.UsesConstructorOwnedDataConstruction) {
                     initializers.Add(BoundFieldInitializer(property!!, ctorCall.Arguments[i]))
                 }
             }

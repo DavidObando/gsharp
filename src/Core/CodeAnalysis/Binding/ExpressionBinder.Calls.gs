@@ -1212,7 +1212,7 @@ internal partial class ExpressionBinder {
             // so `Settings()` supplies declared defaults instead of selecting
             // that zero-initializing constructor. C# records have no gsc marker
             // and keep using CLR overload resolution (#2291/#2458).
-            if ImportedAssemblySemantics.TryGetTypeSemantics(resolvedClrType, out _) {
+            if dataClassAggregate!!.IsClass && ImportedAssemblySemantics.TryGetTypeSemantics(resolvedClrType, out _) {
                 let primaryParameterCount = dataClassAggregate!!.PrimaryConstructorParameters.Length
                 var primaryAcceptsArity = syntax.Arguments.Count <= primaryParameterCount
                 if primaryAcceptsArity {

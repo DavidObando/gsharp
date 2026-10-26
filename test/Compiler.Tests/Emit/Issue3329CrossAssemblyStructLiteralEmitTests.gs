@@ -38,6 +38,380 @@ open class Issue3329CrossAssemblyStructLiteralEmitTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func ConstructorOwnedReview_OrderedReadonlyStores(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(`package ordered5296
+import System.Collections.Generic
+public data struct R {
+    public let X int32 = 7
+    public let Items List[int32] = List[int32]()
+    public var Count int32
+    public func Add(value int32) { Count = Count + value }
+}
+public data struct Positional(X int32) {
+    public prop X int32 { get; }
+    public var Count int32
+    public func Add(value int32) { Count = Count + value }
+}`, "ordered5296", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let consumer = fixture.Compile(`import ordered5296
+import System
+let first = R{Count: 0, 1}
+let second = R{Items: {2}, 3}
+Console.WriteLine(first.X.ToString() + "/" + first.Count.ToString())
+Console.WriteLine(second.X.ToString() + "/" + second.Count.ToString() + "/" + second.Items.Count.ToString())`, "consumer", executable: true, "/r:" +
+                selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("7/1\n7/3/1\n"), fixture.RunBytes(consumer))
+        let rejectedReference = Path.Combine(fixture.Directory, "rejected.ref.dll")
+        let (code, output) = fixture.TryCompile(`import ordered5296
+let bad = R{X: 9, 1}`, "rejected", executable: true, "/r:" + selected, "/refout:" + rejectedReference)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("rejected.gs(2,13,2,14): error GS0127:", StringComparison.Ordinal), output)
+        Assert.Equal(1, output.Split("error GS0127:", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        let primaryConsumer = fixture.Compile(`import ordered5296
+import System
+let primary = Positional{X: 4, 1}
+Console.WriteLine(primary.X.ToString() + "/" + primary.Count.ToString())`, "primaryconsumer", executable: true, "/r:" +
+                selected)
+        IlVerifier.Verify(primaryConsumer, []string{producer})
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("4/1\n"), fixture.RunBytes(primaryConsumer))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedReview_QualifiedForeignRecords(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.CompileCSharpWithReference(`namespace qualified5296;
+public record struct Foreign(int X = 17) { public int Y = 3; }
+public record struct Authored(int X = 17) {
+    public int Y = 3;
+    public Authored() : this(8) { Y = 4; }
+}`, "qualified5296", reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let consumer = fixture.Compile(`import qualified5296
+import System
+let first = qualified5296.Foreign{}
+let second = qualified5296.Foreign{X: 9}
+let third = qualified5296.Authored{}
+let fourth = qualified5296.Authored{X: 9}
+let ordinary = Foreign(3)
+Console.WriteLine(first.X.ToString() + "/" + first.Y.ToString())
+Console.WriteLine(second.X.ToString() + "/" + second.Y.ToString())
+Console.WriteLine(third.X.ToString() + "/" + third.Y.ToString())
+Console.WriteLine(fourth.X.ToString() + "/" + fourth.Y.ToString())
+Console.WriteLine(ordinary.X.ToString() + "/" + ordinary.Y.ToString())`, "consumer", executable: true, "/r:" + selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("0/0\n9/0\n8/4\n9/4\n3/3\n"), fixture.RunBytes(consumer))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedReview_QualifiedPrimaryPopulation(useReferenceAssembly bool) {
+        const library = `package population5296
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Mark(mark string, value int32) int32 {
+            Trace = Trace + mark
+            return value
+        }
+    }
+}
+public data struct Box(Items []int32) {
+    public var X int32 = Effects.Mark("D", 7)
+}
+public func Local() Box -> Box{Items: {Effects.Mark("E", 4)}}`
+        const source = `import population5296
+import System
+try { let local = Local() }
+catch (ex Exception) { Console.WriteLine(Effects.Trace + ":" + ex.GetType().Name) }
+Effects.Trace = ""
+try { let first = Box{Items: {Effects.Mark("E", 4)}} }
+catch (ex Exception) { Console.WriteLine(Effects.Trace + ":" + ex.GetType().Name) }
+Effects.Trace = ""
+try { let second = population5296.Box{Items: {Effects.Mark("E", 4)}} }
+catch (ex Exception) { Console.WriteLine(Effects.Trace + ":" + ex.GetType().Name) }`
+        Assert.Equal(
+            System
+                .Text
+                .Encoding
+                .UTF8
+                .GetBytes("DE:NotSupportedException\nDE:NotSupportedException\nDE:NotSupportedException\n"),
+            CompileAndRunExact(source, library, "population5296", useReferenceAssembly)
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedReview_GetOnlyPrimaryCalls(useReferenceAssembly bool) {
+        const library = `package getter5296
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Next() int32 {
+            Trace = Trace + "E"
+            return 7
+        }
+    }
+}
+public data struct Box(Value int32 = 5) {
+    public prop Value int32 { get; }
+}
+public func Local() Box -> Box(Effects.Next())`
+        const source = `import getter5296
+import System
+let local = Local()
+Console.WriteLine(local.Value.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let first = Box(Effects.Next())
+Console.WriteLine(first.Value.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+Console.WriteLine(Box().Value.ToString() + ":" + Effects.Trace)
+Console.WriteLine(Box{}.Value)`
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes("7:E\n7:E\n5:\n0\n"),
+            CompileAndRunExact(source, library, "getter5296", useReferenceAssembly)
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedReview_GetOnlyPrimaryLiterals(useReferenceAssembly bool) {
+        const library = `package getterliteral5296
+public data struct Box(Value int32) {
+    public prop Value int32 { get; }
+}`
+        const source = `import getterliteral5296
+import System
+data struct Local(Value int32) {
+    public prop Value int32 { get; }
+}
+Console.WriteLine(Local{Value: 3}.Value)
+Console.WriteLine(Box{Value: 7}.Value)
+let qualified = getterliteral5296.Box{Value: 9}
+Console.WriteLine(qualified.Value)`
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes("3\n7\n9\n"),
+            CompileAndRunExact(source, library, "getterliteral5296", useReferenceAssembly)
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedReview_SynthesizedOrdinaryOverloads(useReferenceAssembly bool) {
+        const library = `package overload5296
+public data struct Primary(A int32) {
+    public init(text string) { A = 9 }
+}`
+        const source = `import overload5296
+import System
+data struct Local(A int32) {
+    public init(text string) { A = 8 }
+}
+Console.WriteLine(Local(1).A)
+Console.WriteLine(Primary(2).A)
+Console.WriteLine(Local("x").A)
+Console.WriteLine(Primary("x").A)`
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes("1\n2\n8\n9\n"),
+            CompileAndRunExact(source, library, "overload5296", useReferenceAssembly)
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedReview_SynthesizedConstructorChaining(useReferenceAssembly bool) {
+        const library = `package chaining5296
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Default() int32 {
+            Trace = Trace + "D"
+            return 4
+        }
+    }
+}
+public data struct Primary(A int32) {
+    public var X int32 = Effects.Default()
+    public convenience init(text string) {
+        init(7)
+        Effects.Trace = Effects.Trace + "B"
+    }
+}
+public data struct Body {
+    public var X int32 = Effects.Default()
+    public convenience init(text string) {
+        init()
+        Effects.Trace = Effects.Trace + "B"
+        X = 9
+    }
+}`
+        const source = `import chaining5296
+import System
+let first = Primary("x")
+Console.WriteLine(first.A.ToString() + "/" + first.X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let second = Body("x")
+Console.WriteLine(second.X.ToString() + ":" + Effects.Trace)`
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(library, "chaining5296", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        AssertOrdinaryConstructorMetadata(producer, "Body")
+        AssertOrdinaryConstructorMetadata(reference, "Body")
+        let implementationBytes = File.ReadAllBytes(producer)
+        let referenceBytes = File.ReadAllBytes(reference)
+        fixture.Compile(library, "chaining5296", executable: false, "/refout:" + reference)
+        Assert.Equal(implementationBytes, File.ReadAllBytes(producer))
+        Assert.Equal(referenceBytes, File.ReadAllBytes(reference))
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let consumer = fixture.Compile(source, "consumer", executable: true, "/r:" + selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("7/4:DB\n9:DB\n"), fixture.RunBytes(consumer))
+        let csharp = fixture.CompileCSharp(`using System;
+using chaining5296;
+namespace CSharpConstruction;
+public static class Native {
+    public static string Run() {
+        var first = new Primary("x");
+        var result = first.A + "/" + first.X + ":" + Effects.Trace + "\n";
+        Effects.Trace = "";
+        var second = new Body("x");
+        return result + second.X + ":" + Effects.Trace + "\n";
+    }
+}`, "csharp", selected)
+        IlVerifier.Verify(csharp, []string{producer})
+        let csharpConsumer = fixture.Compile(`import System
+import CSharpConstruction
+Console.Write(Native.Run())`, "csharpconsumer", executable: true, "/r:" + csharp, "/r:" + selected)
+        IlVerifier.Verify(csharpConsumer, []string{producer, csharp})
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("7/4:DB\n9:DB\n"), fixture.RunBytes(csharpConsumer))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedReview_NestedReadonlyConstructorStorage(useReferenceAssembly bool) {
+        const library = `package nestedreadonly5296
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Mark(mark string, value int32) int32 {
+            Trace = Trace + mark
+            return value
+        }
+    }
+}
+public data struct Child {
+    public let Items []int32
+    public var X int32 = Effects.Mark("D", 7)
+}`
+        const source = `import nestedreadonly5296
+import System
+data struct Parent {
+    public var Before int32 = Effects.Mark("P", 1)
+    public var Value Child = Child{}
+    public var After int32 = Effects.Mark("A", 2)
+}
+let first = Parent{}
+Console.WriteLine(first.Value.X.ToString() + "/" + first.Value.Items.Length.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let raw = default(Parent)
+let array = [1]Parent{}
+Console.WriteLine(raw.Value.X.ToString() + "/" + array[0].Value.X.ToString() + ":" + Effects.Trace)`
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(library, "nestedreadonly5296", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let consumer = fixture.Compile(source, "consumer", executable: true, "/r:" + selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("7/0:PDA\n0/0:\n"), fixture.RunBytes(consumer))
+        let rejectedReference = Path.Combine(fixture.Directory, "rejected.ref.dll")
+        let (code, output) = fixture.TryCompile(`import nestedreadonly5296
+data struct Parent {
+    public var Value Child = Child{}
+}
+var bare Parent`, "rejected", executable: true, "/r:" + selected, "/refout:" + rejectedReference)
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("rejected.gs(5,1,5,16): error GS0127:", StringComparison.Ordinal), output)
+        Assert.Equal(1, output.Split("error GS0127:", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedReview_GenericPrimaryConstructorIdentity(useReferenceAssembly bool) {
+        const library = `package collision5296
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Mark(mark string, value int32) int32 {
+            Trace = Trace + mark
+            return value
+        }
+    }
+}
+public data struct S[T](Value T) {
+    public var X int32 = Effects.Mark("D", 7)
+    public init(other int32) {
+        Value = default(T)
+        Effects.Trace = Effects.Trace + "A"
+    }
+}
+public func Local() int32 -> S[int32]{Value: 5}.Value`
+        const source = `import collision5296
+import System
+func Make[T](value T) T -> S[T]{Value: value}.Value
+Console.WriteLine(Local().ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let first = S[int32]{Value: Effects.Mark("V", 5)}
+Console.WriteLine(first.Value.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let second = collision5296.S[int32]{Value: Effects.Mark("V", 9)}
+Console.WriteLine(second.Value.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+Console.WriteLine(Make[int32](6).ToString() + ":" + Effects.Trace)`
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes("5:D\n5:VD\n9:VD\n6:D\n"),
+            CompileAndRunExact(source, library, "collision5296", useReferenceAssembly)
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func ConstructorOwnedDataStruct_EmptyPrimaryParity(useReferenceAssembly bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
@@ -554,8 +928,11 @@ let bad = Secret{}`, "rejected", executable: true, "/r:" + selected, "/refout:" 
     @InlineData(true)
     func ConstructorOwnedDataStruct_LegacyMissingConstructorAndForeignZero(useReferenceAssembly bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
-        const declarations = `namespace legacy5296;
+        const declarations = `#nullable enable
+namespace legacy5296;
 public struct Legacy { public int X; }
+public record struct Collection(int[] Items);
+public record struct NullableCollection(int[]? Items);
 public record struct Foreign(int X = 17) { public int Y = 3; }
 public record struct Authored {
     public int X = 7;
@@ -563,6 +940,8 @@ public record struct Authored {
 }`
         let probe = fixture.CompileCSharp(declarations, "Probe")
         var legacyToken = 0
+        var collectionToken = 0
+        var nullableCollectionToken = 0
         {
             using let stream = File.OpenRead(probe)
             using let pe = PEReader(stream)
@@ -573,6 +952,22 @@ public record struct Authored {
                     (handle TypeDefinitionHandle) -> reader.GetString(reader.GetTypeDefinition(handle).Name) == "Legacy"
                 )
             )
+            collectionToken = MetadataTokens.GetToken(
+                Assert.Single(
+                    reader.TypeDefinitions,
+                    (handle TypeDefinitionHandle) -> reader.GetString(
+                        reader.GetTypeDefinition(handle).Name
+                    ) == "Collection"
+                )
+            )
+            nullableCollectionToken = MetadataTokens.GetToken(
+                Assert.Single(
+                    reader.TypeDefinitions,
+                    (handle TypeDefinitionHandle) -> reader.GetString(
+                        reader.GetTypeDefinition(handle).Name
+                    ) == "NullableCollection"
+                )
+            )
         }
         let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
         let producer = fixture.CompileCSharpWithReference(
@@ -580,6 +975,12 @@ public record struct Authored {
                 System.Globalization.CultureInfo.InvariantCulture
             ) +
                 "|struct|1||closed\")]\n" +
+                "[assembly: System.Reflection.AssemblyMetadata(\"GSharp.TypeSemantics\", \"" +
+                collectionToken.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                "|struct|1|Items:0|closed\")]\n" +
+                "[assembly: System.Reflection.AssemblyMetadata(\"GSharp.TypeSemantics\", \"" +
+                nullableCollectionToken.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                "|struct|1|Items:0|closed\")]\n" +
                 declarations,
             "legacy5296",
             reference
@@ -597,6 +998,18 @@ let bad = Legacy{}`, "rejected", executable: true, "/r:" + selected, "/refout:" 
         Assert.True(output.Contains("rejected.gs(2,11,2,17): error GS0267:", StringComparison.Ordinal), output)
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
         Assert.False(File.Exists(rejectedReference))
+        let rejectedCollectionReference = Path.Combine(fixture.Directory, "rejectedcollection.ref.dll")
+        let (collectionCode, collectionOutput) = fixture.TryCompile(`import legacy5296
+let bad = Collection{}`, "rejectedcollection", executable: true, "/r:" +
+                selected, "/refout:" + rejectedCollectionReference)
+        Assert.NotEqual(0, collectionCode)
+        Assert.True(
+            collectionOutput.Contains("rejectedcollection.gs(2,11,2,21): error GS0267:", StringComparison.Ordinal),
+            collectionOutput
+        )
+        Assert.Equal(1, collectionOutput.Split("error GS0267:", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejectedcollection.dll")))
+        Assert.False(File.Exists(rejectedCollectionReference))
         let consumer = fixture.Compile(`import legacy5296
 import System
 let empty = Foreign{}
@@ -605,9 +1018,12 @@ let ordinary = Foreign(3)
 Console.WriteLine(empty.X.ToString() + "/" + empty.Y.ToString())
 Console.WriteLine(supplied.X.ToString() + "/" + supplied.Y.ToString())
 Console.WriteLine(ordinary.X.ToString() + "/" + ordinary.Y.ToString())
-Console.WriteLine(Authored{}.X)`, "consumer", executable: true, "/r:" + selected)
+Console.WriteLine(Authored{}.X)
+let collection = Collection{Items: []int32{3}}
+Console.WriteLine(collection.Items.Length.ToString() + "/" + collection.Items[0].ToString())
+Console.WriteLine(NullableCollection{}.Items == nil)`, "consumer", executable: true, "/r:" + selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("0/0\n9/0\n3/3\n8\n"), fixture.RunBytes(consumer))
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("0/0\n9/0\n3/3\n8\n1/3\nTrue\n"), fixture.RunBytes(consumer))
     }
 
     @Theory

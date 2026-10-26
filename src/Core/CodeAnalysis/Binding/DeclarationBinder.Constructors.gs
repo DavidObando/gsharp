@@ -982,11 +982,18 @@ internal partial class DeclarationBinder {
         // becomes a synthesized designated initializer that participates in
         // the overload set alongside the explicit bodies. Duplicate signatures
         // are diagnosed below by the same overload-equality check that catches
-        // collisions between two user-declared init overloads. Value structs
-        // reuse that signature validation without adding a source overload.
+        // collisions between two user-declared init overloads. Data structs
+        // share these signatures with ordinary calls and self-delegation.
         var synthesizedPrimary ConstructorSymbol? = nil
         if structSymbol.HasPrimaryConstructor ||
-            (structSymbol.UsesConstructorOwnedDataConstruction && structSymbol.HasDeclaredPrimaryConstructor) {
+            (
+            structSymbol.UsesConstructorOwnedDataConstruction &&
+                (
+                structSymbol.HasDeclaredPrimaryConstructor || !syntax.Constructors.Any(
+                    (constructor ConstructorDeclarationSyntax) -> constructor.Parameters.Count == 0
+                )
+            )
+        ) {
             synthesizedPrimary = SynthesizePrimaryConstructor(structSymbol, $package)
         }
         // ADR-0063 §9: bind every declared init(...) constructor. Duplicate
@@ -994,7 +1001,7 @@ internal partial class DeclarationBinder {
         // overloads, so each surviving ConstructorSymbol carries a unique
         // signature within the overload family.
         let ctorBuilder = ImmutableArray.CreateBuilder[ConstructorSymbol]()
-        if structSymbol.IsClass && synthesizedPrimary != nil {
+        if (structSymbol.IsClass || structSymbol.UsesConstructorOwnedDataConstruction) && synthesizedPrimary != nil {
             ctorBuilder.Add(synthesizedPrimary)
         }
         for ctorSyntax in syntax.Constructors {
@@ -1023,8 +1030,7 @@ internal partial class DeclarationBinder {
                     structSymbol.Name
                 )
             }
-            // Value structs also own a primary signature, even though their
-            // constructor overload set does not contain a synthesized symbol.
+            // Check the owning primary signature before accepting an authored overload.
             var duplicate = synthesizedPrimary != nil && BoundScope.FunctionSignaturesEqual(
                 synthesizedPrimary.Function,
                 ctor.Function

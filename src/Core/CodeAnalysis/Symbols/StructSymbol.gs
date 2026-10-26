@@ -889,7 +889,10 @@ class StructSymbol : TypeSymbol {
     internal prop HasSynthesizedDataConstructor bool -> UsesConstructorOwnedDataConstruction &&
         (
         HasDeclaredPrimaryConstructor || !EffectiveExplicitConstructors.Any(
-            (constructor ConstructorSymbol) -> constructor.Parameters.IsEmpty
+            (constructor ConstructorSymbol) -> !constructor.IsSynthesizedFromPrimaryConstructor &&
+                constructor
+                .Parameters
+                .IsEmpty
         )
     )
 
@@ -906,7 +909,30 @@ class StructSymbol : TypeSymbol {
         }
     )
 
-    /// Selects the ordinary imported constructor from the existing G# primary signature.
+    /// Finds the storage selected by existing primary-member metadata.
+    internal func GetDataConstructionPrimaryField(type Type, index int32) FieldInfo? {
+        if !ImportedAssemblySemantics.TryGetTypeSemantics(type, out var semantics) ||
+            index < 0 ||
+            index >= semantics!!
+            .PrimaryConstructorParameterNames
+            .Length {
+            return nil
+        }
+        let tokens = semantics!!.PrimaryConstructorParameterFieldTokens
+        return ClrTypeUtilities.SafeGetFields(
+            type,
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+        )
+            .FirstOrDefault(
+            (field FieldInfo) -> if !tokens.IsDefaultOrEmpty && index < tokens.Length && tokens[index] != 0 {
+                field.MetadataToken == tokens[index]
+            } else {
+                field.Name == semantics!!.PrimaryConstructorParameterNames[index]
+            }
+        )
+    }
+
+    /// Selects the declaration signature before mapping it to a closed imported type.
     internal func GetDataConstructionConstructor() ConstructorInfo? {
         if ClrType is not{} importedType {
             return nil
@@ -923,17 +949,16 @@ class StructSymbol : TypeSymbol {
             return nil
         }
         let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
-        let fields = ClrTypeUtilities.SafeGetFields(importedType, flags)
+        let signatureType = if importedType.IsGenericType && !importedType.IsGenericTypeDefinition {
+            importedType.GetGenericTypeDefinition()
+        } else {
+            importedType
+        }
         let expectedTypes = ImmutableArray.CreateBuilder[Type](parameters.Length)
         for var i = 0; i < parameters.Length; i++ {
-            let tokens = semantics!!.PrimaryConstructorParameterFieldTokens
-            let field = if !tokens.IsDefaultOrEmpty && i < tokens.Length && tokens[i] != 0 {
-                fields.FirstOrDefault((candidate FieldInfo) -> candidate.MetadataToken == tokens[i])
-            } else {
-                fields.FirstOrDefault((candidate FieldInfo) -> candidate.Name == parameters[i].Name)
-            }
+            let field = GetDataConstructionPrimaryField(signatureType, i)
             let physicalType = field?.FieldType ?? ClrTypeUtilities.SafeGetProperty(
-                importedType,
+                signatureType,
                 parameters[i].Name,
                 flags
             )
@@ -943,7 +968,7 @@ class StructSymbol : TypeSymbol {
             }
             expectedTypes.Add(physicalType)
         }
-        for constructor in ClrTypeUtilities.SafeGetConstructors(importedType, flags) {
+        for constructor in ClrTypeUtilities.SafeGetConstructors(signatureType, flags) {
             let actual = constructor.GetParameters()
             if actual.Length != parameters.Length {
                 continue
@@ -956,16 +981,24 @@ class StructSymbol : TypeSymbol {
                 }
             }
             if matches {
-                return constructor
+                return if object.ReferenceEquals(signatureType, importedType) {
+                    constructor
+                } else {
+                    ClrTypeUtilities.FindMetadataDefinition(
+                        importedType,
+                        constructor,
+                        flags,
+                        safeEnumeration: true
+                    ) as ConstructorInfo
+                }
             }
         }
         return nil
     }
 
     /// Gets a value indicating whether a positional data struct needs an in-type collection-zero helper.
-    internal prop NeedsValueStructZeroHelper bool -> ValueStructDefaultCtorIsZeroInitialization && Fields.Any(
-        (member FieldSymbol) -> MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(nil, this, member) != nil
-    )
+    internal prop NeedsValueStructZeroHelper bool -> ValueStructDefaultCtorIsZeroInitialization &&
+        MagicCollectionZeroValue.CanSynthesizeInTypeZeroConstructor(this)
 
     /// Gets imported accessors selected by interface conformance binding.
     internal prop ImportedInterfaceAccessors List[

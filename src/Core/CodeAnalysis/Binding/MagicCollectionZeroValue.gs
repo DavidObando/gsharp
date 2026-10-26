@@ -145,6 +145,53 @@ internal shared class MagicCollectionZeroValue {
         }
     }
 
+    internal func TrySynthesizePrimaryArgument(
+        syntax SyntaxNode?,
+        owner StructSymbol,
+        parameter ParameterSymbol
+    ) BoundExpression? {
+        let zero = TrySynthesizeEmptyInstance(syntax, parameter.Type)
+        if zero != nil || owner.ClrType is not{} imported || !ImportedAssemblySemantics.TryGetMagicCollectionFields(
+            imported,
+            out var kinds
+        ) {
+            return zero
+        }
+        let field = owner.GetDataConstructionPrimaryField(
+            imported,
+            owner.PrimaryConstructorParameters.IndexOf(parameter)
+        )
+        return if field != nil && kinds!!.TryGetValue(field.Name, out var kind) {
+            TrySynthesizeEmptyInstanceFromMarker(field, kind)
+        } else {
+            nil
+        }
+    }
+
+    internal func CanSynthesizeInTypeZeroConstructor(owner StructSymbol) bool {
+        var hasZero = false
+        for field in owner.Fields {
+            if TrySynthesizeInTypeZeroField(nil, owner, field) is {} zero {
+                if !CanInitializeZeroValue(zero) {
+                    return false
+                }
+                hasZero = true
+            }
+        }
+        return hasZero
+    }
+
+    private func CanInitializeZeroValue(value BoundExpression) bool {
+        if value is not BoundStructLiteralExpression literal {
+            return true
+        }
+        return literal.Initializers.All(
+            (initializer BoundFieldInitializer) ->
+            (literal.StructType.ClrType == nil || initializer.Field == nil || !initializer.Field.IsReadOnly) &&
+                CanInitializeZeroValue(initializer.Value)
+        )
+    }
+
     /// Issue #3329: classifies a struct field's shape into the compact tag
     /// recorded by the `GSharp.MagicCollectionFields` cross-assembly
     /// metadata marker (see (cref:Symbols.ImportedAssemblySemantics)).

@@ -269,6 +269,20 @@ internal shared class InitializationPlanner {
         )
         if owner.UsesConstructorOwnedDataConstruction {
             for field in owner.Fields {
+                if field.Declaration is FieldDeclarationSyntax{Initializer: not nil} ||
+                    (
+                    primaryStores && owner.PrimaryConstructorParameters.Any(
+                        (parameter ParameterSymbol) ->
+                        ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(
+                            owner,
+                            parameter.Name,
+                            out var primaryField
+                        ) &&
+                            primaryField == field
+                    )
+                ) {
+                    continue
+                }
                 if MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(field.Declaration, owner, field) is {} zero {
                     statements.Add(
                         BoundExpressionStatement(

@@ -1611,7 +1611,10 @@ internal class UserTokenResolver {
         let ctorKey = structType.Definition ?? structType
         if !ctorKey.IsClass && ctorKey.IsData && !ctorKey.HasDataConstructionPrimary {
             let explicitDefault = ctorKey.EffectiveExplicitConstructors.FirstOrDefault(
-                (candidate ConstructorSymbol) -> candidate.Parameters.IsEmpty
+                (candidate ConstructorSymbol) -> !candidate.IsSynthesizedFromPrimaryConstructor &&
+                    candidate
+                    .Parameters
+                    .IsEmpty
             )
             if explicitDefault != nil {
                 return this.ResolveUserCtorTokenForExplicit(structType, explicitDefault)

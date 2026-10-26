@@ -91,10 +91,15 @@ An authored inaccessible parameterless constructor is not bypassed. Do not gener
 | Generic data struct or private initialized storage | Use the same selected owning constructor on the closed type. | Bind declaration expressions inside the declaring type. Preserve normal private access. |
 | Old G# producer with a usable ordinary constructor | Select the same constructor by its signature and existing primary mapping. | A correct existing constructor body needs only a corrected consumer. This covers #5364. |
 | Old G# producer missing the required constructor | Report `GS0267` at the construction type. Do not silently substitute raw zero. | Recompile the producer and consumer. Explicit raw defaults remain a separate operation where legal. |
+| Old G# producer missing required primary collection shape metadata | Reject an omitted nonnullable array input with `GS0267`. Do not guess slice or fixed-array shape from CLR `T[]`. | An explicit primary value remains legal. Nullable omission remains null. Recompile the producer to enable sound-zero omission. |
 | Foreign struct without G# primary metadata | Use its accessible parameterless constructor, if present. Otherwise retain its ordinary implicit-zero construction. | Never infer a parameterized constructor from field names or field order. A foreign type's own language controls its constructor body. |
 | Implementation assembly or `/refout` reference | Select the same constructor signature and classify the same primary inputs. | Reference metadata must expose the constructor, visibility, generic signature, primary mapping, and ordinary parameter defaults. |
 
 Use existing authoritative G# type identity and primary-member metadata. Validate a mapped primary constructor against the actual constructor signature after generic substitution. Reject incomplete or inconsistent G# construction metadata instead of guessing.
+
+Select the primary signature on the open definition before mapping the same constructor to a closed generic type. Substitution can make an unrelated overload have the same closed parameter types. It does not change the primary constructor's metadata identity.
+
+Include primary automatic-property backing storage in the existing primary-field mapping and collection-shape entries. Do not add a metadata key. Implementation and reference metadata must preserve the same mapping.
 
 Do not use `ClrType == nil` as a constructor-ownership gate. Do not require recovery of the source distinction between an empty primary list and no primary list. Both zero-argument cases use ordinary `.ctor()` metadata.
 
@@ -175,6 +180,8 @@ Private declaration expressions run inside the declaring constructor. Friend acc
 
 For fresh construction, the owning constructor establishes required sound zeros before declaration expressions or population can use them. An explicit declaration initializer replaces its field's initial zero in the constructor. Never reset that completed field to an empty collection afterward.
 
+An explicit declaration expression owns its field's initialization. Do not add preliminary nested stores when that expression directly assigns the completed value before any legal read. Primary arguments similarly own their assigned storage.
+
 A field without a declaration expression does not recursively call its field type's fresh-construction constructor. Establish only its required sound-zero state. Do not replay that nested type's scalar declaration defaults.
 
 After construction, mixed literals execute assignments and `Add` operations in their existing lexical order. If an `Add` precedes an explicit replacement, it sees the constructor's current collection. This includes an effectful declaration default. It no longer sees a substituted empty collection merely because a later entry replaces that field.
@@ -186,6 +193,8 @@ Structural projection creates a fresh target. Capture its source once. Read cons
 Raw `default(T)`, `initobj`, and zero-initialized array elements remain zero. They do not call the constructor or replay declaration expressions. Existing `GS0604` rejection of illegal managed-reference defaults remains in force.
 
 Bare declarations and existing sound-zero-only helpers retain their ADR-0159 behavior. In particular, they must not start replaying arbitrary scalar declaration defaults. This decision removes the per-field helper protocol, not every existing collection-zero helper.
+
+Do not emit a sound-zero helper whose nested writes violate imported readonly storage. If no legal existing sound-zero path is available, retain a located `GS0127` error. Do not infer a zero-only contract for an arbitrary imported constructor or call a fresh constructor to avoid this error.
 
 `with` and `.copy` remain value copy/update operations under [ADR-0032](0032-data-struct-ergonomics.md). They capture their source once and do not call a fresh-construction constructor or replay declaration initializers. Their existing update legality remains unchanged.
 
@@ -232,6 +241,7 @@ Compile producers and consumers independently through the actual user driver. Do
 | Raw defaults, array elements, bare declarations | Scalar values remain zero and declaration-effect count stays zero. Preserve sound-zero-only behavior and located `GS0604` negatives. |
 | `with` and `.copy` | Copies retain source values. Updates execute once. Constructor/default effect counters do not increase. |
 | Legacy G# producer | A usable existing constructor succeeds, including #5364. A missing required constructor reports `GS0267` at the type identifier and emits no image. Never infer arbitrary parameterized ownership. |
+| Legacy primary collection shape | Missing shape metadata rejects nonnullable array omission with located `GS0267` and no image. An explicit array input and a nullable omitted input remain legal. |
 | Foreign C# producer | An explicit public parameterless constructor runs once. A type without one retains implicit zero. A parameterized-only overload is not guessed from fields. |
 | Roslyn consumer of new G# producer | `new S()` and `new S { X = 9 }` produce `1:I\n9:I\n` after separate resets. Match explicit primary calls; keep readonly-field assignments as compile errors. |
 | Constructor and helper metadata | Inspect actual emitted metadata: required public constructors and mappings exist in implementation and reference assemblies. No `<>FieldInitializers` host or `<>fieldInitializer$...` method exists. |

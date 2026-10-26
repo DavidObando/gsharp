@@ -2136,7 +2136,7 @@ internal partial class ExpressionBinder {
                 continue
             }
             if hasField &&
-                !callsDataConstructor &&
+                (!callsDataConstructor || (orderedInitializers != nil && !usesGetter)) &&
                 !consumesPrimaryArgument &&
                 !BoundStructLiteralExpression.CanWriteInitializerField(fieldDeclaringType ?? structSymbol!!, field!!) &&
                 (!usesGetter || !structSymbol!!.IsClass) {
@@ -2176,7 +2176,11 @@ internal partial class ExpressionBinder {
             }
             // A get-only property (no `set` and no `init` accessor) cannot be
             // assigned in a composite literal — keep it diagnosed.
-            if !hasField && !Invariant.Required(property, "a resolved property is present", expression: "property")
+            if !hasField && !(callsDataConstructor && consumesPrimaryArgument) && !Invariant.Required(
+                property,
+                "a resolved property is present",
+                expression: "property"
+            )
                 .HasSetter {
                 Diagnostics.ReportCannotAssign(initSyntax.FieldIdentifier.Location, fieldName)
                 continue
@@ -2716,7 +2720,11 @@ internal partial class ExpressionBinder {
             }
             constructor = aggregate!!.GetDataConstructionConstructor()
             let supplied = Dictionary[string, BoundExpression](StringComparer.Ordinal)
-            let parameters = aggregate!!.PrimaryConstructorParameters
+            let parameters = if aggregate!!.HasDataConstructionPrimary {
+                aggregate!!.PrimaryConstructorParameters
+            } else {
+                ImmutableArray[ParameterSymbol].Empty
+            }
             for parameter in parameters {
                 constructorMembers.Add(parameter.Name)
             }
@@ -2757,7 +2765,7 @@ internal partial class ExpressionBinder {
                     if supplied.TryGetValue(parameters[i].Name, out var value) {
                         value
                     } else {
-                        MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, type) ??
+                        MagicCollectionZeroValue.TrySynthesizePrimaryArgument(syntax, aggregate!!, parameters[i]) ??
                             BoundDefaultExpression(syntax, type)
                     }
                 )
@@ -2878,7 +2886,8 @@ internal partial class ExpressionBinder {
             }
             let initSyntax = cast[FieldInitializerSyntax](element)
             let memberName = initSyntax.FieldIdentifier.ValueText
-            if constructorMembers?.Contains(memberName) == true {
+            if constructorMembers?.Contains(memberName) == true &&
+                initSyntax.Value is not CollectionInitializerExpressionSyntax{Target: nil} {
                 continue
             }
             if !seen.Add(memberName) {

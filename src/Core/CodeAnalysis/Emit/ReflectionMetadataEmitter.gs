@@ -2132,7 +2132,9 @@ internal class ReflectionMetadataEmitter {
             }
             structFirstMethodRows[s] = methodRow
             if !s.ExplicitConstructors.IsDefaultOrEmpty {
-                methodRow += s.ExplicitConstructors.Length
+                methodRow += s.ExplicitConstructors.Count(
+                    (constructor ConstructorSymbol) -> !constructor.IsSynthesizedFromPrimaryConstructor
+                )
             }
             if s.IsInline {
                 methodRow += 8
@@ -2643,16 +2645,26 @@ internal class ReflectionMetadataEmitter {
                 s,
                 out var explicitCtorRow
             ) {
-                for var i = 0; i < s.ExplicitConstructors.Length; i++ {
-                    this.cache.ExplicitCtorHandles[s.ExplicitConstructors[i]] = MetadataTokens.MethodDefinitionHandle(
-                        explicitCtorRow + i
+                for constructor in s.ExplicitConstructors {
+                    if constructor.IsSynthesizedFromPrimaryConstructor {
+                        continue
+                    }
+                    this.cache.ExplicitCtorHandles[constructor] = MetadataTokens.MethodDefinitionHandle(
+                        explicitCtorRow++
                     )
                 }
             } else if s.IsInline && structFirstMethodRows.TryGetValue(s, out var inlineCtorRow) {
                 this.cache.ClassPrimaryCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(inlineCtorRow)
             }
             if s.HasSynthesizedDataConstructor && classPrimaryCtorRows.TryGetValue(s, out var dataPrimaryCtorRow) {
-                this.cache.ClassPrimaryCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(dataPrimaryCtorRow)
+                let primaryHandle = MetadataTokens.MethodDefinitionHandle(dataPrimaryCtorRow)
+                this.cache.ClassPrimaryCtorHandles[s] = primaryHandle
+                // The overload symbol names the existing constructor row; it does not add another method.
+                for constructor in s.ExplicitConstructors {
+                    if constructor.IsSynthesizedFromPrimaryConstructor {
+                        this.cache.ExplicitCtorHandles[constructor] = primaryHandle
+                    }
+                }
             }
         }
         // Same hazard, same fix, for a NAMED DELEGATE's ctor: an interface
@@ -3481,6 +3493,9 @@ internal class ReflectionMetadataEmitter {
         let EmitStructMethodBodies = func (s StructSymbol) {
             if !s.ExplicitConstructors.IsDefaultOrEmpty {
                 for explicitCtor in s.ExplicitConstructors {
+                    if explicitCtor.IsSynthesizedFromPrimaryConstructor {
+                        continue
+                    }
                     let ctorHandle = this.typeDefEmitter.EmitClassConstructorWithBody(s, explicitCtor)
                     this.cache.ExplicitCtorHandles[explicitCtor] = ctorHandle
                 }

@@ -205,6 +205,28 @@ class BoundStructLiteralExpression : BoundExpression {
                     )
                         .Any((candidate System.Reflection.ConstructorInfo) -> candidate.GetParameters().Length == 0)
                 }
+                if valid && type.HasDataConstructionPrimary && syntax is StructLiteralExpressionSyntax literal {
+                    for parameter in type.PrimaryConstructorParameters {
+                        let supplied = literal.Initializers.Any(
+                            (initializer FieldInitializerSyntax) -> initializer
+                                .FieldIdentifier
+                                .ValueText == parameter.Name &&
+                                initializer.Value is not CollectionInitializerExpressionSyntax{Target: nil}
+                        )
+                        if !supplied &&
+                            parameter
+                            .Type
+                            .ReferenceNullability == ReferenceNullabilityKind.NotNull &&
+                            parameter
+                            .Type
+                            .ClrType
+                            ?.IsArray == true &&
+                            MagicCollectionZeroValue.TrySynthesizePrimaryArgument(literal, type, parameter) == nil {
+                            valid = false
+                            break
+                        }
+                    }
+                }
             } else if !type.HasDataConstructionPrimary {
                 let constructor = type.EffectiveExplicitConstructors.FirstOrDefault(
                     (candidate ConstructorSymbol) -> candidate.Parameters.IsEmpty
@@ -245,7 +267,7 @@ class BoundStructLiteralExpression : BoundExpression {
                 }
                 // Defaults are children of the bound literal, so rewriting and
                 // slot planning see exactly the nodes that emission will consume.
-                let value = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, parameter.Type) ??
+                let value = MagicCollectionZeroValue.TrySynthesizePrimaryArgument(syntax, type, parameter) ??
                     BoundDefaultExpression(syntax, parameter.Type)
                 builder ??= initializers.ToBuilder()
                 builder!!.Add(
