@@ -102,6 +102,14 @@ change.
 The raw bytes of the Source-Link JSON file as passed to `/sourcelink:<file>`,
 unmodified. The PDB spec does not transform or re-encode the payload.
 
+The SDK uses the standard .NET `GenerateSourceLinkFile` target for automatic mappings.
+It tracks the JSON file before it calculates the compilation input cache.
+Mapping changes therefore update incremental build output.
+An explicit missing file causes an SDK error when compilation requests debug information.
+`EnableSourceLink=false` disables automatic generation but permits an explicit `SourceLink` file.
+The direct compiler option continues to accept an existing JSON file without changing its bytes.
+See [ADR-0215](adr/0215-source-link-build-inputs.md) and the [SDK guide](../website/docs/tooling/sdk-projects.md#source-link).
+
 ### `CompilationOptions` blob layout
 
 A sequence of `(utf8 name \0 utf8 value \0)` pairs. The Phase 6 set is:
