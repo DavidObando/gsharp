@@ -676,10 +676,45 @@ internal partial class MethodBodyEmitter {
                 // MethodBase.GetMethodFromHandle(...) ; castclass MethodInfo`.
                 this.EmitMethodInfoLiteral(method)
             }
+            case constructor is BoundConstructorCallExpression {
+                // Keep constructor identity and its closed owner until metadata emission.
+                let token = if constructor.StructType.ClrType != nil {
+                    this
+                        .outer
+                        .memberRefs
+                        .GetCtorReference(
+                        Invariant.Required(
+                            constructor.StructType.GetDataConstructionConstructor(),
+                            "a constructor-owned imported literal has a selected constructor",
+                            expression: "constructor.StructType.GetDataConstructionConstructor()"
+                        ),
+                        constructor.StructType
+                    )
+                } else {
+                    this.outer.userTokens.ResolveUserCtorToken(constructor)
+                }
+                this.EmitConstructorInfoLiteral(token, constructor.StructType)
+            }
+            case constructor is BoundClrConstructorCallExpression {
+                this.EmitConstructorInfoLiteral(
+                    this.outer.memberRefs.GetCtorReference(constructor.Constructor, constructor.Type),
+                    constructor.Type
+                )
+            }
             default {
                 throw NotSupportedException("Literal of CLR type '${literal.Value?.GetType()}' is not yet supported.")
             }
         }
+    }
+
+    private func EmitConstructorInfoLiteral(token EntityHandle, owner TypeSymbol) {
+        this.il.OpCode(ILOpCode.Ldtoken)
+        this.il.Token(token)
+        this.il.OpCode(ILOpCode.Ldtoken)
+        this.il.Token(this.outer.memberRefs.GetTypeOfToken(owner))
+        this.il.Call(this.outer.wellKnown.GetMethodFromHandleWithDeclaringTypeReference())
+        this.il.OpCode(ILOpCode.Castclass)
+        this.il.Token(this.outer.memberRefs.GetTypeReference(typeof(ConstructorInfo)))
     }
 
     private func EmitMethodInfoLiteral(method MethodInfo) {
@@ -699,9 +734,7 @@ internal partial class MethodBodyEmitter {
         } else {
             this.il.Call(this.outer.wellKnown.GetMethodFromHandleReference())
         }
-        // GetMethodFromHandle returns MethodBase; every caller of this helper
-        // needs the more specific MethodInfo (constructors never reach here —
-        // Stream C only resolves public static operator methods).
+        // GetMethodFromHandle returns MethodBase; these callers need MethodInfo.
         this.il.OpCode(ILOpCode.Castclass)
         this.il.Token(this.outer.memberRefs.GetTypeReference(typeof(MethodInfo)))
     }
@@ -1291,7 +1324,7 @@ internal partial class MethodBodyEmitter {
                 }
                 let constructor = literal.StructType.GetDataConstructionConstructor()
                 let token = if constructor != nil {
-                    this.outer.memberRefs.GetCtorReference(constructor)
+                    this.outer.memberRefs.GetCtorReference(constructor, literal.StructType)
                 } else {
                     this.outer.userTokens.ResolveUserCtorTokenForPrimary(literal.StructType)
                 }

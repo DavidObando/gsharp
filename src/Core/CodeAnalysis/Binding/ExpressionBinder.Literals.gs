@@ -1621,7 +1621,8 @@ internal partial class ExpressionBinder {
     private func BindStructLiteralExpression(
         syntax StructLiteralExpressionSyntax,
         resolvedDefinition StructSymbol?,
-        enclosingTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
+        enclosingTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
+        resolveTypeOnly bool = false
     ) BoundExpression {
         if resolvedDefinition == nil && syntax.TypeArgumentList is {} nativeTypeArguments {
             if CanUseSpanAlias(syntax.TypeIdentifier, expression: true) {
@@ -1971,6 +1972,9 @@ internal partial class ExpressionBinder {
                 enclosingTypeArguments,
                 $scope.References!!.MapClrTypeToReferences
             )
+        }
+        if resolveTypeOnly {
+            return BoundDefaultExpression(syntax, structSymbol!!)
         }
         // ADR-0180: a bare content element or `...source` content spread
         // lowers to Add(...)/Add(item) on the constructed receiver, exactly
@@ -2492,7 +2496,12 @@ internal partial class ExpressionBinder {
                 .SeparatedSyntaxList[StructLiteralElementSyntax](ImmutableArray[SyntaxNode].Empty),
             syntax.CloseBraceToken
         ){TypeArgumentList = syntax.TypeArgumentList}
-        let boundTarget = BindStructLiteralExpression(emptyTargetSyntax, resolvedDefinition, enclosingTypeArguments)
+        let boundTarget = BindStructLiteralExpression(
+            emptyTargetSyntax,
+            resolvedDefinition,
+            enclosingTypeArguments,
+            resolveTypeOnly: true
+        )
         let spreadExpression = Invariant.Required(
             syntax.SpreadExpression,
             "a structural spread has a source expression",
@@ -2765,7 +2774,12 @@ internal partial class ExpressionBinder {
                     if supplied.TryGetValue(parameters[i].Name, out var value) {
                         value
                     } else {
-                        MagicCollectionZeroValue.TrySynthesizePrimaryArgument(syntax, aggregate!!, parameters[i]) ??
+                        MagicCollectionZeroValue.TrySynthesizePrimaryArgument(
+                            syntax,
+                            aggregate!!,
+                            parameters[i],
+                            type
+                        ) ??
                             BoundDefaultExpression(syntax, type)
                     }
                 )

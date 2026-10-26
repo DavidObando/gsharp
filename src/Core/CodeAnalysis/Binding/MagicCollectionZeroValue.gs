@@ -148,23 +148,27 @@ internal shared class MagicCollectionZeroValue {
     internal func TrySynthesizePrimaryArgument(
         syntax SyntaxNode?,
         owner StructSymbol,
-        parameter ParameterSymbol
+        parameter ParameterSymbol,
+        parameterType TypeSymbol? = nil
     ) BoundExpression? {
-        let zero = TrySynthesizeEmptyInstance(syntax, parameter.Type)
-        if zero != nil || owner.ClrType is not{} imported || !ImportedAssemblySemantics.TryGetMagicCollectionFields(
+        if owner.ClrType is not{} imported || !ImportedAssemblySemantics.TryGetMagicCollectionFields(
             imported,
             out var kinds
         ) {
-            return zero
+            return TrySynthesizeEmptyInstance(syntax, parameterType ?? parameter.Type)
         }
         let field = owner.GetDataConstructionPrimaryField(
             imported,
             owner.PrimaryConstructorParameters.IndexOf(parameter)
         )
         return if field != nil && kinds!!.TryGetValue(field.Name, out var kind) {
-            TrySynthesizeEmptyInstanceFromMarker(field, kind)
+            TrySynthesizeEmptyInstanceFromMarker(
+                field,
+                kind,
+                parameterType ?? MemberLookup.GetClrFieldTypeSymbol(owner, field)
+            )
         } else {
-            nil
+            TrySynthesizeEmptyInstance(syntax, parameterType ?? parameter.Type)
         }
     }
 
@@ -235,9 +239,14 @@ internal shared class MagicCollectionZeroValue {
     /// zero value (see (cref:TrySynthesizeEmptyInstance)).
     /// @param fieldInfo The reflected field the marker describes.
     /// @param markerKind The marker tag produced by (cref:ClassifyForMarker).
+    /// @param fieldType The receiver-aware signature type, when available.
     /// @returns The synthesized empty-instance expression, or `null` when the field/tag cannot be
     /// reconstructed.
-    internal func TrySynthesizeEmptyInstanceFromMarker(fieldInfo FieldInfo?, markerKind string?) BoundExpression? {
+    internal func TrySynthesizeEmptyInstanceFromMarker(
+        fieldInfo FieldInfo?,
+        markerKind string?,
+        fieldType TypeSymbol? = nil
+    ) BoundExpression? {
         if fieldInfo == nil || string.IsNullOrEmpty(markerKind) {
             return nil
         }
@@ -258,13 +267,13 @@ internal shared class MagicCollectionZeroValue {
             if args.Length != 2 {
                 return nil
             }
-            type = MapTypeSymbol.Get(ElementShape(fieldInfo, 0), ElementShape(fieldInfo, 1))
+            type = MapTypeSymbol.Get(ElementShape(fieldInfo, 0, fieldType), ElementShape(fieldInfo, 1, fieldType))
         } else if string.Equals(markerKind, "slice", StringComparison.Ordinal) {
             let elementClr Type? = fieldInfo.FieldType.GetElementType()
             if elementClr == nil {
                 return nil
             }
-            type = SliceTypeSymbol.Get(ElementShape(fieldInfo, 0))
+            type = SliceTypeSymbol.Get(ElementShape(fieldInfo, 0, fieldType))
         } else if markerKind!!.StartsWith("arr", StringComparison.Ordinal) {
             let elementClr Type? = fieldInfo.FieldType.GetElementType()
             if elementClr == nil || !int32.TryParse(
@@ -275,7 +284,7 @@ internal shared class MagicCollectionZeroValue {
             ) {
                 return nil
             }
-            type = ArrayTypeSymbol.Get(ElementShape(fieldInfo, 0), length)
+            type = ArrayTypeSymbol.Get(ElementShape(fieldInfo, 0, fieldType), length)
         } else if markerKind!!.StartsWith("rect", StringComparison.Ordinal) {
             let elementClr Type? = fieldInfo.FieldType.GetElementType()
             if elementClr == nil || !fieldInfo.FieldType.IsArray || !int32.TryParse(
@@ -289,13 +298,13 @@ internal shared class MagicCollectionZeroValue {
                 .GetArrayRank() != rank {
                 return nil
             }
-            type = RectangularArrayTypeSymbol.Get(ElementShape(fieldInfo, 0), rank)
+            type = RectangularArrayTypeSymbol.Get(ElementShape(fieldInfo, 0, fieldType), rank)
         } else if string.Equals(markerKind, "seq", StringComparison.Ordinal) {
             let args = fieldInfo.FieldType.GetGenericArguments()
             if args.Length != 1 {
                 return nil
             }
-            type = SequenceTypeSymbol.Get(ElementShape(fieldInfo, 0))
+            type = SequenceTypeSymbol.Get(ElementShape(fieldInfo, 0, fieldType))
         } else {
             return nil
         }
@@ -577,12 +586,10 @@ internal shared class MagicCollectionZeroValue {
         }
     }
 
-    /// ADR-0193 Phase 2: one element position of a magic-collection field's
-    /// declared type, read through the funnel and taken bare. The synthesized
-    /// empty collection is the field's runtime zero value; it read these
-    /// positions erased before, and still wants that shape.
-    private func ElementShape(field FieldInfo, index int32) TypeSymbol {
-        let positions = ClrNullability.GetFieldTypeSymbol(field).GetElementPositions()
+    /// Reads a collection element through canonical signature queries.
+    /// Sound-zero construction uses the substituted element's bare shape.
+    private func ElementShape(field FieldInfo, index int32, fieldType TypeSymbol? = nil) TypeSymbol {
+        let positions = (fieldType ?? ClrNullability.GetFieldTypeSymbol(field)).GetElementPositions()
         return if uint32(index) < uint32(positions.Length) {
             positions[index].StripToBareShape()
         } else {

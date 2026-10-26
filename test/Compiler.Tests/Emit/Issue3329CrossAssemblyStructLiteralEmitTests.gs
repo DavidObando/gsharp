@@ -38,6 +38,166 @@ open class Issue3329CrossAssemblyStructLiteralEmitTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func ConstructorOwnedReview_RequiredOrdinaryArguments(useReferenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(`package required5296
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Next() int32 {
+            Trace = Trace + "D"
+            return 7
+        }
+    }
+}
+public data struct Required(A int32) { public var X int32 = Effects.Next() }
+public data struct Optional(A int32 = 17) { public var X int32 = Effects.Next() }
+public data struct Secondary(A int32) {
+    public var X int32 = Effects.Next()
+    public init() {
+        A = 8
+        Effects.Trace = Effects.Trace + "B"
+    }
+}`, "required5296", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let consumer = fixture.Compile(`import required5296
+import System
+Console.WriteLine(Optional().A)
+Console.WriteLine(Optional{}.A)
+Console.WriteLine(Required(6).A)
+Console.WriteLine(Required{}.A)
+Console.WriteLine(Secondary().A)
+Console.WriteLine(Effects.Trace)`, "consumer", executable: true, "/r:" + selected)
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(ExpectedConsoleBytes("17\n0\n6\n0\n8\nDDDDDB\n"), fixture.RunBytes(consumer))
+        for var i = 0; i < 2; i++ {
+            let name = "rejected" + i.ToString()
+            let call = if i == 0 {
+                "Required()"
+            } else {
+                "required5296.Required()"
+            }
+            let rejectedReference = Path.Combine(fixture.Directory, name + ".ref.dll")
+            let (code, output) = fixture.TryCompile(
+                "import required5296\nlet bad = " + call,
+                name,
+                executable: true,
+                "/r:" + selected,
+                "/refout:" + rejectedReference
+            )
+            Assert.NotEqual(0, code)
+            Assert.True(
+                output.Contains(
+                    name +
+                        (
+                        if i == 0 {
+                            ".gs(2,20,2,21): error GS0144:"
+                        } else {
+                            ".gs(2,24,2,32): error GS0267:"
+                        }
+                    ),
+                    StringComparison.Ordinal
+                ),
+                output
+            )
+            Assert.Equal(
+                1,
+                output.Split(
+                    if i == 0 {
+                        "error GS0144:"
+                    } else {
+                        "error GS0267:"
+                    },
+                    StringSplitOptions.None
+                )
+                    .Length - 1
+            )
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, name + ".dll")))
+            Assert.False(File.Exists(rejectedReference))
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedReview_SymbolicPrimaryCollectionZeros(useReferenceAssembly bool) {
+        const library = `package symbolic5296
+public data struct Box[T](Items []T)
+public data struct Fixed[T](Items [2]T)`
+        const source = `import symbolic5296
+import System
+data struct Local { public var X int32 }
+func Lengths[T]() int32 {
+    let simple = Box[T]{}
+    let qualified = symbolic5296.Box[T]{}
+    let fixed = symbolic5296.Fixed[T]{}
+    return simple.Items.Length * 100 + qualified.Items.Length * 10 + fixed.Items.Length
+}
+let qualified = symbolic5296.Box[Local]{}
+let fixed = symbolic5296.Fixed[Local]{}
+Console.WriteLine(qualified.Items.Length)
+Console.WriteLine(fixed.Items.Length)
+Console.WriteLine(Lengths[Local]())
+Console.WriteLine(Lengths[int32]())`
+        Assert.Equal(
+            ExpectedConsoleBytes("0\n2\n2\n2\n"),
+            CompileAndRunExact(source, library, "symbolic5296", useReferenceAssembly)
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedReview_ExpressionTreeNestedSoundZero(useReferenceAssembly bool) {
+        const library = `package treezero5296
+import System
+import System.Linq.Expressions
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Next() int32 {
+            Trace = Trace + "D"
+            return 7
+        }
+    }
+}
+public data struct Child {
+    public var Items []int32
+    public var X int32 = Effects.Next()
+}
+public data struct Box(Value Child)
+public func LocalTree() int32 {
+    let tree Expression[Func[Box]] = () -> Box{}
+    return tree.Compile()().Value.X
+}`
+        const source = `import treezero5296
+import System
+import System.Linq.Expressions
+Console.WriteLine(LocalTree().ToString() + ":" + Effects.Trace)
+let native = Box{}
+Console.WriteLine(native.Value.X.ToString() + "/" + native.Value.Items.Length.ToString() + ":" + Effects.Trace)
+let tree Expression[Func[Box]] = () -> Box{}
+Console.WriteLine("factory:" + Effects.Trace)
+let value = tree.Compile()()
+Console.WriteLine(value.Value.X.ToString() + "/" + value.Value.Items.Length.ToString() + ":" + Effects.Trace)
+let freshTree Expression[Func[Box]] = () -> Box{Value: Child{}}
+let fresh = freshTree.Compile()()
+Console.WriteLine(fresh.Value.X.ToString() + "/" + fresh.Value.Items.Length.ToString() + ":" + Effects.Trace)`
+        Assert.Equal(
+            ExpectedConsoleBytes("0:\n0/0:\nfactory:\n0/0:\n7/0:D\n"),
+            CompileAndRunExact(source, library, "treezero5296", useReferenceAssembly)
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func ConstructorOwnedReview_OrderedReadonlyStores(useReferenceAssembly bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
@@ -68,7 +228,7 @@ Console.WriteLine(first.X.ToString() + "/" + first.Count.ToString())
 Console.WriteLine(second.X.ToString() + "/" + second.Count.ToString() + "/" + second.Items.Count.ToString())`, "consumer", executable: true, "/r:" +
                 selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("7/1\n7/3/1\n"), fixture.RunBytes(consumer))
+        Assert.Equal(ExpectedConsoleBytes("7/1\n7/3/1\n"), fixture.RunBytes(consumer))
         let rejectedReference = Path.Combine(fixture.Directory, "rejected.ref.dll")
         let (code, output) = fixture.TryCompile(`import ordered5296
 let bad = R{X: 9, 1}`, "rejected", executable: true, "/r:" + selected, "/refout:" + rejectedReference)
@@ -83,7 +243,7 @@ let primary = Positional{X: 4, 1}
 Console.WriteLine(primary.X.ToString() + "/" + primary.Count.ToString())`, "primaryconsumer", executable: true, "/r:" +
                 selected)
         IlVerifier.Verify(primaryConsumer, []string{producer})
-        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("4/1\n"), fixture.RunBytes(primaryConsumer))
+        Assert.Equal(ExpectedConsoleBytes("4/1\n"), fixture.RunBytes(primaryConsumer))
     }
 
     @Theory
@@ -117,7 +277,7 @@ Console.WriteLine(third.X.ToString() + "/" + third.Y.ToString())
 Console.WriteLine(fourth.X.ToString() + "/" + fourth.Y.ToString())
 Console.WriteLine(ordinary.X.ToString() + "/" + ordinary.Y.ToString())`, "consumer", executable: true, "/r:" + selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("0/0\n9/0\n8/4\n9/4\n3/3\n"), fixture.RunBytes(consumer))
+        Assert.Equal(ExpectedConsoleBytes("0/0\n9/0\n8/4\n9/4\n3/3\n"), fixture.RunBytes(consumer))
     }
 
     @Theory
@@ -149,11 +309,7 @@ Effects.Trace = ""
 try { let second = population5296.Box{Items: {Effects.Mark("E", 4)}} }
 catch (ex Exception) { Console.WriteLine(Effects.Trace + ":" + ex.GetType().Name) }`
         Assert.Equal(
-            System
-                .Text
-                .Encoding
-                .UTF8
-                .GetBytes("DE:NotSupportedException\nDE:NotSupportedException\nDE:NotSupportedException\n"),
+            ExpectedConsoleBytes("DE:NotSupportedException\nDE:NotSupportedException\nDE:NotSupportedException\n"),
             CompileAndRunExact(source, library, "population5296", useReferenceAssembly)
         )
     }
@@ -187,7 +343,7 @@ Effects.Trace = ""
 Console.WriteLine(Box().Value.ToString() + ":" + Effects.Trace)
 Console.WriteLine(Box{}.Value)`
         Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("7:E\n7:E\n5:\n0\n"),
+            ExpectedConsoleBytes("7:E\n7:E\n5:\n0\n"),
             CompileAndRunExact(source, library, "getter5296", useReferenceAssembly)
         )
     }
@@ -210,7 +366,7 @@ Console.WriteLine(Box{Value: 7}.Value)
 let qualified = getterliteral5296.Box{Value: 9}
 Console.WriteLine(qualified.Value)`
         Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("3\n7\n9\n"),
+            ExpectedConsoleBytes("3\n7\n9\n"),
             CompileAndRunExact(source, library, "getterliteral5296", useReferenceAssembly)
         )
     }
@@ -249,7 +405,7 @@ Console.WriteLine(PrimaryOptional(6).A)
 Console.WriteLine(PrimaryOptional{}.A)
 Console.WriteLine(SourceOptionalDefaults())`
         Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("1\n2\n8\n9\n1\n6\n1\n7\n6\n0\n170\n"),
+            ExpectedConsoleBytes("1\n2\n8\n9\n1\n6\n1\n7\n6\n0\n170\n"),
             CompileAndRunExact(source, library, "overload5296", useReferenceAssembly)
         )
     }
@@ -308,7 +464,7 @@ Console.WriteLine(second.X.ToString() + ":" + Effects.Trace)`
         }
         let consumer = fixture.Compile(source, "consumer", executable: true, "/r:" + selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("7/4:DB\n9:DB\n"), fixture.RunBytes(consumer))
+        Assert.Equal(ExpectedConsoleBytes("7/4:DB\n9:DB\n"), fixture.RunBytes(consumer))
         let csharp = fixture.CompileCSharp(`using System;
 using chaining5296;
 namespace CSharpConstruction;
@@ -371,7 +527,7 @@ Console.WriteLine(raw.Value.X.ToString() + "/" + array[0].Value.X.ToString() + "
         }
         let consumer = fixture.Compile(source, "consumer", executable: true, "/r:" + selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("7/0:PDA\n0/0:\n"), fixture.RunBytes(consumer))
+        Assert.Equal(ExpectedConsoleBytes("7/0:PDA\n0/0:\n"), fixture.RunBytes(consumer))
         let rejectedReference = Path.Combine(fixture.Directory, "rejected.ref.dll")
         let (code, output) = fixture.TryCompile(`import nestedreadonly5296
 data struct Parent {
@@ -390,6 +546,8 @@ var bare Parent`, "rejected", executable: true, "/r:" + selected, "/refout:" + r
     @InlineData(true)
     func ConstructorOwnedReview_GenericPrimaryConstructorIdentity(useReferenceAssembly bool) {
         const library = `package collision5296
+import System
+import System.Linq.Expressions
 public class Effects {
     shared {
         public var Trace string = ""
@@ -406,9 +564,25 @@ public data struct S[T](Value T) {
         Effects.Trace = Effects.Trace + "A"
     }
 }
-public func Local() int32 -> S[int32]{Value: 5}.Value`
+public func Local() int32 -> S[int32]{Value: 5}.Value
+public func LocalTree() int32 {
+    let tree Expression[Func[S[int32]]] = () -> S[int32]{Value: Effects.Mark("V", 8)}
+    if Effects.Trace != "" {
+        return -100
+    }
+    return tree.Compile()().Value
+}
+public func LocalGenericTree[T](value T) T {
+    let tree Expression[Func[S[T]]] = () -> S[T]{Value: value}
+    return tree.Compile()().Value
+}
+public func LocalAuthoredTree() int32 {
+    let tree Expression[Func[S[int32]]] = () -> S[int32](other: 12)
+    return tree.Compile()().Value
+}`
         const source = `import collision5296
 import System
+import System.Linq.Expressions
 func Make[T](value T) T -> S[T]{Value: value}.Value
 Console.WriteLine(Local().ToString() + ":" + Effects.Trace)
 Effects.Trace = ""
@@ -418,9 +592,22 @@ Effects.Trace = ""
 let second = collision5296.S[int32]{Value: Effects.Mark("V", 9)}
 Console.WriteLine(second.Value.ToString() + ":" + Effects.Trace)
 Effects.Trace = ""
-Console.WriteLine(Make[int32](6).ToString() + ":" + Effects.Trace)`
+Console.WriteLine(Make[int32](6).ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+Console.WriteLine(LocalTree().ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let tree Expression[Func[S[int32]]] = () -> S[int32]{Value: Effects.Mark("V", 7)}
+Console.WriteLine("factory:" + Effects.Trace)
+Console.WriteLine(tree.Compile()().Value.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+Console.WriteLine(LocalGenericTree[int32](10).ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+Console.WriteLine(LocalAuthoredTree().ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let authoredTree Expression[Func[S[int32]]] = () -> S[int32](other: 12)
+Console.WriteLine(authoredTree.Compile()().Value.ToString() + ":" + Effects.Trace)`
         Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("5:D\n5:VD\n9:VD\n6:D\n"),
+            ExpectedConsoleBytes("5:D\n5:VD\n9:VD\n6:D\n8:VD\nfactory:\n7:VD\n10:D\n0:DA\n0:DA\n"),
             CompileAndRunExact(source, library, "collision5296", useReferenceAssembly)
         )
     }
@@ -470,7 +657,7 @@ Effects.Trace = ""
 let ordinary = S()
 Console.WriteLine(ordinary.X.ToString() + ":" + Effects.Trace)`, "consumer", executable: true, "/r:" + selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("1:I\n1:I\n9:I\n9:I\n1:I\n"), fixture.RunBytes(consumer))
+        Assert.Equal(ExpectedConsoleBytes("1:I\n1:I\n9:I\n9:I\n1:I\n"), fixture.RunBytes(consumer))
     }
 
     @Theory
@@ -539,7 +726,7 @@ Console.WriteLine(rawTree.Compile()().X.ToString() + ":" + Effects.Trace)`, "con
                 selected)
         IlVerifier.Verify(consumer, []string{producer})
         Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("DE:9\nDE:9\ntree:\nD:7\n7\ntree:\n9:DE\ntree:\nQADE:3/2/9\n0:\n"),
+            ExpectedConsoleBytes("DE:9\nDE:9\ntree:\nD:7\n7\ntree:\n9:DE\ntree:\nQADE:3/2/9\n0:\n"),
             fixture.RunBytes(consumer)
         )
     }
@@ -569,7 +756,7 @@ let second = Holder{}
 System.Console.WriteLine(first.Value.X)
 System.Console.WriteLine(second.Value.X)`, "consumer", executable: true, "/r:" + selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("7\n7\n"), fixture.RunBytes(consumer))
+        Assert.Equal(ExpectedConsoleBytes("7\n7\n"), fixture.RunBytes(consumer))
         let (code, output) = fixture.TryCompile(`import readonly5296
 let x = R{X: 9}`, "rejected", executable: true, "/r:" + selected)
         Assert.True(code != 0, output)
@@ -701,11 +888,7 @@ Console.WriteLine(Make[int32](42).ToString() + ":" + Effects.Trace)
 Console.WriteLine(RequiredControl())`, "consumer", executable: true, "/r:" + selected)
         IlVerifier.Verify(consumer, []string{producer})
         Assert.Equal(
-            System
-                .Text
-                .Encoding
-                .UTF8
-                .GetBytes(
+            ExpectedConsoleBytes(
                 "ADE:3/0/9\nQADE:1/2/9\nD:3/5/7\nDBE:9\n8:DB\n5:DB\n7:D\n7:D\n99:DP\n7:D\n7:D\nHDE:3/9\n9:DE\n42\n"
             ),
             fixture.RunBytes(consumer)
@@ -785,7 +968,7 @@ Effects.Trace = ""
 let second = StaticPrimary{A: Effects.Mark("A", 1), X: Effects.Mark("E", 9)}
 Console.WriteLine(Effects.Trace + ":" + second.X.ToString())`, "consumer", executable: true, "/r:" + selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("D:default\nSDE:9\nASDE:9\n"), fixture.RunBytes(consumer))
+        Assert.Equal(ExpectedConsoleBytes("D:default\nSDE:9\nASDE:9\n"), fixture.RunBytes(consumer))
     }
 
     @Theory
@@ -852,7 +1035,10 @@ public static class NativeConsumer {
         let consumer = fixture.Compile(`import Native5296Consumer
 System.Console.WriteLine(NativeConsumer.Run())`, "consumer", executable: true, "/r:" + selected, "/r:" + native)
         IlVerifier.Verify(consumer, []string{producer, native})
-        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("DE:9/3\nDE:3/5/9\n0/0:\n7\n"), fixture.RunBytes(consumer))
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetBytes("DE:9/3\nDE:3/5/9\n0/0:\n7" + Environment.NewLine),
+            fixture.RunBytes(consumer)
+        )
         let rejected = CSharpCompilation.Create(
             "rejected",
             []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(`using native5296;
@@ -929,7 +1115,7 @@ let friend = Friend{}
 Console.WriteLine(Effects.Trace + ":" + friend.X.ToString())`, "consumer", executable: true, "/assemblyname:consumer", "/r:" +
                 selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("DB:8\nDB:8\n"), fixture.RunBytes(consumer))
+        Assert.Equal(ExpectedConsoleBytes("DB:8\nDB:8\n"), fixture.RunBytes(consumer))
         let rejectedReference = Path.Combine(fixture.Directory, "rejected.ref.dll")
         let (code, output) = fixture.TryCompile(`import access5296
 let bad = Secret{}`, "rejected", executable: true, "/r:" + selected, "/refout:" + rejectedReference)
@@ -1037,9 +1223,16 @@ Console.WriteLine(ordinary.X.ToString() + "/" + ordinary.Y.ToString())
 Console.WriteLine(Authored{}.X)
 let collection = Collection{Items: []int32{3}}
 Console.WriteLine(collection.Items.Length.ToString() + "/" + collection.Items[0].ToString())
-Console.WriteLine(NullableCollection{}.Items == nil)`, "consumer", executable: true, "/r:" + selected)
+Console.WriteLine(NullableCollection{}.Items == nil)
+data struct Source(Items []int32)
+let original = Source{Items: []int32{4}}
+let projected = Collection{...original}
+Console.WriteLine(projected.Items.Length.ToString() + "/" + projected.Items[0].ToString())
+let overridden = Collection{...original, Items: []int32{8}}
+Console.WriteLine(overridden.Items.Length.ToString() + "/" + overridden.Items[0].ToString())`, "consumer", executable: true, "/r:" +
+                selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("0/0\n9/0\n3/3\n8\n1/3\nTrue\n"), fixture.RunBytes(consumer))
+        Assert.Equal(ExpectedConsoleBytes("0/0\n9/0\n3/3\n8\n1/3\nTrue\n1/4\n1/8\n"), fixture.RunBytes(consumer))
     }
 
     @Theory
@@ -1107,7 +1300,7 @@ Console.WriteLine(raw.X.ToString() + "/" + array[0].X.ToString() + ":" + Effects
                 selected)
         IlVerifier.Verify(consumer, []string{producer})
         Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("D:3/7/0/0\nDEB:3/9/2\nD:3/7\nEC:8/9/7\n0/0/0\n0/0:\n"),
+            ExpectedConsoleBytes("D:3/7/0/0\nDEB:3/9/2\nD:3/7\nEC:8/9/7\n0/0/0\n0/0:\n"),
             fixture.RunBytes(consumer)
         )
     }
@@ -1172,10 +1365,7 @@ Effects.Trace = ""
 Console.WriteLine(NonPrimary{}.X)
 Console.WriteLine(Effects.Trace)`, "consumer", executable: true, "/r:" + selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("IE:9\nIE:9\n1\nI\n1\nI\nIE:9\nIE:9\n1\nI\n"),
-            fixture.RunBytes(consumer)
-        )
+        Assert.Equal(ExpectedConsoleBytes("IE:9\nIE:9\n1\nI\n1\nI\nIE:9\nIE:9\n1\nI\n"), fixture.RunBytes(consumer))
         let assembly = EmittedFixture.Load(producer)
         for name in[]string{"EmptyPrimary", "Primary"} {
             let type = assembly.GetType("i5296primary." + name, throwOnError: true)
@@ -1238,7 +1428,7 @@ System.Console.WriteLine(omitted.Value.Child.Items.Length)
 let supplied = Holder{Value: MutableOuter{Child: MutableItems{Items: []int32{1, 2}}}}
 System.Console.WriteLine(supplied.Value.Child.Items.Length)`, "control", executable: true, "/r:" + selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("0\n0\n2\n"), fixture.RunBytes(consumer))
+        Assert.Equal(ExpectedConsoleBytes("0\n0\n2\n"), fixture.RunBytes(consumer))
     }
 
     @Theory
@@ -1269,7 +1459,7 @@ let target Target = source
 System.Console.WriteLine(target.A)
 System.Console.WriteLine(target.X)`, "projected", executable: true, "/r:" + selected)
         IlVerifier.Verify(projected, []string{producer})
-        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("3\n7\n"), fixture.RunBytes(projected))
+        Assert.Equal(ExpectedConsoleBytes("3\n7\n"), fixture.RunBytes(projected))
         AssertConstructorStores(projected, "i5296projection", "Target", "X")
         let consumer = fixture.Compile(`import i5296projection
 data struct Source {
@@ -1282,7 +1472,7 @@ System.Console.WriteLine(target.A)
 System.Console.WriteLine(target.X)
 System.Console.WriteLine(default(Target).X)`, "control", executable: true, "/r:" + selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("3\n9\n0\n"), fixture.RunBytes(consumer))
+        Assert.Equal(ExpectedConsoleBytes("3\n9\n0\n"), fixture.RunBytes(consumer))
     }
 
     @Theory
@@ -1337,10 +1527,7 @@ let imported = Basket{Tag: 0, 1, Items: Effects.ExplicitItems()}
 Console.WriteLine(Effects.Trace + ":" + imported.Tag.ToString() + "," + imported.Items.Length.ToString())`, "FriendConsumer", executable: true, "/assemblyname:FriendConsumer", "/r:" +
                 selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("AE:1,3\nAE:1,3\n"),
-            System.Text.Encoding.UTF8.GetBytes(fixture.Run(consumer))
-        )
+        Assert.Equal(ExpectedConsoleBytes("AE:1,3\nAE:1,3\n"), fixture.RunBytes(consumer))
         let (code, output) = fixture.TryCompile(`import i5296friend
 let value = Basket{Items: []int32{}}`, "NonFriend", executable: true, "/assemblyname:NonFriend", "/r:" + selected)
         Assert.True(code != 0, output)
@@ -1368,7 +1555,7 @@ public data struct Readonly {
 System.Console.WriteLine(Readonly{}.X)
 System.Console.WriteLine(default(Readonly).X)`, "consumer", executable: true, "/r:" + selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("7\n0\n"), fixture.RunBytes(consumer))
+        Assert.Equal(ExpectedConsoleBytes("7\n0\n"), fixture.RunBytes(consumer))
         let rejectedReference = Path.Combine(fixture.Directory, "rejected.ref.dll")
         let (code, output) = fixture.TryCompile(`import i5296readonly
 let value = Readonly{X: 9}`, "rejected", executable: true, "/r:" + selected, "/refout:" + rejectedReference)
@@ -1418,10 +1605,7 @@ Console.WriteLine(Effects.Trace + ":" + local.Tag.ToString() + "," + local.Items
 Effects.Trace = ""
 let imported = ` + expression + `
 Console.WriteLine(Effects.Trace + ":" + imported.Tag.ToString() + "," + imported.Items.Length.ToString())`
-        Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("DAE:3,3\nDAE:3,3\n"),
-            CompileAndRunExact(source, library, "i5296mixed")
-        )
+        Assert.Equal(ExpectedConsoleBytes("DAE:3,3\nDAE:3,3\n"), CompileAndRunExact(source, library, "i5296mixed"))
     }
 
     @Theory
@@ -1450,11 +1634,7 @@ try {
     System.Console.WriteLine(error.InnerException?.Message)
 }`
         Assert.Equal(
-            System
-                .Text
-                .Encoding
-                .UTF8
-                .GetBytes(
+            ExpectedConsoleBytes(
                 (
                     if throws {
                         "Sexpected static initialization\nSexpected static initialization\n"
@@ -1490,7 +1670,7 @@ Console.WriteLine(PropertyGrid{Layout: Layout.Compact}.LabelWidth)
 Console.WriteLine(SettingsLayoutInput{}.SidebarWidth)
 Console.WriteLine(PropertyGrid{Layout: Layout.Compact, LabelWidth: 160}.LabelWidth)`
         Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("160\n160\n180\n160\n"),
+            ExpectedConsoleBytes("160\n160\n180\n160\n"),
             CompileAndRunExact(source, library, "i5296defaults", useReferenceAssembly)
         )
     }
@@ -1536,7 +1716,7 @@ let array = [1]Imported{}
 Console.WriteLine(array[0].A)
 Console.WriteLine(Effects.Trace.Length)`
         Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("ABCX:1,2,9\nABCX:1,2,9\nABC:1,2,3\nABCXYZ:7,8,9\n0\n0\n0\n"),
+            ExpectedConsoleBytes("ABCX:1,2,9\nABCX:1,2,9\nABC:1,2,3\nABCXYZ:7,8,9\n0\n0\n0\n"),
             CompileAndRunExact(source, library, "i5296order")
         )
     }
@@ -1559,10 +1739,7 @@ if input.Values.Length != 0 {
     Console.WriteLine(input.Values[0])
 }
 Console.WriteLine(input.Text)`
-        Assert.Equal(
-            System.Text.Encoding.UTF8.GetBytes("1\n4\nseed:4\n".ReplaceLineEndings(Environment.NewLine)),
-            System.Text.Encoding.UTF8.GetBytes(CompileAndRun(source, library, "i5296expressions"))
-        )
+        Assert.Equal(ExpectedConsoleBytes("1\n4\nseed:4\n"), CompileAndRunExact(source, library, "i5296expressions"))
     }
 
     @Fact
@@ -1838,6 +2015,12 @@ System.Console.WriteLine(value.Counts.Count)`)
     }
 
     shared {
+        private func ExpectedConsoleBytes(lines string)[]uint8 -> System
+            .Text
+            .Encoding
+            .UTF8
+            .GetBytes(lines.Replace("\n", Environment.NewLine, StringComparison.Ordinal))
+
         private func CompileAndRunExact(
             source string,
             library string,

@@ -1595,6 +1595,20 @@ internal class UserTokenResolver {
         return this.GetUserStructMethodRef(structType, clone, "<Clone>$$", signature)
     }
 
+    internal func ResolveUserCtorToken(call BoundConstructorCallExpression) EntityHandle {
+        if call.SelectedConstructor != nil && this.cache.ExplicitCtorHandles.ContainsKey(call.SelectedConstructor) {
+            return this.ResolveUserCtorTokenForExplicit(call.StructType, call.SelectedConstructor)
+        }
+        let definition = call.StructType.Definition ?? call.StructType
+        if this.cache.ClassPrimaryCtorHandles.ContainsKey(definition) {
+            return this.ResolveUserCtorTokenForPrimary(call.StructType)
+        }
+        if call.Arguments.IsDefaultOrEmpty && this.cache.ClassCtorHandles.ContainsKey(definition) {
+            return this.ResolveUserCtorTokenForDefault(call.StructType)
+        }
+        throw InvalidOperationException("Type '${call.StructType.Name}' has no emitted primary ctor.")
+    }
+
     /// ADR-0087 §3 R3: resolves the right token for a `newobj`
     /// against a user-declared primary ctor. Returns the bare
     /// `MethodDef` for a non-generic type, or a MemberRef

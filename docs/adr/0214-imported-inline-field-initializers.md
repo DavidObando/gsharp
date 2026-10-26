@@ -216,6 +216,10 @@ Share selection, initialization ownership, and write-legality decisions across b
 
 The emitted program, REPL, and supported expression-tree lowering must select the same constructor and preserve the same phases. Unsupported expression-tree cases must retain explicit diagnostics, not silently use raw zero.
 
+Preserve the selected constructor and its constructed receiver during expression-tree lowering. Do not repeat constructor selection from closed argument types.
+
+Resolve a projection's target type before checking omitted constructor inputs. Reconstruct collection shape from existing metadata and use receiver-aware element types.
+
 Emit constructors and their metadata deterministically. Use declaration and stable signature order, never hash iteration order. Repeated compilation of the same input must preserve constructor selection, member order, and emitted bytes.
 
 ## Acceptance matrix

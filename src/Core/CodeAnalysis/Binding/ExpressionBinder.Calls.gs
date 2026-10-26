@@ -1873,6 +1873,9 @@ internal partial class ExpressionBinder {
                 clrType.IsValueType &&
                 !clrType.IsEnum &&
                 !clrType.IsPrimitive &&
+                !(
+                ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out var zeroSemantics) && zeroSemantics!!.IsData
+            ) &&
                 !clrType
                 .ContainsGenericParameters {
                 result = BoundDefaultExpression(

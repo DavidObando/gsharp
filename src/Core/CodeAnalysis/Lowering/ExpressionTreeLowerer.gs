@@ -846,7 +846,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
         let markerCount = literal.StructType.LiteralInitializerMarkerCount
-        if literal.IsZeroInitialization && literal.StructType is {IsData: true, IsClass: false} && markerCount == 0 {
+        if literal.IsZeroInitialization && !literal.StructType.IsClass && markerCount == 0 {
             return this.BuildZeroStorageStructLiteralExpression(literal, parameterMap)
         }
         var construction BoundExpression
@@ -1033,7 +1033,18 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         constructor BoundConstructorCallExpression,
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
-        if constructor.Arguments.IsDefaultOrEmpty || constructor.Arguments.Length == 0 {
+        let importedConstructor = if constructor.StructType.UsesConstructorOwnedDataConstruction {
+            constructor.StructType.GetDataConstructionConstructor()
+        } else {
+            nil
+        }
+        if constructor
+            .StructType
+            .ClrType != nil &&
+            importedConstructor == nil &&
+            constructor
+            .Arguments
+            .IsDefaultOrEmpty {
             return BoundClrStaticCallExpression(
                 constructor.Syntax,
                 ExpressionNewTypeMethod,
@@ -1041,13 +1052,19 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 ImmutableArray.Create[BoundExpression](CreateTypeOf(constructor.StructType))
             )
         }
-        let ctorInfo = BoundImportedInstanceCallExpression(
-            constructor.Syntax,
-            CreateTypeOf(constructor.StructType),
-            TypeGetConstructorMethod,
-            ReflectionConstructorInfoTypeSymbol,
-            ImmutableArray.Create[BoundExpression](BuildTypeArray(GetArgumentTypes(constructor.Arguments)))
-        )
+        let ctorInfo = if constructor.StructType.ClrType == nil || importedConstructor != nil {
+            cast[BoundExpression](
+                BoundLiteralExpression(constructor.Syntax, constructor, ReflectionConstructorInfoTypeSymbol)
+            )
+        } else {
+            BoundImportedInstanceCallExpression(
+                constructor.Syntax,
+                CreateTypeOf(constructor.StructType),
+                TypeGetConstructorMethod,
+                ReflectionConstructorInfoTypeSymbol,
+                ImmutableArray.Create[BoundExpression](BuildTypeArray(GetArgumentTypes(constructor.Arguments)))
+            )
+        }
         // Only property-based anonymous objects carry the NewExpression.Members
         // contract. Named positional data types can also have properties without
         // fields, including properties that hide inherited members.
@@ -1086,21 +1103,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         constructor BoundClrConstructorCallExpression,
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
-        if constructor.Arguments.IsDefaultOrEmpty || constructor.Arguments.Length == 0 {
-            return BoundClrStaticCallExpression(
-                constructor.Syntax,
-                ExpressionNewTypeMethod,
-                TypeSymbol.FromClrTypeWithoutNullability(typeof(NewExpression), NullabilityFreeReason.TypeLiteral),
-                ImmutableArray.Create[BoundExpression](CreateTypeOf(constructor.Type))
-            )
-        }
-        let ctorInfo = BoundImportedInstanceCallExpression(
-            constructor.Syntax,
-            CreateTypeOf(constructor.Type),
-            TypeGetConstructorMethod,
-            ReflectionConstructorInfoTypeSymbol,
-            ImmutableArray.Create[BoundExpression](BuildTypeArray(GetArgumentTypes(constructor.Arguments)))
-        )
+        let ctorInfo = BoundLiteralExpression(constructor.Syntax, constructor, ReflectionConstructorInfoTypeSymbol)
         return BoundClrStaticCallExpression(
             constructor.Syntax,
             ExpressionNewCtorMethod,
