@@ -52,22 +52,7 @@ open class Issue1026FixedEmitTests {
         create.ArgumentList.Add(stderrPath)
         using let fifo = Process.Start(create) ?? throw InvalidOperationException("Failed to create FIFOs")
         Assert.Empty(CaptureBytes(fifo, fifo.StandardOutput.BaseStream, fifo.StandardError.BaseStream, 5_000))
-        using let stdout = FileStream(
-            stdoutPath,
-            FileMode.Open,
-            FileAccess.ReadWrite,
-            FileShare.ReadWrite,
-            1,
-            FileOptions.None
-        )
-        using let stderr = FileStream(
-            stderrPath,
-            FileMode.Open,
-            FileAccess.ReadWrite,
-            FileShare.ReadWrite,
-            1,
-            FileOptions.None
-        )
+        // Read-only capture handles let closing the writers produce EOF.
         using let stdoutWriter = FileStream(
             stdoutPath,
             FileMode.Open,
@@ -80,6 +65,22 @@ open class Issue1026FixedEmitTests {
             stderrPath,
             FileMode.Open,
             FileAccess.ReadWrite,
+            FileShare.ReadWrite,
+            1,
+            FileOptions.None
+        )
+        using let stdout = FileStream(
+            stdoutPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite,
+            1,
+            FileOptions.None
+        )
+        using let stderr = FileStream(
+            stderrPath,
+            FileMode.Open,
+            FileAccess.Read,
             FileShare.ReadWrite,
             1,
             FileOptions.None
@@ -122,8 +123,8 @@ open class Issue1026FixedEmitTests {
                 Assert.False(snapshot.IsCompleted)
             }
         } finally {
-            stdoutWriter.WriteByte(uint8(1))
-            stderrWriter.WriteByte(uint8(1))
+            stdoutWriter.Dispose()
+            stderrWriter.Dispose()
             let all = Task.WhenAll(snapshots.ToArray())
             let _ = all.ContinueWith(
                 (finished Task[[][]uint8]) -> finished.Exception,
@@ -132,7 +133,8 @@ open class Issue1026FixedEmitTests {
             let _ = Task.WhenAny(all, Task.Delay(5_000)).GetAwaiter().GetResult()
         }
         for copy in copies {
-            Assert.True(copy.IsCanceled)
+            Assert.True(copy.IsCompleted)
+            Assert.False(copy.IsFaulted)
         }
         for snapshot in snapshots {
             Assert.True(snapshot.IsCompletedSuccessfully)
