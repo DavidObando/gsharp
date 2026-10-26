@@ -846,7 +846,14 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
         let markerCount = literal.StructType.LiteralInitializerMarkerCount
-        if literal.IsZeroInitialization && !literal.StructType.IsClass && markerCount == 0 {
+        if literal.IsZeroInitialization &&
+            !literal
+            .StructType
+            .IsClass &&
+            markerCount == 0 &&
+            !literal
+            .StructType
+            .NeedsSynthesizedValueStructDefaultCtor {
             return this.BuildZeroStorageStructLiteralExpression(literal, parameterMap)
         }
         var construction BoundExpression
