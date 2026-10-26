@@ -12,6 +12,64 @@ import System.Text
 import Xunit
 
 class Utf8LiteralLanguageTests {
+    @Fact
+    func LiteralHelperUsesItsTargetAssemblyAndMissingHelperStillDiagnoses() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let helper = fixture.CompileCSharp(`namespace System.Runtime.CompilerServices {
+public static class RuntimeHelpers {
+    public static System.ReadOnlySpan<T> CreateSpan<T>(System.RuntimeFieldHandle handle)
+        => throw new System.NotSupportedException();
+}
+}`, "SplitUtf8Helpers")
+        let image = File.ReadAllBytes(typeof(object).Assembly.Location)
+        using let coreStream = MemoryStream(image)
+        using let corePe = PEReader(coreStream)
+        let coreReader = corePe.GetMetadataReader()
+        let helperDefinition = coreReader
+            .TypeDefinitions
+            .Select((handle TypeDefinitionHandle) -> coreReader.GetTypeDefinition(handle))
+            .Single(
+            (definition TypeDefinition) ->
+            coreReader.GetString(definition.Namespace) == "System.Runtime.CompilerServices" && coreReader.GetString(
+                definition.Name
+            ) == "RuntimeHelpers"
+        )
+        // Keep the real span/core identities, but relocate only the helper name in this metadata-only target.
+        let offset = corePe.PEHeaders.MetadataStartOffset + coreReader.GetHeapMetadataOffset(HeapIndex.String) +
+            MetadataTokens.GetHeapOffset(helperDefinition.Name)
+        let renamed = Encoding.UTF8.GetBytes("UnusedHelpers_")
+        Array.Copy(renamed, 0, image, offset, renamed.Length)
+        let core = Path.Combine(fixture.Directory, Path.GetFileName(typeof(object).Assembly.Location))
+        File.WriteAllBytes(core, image)
+        const source = "package Utf8SplitTarget\nfunc Count() int32 -> u8\"A\".Length"
+        let assembly = fixture.Compile(source, "Utf8SplitTarget", false, "/r:" + core, "/r:" + helper)
+        using let stream = File.OpenRead(assembly)
+        using let pe = PEReader(stream)
+        let reader = pe.GetMetadataReader()
+        let createSpan = reader
+            .MemberReferences
+            .Select((handle MemberReferenceHandle) -> reader.GetMemberReference(handle))
+            .Single((member MemberReference) -> reader.GetString(member.Name) == "CreateSpan")
+        Assert.Equal(HandleKind.TypeReference, createSpan.Parent.Kind)
+        let owner = reader.GetTypeReference(
+            MetadataTokens.TypeReferenceHandle(MetadataTokens.GetRowNumber(createSpan.Parent))
+        )
+        Assert.Equal("RuntimeHelpers", reader.GetString(owner.Name))
+        Assert.Equal(HandleKind.AssemblyReference, owner.ResolutionScope.Kind)
+        let ownerAssembly = reader.GetAssemblyReference(
+            MetadataTokens.AssemblyReferenceHandle(MetadataTokens.GetRowNumber(owner.ResolutionScope))
+        )
+        Assert.Equal("SplitUtf8Helpers", reader.GetString(ownerAssembly.Name))
+        let (code, output) = fixture.TryCompile(source, "Utf8MissingHelper", false, "/r:" + core)
+        Assert.NotEqual(0, code)
+        let diagnostic = Assert.Single(
+            output.Split('\n').Where((line string) -> line.Contains(": error ", StringComparison.Ordinal))
+        )
+        Assert.Contains("Utf8MissingHelper.gs(2,23,2,28): error GS0632:", diagnostic, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Utf8MissingHelper.dll")))
+    }
+
     @Theory
     @InlineData("u8\"\"\"A\"\"\"")
     @InlineData("u8\"\"\"\nA\n\"\"\"")

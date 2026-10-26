@@ -30,8 +30,10 @@ internal shared class ClrSpanTypes {
         let intType = references.GetCoreType("System.Int32")
         spanType = resolvedSpan
         slice = resolvedSpan.GetMethod("Slice", []Type{intType, intType})
-        let helpers = resolvedSpan.Assembly.GetType("System.Runtime.CompilerServices.RuntimeHelpers")
-        if helpers == nil || slice == nil || slice.ReturnType != spanType {
+        if !references.TryResolveType("System.Runtime.CompilerServices.RuntimeHelpers", out var helpers) ||
+            helpers == nil ||
+            slice == nil ||
+            slice.ReturnType != spanType {
             return false
         }
         for method in helpers.GetMethods(BindingFlags.Public | BindingFlags.Static) {
