@@ -1681,12 +1681,13 @@ internal partial class ExpressionBinder {
         // issue #3775's nil-tolerance (`e += nil` is a silent no-op in C#, not
         // a conversion error) identical on the static path.
         if isEventOperator {
-            let staticOwner = if $scope.TryLookupSymbol(name) is ImplicitStaticFieldVariableSymbol eventField &&
-                eventField
-                .Field
-                .IsEventBackingField {
+            let staticOwner StructSymbol? = switch $scope.TryLookupSymbol(name) {
+                case eventField is ImplicitStaticFieldVariableSymbol when eventField.Field.IsEventBackingField:
                 eventField.StructType
-            } else {
+                // Selected delegate storage must not fall back to an inherited event.
+                case _ is ImplicitStaticFieldVariableSymbol or _ is ImplicitStaticPropertyVariableSymbol:
+                nil
+                default:
                 function?.StaticOwnerType as StructSymbol ?? function?.ReceiverType as StructSymbol
             }
             if staticOwner != nil &&

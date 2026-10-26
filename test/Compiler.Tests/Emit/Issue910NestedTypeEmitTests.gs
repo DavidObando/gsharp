@@ -335,6 +335,180 @@ Outer().Run()`, "StaticVisibility5262", true, "/r:" + contract)
     }
 
     @Fact
+    func SelectedLexicalDelegateFieldKeepsCompoundWritesAwayFromInheritedEvents() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let executable = fixture.Compile(`package SelectedField5262
+import System
+open class Base {
+    shared {
+        event Changed Action?
+        func Raise() { Changed?() }
+    }
+}
+class EventOnly : Base {
+    shared {
+        func Adjust(handler Action) {
+            Changed += handler
+            Base.Raise()
+            Changed -= handler
+            Base.Raise()
+        }
+    }
+}
+class Outer {
+    shared {
+        var Changed Action? = func() { Console.Write("X") }
+        func Stamp(handler Action) Action {
+            Console.Write("S")
+            return handler
+        }
+        event Ticked Action?
+        func RaiseTicked() { Ticked?() }
+    }
+    class Nested : Base {
+        shared {
+            func Reset(handler Action) { Changed = handler }
+            func Fire() { Changed?() }
+            func Add(handler Action) { Changed += Outer.Stamp(handler) }
+            func Remove(handler Action) { Changed -= Outer.Stamp(handler) }
+            func EventControl(handler Action) {
+                Ticked += handler
+                Outer.RaiseTicked()
+                Ticked -= handler
+                Outer.RaiseTicked()
+            }
+        }
+    }
+    func Run() {
+        let handler Action = func() { Console.Write("H") }
+        let baseHandler Action = func() { Console.Write("B") }
+        Base.Changed += baseHandler
+        Nested.Reset(func() { Console.Write("O") })
+        Nested.Fire()
+        Console.Write("|")
+        Base.Raise()
+        Console.Write("|")
+        Nested.Add(handler)
+        Nested.Fire()
+        Console.Write("|")
+        Base.Raise()
+        Console.Write("|")
+        Nested.Remove(handler)
+        Nested.Fire()
+        Console.Write("|")
+        Base.Raise()
+        Console.Write("|")
+        Nested.EventControl(handler)
+        Console.Write("|")
+        EventOnly.Adjust(handler)
+        Base.Changed -= baseHandler
+    }
+}
+Outer().Run()`, "SelectedField5262", true)
+        IlVerifier.Verify(executable)
+        Assert.Equal(Encoding.UTF8.GetBytes("O|B|SOH|B|SO|B|H|BHB"), fixture.RunBytes(executable))
+    }
+
+    @Fact
+    func SelectedLexicalDelegatePropertyKeepsCompoundWritesAndAccessorEvaluation() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`using System;
+namespace ForeignEvents5262;
+public class ClrBase
+{
+    public static event Action? Changed;
+    public static void Raise() => Changed?.Invoke();
+}`, "ForeignEvents5262")
+        let executable = fixture.Compile(`package SelectedProperty5262
+import System
+import ForeignEvents5262
+open class Base {
+    shared {
+        event Changed Action?
+        func Raise() { Changed?() }
+    }
+}
+class Outer[T] {
+    shared {
+        private var stored Action? = func() { Console.Write("X") }
+        prop Changed Action? {
+            get {
+                Console.Write("G")
+                return stored
+            }
+            set {
+                Console.Write("W")
+                stored = value
+            }
+        }
+        func Stamp(handler Action) Action {
+            Console.Write("S")
+            return handler
+        }
+    }
+    class Nested : Base {
+        shared {
+            func Reset(handler Action) { Changed = handler }
+            func Fire() { Changed?() }
+            func Add(handler Action) { Changed += Outer[T].Stamp(handler) }
+            func Remove(handler Action) { Changed -= Outer[T].Stamp(handler) }
+        }
+    }
+    class Imported : ClrBase {
+        shared {
+            func Reset(handler Action) { Changed = handler }
+            func Fire() { Changed?() }
+            func Add(handler Action) { Changed += Outer[T].Stamp(handler) }
+            func Remove(handler Action) { Changed -= Outer[T].Stamp(handler) }
+        }
+    }
+    func Run() {
+        let handler Action = func() { Console.Write("H") }
+        let baseHandler Action = func() { Console.Write("B") }
+        Base.Changed += baseHandler
+        Nested.Reset(func() { Console.Write("O") })
+        Nested.Fire()
+        Console.Write("|")
+        Base.Raise()
+        Console.Write("|")
+        Nested.Add(handler)
+        Nested.Fire()
+        Console.Write("|")
+        Base.Raise()
+        Console.Write("|")
+        Nested.Remove(handler)
+        Nested.Fire()
+        Console.Write("|")
+        Base.Raise()
+        Base.Changed -= baseHandler
+        Console.Write("|")
+        ClrBase.Changed += baseHandler
+        Imported.Reset(func() { Console.Write("O") })
+        Imported.Fire()
+        Console.Write("|")
+        ClrBase.Raise()
+        Console.Write("|")
+        Imported.Add(handler)
+        Imported.Fire()
+        Console.Write("|")
+        ClrBase.Raise()
+        Console.Write("|")
+        Imported.Remove(handler)
+        Imported.Fire()
+        Console.Write("|")
+        ClrBase.Raise()
+        ClrBase.Changed -= baseHandler
+    }
+}
+Outer[int32]().Run()`, "SelectedProperty5262", true, "/r:" + contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("WGO|B|GSWGOH|B|GSWGO|B|WGO|B|GSWGOH|B|GSWGO|B"),
+            fixture.RunBytes(executable)
+        )
+    }
+
+    @Fact
     func IssueExample_NestedClassInClass_ConstructedFromEnclosingMethod_Runs() {
         let output = CompileAndRun(`package Oahu.Cli.Tests
 

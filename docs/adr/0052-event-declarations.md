@@ -194,6 +194,7 @@ Everything the instance form supports, with identical semantics:
 - **Subscription** — `Type.Event += handler` / `-= handler` from outside, and the bare
   `Event += handler` spelling inside the declaring type's own members. Nested-type access
   to lexical event backing state also subscribes through the declaring owner's add/remove accessors (issue #5262).
+  A selected lexical delegate field or property keeps compound-write semantics when a nearer type inherits a same-named event.
 - **Reading and raising** — the event's name resolves inside the declaring type's members
   to its backing delegate field, so `Event?(sender, args)`, `let h = Event`, and
   `if Event != nil` all work. This mirrors C#, where a field-like event access

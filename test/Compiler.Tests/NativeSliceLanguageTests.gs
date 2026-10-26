@@ -556,6 +556,28 @@ True
             return stdout.ReplaceLineEndings("\n")
         }
 
+        func RunBytes(assembly string)[]uint8 {
+            let start = ProcessStartInfo("dotnet"){
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = Directory
+            }
+            start.ArgumentList.Add(assembly)
+            using let process = Process.Start(start)!!
+            let stderr = process.StandardError.ReadToEndAsync()
+            using let stdout = MemoryStream()
+            let readOutput = process.StandardOutput.BaseStream.CopyToAsync(stdout)
+            if !process.WaitForExit(30_000) {
+                process.Kill(entireProcessTree: true)
+                process.WaitForExit()
+                Assert.Fail("native slice byte witness timed out")
+            }
+            readOutput.GetAwaiter().GetResult()
+            Assert.True(process.ExitCode == 0, stderr.GetAwaiter().GetResult())
+            return stdout.ToArray()
+        }
+
         func Dispose() -> Directory.Delete(Directory, recursive: true)
     }
 
