@@ -13,6 +13,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Binding.OverloadResolution
 import System
 import System.Threading
@@ -400,6 +401,7 @@ internal shared class DefiniteAssignmentAnalyzer {
             )
         }
         if cache.TryReplay(key, initialAssigned, out var cachedExit) {
+            CompilationMeasurements.Count("definite-assignment.region-replays")
             Interlocked.Increment(&nestedRegionCacheHits)
             if mode == NestedRegionCacheVerify {
                 let fresh = AnalyzeRegionUncached(
@@ -453,6 +455,7 @@ internal shared class DefiniteAssignmentAnalyzer {
         methodExitLabel BoundLabel?,
         isFunctionBody bool = false
     ) HashSet[VariableSymbol]? {
+        CompilationMeasurements.Count("definite-assignment.region-analyses")
         let graph = ControlFlowGraph.Create(AsBlock(regionBody))
         let entryAssigned = Dictionary[ControlFlowGraph.BasicBlock, HashSet[VariableSymbol]?]()
         let exitAssigned = Dictionary[ControlFlowGraph.BasicBlock, HashSet[VariableSymbol]?]()

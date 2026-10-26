@@ -44,7 +44,7 @@ open class Issue910NestedTypeEmitTests {
             true
         )
         IlVerifier.Verify(executable)
-        Assert.Equal(Encoding.UTF8.GetBytes("1"), Encoding.UTF8.GetBytes(fixture.Run(executable)))
+        Assert.Equal(Encoding.UTF8.GetBytes("1"), fixture.RunBytes(executable))
     }
 
     @Fact
@@ -90,7 +90,7 @@ class Outer {
 }
 Outer().Run()`, "Write5262", true)
         IlVerifier.Verify(executable)
-        Assert.Equal(Encoding.UTF8.GetBytes("12|13|13|30|20|100"), Encoding.UTF8.GetBytes(fixture.Run(executable)))
+        Assert.Equal(Encoding.UTF8.GetBytes("12|13|13|30|20|100"), fixture.RunBytes(executable))
     }
 
     @Fact
@@ -158,7 +158,7 @@ Hub().Run()`, "Events5262", true)
             []string{"Events5262.Hub.add_Ticked", "Events5262.Hub.add_Ticked", "Events5262.Hub.remove_Ticked"},
             accessors.ToArray()
         )
-        Assert.Equal(Encoding.UTF8.GetBytes("SSHHSH"), Encoding.UTF8.GetBytes(fixture.Run(executable)))
+        Assert.Equal(Encoding.UTF8.GetBytes("SSHHSH"), fixture.RunBytes(executable))
     }
 
     @Fact
@@ -209,10 +209,7 @@ class Outer {
 }
 Outer().Run()`, "Imported5262", true, "/r:" + contract)
         IlVerifier.Verify(executable, []string{contract})
-        Assert.Equal(
-            Encoding.UTF8.GetBytes("inner|outer|7|8|300|100|200"),
-            Encoding.UTF8.GetBytes(fixture.Run(executable))
-        )
+        Assert.Equal(Encoding.UTF8.GetBytes("inner|outer|7|8|300|100|200"), fixture.RunBytes(executable))
     }
 
     @Fact
@@ -263,7 +260,7 @@ class Outer {
 }
 Outer().Run()`, "Methods5262", true)
         IlVerifier.Verify(executable)
-        Assert.Equal(Encoding.UTF8.GetBytes("2|3|4|1"), Encoding.UTF8.GetBytes(fixture.Run(executable)))
+        Assert.Equal(Encoding.UTF8.GetBytes("2|3|4|1"), fixture.RunBytes(executable))
     }
 
     @Fact
@@ -331,7 +328,7 @@ class Outer {
 }
 Outer().Run()`, "StaticVisibility5262", true, "/r:" + contract)
         IlVerifier.Verify(executable, []string{contract})
-        Assert.Equal(Encoding.UTF8.GetBytes("22|11|20|21|70|72|90|80"), Encoding.UTF8.GetBytes(fixture.Run(executable)))
+        Assert.Equal(Encoding.UTF8.GetBytes("22|11|20|21|70|72|90|80"), fixture.RunBytes(executable))
     }
 
     @Fact

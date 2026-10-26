@@ -47,7 +47,7 @@ public class Base { public int Value => 9; }`, "ForeignLookupCost5262")
                 json.RootElement.GetProperty("Counters").GetProperty("binding.lexical-member-owner.queries").GetInt64()
             )
             IlVerifier.Verify(executable, []string{contract})
-            Assert.Equal(Encoding.UTF8.GetBytes("9"), Encoding.UTF8.GetBytes(fixture.Run(executable)))
+            Assert.Equal(Encoding.UTF8.GetBytes("9"), fixture.RunBytes(executable))
             let measured = File.ReadAllBytes(executable)
             Environment.SetEnvironmentVariable("GSHARP_MEASURE_PHASES", nil)
             fixture.Compile(
