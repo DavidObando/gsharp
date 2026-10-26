@@ -69,14 +69,20 @@ internal class MemberLookup {
         CompilationMeasurements.Count("binding.lexical-member-owner.queries")
         let matches Func[Symbol, bool] = (member Symbol) -> member.Name == name &&
             member is not PropertySymbol{IsIndexer: true}
+        const dataMembers = MemberKinds.Field | MemberKinds.Property | MemberKinds.Event
         for var current StructSymbol? = type; current != nil; current = current!!.ContainingType as StructSymbol {
-            if TypeMemberModel.EnumerateMembers(current, MemberQuery.Instance()).Any(matches) ||
+            if TypeMemberModel.EnumerateMembers(current, MemberQuery.Instance(dataMembers)).Any(matches) ||
                 TypeMemberModel
-                .EnumerateMembers(current, MemberQuery.Static()).Any(matches) || TypeMemberModel.TryGetStaticField(
+                .EnumerateMembers(current, MemberQuery.Static(dataMembers)).Any(matches) || TypeMemberModel.GetMethods(
                 current,
                 name,
-                out _
-            ) {
+                MemberQuery.Instance(MemberKinds.Method)
+            )
+                .Length != 0 ||
+                TypeMemberModel
+                .GetMethods(current, name, MemberQuery.Static(MemberKinds.Method))
+                .Length != 0 ||
+                TypeMemberModel.TryGetStaticField(current, name, out _) {
                 return current
             }
             let clrBase = ExpressionBinder.GetInheritedClrBaseType(current) ?? typeof(object)

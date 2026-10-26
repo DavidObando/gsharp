@@ -20,6 +20,8 @@ The entries below are newer than v0.5.212. Published features and migration note
 
 - **Lexical shared-state lookup preserves inherited default interface methods** (issue #5262). Nested classes now check the canonical inherited-call candidates before enclosing shared state. Transitive and constructed generic interface methods retain their targets. Shared bodies still receive no implicit instance.
 
+- **Explicit interface methods do not hide lexical shared state** (issue #5262). Source method barriers now use the ordinary method query. Instance, inherited and shared explicit implementations remain interface-only. Normal private methods keep precedence.
+
 - **Duplicate labels report source errors instead of a compiler exception** (issue #5288). A repeated `goto` label now reports located `GS0470` diagnostics without reusing the first declaration's control-flow target. Parser recovery from a reserved `range` identifier also preserves its source diagnostics instead of reporting `GS9998` for a repeated initializer name. `range` remains reserved.
 
 - **Method-wide `using` bindings in async functions no longer cause exponential analysis work** (issue #5258). Repeated definite-assignment probes of nested cleanup regions caused the growth, not async disposal lowering. The per-analysis region cache from #5287 also corrects this case. Regression tests now bound region-analysis work for twenty distinct bindings and check lifetime, single evaluation, LIFO disposal, exception propagation and deterministic output. Cleanup scopes and async suspension behavior are unchanged.

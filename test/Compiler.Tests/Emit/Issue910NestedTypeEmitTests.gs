@@ -332,6 +332,77 @@ Outer().Run()`, "StaticVisibility5262", true, "/r:" + contract)
     }
 
     @Fact
+    func SourceExplicitMethodsDoNotHideOuterCallbacksOrOrdinaryPrivateMethods() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let executable = fixture.Compile(`package SourceExplicit5262
+import System
+interface IReader { func Read() int32; }
+interface IValue[T] { func Echo(value T) T; }
+open class Base : IReader { func (IReader) Read() int32 -> 2 }
+class Outer {
+    shared {
+        let Read () -> int32 = func() int32 { return 1 }
+        let Echo (int32) -> int32 = func(value int32) int32 { return value + 10 }
+    }
+    class Inner : IReader {
+        func (IReader) Read() int32 -> 2
+        func Pick() int32 -> Read()
+    }
+    class Generic : IValue[int32] {
+        func (IValue[int32]) Echo(value int32) int32 -> value
+        func Pick() int32 -> Echo(3)
+    }
+    class Ordinary : IReader {
+        func (IReader) Read() int32 -> 2
+        private func Read() int32 -> 4
+        func Pick() int32 -> Read()
+    }
+    class Derived : Base { func Pick() int32 -> Read() }
+    func Run() {
+        let inner = Inner()
+        let reader IReader = inner
+        Console.Write(reader.Read())
+        Console.Write("|")
+        Console.Write(inner.Pick())
+        Console.Write("|")
+        let generic = Generic()
+        let value IValue[int32] = generic
+        Console.Write(value.Echo(3))
+        Console.Write("|")
+        Console.Write(generic.Pick())
+        Console.Write("|")
+        Console.Write(Ordinary().Pick())
+        Console.Write("|")
+        Console.Write(Derived().Pick())
+    }
+}
+Outer().Run()`, "SourceExplicit5262", true)
+        IlVerifier.Verify(executable)
+        Assert.Equal(Encoding.UTF8.GetBytes("2|1|3|13|4|1"), fixture.RunBytes(executable))
+    }
+
+    @Fact
+    func SourceExplicitSharedMethodsDoNotHideOuterCallbacks() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let executable = fixture.Compile(`package StaticExplicit5262
+import System
+interface IFactory { shared { func Choose() int32; } }
+class Outer {
+    shared { let Choose () -> int32 = func() int32 { return 7 } }
+    class Inner : IFactory {
+        shared {
+            func (IFactory) Choose() int32 -> 6
+            func Pick() int32 -> Choose()
+        }
+    }
+    func Run() { Console.Write(Inner.Pick()) }
+}
+Outer().Run()`, "StaticExplicit5262", true)
+        IlVerifier.Verify(executable)
+        Assert.Equal(Encoding.UTF8.GetBytes("7"), fixture.RunBytes(executable))
+    }
+
+    @Fact
     func ImportedDefaultMethodsHideOuterCallbacksUsingInheritedCallCandidates() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let contract = fixture.CompileCSharp(`namespace DefaultMethods5262;

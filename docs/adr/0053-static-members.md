@@ -80,6 +80,7 @@ Members inside `shared` inherit the same accessibility modifier rules as regular
 - Bare static-member access (no `TypeName.` prefix) is allowed from **both** shared and instance method bodies of the enclosing type. Static state lookup visits lexical enclosing types from the innermost type outward, including private fields (issue #5262). It does not inherit static members: inherited static members must be qualified with `Base.X`. Parameters and nearer members hide outer static state, including declared shared members and visible inherited instance members. The inherited-member barrier includes implicit `System.Object` methods when no imported base is declared. Imported method names use the canonical CLR source-name mapping. A hidden outer instance member does not acquire an implicit receiver.
 - Compound assignment (`+=` / `-=`) on `TypeName.StaticField` and `TypeName.StaticProp` is supported wherever simple assignment is. For static properties, compound assignment requires both a getter and a setter; otherwise the binder reports `GS0127` (cannot assign) and the expression is rejected.
 - Imported method barriers include default interface methods from the canonical inherited-call candidate query.
+- Source method barriers use ordinary overload lookup and exclude explicit-interface implementations.
 
 ### 6. Type-level access from GSharp
 
