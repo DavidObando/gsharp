@@ -45,27 +45,18 @@ internal partial class ExpressionBinder {
         // Native copies preserve the whole value or dispatch through the
         // record clone; reconstructing visible members loses private state
         // and incorrectly reruns construction initializers.
-        let normalizedReceiverType = ImportedTypeSymbol.NormalizeSemanticAggregate(
-            receiver.Type,
-            receiver.Type.ClrType,
-            $scope.References
-        )
-        let structType StructSymbol? = switch normalizedReceiverType {
-            case aggregate is StructSymbol: aggregate
-            case NullabilityAnnotatedTypeSymbol{BaseType: StructSymbol aggregate}: aggregate
-            default: default(StructSymbol?)
-        }
-        if structType == nil || !structType.IsData {
+        let structType = GetDataCopyType(receiver.Type)
+        if structType == nil {
             Diagnostics.ReportCopyOrWithNotDataStruct(diagnosticLocation, receiver.Type)
             return BoundErrorExpression(nil)
         }
-        if !object.ReferenceEquals(receiver.Type, structType) {
-            receiver = BoundConversionExpression(nil, structType, receiver)
-        }
+        // The aggregate supplies the copy contract, not the receiver's type arguments.
+        // Keep the receiver type so CLR erasure cannot remove nested nullability.
+        let receiverType = receiver.Type
         let tempName = "$$copy" + Interlocked.Increment(&binderCtx.SyntheticLocalCounter).ToString(
             CultureInfo.InvariantCulture
         )
-        let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, structType)
+        let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, receiverType)
         $scope.TryDeclareVariable(tempVar)
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         statements.Add(BoundVariableDeclaration(nil, tempVar, receiver))
@@ -89,7 +80,7 @@ internal partial class ExpressionBinder {
                 copySyntax,
                 captured,
                 cloneMethods[0],
-                structType,
+                receiverType,
                 ImmutableArray[BoundExpression].Empty
             )
         } else {
@@ -100,7 +91,7 @@ internal partial class ExpressionBinder {
                 captured
             )
         }
-        let copiedValue = LocalVariableSymbol(tempName + "result", isReadOnly: true, structType)
+        let copiedValue = LocalVariableSymbol(tempName + "result", isReadOnly: true, receiverType)
         $scope.TryDeclareVariable(copiedValue)
         statements.Add(BoundVariableDeclaration(nil, copiedValue, copy))
         let seen = HashSet[string]()
@@ -108,6 +99,20 @@ internal partial class ExpressionBinder {
             let memberName = initSyntax.FieldIdentifier.ValueText
             if !seen.Add(memberName) {
                 Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.FieldIdentifier.Location, memberName)
+                continue
+            }
+            if structType.ClrType != nil {
+                let assignment = BindInitializerMemberAssignment(
+                    copiedValue,
+                    receiverType,
+                    initSyntax.FieldIdentifier,
+                    initSyntax.ColonToken,
+                    initSyntax.Value,
+                    initSyntax
+                )
+                if assignment != nil {
+                    statements.Add(BoundExpressionStatement(initSyntax, assignment))
+                }
                 continue
             }
             let hasUpdateProperty = TypeMemberModel.TryGetProperty(
@@ -216,6 +221,25 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, memberName)
         }
         return BoundBlockExpression(nil, statements.ToImmutable(), BoundVariableExpression(nil, copiedValue))
+    }
+
+    private func GetDataCopyType(type TypeSymbol) StructSymbol? {
+        let receiverType = PlatformTypeSymbol.StripTopLevel(type)
+        let normalized = ImportedTypeSymbol.NormalizeSemanticAggregate(
+            receiverType,
+            receiverType.ClrType,
+            $scope.References
+        )
+        let aggregate StructSymbol? = switch normalized {
+            case structType is StructSymbol: structType
+            case NullabilityAnnotatedTypeSymbol{BaseType: StructSymbol structType}: structType
+            default: default(StructSymbol?)
+        }
+        return if aggregate?.IsData == true {
+            aggregate
+        } else {
+            default(StructSymbol?)
+        }
     }
 
     private func BindObjectCreationExpression(syntax ObjectCreationExpressionSyntax) BoundExpression {
