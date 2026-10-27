@@ -21,7 +21,10 @@ open class Adr0213LoopEntryTests {
     @Theory
     @MemberData("Rows")
     func EveryRow_GivesItsDiagnostics(name string, source string, expectedErrors string) {
-        let result = EmittedOracle.Evaluate([]string{source}, EmittedOracleOptions{IsLibrary: !source.Contains("func Main")})
+        let result = EmittedOracle.Evaluate(
+            []string{source},
+            EmittedOracleOptions{IsLibrary: !source.Contains("func Main")}
+        )
         let errors = result.Diagnostics.Where((d Diagnostic) -> d.IsError).Select((d Diagnostic) -> d.Id).ToArray()
         Assert.True(
             expectedErrors == string.Join(" ", errors),
@@ -38,8 +41,7 @@ open class Adr0213LoopEntryTests {
     @Fact
     func NoLoopBindsItsBodyTwice() {
         using let measurements = CompilationMeasurements.Start("test")
-        EmittedOracle.Evaluate(
-            []string{`package T
+        EmittedOracle.Evaluate([]string{`package T
 func Get() string? { return nil }
 func Run(n int32) int32 {
     var s string? = Get()
@@ -50,9 +52,7 @@ func Run(n int32) int32 {
         s = Get()
     }
     return total
-}`},
-            EmittedOracleOptions{IsLibrary: true}
-        )
+}`}, EmittedOracleOptions{IsLibrary: true})
         Assert.Equal(0L, measurements.GetCounter("narrowing.loop-rebinds"))
     }
 

@@ -511,7 +511,13 @@ internal partial class StatementBinder {
             externalCallableAliases.Clear()
             CompilationMeasurements.Count("narrowing.region-facts-killed", cast[int64](invalidations.Count))
             if NarrowingComparison.LoopsEnabled {
-                NarrowingComparison.ReportLoopSummary(body.Location, invalidations.Count, invalidations.Count, 0, "no-loop-parent")
+                NarrowingComparison.ReportLoopSummary(
+                    body.Location,
+                    invalidations.Count,
+                    invalidations.Count,
+                    0,
+                    "no-loop-parent"
+                )
             }
             return
         }
@@ -618,10 +624,18 @@ internal partial class StatementBinder {
     private func HeaderIsLiteralFalse(loop SyntaxNode) bool {
         var condition ExpressionSyntax? = nil
         switch loop.Kind {
-            case SyntaxKind.WhileStatement { condition = cast[WhileStatementSyntax](loop).Condition }
-            case SyntaxKind.ForConditionStatement { condition = cast[ForConditionStatementSyntax](loop).Condition }
-            case SyntaxKind.ForClauseStatement { condition = cast[ForClauseStatementSyntax](loop).Condition }
-            case SyntaxKind.DoWhileStatement { condition = cast[DoWhileStatementSyntax](loop).Condition }
+            case SyntaxKind.WhileStatement {
+                condition = cast[WhileStatementSyntax](loop).Condition
+            }
+            case SyntaxKind.ForConditionStatement {
+                condition = cast[ForConditionStatementSyntax](loop).Condition
+            }
+            case SyntaxKind.ForClauseStatement {
+                condition = cast[ForClauseStatementSyntax](loop).Condition
+            }
+            case SyntaxKind.DoWhileStatement {
+                condition = cast[DoWhileStatementSyntax](loop).Condition
+            }
             default { }
         }
         while condition is ParenthesizedExpressionSyntax parenthesized {
