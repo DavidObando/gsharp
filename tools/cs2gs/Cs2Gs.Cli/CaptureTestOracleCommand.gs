@@ -91,8 +91,14 @@ internal shared class CaptureTestOracleCommand {
         let root string? = CanonicalRootPath.Resolve(corpus)
         outDir = Path.GetFullPath(outDir!!)
         Directory.CreateDirectory(outDir)
-        let testApps IReadOnlyList[CorpusApp] = ValidateCommand
-            .ApplyExclusions(RepositoryDiscovery.Discover(root), options)
+        let apps = ValidateCommand.ApplyExclusions(RepositoryDiscovery.Discover(root), options)
+        for appId in appIds {
+            if !apps.Any((app CorpusApp) -> string.Equals(app.Id, appId, StringComparison.Ordinal)) {
+                Console.Error.WriteLine("cs2gs: capture-test-oracle found no app '" + appId + "'.")
+                return 1
+            }
+        }
+        let testApps IReadOnlyList[CorpusApp] = apps
             .Where((app CorpusApp) -> appIds.Count == 0 || appIds.Contains(app.Id, StringComparer.Ordinal))
             .Where(
             (app CorpusApp) -> TestParityStage.IsMirroredTestProject(
@@ -102,7 +108,7 @@ internal shared class CaptureTestOracleCommand {
         )
             .OrderBy((app CorpusApp) -> app.Id, StringComparer.Ordinal)
             .ToList()
-        if testApps.Count == 0 {
+        if testApps.Count == 0 && appIds.Count == 0 {
             Console.Error.WriteLine("cs2gs: capture-test-oracle found no test projects under " + root + ".")
             return 1
         }
@@ -248,7 +254,7 @@ internal shared class CaptureTestOracleCommand {
         Console.WriteLine("  --manifests <dir>  The migrate run directory; its validation manifests add the evaluated")
         Console.WriteLine("                     MSBuild IsTestProject to the classification (recommended).")
         Console.WriteLine("  --no-build         List already-built test assemblies.")
-        Console.WriteLine("  --app <id>         Capture only this app (repeatable).")
+        Console.WriteLine("  --app <id>         Select an existing app (repeatable); non-test apps need no oracle.")
         Console.WriteLine("  --exclude <path>   Same meaning as for migrate/validate.")
         Console.WriteLine("  --passthrough <path>  Same meaning as for migrate/validate.")
     }
