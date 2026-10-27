@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Member queries in the semantic model** ([#5307](https://github.com/DavidObando/gsharp/issues/5307), ADR-0212 slice S4). `SemanticModel.LookupMembers(position, type, name)` returns the members of a type that a member access can name, and `SemanticModel.GetMemberGroup(node)` returns the candidates that overload resolution considered for a call. Imported members answer as symbols with types read through the nullability readers. Member completion, the hover member fallback, and Go to Definition on imported members now use these queries, and `ImportedClrMemberResolver` is removed. Signature help lists one signature for each candidate, including imported overloads, and the hover overload count of a call is the size of its group. Completion no longer lists private or protected members from outside their type.
+
 - **Imported record projections use their declaring constructors** (issue #5435). Structural spreads, casts, and implicit projections no longer select source-emitted constructors for imported records. They retain the selected open constructor identity, constructed owner, optional defaults, and single evaluation.
 
 - **Generic map expression-tree parameters** ([#5430](https://github.com/DavidObando/gsharp/issues/5430)): `map[K,V]` parameters now use the canonical `Dictionary[K,V]` type token instead of reporting `GS9998`. Map signatures and tokens retain generic owners, nested arguments, and nullable value types. Map literals inside expression-tree lambdas still report `GS0473`.
