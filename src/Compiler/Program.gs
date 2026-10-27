@@ -864,12 +864,17 @@ open class Program {
 
         private func CreateOutput(path string, createdOutputs List[string]) FileStream {
             try {
-                let stream = FileStream(path, FileMode.CreateNew)
+                let stream = FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None)
                 createdOutputs.Add(path)
                 return stream
             } catch (IOException) when File.Exists(path) {
+                let target = File.ResolveLinkTarget(path, returnFinalTarget: true)
+                if target != nil && !target.Exists {
+                    // Track a new dangling-link target without deleting the existing link.
+                    return CreateOutput(target.FullName, createdOutputs)
+                }
                 // Keep the existing overwrite policy without claiming ownership of an existing file.
-                return File.Create(path)
+                return FileStream(path, FileMode.Truncate, FileAccess.ReadWrite, FileShare.None)
             }
         }
 
