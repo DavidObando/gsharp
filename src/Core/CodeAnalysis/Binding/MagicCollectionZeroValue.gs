@@ -152,9 +152,18 @@ internal shared class MagicCollectionZeroValue {
         syntax SyntaxNode?,
         owner StructSymbol,
         parameter ParameterSymbol,
+        parameterType TypeSymbol? = nil
+    ) BoundExpression? -> TrySynthesizePrimaryArgument(syntax, owner, parameter, out _, parameterType)
+
+    internal func TrySynthesizePrimaryArgument(
+        syntax SyntaxNode?,
+        owner StructSymbol,
+        parameter ParameterSymbol,
+        out missingDeclarationShape bool,
         parameterType TypeSymbol? = nil,
         constructor ConstructorInfo? = nil
     ) BoundExpression? {
+        missingDeclarationShape = false
         if owner.ClrType is {} imported {
             let index = owner.PrimaryConstructorParameters.IndexOf(parameter)
             let field = owner.GetDataConstructionPrimaryField(imported, index)
@@ -179,6 +188,7 @@ internal shared class MagicCollectionZeroValue {
                 }
                 // CLR arrays do not retain declaration lengths. A whole-slot T retains its argument's shape.
                 if declaration == nil || declaration.GetParameters()[index].ParameterType.IsArray {
+                    missingDeclarationShape = true
                     return nil
                 }
             }

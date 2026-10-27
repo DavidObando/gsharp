@@ -820,6 +820,87 @@ System.Console.WriteLine(provided.Items[0])
         Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "MissingShape.dll")))
     }
 
+    @Theory
+    @InlineData("GenericSliceBox", false)
+    @InlineData("GenericFixedBox", false)
+    @InlineData("GenericSliceBox", true)
+    @InlineData("GenericFixedBox", true)
+    func ImportedGenericDataClassLiteral_SymbolicArrayOmissionIsDiagnosed(name string, inGenericFunction bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.Compile(`package SymbolicCollection5419
+public data class GenericSliceBox[T](Items []T)
+public data class GenericFixedBox[T](Items [3]T)
+public data class NullableBox[T](Items []?T)
+public data class ArgumentBox[T](Items T)
+`, "SymbolicCollection5419", false)
+        IlVerifier.Verify(contract)
+        let dll = fixture.Compile(`import SymbolicCollection5419
+struct Point { public var Value int32 }
+func Shapes[U]() {
+    let slice = ArgumentBox[[]U]{}
+    System.Console.WriteLine(slice.Items.Length)
+    let fixedValue = ArgumentBox[[3]U]{}
+    System.Console.WriteLine(fixedValue.Items.Length)
+    let explicitSlice = GenericSliceBox[U]{Items: []U{}}
+    System.Console.WriteLine(explicitSlice.Items.Length)
+    let explicitFixed = GenericFixedBox[U]{Items: [3]U{}}
+    System.Console.WriteLine(explicitFixed.Items.Length)
+    let nullableValue = NullableBox[U]{}
+    System.Console.WriteLine(nullableValue.Items == nil)
+}
+Shapes[Point]()
+let directSlice = ArgumentBox[[]Point]{}
+System.Console.WriteLine(directSlice.Items.Length)
+let directFixed = ArgumentBox[[3]Point]{}
+System.Console.WriteLine(directFixed.Items.Length)
+`, "KnownSymbolicShapes", true, "/r:" + contract)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("0\n3\n0\n3\nTrue\n0\n3\n", fixture.Run(dll))
+        let source = "import SymbolicCollection5419\nstruct Point { public var Value int32 }\n" + if inGenericFunction {
+            "func Make[U]() {\n    let value = " + name + "[U]{}\n}\n"
+        } else {
+            "let value = " + name + "[Point]{}\n"
+        }
+        let referenceDirectory = System.IO.Path.Combine(fixture.Directory, "ref")
+        System.IO.Directory.CreateDirectory(referenceDirectory)
+        let reference = System.IO.Path.Combine(referenceDirectory, "MissingSymbolicShape.dll")
+        let pdb = System.IO.Path.Combine(fixture.Directory, "MissingSymbolicShape.pdb")
+        let (code, output) = fixture.TryCompile(
+            source,
+            "MissingSymbolicShape",
+            true,
+            "/r:" + contract,
+            "/refout:" + reference,
+            "/debug:portable",
+            "/pdb:" + pdb
+        )
+        Assert.Equal(1, code)
+        let line = if inGenericFunction {
+            "4"
+        } else {
+            "3"
+        }
+        let column = if inGenericFunction {
+            17
+        } else {
+            13
+        }
+        Assert.True(
+            output.Contains(
+                "MissingSymbolicShape.gs(" + line + "," + column.ToString() +
+                    "," +
+                    line +
+                    "," +
+                    (column + name.Length).ToString() + "): error GS0267",
+                StringComparison.Ordinal
+            ),
+            output
+        )
+        Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "MissingSymbolicShape.dll")))
+        Assert.False(System.IO.File.Exists(reference))
+        Assert.False(System.IO.File.Exists(pdb))
+    }
+
     @Fact
     func ImportedGenericDataClassLiteral_SpreadTypeProbePreservesExplicitCollectionInputs() {
         using let fixture = NativeSliceLanguageTests.Fixture()

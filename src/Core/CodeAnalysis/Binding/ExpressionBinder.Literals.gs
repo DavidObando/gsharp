@@ -2737,14 +2737,11 @@ internal partial class ExpressionBinder {
                     syntax,
                     aggregate,
                     aggregate.PrimaryConstructorParameters[index],
+                    out var missingDeclarationShape,
                     parameterType,
                     constructor
                 )
-                if zero == nil &&
-                    parameterType.ReferenceNullability == ReferenceNullabilityKind.NotNull &&
-                    parameterType
-                    .ClrType
-                    ?.IsArray == true {
+                if missingDeclarationShape && parameterType.ReferenceNullability == ReferenceNullabilityKind.NotNull {
                     Diagnostics.ReportNoApplicableOverload(syntax.TypeIdentifier.Location, aggregate.Name)
                     return BoundErrorExpression(syntax)
                 }
